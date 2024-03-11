@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    deployment_name: test-deployment
+  name: test-deployment
+spec:
+  replicas: 1
+  strategy:
+    type: "Recreate"
+  selector:
+    matchLabels:
+      pod_name: test-deployment
+  template:
+    metadata:
+      labels:
+        pod_name: test-deployment
+      name: test-deployment
+    spec:
+      containers:
+        - image: postgres-image
+          imagePullPolicy: IfNotPresent
+          name: test-deployment
+          ports:
+            - name: test-deployment
+              containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-some_options"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data
+          resources:
+            requests:
+              cpu: 100m
+              ephemeral-storage: 11Mi
+              memory: 256Mi
+          volumeMounts:
+            - name: test-deployment-data-0
+              mountPath: /var/lib/postgresql/data
+              subPath: postgres
+            - name: test-deployment-data-1
+              mountPath: /var/lib/postgresql/data/config
+            - name: test-deployment-data-2
+              mountPath: /etc/postgresql/ssl
+            - name: pg-socket
+              mountPath: /var/run/postgresql
+        - image: some-other-image
+          name: sidecar-container
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "echo 'pre-stop'"]
+          volumeMounts:
+            - name: pg-socket
+              mountPath: /var/run/postgresql
+      imagePullSecrets:
+        - name: docker-registry-credentials
+      restartPolicy: Always
+      volumes:
+        - name: test-deployment-data-0
+          persistentVolumeClaim:
+            claimName: test-pvc
+        # separate configmap with several files in different volumes to avoid conflicts mounting them with other volumes
+        - name: test-deployment-data-1
+          configMap:
+            name: db-configmap
+            defaultMode: 0777
+            items:
+              - key: postgresql.conf
+                path: postgresql.conf
+              - key: pg_hba.conf
+                path: pg_hba.conf
+        - name: test-deployment-data-2
+          secret:
+            defaultMode: 0600
+            secretName: db-secret
+            items:
+              - key: server.key
+                path: server.key
+              - key: server.crt
+                path: server.crt
+        - name: pg-socket
+          emptyDir: {}

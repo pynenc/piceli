@@ -1,0 +1,157 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: example-namespace
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: example-namespace
+  name: example-role
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "watch", "list"]
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: example-serviceaccount
+  namespace: example-namespace
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: example-rolebinding
+  namespace: example-namespace
+subjects:
+  - kind: ServiceAccount
+    name: example-serviceaccount
+roleRef:
+  kind: Role
+  name: example-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: example-secret
+  namespace: example-namespace
+type: Opaque
+data:
+  username: dXNlcm5hbWU= # base64 encoded 'username'
+  password: cGFzc3dvcmQ= # base64 encoded 'password'
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: example-configmap
+  namespace: example-namespace
+data:
+  config.json: |
+    {
+      "key": "value"
+    }
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: example-persistentvolumeclaim
+  namespace: example-namespace
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 0.2Gi # Changed from 0.1Gi to 0.2Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: example-deployment
+  namespace: example-namespace
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: example
+  template:
+    metadata:
+      labels:
+        app: example
+    spec:
+      containers:
+        - name: example-container
+          image: ubuntu:latest # Changed from bash:4.4 to ubuntu:latest
+          command: ["sh", "-c", "while true; do sleep 60; done;"]
+          env:
+            - name: EXAMPLE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: example-secret
+                  key: username
+            - name: EXAMPLE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: example-secret
+                  key: password
+            - name: EXAMPLE_CONFIG
+              valueFrom:
+                configMapKeyRef:
+                  name: example-configmap
+                  key: config.json
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: example-service
+  namespace: example-namespace
+spec:
+  selector:
+    app: example
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: example-job
+  namespace: example-namespace
+spec:
+  template:
+    spec:
+      containers:
+        - name: example-job-container
+          image: bash:4.4
+          command: ["sh", "-c", "echo Hello from the job; sleep 30"]
+      restartPolicy: Never
+  backoffLimit: 4
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: example-cronjob
+  namespace: example-namespace
+spec:
+  schedule: "*/10 * * * *" # Changed from "*/5 * * * *" to "*/10 * * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+            - name: example-cronjob-container
+              image: bash:4.4
+              command: ["sh", "-c", "echo Hello from the CronJob; date"]
+          restartPolicy: Never

@@ -1,0 +1,31 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  labels:
+    cronjob_name: test-cronjob
+  name: test-cronjob
+spec:
+  schedule: "0 6 * * *"
+  concurrencyPolicy: Allow
+  jobTemplate:
+    spec:
+      # backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            pod_name: test-cronjob
+          name: test-cronjob
+        spec:
+          serviceAccountName: test-sa
+          imagePullSecrets:
+            - name: docker-registry-credentials
+          automountServiceAccountToken: true
+          containers:
+            - name: test-cronjob
+              image: "docker-image"
+              imagePullPolicy: Always
+              command: ["python", "--version"]
+              env:
+                - name: K0
+                  value: V0
+          restartPolicy: Never

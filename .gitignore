@@ -160,3 +160,8 @@ cython_debug/
 #.idea/
 
 .DS_Store
+
+# Temporary tests file, to remove
+piceli/k8s/k8s_client/tmp.py
+sa.json
+.vscode/

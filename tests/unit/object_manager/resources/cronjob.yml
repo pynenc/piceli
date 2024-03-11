@@ -1,0 +1,23 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: tasker-schedulerx
+spec:
+  schedule: "0 6 * * *"
+  concurrencyPolicy: Allow
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            pod_name: tasker-scheduler
+        spec:
+          # serviceAccountName: default
+          # imagePullSecrets:
+          #   - name: docker-registry-secret
+          containers:
+            - name: tasker-scheduler
+              image: "python:3.12-slim"
+              imagePullPolicy: Always
+              command: ["python", "--version"]
+          restartPolicy: Never

@@ -1,0 +1,14 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tasker-scheduler
+spec:
+  template:
+    metadata:
+      name: tasker-scheduler
+    spec:
+      containers:
+        - name: tasker-scheduler
+          image: busybox
+          command: ["sh", "-c", "echo 'scheduler' && sleep 30"]
+      restartPolicy: Never

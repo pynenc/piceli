@@ -1,0 +1,9 @@
+# temporary settings module for piceli
+import os
+
+GCE_SA_INFO = os.getenv("GCE_SA_INFO")
+WAIT_GKE_RUNNING_MINUTES = 15
+
+K8S_DELETE_TIMEOUT = 60
+K8S_WAIT_TIMEOUT = 300
+K8S_WAIT_REQUEST_TIMEOUT = 80

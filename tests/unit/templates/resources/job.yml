@@ -1,0 +1,38 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  labels:
+    job_name: test-job
+  name: test-job
+spec:
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        pod_name: test-job
+      name: test-job
+    spec:
+      imagePullSecrets:
+        - name: docker-registry-credentials
+      containers:
+        - name: test-job
+          image: docker-image
+          command: ["python", "--version"]
+          resources:
+            requests:
+              memory: 250Mi
+              cpu: 100m
+              ephemeral-storage: 11Mi
+          env:
+            - name: K0
+              value: V0
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "test $(expr $(date +%s) - $(cat /tmp/health_check)) -lt 60"
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 3
+      restartPolicy: Never
