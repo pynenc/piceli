@@ -2,7 +2,6 @@ import base64
 import json
 import logging
 import os
-import sys
 import tempfile
 import threading
 from functools import cached_property
@@ -10,12 +9,9 @@ from typing import Any, Optional
 
 from kubernetes import client, config, watch
 
-sys.path.append("/Users/krossover/git/piceli")
 from piceli.k8s.config.kubeconfig import KubeConfig
 from piceli.k8s.templates.auxiliary.resource_request import ClusterResources
 from piceli.settings import GCE_SA_INFO
-
-# from piceli.k8s.k8s_client.tmp import kubeconfig as _tmp_kubeconfig # TMP FOR MINIKUBE REMOVE!
 
 logger = logging.getLogger(__name__)
 
@@ -33,12 +29,13 @@ class ClientManager:
         return cls._instance
 
     def get_client(self, kubeconfig: Optional[KubeConfig] = None) -> client.ApiClient:
-        # TODO REMOVE default to minikube when proper config is ready (pystell)
-        # kubeconfig = _tmp_kubeconfig  # REMOVE THIS!!!
         if kubeconfig not in self._clients:
-            # this it probably only work in GCP make this more generic
+            # this it probably only work in GCP make this more generic when refactoring legacy libs
             if kubeconfig:
                 logger.debug(f"connection to client using {kubeconfig=}")
+                if not GCE_SA_INFO:
+                    # TODO: if still necessary after refactoring, use cistell
+                    raise ValueError("GCE_SA_INFO required for GKE kubeconfig")
                 credentials = json.loads(base64.b64decode(GCE_SA_INFO).decode("utf-8"))
                 with tempfile.TemporaryDirectory():
                     with open(
@@ -151,10 +148,3 @@ def get_cluster_pods(
     return ctx.core_api.list_namespaced_pod(
         namespace=Namespace, label_selector=_label_selector
     ).items
-
-
-if __name__ == "__main__":
-    k8s = ClientManager()
-    ctx = ClientContext()
-    resources = get_cluster_resources(ctx, "default")
-    pass

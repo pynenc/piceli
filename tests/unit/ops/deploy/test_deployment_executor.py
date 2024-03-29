@@ -23,7 +23,7 @@ async def test_deploy_node_creates_nonexistent(
     node = deployment_graph.ObjectNode(deploying_object=object_managers[0])
     graph.add_node(node)
 
-    node.deploying_object.read = MagicMock(side_effect=not_found_api_op_exception)
+    node.deploying_object.read = MagicMock(side_effect=not_found_api_op_exception)  # type: ignore
     node.deploying_object.create = MagicMock()
 
     # Act
@@ -48,7 +48,7 @@ async def test_rollback_node_deletes_created(
     node.deployment_status = deployment_graph.DeploymentStatus.DONE
     graph.add_node(node)
 
-    node.deploying_object.delete = MagicMock()
+    node.deploying_object.delete = MagicMock()  # type: ignore
 
     # Act
     await executor.rollback_node(node, ctx, namespace)
@@ -76,10 +76,10 @@ async def test_deploy_with_dependencies(
     graph.add_node(node2)
     graph.add_dependency(node2.identifier, node1.identifier)
 
-    obj1.read = MagicMock(side_effect=not_found_api_op_exception)
+    obj1.read = MagicMock(side_effect=not_found_api_op_exception)  # type: ignore
     obj1.create = MagicMock()
-    obj1.wait = MagicMock()
-    obj2.read = MagicMock(side_effect=not_found_api_op_exception)
+    obj1.wait = MagicMock()  # type: ignore
+    obj2.read = MagicMock(side_effect=not_found_api_op_exception)  # type: ignore
     obj2.create = MagicMock()
 
     # Act

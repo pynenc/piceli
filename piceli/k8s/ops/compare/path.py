@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import ClassVar, Iterator, Union, overload
+from functools import lru_cache
+from typing import ClassVar, Iterable, Iterator, Union, overload
 
 
 class PathElem(ABC):
@@ -62,6 +63,23 @@ class ListElemId(PathElem):
 
 
 @dataclass(frozen=True)
+class Wildcard(PathElem):
+    _wildcard: ClassVar[str] = "*"
+
+    @property
+    def id(self) -> str:
+        return self._wildcard
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, PathElem):
+            return True
+        return False
+
+    def __hash__(self) -> int:
+        return hash(self._wildcard)
+
+
+@dataclass(frozen=True)
 class Path:
     elements: list[PathElem]
     _elem_separator: ClassVar[str] = ","
@@ -87,7 +105,9 @@ class Path:
     def from_list(cls, path: list[str]) -> "Path":
         elements: list[PathElem] = []
         for part in path:
-            if ListElemId._id_separator in part:
+            if Wildcard._wildcard == part:
+                elements.append(Wildcard())
+            elif ListElemId._id_separator in part:
                 key, value = part.split(ListElemId._id_separator)
                 elements.append(ListElemId(key, value))
             else:
@@ -97,7 +117,7 @@ class Path:
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Path):
             return False
-        return self.elements == other.elements
+        return wildcard_match_paths(self, other)
 
     def __hash__(self) -> int:
         return hash(tuple(self.elements))
@@ -124,15 +144,81 @@ class Path:
 
     def __contains__(self, item: object) -> bool:
         if isinstance(item, Path):
-            # traverse item and if elems match self return True
-            if len(item) > len(self):
-                return False
-            for i, elem in enumerate(item.elements):
-                if elem != self.elements[i]:
-                    return False
-            return True
+            return wildcard_contains(item.elements, self.elements)
         if isinstance(item, PathElem):
             return item in self.elements
         if isinstance(item, str):
             return item in str(self)
         return False
+
+
+def wildcard_contains(seq1: list[PathElem], seq2: list[PathElem]) -> bool:
+    @lru_cache(maxsize=None)
+    def match_helper(index1: int, index2: int) -> bool:
+        if index1 == len(seq1):
+            return True
+        if index2 == len(seq2):
+            return False
+        if index1 < len(seq1) and isinstance(seq1[index1], Wildcard):
+            return any(
+                match_helper(index1 + 1, j) for j in range(index2, len(seq2) + 1)
+            )
+        if index2 < len(seq2) and isinstance(seq2[index2], Wildcard):
+            return any(
+                match_helper(i, index2 + 1) for i in range(index1, len(seq1) + 1)
+            )
+        return seq1[index1] == seq2[index2] and match_helper(index1 + 1, index2 + 1)
+
+    # Check if the first elements are wildcards or if they match directly without wildcards
+    # If not, then do not allow flexible start positions for matching
+    allow_flexible_start = isinstance(seq1[0], Wildcard) or isinstance(
+        seq2[0], Wildcard
+    )
+    if not allow_flexible_start:
+        return match_helper(0, 0)  # Start matching from the beginning of both sequences
+
+    return any(match_helper(0, start) for start in range(len(seq2) + 1))
+
+
+def match_sequences(seq1: list[PathElem], seq2: list[PathElem]) -> bool:
+    @lru_cache(maxsize=None)
+    def match_helper(index1: int, index2: int) -> bool:
+        # End of both sequences reached, successful match
+        if index1 == len(seq1) and index2 == len(seq2):
+            return True
+        # End of one sequence but not the other, unsuccessful match
+        if index1 == len(seq1) or index2 == len(seq2):
+            return index1 == len(seq1) and index2 == len(seq2)
+        # Wildcard in seq1
+        if index1 < len(seq1) and isinstance(seq1[index1], Wildcard):
+            # Skip wildcard, match rest of seq1 with any subsequence of seq2
+            return any(
+                match_helper(index1 + 1, j) for j in range(index2, len(seq2) + 1)
+            )
+        # Wildcard in seq2
+        if index2 < len(seq2) and isinstance(seq2[index2], Wildcard):
+            # Skip wildcard, match rest of seq2 with any subsequence of seq1
+            return any(
+                match_helper(i, index2 + 1) for i in range(index1, len(seq1) + 1)
+            )
+
+        # Direct match for the current elements and the rest
+        return seq1[index1] == seq2[index2] and match_helper(index1 + 1, index2 + 1)
+
+    # Start matching from the beginning of both sequences
+    return match_helper(0, 0)
+
+
+def wildcard_match_paths(path0: Path, path1: Path) -> bool:
+    """Check if the patches match using wildcard"""
+    return match_sequences(path0.elements, path1.elements)
+
+
+def wildcard_contains_path(path_to_check: Path, path_container: Path) -> bool:
+    """Check if path_to_check is contained in patch_container considering wildcard"""
+    return wildcard_contains(path_to_check.elements, path_container.elements)
+
+
+def path_matches_any_with_wildcard(path: Path, paths: Iterable[Path]) -> bool:
+    """Check if the target_path matches any path in the paths using wildcard matching."""
+    return any(wildcard_match_paths(path, _path) for _path in paths)

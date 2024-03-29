@@ -5,7 +5,13 @@ from typing import Any, NamedTuple
 from kubernetes.utils.quantity import parse_quantity
 
 from piceli.k8s.k8s_objects.base import K8sObject
-from piceli.k8s.ops.compare.path import DictKey, ListElemId, Path
+from piceli.k8s.ops.compare.path import (
+    DictKey,
+    ListElemId,
+    Path,
+    path_matches_any_with_wildcard,
+    wildcard_contains_path,
+)
 
 
 class UpdateAction(Enum):
@@ -113,6 +119,17 @@ class CompareResult:
     def needs_replacement(self) -> bool:
         return self.update_action == UpdateAction.NEEDS_REPLACEMENT
 
+    @property
+    def action_description(self) -> str:
+        """action description"""
+        if self.update_action == UpdateAction.NEEDS_PATCH:
+            return "Can be patched"
+        if self.update_action == UpdateAction.NEEDS_REPLACEMENT:
+            return "Requires replacement"
+        if self.update_action == UpdateAction.EQUALS:
+            return "No action needed"
+        return str(self.update_action)
+
 
 # paths to ignore in exising and desired specs
 # would always be overwritten by k8s
@@ -130,23 +147,64 @@ IGNORED_PATHS = {
     Path.from_list(["status"]),
 }
 
-# paths to ignore if only exsits in existing_spec
+# paths to ignore if only exists in existing_spec
 # because they are default values and desired do not explicitly set them
 # k8s will define them if not set in desired spec
 DEFAULTED_PATHS = {
+    # Volumes
     Path.from_string("spec,storageClassName"),
     Path.from_string("spec,volumeMode"),
+    Path.from_string("spec,volumeName"),
+    Path.from_string("reclaimPolicy"),
+    Path.from_string("volumeBindingMode"),
+    # Common Containers
+    Path.from_string("*,spec,containers,*,terminationMessagePath"),
+    Path.from_string("*,spec,containers,*,terminationMessagePolicy"),
+    Path.from_string("*,spec,containers,*,imagePullPolicy"),
+    # Deployment
+    Path.from_string("spec,template,spec,schedulerName"),
+    Path.from_string("spec,template,spec,restartPolicy"),
+    Path.from_string("spec,template,spec,terminationGracePeriodSeconds"),
+    Path.from_string("spec,template,spec,dnsPolicy"),
+    Path.from_string("spec,strategy,type"),
+    Path.from_string("spec,strategy,rollingUpdate,maxSurge"),
+    Path.from_string("spec,strategy,rollingUpdate,maxUnavailable"),
+    Path.from_string("spec,revisionHistoryLimit"),
+    Path.from_string(
+        "spec,progressDeadlineSeconds",
+    ),
+    # Service
+    Path.from_string("spec,type"),
+    Path.from_string("spec,ipFamilies"),
+    Path.from_string("spec,clusterIP"),
+    Path.from_string("spec,sessionAffinity"),
+    Path.from_string("spec,clusterIPs"),
+    Path.from_string("spec,ipFamilyPolicy"),
+    Path.from_string("spec,internalTrafficPolicy"),
+    # Cronjob
+    Path.from_string("spec,failedJobsHistoryLimit"),
+    Path.from_string(
+        "spec,jobTemplate,spec,template,spec,terminationGracePeriodSeconds"
+    ),
+    Path.from_string("spec,jobTemplate,spec,template,spec,schedulerName"),
+    Path.from_string("spec,jobTemplate,spec,template,spec,dnsPolicy"),
+    Path.from_string("spec,successfulJobsHistoryLimit"),
+    Path.from_string("spec,concurrencyPolicy"),
+    Path.from_string("spec,suspend"),
 }
 
 
 def is_path_ignored(path_comparison: PathComparison) -> bool:
     """Check if the path should be completely ignored."""
-    return any(ignored_path in path_comparison.path for ignored_path in IGNORED_PATHS)
+    return any(
+        wildcard_contains_path(ignored_path, path_comparison.path)
+        for ignored_path in IGNORED_PATHS
+    )
 
 
 def is_path_defaulted(path_comparison: PathComparison) -> bool:
     """Check if the path should be considered a default, ignored only if missing in desired."""
-    return (path_comparison.path in DEFAULTED_PATHS) and (
+    return path_matches_any_with_wildcard(path_comparison.path, DEFAULTED_PATHS) and (
         path_comparison.desired is None and path_comparison.existing is not None
     )
 
@@ -170,6 +228,8 @@ def are_values_equal(path_comparison: PathComparison) -> bool:
 # dict with the path and the key of the unique id in each of the list elements
 PATH_WITH_ID_LIST = {
     Path.from_string("spec,template,spec,containers"): "name",
+    # Cronjob containers
+    Path.from_string("spec,jobTemplate,spec,template,spec,containers"): "name",
 }
 
 

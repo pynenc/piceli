@@ -191,14 +191,12 @@ def test_find_differences_with_none_and_string() -> None:
     # Execute: Find differences between the two specs
     differences = object_comparer.find_differences(desired_spec, existing_spec)
     # Assert: Check that the difference is correctly identified and considered
-    assert (
-        differences.considered
-        == [
-            object_comparer.PathComparison(
-                object_comparer.Path.from_string("key"), "existing_value", None
-            )
-        ]
-    ), "Should detect and consider a difference where one value is None and the other is a string"
+    expected = object_comparer.PathComparison(
+        object_comparer.Path.from_string("key"), "existing_value", None
+    )
+    assert differences.considered == [
+        expected
+    ], "Should detect and consider a difference where one value is None and the other is a string"
     # Also assert that there are no ignored differences in this case
     assert (
         differences.ignored == []

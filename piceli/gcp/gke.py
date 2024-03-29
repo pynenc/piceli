@@ -78,37 +78,37 @@ class GKECluster:
     ) -> None:
         """Creates GKE cluster if doesn't exists"""
         raise NotImplementedError("Review before testing this method")
-        try:
-            self.get(cluster_id)
-            logger.info(f"Nothing to do, {cluster_id} already exists")
-        except exceptions.NotFound:
-            if only_check:
-                logger.warning(
-                    f"GKE cluster {cluster_id} don't exits and will be created"
-                )
-                return
-            logger.warning(f"Creating GKE cluster {cluster_id}")
-            # https://cloud.google.com/python/docs/reference/container/latest/google.cloud.container_v1.types.Cluster
-            cluster = container_v1.Cluster(
-                name=cluster_id.cluster_name,
-                description=f"Cluster created by infra_client on project {cluster_id.project_name} and region {cluster_id.region}",
-                initial_node_count=1,
-                autopilot=container_v1.Autopilot(enabled=True),
-                node_config=container_v1.NodeConfig(
-                    machine_type=const.GKE_NODE_MACHINE_TYPE
-                ),
-                # only on non autopilot clusters to enable workload identity
-                workload_identity_config=container_v1.WorkloadIdentityConfig(
-                    workload_pool=f"{project_id}.svc.id.goog"
-                ),
-            )
-            request = container_v1.CreateClusterRequest(
-                parent=f"{cluster_id.project_name}/locations/{cluster_id.region}",
-                cluster=cluster,
-            )
-            client = container_v1.ClusterManagerClient(credentials=self.credentials)
-            _ = client.create_cluster(request=request)
-            self._cache.pop(cluster_id, None)
+        # try:
+        #     self.get(cluster_id)
+        #     logger.info(f"Nothing to do, {cluster_id} already exists")
+        # except exceptions.NotFound:
+        #     if only_check:
+        #         logger.warning(
+        #             f"GKE cluster {cluster_id} don't exits and will be created"
+        #         )
+        #         return
+        #     logger.warning(f"Creating GKE cluster {cluster_id}")
+        #     # https://cloud.google.com/python/docs/reference/container/latest/google.cloud.container_v1.types.Cluster
+        #     cluster = container_v1.Cluster(
+        #         name=cluster_id.cluster_name,
+        #         description=f"Cluster created by infra_client on project {cluster_id.project_name} and region {cluster_id.region}",
+        #         initial_node_count=1,
+        #         autopilot=container_v1.Autopilot(enabled=True),
+        #         node_config=container_v1.NodeConfig(
+        #             machine_type=const.GKE_NODE_MACHINE_TYPE
+        #         ),
+        #         # only on non autopilot clusters to enable workload identity
+        #         workload_identity_config=container_v1.WorkloadIdentityConfig(
+        #             workload_pool=f"{project_id}.svc.id.goog"
+        #         ),
+        #     )
+        #     request = container_v1.CreateClusterRequest(
+        #         parent=f"{cluster_id.project_name}/locations/{cluster_id.region}",
+        #         cluster=cluster,
+        #     )
+        #     client = container_v1.ClusterManagerClient(credentials=self.credentials)
+        #     _ = client.create_cluster(request=request)
+        #     self._cache.pop(cluster_id, None)
 
     def wait(self, cluster_id: GKEClusterId) -> None:
         """Wait until the cluster is ready"""
@@ -125,10 +125,8 @@ class GKECluster:
                 )
                 raise Exception(f"Error creating {msg}: {gke_cluster.conditions}")
             if time.time() > timeout:
-                logger.error(
-                    msg
-                    := f"After more than {WAIT_GKE_RUNNING_MINUTES} min, {msg} still:{gke_cluster.status.name}"
-                )
+                msg = f"After more than {WAIT_GKE_RUNNING_MINUTES} min, {msg} still:{gke_cluster.status.name}"
+                logger.error(msg)
                 raise TimeoutError(msg)
             elapsed = datetime.timedelta(seconds=time.time() - start)
             logger.warning(
@@ -168,8 +166,7 @@ def wait(
             break
         if time.time() > timeout:
             logger.error(
-                msg
-                := f"After {timeout_secs} secs, still waiting for {msg}: {status_str(status)}"
+                msg := f"After {timeout_secs} secs, still waiting for {msg}: {status_str(status)}"
             )
             raise TimeoutError(msg)
         elapsed = datetime.timedelta(seconds=time.time() - start)

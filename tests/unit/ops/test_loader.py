@@ -8,7 +8,7 @@ def test_load_all_resources() -> None:
     test_module = "tests.unit.ops.resources.simple_job"
     test_yaml = os.path.join(os.path.dirname(__file__), "resources", "simple_job.yml")
 
-    resources = loader.load_all_resources([test_module], [test_yaml])
+    resources = list(loader.load_all_resources([test_module], [test_yaml]))
 
     assert len(resources) == 2, "Should load one template object and one YAML resource"
     assert all(isinstance(r, K8sObject) for r in resources)
@@ -28,7 +28,7 @@ def test_load_yaml_multiple_jobs() -> None:
         os.path.dirname(__file__), "resources", "multiple_jobs.yml"
     )
 
-    resources = loader.load_resources_from_yaml([test_yaml])
+    resources = list(loader.load_resources_from_files([test_yaml]))
 
     assert len(resources) == 2, "Should load two YAML resources from the same file"
     assert all(isinstance(r, K8sObject) for r in resources)

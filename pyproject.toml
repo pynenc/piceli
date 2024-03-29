@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "piceli"
-version = "0.0.2"
+version = "0.0.3"
 description = "Infrastructure for python"
 authors = ["Jose Diaz"]
 license = "MIT License"
@@ -9,11 +9,12 @@ homepage = "https://piceli.pynenc.org"
 documentation = "https://docs.piceli.pynenc.org"
 repository = "https://github.com/pynenc/piceli"
 classifiers = [
-    "Development Status :: 1 - Planning",
+    "Development Status :: 2 - Pre-Alpha",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Environment :: Console",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: System :: Distributed Computing",
 ]
@@ -24,12 +25,14 @@ piceli = 'piceli.__main__:main'
 
 
 [tool.poetry.dependencies]
-python = "^3.11"
+python = ">=3.11.6,<4.0"
 textual = "^0.49.0"
 kubernetes = "^29.0.0"
 tenacity = "^8.2.3"
 cron-validator = "^1.0.8"
 pydantic = "^2.6.1"
+typer = { extras = ["all"], version = "^0.9.0" }
+cistell = "^0.0.4"
 
 [tool.poetry.group.gcp]
 optional = false
@@ -98,7 +101,7 @@ select = [
 ignore = [
     "E501", # line too long, handled by black
     # "B008",  # do not perform function calls in argument defaults
-    # "C901",  # too complex
+    "C901", # too complex
     # "W191", # indentation contains tabs
 ]
 exclude = ["legacy_libs/"]

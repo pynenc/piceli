@@ -1,4 +1,5 @@
 from collections import defaultdict
+from typing import Iterable
 
 from piceli.k8s.k8s_objects.base import K8sObject, K8sObjectIdentifier
 from piceli.k8s.object_manager.factory import ManagerFactory
@@ -39,7 +40,7 @@ KIND_TO_DEPLOYMENT_LEVEL = {
 
 
 def classify_k8s_objects_by_deployment_level(
-    k8s_objects: list[K8sObject],
+    k8s_objects: Iterable[K8sObject],
 ) -> dict[int, list[K8sObject]]:
     """
     Classifies the Kubernetes objects in the specified list by their deployment level.
@@ -62,7 +63,9 @@ class StrategyAuto(DeploymentStrategy):
     This trategy classify the objects by its kind, eg: ConfigMap will run before Deployment.
     """
 
-    def build_deployment_graph(self, k8s_objects: list[K8sObject]) -> DeploymentGraph:
+    def build_deployment_graph(
+        self, k8s_objects: Iterable[K8sObject]
+    ) -> DeploymentGraph:
         graph = DeploymentGraph()
         classified_objects = classify_k8s_objects_by_deployment_level(k8s_objects)
 

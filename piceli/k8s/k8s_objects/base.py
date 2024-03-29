@@ -29,6 +29,13 @@ class OriginYAML(ObjectOrigin):
 
 
 @dataclass
+class OriginJSON(ObjectOrigin):
+    """The object was created from a JSON file"""
+
+    path: str
+
+
+@dataclass
 class OriginTemplate(ObjectOrigin):
     """The object was created from a template"""
 

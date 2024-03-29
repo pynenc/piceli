@@ -13,7 +13,7 @@ from piceli.k8s.ops.deploy.deployment_graph import DeploymentGraph
 @pytest.fixture
 def resources() -> list[K8sObject]:
     test_yaml = os.path.join(os.path.dirname(__file__), "resources", "deployment.yml")
-    return loader.load_resources_from_yaml([test_yaml])
+    return list(loader.load_resources_from_files([test_yaml]))
 
 
 @pytest.fixture
@@ -21,7 +21,7 @@ def resources_update() -> list[K8sObject]:
     test_yaml = os.path.join(
         os.path.dirname(__file__), "resources", "deployment_update.yml"
     )
-    return loader.load_resources_from_yaml([test_yaml])
+    return list(loader.load_resources_from_files([test_yaml]))
 
 
 @pytest.fixture

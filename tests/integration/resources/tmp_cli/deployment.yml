@@ -47,20 +47,26 @@ data:
       "key": "value"
     }
 
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: resizable
+provisioner: k8s.io/minikube-hostpath
+allowVolumeExpansion: true
 
-# ---
-# Patch disabled, do not run in minikube Ubuntu
-#
-# apiVersion: v1
-# kind: PersistentVolumeClaim
-# metadata:
-#   name: example-persistentvolumeclaim
-# spec:
-#   accessModes:
-#     - ReadWriteOnce
-#   resources:
-#     requests:
-#       storage: 0.2Gi # Changed from 0.1Gi to 0.2Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: example-persistentvolumeclaim
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 0.1Gi
+  storageClassName: resizable
 
 ---
 apiVersion: apps/v1
@@ -79,7 +85,7 @@ spec:
     spec:
       containers:
         - name: example-container
-          image: ubuntu:latest # Changed from bash:4.4 to ubuntu:latest
+          image: bash:4.4
           imagePullPolicy: Always
           command: ["sh", "-c", "while true; do sleep 60; done;"]
           env:
@@ -118,7 +124,7 @@ kind: CronJob
 metadata:
   name: example-cronjob
 spec:
-  schedule: "*/10 * * * *" # Changed from "*/5 * * * *" to "*/10 * * * *"
+  schedule: "*/5 * * * *"
   jobTemplate:
     spec:
       template:
@@ -128,3 +134,23 @@ spec:
               image: bash:4.4
               command: ["sh", "-c", "echo Hello from the CronJob; date"]
           restartPolicy: Never
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: example-horizontalpodautoscaler
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: example-deployment
+  minReplicas: 1
+  maxReplicas: 3
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 80

@@ -1,0 +1,14 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: other-job
+spec:
+  template:
+    metadata:
+      name: other-job
+    spec:
+      containers:
+        - name: other-job
+          image: busybox
+          command: ["sh", "-c", "echo 'scheduler' && sleep 30"]
+      restartPolicy: Never

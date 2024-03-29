@@ -16,10 +16,6 @@ def deploy(
     deployment_graph = strategy.build_deployment_graph(k8s_objects)
     deployment_graph.validate()
     executor = deployment_executor.DeploymentExecutor(deployment_graph)
-    try:
-        asyncio.run(executor.deploy(ctx, namespace))
-        asyncio.run(executor.wait_for_all(ctx, namespace))
-    except Exception as e:
-        print(f"Deployment failed: {e}")
-        # Deployment failure and rollback logic is handled within executor.deploy()
+    asyncio.run(executor.deploy(ctx, namespace))
+    asyncio.run(executor.wait_for_all(ctx, namespace))
     return executor
