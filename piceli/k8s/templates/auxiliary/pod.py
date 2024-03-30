@@ -11,7 +11,24 @@ from piceli.k8s.templates.deployable import service_account as sa_lib
 
 
 class Pod(BaseModel):
-    "k8s_client.Kubernetes common pod definition"
+    """
+    Represents a common Kubernetes Pod definition within Piceli, encapsulating the necessary configuration for deploying containers.
+
+    Attributes:
+        :param names.Name name: The name of the Pod, unique within a namespace.
+        :param list[container_lib.Container] containers: A list of containers to include in the Pod.
+        :param list[container_lib.Container] init_containers: A list of initialization containers that run before the app containers.
+        :param Optional[sa_lib.ServiceAccount] service_account: The service account associated with the Pod.
+        :param Optional[bool] automount_service_account_token: Indicates whether to automatically mount the service account token.
+        :param Optional[int] port: The port that the container exposes.
+        :param policies.RestartPolicy restart_policy: The Pod's restart policy.
+        :param Optional[int] security_context_uid: UID to use for the Pod's security context.
+        :param Optional[Labels] template_labels: Labels to apply to the Pod for identification and selection.
+        :param list[str] image_pull_secrets: Names of the Kubernetes secrets used to pull container images.
+        :param Optional[int] termination_grace_period_seconds: Duration in seconds to wait before forcibly terminating the container.
+
+    This class provides a structured way to define and manage the configuration of Pods, crucial for the deployment of containerized applications within Kubernetes. It integrates with various auxiliary classes and templates to specify containers, security settings, and other critical aspects of Pod deployment.
+    """
 
     name: names.Name
     containers: list[container_lib.Container] = []
@@ -24,8 +41,6 @@ class Pod(BaseModel):
     template_labels: Optional[Labels] = None
     image_pull_secrets: list[str] = []
     termination_grace_period_seconds: Optional[int] = None
-    # API: ClassVar[str] = "core"
-    # API_FUNC: ClassVar[str] = "job"
 
     @property
     def container_map(self) -> dict[str, container_lib.Container]:
@@ -33,7 +48,11 @@ class Pod(BaseModel):
         return {container.name: container for container in self.containers}
 
     def get_pod_spec(self) -> client.V1PodTemplateSpec:
-        """gets the Pod template spec definition"""
+        """
+        Generates the Kubernetes Pod template specification for the defined Pod configuration.
+
+        :return: A `client.V1PodTemplateSpec` instance representing the Pod's configuration for deployment.
+        """
         containers = []
         init_containers = []
         _volume_claims: dict[str, client.V1Volume] = {}
@@ -89,7 +108,11 @@ class Pod(BaseModel):
         return pod_template
 
     def get_label_selector(self) -> str:
-        """Concatenate deployment pod labes to use in selector field"""
+        """
+        Constructs a label selector string from the Pod's labels for Kubernetes operations.
+
+        :return: A string representation of the label selector.
+        """
         labels = [f"{k}={v}" for k, v in self.get_pod_spec().metadata.labels.items()]
         return ",".join(labels)
 

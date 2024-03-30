@@ -44,7 +44,16 @@ def get_role_binding(
 
 
 class RoleBinding(base.Deployable):
-    """Role Binding"""
+    """
+    Represents a Kubernetes RoleBinding, allowing you to assign a role to a set of users within a namespace.
+
+    :param names.Name name: The name of the RoleBinding.
+    :param str role_name: The name of the Role being bound.
+    :param Optional[str] service_account_name: The ServiceAccount name, if any, the role is being assigned to.
+    :param list[str] users: The list of users being granted the role.
+    :param list[str] resource_names: Specific resource names the role applies to.
+    :param Optional[Labels] labels: Custom labels for organizational purposes.
+    """
 
     name: names.Name
     role_name: str
@@ -67,16 +76,21 @@ class RoleBinding(base.Deployable):
 
 
 class ClusterRoleBinding(base.Deployable):
-    """Cluster Role Binding"""
+    """
+    Defines a Kubernetes ClusterRoleBinding for assigning a ClusterRole to users cluster-wide.
+
+    :param names.Name name: The name of the ClusterRoleBinding.
+    :param names.Name role_name: The name of the ClusterRole being assigned.
+    :param Optional[str] service_account_name: ServiceAccount being granted the ClusterRole.
+    :param list[str] users: List of users being assigned the ClusterRole.
+    :param Optional[Labels] labels: Custom labels for identification and organization.
+    """
 
     name: names.Name
     role_name: names.Name
     service_account_name: Optional[str] = None
     users: list[str] = []
     labels: Optional[Labels] = None
-    # API: ClassVar[str] = "rbacauthorization"
-    # API_FUNC: ClassVar[str] = "cluster_role_binding"
-    # NAMESPACED: ClassVar[bool] = False
 
     def get(self) -> list[client.V1ClusterRoleBinding]:
         """gets the Job definition"""

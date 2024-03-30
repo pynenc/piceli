@@ -11,7 +11,15 @@ from piceli.k8s.templates.deployable import base
 
 
 class Secret(base.Deployable):
-    """Secret"""
+    """
+    Facilitates the definition and deployment of Kubernetes Secret objects.
+
+    :param names.Name name: The unique name of the secret.
+    :param secret_type.SecretType secret_type: Specifies the type of the secret, influencing how it is used by Kubernetes.
+    :param Optional[dict[str, str]] string_data: Unencoded data to store in the secret. Keys must be unique.
+    :param Optional[dict[str, str]] data: Base64-encoded data to store in the secret. Provides an alternative to `string_data`.
+    :param Optional[Labels] labels: Custom labels for organizational purposes.
+    """
 
     name: names.Name
     secret_type: secret_type.SecretType

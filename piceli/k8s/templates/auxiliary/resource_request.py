@@ -8,7 +8,16 @@ from kubernetes.utils.quantity import parse_quantity
 
 @dataclass(frozen=True)
 class Resources:
-    """Kubernetes resources"""
+    """
+    Represents Kubernetes resources, facilitating arithmetic operations and validation.
+
+    Attributes:
+        :param Optional[str] memory: The amount of memory allocated for the resource. Specified in Kubernetes quantity string format (e.g., '200Mi', '1Gi').
+        :param Optional[str] cpu: The amount of CPU allocated for the resource. Specified in Kubernetes quantity string format (e.g., '100m' for 100 millicpu).
+        :param Optional[str] ephemeral_storage: The amount of ephemeral storage allocated for the resource. Specified in Kubernetes quantity string format.
+
+    The class supports creating `Resources` objects from dictionaries, converting between string and numerical representations, and performing arithmetic operations on resource quantities. These capabilities are essential for managing resource allocations in Kubernetes deployments.
+    """
 
     memory: Optional[str] = None
     cpu: Optional[str] = None
@@ -16,7 +25,12 @@ class Resources:
 
     @classmethod
     def from_dict(cls, resources: dict[str, str]) -> "Resources":
-        """creates a Resources object from a dict"""
+        """
+        Creates a `Resources` object from a dictionary of string quantities.
+
+        :param dict[str, str] resources: A dictionary where keys are resource types ('memory', 'cpu', 'ephemeral-storage') and values are quantities in string format.
+        :return: A `Resources` object with the specified resources.
+        """
         return cls(
             **{
                 k.replace("-", "_"): v
@@ -29,7 +43,12 @@ class Resources:
     def from_quantity_dict(
         cls, resources: dict[str, int | float | None]
     ) -> "Resources":
-        """creates a Resources object from a dict containing the quantity in k"""
+        """
+        Creates a `Resources` object from a dictionary of quantities, converting them to string format.
+
+        :param dict[str, int | float | None] resources: A dictionary where keys are resource types and values are quantities in kilo, mega, etc.
+        :return: A `Resources` object with resources converted to Kubernetes-compatible string representations.
+        """
         return cls(
             **{
                 k.replace("-", "_"): Resources.bytes_to_str(v, k)

@@ -3,7 +3,7 @@ from kubernetes import client
 from piceli.k8s import constants, templates
 from tests.unit.templates import yaml_utils
 
-CONFIGMAP = templates.CronJob(
+CRONJOB = templates.CronJob(
     name="test-cronjob",
     containers=[
         templates.Container(
@@ -16,7 +16,7 @@ CONFIGMAP = templates.CronJob(
 
 def test_get_role_from_deployable() -> None:
     """test service_account"""
-    roles = templates.Role.from_deployable(CONFIGMAP)
+    roles = templates.Role.from_deployable(CRONJOB)
     assert len(roles) == 1
     assert isinstance(roles[0], templates.Role)
     objects = roles[0].get()
@@ -27,7 +27,7 @@ def test_get_role_from_deployable() -> None:
 
 
 def test_service_account_and_role_bindings() -> None:
-    roles = templates.Role.from_deployable(CONFIGMAP)
+    roles = templates.Role.from_deployable(CRONJOB)
     assert len(roles) == 1
     service_account = templates.ServiceAccount(name="test-sa", roles=roles)
     objects = service_account.get()
@@ -46,7 +46,7 @@ def test_service_account_and_role_bindings() -> None:
 def test_read_only_role() -> None:
     """Test read only role"""
     roles = templates.Role.from_deployable(
-        CONFIGMAP, constants.APIRequestVerb.get_read_only()
+        CRONJOB, constants.APIRequestVerb.get_read_only()
     )
     assert len(roles) == 1
     assert isinstance(roles[0], templates.Role)

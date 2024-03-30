@@ -9,7 +9,14 @@ from piceli.k8s.templates.deployable import base
 
 
 class ServicePort(BaseModel):
-    """Service Port"""
+    """
+    Represents a single port exposed by a Kubernetes Service.
+
+    Attributes:
+        name (str): The name of the service port.
+        port (int): The port number exposed by the service.
+        target_port (int): The target port on the pod(s) to which traffic is forwarded.
+    """
 
     name: str
     port: int
@@ -23,15 +30,22 @@ class ServicePort(BaseModel):
 
 
 class Service(base.Deployable):
-    """k8s_client.Kubernetes Service"""
+    """
+    Facilitates the definition and deployment of Kubernetes Service objects.
+
+    Services enable networking access to a set of pods, based on labels and selectors,
+    defining logical sets of pods and policies to access them.
+
+    :param names.Name name: The name of the service, unique within the namespace.
+    :param list[ServicePort] ports: List of ports that the service will expose.
+    :param dict selector: Defines how the service selects pods to include in its set.
+    :param Optional[Labels] labels: Custom labels to organize and select services within Kubernetes.
+    """
 
     name: names.Name
     ports: list[ServicePort]
     selector: dict
     labels: Optional[Labels] = None
-
-    # API: ClassVar[str] = "core"
-    # API_FUNC: ClassVar[str] = "service"
 
     def get(self) -> list[client.V1Service]:
         ports = [p.get() for p in self.ports]

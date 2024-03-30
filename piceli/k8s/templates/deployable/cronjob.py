@@ -6,11 +6,18 @@ from piceli.k8s.templates.deployable import job
 
 
 class CronJob(job.Job):
-    "Kuberentes cronjob definition"
+    """
+    Defines a Kubernetes CronJob for scheduled job execution.
+
+    Extends the functionality of the `Job` class to include scheduling,
+    allowing jobs to be executed at predefined times or intervals.
+
+    :param crontab.CronTab schedule: The schedule on which the job should run, specified in CronTab format.
+
+    Inherits `name`, `labels`, `backoff_limit`, and pod spec configuration from the `Job` class.
+    """
 
     schedule: crontab.CronTab
-    # API: ClassVar[str] = "batch"
-    # API_FUNC: ClassVar[str] = "cron_job"
 
     def get(self) -> list[client.V1CronJob]:
         """gets the CronJob definition"""

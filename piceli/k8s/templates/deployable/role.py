@@ -12,7 +12,17 @@ from piceli.k8s.utils import utils_object
 
 
 class K8sRole(BaseModel):
-    """Defines the common Protocol for Role and ClusterRoles"""
+    """
+    Abstract base class for defining Kubernetes roles (`Role` and `ClusterRole`).
+
+    :param Name name: The unique name of the role, following DNS subdomain name conventions,
+        used in resource URLs, and provided by clients at creation time. This name is
+        intended to be human-friendly and should be unique within a given scope at a
+        particular time, with a maximum length of 63 characters.
+    :param str api_group: The name of the API group that the resources belong to.
+    :param str resource: The name of the resources within the API group that the role applies to.
+    :param list[APIRequestVerb] verbs: A list of actions that are allowed on the resources.
+    """
 
     name: names.Name
     api_group: str
@@ -51,7 +61,14 @@ def get_role(
 
 
 class Role(K8sRole, base.Deployable):
-    """Role"""
+    """
+    Represents a Kubernetes Role for namespace-scoped access control.
+
+    A Role defines permissions within a specific namespace, granting specified
+    actions on resources to users or service accounts.
+
+    Inherits common attributes from K8sRole and adds namespace-specific configuration.
+    """
 
     api_group: str
     resource: str
@@ -83,7 +100,14 @@ class Role(K8sRole, base.Deployable):
 
 
 class ClusterRole(K8sRole, base.Deployable):
-    """Cluster Role"""
+    """
+    Represents a Kubernetes ClusterRole for cluster-wide access control.
+
+    ClusterRoles grant permissions on resources across all namespaces in the cluster,
+    or on a specified set of resources, irrespective of their namespace.
+
+    Inherits from K8sRole, focusing on cluster-wide permissions without namespace specification.
+    """
 
     api_group: str
     resource: str

@@ -5,7 +5,17 @@ from piceli.k8s.templates.auxiliary import replica_manager
 
 
 class Deployment(replica_manager.ReplicaManager):
-    """Simplification of K8s deployment"""
+    """
+    Represents a Kubernetes Deployment object, extending ReplicaManager.
+
+    A Deployment provides declarative updates for Pods and ReplicaSets. This class simplifies
+    the deployment and scaling of applications, allowing users to specify desired states for
+    replicable pods within a Kubernetes cluster. Inherits common properties and behavior from
+    the ReplicaManager class.
+
+    Attributes:
+        Inherits all attributes from ReplicaManager.
+    """
 
     def get_replica_manager(self) -> client.V1Deployment:
         """gets the Job definition"""

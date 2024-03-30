@@ -10,13 +10,27 @@ from piceli.k8s.templates.deployable import base
 
 
 class Job(pod.Pod, base.Deployable):
-    """k8s_client.Kubernetes Job"""
+    """
+    Represents a Kubernetes Job for running short-lived or batch operations within a cluster.
+
+    :param Optional[NonNegativeInt] cleanup_after_seconds: Time in seconds to clean up job pods after completion.
+    :param Optional[NonNegativeInt] backoff_limit: The number of retries before marking the job as failed.
+    :param Optional[Labels] labels: Custom labels to apply to the job.
+
+    This class encapsulates the creation and management of Kubernetes Jobs, supporting
+    configurations for automatic cleanup and retry strategies. It ensures that jobs are
+    compliant with Kubernetes' best practices and restrictions, particularly regarding
+    the restart policy, which cannot be set to 'Always' for jobs.
+
+    ```{node}
+        The restart policy is implicitly handled to align with Kubernetes' requirements,
+        defaulting to 'Never' unless explicitly set to 'OnFailure' within the pod template.
+    ```
+    """
 
     cleanup_after_seconds: Optional[NonNegativeInt] = None
     backoff_limit: Optional[NonNegativeInt] = None
     labels: Optional[Labels] = None
-    # API: ClassVar[str] = "batch"
-    # API_FUNC: ClassVar[str] = "job"
 
     @model_validator(mode="before")
     def check_restart_policy(cls, values: dict) -> dict:

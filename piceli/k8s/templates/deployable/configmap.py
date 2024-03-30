@@ -8,7 +8,17 @@ from piceli.k8s.templates.deployable import base
 
 
 class ConfigMap(base.Deployable):
-    """Config Map"""
+    """
+    Represents a Kubernetes ConfigMap object within Piceli.
+
+    ConfigMaps allow you to decouple configuration artifacts from image content,
+    enhancing container application portability. This class provides a streamlined
+    interface to define and manage ConfigMaps in a Kubernetes cluster.
+
+    :param names.Name name: The name of the ConfigMap, adhering to Kubernetes naming conventions.
+    :param dict[str, str] data: A dictionary representing the data stored in the ConfigMap as key-value pairs.
+    :param Optional[Labels] labels: Optional. Labels to apply to the ConfigMap for better organization and discoverability.
+    """
 
     name: names.Name
     data: dict[str, str]

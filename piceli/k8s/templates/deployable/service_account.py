@@ -10,7 +10,19 @@ from piceli.k8s.templates.deployable import role_binding
 
 
 class ServiceAccount(base.Deployable):
-    """Service Account"""
+    """
+    Facilitates the definition and deployment of Kubernetes ServiceAccounts with associated roles and role bindings.
+
+    Service accounts are used to provide an identity for pods, enabling access control and secure interaction with the Kubernetes API.
+
+    :param names.Name name: The unique name of the service account.
+    :param Sequence[K8sRole] roles: Roles (Role or ClusterRole) to be associated with the service account for granting permissions.
+    :param Optional[dict[str, str]] annotations: Annotations to add metadata to the service account.
+    :param Optional[Labels] labels: Labels for organizing and selecting service accounts within Kubernetes.
+
+    The class streamlines the creation of service accounts and automates the association of roles and role bindings,
+    ensuring that the service account is ready for deployment with the necessary access controls.
+    """
 
     name: names.Name
     roles: Sequence[role_lib.K8sRole]

@@ -1,11 +1,11 @@
 [tool.poetry]
 name = "piceli"
-version = "0.0.3"
+version = "0.0.4"
 description = "Infrastructure for python"
 authors = ["Jose Diaz"]
 license = "MIT License"
 readme = "README.md"
-homepage = "https://piceli.pynenc.org"
+homepage = "https://www.pynenc.org"
 documentation = "https://docs.piceli.pynenc.org"
 repository = "https://github.com/pynenc/piceli"
 classifiers = [

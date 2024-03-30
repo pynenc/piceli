@@ -6,7 +6,19 @@ from piceli.k8s.templates.deployable import volume as volume_lib
 
 
 class StatefulSet(replica_manager.ReplicaManager, base.Deployable):
-    """Simplification of K8s sateteful set"""
+    """
+    Represents a Kubernetes StatefulSet object, extending ReplicaManager.
+
+    A StatefulSet is used for managing stateful applications. It manages the deployment and scaling
+    of a set of Pods and provides guarantees about the ordering and uniqueness of these Pods. Like
+    Deployments, StatefulSets maintain a sticky identity for each of their Pods. This class provides
+    a simplified interface for defining and managing StatefulSets, adding functionalities for volume
+    management on top of the common replica management features.
+
+    :param int replicas: Overrides ReplicaManager's default, setting the default number of replicas to 2 for StatefulSets.
+
+    Inherits all other attributes from ReplicaManager.
+    """
 
     replicas: int = 2
 

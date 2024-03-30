@@ -9,7 +9,25 @@ from piceli.k8s.templates.deployable import configmap, secret, volume
 
 
 class Container(BaseModel):
-    """Container definition"""
+    """
+    Represents a container within a Kubernetes pod, specifying runtime, resources, and configuration.
+
+    :param names.Name name: The unique name of the container within the pod.
+    :param str image: The Docker image to use for the container.
+    :param Optional[list[str]] command: The command to run in the container.
+    :param Optional[list[str]] args: Arguments to the command.
+    :param Optional[policies.ImagePullPolicy] image_pull_policy: Policy for pulling images.
+    :param Optional[list[port.Port]] ports: List of ports the container exposes.
+    :param Optional[dict[str, str | env_vars.ValueFromField | env_vars.ValueFromResourceField]] env: Environment variables.
+    :param Optional[list[volume.VolumeMount]] volumes: Volumes to mount into the container.
+    :param Optional[list[str]] liveness_pre_stop_command: Commands run before stopping the container.
+    :param Optional[list[str]] liveness_post_start_command: Commands run after starting the container.
+    :param Optional[list[str]] readiness_command: Command to determine the readiness of the container.
+    :param Optional[list[str]] liveness_command: Command to determine the liveness of the container.
+    :param Optional[resource_request.Resources] resources: Resource requests and limits.
+    :param list[configmap.ConfigMap | secret.Secret] env_sources: Sources for environment variables.
+    :param Optional[int] security_context_uid: User ID for running the container.
+    """
 
     name: names.Name
     image: str

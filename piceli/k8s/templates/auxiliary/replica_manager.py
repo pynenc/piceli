@@ -55,7 +55,21 @@ class VPA(BaseModel):
 
 
 class ReplicaManager(ABC, pod.Pod):
-    """Common definition for ReplicaSet and StatefulSet"""
+    """
+    An abstract base class for managing replica sets and stateful sets in Kubernetes.
+
+    This class provides common functionalities for replica management, including support
+    for horizontal and vertical pod autoscalers, service creation, and basic pod configuration.
+    It serves as a foundation for more specific deployment strategies such as Deployment and
+    StatefulSet objects.
+
+    :param policies.RestartPolicy restart_policy: The policy to restart pods. Default is Always.
+    :param int replicas: The number of replicas to maintain. Default is 1.
+    :param bool create_service: Flag indicating whether to create a service for the replica manager.
+    :param Optional[HPA] hpa: Configuration for HorizontalPodAutoscaler.
+    :param Optional[VPA] vpa: Configuration for VerticalPodAutoscaler.
+    :param Optional[Labels] labels: Labels to apply to the replica manager.
+    """
 
     restart_policy: policies.RestartPolicy = policies.RestartPolicy.ALWAYS
     replicas: int = 1

@@ -10,26 +10,44 @@ logger = logging.getLogger(__name__)
 
 
 class ValueFromField(BaseModel):
-    """ValueFromField"""
+    """
+    Represents a mechanism to set an environment variable from a PodSpec field.
+
+    :param names.FieldPath field_path: The path of the field from which to derive the environment variable value.
+    """
 
     field_path: names.FieldPath
 
     def get(self) -> client.V1EnvFromSource:
-        """gets the value"""
+        """
+        Creates a Kubernetes environment variable source from a field reference.
+
+        :return: A Kubernetes environment variable source object.
+        """
         return client.V1EnvVarSource(
             field_ref=client.V1ObjectFieldSelector(field_path=self.field_path)
         )
 
 
 class ValueFromResourceField(BaseModel):
-    """ValueFromResourceField"""
+    """
+    Allows setting an environment variable from a resource field like CPU or memory limits.
+
+    :param names.Name container_name: The name of the container for which the resource field is referenced.
+    :param quantity.Quantity divisor: The divisor used when setting resource-based environment variables.
+    :param names.FieldPath resource: The specific resource field to reference for the environment variable.
+    """
 
     container_name: names.Name
     divisor: quantity.Quantity
     resource: names.FieldPath
 
     def get(self) -> client.V1EnvFromSource:
-        """gets the value"""
+        """
+        Generates a Kubernetes environment variable source from a resource field reference.
+
+        :return: A Kubernetes environment variable source object.
+        """
         return client.V1EnvVarSource(
             resource_field_ref=client.V1ResourceFieldSelector(
                 container_name=self.container_name,
@@ -40,12 +58,23 @@ class ValueFromResourceField(BaseModel):
 
 
 def get_env_pair(key: str, value: str) -> client.V1EnvVar:
-    """gets the list of env var of a pod from a dictionary"""
+    """
+    Creates a simple environment variable key-value pair.
+
+    :param str key: The name of the environment variable.
+    :param str value: The value of the environment variable.
+    :return: A Kubernetes environment variable object.
+    """
     return client.V1EnvVar(key, value)
 
 
 def get_env_from_dict(data: dict) -> list[client.V1EnvVar]:
-    """gets the list of env var of a pod from a dictionary"""
+    """
+    Converts a dictionary of environment variable names and values to a list of Kubernetes environment variable objects.
+
+    :param dict data: A dictionary where keys are environment variable names and values are the environment variable values.
+    :return: A list of Kubernetes environment variable objects.
+    """
     env = []
     for key, value in data.items():
         if isinstance(value, client.V1EnvVarSource):
@@ -56,7 +85,12 @@ def get_env_from_dict(data: dict) -> list[client.V1EnvVar]:
 
 
 def describe_envvar(env_var: client.V1EnvVar) -> str:
-    """Gets a basica description of an environment variable"""
+    """
+    Provides a basic description of a Kubernetes environment variable, useful for logging and debugging.
+
+    :param client.V1EnvVar env_var: The environment variable to describe.
+    :return: A string description of the environment variable.
+    """
     if not env_var.value_from:
         return f"V1EnvVar({env_var.name} with a direct value)"
     if ref := env_var.value_from.config_map_key_ref:
@@ -69,7 +103,13 @@ def describe_envvar(env_var: client.V1EnvVar) -> str:
 def upsert_envvars(
     base_env: list[client.V1EnvVar], new_env: list[client.V1EnvVar]
 ) -> list[client.V1EnvVar]:
-    """return the base list of env variables (base_env) upserting (insert/update) the new_env"""
+    """
+    Merges two lists of environment variables, with variables in the new list updating or adding to those in the base list.
+
+    :param list[client.V1EnvVar] base_env: The base list of environment variables.
+    :param list[client.V1EnvVar] new_env: The new environment variables to upsert into the base list.
+    :return: A list of merged and upserted environment variables.
+    """
     env_map = {item.name: item for item in base_env}
     for new_item in new_env:
         if new_item.name in env_map:
@@ -87,7 +127,12 @@ def upsert_envvars(
 def get_env_from_source(
     sources: list[configmap.ConfigMap | secret.Secret],
 ) -> list[client.V1EnvVar]:
-    """Gets a list of env variables for the specified list of Secrets or Configmaps"""
+    """
+    Generates a list of environment variables based on the specified list of ConfigMaps or Secrets.
+
+    :param list[configmap.ConfigMap | secret.Secret] sources: The ConfigMaps or Secrets to source environment variables from.
+    :return: A list of Kubernetes environment variable objects.
+    """
     list_envs = []
 
     for source in sources:
