@@ -2,6 +2,17 @@
 
 The Piceli CLI offers a suite of commands to manage and deploy Kubernetes resources efficiently. This guide provides an overview of the available commands and examples of how to use them for various operations.
 
+```{toctree}
+:hidden:
+:maxdepth: 2
+:caption: Kubernetes Model Sections
+
+./model_list
+./deploy_detail
+./deploy_plan
+./deploy_run
+```
+
 ## Global Options
 
 Piceli CLI supports several global options that can be used across all commands. These options allow you to specify common settings like namespace, path to Kubernetes object specifications, and more.
@@ -39,11 +50,11 @@ python -m piceli deploy --help
 Usage: python -m piceli deploy [OPTIONS] COMMAND [ARGS]...
 ```
 
-### Subcommands
+### Deploy Subcommands
 
-- **Detail**: Analyzes the required changes to deploy the specified Kubernetes object model. `{subdoc}`./deploy_detail`
-- **Plan**: Generates a deployment plan for the Kubernetes object model. `{subdoc}`./deploy_plan`
-- **Run**: Deploys the Kubernetes Object Model to the current cluster. `{subdoc}`./deploy_run`
+- **Detail**: Analyzes the required changes to deploy the specified Kubernetes object model. {command details}`./deploy_detail`
+- **Plan**: Generates a deployment plan for the Kubernetes object model. {command details}`./deploy_plan`
+- **Run**: Deploys the Kubernetes Object Model to the current cluster. {command details}`./deploy_run`
 
 For detailed information about each subcommand, refer to the respective documentation pages.
 
@@ -57,9 +68,9 @@ python -m piceli model --help
 Usage: python -m piceli model [OPTIONS] COMMAND [ARGS]...
 ```
 
-### Subcommands
+### Model Subcommands
 
-- **List**: Lists Kubernetes objects based on the command options. `{subdoc}`./model_list`
+- **List**: Lists Kubernetes objects based on the command options. {command details}`./model_list`
 
 For more information on the `list` command, visit the documentation page linked above.
 

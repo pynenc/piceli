@@ -458,10 +458,6 @@ For more information and detailed guides, check out the [Piceli Documentation](h
 
 Piceli aims to work seamlessly with your existing Kubernetes setup. Ensure you have `kubectl` configured and access to a Kubernetes cluster.
 
-## Contributing
-
-We welcome contributions and feedback to help improve Piceli! Whether it's feature requests, bug reports, or code contributions, please feel free to reach out through our [GitHub Issues](https://github.com/pynenc/piceli/issues) page.
-
 ## License
 
 Piceli is made available under the [MIT License](https://github.com/pynenc/piceli/blob/main/LICENSE).
