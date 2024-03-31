@@ -42,6 +42,7 @@ deployable/volume
 
 Auxiliary objects provide additional configurations and are often used in conjunction with deployable objects to fine-tune resource definitions.
 
+```{toctree}
 :hidden:
 :maxdepth: 2
 :caption: Auxiliary Objects
@@ -57,6 +58,7 @@ auxiliary/port
 auxiliary/quantity
 auxiliary/replica_manager
 auxiliary/resource_request
+```
 
 - **Container**: Specify container images, commands, and arguments. {doc}`./auxiliary/container`
 - **Crontab**: Define the schedule for running CronJobs. {doc}`./auxiliary/crontab`
