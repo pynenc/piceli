@@ -35,7 +35,7 @@ class DirectoryClient:
         if not self._api:
             scoped_credentials = self.credentials.with_scopes(
                 ["https://www.googleapis.com/auth/admin.directory.group.readonly"]
-            )  # .with_subject("admin@viboo.io")
+            )  # .with_subject("admin@firm.com")
             self._api = discovery.build(
                 "admin", "directory_v1", credentials=scoped_credentials
             )

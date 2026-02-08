@@ -387,7 +387,7 @@ class Cluster(ProjectResource):
         self, client: gcp_client.GCPClient, k8s_client: Kubernetes, dry_run: DryRun
     ) -> None:
         for group_member_role in self.group_members_roles:
-            group_email = group_member_role.group_name + "@" + const.VIBOO_DOMAIN
+            group_email = group_member_role.group_name + "@" + const.FIRM_DOMAIN
             member_emails = client.api_directory.get_group_members(
                 group_email=group_email
             )
@@ -500,7 +500,7 @@ class Group:
     @property
     def email(self) -> str:
         """Gets the group email"""
-        return f"{self.name}@{const.VIBOO_DOMAIN}"
+        return f"{self.name}@{const.FIRM_DOMAIN}"
 
     def apply(self, client: gcp_client.GCPClient, only_check: bool) -> None:
         """Check or Apply the group and its description"""
@@ -561,9 +561,9 @@ class SecretManager:
                 f"serviceAccount:{gcp_client.IAMClient.get_service_account_email(sa_name, self.project.project_id)}"
             )
         for group_name in group_names:
-            typed_members.append(f"group:{group_name}@{const.VIBOO_DOMAIN}")
+            typed_members.append(f"group:{group_name}@{const.FIRM_DOMAIN}")
         # for user_name in user_names:
-        #     typed_members.append(f"user:{user_name}@{const.VIBOO_DOMAIN}")
+        #     typed_members.append(f"user:{user_name}@{const.FIRM_DOMAIN}")
         client.api_secret_manager.authorize_access_to_typed_member(
             self.project.project_id, secret_id, typed_members, only_check
         )
