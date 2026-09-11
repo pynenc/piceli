@@ -16,7 +16,7 @@ import time
 from typing import Any, Iterator
 from urllib.parse import urlsplit
 
-from piceli.k8s.ops.bounds import bounded_call, positive, seconds, text
+from piceli.bounds import bounded_call, positive, seconds, text
 
 _EXPORT_SLOTS = threading.BoundedSemaphore(2)
 PHASES = frozenset(
