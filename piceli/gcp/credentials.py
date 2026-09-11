@@ -3,6 +3,7 @@ import json
 import logging
 
 import google.auth
+from google.auth.credentials import Credentials
 from google.oauth2 import service_account
 
 from piceli.settings import GCE_SA_INFO
@@ -10,7 +11,7 @@ from piceli.settings import GCE_SA_INFO
 logger = logging.getLogger(__name__)
 
 
-def get_credentials(gce_sa_info: str | None = None) -> service_account.Credentials:
+def get_credentials(gce_sa_info: str | None = None) -> Credentials:
     gce_sa_info = gce_sa_info or GCE_SA_INFO
     if gce_sa_info:
         # remove the first two chars and the last char in the key

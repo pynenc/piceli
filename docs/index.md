@@ -14,6 +14,8 @@ It offers deployment management by assessing the state of existing objects to de
 :caption: Table of Contents
 
 overview
+deployment_planning
+artifact_delivery
 getting_started/index
 kubernetes_model/index
 cli/index
@@ -32,6 +34,8 @@ license
 - Deployment management that supports patches, replacements, and rollbacks for enhanced stability.
 - Detailed deployment plans that take into account the current state and nuances of the cluster configuration.
 - Future development will introduce configurable deployment strategies for granular control over infrastructure rollouts.
+- Pure, source-pinned OCI artifact assembly and explicitly authorized local import.
+- Bounded deployment-operation spans and logs with explicit delivery accounting.
 
 ## Installation
 

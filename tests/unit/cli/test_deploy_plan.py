@@ -1,25 +1,16 @@
 from unittest import mock
 
-import pytest
 from typer.testing import CliRunner
 
 from piceli.k8s.cli import app
 from piceli.k8s.k8s_objects.base import K8sObject
-from piceli.k8s.ops.deploy.deployment_graph import DeploymentGraph
-from piceli.k8s.ops.deploy.strategy_auto import StrategyAuto
 
 runner = CliRunner()
 
 
-@pytest.fixture
-def deployment_graph(k8s_objects: list[K8sObject]) -> DeploymentGraph:
-    strategy = StrategyAuto()
-    return strategy.build_deployment_graph(k8s_objects)
-
-
 def test_plan_without_validation(k8s_objects: list[K8sObject]) -> None:
     with mock.patch("piceli.k8s.ops.loader.load_all", return_value=k8s_objects):
-        result = runner.invoke(app, ["deploy", "plan"])
+        result = runner.invoke(app, ["deploy", "plan", "--cluster-id", "kind-local"])
         assert result.exit_code == 0
         assert "Kubernetes Deployment Plan" in result.stdout
         for k8s_object in k8s_objects:
@@ -29,32 +20,32 @@ def test_plan_without_validation(k8s_objects: list[K8sObject]) -> None:
 
 def test_plan_with_validation_success(
     k8s_objects: list[K8sObject],
-    deployment_graph: DeploymentGraph,
 ) -> None:
-    with mock.patch(
-        "piceli.k8s.ops.loader.load_all", return_value=k8s_objects
-    ), mock.patch(
-        "piceli.k8s.ops.deploy.strategy_auto.StrategyAuto.build_deployment_graph",
-        return_value=deployment_graph,
-    ):
-        result = runner.invoke(app, ["deploy", "plan", "--validate"])
+    with mock.patch("piceli.k8s.ops.loader.load_all", return_value=k8s_objects):
+        result = runner.invoke(
+            app, ["deploy", "plan", "--cluster-id", "kind-local", "--validate"]
+        )
         assert result.exit_code == 0
         assert "Validation successful" in result.stdout
         assert "Kubernetes Deployment Plan" in result.stdout
 
 
 def test_plan_with_validation_failure(k8s_objects: list[K8sObject]) -> None:
-    class MockFailingGraph:
-        def validate(self) -> None:
-            raise ValueError("Mock validation failure")
-
     with mock.patch(
         "piceli.k8s.ops.loader.load_all", return_value=k8s_objects
     ), mock.patch(
-        "piceli.k8s.ops.deploy.strategy_auto.StrategyAuto.build_deployment_graph",
-        return_value=MockFailingGraph(),
+        "piceli.k8s.ops.plan.DeploymentComposition",
+        side_effect=ValueError("Mock validation failure"),
     ):
-        result = runner.invoke(app, ["deploy", "plan", "--validate"])
+        result = runner.invoke(
+            app, ["deploy", "plan", "--cluster-id", "kind-local", "--validate"]
+        )
         assert result.exit_code == 0
         assert "Mock validation failure" in result.stdout
         assert "Validation error" in result.stdout
+
+
+def test_plan_requires_explicit_cluster_binding() -> None:
+    result = runner.invoke(app, ["deploy", "plan"])
+    assert result.exit_code != 0
+    assert "--cluster-id" in result.stdout

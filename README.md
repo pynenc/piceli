@@ -44,6 +44,18 @@ Piceli simplifies Kubernetes object management and deployment, streamlining the 
 
 ## Key Features
 
+- **Recoverable Execution API**: Pure target-bound plans, validated discovery,
+  private secret versions and journaled apply/readiness/cancel/resume/compensation.
+  See the [execution guide](docs/deployment_planning.md). Run
+  `make local-test-env` and `make test-local-executor` for local API acceptance;
+  this does not qualify or contact a live cluster.
+
+- **Bounded Artifact Delivery**: Immutable public-source pins, deterministic
+  offline OCI layouts, explicit tool grants, local-engine import, cancellation,
+  secret-safe receipts and bounded OTLP deployment telemetry. See the
+  [artifact delivery guide](docs/artifact_delivery.md). Nothing pushes or deploys
+  implicitly.
+
 - **Effortless Kubernetes Object Management**: Easily define Kubernetes resources in Python, with support for custom objects and configurations.
 
 - **Simplified Deployment Workflow**: Piceli provides tools for planning, detailing, and executing deployments directly from your terminal, offering clear insights into the deployment process.
@@ -159,7 +171,7 @@ PICELI__FOLDER_PATH=/folder/to/resources/tmp_cli PICELI__NAMESPACE=test-run pice
 │ Namespace: test-run                                                          │
 │ Module Name: Not specified                                                   │
 │ Module Path: Not specified                                                   │
-│ Folder Path: /folder/to/resources/tmp_cli │
+│ Folder Path: /folder/to/resources/tmp_cli                                    │
 │ Include Sub-elements: True                                                   │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 Kubernetes Deployment Plan
@@ -195,7 +207,7 @@ PICELI__FOLDER_PATH=/folder/to/resources/tmp_cli PICELI__NAMESPACE=test-run pice
 │ Namespace: test-run                                                          │
 │ Module Name: Not specified                                                   │
 │ Module Path: Not specified                                                   │
-│ Folder Path: /folder/to/resources/tmp_cli │
+│ Folder Path: /folder/to/resources/tmp_cli                                    │
 │ Include Sub-elements: True                                                   │
 ╰──────────────────────────────────────────────────────────────────────────────╯
                                 New Kubernetes Objects

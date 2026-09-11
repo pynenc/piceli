@@ -1,0 +1,11 @@
+{
+  "contract": "piceli.discovery.v2",
+  "fixture": {
+    "path": "tests/fixtures/discovery-v2/complete.json",
+    "sha256": "6b88f69afbd53a02f80a2f8fb34c7ab6df90e16ee4cdf2942156c9037f8c3766"
+  },
+  "schema": {
+    "path": "docs/schemas/piceli-discovery-v2.schema.json",
+    "sha256": "bc901ab5350595c44db732ce89534912392b8085b100f90c060159a31da0d57c"
+  }
+}
