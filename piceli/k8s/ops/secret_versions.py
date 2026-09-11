@@ -127,6 +127,10 @@ class SecretVersionStore:
             CREATE TABLE IF NOT EXISTS versions (
                 version TEXT PRIMARY KEY, cluster_id TEXT NOT NULL,
                 namespace TEXT NOT NULL, value TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS session_bindings (
+                session_id TEXT NOT NULL, input_name TEXT NOT NULL,
+                version TEXT NOT NULL REFERENCES versions(version),
+                PRIMARY KEY(session_id, input_name));
         """
         )
         with self.connection:
@@ -150,6 +154,63 @@ class SecretVersionStore:
                 (reference.version, target.cluster_id, target.namespace, encoded),
             )
         return reference
+
+    def put_once(
+        self, target: PlanTarget, session_id: str, input_name: str, value: Any
+    ) -> SecretVersionRef:
+        """Materialize one caller input once, without storing a value fingerprint.
+
+        A retry with the same session/input pair returns the original opaque
+        reference.  It deliberately does not compare ``value``: doing so would
+        require retaining a secret-derived hash and would make private material
+        observable from otherwise public session state.
+        """
+        if not re.fullmatch(r"[0-9a-f]{32}", session_id):
+            raise ValueError("invalid deployment session identity")
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,127}", input_name):
+            raise ValueError("invalid private input name")
+        row = self.connection.execute(
+            "SELECT version FROM session_bindings WHERE session_id=? AND input_name=?",
+            (session_id, input_name),
+        ).fetchone()
+        if row is not None:
+            return SecretVersionRef(self.store_id, row[0])
+        encoded = json.dumps(
+            value, sort_keys=True, separators=(",", ":"), allow_nan=False
+        )
+        strict_json(encoded, 1_000_000)
+        if self.path.stat().st_size + len(encoded.encode()) + 32768 > self.max_bytes:
+            raise ValueError("private store byte budget exhausted")
+        reference = SecretVersionRef(self.store_id, uuid.uuid4().hex)
+        with self.connection:
+            current = self.connection.execute(
+                "SELECT version FROM session_bindings WHERE session_id=? AND input_name=?",
+                (session_id, input_name),
+            ).fetchone()
+            if current is not None:
+                return SecretVersionRef(self.store_id, current[0])
+            self.connection.execute(
+                "INSERT INTO versions VALUES (?, ?, ?, ?)",
+                (reference.version, target.cluster_id, target.namespace, encoded),
+            )
+            self.connection.execute(
+                "INSERT INTO session_bindings VALUES (?, ?, ?)",
+                (session_id, input_name, reference.version),
+            )
+        return reference
+
+    def session_reference(
+        self, target: PlanTarget, session_id: str, input_name: str
+    ) -> SecretVersionRef | None:
+        """Return an existing session binding without resolving its value."""
+        row = self.connection.execute(
+            "SELECT version FROM session_bindings WHERE session_id=? AND input_name=?",
+            (session_id, input_name),
+        ).fetchone()
+        if row is None:
+            return None
+        reference = SecretVersionRef(self.store_id, row[0])
+        return reference if self.contains(target, reference) else None
 
     def resolve(self, target: PlanTarget, reference: SecretVersionRef) -> Any:
         if reference.store_id != self.store_id:

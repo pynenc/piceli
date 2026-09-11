@@ -6,6 +6,9 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ## Unreleased
 
+- Added `DeploymentSession`, a Python-first provider-free boundary for one-time
+  private input materialization, canonical opaque-reference interchange, exact
+  preview/apply/resume, explicit rotation and owner-scoped stop.
 - Added canonical `DeploymentRevision` and `ExecutionBundle` interchange for
   exact, secret-safe resume. Retained owned resources reconcile without a new
   SSA operation annotation; PVC first-consumer execution defers only readiness,

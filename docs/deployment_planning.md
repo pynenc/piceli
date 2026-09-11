@@ -132,6 +132,34 @@ binding followed by normal workload readiness. A Pending PVC is never globally
 reported as ready. See `examples/deployment_revision.py` for the Python-first
 canonical JSON interchange boundary.
 
+### Deployment sessions
+
+`DeploymentSession` is the Python-first boundary above revisions and bundles.
+It accepts a pure composition factory, immutable snapshot, plan authorization and
+authorization factory, alongside caller-owned `ExecutionJournal` and
+`SecretVersionStore`. Session construction never constructs a Kubernetes provider
+or performs Kubernetes I/O. Each named private input is materialized once through
+`SecretVersionStore.put_once`; retries reuse its random opaque reference without
+storing a secret value or value-derived hash.
+
+`session.preview()` is fully offline. `session.apply(executor)`,
+`session.resume(executor)` and `session.stop(executor)` require an executor with
+the exact journal, private store, target and owner. Recovery rebuilds the
+composition from the persisted opaque references and rejects changed composition,
+snapshot/target drift, missing or wrong-store references, replaced/expired grants,
+or incomplete journal action identity. Rotation means a *new* session ID and
+therefore a new revision; it never changes a previous session.
+`DeploymentSession.create()` refuses an existing session ID because it cannot
+compare caller values safely; use `open()` for exact recovery or `rotate()` for
+deliberately new private material.
+
+`session.archive.to_json()` is canonical machine interchange described by
+[the v1 schema](schemas/piceli-deployment-session-v1.schema.json). It contains
+opaque `SecretVersionRef` IDs needed to prove exact resume, but never values or
+value hashes. It must be treated as private operational metadata. In contrast,
+`session.report()` is safe for status endpoints and omits those IDs. A concise
+factory is in `examples/deployment_session.py`.
+
 ### Legacy execution import
 
 `LegacyExecutionArchive` is the only supported bridge from a legacy

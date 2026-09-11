@@ -8,6 +8,11 @@ from piceli.k8s.ops.legacy_execution import (
     LegacyExecutionImport,
     import_legacy_execution,
 )
+from piceli.k8s.ops.session import (
+    DEPLOYMENT_SESSION_SCHEMA_VERSION,
+    DeploymentSession,
+    DeploymentSessionArchive,
+)
 
 __all__ = [
     "DeploymentRevision",
@@ -17,4 +22,7 @@ __all__ = [
     "LegacyExecutionArchive",
     "LegacyExecutionImport",
     "import_legacy_execution",
+    "DEPLOYMENT_SESSION_SCHEMA_VERSION",
+    "DeploymentSession",
+    "DeploymentSessionArchive",
 ]

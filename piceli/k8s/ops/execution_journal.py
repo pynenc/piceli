@@ -51,6 +51,8 @@ class ExecutionJournal:
                 source_execution TEXT NOT NULL,
                 source_binding_sha256 TEXT NOT NULL,
                 archive_sha256 TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS deployment_sessions (
+                id TEXT PRIMARY KEY, archive TEXT NOT NULL);
         """
         )
         if self.connection.execute("PRAGMA quick_check").fetchone()[0] != "ok":
@@ -269,6 +271,43 @@ class ExecutionJournal:
             (execution,),
         ).fetchone()
         return None if row is None else dict(row)
+
+    def store_session(self, session_id: str, archive: dict[str, Any]) -> None:
+        """Persist one canonical session archive without changing an existing one."""
+        if not re.fullmatch(r"[0-9a-f]{32}", session_id):
+            raise ValueError("invalid deployment session identity")
+        encoded = json.dumps(
+            archive, sort_keys=True, separators=(",", ":"), allow_nan=False
+        )
+        current = self.connection.execute(
+            "SELECT archive FROM deployment_sessions WHERE id=?", (session_id,)
+        ).fetchone()
+        if current is not None:
+            if current[0] != encoded:
+                raise ValueError("deployment session archive changed")
+            return
+        self._capacity(encoded)
+        with self.connection:
+            self.connection.execute(
+                "INSERT INTO deployment_sessions(id,archive) VALUES (?,?)",
+                (session_id, encoded),
+            )
+
+    def session(self, session_id: str) -> dict[str, Any]:
+        """Load canonical session evidence; malformed durable state is rejected."""
+        row = self.connection.execute(
+            "SELECT archive FROM deployment_sessions WHERE id=?", (session_id,)
+        ).fetchone()
+        if row is None:
+            raise ValueError("deployment session missing")
+        value = strict_json(row[0])
+        if (
+            not isinstance(value, dict)
+            or json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+            != row[0]
+        ):
+            raise ValueError("deployment session archive is corrupt")
+        return value
 
     def record(
         self, execution: str, ordinal: int, state: str, payload: dict[str, Any]
