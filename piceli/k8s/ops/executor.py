@@ -570,6 +570,17 @@ class PlanExecutor:
             for claim in self._workload_claims(action):
                 if claim in claims:
                     deferred.update((claims[claim], action.resource.ref))
+        # Submit the whole declared workload wave before starting the strict
+        # readiness loop. This lets WFFC claims see their consumers promptly,
+        # avoids serial API polling during a rollout, and still verifies every
+        # workload only after the claims have bound.
+        deferred.update(
+            action.resource.ref
+            for action in plan.actions
+            if self._workload_claims(action)
+            or action.resource.ref.kind
+            in {"Deployment", "StatefulSet", "DaemonSet", "Job", "Pod"}
+        )
         return deferred
 
     def _ready(
