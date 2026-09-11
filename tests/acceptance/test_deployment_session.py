@@ -21,7 +21,7 @@ from tests.acceptance.fake_api import TARGET, manifest
 from tests.acceptance.test_local_executor import discover, executor, mutations
 
 
-def _authorization(provider):
+def _authorization(provider, *, max_evidence_age_seconds=300):
     def factory(plan, snapshot):
         return ExecutionAuthorization(
             "session-grant",
@@ -36,6 +36,7 @@ def _authorization(provider):
             compensation_resources=tuple(
                 action.resource.ref for action in plan.actions
             ),
+            max_evidence_age_seconds=max_evidence_age_seconds,
         )
 
     return factory
@@ -54,7 +55,7 @@ def _composition(inputs):
     )
 
 
-def _session(provider, run, *, session_id="a" * 32):
+def _session(provider, run, *, session_id="a" * 32, max_evidence_age_seconds=300):
     snapshot = ObservedSnapshot.from_discovery(
         discover(
             provider,
@@ -67,7 +68,9 @@ def _session(provider, run, *, session_id="a" * 32):
             composition_factory=_composition,
             snapshot=snapshot,
             plan_authorization=PlanAuthorization(TARGET),
-            authorization_factory=_authorization(provider),
+            authorization_factory=_authorization(
+                provider, max_evidence_age_seconds=max_evidence_age_seconds
+            ),
             journal=run.journal,
             secrets=run.secrets,
             session_id=session_id,
@@ -117,6 +120,32 @@ def test_session_preview_apply_restart_resume_and_archive_are_identical(
         "Secret",
         "Deployment",
     ]
+
+
+def test_session_archive_preserves_non_default_authorization_bounds(
+    local_api, tmp_path
+):
+    """Recovery cannot silently widen a caller-selected evidence-age bound."""
+    _, provider = local_api
+    run = executor(provider, tmp_path)
+    session, snapshot = _session(provider, run, max_evidence_age_seconds=120)
+
+    assert (
+        session.archive.to_dict()["revision"]["authorization"][
+            "max_evidence_age_seconds"
+        ]
+        == 120
+    )
+    reopened = DeploymentSession.open(
+        session.archive.to_json(),
+        composition_factory=_composition,
+        snapshot=snapshot,
+        plan_authorization=PlanAuthorization(TARGET),
+        authorization_factory=_authorization(provider, max_evidence_age_seconds=120),
+        journal=run.journal,
+        secrets=run.secrets,
+    )
+    assert reopened.archive.to_json() == session.archive.to_json()
 
 
 def test_session_rejects_private_store_composition_and_grant_drift(local_api, tmp_path):

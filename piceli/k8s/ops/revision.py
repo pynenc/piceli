@@ -52,6 +52,8 @@ def _authorization_material(authorization: ExecutionAuthorization) -> dict[str, 
         "field_manager": authorization.field_manager,
         "owner_id": authorization.owner_id,
         "expires_at": authorization.expires_at,
+        "max_evidence_age_seconds": authorization.max_evidence_age_seconds,
+        "resume_revision_id": authorization.resume_revision_id,
         "actions": [
             {
                 "resource": grant.resource.__dict__,
