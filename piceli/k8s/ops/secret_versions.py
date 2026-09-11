@@ -162,5 +162,17 @@ class SecretVersionStore:
             raise ValueError("private version missing or outside target")
         return strict_json(row[0], 1_000_000)
 
+    def contains(self, target: PlanTarget, reference: SecretVersionRef) -> bool:
+        """Check an opaque version binding without loading its private value."""
+        if reference.store_id != self.store_id:
+            return False
+        return (
+            self.connection.execute(
+                "SELECT 1 FROM versions WHERE version=? AND cluster_id=? AND namespace=?",
+                (reference.version, target.cluster_id, target.namespace),
+            ).fetchone()
+            is not None
+        )
+
     def close(self) -> None:
         self.connection.close()

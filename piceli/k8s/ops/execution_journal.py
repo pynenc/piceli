@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -13,6 +14,10 @@ from typing import Any, Iterator
 
 from piceli.k8s.ops.bounds import positive, strict_json
 from piceli.k8s.ops.secret_versions import private_database
+
+
+_MIGRATABLE_ACTION_STATES = frozenset({"pending", "failed", "applied", "ready"})
+_MIGRATABLE_EXECUTION_STATES = frozenset({"pending", "failed", "ready"})
 
 
 class ExecutionJournal:
@@ -41,6 +46,11 @@ class ExecutionJournal:
                 sequence INTEGER PRIMARY KEY AUTOINCREMENT,
                 execution TEXT NOT NULL REFERENCES executions(id), ordinal INTEGER,
                 state TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS migration_lineage (
+                execution TEXT PRIMARY KEY REFERENCES executions(id),
+                source_execution TEXT NOT NULL,
+                source_binding_sha256 TEXT NOT NULL,
+                archive_sha256 TEXT NOT NULL);
         """
         )
         if self.connection.execute("PRAGMA quick_check").fetchone()[0] != "ok":
@@ -117,6 +127,148 @@ class ExecutionJournal:
                 "SELECT * FROM actions WHERE execution=? ORDER BY ordinal", (execution,)
             )
         ]
+
+    def export_execution(self, execution: str) -> dict[str, Any]:
+        """Read a legacy record without changing it or resolving private references."""
+        row = self.connection.execute(
+            "SELECT binding,state,cancelled FROM executions WHERE id=?", (execution,)
+        ).fetchone()
+        if row is None:
+            raise ValueError("unknown execution")
+        return {
+            "execution_id": execution,
+            "binding": strict_json(row["binding"]),
+            "state": row["state"],
+            "cancelled": bool(row["cancelled"]),
+            "actions": self.actions(execution),
+        }
+
+    @staticmethod
+    def _legacy_payload(payload: Any) -> None:
+        if not isinstance(payload, dict) or set(payload) - {
+            "before",
+            "after",
+            "uid",
+            "resource_version",
+            "retained_reconciled",
+        }:
+            raise ValueError("legacy receipt is not secret-safe")
+        for key in ("before", "after"):
+            if key not in payload:
+                continue
+            reference = payload[key]
+            if (
+                not isinstance(reference, dict)
+                or set(reference) != {"store_id", "version"}
+                or any(
+                    not isinstance(value, str)
+                    or not re.fullmatch(r"[0-9a-f]{32}", value)
+                    for value in reference.values()
+                )
+            ):
+                raise ValueError("legacy receipt has invalid private reference")
+        for key in ("uid", "resource_version"):
+            if key in payload and (
+                not isinstance(payload[key], str) or not payload[key]
+            ):
+                raise ValueError("legacy receipt has invalid identity")
+        if "retained_reconciled" in payload and not isinstance(
+            payload["retained_reconciled"], bool
+        ):
+            raise ValueError("legacy receipt has invalid retention state")
+
+    def import_legacy_execution(
+        self,
+        *,
+        execution: str,
+        binding: dict[str, Any],
+        source_execution: str,
+        source_binding: dict[str, Any],
+        archive: dict[str, Any],
+        state: str,
+        cancelled: bool,
+        actions: list[dict[str, Any]],
+    ) -> None:
+        """Copy verified legacy state into a new journal with immutable lineage.
+
+        The caller must validate plan/archive semantics first. This method only
+        admits unambiguous, secret-safe receipts and never touches the source
+        journal.
+        """
+        if state not in _MIGRATABLE_EXECUTION_STATES or cancelled:
+            raise ValueError("legacy execution state is ambiguous")
+        if not execution or execution != source_execution:
+            raise ValueError("legacy execution identity mismatch")
+        if (
+            self.connection.execute(
+                "SELECT 1 FROM executions WHERE id=?", (execution,)
+            ).fetchone()
+            is not None
+        ):
+            raise ValueError("destination execution already exists")
+        encoded_binding = json.dumps(
+            binding, sort_keys=True, separators=(",", ":"), allow_nan=False
+        )
+        encoded_source = json.dumps(
+            source_binding, sort_keys=True, separators=(",", ":"), allow_nan=False
+        )
+        encoded_archive = json.dumps(
+            archive, sort_keys=True, separators=(",", ":"), allow_nan=False
+        )
+        if not isinstance(actions, list) or not actions:
+            raise ValueError("legacy action inventory is missing")
+        prepared: list[tuple[int, str, str, str]] = []
+        for ordinal, action in enumerate(actions):
+            if (
+                not isinstance(action, dict)
+                or action.get("ordinal") != ordinal
+                or action.get("state") not in _MIGRATABLE_ACTION_STATES
+                or not isinstance(action.get("operation_id"), str)
+                or not re.fullmatch(r"[0-9a-f]{32}", action["operation_id"])
+                or not isinstance(action.get("payload"), dict)
+            ):
+                raise ValueError("legacy action state is ambiguous")
+            self._legacy_payload(action["payload"])
+            payload = json.dumps(
+                action["payload"],
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+            prepared.append((ordinal, action["state"], action["operation_id"], payload))
+        if state == "ready" and any(item[1] != "ready" for item in prepared):
+            raise ValueError("ready legacy execution has incomplete receipts")
+        self._capacity(encoded_binding + encoded_archive)
+        with self.connection:
+            self.connection.execute(
+                "INSERT INTO executions(id,binding,state) VALUES (?,?,?)",
+                (execution, encoded_binding, state),
+            )
+            self.connection.executemany(
+                "INSERT INTO actions VALUES (?,?,?,?,?)",
+                [(execution, *item) for item in prepared],
+            )
+            self.connection.execute(
+                "INSERT INTO migration_lineage VALUES (?,?,?,?)",
+                (
+                    execution,
+                    source_execution,
+                    hashlib.sha256(encoded_source.encode()).hexdigest(),
+                    hashlib.sha256(encoded_archive.encode()).hexdigest(),
+                ),
+            )
+            self.connection.execute(
+                "INSERT INTO events(execution,ordinal,state) VALUES (?,NULL,?)",
+                (execution, "legacy-imported"),
+            )
+
+    def migration_lineage(self, execution: str) -> dict[str, str] | None:
+        row = self.connection.execute(
+            "SELECT source_execution,source_binding_sha256,archive_sha256 "
+            "FROM migration_lineage WHERE execution=?",
+            (execution,),
+        ).fetchone()
+        return None if row is None else dict(row)
 
     def record(
         self, execution: str, ordinal: int, state: str, payload: dict[str, Any]

@@ -132,6 +132,46 @@ binding followed by normal workload readiness. A Pending PVC is never globally
 reported as ready. See `examples/deployment_revision.py` for the Python-first
 canonical JSON interchange boundary.
 
+### Legacy execution import
+
+`LegacyExecutionArchive` is the only supported bridge from a legacy
+`ExecutionJournal` binding to a durable `DeploymentRevision` and
+`ExecutionBundle`. Create and retain the canonical JSON archive while the
+original plan, discovery evidence and authorization still exist:
+
+```python
+archive_json = LegacyExecutionArchive.from_revision(revision).to_json()
+```
+
+The archive has schema version `1` and exactly these fields:
+
+```json
+{
+  "schema_version": 1,
+  "revision": "redacted DeploymentRevision interchange",
+  "plan": "original rendered redacted plan",
+  "snapshot": "immutable target, coverage, defaults and resource identities",
+  "discovery": "immutable redacted DiscoveryArtifact",
+  "authorization": "exact grant material and expiry",
+  "private_references": "opaque resource/pointer/SecretVersionRef bindings"
+}
+```
+
+Import needs the legacy journal, a *separate* destination journal, the original
+private version store and that canonical archive. It makes no provider calls and
+does not resolve secret values. Each archive redaction must correspond to an
+existing opaque `SecretVersionRef`; source action IDs and safe prior receipts are
+copied verbatim. Migration records source-binding and archive SHA-256 lineage in
+the destination journal, never in the historical journal.
+
+`import_legacy_execution(...)` raises `LegacyEvidenceInsufficient` for a missing
+or altered plan, target, ownership, action scope, snapshot coverage/default,
+manifest, private reference, grant, receipt or legacy state. Legacy `intent` and
+compensation states are deliberately ambiguous and cannot be imported. The
+result's `report()` is safe for humans and omits opaque reference IDs; the archive
+itself retains those IDs only for exact machine resume. See
+`examples/legacy_execution_import.py` for the compact flow.
+
 ## Local acceptance
 
 ```sh
