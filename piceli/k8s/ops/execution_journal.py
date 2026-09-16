@@ -153,6 +153,7 @@ class ExecutionJournal:
             "uid",
             "resource_version",
             "retained_reconciled",
+            "same_owner_update",
         }:
             raise ValueError("legacy receipt is not secret-safe")
         for key in ("before", "after"):
@@ -178,6 +179,10 @@ class ExecutionJournal:
             payload["retained_reconciled"], bool
         ):
             raise ValueError("legacy receipt has invalid retention state")
+        if "same_owner_update" in payload and not isinstance(
+            payload["same_owner_update"], bool
+        ):
+            raise ValueError("legacy receipt has invalid update state")
 
     def import_legacy_execution(
         self,
@@ -328,6 +333,16 @@ class ExecutionJournal:
                 (execution, ordinal, state),
             )
 
+    def record_failure(self, execution: str, category: str) -> None:
+        """Persist one bounded provider failure category without exception details."""
+        if not re.fullmatch(r"[a-z][a-z0-9-]{0,79}", category):
+            raise ValueError("invalid provider failure category")
+        with self.connection:
+            self.connection.execute(
+                "INSERT INTO events(execution,ordinal,state) VALUES (?,NULL,?)",
+                (execution, f"error:{category}"),
+            )
+
     def set_state(self, execution: str, state: str) -> None:
         self._capacity()
         with self.connection:
@@ -365,7 +380,7 @@ class ExecutionJournal:
         ).fetchone()
         if row is None:
             raise ValueError("unknown execution")
-        return {
+        result = {
             "execution_id": execution,
             "state": row["state"],
             "cancelled": bool(row["cancelled"]),
@@ -374,6 +389,14 @@ class ExecutionJournal:
                 for item in self.actions(execution)
             ],
         }
+        failure = self.connection.execute(
+            "SELECT state FROM events WHERE execution=? AND state LIKE 'error:%' "
+            "ORDER BY sequence DESC LIMIT 1",
+            (execution,),
+        ).fetchone()
+        if failure is not None and row["state"] in {"blocked", "failed"}:
+            result["failure_category"] = failure["state"].removeprefix("error:")
+        return result
 
     def close(self) -> None:
         self.connection.close()

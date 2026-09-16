@@ -50,11 +50,25 @@ Piceli simplifies Kubernetes object management and deployment, streamlining the 
   `make local-test-env` and `make test-local-executor` for local API acceptance;
   this does not qualify or contact a live cluster.
 
+- **Modern Streamed Container Pipeline & Micro-Images**: Decouple monolithic
+  runtimes into specialized 20-30MB micro-images sharing cached base layers.
+  Stream layers directly into node containerd runtimes over secure transport or
+  in-cluster OCI registries (`registry:2`), eliminating multi-gigabyte disk
+  archives and remote checksum stalls. Supports granular single-component
+  rollouts without restarting stateful datastores.
+
 - **Bounded Artifact Delivery**: Immutable public-source pins, deterministic
   offline OCI layouts, explicit tool grants, local-engine import, cancellation,
   secret-safe receipts and bounded OTLP deployment telemetry. See the
   [artifact delivery guide](docs/artifact_delivery.md). Nothing pushes or deploys
   implicitly.
+
+- **Local Operations Lens**: Reconcile a durable deployment session archive with
+  an explicitly selected kubeconfig, identify declared, missing, and
+  archive-undeclared resources, and retain non-secret per-user loopback
+  port-forward preferences. The same read-only status model is available as a
+  Python library, JSON CLI, and loopback REST service. See
+  [operations lens](docs/operations_lens.md).
 
 - **Effortless Kubernetes Object Management**: Easily define Kubernetes resources in Python, with support for custom objects and configurations.
 
@@ -66,13 +80,85 @@ Piceli simplifies Kubernetes object management and deployment, streamlining the 
 
 ## Installation
 
-To install Piceli, simply use pip:
+Piceli does not require a public package registry or hosted container registry.
+For a private checkout, install the reviewed source directly:
+
+```bash
+python -m pip install -e /path/to/piceli
+```
+
+An organisation may package the same reviewed commit in its own package system
+when that is useful, but Piceli's OCI workflow is intentionally local-first:
+
+1. capture source and tool pins;
+2. build and inspect a deterministic OCI layout locally;
+3. explicitly import that layout into an approved local engine or node runtime;
+4. execute a separately granted `DeploymentSession` against the target cluster.
+
+No step pushes to a public registry, watches a repository, or changes a cluster
+without an explicit command and grant. `docs/artifact_delivery.md` records the
+current local import boundary; K3s/node image import remains an explicit adapter
+chosen by the operator, not an ambient side effect.
+
+To install a published release instead:
 
 ```bash
 pip install piceli
 ```
 
 This will install Piceli and its dependencies, preparing you for your Kubernetes management tasks.
+
+## Local Operations Lens
+
+The initial operations interface runs on the operator laptop. It is deliberately
+small and read-only: it does not replace `DeploymentSession`, grants, journals,
+or Kubernetes RBAC with a dashboard.
+
+```bash
+# Reconcile one recorded deployment with its selected cluster. Output is JSON.
+piceli observe status \
+  --archive /secure/session.archive.json \
+  --kubeconfig ~/.kube/k-lab.yaml --context k-lab
+
+# Save a non-secret user preference and run the resulting loopback forward.
+piceli observe forward-save --user jose --name kabuki \
+  --namespace infinite-haiku-p2 --target service/ih-v18-kabuki \
+  --local-port 18080 --remote-port 3000
+piceli observe forward-run --user jose --name kabuki \
+  --kubeconfig ~/.kube/k-lab.yaml --context k-lab
+
+# Inspect one workload's current or previous bounded log tail.
+piceli observe logs-run --namespace infinite-haiku-p2 \
+  --target deployment/ih-v18-kabuki --tail 200 \
+  --kubeconfig ~/.kube/k-lab.yaml --context k-lab
+
+# Local browser UI plus JSON API. Passing --user restores only that user's
+# saved, loopback-only forwards and supervises processes Piceli starts itself.
+piceli observe serve --archive /secure/session.archive.json \
+  --kubeconfig ~/.kube/k-lab.yaml --context k-lab --user jose --port 9876
+```
+
+Open `http://127.0.0.1:9876/` to inspect the session, live resources and saved
+forwards. The status report distinguishes resources declared by the archive,
+resources missing from the cluster, and objects that are visible in the namespace
+but absent from that archive. "Undeclared" is information, not permission to
+adopt or delete an object.
+
+## Modern Container Pipeline & Micro-Image Delivery
+
+For high-performance systems and multi-tier architectures (such as Infinite Haiku),
+Piceli supports modular micro-image delivery instead of monolithic archives:
+
+1. **Modular OCI Images**: Decompose services (frontend, gateway, workers, datastores)
+   into lean, single-purpose containers (20–30 MB) built on a shared base layer.
+2. **Streamed Node Import**: Stream layer bytes directly from builder stdout to the
+   remote container runtime (`docker image save <tag> | ssh <node> sudo k3s ctr images import -`),
+   bypassing intermediate host disk I/O and remote SD/disk checksum bottlenecks.
+3. **In-Cluster OCI Layer Registry**: Optional lightweight in-cluster registry (`registry:2`)
+   for zero-copy layer deduplication and instant `<1s` container restarts.
+4. **Selective Rollouts**: Rebuilding and updating a stateless UI or signalling service
+   rolls out only that deployment in seconds, leaving PVC-backed stateful stores
+   completely warm and undisturbed.
 
 ## Quick Start Example
 

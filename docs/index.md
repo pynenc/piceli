@@ -1,12 +1,12 @@
-# Welcome to Piceli's Documentation
+# Piceli Documentation
 
-**Piceli: An Infrastructure Management Framework for Kubernetes and Beyond.**
+**Piceli: Reusable Programmable Infrastructure, Delivery, and Cluster Operations for Kubernetes.**
 
 ## Introduction
 
-Piceli is an infrastructure management framework aimed at simplifying the orchestration and deployment across both Kubernetes environments and cloud providers. In its current state, it focuses on managing Kubernetes resources, with the goal to include comprehensive management of cloud infrastructure, such as creating and managing GKE clusters on GCP. Users can define their infrastructure using YAML, Piceli templates, or directly through Kubernetes objects from the official Kubernetes library. The Piceli CLI tool is designed to parse these definitions, generating an automatic deployment plan that accounts for dependencies and execution order.
+Piceli is an owner-operated infrastructure delivery and cluster operations framework. It provides declarative deployment planning, dependency-ordered execution graphs, streamed OCI artifact delivery, safe reference-counted garbage collection, and a laptop-local operations control plane without requiring external database services or public registries.
 
-It offers deployment management by assessing the state of existing objects to determine necessary actions, including supporting patches, replacements, and implementing rollbacks to maintain system stability and efficiency. While the current version focuses on Kubernetes, future developments aim to manage the entire cloud infrastructure stack, ensuring that the Kubernetes cluster itself, along with any dependent resources, are provisioned and managed seamlessly.
+Users define infrastructure using Python composition, Piceli templates, or native Kubernetes manifests. Piceli reconciles desired intent against live cluster discovery, generating an explicit preflight deployment plan that accounts for dependencies, immutable execution journals, and safe pruning.
 
 ```{toctree}
 :hidden:
@@ -16,70 +16,33 @@ It offers deployment management by assessing the state of existing objects to de
 overview
 deployment_planning
 artifact_delivery
+operations_lens
+operator_workflow
 getting_started/index
 kubernetes_model/index
 cli/index
-apidocs/index.rst
-contributing/index
-faq
 changelog
 license
 ```
 
-## Key Features
+## Core Architecture
 
-- Comprehensive orchestration for Kubernetes and future cloud provider environments.
-- Designed to manage the entire infrastructure stack, including provisioning and management of cloud resources and Kubernetes clusters.
-- Intuitive deployment plans with automatic dependency resolution to ensure efficient and reliable deployments.
-- Deployment management that supports patches, replacements, and rollbacks for enhanced stability.
-- Detailed deployment plans that take into account the current state and nuances of the cluster configuration.
-- Future development will introduce configurable deployment strategies for granular control over infrastructure rollouts.
-- Pure, source-pinned OCI artifact assembly and explicitly authorized local import.
-- Bounded deployment-operation spans and logs with explicit delivery accounting.
+- **Declarative Planning & Discovery Contract (v2)**: Preflight discovery with scope/API coverage validation, topological DAG execution order, and immutable journals.
+- **Owner-Operated Delivery & Safe GC**: Direct OCI blob/manifest streaming to in-cluster or node-local registries without public pushes; reference-counted GC ensuring unknown inventory never deletes.
+- **Laptop-Local Operations Control Plane**: `piceli operator serve` and `piceli observe serve` run locally on loopback (`http://127.0.0.1:9876`), bridging cluster services via supervised loopback port forwards with 1-click shortcuts (Kabuki, Task Monitor, Poet, Shibuya).
+- **Git & PR Automation with Untrusted PR Isolation**: Opt-in branch watching, zero rebuild digest promotion, dependency-safe rollouts, and strict security isolation ensuring untrusted PR code never accesses deployment credentials.
+- **Single-Instance Atomic Persistence**: Default file-backed state store (`0o600` / `0o700`) with exclusive `fcntl.flock` locking and compressed `.tar.gz` backup/restore.
 
-## Installation
+## Operator Quick Start
 
-Piceli can be installed directly via pip:
+Start the local operator web interface and REST control plane:
 
 ```bash
-pip install piceli
+piceli operator serve --kubeconfig target/k-lab-p2/kubeconfig --namespace infinite-haiku-p2 --port 9876
 ```
 
-For a detailed installation guide, including prerequisites and environment setup, see the {doc}`getting_started/index` section.
-
-## Quick Start
-
-Here's a simple example to define a Kubernetes deployment using a Piceli template:
-
-```python
-from piceli.k8s import templates
-
-job = templates.Job(
-    name="job0",
-    containers=[
-        templates.Container(
-            name="c0", command=["python", "--version"], image="python:latest",
-        )
-    ],
-)
-```
-
-And deploy it with:
-
-```bash
-PICELI__MODULE_NAME=path.to.templates piceli deploy run
-```
-
-For a step-by-step guide to your first deployment, visit the {doc}`getting_started/index` section.
-
-## Compatibility
-
-Piceli is designed with Kubernetes in mind but aims to extend its support to various cloud providers and infrastructure services.
-
-## Contact or Support
-
-Need help or want to discuss Pynenc? Check out our [GitHub Issues](https://github.com/pynenc/piceli/issues) and [GitHub Discussions](https://github.com/pynenc/piceli/discussions).
+Open `http://127.0.0.1:9876` in your browser to inspect cluster inventory, manage releases, view bounded logs, and toggle one-click port forwards directly to Kabuki Studio and the Rustvello/Pynenc Task Monitor.
 
 ## License
 
-Piceli is released under the MIT License. For more details, see the {doc}`license` section.
+Piceli is released under the MIT License. For details, see {doc}`license`.

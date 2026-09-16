@@ -759,6 +759,36 @@ class DiscoveryArtifact:
             raise ValueError("discovery artifact exceeds byte limit")
         return encoded
 
+    def to_private_json(self) -> str:
+        """Serialize exact discovery for owner-only execution recovery.
+
+        Unlike :meth:`to_json`, this representation retains resource bodies,
+        including Secret data, so that a durable deployment can reconstruct
+        the identical snapshot hash. Callers must keep it in private storage;
+        it is never suitable for reports, logs, receipts, or interchange.
+        """
+        value = self.to_dict()
+        for encoded, resource in zip(value["resources"], self.resources):
+            encoded["manifest"] = resource.manifest
+            encoded["content_complete"] = resource.content_complete
+        result = _canonical_json(value)
+        if len(result.encode()) > self.limits.max_artifact_bytes:
+            raise ValueError("private discovery artifact exceeds byte limit")
+        return result
+
+    @classmethod
+    def from_private_json(cls, encoded: str) -> DiscoveryArtifact:
+        """Restore an exact owner-only discovery artifact without redaction."""
+        value = strict_json(encoded)
+        if not isinstance(value, Mapping):
+            raise ValueError("private discovery artifact must be an object")
+        result = cls.from_dict(value)
+        if result.to_private_json() != encoded:
+            raise ValueError("private discovery artifact must use canonical JSON")
+        if not result.execution_authoritative:
+            raise ValueError("private discovery artifact is not authoritative")
+        return result
+
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> DiscoveryArtifact:
         object_keys(

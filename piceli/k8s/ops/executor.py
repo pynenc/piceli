@@ -177,6 +177,16 @@ def _owners(resource: DiscoveredResource) -> list[dict[str, Any]]:
     )
 
 
+def _receipt_intent(resource: DiscoveredResource) -> dict[str, Any]:
+    """Return desired intent without Kubernetes controller rollout counters."""
+    manifest = ResourceIntent.from_manifest(resource.manifest).manifest
+    annotations = manifest.get("metadata", {}).get("annotations", {})
+    annotations.pop("deployment.kubernetes.io/revision", None)
+    if not annotations:
+        manifest.get("metadata", {}).pop("annotations", None)
+    return manifest
+
+
 def _reference(value: dict[str, str]) -> SecretVersionRef:
     return SecretVersionRef(**value)
 
@@ -418,7 +428,10 @@ class PlanExecutor:
             if current is not None:
                 raise ProviderError("absence-precondition-failed")
             return
-        if current is None or _version(current) != action.precondition:
+        if (
+            current is None
+            or current.manifest["metadata"].get("uid") != action.precondition.uid
+        ):
             raise ProviderError("uid-version-precondition-failed")
         baseline = (
             next(
@@ -435,6 +448,12 @@ class PlanExecutor:
             "metadata"
         ].get("generation"):
             raise ProviderError("generation-precondition-failed")
+        if current.manifest["metadata"].get(
+            "resourceVersion"
+        ) != action.precondition.resource_version and _receipt_intent(
+            current
+        ) != _receipt_intent(baseline):
+            raise ProviderError("resource-content-precondition-failed")
         if (
             current.ownership is Ownership.UNMANAGED
             and action.operation is not PlanOperation.ADOPT
@@ -482,6 +501,20 @@ class PlanExecutor:
         if self._retained_identical(current, action):
             return current, True
         metadata = current.manifest["metadata"]
+        if row["payload"].get("same_owner_update", False):
+            if current.ownership is not Ownership.MANAGED:
+                raise ProviderError("ambiguous-write-blocked", ambiguous=True)
+            if (
+                not action.precondition.must_not_exist
+                and metadata["uid"] != action.precondition.uid
+            ):
+                raise ProviderError("recreated-object", ambiguous=True)
+            if not _contains(
+                ResourceIntent.from_manifest(current.manifest).manifest,
+                self._manifest(action.resource),
+            ):
+                raise ProviderError("ambiguous-content-blocked", ambiguous=True)
+            return current, False
         if (
             metadata.get("annotations", {}).get(OPERATION_ANNOTATION)
             != row["operation_id"]
@@ -514,17 +547,16 @@ class PlanExecutor:
         if current is None or current.manifest["metadata"]["uid"] != payload["uid"]:
             raise ProviderError("recreated-object")
         after = self._load(payload["after"], current.identity)
-        if (
-            _owners(current) != _owners(after)
-            or ResourceIntent.from_manifest(current.manifest).manifest
-            != ResourceIntent.from_manifest(after.manifest).manifest
-        ):
+        if _owners(current) != _owners(after) or _receipt_intent(
+            current
+        ) != _receipt_intent(after):
             raise ProviderError("applied-resource-drift")
         if current.ownership != after.ownership:
             raise ProviderError("ownership-precondition-failed")
         if (
             action.operation is not PlanOperation.NOOP
             and not payload.get("retained_reconciled", False)
+            and not payload.get("same_owner_update", False)
             and current.manifest["metadata"]
             .get("annotations", {})
             .get(OPERATION_ANNOTATION)
@@ -699,7 +731,7 @@ class PlanExecutor:
                             _identity(action.resource.ref), deadline=deadline
                         )
                         self._check_current(current, action, snapshot)
-                        payload = (
+                        payload: dict[str, Any] = (
                             {"before": self._store(current)}
                             if current is not None
                             else {}
@@ -726,27 +758,49 @@ class PlanExecutor:
                             )
                             if manifest is not None:
                                 metadata = manifest["metadata"]
-                                metadata.setdefault("annotations", {}).update(
-                                    {
-                                        OWNER_ANNOTATION: self.provider.owner_id,
-                                        OPERATION_ANNOTATION: row["operation_id"],
-                                    }
+                                annotations = metadata.setdefault("annotations", {})
+                                annotations[OWNER_ANNOTATION] = self.provider.owner_id
+                                same_owner_update = (
+                                    current is not None
+                                    and current.ownership is Ownership.MANAGED
+                                    and action.operation is PlanOperation.APPLY
                                 )
+                                if same_owner_update:
+                                    # The previous release may own this annotation's
+                                    # SSA field. Exact content reconciliation keeps
+                                    # crash safety without forcing that ownership.
+                                    annotations.pop(OPERATION_ANNOTATION, None)
+                                    payload["same_owner_update"] = True
+                                else:
+                                    annotations[OPERATION_ANNOTATION] = row[
+                                        "operation_id"
+                                    ]
                                 if current is not None:
                                     metadata.update(
                                         {
-                                            "uid": action.precondition.uid,
-                                            "resourceVersion": action.precondition.resource_version,
+                                            "uid": current.manifest["metadata"]["uid"],
+                                            "resourceVersion": current.manifest[
+                                                "metadata"
+                                            ]["resourceVersion"],
                                         }
                                     )
                                 # Admission/field conflicts are surfaced without force ownership.
-                                self.provider.write(
-                                    _identity(action.resource.ref),
-                                    manifest,
-                                    create=action.operation is PlanOperation.CREATE,
-                                    dry_run=True,
-                                    deadline=deadline,
-                                )
+                                if same_owner_update:
+                                    assert current is not None
+                                    self.provider.update_owned(
+                                        current,
+                                        manifest,
+                                        dry_run=True,
+                                        deadline=deadline,
+                                    )
+                                else:
+                                    self.provider.write(
+                                        _identity(action.resource.ref),
+                                        manifest,
+                                        create=action.operation is PlanOperation.CREATE,
+                                        dry_run=True,
+                                        deadline=deadline,
+                                    )
                             self._guard(execution, authorization, deadline)
                             self.journal.record(
                                 execution, row["ordinal"], "intent", payload
@@ -765,11 +819,20 @@ class PlanExecutor:
                                     result = None
                                 else:
                                     assert manifest is not None
-                                    result = self.provider.write(
-                                        _identity(action.resource.ref),
-                                        manifest,
-                                        create=action.operation is PlanOperation.CREATE,
-                                        deadline=deadline,
+                                    result = (
+                                        self.provider.update_owned(
+                                            current,
+                                            manifest,
+                                            deadline=deadline,
+                                        )
+                                        if same_owner_update and current is not None
+                                        else self.provider.write(
+                                            _identity(action.resource.ref),
+                                            manifest,
+                                            create=action.operation
+                                            is PlanOperation.CREATE,
+                                            deadline=deadline,
+                                        )
                                     )
                                 if self.after_response is not None:
                                     self.after_response(row["ordinal"])
@@ -821,6 +884,7 @@ class PlanExecutor:
                     self._ready(execution, row, action, authorization, deadline)
                 self.journal.set_state(execution, "ready")
             except ProviderError as error:
+                self.journal.record_failure(execution, error.category)
                 self.journal.set_state(
                     execution,
                     "cancelled"

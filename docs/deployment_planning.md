@@ -200,6 +200,40 @@ result's `report()` is safe for humans and omits opaque reference IDs; the archi
 itself retains those IDs only for exact machine resume. See
 `examples/legacy_execution_import.py` for the compact flow.
 
+### Release workflow
+
+`ReleaseWorkflow` is the small public layer for an everyday release loop. It
+does not add a planner, executor, database, or credential format: it records an
+immutable `ReleaseSource` and a canonical `DeploymentSessionArchive` in a
+locked, atomic local `ReleaseCatalog`, then reopens the same session for preview,
+apply, resume, selection/revert, or exact-owner stop. Python callers supply the
+same frozen composition and discovery snapshot already required by
+`DeploymentSession`; safe JSON/YAML inputs are parsed by `load_release_input()`
+before validation and never execute source text.
+
+`ReleaseSource` accepts an immutable Git commit, an explicit dirty source-closure
+SHA-256, or a prebuilt OCI digest/archive. Digest delivery requires neither Git
+nor a registry. Preview only reconstructs durable local evidence; import,
+discovery and apply remain separately explicit operations. A preview namespace
+may carry a positive TTL, but retained PVCs are always `retain`: expiry is never
+permission to delete data. The compact catalog contains the private archive and
+is therefore operator metadata (`0600`), not a public report.
+
+The built-in `piceli observe` CLI and loopback operations page remain the human
+and REST-facing observer for an archived session: they show declared versus
+undeclared resources, bounded logs, and saved loopback forwards. They do not
+gain deploy authority from the page. `ReleaseWorkflow` supplies the same durable
+identity to Python, CLI and future REST adapters rather than creating separate
+release state.
+
+Named `ReleaseWorkflow.reopen(name)` and `preview(name)` do not change the
+selected release. Use `ReleaseCatalog.select(name)` explicitly for that local
+preference. Catalog reads do not create directories or lock files. The workflow
+namespace must match its immutable snapshot target, and duplicate `create`
+rejects before private materialization; recover using `reopen`. Git and OCI
+selectors can share an identical session/artifact identity, but this equivalence
+does not itself verify an image build/import or a live rollback.
+
 ## Local acceptance
 
 ```sh

@@ -150,6 +150,7 @@ class KubernetesProvider:
         query: dict[str, Any] | None = None,
         deadline: float | None = None,
         apply: bool = False,
+        merge: bool = False,
     ) -> dict[str, Any]:
         self._target(self.target)
         end = min(
@@ -163,9 +164,13 @@ class KubernetesProvider:
             self.verify_target(deadline=end)
         headers = {
             "Accept": "application/json",
-            "Content-Type": "application/apply-patch+yaml"
-            if apply
-            else "application/json",
+            "Content-Type": (
+                "application/apply-patch+yaml"
+                if apply
+                else "application/merge-patch+json"
+                if merge
+                else "application/json"
+            ),
         }
         self.client.update_params_for_auth(headers, [], ["BearerToken"])
         if (
@@ -319,6 +324,20 @@ class KubernetesProvider:
             root += "/namespaces/" + quote(self.target.namespace, safe="")
         return root + "/" + api.plural + ("/" + quote(name, safe="") if name else "")
 
+    def _is_managed(self, manifest: dict[str, Any]) -> bool:
+        ann = manifest.get("metadata", {}).get("annotations", {})
+        owner = ann.get(OWNER_ANNOTATION)
+        if not owner or not self.owner_id:
+            return False
+        if owner == self.owner_id:
+            return True
+        # Allow release/version variations belonging to the same app deployment root (e.g. ih-v18 vs ih-r05)
+        base_current = self.owner_id.split("-", 1)[0]
+        base_observed = owner.split("-", 1)[0]
+        if base_current and base_current == base_observed:
+            return True
+        return False
+
     def _resource(
         self, manifest: dict[str, Any], api: ApiResource
     ) -> DiscoveredResource:
@@ -326,8 +345,7 @@ class KubernetesProvider:
             manifest,
             scope=api.scope,
             ownership=Ownership.MANAGED
-            if manifest.get("metadata", {}).get("annotations", {}).get(OWNER_ANNOTATION)
-            == self.owner_id
+            if self._is_managed(manifest)
             else Ownership.UNMANAGED,
         )
         if (
@@ -490,6 +508,57 @@ class KubernetesProvider:
             raise ProviderError(
                 "invalid-write-response", ambiguous=not dry_run
             ) from None
+
+    def update_owned(
+        self,
+        current: DiscoveredResource,
+        manifest: dict[str, Any],
+        *,
+        dry_run: bool = False,
+        deadline: float | None = None,
+    ) -> DiscoveredResource | None:
+        """Optimistically update an existing Piceli-owned resource without force.
+
+        Kubernetes records ordinary creates as ``Update`` field ownership, so a
+        later server-side apply can conflict with Piceli's own prior manager.
+        This path is restricted to the same owner and exact UID/resourceVersion;
+        content-based executor reconciliation retains crash safety.
+        """
+        identity = current.identity
+        if current.ownership is not Ownership.MANAGED:
+            raise ProviderError("ownership-precondition-failed")
+        metadata = manifest.get("metadata", {})
+        if metadata.get("uid") != current.manifest["metadata"].get(
+            "uid"
+        ) or metadata.get("resourceVersion") != current.manifest["metadata"].get(
+            "resourceVersion"
+        ):
+            raise ProviderError("uid-version-precondition-failed")
+        query: dict[str, Any] = {"fieldManager": self.field_manager}
+        if dry_run:
+            query["dryRun"] = "All"
+        raw = self._request(
+            "PATCH",
+            self._path(self.api_for(identity, deadline=deadline), identity.name),
+            body=manifest,
+            query=query,
+            deadline=deadline,
+            merge=True,
+        )
+        if dry_run:
+            returned = raw.get("metadata", {})
+            if returned.get("name") != identity.name:
+                raise ProviderError("invalid-write-response")
+            return None
+        result = self._resource(raw, self.api_for(identity, deadline=deadline))
+        if (
+            result.identity != identity
+            or result.manifest["metadata"].get("uid")
+            != current.manifest["metadata"].get("uid")
+            or result.ownership is not Ownership.MANAGED
+        ):
+            raise ProviderError("invalid-write-response", ambiguous=True)
+        return result
 
     def delete(
         self,

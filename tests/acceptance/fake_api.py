@@ -316,11 +316,15 @@ class FakeAPI:
                 != current["metadata"]["resourceVersion"]
             ):
                 return 409, {}
-            if (
-                query.get("force") != ["false"]
-                or request["content_type"] != "application/apply-patch+yaml"
+            apply_patch = request["content_type"] == "application/apply-patch+yaml"
+            merge_patch = request["content_type"] == "application/merge-patch+json"
+            if not (apply_patch or merge_patch) or (
+                apply_patch and query.get("force") != ["false"]
             ):
                 return 422, {}
+            if merge_patch:
+                body = _merge_patch(current, body)
+                metadata = body["metadata"]
         metadata.update(
             {
                 "uid": current["metadata"]["uid"] if current else uuid.uuid4().hex,
@@ -331,7 +335,7 @@ class FakeAPI:
                 "managedFields": [
                     {
                         "manager": query["fieldManager"][0],
-                        "operation": "Apply",
+                        "operation": "Apply" if query.get("force") else "Update",
                         "apiVersion": api_version,
                         "fieldsType": "FieldsV1",
                         "fieldsV1": {"f:spec": {}},
@@ -381,3 +385,16 @@ def provider_at(url: str, **kwargs: Any) -> KubernetesProvider:
         namespace_uid="namespace-uid",
         **kwargs,
     )
+
+
+def _merge_patch(current: Any, patch: Any) -> Any:
+    """Apply the object subset needed by the fake Kubernetes merge-patch route."""
+    if not isinstance(current, dict) or not isinstance(patch, dict):
+        return copy.deepcopy(patch)
+    result = copy.deepcopy(current)
+    for key, value in patch.items():
+        if value is None:
+            result.pop(key, None)
+        else:
+            result[key] = _merge_patch(result.get(key), value)
+    return result

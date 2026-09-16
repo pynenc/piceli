@@ -209,6 +209,37 @@ def test_lost_response_is_observed_then_resumed_without_duplicate_write(
     assert len(mutations(api)) == 1
 
 
+def test_same_owner_update_resumes_by_content_without_replacing_operation_marker(
+    local_api, tmp_path
+):
+    api, provider = local_api
+    existing = manifest(value="one")
+    existing.setdefault("metadata", {}).setdefault("annotations", {})[
+        "piceli.io/operation"
+    ] = "prior-release-operation"
+    api.put(existing, owned=True)
+    run = executor(provider, tmp_path)
+    plan, snapshot, grant = prepare(provider, [manifest(value="two")])
+    api.inject("PATCH", "/configmaps/settings", disconnect_after=True, dry_run=False)
+
+    first = run.run("same-owner-lost", plan, snapshot, grant)
+    assert first["state"] == "blocked"
+    assert first["failure_category"] == "transport-error"
+    row = run.journal.actions("same-owner-lost")[0]
+    assert row["state"] == "intent"
+    assert row["payload"]["same_owner_update"] is True
+    assert (
+        "piceli.io/operation"
+        not in mutations(api)[0]["body"]["metadata"]["annotations"]
+    )
+
+    assert (
+        run.run("same-owner-lost", plan, snapshot, grant, resume=True)["state"]
+        == "ready"
+    )
+    assert len(mutations(api)) == 1
+
+
 def test_ambiguous_absence_blocks_retry(local_api, tmp_path):
     api, provider = local_api
     run = executor(provider, tmp_path)
@@ -318,10 +349,30 @@ def test_resource_preconditions_fail_before_side_effects(local_api, tmp_path, ch
         current["metadata"]["uid"] = "replacement"
     elif change == "version":
         current["metadata"]["resourceVersion"] = "new-version"
+        current["data"]["mode"] = "external-change"
     else:
         current["metadata"]["managedFields"][0]["manager"] = "foreign-manager"
     assert run.run("stale", plan, snapshot, grant)["state"] == "failed"
     assert mutations(api) == []
+
+
+def test_status_only_resource_version_change_uses_fresh_write_precondition(
+    local_api, tmp_path
+):
+    api, provider = local_api
+    api.put(manifest(), uid="original", owned=True)
+    run = executor(provider, tmp_path)
+    plan, snapshot, grant = prepare(provider, [manifest(value="two")])
+    current = api.objects[("ConfigMap", "settings")]
+    current["metadata"]["resourceVersion"] = "status-version"
+    current["status"] = {"observedGeneration": 1}
+    current["metadata"].setdefault("annotations", {})[
+        "deployment.kubernetes.io/revision"
+    ] = "2"
+
+    assert run.run("status-race", plan, snapshot, grant)["state"] == "ready"
+    write = mutations(api)[0]
+    assert write["body"]["metadata"]["resourceVersion"] == "status-version"
 
 
 def test_exact_adoption_is_required_and_ssa_uses_uid_version_manager(
@@ -684,7 +735,13 @@ def test_retained_operation_content_conflict_never_force_applies(local_api, tmp_
         execution_id="operation-conflict",
     )
 
-    assert run.run_bundle(bundle)["state"] == "failed"
+    report = run.run_bundle(bundle)
+    assert report["state"] == "failed"
+    assert report["failure_category"] == "retained-content-precondition-failed"
+    assert (
+        run.journal.summary(bundle.execution_id)["failure_category"]
+        == "retained-content-precondition-failed"
+    )
     assert mutations(api) == []
 
 

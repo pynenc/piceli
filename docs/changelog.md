@@ -6,6 +6,12 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ## Unreleased
 
+- Added the read-only local operations lens: Python inventory API, JSON CLI,
+  loopback REST endpoints, and owner-only non-secret port-forward preferences.
+  It reconciles an explicit deployment-session archive with an explicit
+  kubeconfig and distinguishes declared, missing, unknown, and undeclared
+  objects without acquiring deployment authority.
+
 - Added `DeploymentSession`, a Python-first provider-free boundary for one-time
   private input materialization, canonical opaque-reference interchange, exact
   preview/apply/resume, explicit rotation and owner-scoped stop.

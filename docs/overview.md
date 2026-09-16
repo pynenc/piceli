@@ -1,35 +1,28 @@
 # Overview
 
-## Piceli: Infrastructure Management for Kubernetes and Cloud Providers
+Piceli provides programmable infrastructure, source-pinned artifact delivery, and cluster operations for Kubernetes. It separates intent and preview from explicit execution grants, ensuring deployments remain reproducible, inspectable, and safely recoverable.
 
-Piceli is conceived as a comprehensive framework for managing infrastructure across Kubernetes and cloud providers. This overview sheds light on Piceli's key functionalities, architectural principles, and the vision for its future evolution.
+## Design Philosophy
 
-## Core Features and Design Philosophy
+Piceli is built on five core architectural principles:
 
-Piceli offers a suite of features designed to simplify the management of complex infrastructures:
+1. **Explicit Authority and Durable Sessions**:
+   Importing Piceli modules never contacts infrastructure or loads ambient credentials. Deployment actions require an explicit `DeploymentSession`, an authorized `ExecutionBundle`, and produce immutable journals.
 
-- **Automated Deployment Plans**: Piceli generates deployment plans automatically, considering dependencies and execution order to streamline the deployment process across environments.
+2. **Owner-Operated Delivery Without Public Registries**:
+   Containers are streamed directly via OCI Distribution Spec v2 to in-cluster or node-local registries. No hosted third-party registries or Docker daemon dependencies on Kubernetes worker nodes are required.
 
-- **Smart Management of Kubernetes Resources**: Through intelligent analysis, Piceli manages Kubernetes objects by applying actions such as patches and replacements, enhancing system stability and efficiency.
+3. **Safe Garbage Collection**:
+   Images are tracked across multiple dimensions (source commits, test runs, active releases, running cluster pods, and rollback targets). Invariant: **Unknown inventory never licenses deletion.** Transient inspection failures abort GC immediately.
 
-- **Cloud Provider Integration (Future Development)**: Piceli aims to extend its management capabilities beyond Kubernetes, allowing users to orchestrate cloud resources directly, facilitating a unified infrastructure management solution.
+4. **Laptop-Local Control Plane**:
+   `piceli operator serve` / `piceli observe serve` operates as a developer/operator tool on `127.0.0.1`. It does not require an in-cluster controller or database server. It bridges developer access through supervised loopback `kubectl port-forward` subprocesses with 1-click shortcuts for core services.
 
-- **Extensive Compatibility and Modularity**: Designed with modularity at its core, Piceli supports a wide range of Kubernetes objects and cloud services, enabling flexible and scalable infrastructure solutions.
+5. **Agent and Human Ergonomics**:
+   Every capability is unified across the Python library, CLI commands, versioned REST endpoints (`/v1/*`), and the reactive web UI with full semantic `data-testid` coverage for AI agents and rich visual telemetry for human operators.
 
-## Current Capabilities and Planned Expansions
+## System Boundaries
 
-- **Current State**: At present, Piceli manages Kubernetes environments.
-
-- **Future Directions**: The roadmap includes expanding Piceli's functionalities to manage cloud provider resources, such as GKE clusters on GCP, and enhancing its adaptability to various cloud services and infrastructure models.
-
-## Emphasis on Efficiency and Scalability
-
-Piceli is built with a focus on optimizing the deployment and management processes, ensuring that infrastructures can scale seamlessly:
-
-- **Efficient Resource Management**: Piceli's deployment engine is designed to handle resources efficiently, reducing overhead and optimizing utilization.
-
-- **Scalable Architecture**: The framework's architecture is scalable, supporting the management of infrastructures ranging from small-scale projects to large enterprise environments.
-
-## Conclusion
-
-Piceli is a tool in the realm of infrastructure management, bridging the gap between Kubernetes resource orchestration and comprehensive cloud provider management. It's structured to foster innovation, simplicity, and effectiveness, facilitating the seamless interoperability of components across the infrastructure stack.
+- **Rustvello** owns generic scheduling, task persistence, recovery, and multi-host distribution.
+- **Piceli** owns reusable programmable infrastructure, deployment planning, image delivery, execution journals, and deployment telemetry.
+- **Infinite Haiku** owns domain operations, telemetry meaning, product composition, and acceptance assertions.
