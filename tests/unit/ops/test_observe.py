@@ -3,7 +3,7 @@ import stat
 import threading
 import time
 from pathlib import Path
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 import pytest
 
@@ -278,3 +278,18 @@ def test_forward_supervisor_shortcuts_and_dynamic_management(tmp_path: Path) -> 
         assert not any(s.name == "custom-fwd" for s in supervisor.statuses())
     finally:
         supervisor.close()
+
+def test_local_rest_server_favicon_returns_no_content(tmp_path: Path) -> None:
+    store = PreferenceStore(tmp_path / "observe.json")
+    server = LocalObserveServer(
+        ("127.0.0.1", 0), lambda: InventoryReport("a" * 32, (), ()), store
+    )
+    thread = threading.Thread(target=server.handle_request)
+    thread.start()
+    try:
+        req = Request(f"http://127.0.0.1:{server.server_port}/favicon.ico")
+        with urlopen(req) as response:
+            assert response.status == 204
+    finally:
+        thread.join(timeout=1)
+        server.server_close()

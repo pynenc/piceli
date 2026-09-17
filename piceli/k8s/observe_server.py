@@ -1233,7 +1233,7 @@ _PAGE_HTML = """<!doctype html>
 
       showToast('Fetching logs for ' + target + '...', 'info');
       const res = await req('/v1/logs?target=' + encodeURIComponent(target) + '&tail=' + tail + '&container=' + encodeURIComponent(container) + '&previous=' + prev);
-      document.getElementById('log-output').textContent = (res.lines || []).join('\n') || res.error || 'No log lines returned.';
+      document.getElementById('log-output').textContent = (res.lines || []).join(String.fromCharCode(10)) || res.error || 'No log lines returned.';
     }
 
     async function createBackup() {
@@ -1338,6 +1338,10 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         if self.path == "/":
             self._html()
+            return
+        if self.path == "/favicon.ico":
+            self.send_response(204)
+            self.end_headers()
             return
         if self.path == "/healthz":
             self._json(200, {"ok": True})
