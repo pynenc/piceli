@@ -122,12 +122,17 @@ def _resource_dict(resource: ManagedResource) -> dict[str, Any]:
     if resource.error:
         res["error"] = resource.error
     if resource.observed is not None:
-        res["observed"] = {
+        obs_dict: dict[str, Any] = {
             "uid": resource.observed.uid,
             "resource_version": resource.observed.resource_version,
             "phase": resource.observed.phase,
             "images": list(resource.observed.images),
         }
+        if getattr(resource.observed, "labels", None):
+            obs_dict["labels"] = dict(resource.observed.labels)
+        if getattr(resource.observed, "annotations", None):
+            obs_dict["annotations"] = dict(resource.observed.annotations)
+        res["observed"] = obs_dict
     return res
 
 
@@ -228,14 +233,31 @@ def build_operator_report(
         for item in live_items:
             if item.ref in declared_refs:
                 continue
-            unmanaged.append(
-                ManagedResource(
-                    ref=item.ref,
-                    classification="unmanaged",
-                    state="present",
-                    observed=item,
-                )
+            item_labels = dict(getattr(item, "labels", ()))
+            is_managed = (
+                item_labels.get("piceli.io/managed") == "true"
+                or item_labels.get("app.kubernetes.io/name") == "infinite-haiku"
             )
+            if is_managed:
+                managed.append(
+                    ManagedResource(
+                        ref=item.ref,
+                        classification="managed",
+                        state="present",
+                        session_id=session_id,
+                        release_name=active_release_name or item_labels.get("ih.revision"),
+                        observed=item,
+                    )
+                )
+            else:
+                unmanaged.append(
+                    ManagedResource(
+                        ref=item.ref,
+                        classification="unmanaged",
+                        state="present",
+                        observed=item,
+                    )
+                )
 
     return OperatorReport(
         namespace=namespace,

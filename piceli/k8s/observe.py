@@ -80,6 +80,8 @@ class ObservedObject:
     generation: int | None = None
     phase: str | None = None
     images: tuple[str, ...] = ()
+    labels: tuple[tuple[str, str], ...] = ()
+    annotations: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         if any(not isinstance(value, str) or not value for value in self.images):
@@ -162,9 +164,16 @@ def archive_resources(archive: DeploymentSessionArchive) -> tuple[ObservationRef
     """Read declared public resource identities from a canonical session archive."""
     refs: set[ObservationRef] = set()
     for component in archive.to_dict()["composition"]:
-        for resource in component["resources"]:
-            reference = resource["resource"]
-            refs.add(ObservationRef(**reference))
+        items = component.get("resources", [component])
+        for resource in items:
+            reference = resource.get("resource", resource)
+            if isinstance(reference, Mapping) and "kind" in reference and "name" in reference:
+                refs.add(ObservationRef(
+                    api_version=str(reference.get("api_version", "v1")),
+                    kind=str(reference["kind"]),
+                    namespace=str(reference.get("namespace", "")),
+                    name=str(reference["name"]),
+                ))
     return tuple(sorted(refs))
 
 
@@ -252,6 +261,10 @@ class KubernetesDynamicInventoryReader:
             }
         )
         phase = status.get("phase") if isinstance(status, Mapping) else None
+        raw_labels = metadata.get("labels") or {}
+        lbls = tuple(sorted((str(k), str(v)) for k, v in raw_labels.items()))
+        raw_ann = metadata.get("annotations") or {}
+        anns = tuple(sorted((str(k), str(v)) for k, v in raw_ann.items()))
         return ObservedObject(
             ref=fallback,
             uid=_string(metadata.get("uid")),
@@ -259,6 +272,8 @@ class KubernetesDynamicInventoryReader:
             generation=_integer(metadata.get("generation")),
             phase=_string(phase),
             images=tuple(images),
+            labels=lbls,
+            annotations=anns,
         )
 
     def get(self, ref: ObservationRef) -> ObservedObject | None:

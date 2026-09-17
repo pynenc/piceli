@@ -172,6 +172,100 @@ _PAGE_HTML = """<!doctype html>
       align-items: center;
       gap: 8px;
     }
+        .topology-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 16px;
+      margin-bottom: 8px;
+    }
+    .tier-group {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .tier-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      padding-bottom: 8px;
+    }
+    .tier-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .tier-badge {
+      font-size: 10px;
+      padding: 2px 8px;
+      border-radius: 9999px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .tier-badge-core { background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); }
+    .tier-badge-task { background: rgba(168, 85, 247, 0.15); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.3); }
+    .tier-badge-app { background: rgba(34, 197, 94, 0.15); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.3); }
+    .tier-badge-sensor { background: rgba(234, 179, 8, 0.15); color: #fde047; border: 1px solid rgba(234, 179, 8, 0.3); }
+
+    .comp-item {
+      background: rgba(0,0,0,0.25);
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 6px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      transition: border-color 0.15s;
+    }
+    .comp-item:hover {
+      border-color: rgba(56, 189, 248, 0.4);
+    }
+    .comp-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .comp-name {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-weight: 700;
+      font-size: 13px;
+      color: #fff;
+    }
+    .comp-desc {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.4;
+    }
+    .comp-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .comp-tag {
+      background: rgba(255,255,255,0.04);
+      padding: 2px 6px;
+      border-radius: 4px;
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+    .comp-actions {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      margin-top: 4px;
+      padding-top: 6px;
+      border-top: 1px solid rgba(255,255,255,0.04);
+    }
+
     .quick-cards {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -452,6 +546,9 @@ _PAGE_HTML = """<!doctype html>
       <span class="brand-tag">Piceli Observe R07</span>
     </div>
     <div class="header-actions">
+      <div class="status-pill" data-testid="badge-auth" style="border-color: rgba(34, 197, 94, 0.4); background: rgba(34, 197, 94, 0.08); color: #86efac;">
+        <span>🔑 <strong>Kabuki:</strong> ihadmin / admin</span>
+      </div>
       <div class="status-pill" id="hdr-ns" data-testid="badge-namespace">Namespace: loading...</div>
       <button class="btn btn-sec" id="btn-toggle-refresh" data-testid="btn-autorefresh-toggle" onclick="toggleAutoRefresh()">Auto-Refresh: ON (3s)</button>
       <button class="btn btn-sec" data-testid="btn-refresh" onclick="loadAll()">↻ Refresh</button>
@@ -501,6 +598,17 @@ _PAGE_HTML = """<!doctype html>
         <div class="metric-card" data-testid="metric-release">
           <div class="metric-title">Active Release</div>
           <div class="metric-value" id="m-release" style="font-size: 16px; color: var(--success);">None</div>
+        </div>
+      </div>
+
+      <!-- System Topology & Architecture Tiers View -->
+      <div class="section-box" data-testid="section-system-topology">
+        <h2>
+          <span>🏛️ System Topology & Component Architecture</span>
+          <span style="font-size: 11px; font-weight: normal; color: var(--muted);">Infinite Haiku Canonical Event-Driven & Telemetry Architecture</span>
+        </h2>
+        <div class="topology-grid" id="topology-container" data-testid="topology-grid">
+          <div style="color: var(--muted); font-size: 12px;">Loading topology...</div>
         </div>
       </div>
 
@@ -655,6 +763,112 @@ _PAGE_HTML = """<!doctype html>
   <div id="toasts" class="toast-container"></div>
 
   <script>
+    const COMPONENT_TIERS = [
+      {
+        id: "core",
+        title: "Core Telemetry & Datastore Engine",
+        badge: "Storage & Ingestion",
+        badgeClass: "tier-badge-core",
+        components: [
+          {
+            name: "ih-target-poet",
+            role: "Target Poet Ingestion & Store",
+            desc: "Native telemetry datastore, OTLP ingestion, and temporal multi-view graph engine.",
+            ports: "18080 (HTTP) / 18443 (TLS)",
+            shortcutId: "poet",
+            url: "http://127.0.0.1:18086"
+          },
+          {
+            name: "ih-observer-poet",
+            role: "Observer Poet Analytics",
+            desc: "Read-only replica for historical analytics and long-term telemetry retention.",
+            ports: "18081",
+            shortcutId: null,
+            url: null
+          }
+        ]
+      },
+      {
+        id: "task",
+        title: "Distributed Task & Coordination Tier",
+        badge: "Shibuya & Rustvello",
+        badgeClass: "tier-badge-task",
+        components: [
+          {
+            name: "ih-redis",
+            role: "State & Queue Store",
+            desc: "Redis 7 persistent backing store for Shibuya domain state and Rustvello task distribution.",
+            ports: "6379 (Plain) / 6380 (TLS)",
+            shortcutId: null,
+            url: null
+          },
+          {
+            name: "ih-shibuya",
+            role: "Domain Task Coordinator",
+            desc: "Domain orchestrator and event hub for offloading compute tasks to Rustvello.",
+            ports: "18083",
+            shortcutId: "shibuya",
+            url: "http://127.0.0.1:18083"
+          },
+          {
+            name: "ih-worker",
+            role: "Rustvello Task Worker",
+            desc: "High-performance worker pulling and executing offloaded generation tasks.",
+            ports: "Internal Worker",
+            shortcutId: null,
+            url: null
+          }
+        ]
+      },
+      {
+        id: "app",
+        title: "Application & Presentation Tier",
+        badge: "Kabuki & Monitor",
+        badgeClass: "tier-badge-app",
+        components: [
+          {
+            name: "ih-kabuki",
+            role: "Leptos SSR Web UI & Studio",
+            desc: "Browser user interface, pilot bridge, and interactive session manager.",
+            ports: "3000",
+            shortcutId: "kabuki",
+            url: "http://127.0.0.1:3000/login"
+          },
+          {
+            name: "ih-rustvello-monitor",
+            role: "Task Telemetry Dashboard",
+            desc: "Realtime observability interface for task worker queues and execution progress.",
+            ports: "18084",
+            shortcutId: "monitor",
+            url: "http://127.0.0.1:18084"
+          }
+        ]
+      },
+      {
+        id: "sensors",
+        title: "Autonomous Sensors & Muses",
+        badge: "Telemetry Harvester",
+        badgeClass: "tier-badge-sensor",
+        components: [
+          {
+            name: "ih-observer-muse",
+            role: "Cross-Node Telemetry Sensor",
+            desc: "Autonomous agent harvesting host and service metrics between target and observer.",
+            ports: "Autonomous Sensor",
+            shortcutId: null,
+            url: null
+          }
+        ]
+      }
+    ];
+
+    function viewLogsFor(target) {
+      const input = document.getElementById('log-target');
+      if (input) input.value = target;
+      switchTab('logs', document.querySelector('[data-testid="nav-logs"]'));
+      fetchLogs();
+    }
+
     const token = __PICELI_TOKEN__;
     let autoRefreshActive = true;
     let autoRefreshTimer = null;
@@ -769,6 +983,54 @@ _PAGE_HTML = """<!doctype html>
           `;
         }).join('');
         document.getElementById('quick-cards-container').innerHTML = shortcutsHtml || '<div style="color: var(--muted);">No shortcuts configured</div>';
+
+        // Render System Topology Cards
+        const managedMap = new Map();
+        (status.managed || []).forEach(m => managedMap.set(m.ref.name, m));
+
+        const topologyHtml = COMPONENT_TIERS.map(tier => `
+          <div class="tier-group" data-testid="tier-group-${esc(tier.id)}">
+            <div class="tier-header">
+              <div class="tier-title">${esc(tier.title)}</div>
+              <span class="tier-badge ${esc(tier.badgeClass)}">${esc(tier.badge)}</span>
+            </div>
+            ${tier.components.map(comp => {
+              const res = managedMap.get(comp.name);
+              const isPresent = res && res.state === 'present';
+              const phase = res?.observed?.phase || (isPresent ? 'Running' : 'Not Deployed');
+              const images = (res?.observed?.images || []).join(', ') || 'canonical';
+              const shortcut = shortcuts.find(s => s.id === comp.shortcutId);
+              const fwdRunning = shortcut && shortcut.state === 'running';
+
+              return `
+                <div class="comp-item" data-testid="topology-card-${esc(comp.name)}">
+                  <div class="comp-header">
+                    <span class="comp-name">${esc(comp.name)}</span>
+                    <span class="badge ${isPresent ? 'badge-running' : 'badge-stopped'}">
+                      <span class="pulse-dot ${isPresent ? 'pulse-running' : 'pulse-stopped'}"></span>${esc(phase)}
+                    </span>
+                  </div>
+                  <div class="comp-desc">${esc(comp.desc)}</div>
+                  <div class="comp-meta">
+                    <span class="comp-tag">Role: <strong>${esc(comp.role)}</strong></span>
+                    <span class="comp-tag">Port: <code>${esc(comp.ports)}</code></span>
+                  </div>
+                  <div class="comp-actions">
+                    ${comp.shortcutId ? (fwdRunning ? `
+                      <button class="btn btn-danger" style="padding: 3px 8px; font-size: 11px;" onclick="actQuickShortcut('${esc(comp.shortcutId)}', 'stop')">■ Stop</button>
+                      <a href="${esc(comp.url)}" target="_blank" class="btn btn-open" style="padding: 3px 8px; font-size: 11px;">Open ↗</a>
+                    ` : `
+                      <button class="btn" style="padding: 3px 8px; font-size: 11px;" onclick="actQuickShortcut('${esc(comp.shortcutId)}', 'start')">▶ Forward</button>
+                      <a href="${esc(comp.url)}" target="_blank" class="btn btn-disabled" style="padding: 3px 8px; font-size: 11px;">Open ↗</a>
+                    `) : ''}
+                    <button class="btn btn-sec" style="padding: 3px 8px; font-size: 11px;" onclick="viewLogsFor('deployment/${esc(comp.name)}')">Logs ↗</button>
+                  </div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        `).join('');
+        document.getElementById('topology-container').innerHTML = topologyHtml;
 
         // Managed table
         document.getElementById('tbl-managed').innerHTML = (status.managed || []).map(r => `
