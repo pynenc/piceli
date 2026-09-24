@@ -10,7 +10,7 @@ The `piceli` command (also available as `python -m piceli`) has seven command gr
 | `operator` | Inventory, releases, approvals, backups, local UI | Explicit `--kubeconfig` | JSON |
 | `artifacts` | Deterministic OCI builds and explicit local import | None (local tools only) | JSON |
 | `inputs` | Record and verify the git identity of build sources | None (local git only) | JSON |
-| `release` | Plan, apply, roll back, resume and stop releases from a `release.toml` spec (recoverable engine). See {doc}`../release_cli` | Explicit kubeconfig file + context from the spec | JSON + summary on stderr |
+| `release` | Plan, apply, roll back, resume and stop releases from a `release.toml` spec (recoverable engine); `release secret show` inspects secret values (owner, `--reveal`). See {doc}`../release_cli` and {doc}`../secrets` | Explicit kubeconfig file + context from the spec | JSON + summary on stderr |
 
 The global options below (`--namespace`, `--module-*`, `--folder-path`) apply to
 `model` and `deploy`. The `observe`, `operator` and `artifacts` groups take their
