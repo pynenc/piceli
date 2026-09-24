@@ -46,6 +46,16 @@ RotateOption = Annotated[
         help="Regenerate this secret generator's values in the new release (repeatable)",
     ),
 ]
+AdoptOption = Annotated[
+    list[str] | None,
+    typer.Option(
+        "--adopt",
+        help=(
+            "Authorize adopting this existing object, as Kind/name or "
+            "apiVersion/Kind/name (repeatable; adds to [release] adopt)"
+        ),
+    ),
+]
 ReleaseOption = Annotated[
     str | None,
     typer.Option("--release", help="Release name (default: the latest execution)"),
@@ -86,15 +96,40 @@ def _refuse(error: BaseException) -> None:
 def _describe_plan(result: Any, spec: Path, command: str) -> None:
     counts = ", ".join(f"{n} {op}" for op, n in result.counts.items()) or "no actions"
     _say(f"release {result.release} ({result.mode}, {result.intent}): {counts}")
-    for action in result.to_dict()["actions"]:
+    report = result.to_dict()
+    for action in report["actions"]:
         if action["operation"] != "no-op":
-            _say(f"  {action['operation']:>7} {action['kind']}/{action['name']}")
+            _say(
+                f"  {action['operation']:>7} {action['kind']}/{action['name']}"
+                + _adoption_note(action.get("adoption"))
+            )
+    for item in report["drift"]:
+        resource = item["resource"]
+        _say(
+            f"  drift   {resource['kind']}/{resource['name']}: desired fields "
+            f"also managed by {', '.join(item['managers'])}"
+        )
+    for entry in report["adopt_not_needed"]:
+        _say(f"  adopt {entry}: not needed (absent or already managed)")
     for name, origin in result.secrets.items():
         _say(f"  secret {name}: {origin}")
     _say(f"plan hash: {result.plan_hash} (valid until {result.expires_at})")
     _say(
         f"approve with: piceli release {command} --spec {spec} --approve {result.plan_hash}"
     )
+
+
+def _adoption_note(adoption: dict[str, Any] | None) -> str:
+    if not adoption:
+        return ""
+    owner = adoption.get("previous_owner") or "none"
+    if adoption["mode"] == "takeover":
+        displaced = ", ".join(adoption["displaced_managers"]) or "none"
+        return (
+            f"  [takeover: forced apply; displaces field managers: {displaced}; "
+            f"previous owner: {owner}]"
+        )
+    return f"  [metadata-only: owner annotation only; previous owner: {owner}]"
 
 
 def _confirm(result: Any) -> bool:
@@ -108,6 +143,13 @@ def _confirm(result: Any) -> bool:
 
 def _finish(outcome: dict[str, Any]) -> None:
     _emit(outcome)
+    for item in outcome.get("adopted", ()):
+        removed = item.get("removed_managers")
+        _say(
+            f"  adopted {item['kind']}/{item['name']} ({item['mode']}"
+            + (f"; removed field managers: {', '.join(removed)}" if removed else "")
+            + ")"
+        )
     execution = outcome["execution"]
     _say(
         f"{outcome['intent']} {outcome['release']}: {execution['state']}"
@@ -129,11 +171,12 @@ def _plan_then_execute(
     auto_approve: bool,
     rotate: list[str] | None = None,
     rollback_to: str | None = None,
+    adopt: list[str] | None = None,
 ) -> None:
     try:
         runner = _runner(spec)
         if approve is not None:
-            if auto_approve or rotate:
+            if auto_approve or rotate or adopt:
                 raise ValueError("--approve cannot be combined with planning flags")
             expected = None
             if rollback_to is not None:
@@ -144,7 +187,9 @@ def _plan_then_execute(
                 expected_release=expected,
             )
         else:
-            result = runner.plan(rotate=rotate or (), rollback_to=rollback_to)
+            result = runner.plan(
+                rotate=rotate or (), rollback_to=rollback_to, adopt=adopt or ()
+            )
             _describe_plan(result, spec, command)
             if not auto_approve and not _confirm(result):
                 _emit({"state": "approval-required", **result.to_dict()})
@@ -160,6 +205,7 @@ def _plan_then_execute(
 def plan(
     spec: SpecOption,
     rotate: RotateOption = None,
+    adopt: AdoptOption = None,
     out: Annotated[
         Path | None,
         typer.Option("--out", help="Also write the full redacted plan JSON here"),
@@ -167,7 +213,7 @@ def plan(
 ) -> None:
     """Capture live discovery and persist an approvable plan (prints its hash)."""
     try:
-        result = _runner(spec).plan(rotate=rotate or ())
+        result = _runner(spec).plan(rotate=rotate or (), adopt=adopt or ())
         if out is not None:
             out.write_text(
                 json.dumps(result.to_dict(full=True), sort_keys=True, indent=2)
@@ -188,10 +234,16 @@ def apply(
     approve: ApproveOption = None,
     auto_approve: AutoApproveOption = False,
     rotate: RotateOption = None,
+    adopt: AdoptOption = None,
 ) -> None:
     """Execute an approved plan (``--approve HASH``), or plan and confirm."""
     _plan_then_execute(
-        spec, command="apply", approve=approve, auto_approve=auto_approve, rotate=rotate
+        spec,
+        command="apply",
+        approve=approve,
+        auto_approve=auto_approve,
+        rotate=rotate,
+        adopt=adopt,
     )
 
 
@@ -203,6 +255,7 @@ def rollback(
     spec: SpecOption,
     approve: ApproveOption = None,
     auto_approve: AutoApproveOption = False,
+    adopt: AdoptOption = None,
 ) -> None:
     """Re-plan and re-apply an earlier release against current cluster state."""
     _plan_then_execute(
@@ -211,6 +264,7 @@ def rollback(
         approve=approve,
         auto_approve=auto_approve,
         rollback_to=target,
+        adopt=adopt,
     )
 
 

@@ -50,6 +50,22 @@ class ReleaseSpecError(ValueError):
     """The release spec, build receipt or composition entry point is invalid."""
 
 
+_ADOPT_ENTRY = re.compile(
+    r"(?:(?P<api>(?:[a-z0-9.-]+/)?v[0-9][a-z0-9]*)/)?"
+    r"(?P<kind>[A-Z][A-Za-z0-9]*)/(?P<name>[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?)"
+)
+
+
+def parse_adopt_entry(value: str) -> tuple[str | None, str, str]:
+    """``Kind/name`` or ``apiVersion/Kind/name`` → (api_version, kind, name)."""
+    match = _ADOPT_ENTRY.fullmatch(value) if isinstance(value, str) else None
+    if match is None or len(match["name"]) > 253:
+        raise ReleaseSpecError(
+            f"adopt entry must be 'Kind/name' or 'apiVersion/Kind/name', got {value!r}"
+        )
+    return match["api"], match["kind"], match["name"]
+
+
 class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -82,6 +98,16 @@ class ReleaseSettings(_Strict):
     approval_window_seconds: int = Field(default=900, ge=30, le=86400)
     prune: bool = False
     inherited_owners: tuple[str, ...] = ()
+    # Existing objects this release may adopt: "Kind/name" or
+    # "apiVersion/Kind/name", in the target namespace. See docs/release_cli.md.
+    adopt: tuple[str, ...] = ()
+
+    @field_validator("adopt")
+    @classmethod
+    def _adopt(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        for item in value:
+            parse_adopt_entry(item)
+        return value
 
     @field_validator("name")
     @classmethod

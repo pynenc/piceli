@@ -7,10 +7,10 @@ the plan executor and its journal, so each release can be previewed, applied,
 resumed, stopped and rolled back.
 
 ```text
-piceli release plan     --spec release.toml [--rotate NAME] [--out plan.json]
+piceli release plan     --spec release.toml [--rotate NAME] [--adopt Kind/name] [--out plan.json]
 piceli release preview  --spec release.toml          # alias of plan
-piceli release apply    --spec release.toml --approve <plan-hash> | --auto-approve
-piceli release rollback <release|previous> --spec release.toml [--approve <hash> | --auto-approve]
+piceli release apply    --spec release.toml --approve <plan-hash> | --auto-approve [--adopt Kind/name]
+piceli release rollback <release|previous> --spec release.toml [--approve <hash> | --auto-approve [--adopt Kind/name]]
 piceli release resume   --spec release.toml [--release NAME]
 piceli release stop     --spec release.toml [--release NAME]
 piceli release status   --spec release.toml
@@ -42,6 +42,8 @@ composition = "composition.py:build"   # or "package.module:function"
 state_dir = ".piceli-release"       # catalog, journal, secret store, plans (0700)
 approval_window_seconds = 900       # plan validity and evidence age limit
 prune = false                       # delete managed objects a release drops
+# inherited_owners = ["old-owner"]  # earlier owner ids whose objects count as ours
+# adopt = ["Deployment/web", "PersistentVolumeClaim/data"]   # see "Adopting existing objects"
 
 [execution]
 max_seconds = 300
@@ -121,6 +123,27 @@ release **carries over** the previous release's values unless the generator's
 settings changed or you pass `--rotate NAME`. Rotation always creates a new
 release.
 
+Secrets are retained objects: Piceli never rewrites or deletes an existing
+Secret, so a rotated value must go into a **new** Secret. Put a generation in
+the Secret's name, bump it together with `--rotate`, and reference the new
+name from the workloads:
+
+```python
+generation = ctx.values["token_generation"]  # [values] token_generation = 2
+token = ResourceIntent.from_manifest(
+    {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {"name": f"web-token-{generation}", "namespace": ctx.namespace},
+        "data": {"token": "<private>"},
+    }
+).with_secret("/data/token", ctx.secret("api-token"))
+```
+
+Rotating under the same name fails at apply with
+`retained-content-precondition-failed` and writes nothing to that Secret. The
+old Secret stays until you delete it.
+
 ## Plan and approval
 
 `plan` identifies the cluster (kube-system and namespace UIDs, optional node
@@ -153,6 +176,65 @@ $ piceli release apply --spec release.toml --approve 4123ff6e…29b8e4
 apply web-716dfe62698b: ready
 ```
 
+## Adopting existing objects
+
+Objects that already exist in the namespace without this release's
+`piceli.io/owner` (for example created by `kubectl`) are refused at plan
+time, with the list of objects to adopt. Authorize each one with
+`--adopt Kind/name` (or `apiVersion/Kind/name`; repeatable) on `plan`,
+`apply` or `rollback`, or list them in `[release] adopt`. An entry must name
+a resource the composition declares; entries for objects that are absent or
+already managed are reported as `adopt_not_needed` and ignored, so a standing
+list keeps working after the first release. Adoption flags are planning
+flags: `apply --approve HASH` runs exactly the approved plan and refuses them.
+
+The plan shows how each object is adopted, and the mode, previous owner and
+displaced field managers are part of the plan hash you approve:
+
+```console
+$ piceli release plan --spec release.toml \
+    --adopt Deployment/web --adopt PersistentVolumeClaim/web-data --adopt Secret/web-token
+release web-06c982ec7fe9 (create, apply): 3 adopt
+    adopt Secret/web-token  [metadata-only: owner annotation only; previous owner: none]
+    adopt PersistentVolumeClaim/web-data  [metadata-only: owner annotation only; previous owner: none]
+    adopt Deployment/web  [takeover: forced apply; displaces field managers: kubectl-client-side-apply, kubectl-set; previous owner: none]
+plan hash: b9b282dd…c67a07 (valid until 2026-09-24T19:26:34+00:00)
+$ piceli release apply --spec release.toml --approve b9b282dd…c67a07
+  adopted Secret/web-token (metadata-only)
+  adopted PersistentVolumeClaim/web-data (metadata-only)
+  adopted Deployment/web (takeover; removed field managers: kubectl-client-side-apply, kubectl-set)
+apply web-06c982ec7fe9: ready
+```
+
+* **Retained objects** (PVC, Secret, or `piceli.io/retained: "true"`) are
+  adopted **metadata-only**: Piceli writes only its owner annotation, never
+  spec or data, and only when the live object already contains everything the
+  composition declares for it (labels and annotations included). Declare a
+  PVC with the same spec as the live claim; declare an existing Secret without
+  `data` to adopt it and keep its value. A different declared value is refused
+  before any write. A retained object of an `inherited_owners` id can be
+  adopted the same way; its owner annotation is re-stamped.
+* **Everything else** is adopted by a **takeover**: one server-side apply with
+  `force=true` (the only forced write Piceli sends), then the displaced
+  managers' `managedFields` entries are removed. Afterwards Piceli's field
+  manager is the only owner of the fields the composition declares, so a
+  later `kubectl set image` shows up as drift in the next plan:
+
+  ```console
+    drift   Deployment/web: desired fields also managed by kubectl-set
+  ```
+
+  Managers of undeclared fields (such as `kubectl rollout restart`'s
+  `restartedAt` annotation) are left alone. Ordinary creates and updates
+  never force.
+
+The `apply` JSON lists `adopted` objects with `mode`, `previous_owner`,
+`displaced_managers` and `removed_managers`; the journal records the same.
+Rolling back to an earlier release re-applies its archived composition as
+usual; adopted retained objects and their data are never touched by a
+rollback. If the managedFields cleanup of a takeover is interrupted, the apply
+ends `blocked` and `resume` finishes it.
+
 ## Rollback
 
 `rollback <release>` re-plans the named release's archived composition
@@ -182,7 +264,10 @@ did not become ready, the last ready release itself.
 * A state directory serves one cluster and namespace: releases record the
   kube-system UID, and a later run against another cluster is refused.
 * Objects are owned by exact `owner` match. Objects created by other tools are
-  unmanaged; planning them fails until they are adopted explicitly.
+  unmanaged; planning them fails until they are adopted explicitly
+  (`--adopt` / `[release] adopt`). Only an approved takeover adoption sends a
+  forced server-side apply; retained objects are adopted by an owner-annotation
+  change only.
 * Plans, discovery evidence and secrets stay in the private state directory
   (owner-only). Reports and the catalog contain opaque references only.
 
@@ -197,9 +282,9 @@ did not become ready, the last ready release itself.
    supported yet, so plan a rotation window for anything clients cache.
 3. Ownership: objects that already carry `piceli.io/owner` are managed if you
    keep that owner or list it in `release.inherited_owners`. Objects created
-   by plain `kubectl` are unmanaged and planning refuses them; delete them or
-   recreate them under the release (explicit adoption from the CLI is not
-   available yet).
+   by plain `kubectl` are unmanaged and planning refuses them until you adopt
+   them with `--adopt Kind/name` (see
+   [Adopting existing objects](#adopting-existing-objects)).
 4. Replace `kubectl apply`, hand-written rollout waits and state files with
    `plan`/`apply`, and ad-hoc rollback with `rollback previous`. Keep the
    state directory: it is the release history, and the secret store holds

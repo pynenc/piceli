@@ -22,6 +22,10 @@ field_manager = "release-demo"
 composition = "composition.py:build"
 state_dir = ".piceli-release"       # catalog, journal, secret store, plans
 approval_window_seconds = 900
+# Existing objects (e.g. made with kubectl) this release may adopt. Retained
+# kinds (PVC, Secret) get only the owner annotation; others are taken over by
+# a forced server-side apply. The plan shows both; see docs/release_cli.md.
+# adopt = ["Deployment/web", "Secret/web-token"]
 
 [execution]
 max_seconds = 300

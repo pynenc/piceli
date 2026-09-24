@@ -70,7 +70,9 @@ from piceli.k8s import templates
 registry = templates.NodeLocalRegistry(node_name="worker-1", storage="20Gi")
 
 # workloads on worker-1 pull by digest from the node loopback
-image = registry.pull_reference("team/api", "sha256:4f1c…")  # 127.0.0.1:5000/team/api@sha256:4f1c…
+image = registry.pull_reference(
+    "team/api", "sha256:4f1c…"
+)  # 127.0.0.1:5000/team/api@sha256:4f1c…
 
 # garbage collection (see the guide for the procedure)
 gc = registry.garbage_collection()

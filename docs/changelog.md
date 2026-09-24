@@ -6,6 +6,21 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ## Unreleased
 
+- Adopt existing objects by ownership transfer. `piceli release --adopt
+  Kind/name` (or `[release] adopt = [...]`, or
+  `PlanAuthorization.adopt_resources`) adopts objects in one of two ways:
+  - retained objects (PVC, Secret, Namespace, PV) with an owner-annotation-only
+    write; their spec and data are never touched;
+  - other objects with an explicitly authorized forced server-side apply that
+    removes the displaced field managers.
+
+  Plans show the adoption mode and the displaced managers, and report field
+  drift. Inherited owners are now part of the execution grant.
+- Receipts only compare declared fields, which fixes the false drift on the
+  first apply of a WaitForFirstConsumer PVC.
+- Boolean `*Token` fields such as `automountServiceAccountToken` are no longer
+  redacted as secrets.
+
 - `templates.NodeLocalRegistry` is a digest-pinned OCI registry bound to the
   node loopback, so the node pulls from it without any registry configuration
   and it is not exposed on the network. It has:

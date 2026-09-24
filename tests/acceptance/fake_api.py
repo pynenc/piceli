@@ -62,8 +62,132 @@ def manifest(
     return result
 
 
+# --- Field ownership model (opt-in: ``FakeAPI.field_ownership = True``) -------
+#
+# A small model of server-side apply bookkeeping: field paths are tuples of
+# FieldsV1 segments (``f:name``; ``k:{"name":...}`` for lists of named items).
+# Only ``metadata.labels``/``metadata.annotations`` and non-metadata content
+# are tracked. It reproduces what the takeover code relies on: apply conflicts
+# on differing values owned by another manager (``force=true`` moves them),
+# Update ownership of changed fields, and managedFields replacement through a
+# non-apply patch.
+
+Path = tuple[str, ...]
+_UNTRACKED_METADATA = {
+    "name",
+    "namespace",
+    "uid",
+    "resourceVersion",
+    "generation",
+    "managedFields",
+    "creationTimestamp",
+}
+
+
+def _segments(value: Any, prefix: Path = ()) -> set[Path]:
+    paths: set[Path] = set()
+    if isinstance(value, dict) and value:
+        for key, child in value.items():
+            if not prefix and key in {"status", "apiVersion", "kind"}:
+                continue
+            if prefix == ("f:metadata",) and key in _UNTRACKED_METADATA:
+                continue
+            paths |= _segments(child, prefix + (f"f:{key}",))
+    elif (
+        isinstance(value, list)
+        and value
+        and all(isinstance(item, dict) and "name" in item for item in value)
+    ):
+        for item in value:
+            key = "k:" + json.dumps({"name": item["name"]}, separators=(",", ":"))
+            paths.add(prefix + (key, "f:name"))
+            for name, child in item.items():
+                if name != "name":
+                    paths |= _segments(child, prefix + (key, f"f:{name}"))
+    elif prefix:
+        paths.add(prefix)
+    return paths
+
+
+def field_paths(manifest: dict[str, Any]) -> set[Path]:
+    return {path for path in _segments(manifest) if path != ("f:metadata",)}
+
+
+def fields_v1(paths: set[Path]) -> dict[str, Any]:
+    tree: dict[str, Any] = {}
+    for path in sorted(paths):
+        node = tree
+        for segment in path:
+            node = node.setdefault(segment, {})
+    return tree
+
+
+def paths_of(fields: dict[str, Any], prefix: Path = ()) -> set[Path]:
+    paths: set[Path] = set()
+    for key, child in fields.items():
+        if key == ".":
+            continue
+        if isinstance(child, dict) and child:
+            paths |= paths_of(child, prefix + (key,))
+        else:
+            paths.add(prefix + (key,))
+    return paths
+
+
+def value_at(manifest: Any, path: Path) -> Any:
+    node = manifest
+    for segment in path:
+        kind, _, name = segment.partition(":")
+        if kind == "f" and isinstance(node, dict) and name in node:
+            node = node[name]
+        elif kind == "k" and isinstance(node, list):
+            key = json.loads(name)
+            node = next(
+                (
+                    item
+                    for item in node
+                    if all(item.get(k) == v for k, v in key.items())
+                ),
+                None,
+            )
+            if node is None:
+                return _MISSING
+        else:
+            return _MISSING
+    return node
+
+
+_MISSING = object()
+
+
+def _ssa_merge(current: Any, applied: Any) -> Any:
+    if isinstance(current, dict) and isinstance(applied, dict):
+        result = copy.deepcopy(current)
+        for key, value in applied.items():
+            result[key] = _ssa_merge(current.get(key), value)
+        return result
+    if (
+        isinstance(current, list)
+        and isinstance(applied, list)
+        and all(isinstance(item, dict) and "name" in item for item in current + applied)
+    ):
+        by_name = {item["name"]: item for item in current}
+        merged = [_ssa_merge(by_name.get(item["name"]), item) for item in applied]
+        names = {item["name"] for item in applied}
+        return merged + [item for item in current if item["name"] not in names]
+    return copy.deepcopy(applied)
+
+
+def _remove_path(manifest: dict[str, Any], path: Path) -> None:
+    parent = value_at(manifest, path[:-1]) if len(path) > 1 else manifest
+    kind, _, name = path[-1].partition(":")
+    if kind == "f" and isinstance(parent, dict):
+        parent.pop(name, None)
+
+
 class FakeAPI:
     def __init__(self) -> None:
+        self.field_ownership = False
         self.objects: dict[tuple[str, str], dict[str, Any]] = {}
         self.requests: list[dict[str, Any]] = []
         self.faults: list[dict[str, Any]] = []
@@ -75,6 +199,40 @@ class FakeAPI:
         self.put(manifest("Namespace", TARGET.namespace), uid="namespace-uid")
 
     def put(
+        self,
+        value: dict[str, Any],
+        *,
+        uid: str | None = None,
+        owned: bool = False,
+        managers: list[tuple[str, str, dict[str, Any]]] | None = None,
+    ) -> dict[str, Any]:
+        """Store an object; ``managers`` = (manager, operation, owned subset)."""
+        stored = self._put(value, uid=uid, owned=owned)
+        if managers is not None:
+            with self.lock:
+                current = self.objects[(value["kind"], value["metadata"]["name"])]
+                current["metadata"]["managedFields"] = [
+                    {
+                        "manager": manager,
+                        "operation": operation,
+                        "apiVersion": value["apiVersion"],
+                        "fieldsType": "FieldsV1",
+                        "fieldsV1": fields_v1(field_paths(subset)),
+                    }
+                    for manager, operation, subset in managers
+                ]
+                stored = copy.deepcopy(current)
+        return stored
+
+    def managers(self, kind: str, name: str) -> dict[str, set[Path]]:
+        entries = self.objects[(kind, name)]["metadata"].get("managedFields", [])
+        return {
+            f"{entry['manager']}/{entry['operation']}": paths_of(entry["fieldsV1"])
+            for entry in entries
+            if entry.get("subresource") != "status"
+        }
+
+    def _put(
         self, value: dict[str, Any], *, uid: str | None = None, owned: bool = False
     ) -> dict[str, Any]:
         with self.lock:
@@ -136,6 +294,57 @@ class FakeAPI:
                 if name not in self.wait_for_first_consumer or consumed
                 else "Pending"
             }
+            metadata = value["metadata"]
+            if (
+                name in self.wait_for_first_consumer
+                and consumed
+                and "uid" in metadata
+                and not value.get("spec", {}).get("volumeName")
+            ):
+                # Binding a WaitForFirstConsumer claim writes server-owned
+                # fields, as the scheduler and PV controller do.
+                value.setdefault("spec", {})["volumeName"] = "pvc-" + metadata["uid"]
+                metadata.setdefault("annotations", {}).update(
+                    {
+                        "pv.kubernetes.io/bind-completed": "yes",
+                        "pv.kubernetes.io/bound-by-controller": "yes",
+                        "volume.kubernetes.io/selected-node": "node-a",
+                        "volume.kubernetes.io/storage-provisioner": "local-path",
+                        "volume.beta.kubernetes.io/storage-provisioner": "local-path",
+                    }
+                )
+                metadata["managedFields"] = list(metadata.get("managedFields", [])) + [
+                    {
+                        "manager": "kube-controller-manager",
+                        "operation": "Update",
+                        "apiVersion": "v1",
+                        "fieldsType": "FieldsV1",
+                        "fieldsV1": {
+                            "f:metadata": {
+                                "f:annotations": {
+                                    "f:pv.kubernetes.io/bind-completed": {},
+                                    "f:pv.kubernetes.io/bound-by-controller": {},
+                                }
+                            },
+                            "f:spec": {"f:volumeName": {}},
+                        },
+                    },
+                    {
+                        "manager": "kube-scheduler",
+                        "operation": "Update",
+                        "apiVersion": "v1",
+                        "fieldsType": "FieldsV1",
+                        "fieldsV1": {
+                            "f:metadata": {
+                                "f:annotations": {
+                                    "f:volume.kubernetes.io/selected-node": {}
+                                }
+                            }
+                        },
+                    },
+                ]
+                self.version += 1
+                metadata["resourceVersion"] = str(self.version)
         elif value["kind"] == "PersistentVolume":
             value["status"] = {"phase": "Bound"}
 
@@ -305,7 +514,8 @@ class FakeAPI:
             self.version += 1
             return 200, {"kind": "Status", "status": "Success"}
         metadata = body["metadata"]
-        name = metadata["name"]
+        # A patch may omit metadata.name; the URL names the object.
+        name = metadata.get("name") or name
         current = self.objects.get((kind, name))
         if method == "POST" and current is not None:
             return 409, {}
@@ -319,6 +529,10 @@ class FakeAPI:
                 return 409, {}
             apply_patch = request["content_type"] == "application/apply-patch+yaml"
             merge_patch = request["content_type"] == "application/merge-patch+json"
+            if self.field_ownership and (apply_patch or merge_patch):
+                return self._owned_patch(
+                    request, current, body, kind, api_version, merge_patch
+                )
             if not (apply_patch or merge_patch) or (
                 apply_patch and query.get("force") != ["false"]
             ):
@@ -326,6 +540,21 @@ class FakeAPI:
             if merge_patch:
                 body = _merge_patch(current, body)
                 metadata = body["metadata"]
+        if self.field_ownership and method == "POST":
+            metadata["managedFields"] = [
+                {
+                    "manager": query["fieldManager"][0],
+                    "operation": "Update",
+                    "apiVersion": api_version,
+                    "fieldsType": "FieldsV1",
+                    "fieldsV1": fields_v1(field_paths(body)),
+                }
+            ]
+            metadata.update(
+                {"uid": uuid.uuid4().hex, "resourceVersion": str(self.version + 1)}
+            )
+            metadata["generation"] = 1
+            return self._commit(query, kind, name, body, 201)
         metadata.update(
             {
                 "uid": current["metadata"]["uid"] if current else uuid.uuid4().hex,
@@ -352,6 +581,131 @@ class FakeAPI:
                 if existing_kind == "PersistentVolumeClaim":
                     self._readiness(existing)
         return 201 if method == "POST" else 200, copy.deepcopy(body)
+
+    def _commit(
+        self, query: dict[str, Any], kind: str, name: str, body: Any, status: int
+    ) -> tuple[int, Any]:
+        self._readiness(body)
+        if query.get("dryRun") != ["All"]:
+            self.version += 1
+            self.objects[(kind, name)] = body
+            for (existing_kind, _), existing in self.objects.items():
+                if existing_kind == "PersistentVolumeClaim":
+                    self._readiness(existing)
+        return status, copy.deepcopy(body)
+
+    def _owned_patch(
+        self,
+        request: dict[str, Any],
+        current: dict[str, Any],
+        body: dict[str, Any],
+        kind: str,
+        api_version: str,
+        merge_patch: bool,
+    ) -> tuple[int, Any]:
+        query = request["query"]
+        manager = query["fieldManager"][0]
+        entries = copy.deepcopy(current["metadata"].get("managedFields", []))
+        if merge_patch:
+            provided = body["metadata"].pop("managedFields", None)
+            result = _merge_patch(current, body)
+            if provided:
+                entries = copy.deepcopy(provided)
+            else:
+                before, after = field_paths(current), field_paths(result)
+                changed = {
+                    path
+                    for path in after
+                    if value_at(current, path) != value_at(result, path)
+                } | (before - after)
+                for entry in entries:
+                    entry["fieldsV1"] = fields_v1(paths_of(entry["fieldsV1"]) - changed)
+                own = next(
+                    (
+                        e
+                        for e in entries
+                        if e["manager"] == manager and e["operation"] == "Update"
+                    ),
+                    None,
+                )
+                owned = changed & after
+                if owned:
+                    if own is None:
+                        own = {
+                            "manager": manager,
+                            "operation": "Update",
+                            "apiVersion": api_version,
+                            "fieldsType": "FieldsV1",
+                            "fieldsV1": {},
+                        }
+                        entries.append(own)
+                    own["fieldsV1"] = fields_v1(paths_of(own["fieldsV1"]) | owned)
+        else:
+            force = query.get("force") == ["true"]
+            if query.get("force") not in (["true"], ["false"]):
+                return 422, {}
+            applied = field_paths(body)
+            conflicts = False
+            for entry in entries:
+                if (entry["manager"], entry["operation"]) == (manager, "Apply"):
+                    continue
+                if entry.get("subresource") == "status":
+                    continue
+                owned = paths_of(entry["fieldsV1"])
+                clash = {
+                    path
+                    for path in owned & applied
+                    if value_at(current, path) != value_at(body, path)
+                }
+                if clash and not force:
+                    conflicts = True
+                entry["fieldsV1"] = fields_v1(owned - clash)
+            if conflicts:
+                return 409, {}
+            result = _ssa_merge(current, body)
+            own = next(
+                (
+                    e
+                    for e in entries
+                    if e["manager"] == manager and e["operation"] == "Apply"
+                ),
+                None,
+            )
+            if own is not None:
+                others = set().union(
+                    *(
+                        paths_of(e["fieldsV1"])
+                        for e in entries
+                        if e is not own and e.get("subresource") != "status"
+                    )
+                )
+                for path in paths_of(own["fieldsV1"]) - applied - others:
+                    _remove_path(result, path)
+            else:
+                own = {
+                    "manager": manager,
+                    "operation": "Apply",
+                    "apiVersion": api_version,
+                    "fieldsType": "FieldsV1",
+                    "fieldsV1": {},
+                }
+                entries.append(own)
+            own["fieldsV1"] = fields_v1(applied)
+        result["metadata"]["managedFields"] = [
+            entry for entry in entries if entry.get("fieldsV1")
+        ]
+        result["metadata"]["uid"] = current["metadata"]["uid"]
+        result["metadata"]["resourceVersion"] = str(self.version + 1)
+        changed_spec = {
+            k: v for k, v in result.items() if k not in {"metadata", "status"}
+        }
+        before_spec = {
+            k: v for k, v in current.items() if k not in {"metadata", "status"}
+        }
+        result["metadata"]["generation"] = current["metadata"].get("generation", 1) + (
+            1 if changed_spec != before_spec else 0
+        )
+        return self._commit(query, kind, result["metadata"]["name"], result, 200)
 
 
 @contextmanager
