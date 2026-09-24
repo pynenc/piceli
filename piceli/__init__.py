@@ -29,6 +29,23 @@ _APP_EXPORTS = frozenset(
     }
 )
 
+# The pipeline API (``piceli deploy``) is exported lazily the same way.
+_PIPELINE_EXPORTS = frozenset(
+    {
+        "Build",
+        "NodeImport",
+        "NodeLoopbackRegistry",
+        "Pipeline",
+        "Random",
+        "Registry",
+        "Secrets",
+        "Static",
+        "Target",
+        "Template",
+        "TlsCa",
+    }
+)
+
 if TYPE_CHECKING:
     from piceli.app import (  # noqa: F401
         App,
@@ -51,6 +68,19 @@ if TYPE_CHECKING:
         Service,
         ServicePort,
     )
+    from piceli.pipeline import (  # noqa: F401
+        Build,
+        NodeImport,
+        NodeLoopbackRegistry,
+        Pipeline,
+        Random,
+        Registry,
+        Secrets,
+        Static,
+        Target,
+        Template,
+        TlsCa,
+    )
 
 
 def __getattr__(name: str) -> Any:
@@ -58,8 +88,12 @@ def __getattr__(name: str) -> Any:
         from piceli import app
 
         return getattr(app, name)
+    if name in _PIPELINE_EXPORTS:
+        from piceli import pipeline
+
+        return getattr(pipeline, name)
     raise AttributeError(f"module 'piceli' has no attribute {name!r}")
 
 
 def __dir__() -> list[str]:
-    return sorted([*globals(), *_APP_EXPORTS])
+    return sorted([*globals(), *_APP_EXPORTS, *_PIPELINE_EXPORTS])

@@ -123,6 +123,7 @@ kubernetes_model/index
 :maxdepth: 2
 :caption: Guides
 
+deploy
 typed_apps
 deployment_planning
 release_cli

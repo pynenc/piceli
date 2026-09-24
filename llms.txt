@@ -14,6 +14,7 @@ Rules for agents: run `piceli help-json` for every command's options, side effec
 
 - [Overview and architecture](https://docs.pynenc.org/projects/piceli/en/latest/overview.html): model, plan, execute, observe; the two engines; glossary
 - [Getting started](https://docs.pynenc.org/projects/piceli/en/latest/getting_started/index.html): install and define a first set of objects
+- [Deploy an app from source](https://docs.pynenc.org/projects/piceli/en/latest/deploy.html): `piceli deploy MODULE:ATTR`, one journaled run of build, deliver, plan, apply and checks; `--plan`, `--approve`, `--resume`
 - [Releases from a spec](https://docs.pynenc.org/projects/piceli/en/latest/release_cli.html): `piceli release` plan, apply, adopt, roll back, resume; "If plan refuses"
 - [Deployment planning](https://docs.pynenc.org/projects/piceli/en/latest/deployment_planning.html): discovery, pure plans, authorized execution and journals (Python API)
 - [Containerized builds](https://docs.pynenc.org/projects/piceli/en/latest/containerized_builds.html): `build.toml`, pinned builders, build receipts

@@ -44,9 +44,7 @@ These apply to `model` and `deploy` (the legacy CLI engine).
 | [`piceli artifacts pin`](#cli-artifacts-pin) | Pin one public source file by digest. | none | no |
 | [`piceli artifacts preview`](#cli-artifacts-preview) | Preview a deterministic OCI build plan (no tools run). | none | no |
 | [`piceli artifacts preview-command`](#cli-artifacts-preview-command) | Preview a pinned external build command. | none | no |
-| [`piceli deploy detail`](#cli-deploy-detail) | Analyze the required changes to deploy the specified kubernetes object model | ambient-reads | no |
-| [`piceli deploy plan`](#cli-deploy-plan) | Deployment plan for the kubernetes object model. | none | no |
-| [`piceli deploy run`](#cli-deploy-run) | Deploy Kubernetes Object Model to the current cluster. | ambient-writes | no |
+| [`piceli deploy`](#cli-deploy) | Deploy a pipeline: inputs → build → deliver → plan → apply → checks. | writes | yes |
 | [`piceli explain`](#cli-explain) | Explain an error code: cause, fix and whether a retry can succeed. | none | no |
 | [`piceli help-json`](#cli-help-json) | Print the whole CLI tree (commands, options, contracts) as JSON. | none | no |
 | [`piceli inputs record`](#cli-inputs-record) | Capture each declared source (or the ``--only`` ones) and write a lock. | none | no |
@@ -319,64 +317,32 @@ Preview a pinned external build command.
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** partial
 
-(cli-deploy-detail)=
-### `piceli deploy detail`
+(cli-deploy)=
+### `piceli deploy`
 
-Analyze the required changes to deploy the specified kubernetes object model
+Deploy a pipeline: inputs → build → deliver → plan → apply → checks.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--hide-no-action`, `-hna` | boolean | `False` | Hide the comparison details when no action is needed. |
+| `TARGET` | text | required |  |
+| `--plan` | boolean | `False` | Plan every stage and print the combined hash; execute nothing |
+| `--until` | text | `checks` | Stop after this stage: inputs, build, deliver, plan, apply or checks |
+| `--resume` | boolean | `False` | Continue the latest interrupted or failed run at its failed stage |
+| `--approve` | text |  | Combined hash to execute (from --plan) |
+| `--auto-approve` | boolean | `False` | Plan and execute without confirmation (CI) |
+| `--reapply` | boolean | `False` | Apply even when the release is unchanged and already deployed |
+| `--json` | boolean | `False` | Stream one JSON event per stage change on stdout |
 
 **Contract**
 
-- **Reads:** model modules/folders
-- **Writes:** nothing (read-only)
-- **Cluster:** ambient-reads
-- **Approval required:** no
+- **Reads:** pipeline module, build specs and sources, docker, kubeconfig, state_dir
+- **Writes:** state_dir (run journal, receipts, release catalog, secret store), local Docker image store, registry or node image store
+- **Cluster:** writes
+- **Approval required:** yes
 - **Safe to retry:** yes
-- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** legacy
-
-(cli-deploy-plan)=
-### `piceli deploy plan`
-
-Deployment plan for the kubernetes object model.
-
-| Option | Type | Default | Description |
-| --- | --- | --- | --- |
-| `--cluster-id` | text | required | Stable cluster identity to bind into this offline plan. |
-| `--validate`, `-v` | boolean | `False` | Validate the deployment graph for cycles and errors before showing the plan. |
-
-**Contract**
-
-- **Reads:** model modules/folders
-- **Writes:** nothing (read-only)
-- **Cluster:** none
-- **Approval required:** no
-- **Safe to retry:** yes
-- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** legacy
-
-(cli-deploy-run)=
-### `piceli deploy run`
-
-Deploy Kubernetes Object Model to the current cluster.
-
-| Option | Type | Default | Description |
-| --- | --- | --- | --- |
-| `--create-namespace`, `-c` | boolean | `True` | Create the namespace if it does not exist. |
-
-**Contract**
-
-- **Reads:** model modules/folders
-- **Writes:** nothing (read-only)
-- **Cluster:** ambient-writes
-- **Approval required:** no
-- **Safe to retry:** no
-- **Exit codes:** `0` success
-- **Output contract:** legacy
-- **Notes:** Legacy engine: uses the current kube context and has no approval step.
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** --plan never changes the cluster, a registry or a node; --approve HASH executes exactly the combined plan; --resume continues the latest interrupted run without a new approval. Unchanged stages are skipped.
 
 (cli-explain)=
 ### `piceli explain`

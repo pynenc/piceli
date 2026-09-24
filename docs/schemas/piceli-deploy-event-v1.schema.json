@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.pynenc.org/projects/piceli/en/latest/schemas/piceli-deploy-event-v1.schema.json",
+  "title": "piceli deploy stdout line",
+  "description": "One JSON line printed on stdout by `piceli deploy`: a stage event (with --json), the result, or a rejection. Fields are only added within a major version.",
+  "anyOf": [
+    {"$ref": "#/$defs/stage"},
+    {"$ref": "#/$defs/result"},
+    {"$ref": "#/$defs/rejection"}
+  ],
+  "$defs": {
+    "stageName": {
+      "enum": ["inputs", "build", "deliver", "plan", "apply", "checks"]
+    },
+    "hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "stage": {
+      "type": "object",
+      "required": ["schema", "event", "stage", "state", "at", "run_id"],
+      "properties": {
+        "schema": {"const": "piceli.deploy-event.v1"},
+        "event": {"const": "stage"},
+        "stage": {"$ref": "#/$defs/stageName"},
+        "state": {
+          "enum": ["planned", "running", "done", "skipped", "failed", "rejected", "interrupted"]
+        },
+        "at": {"type": "string"},
+        "run_id": {"type": ["string", "null"]},
+        "detail": {
+          "type": "object",
+          "description": "The stage's plan (state planned), output (done, skipped) or {\"reason\": <error code>} (failed, rejected)."
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "required": ["schema", "event", "state"],
+      "properties": {
+        "schema": {"const": "piceli.deploy-event.v1"},
+        "event": {"const": "result"},
+        "state": {
+          "enum": [
+            "planned",
+            "approval-required",
+            "ready",
+            "stopped",
+            "failed",
+            "rolled-back",
+            "interrupted",
+            "rejected",
+            "running"
+          ]
+        },
+        "combined_hash": {"$ref": "#/$defs/hash"},
+        "until": {"$ref": "#/$defs/stageName"},
+        "run_id": {"type": "string"},
+        "release": {"type": ["string", "null"]},
+        "images": {
+          "type": "object",
+          "additionalProperties": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+          "description": "The release's image set: image name to digest."
+        },
+        "stages": {
+          "type": "object",
+          "description": "With planned/approval-required: every stage's plan. Otherwise: stage name to its state.",
+          "propertyNames": {"$ref": "#/$defs/stageName"}
+        },
+        "reason": {"type": "string", "description": "Error code (piceli explain <code>)."},
+        "stage": {"$ref": "#/$defs/stageName"},
+        "blocking": {"type": "array", "items": {"type": "object"}}
+      }
+    },
+    "rejection": {
+      "type": "object",
+      "required": ["state", "reason"],
+      "properties": {
+        "state": {"const": "rejected"},
+        "reason": {"type": "string"},
+        "blocking": {"type": "array", "items": {"type": "object"}}
+      }
+    }
+  }
+}

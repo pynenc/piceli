@@ -4,7 +4,6 @@ import pytest
 from kubernetes.client.exceptions import ApiException
 from typer.testing import CliRunner
 
-from piceli.k8s.cli import app
 from piceli.k8s.cli.context import ContextObject
 from piceli.k8s.k8s_client.client import ClientContext
 from piceli.k8s.ops.deploy.deployment_executor import (
@@ -12,6 +11,7 @@ from piceli.k8s.ops.deploy.deployment_executor import (
     ExecutionStatus,
 )
 from piceli.k8s.ops.deploy.strategy_auto import StrategyAuto
+from tests.unit.cli.legacy_deploy import app
 
 runner = CliRunner()
 

@@ -18,6 +18,7 @@ Priorities may change. Progress is tracked in
 | Typed templates for common workloads | 🟡 Core kinds only; no Ingress/Gateway, NetworkPolicy, DaemonSet, PDB, Namespace or cluster-scoped RBAC yet |
 | Dependency-ordered plan and apply | ✅ Available |
 | Image handoff by digest (build → deliver → release, immutable references only) | 🟡 Preview |
+| One command from source to a verified release (`piceli deploy`) | 🟡 Preview: journaled, resumable, skips unchanged stages |
 | Server-side apply with preconditions, journal and resume | 🟡 Python API only; not yet used by the CLI |
 | Field-level diff | 🟡 `deploy detail` (CLI engine) only |
 | Safe pruning of removed resources | 🟡 Recoverable engine only, opt-in |
@@ -44,6 +45,7 @@ Every feature page starts with its maturity, and this table lists them all:
 | --- | --- | --- |
 | Object model: templates, `kubernetes` client models, YAML/JSON | {doc}`kubernetes_model/index` | stable |
 | Recoverable engine: discovery, plans, executor, journals (Python API) | {doc}`deployment_planning` | preview |
+| Deploy from source (`piceli deploy`, `piceli.pipeline`) | {doc}`deploy` | preview |
 | Releases from a spec (`piceli release`) | {doc}`release_cli` | preview |
 | Source identity (`piceli inputs`) | {doc}`source_identity` | preview |
 | Containerized builds (`piceli artifacts build-spec`) | {doc}`containerized_builds` | preview |
@@ -53,7 +55,7 @@ Every feature page starts with its maturity, and this table lists them all:
 | Operations lens (`piceli observe`) | {doc}`operations_lens` | preview |
 | CLI contract: `piceli explain`, `piceli help-json`, error codes | {doc}`agents` | preview |
 | Operator workflow (`piceli operator`) | {doc}`operator_workflow` | experimental |
-| Legacy CLI engine (`piceli model`, `piceli deploy`) | {doc}`cli/index` | experimental |
+| Legacy CLI engine (`piceli model`; `deploy plan/detail/run` no longer registered) | {doc}`cli/index` | experimental |
 
 ## How Piceli compares
 

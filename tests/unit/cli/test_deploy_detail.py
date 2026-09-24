@@ -3,11 +3,11 @@ from unittest import mock
 import pytest
 from typer.testing import CliRunner
 
-from piceli.k8s.cli import app
 from piceli.k8s.cli.deploy import detail
 from piceli.k8s.k8s_objects.base import K8sObject, OriginYAML
 from piceli.k8s.object_manager.factory import ObjectManager
 from piceli.k8s.ops.compare import object_comparer
+from tests.unit.cli.legacy_deploy import app
 
 runner = CliRunner()
 
