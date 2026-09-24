@@ -424,6 +424,160 @@ def _limit(data: str) -> str:
     return data[:_MAX_OUTPUT]
 
 
+_EXEC_PROTOCOL = "v4.channel.k8s.io"
+_STDOUT, _STDERR, _STATUS = 1, 2, 3
+
+
+def open_exec_socket(
+    client: Any,
+    namespace: str,
+    pod: str,
+    command: Sequence[str],
+    container: str | None,
+    timeout: float,
+) -> Any:
+    """Open a ``pods/exec`` websocket with the client's own TLS and credentials.
+
+    ``kubernetes.stream`` builds its websocket from ``Configuration`` file
+    paths and ignores the in-memory TLS context of clients built by
+    :func:`~piceli.k8s.ops.provider_factory.api_client_from_kubeconfig`, so
+    it cannot verify the cluster. This connects through ``websocket-client``
+    with the connection pool's verifying ``ssl_context`` instead, and the
+    ``Authorization`` header from the client's (refreshing) auth settings.
+    """
+    import ssl
+    from urllib.parse import quote, urlencode
+
+    import websocket  # websocket-client, a kubernetes dependency
+
+    configuration = client.configuration
+    headers: dict[str, str] = {}
+    # Refreshes an exec-plugin credential (and its TLS context) when stale.
+    client.update_params_for_auth(headers, [], ["BearerToken"])
+    query = [("command", argument) for argument in command]
+    query += [("stdout", "true"), ("stderr", "true")]
+    if container is not None:
+        query.append(("container", container))
+    host = str(configuration.host).rstrip("/")
+    scheme, _, rest = host.partition("://")
+    if scheme not in {"https", "http"}:
+        raise ValueError("unsupported API server scheme")
+    url = (
+        ("wss" if scheme == "https" else "ws")
+        + "://"
+        + rest
+        + f"/api/v1/namespaces/{quote(namespace, safe='')}"
+        + f"/pods/{quote(pod, safe='')}/exec?"
+        + urlencode(query)
+    )
+    header = [
+        f"{key}: {value}"
+        for key, value in headers.items()
+        if key.lower() == "authorization"
+    ]
+    sslopt: dict[str, Any] = {}
+    if scheme == "https":
+        pool = getattr(client.rest_client, "pool_manager", None)
+        context = getattr(pool, "connection_pool_kw", {}).get("ssl_context")
+        if context is None:
+            context = ssl.create_default_context(
+                cafile=configuration.ssl_ca_cert or None
+            )
+            if configuration.cert_file:
+                context.load_cert_chain(
+                    configuration.cert_file, configuration.key_file or None
+                )
+        sslopt["context"] = context
+        if getattr(configuration, "tls_server_name", None):
+            sslopt["server_hostname"] = configuration.tls_server_name
+    return websocket.create_connection(
+        url,
+        timeout=timeout,
+        header=header,
+        subprotocols=[_EXEC_PROTOCOL],
+        sslopt=sslopt,
+        enable_multithread=False,
+    )
+
+
+def read_exec(socket_: Any, target: str, timeout: float) -> ExecResult:
+    """Collect stdout, stderr and the exit status from a ``v4`` exec stream."""
+    import websocket
+
+    stdout: list[bytes] = []
+    stderr: list[bytes] = []
+    status_raw = b""
+    sizes = [0, 0]
+    deadline = time.monotonic() + timeout
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise CheckError(
+                    "check-timed-out", f"exec in {target} ran longer than {timeout}s"
+                )
+            # One timeout per frame: a timed-out read may have consumed part
+            # of a frame, so it ends the command instead of being retried.
+            socket_.settimeout(remaining)
+            try:
+                opcode, data = socket_.recv_data()
+            except websocket.WebSocketTimeoutException:
+                raise CheckError(
+                    "check-timed-out", f"exec in {target} ran longer than {timeout}s"
+                ) from None
+            except websocket.WebSocketConnectionClosedException:
+                break
+            if opcode == websocket.ABNF.OPCODE_CLOSE:
+                break
+            if opcode not in (websocket.ABNF.OPCODE_BINARY, websocket.ABNF.OPCODE_TEXT):
+                continue
+            if isinstance(data, str):
+                data = data.encode()
+            if not data:
+                continue
+            channel, payload = data[0], data[1:]
+            if channel in (_STDOUT, _STDERR):
+                index = channel - 1
+                if sizes[index] < _MAX_OUTPUT:
+                    (stdout if channel == _STDOUT else stderr).append(payload)
+                    sizes[index] += len(payload)
+            elif channel == _STATUS and len(status_raw) < _MAX_OUTPUT:
+                status_raw += payload
+    finally:
+        socket_.close()
+    try:
+        status = json.loads(status_raw or b"{}") or {}
+    except ValueError:
+        status = {}
+    if not isinstance(status, dict):
+        status = {}
+    if status.get("status") == "Success":
+        code = 0
+    else:
+        causes = (status.get("details") or {}).get("causes") or []
+        exit_codes = [
+            cause.get("message")
+            for cause in causes
+            if isinstance(cause, Mapping) and cause.get("reason") == "ExitCode"
+        ]
+        if not exit_codes:
+            raise CheckError(
+                "check-exec-unavailable",
+                f"exec did not run: {status.get('reason') or 'unknown reason'}",
+            )
+        try:
+            code = int(str(exit_codes[0]))
+        except ValueError:
+            raise CheckError(
+                "check-exec-unavailable", "exec reported an unreadable exit code"
+            ) from None
+    return ExecResult(
+        code,
+        _limit(b"".join(stdout).decode(errors="replace")),
+        _limit(b"".join(stderr).decode(errors="replace")),
+    )
+
+
 def api_exec(
     context: CheckContext,
     target: str,
@@ -432,70 +586,25 @@ def api_exec(
     timeout: float,
 ) -> ExecResult:
     """The default executor: ``pods/exec`` through the Kubernetes API."""
-    import yaml
-    from kubernetes.client import CoreV1Api
-    from kubernetes.client.exceptions import ApiException
-    from kubernetes.stream import stream
-    from kubernetes.stream.ws_client import ERROR_CHANNEL
+    import websocket
 
     pod = context.ready_pod(target)
-    api = CoreV1Api(context.api_client())
-    options: dict[str, Any] = {
-        "command": list(command),
-        "stderr": True,
-        "stdin": False,
-        "stdout": True,
-        "tty": False,
-        "_preload_content": False,
-        "_request_timeout": context.request_seconds,
-    }
-    if container is not None:
-        options["container"] = container
     try:
-        response = stream(
-            api.connect_get_namespaced_pod_exec, pod, context.namespace, **options
+        socket_ = open_exec_socket(
+            context.api_client(),
+            context.namespace,
+            pod,
+            command,
+            container,
+            min(timeout, context.request_seconds),
         )
-    except ApiException as error:
+    except websocket.WebSocketBadStatusException as error:
         raise CheckError(
-            "check-exec-unavailable", f"exec refused with HTTP {error.status}"
+            "check-exec-unavailable",
+            f"exec refused with HTTP {error.status_code}",
         ) from None
-    except Exception as error:
+    except Exception as error:  # transport details may contain credentials
         raise CheckError(
             "check-exec-unavailable", f"exec failed: {type(error).__name__}"
         ) from None
-    try:
-        stdout: list[str] = []
-        stderr: list[str] = []
-        deadline = time.monotonic() + timeout
-        while response.is_open():
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise CheckError(
-                    "check-timed-out", f"exec in {target} ran longer than {timeout}s"
-                )
-            response.update(timeout=min(remaining, 1.0))
-            if response.peek_stdout():
-                stdout.append(response.read_stdout())
-            if response.peek_stderr():
-                stderr.append(response.read_stderr())
-        stdout.append(response.read_stdout() if response.peek_stdout() else "")
-        stderr.append(response.read_stderr() if response.peek_stderr() else "")
-        status = yaml.safe_load(response.read_channel(ERROR_CHANNEL) or "{}") or {}
-    finally:
-        response.close()
-    if status.get("status") == "Success":
-        code = 0
-    else:
-        causes = (status.get("details") or {}).get("causes") or []
-        exit_codes = [
-            cause.get("message")
-            for cause in causes
-            if cause.get("reason") == "ExitCode"
-        ]
-        if not exit_codes:
-            raise CheckError(
-                "check-exec-unavailable",
-                f"exec did not run: {status.get('reason') or 'unknown reason'}",
-            )
-        code = int(exit_codes[0])
-    return ExecResult(code, _limit("".join(stdout)), _limit("".join(stderr)))
+    return read_exec(socket_, target, timeout)

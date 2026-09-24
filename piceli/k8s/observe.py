@@ -237,12 +237,19 @@ def observe_session(
                 errors.append(f"{api_version}/{kind}: {type(error).__name__}")
                 continue
             undeclared.update(item for item in objects if item.ref not in declared)
+    errors.extend(reader_warnings(reader))
     return InventoryReport(
         session_id=archive.session_id,
         declared=tuple(entries),
         undeclared=tuple(sorted(undeclared, key=lambda item: item.ref)),
         scan_errors=tuple(sorted(errors)),
     )
+
+
+def reader_warnings(reader: object) -> tuple[str, ...]:
+    """Drain skip warnings from readers that tolerate unmodellable objects."""
+    drain = getattr(reader, "drain_warnings", None)
+    return tuple(drain()) if callable(drain) else ()
 
 
 class KubernetesDynamicInventoryReader:
@@ -267,6 +274,7 @@ class KubernetesDynamicInventoryReader:
         self._client = DynamicClient(
             api_client_from_kubeconfig(kubeconfig, context, exec_policy=exec_policy)
         )
+        self._warnings: list[str] = []
 
     @staticmethod
     def _resource(api_version: str, kind: str, client: Any) -> Any:
@@ -326,14 +334,30 @@ class KubernetesDynamicInventoryReader:
         resource = self._resource(api_version, kind, self._client)
         result = resource.get(namespace=namespace)
         items = result.to_dict().get("items", [])
+        skipped = 0
         for value in items:
             metadata = value.get("metadata", {})
             name = metadata.get("name")
-            if isinstance(name, str):
-                yield self._summary(
-                    value,
-                    ObservationRef(api_version, kind, namespace, name),
-                )
+            if not isinstance(name, str):
+                continue
+            try:
+                ref = ObservationRef(api_version, kind, namespace, name)
+            except ValueError:
+                # A live object Piceli cannot model must never abort the whole
+                # scan; it is surfaced as a scan warning instead.
+                skipped += 1
+                continue
+            yield self._summary(value, ref)
+        if skipped:
+            self._warnings.append(
+                f"{api_version}/{kind}: skipped {skipped} object(s) "
+                "with names Piceli cannot model"
+            )
+
+    def drain_warnings(self) -> tuple[str, ...]:
+        """Return and clear warnings about live objects skipped during listing."""
+        warnings, self._warnings = tuple(self._warnings), []
+        return warnings
 
 
 def _string(value: Any) -> str | None:

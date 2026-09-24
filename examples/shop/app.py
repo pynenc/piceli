@@ -20,6 +20,7 @@ import os
 from piceli import (
     App,
     Build,
+    Checks,
     ExistingClaim,
     NodeLoopbackRegistry,
     Pipeline,
@@ -84,20 +85,13 @@ app.service(api, port=8080)
 app.service(web, port=3000)
 app.depends(api, on=cache)
 
-try:  # post-deploy checks need piceli.checks
-    from piceli.checks import Checks  # type: ignore[import-not-found,unused-ignore]
-
-    checks = Checks.http(web, "/", expect=200)
-except ImportError:
-    checks = ()
-
 pipeline = Pipeline(
     app,
     target,
     build=images,
     deliver=NodeLoopbackRegistry(port=5000),  # or NodeImport(), Registry(url)
     secrets=secrets,
-    checks=checks,
+    checks=Checks.http(web, "/", expect=200),
     rollback_on_failed_checks=True,
     state_dir=os.environ.get("SHOP_STATE_DIR", ".piceli-deploy"),
 )

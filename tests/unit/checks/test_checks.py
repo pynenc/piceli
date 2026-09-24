@@ -421,37 +421,39 @@ def test_context_needs_explicit_context_and_never_reads_ambient(tmp_path) -> Non
     assert report.results[0].code == "check-api-unavailable"
 
 
-class _FakeStream:
-    def __init__(self, stdout: str, status: dict[str, Any]) -> None:
-        self._open = True
-        self._stdout = stdout
-        self._status = status
+class _FakeSocket:
+    """A ``v4.channel.k8s.io`` exec websocket replaying canned frames."""
+
+    def __init__(self, frames: list[tuple[int, bytes]]) -> None:
+        self.frames = list(frames)
         self.closed = False
+        self.timeouts: list[float] = []
 
-    def is_open(self) -> bool:
-        return self._open
+    def settimeout(self, value: float) -> None:
+        self.timeouts.append(value)
 
-    def update(self, timeout: float) -> None:
-        self._open = False
+    def recv_data(self) -> tuple[int, bytes]:
+        import websocket
 
-    def peek_stdout(self) -> bool:
-        return bool(self._stdout)
-
-    def read_stdout(self) -> str:
-        value, self._stdout = self._stdout, ""
-        return value
-
-    def peek_stderr(self) -> bool:
-        return False
-
-    def read_stderr(self) -> str:
-        return ""
-
-    def read_channel(self, channel: int) -> str:
-        return json.dumps(self._status)
+        if not self.frames:
+            return websocket.ABNF.OPCODE_CLOSE, b""
+        return self.frames.pop(0)
 
     def close(self) -> None:
         self.closed = True
+
+
+def _frames(stdout: str, status: dict[str, Any]) -> list[tuple[int, bytes]]:
+    import websocket
+
+    binary = websocket.ABNF.OPCODE_BINARY
+    half = len(stdout) // 2
+    return [
+        (binary, b"\x01" + stdout[:half].encode()),
+        (binary, b"\x02"),
+        (binary, b"\x01" + stdout[half:].encode()),
+        (binary, b"\x03" + json.dumps(status).encode()),
+    ]
 
 
 @pytest.mark.parametrize(
@@ -470,27 +472,98 @@ class _FakeStream:
     ],
 )
 def test_api_exec_parses_the_exit_status(monkeypatch, status, expected) -> None:
-    import kubernetes.stream
+    import piceli.checks.context as context_module
 
     captured: dict[str, Any] = {}
+    socket_ = _FakeSocket(_frames("hello\n", status))
 
-    def fake_stream(function, pod, namespace, **options):
-        captured.update(options, pod=pod, namespace=namespace)
-        return _FakeStream("hello\n", status)
+    def fake_open(client, namespace, pod, command, container, timeout):
+        captured.update(
+            namespace=namespace, pod=pod, command=command, container=container
+        )
+        return socket_
 
-    monkeypatch.setattr(kubernetes.stream, "stream", fake_stream)
+    monkeypatch.setattr(context_module, "open_exec_socket", fake_open)
     client = _Client({"/api/v1/namespaces/shop/pods/api-0": {"metadata": {}}})
     context = _context(api_client=client)
     if expected is None:
         with pytest.raises(CheckError) as caught:
             context.exec("pod/api-0", ["true"])
         assert caught.value.code == "check-exec-unavailable"
+        assert socket_.closed
         return
     result = context.exec("pod/api-0", ["sh", "-c", "exit"], container="api")
     assert (result.exit_code, result.stdout) == (expected, "hello\n")
     assert captured["command"] == ["sh", "-c", "exit"]
     assert (captured["pod"], captured["namespace"]) == ("api-0", "shop")
-    assert captured["container"] == "api" and captured["tty"] is False
+    assert captured["container"] == "api"
+    assert socket_.closed
+
+
+def test_api_exec_times_out_on_a_silent_command() -> None:
+    import websocket
+
+    from piceli.checks.context import read_exec
+
+    class Silent(_FakeSocket):
+        def recv_data(self) -> tuple[int, bytes]:
+            raise websocket.WebSocketTimeoutException("timed out")
+
+    socket_ = Silent([])
+    with pytest.raises(CheckError) as caught:
+        read_exec(socket_, "pod/api-0", 5)
+    assert caught.value.code == "check-timed-out"
+    assert socket_.closed
+
+
+def test_exec_socket_uses_the_clients_tls_context_and_auth(monkeypatch) -> None:
+    """Factory clients keep TLS material in the pool, not in Configuration."""
+    import ssl
+    from types import SimpleNamespace
+
+    import websocket
+
+    from piceli.checks.context import open_exec_socket
+
+    tls = ssl.create_default_context()
+    configuration = SimpleNamespace(
+        host="https://127.0.0.1:6443",
+        tls_server_name="kubernetes",
+        ssl_ca_cert=None,
+        cert_file=None,
+        key_file=None,
+    )
+
+    def update_params_for_auth(headers, _queries, _settings):
+        headers["authorization"] = "Bearer not-a-real-token"
+
+    client = SimpleNamespace(
+        configuration=configuration,
+        update_params_for_auth=update_params_for_auth,
+        rest_client=SimpleNamespace(
+            pool_manager=SimpleNamespace(connection_pool_kw={"ssl_context": tls})
+        ),
+    )
+    captured: dict[str, Any] = {}
+
+    def create_connection(url, **options):
+        captured.update(options, url=url)
+        return "socket"
+
+    monkeypatch.setattr(websocket, "create_connection", create_connection)
+
+    assert (
+        open_exec_socket(client, "shop", "api-0", ["sh", "-c", "x y"], "api", 3)
+        == "socket"
+    )
+    assert captured["url"] == (
+        "wss://127.0.0.1:6443/api/v1/namespaces/shop/pods/api-0/exec?"
+        "command=sh&command=-c&command=x+y&stdout=true&stderr=true&container=api"
+    )
+    assert captured["sslopt"] == {"context": tls, "server_hostname": "kubernetes"}
+    assert captured["header"] == ["authorization: Bearer not-a-real-token"]
+    assert captured["subprotocols"] == ["v4.channel.k8s.io"]
+    assert captured["timeout"] == 3
 
 
 FAKE_KUBECTL = """\

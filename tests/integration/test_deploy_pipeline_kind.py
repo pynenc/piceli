@@ -16,7 +16,11 @@ never reads the ambient kubeconfig. In a uniquely named namespace it:
 2. runs it before the cache's existing claim exists, so the apply stage
    fails (not ready) after build and delivery;
 3. creates the claim and resumes: the run continues at the apply stage;
-4. reruns without changes: a no-op in under 10 s.
+4. reruns without changes: a no-op in under 10 s;
+5. deploys a changed app whose check fails: the previous release is
+   re-applied (``rolled-back``);
+6. reruns the original pipeline: the rolled-back release is deployed, so the
+   apply is skipped again.
 """
 
 from __future__ import annotations
@@ -65,25 +69,43 @@ def namespace():
         client.close()
 
 
-def _module(tmp_path: Path, namespace: str) -> Path:
-    """The example's app with a short readiness window, in a private state dir."""
-    module = tmp_path / "deploy_shop.py"
+def _module(tmp_path: Path, namespace: str, *, failing_check: bool = False) -> Path:
+    """The example's app with a short readiness window, in a private state dir.
+
+    ``failing_check`` changes the app (one more ConfigMap, so a new release)
+    and declares a check that cannot pass, with rollback on failed checks.
+    """
+    module = tmp_path / (
+        "deploy_shop_failing.py" if failing_check else "deploy_shop.py"
+    )
+    extra = (
+        """
+            shop.app.config("canary", {"release": "failing"})
+            checks = dict(
+                checks=Checks.http(shop.web, "/", expect=418, retries=0),
+                rollback_on_failed_checks=True,
+            )
+            """
+        if failing_check
+        else "checks = {}"
+    )
     module.write_text(
         textwrap.dedent(
             f"""
             import importlib.util
 
-            from piceli import NodeLoopbackRegistry, Pipeline
+            from piceli import Checks, NodeLoopbackRegistry, Pipeline
 
             spec = importlib.util.spec_from_file_location("shop_example", {str(EXAMPLE)!r})
             shop = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(shop)
-
+            {extra}
             pipeline = Pipeline(
                 shop.app, shop.target, build=shop.images,
                 deliver=NodeLoopbackRegistry(port=5000, storage="1Gi"),
                 secrets=shop.secrets, state_dir={str(tmp_path / "state")!r},
                 execution={{"readiness_seconds": 60, "max_seconds": 600}},
+                **checks,
             )
             """
         )
@@ -178,3 +200,20 @@ def test_shop_deploys_resumes_and_reruns_as_noop(namespace, tmp_path) -> None:
         "checks": "skipped",
     }
     assert elapsed < 10, f"warm no-op rerun took {elapsed:.1f}s"
+
+    # A changed release whose check fails is rolled back to the ready one.
+    ready_release = final["release"]
+    failing = _module(tmp_path, name, failing_check=True)
+    code, events, stderr, _ = _deploy(failing, name, "--auto-approve", "--json")
+    assert code == 1, stderr
+    rolled = events[-1]
+    assert rolled["reason"] == "pipeline-checks-failed", rolled
+    assert rolled["state"] == "rolled-back", rolled
+    assert rolled["stage"] == "checks"
+    assert rolled["stages"]["apply"] == "done"
+    assert rolled["release"] != ready_release
+
+    code, events, stderr, _ = _deploy(module, name, "--auto-approve", "--json")
+    assert code == 0, stderr
+    assert events[-1]["release"] == ready_release
+    assert events[-1]["stages"]["apply"] == "skipped", events[-1]
