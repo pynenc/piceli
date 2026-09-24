@@ -46,6 +46,8 @@ def test_operator_serve_starts_and_stops_without_a_cluster(tmp_path: Path) -> No
                 "serve",
                 "--kubeconfig",
                 str(kubeconfig),
+                "--context",
+                "lab",
                 "--namespace",
                 "demo",
                 "--preferences",
@@ -91,6 +93,8 @@ def test_operator_serve_reports_an_occupied_port_without_a_traceback(
                 "serve",
                 "--kubeconfig",
                 str(kubeconfig),
+                "--context",
+                "lab",
                 "--preferences",
                 str(tmp_path / "prefs.json"),
                 "--port",
@@ -109,6 +113,14 @@ def test_operator_serve_rejects_invalid_ui_config(tmp_path: Path) -> None:
     ui_config.write_text('[[shortcuts]]\nid = "Bad Id"\n')
     result = runner.invoke(
         app,
-        ["serve", "--kubeconfig", str(kubeconfig), "--ui-config", str(ui_config)],
+        [
+            "serve",
+            "--kubeconfig",
+            str(kubeconfig),
+            "--context",
+            "lab",
+            "--ui-config",
+            str(ui_config),
+        ],
     )
     assert result.exit_code != 0

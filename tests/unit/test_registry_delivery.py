@@ -722,6 +722,7 @@ def test_supervised_forward_runs_kubectl_and_stops_it(registry, tmp_path, monkey
         remote_port=5000,
         kubeconfig=kubeconfig,
         kubectl=ToolPin.capture(kubectl),
+        context="kind-test",
         startup_seconds=20,
     )
     layers = [layer(b"through-forward")]
@@ -840,6 +841,8 @@ def test_cli_rejections_are_specific_fixed_codes(tmp_path, capsys, monkeypatch):
                 "r",
                 "--kubeconfig",
                 str(tmp_path / "kc"),
+                "--context",
+                "kind-test",
             ],
             "kubectl-tool-required",
         ),
@@ -877,6 +880,8 @@ def test_cli_rejections_are_specific_fixed_codes(tmp_path, capsys, monkeypatch):
         "r",
         "--kubeconfig",
         str(tmp_path / "kc"),
+        "--context",
+        "kind-test",
     ]
     assert cli.main([*base, "--to", oci, *forward]) == 2
     assert reason(capsys) == "node-registry-required"

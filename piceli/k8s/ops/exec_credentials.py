@@ -33,8 +33,6 @@ Importing this module has no side effects.
 
 from __future__ import annotations
 
-import base64
-import binascii
 import functools
 import json
 import os
@@ -81,8 +79,12 @@ class ProviderFactoryError(ValueError):
     """The kubeconfig, context or observed cluster identity is not acceptable.
 
     Defined here so :class:`ExecAuthError` can extend it; import it from
-    :mod:`piceli.k8s.ops.provider_factory`.
+    :mod:`piceli.k8s.ops.provider_factory`. The message names the problem;
+    ``code`` is the registered error code (``target-refused`` unless a more
+    specific ``exec-*`` code applies).
     """
+
+    code = "target-refused"
 
 
 class ExecAuthError(ProviderFactoryError):
@@ -468,24 +470,70 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
-def _ssl_context(
-    ca_data: str | None, ca_file: Path | None, credential: ExecCredential | None
+class TlsMaterialError(ValueError):
+    """A CA, client certificate or key could not be loaded (no details kept)."""
+
+
+def tls_context(
+    ca_data: str | None,
+    ca_file: Path | None,
+    *,
+    cert: bytes | None = None,
+    key: bytes | None = None,
+    cert_file: Path | None = None,
+    key_file: Path | None = None,
 ) -> ssl.SSLContext:
+    """A verifying client TLS context; in-memory PEM never touches a file.
+
+    ``cert``/``key`` are PEM bytes handed to OpenSSL through pipes;
+    ``cert_file``/``key_file`` are existing files named by the kubeconfig.
+    """
     import ssl
 
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    if ca_data is not None:
-        context.load_verify_locations(cadata=ca_data)
-    elif ca_file is not None:
-        context.load_verify_locations(cafile=str(ca_file))
-    else:
-        context.load_default_certs()
-    if credential is not None and credential.client_certificate is not None:
-        assert credential.client_key is not None
-        _load_client_certificate(
-            context, credential.client_certificate, credential.client_key
-        )
+    try:
+        if ca_data is not None:
+            context.load_verify_locations(cadata=ca_data)
+        elif ca_file is not None:
+            context.load_verify_locations(cafile=str(ca_file))
+        else:
+            context.load_default_certs()
+    except (ssl.SSLError, OSError, ValueError):
+        raise TlsMaterialError(
+            "the cluster certificate authority is not valid"
+        ) from None
+    if cert is not None or key is not None:
+        if cert is None or key is None:
+            raise TlsMaterialError(
+                "a client certificate needs both certificate and key"
+            )
+        _load_client_certificate(context, cert, key)
+    elif cert_file is not None or key_file is not None:
+        if cert_file is None or key_file is None:
+            raise TlsMaterialError(
+                "a client certificate needs both certificate and key"
+            )
+        try:
+            context.load_cert_chain(str(cert_file), str(key_file))
+        except (ssl.SSLError, OSError):
+            raise TlsMaterialError(
+                "the client certificate or key file is not valid"
+            ) from None
     return context
+
+
+def _ssl_context(
+    ca_data: str | None, ca_file: Path | None, credential: ExecCredential | None
+) -> ssl.SSLContext:
+    try:
+        return tls_context(
+            ca_data,
+            ca_file,
+            cert=credential.client_certificate if credential else None,
+            key=credential.client_key if credential else None,
+        )
+    except TlsMaterialError as error:
+        raise ExecAuthError("exec-credential-invalid", str(error)) from None
 
 
 def _load_client_certificate(context: ssl.SSLContext, cert: bytes, key: bytes) -> None:
@@ -493,10 +541,9 @@ def _load_client_certificate(context: ssl.SSLContext, cert: bytes, key: bytes) -
     import ssl
 
     if not os.path.isdir("/dev/fd"):
-        raise ExecAuthError(
-            "exec-credential-invalid",
-            "client-certificate exec credentials need /dev/fd on this platform",
-        )
+        raise TlsMaterialError("in-memory client certificates need /dev/fd")
+    if len(cert) > _MAX_PEM or len(key) > _MAX_PEM:
+        raise TlsMaterialError("client certificate or key exceeds 12 KiB")
     descriptors: list[int] = []
     try:
         paths = []
@@ -511,10 +558,7 @@ def _load_client_certificate(context: ssl.SSLContext, cert: bytes, key: bytes) -
             paths.append(f"/dev/fd/{read}")
         context.load_cert_chain(paths[0], paths[1])
     except (ssl.SSLError, OSError):  # OpenSSL may try to seek the pipe on errors
-        raise ExecAuthError(
-            "exec-credential-invalid",
-            "the exec plugin's client certificate or key is not valid",
-        ) from None
+        raise TlsMaterialError("the client certificate or key is not valid") from None
     finally:
         for descriptor in descriptors:
             os.close(descriptor)
@@ -699,13 +743,3 @@ def approved_refresh(api_client: Any) -> bool:
         and source.configuration is configuration
         and source.pool_manager is getattr(rest_client, "pool_manager", None)
     )
-
-
-def decode_ca_data(value: Any) -> str:
-    """``certificate-authority-data`` (base64 PEM) as PEM text for OpenSSL."""
-    try:
-        return base64.b64decode(str(value), validate=True).decode("ascii")
-    except (binascii.Error, UnicodeDecodeError, ValueError):
-        raise ExecAuthError(
-            "exec-config-invalid", "certificate-authority-data is not base64 PEM"
-        ) from None

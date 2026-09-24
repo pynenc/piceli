@@ -47,6 +47,8 @@ def test_forward_preferences_are_saved_and_emitted_as_shell_free_json(
             "web",
             "--kubeconfig",
             str(kubeconfig),
+            "--context",
+            "lab",
             "--preferences",
             str(preferences),
         ],
@@ -70,6 +72,8 @@ def test_logs_command_emits_bounded_argv(tmp_path: Path) -> None:
             "25",
             "--kubeconfig",
             str(kubeconfig),
+            "--context",
+            "lab",
         ],
     )
     assert result.exit_code == 0
@@ -103,6 +107,8 @@ def test_serve_reports_an_occupied_port_without_a_traceback(tmp_path: Path) -> N
                 str(archive),
                 "--kubeconfig",
                 str(kubeconfig),
+                "--context",
+                "lab",
                 "--namespace",
                 "demo",
                 "--port",

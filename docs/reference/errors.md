@@ -174,6 +174,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`ssh-tool-required`](#error-ssh-tool-required) | artifacts-input | no |
 | [`takeover-conflict`](#error-takeover-conflict) | kubernetes | no |
 | [`target-mismatch`](#error-target-mismatch) | kubernetes | no |
+| [`target-refused`](#error-target-refused) | target | no |
 | [`timed-out`](#error-timed-out) | artifacts-delivery | yes |
 | [`tool-pin-mismatch`](#error-tool-pin-mismatch) | artifacts-input | no |
 | [`transport-error`](#error-transport-error) | kubernetes | yes |
@@ -232,9 +233,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-forward-options-incomplete)=
 ### `forward-options-incomplete`
 
-**Port-forward options incomplete.** `--via-forward` needs an explicit `--kubeconfig` (absolute) and `--namespace`.
+**Port-forward options incomplete.** `--via-forward` needs an explicit `--kubeconfig` (absolute), `--context` and `--namespace`.
 
-- **Fix:** Add `--kubeconfig PATH --namespace NAME`; Piceli never uses an ambient kube context.
+- **Fix:** Add `--kubeconfig PATH --context NAME --namespace NAME`; Piceli never uses an ambient kube context or the file's current-context.
 - **Retry-safe:** no
 
 (error-forward-options-without-forward)=
@@ -1562,3 +1563,11 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Run the command again; if it persists, check the plugin's network access or raise `exec_timeout_seconds`.
 - **Retry-safe:** yes
+
+(error-target-refused)=
+### `target-refused`
+
+**Cluster target refused.** The kubeconfig or context is not acceptable (missing or ambiguous context, unsupported user fields, proxy, insecure TLS, non-https server, invalid certificate data) or the cluster's observed identity differs from the expected one. The message names the cause; nothing was changed.
+
+- **Fix:** Fix the kubeconfig, the named context (`[target]` or `--context`) or the expected UIDs as the message says, then run the command again.
+- **Retry-safe:** no

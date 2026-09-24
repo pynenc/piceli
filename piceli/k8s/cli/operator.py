@@ -17,6 +17,13 @@ from piceli.k8s.automation import (
     PRApproval,
     promote_release,
 )
+from piceli.k8s.cli.cluster_access import (
+    AllowExecOption,
+    ContextOption,
+    ExecSha256Option,
+    exec_policy,
+    guarded,
+)
 from piceli.k8s.cli.observe import (
     UI_CONFIG_HELP,
     bind_local_server,
@@ -50,14 +57,21 @@ def _archive(path: Path) -> DeploymentSessionArchive:
 @app.command("status")
 def status(
     kubeconfig: Annotated[Path, typer.Option(exists=True, readable=True)],
+    context: ContextOption,
     namespace: Annotated[str, typer.Option()] = "default",
-    context: Annotated[MaybeString, typer.Option()] = None,
     archive: Annotated[MaybePath, typer.Option(exists=True, readable=True)] = None,
     catalog: Annotated[MaybePath, typer.Option(exists=True, readable=True)] = None,
     include_common_types: Annotated[bool, typer.Option()] = True,
+    allow_exec: AllowExecOption = False,
+    exec_sha256: ExecSha256Option = None,
 ) -> None:
     """Print classified operator inventory: managed, unmanaged, unknown, and releases."""
-    reader = KubernetesDynamicInventoryReader(kubeconfig=kubeconfig, context=context)
+    policy = exec_policy(allow_exec, exec_sha256)
+    reader = guarded(
+        lambda: KubernetesDynamicInventoryReader(
+            kubeconfig=kubeconfig, context=context, exec_policy=policy
+        )
+    )
     cat = ReleaseCatalog(catalog) if catalog else None
     arch = _archive(archive) if archive else None
 
@@ -151,8 +165,8 @@ def restore(
 @app.command("serve")
 def serve(
     kubeconfig: Annotated[Path, typer.Option(exists=True, readable=True)],
+    context: ContextOption,
     namespace: Annotated[str, typer.Option()] = "default",
-    context: Annotated[MaybeString, typer.Option()] = None,
     archive: Annotated[MaybePath, typer.Option(exists=True, readable=True)] = None,
     catalog: Annotated[MaybePath, typer.Option(exists=True, readable=True)] = None,
     preferences: Annotated[MaybePath, typer.Option()] = None,
@@ -165,10 +179,17 @@ def serve(
             exists=True, readable=True, envvar=UI_CONFIG_ENV, help=UI_CONFIG_HELP
         ),
     ] = None,
+    allow_exec: AllowExecOption = False,
+    exec_sha256: ExecSha256Option = None,
 ) -> None:
     """Launch the Piceli Operator dashboard and unified REST API."""
     config = load_ui_config(ui_config)
-    reader = KubernetesDynamicInventoryReader(kubeconfig=kubeconfig, context=context)
+    policy = exec_policy(allow_exec, exec_sha256)
+    reader = guarded(
+        lambda: KubernetesDynamicInventoryReader(
+            kubeconfig=kubeconfig, context=context, exec_policy=policy
+        )
+    )
     cat = ReleaseCatalog(catalog) if catalog else None
     arch = _archive(archive) if archive else None
     pref_store = PreferenceStore(preferences)

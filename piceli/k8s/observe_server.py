@@ -1499,6 +1499,9 @@ class LocalObserveServer(ThreadingHTTPServer):
     ) -> None:
         if address[0] not in {"127.0.0.1", "::1"}:
             raise ValueError("Piceli observe server must bind to loopback")
+        if kubeconfig is not None and not context:
+            # kubectl would otherwise fall back to the file's current-context.
+            raise ValueError("an explicit kubeconfig context is required")
         self.report = report
         self.preferences = preferences
         self.supervisor = supervisor

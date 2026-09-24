@@ -63,12 +63,12 @@ Identical authorization and operations are exposed across:
 - **Python Library**: `piceli.k8s.operator`, `piceli.k8s.automation`, `piceli.artifacts.gc`, `piceli.k8s.operator_state`.
 - **CLI Commands**:
   ```sh
-  python -m piceli operator status --kubeconfig KUBECONFIG --namespace NS
+  python -m piceli operator status --kubeconfig KUBECONFIG --context CONTEXT --namespace NS
   python -m piceli operator promote --catalog RELEASES.json --source branch-a --target production
   python -m piceli operator approve --state-dir STATE --pr-id 42 --commit HASH --namespace NS --approved-by user
   python -m piceli operator backup --state-dir STATE --output backup.tar.gz
   python -m piceli operator restore --archive-file backup.tar.gz --destination RESTORED_DIR
-  python -m piceli operator serve --kubeconfig KUBECONFIG --namespace NS --port 9876
+  python -m piceli operator serve --kubeconfig KUBECONFIG --context CONTEXT --namespace NS --port 9876
   ```
 - **Versioned REST API**: `/v1/status`, `/v1/releases`, `/v1/releases/promote`, `/v1/releases/rollback`, `/v1/artifacts`, `/v1/artifacts/gc`, `/v1/automation`, `/v1/logs`, `/v1/forwards`, `/v1/backup/create`.
 - **Web UI**: a local dashboard served by `piceli operator serve` (loopback only).

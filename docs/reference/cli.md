@@ -488,7 +488,7 @@ Print a JSON argv array for one explicit loopback-only port forward.
 | `--user` | text | required |  |
 | `--name` | text | required |  |
 | `--kubeconfig` | path | required |  |
-| `--context` | text |  |  |
+| `--context` | text | required | Kubeconfig context to use (required; current-context is never used) |
 | `--kubectl` | text | `kubectl` |  |
 | `--preferences` | path |  |  |
 
@@ -501,6 +501,7 @@ Print a JSON argv array for one explicit loopback-only port forward.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** partial
+- **Notes:** `--context` is required; the argv always carries it.
 
 (cli-observe-forward-list)=
 ### `piceli observe forward-list`
@@ -532,9 +533,11 @@ Run one saved loopback-only port forward until the caller interrupts it.
 | `--user` | text | required |  |
 | `--name` | text | required |  |
 | `--kubeconfig` | path | required |  |
-| `--context` | text |  |  |
+| `--context` | text | required | Kubeconfig context to use (required; current-context is never used) |
 | `--kubectl` | text | `kubectl` |  |
 | `--preferences` | path |  |  |
+| `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
+| `--exec-sha256` | text |  | Expected sha256:<hex> of the resolved exec plugin file |
 
 **Contract**
 
@@ -545,6 +548,7 @@ Run one saved loopback-only port forward until the caller interrupts it.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** partial
+- **Notes:** `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`).
 
 (cli-observe-forward-save)=
 ### `piceli observe forward-save`
@@ -580,11 +584,13 @@ Start every declared forward and supervise it in the foreground.
 | --- | --- | --- | --- |
 | `--profile` | path | required | Access profile: the --ui-config TOML format ([[shortcuts]] with optional [shortcuts.health] and [shortcuts.restart]) |
 | `--kubeconfig` | path | required |  |
-| `--context` | text |  |  |
+| `--context` | text | required | Kubeconfig context to use (required; current-context is never used) |
 | `--namespace` | text |  | Namespace for shortcuts that pin none |
 | `--only` | text (repeatable) |  | Supervise only these shortcut ids |
 | `--kubectl` | text | `kubectl` |  |
 | `--poll` | float | `1.0` | Status report cadence (seconds) |
+| `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
+| `--exec-sha256` | text |  | Expected sha256:<hex> of the resolved exec plugin file |
 
 **Contract**
 
@@ -595,6 +601,7 @@ Start every declared forward and supervise it in the foreground.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** partial
+- **Notes:** `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`).
 
 (cli-observe-forwards-status)=
 ### `piceli observe forwards status`
@@ -626,7 +633,7 @@ Print JSON argv for a bounded, explicit workload-log request.
 | `--namespace` | text | required |  |
 | `--target` | text | required | pod/NAME, deployment/NAME, or another workload |
 | `--kubeconfig` | path | required |  |
-| `--context` | text |  |  |
+| `--context` | text | required | Kubeconfig context to use (required; current-context is never used) |
 | `--tail` | integer | `200` |  |
 | `--container` | text |  |  |
 | `--previous`, `--no-previous` | boolean | `False` |  |
@@ -641,6 +648,7 @@ Print JSON argv for a bounded, explicit workload-log request.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** partial
+- **Notes:** `--context` is required; the argv always carries it.
 
 (cli-observe-logs-run)=
 ### `piceli observe logs-run`
@@ -652,11 +660,13 @@ Run a bounded workload-log request in the caller's foreground terminal.
 | `--namespace` | text | required |  |
 | `--target` | text | required | pod/NAME, deployment/NAME, or another workload |
 | `--kubeconfig` | path | required |  |
-| `--context` | text |  |  |
+| `--context` | text | required | Kubeconfig context to use (required; current-context is never used) |
 | `--tail` | integer | `200` |  |
 | `--container` | text |  |  |
 | `--previous`, `--no-previous` | boolean | `False` |  |
 | `--kubectl` | text | `kubectl` |  |
+| `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
+| `--exec-sha256` | text |  | Expected sha256:<hex> of the resolved exec plugin file |
 
 **Contract**
 
@@ -667,6 +677,7 @@ Run a bounded workload-log request in the caller's foreground terminal.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** partial
+- **Notes:** `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`).
 
 (cli-observe-serve)=
 ### `piceli observe serve`
@@ -677,13 +688,15 @@ Open the local operations dashboard and optionally restore saved forwards.
 | --- | --- | --- | --- |
 | `--archive` | path | required |  |
 | `--kubeconfig` | path | required |  |
-| `--context` | text |  |  |
+| `--context` | text | required | Kubeconfig context to use (required; current-context is never used) |
 | `--namespace` | text |  | Namespace for shortcuts and pods (default: the archive's) |
 | `--preferences` | path |  |  |
 | `--user` | text |  | Restore this user's saved forwards |
 | `--port` | integer | `9876` |  |
 | `--ui-config` | path | env `PICELI__UI_CONFIG` | TOML file with dashboard shortcuts, topology tiers, and badges (also $PICELI__UI_CONFIG) |
 | `--start-shortcuts`, `--no-start-shortcuts` | boolean | `False` | Start and health-supervise every configured shortcut (port-conflict preflight first) |
+| `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
+| `--exec-sha256` | text |  | Expected sha256:<hex> of the resolved exec plugin file |
 
 **Contract**
 
@@ -694,6 +707,7 @@ Open the local operations dashboard and optionally restore saved forwards.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** partial
+- **Notes:** `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`).
 
 (cli-observe-status)=
 ### `piceli observe status`
@@ -704,8 +718,10 @@ Print declared resources, live state, and objects absent from the archive.
 | --- | --- | --- | --- |
 | `--archive` | path | required |  |
 | `--kubeconfig` | path | required |  |
-| `--context` | text |  |  |
+| `--context` | text | required | Kubeconfig context to use (required; current-context is never used) |
 | `--include-common-types`, `--no-include-common-types` | boolean | `True` |  |
+| `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
+| `--exec-sha256` | text |  | Expected sha256:<hex> of the resolved exec plugin file |
 
 **Contract**
 
@@ -716,6 +732,7 @@ Print declared resources, live state, and objects absent from the archive.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** partial
+- **Notes:** `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`).
 
 (cli-operator-approve)=
 ### `piceli operator approve`
@@ -809,8 +826,8 @@ Launch the Piceli Operator dashboard and unified REST API.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--kubeconfig` | path | required |  |
+| `--context` | text | required | Kubeconfig context to use (required; current-context is never used) |
 | `--namespace` | text | `default` |  |
-| `--context` | text |  |  |
 | `--archive` | path |  |  |
 | `--catalog` | path |  |  |
 | `--preferences` | path |  |  |
@@ -818,6 +835,8 @@ Launch the Piceli Operator dashboard and unified REST API.
 | `--user` | text |  |  |
 | `--port` | integer | `9876` |  |
 | `--ui-config` | path | env `PICELI__UI_CONFIG` | TOML file with dashboard shortcuts, topology tiers, and badges (also $PICELI__UI_CONFIG) |
+| `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
+| `--exec-sha256` | text |  | Expected sha256:<hex> of the resolved exec plugin file |
 
 **Contract**
 
@@ -828,6 +847,7 @@ Launch the Piceli Operator dashboard and unified REST API.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** partial
+- **Notes:** `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`).
 
 (cli-operator-status)=
 ### `piceli operator status`
@@ -837,11 +857,13 @@ Print classified operator inventory: managed, unmanaged, unknown, and releases.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--kubeconfig` | path | required |  |
+| `--context` | text | required | Kubeconfig context to use (required; current-context is never used) |
 | `--namespace` | text | `default` |  |
-| `--context` | text |  |  |
 | `--archive` | path |  |  |
 | `--catalog` | path |  |  |
 | `--include-common-types`, `--no-include-common-types` | boolean | `True` |  |
+| `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
+| `--exec-sha256` | text |  | Expected sha256:<hex> of the resolved exec plugin file |
 
 **Contract**
 
@@ -852,6 +874,7 @@ Print classified operator inventory: managed, unmanaged, unknown, and releases.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** partial
+- **Notes:** `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`).
 
 (cli-release-apply)=
 ### `piceli release apply`

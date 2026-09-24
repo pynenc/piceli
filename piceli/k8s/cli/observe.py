@@ -14,6 +14,14 @@ from typing import Annotated
 
 import typer
 
+from piceli.k8s.cli.cluster_access import (
+    AllowExecOption,
+    ContextOption,
+    ExecSha256Option,
+    exec_policy,
+    guarded,
+    verify_kubectl_target,
+)
 from piceli.k8s.observe import (
     AccessPlan,
     ForwardSupervisor,
@@ -123,14 +131,20 @@ def interrupts_as_keyboard_interrupt() -> Iterator[None]:
 def status(
     archive: Annotated[Path, typer.Option(exists=True, readable=True)],
     kubeconfig: Annotated[Path, typer.Option(exists=True, readable=True)],
-    context: Annotated[MaybeString, typer.Option()] = None,
+    context: ContextOption,
     include_common_types: Annotated[bool, typer.Option()] = True,
+    allow_exec: AllowExecOption = False,
+    exec_sha256: ExecSha256Option = None,
 ) -> None:
     """Print declared resources, live state, and objects absent from the archive."""
+    policy = exec_policy(allow_exec, exec_sha256)
+    reader = guarded(
+        lambda: KubernetesDynamicInventoryReader(
+            kubeconfig=kubeconfig, context=context, exec_policy=policy
+        )
+    )
     report = observe_session(
-        _archive(archive),
-        KubernetesDynamicInventoryReader(kubeconfig=kubeconfig, context=context),
-        include_common_types=include_common_types,
+        _archive(archive), reader, include_common_types=include_common_types
     )
     typer.echo(json.dumps(report.to_dict(), sort_keys=True))
 
@@ -180,7 +194,7 @@ def forward_command(
     user: Annotated[str, typer.Option()],
     name: Annotated[str, typer.Option()],
     kubeconfig: Annotated[Path, typer.Option(exists=True, readable=True)],
-    context: Annotated[MaybeString, typer.Option()] = None,
+    context: ContextOption,
     kubectl: Annotated[str, typer.Option()] = "kubectl",
     preferences: Annotated[MaybePath, typer.Option()] = None,
 ) -> None:
@@ -206,11 +220,14 @@ def forward_run(
     user: Annotated[str, typer.Option()],
     name: Annotated[str, typer.Option()],
     kubeconfig: Annotated[Path, typer.Option(exists=True, readable=True)],
-    context: Annotated[MaybeString, typer.Option()] = None,
+    context: ContextOption,
     kubectl: Annotated[str, typer.Option()] = "kubectl",
     preferences: Annotated[MaybePath, typer.Option()] = None,
+    allow_exec: AllowExecOption = False,
+    exec_sha256: ExecSha256Option = None,
 ) -> None:
     """Run one saved loopback-only port forward until the caller interrupts it."""
+    verify_kubectl_target(kubeconfig, context, allow_exec, exec_sha256)
     preference = PreferenceStore(preferences).load().get(user)
     if preference is None:
         raise typer.BadParameter("user has no saved port forwards")
@@ -233,7 +250,7 @@ def logs_command(
         str, typer.Option(help="pod/NAME, deployment/NAME, or another workload")
     ],
     kubeconfig: Annotated[Path, typer.Option(exists=True, readable=True)],
-    context: Annotated[MaybeString, typer.Option()] = None,
+    context: ContextOption,
     tail: Annotated[int, typer.Option(min=1, max=10_000)] = 200,
     container: Annotated[MaybeString, typer.Option()] = None,
     previous: Annotated[bool, typer.Option()] = False,
@@ -263,13 +280,16 @@ def logs_run(
         str, typer.Option(help="pod/NAME, deployment/NAME, or another workload")
     ],
     kubeconfig: Annotated[Path, typer.Option(exists=True, readable=True)],
-    context: Annotated[MaybeString, typer.Option()] = None,
+    context: ContextOption,
     tail: Annotated[int, typer.Option(min=1, max=10_000)] = 200,
     container: Annotated[MaybeString, typer.Option()] = None,
     previous: Annotated[bool, typer.Option()] = False,
     kubectl: Annotated[str, typer.Option()] = "kubectl",
+    allow_exec: AllowExecOption = False,
+    exec_sha256: ExecSha256Option = None,
 ) -> None:
     """Run a bounded workload-log request in the caller's foreground terminal."""
+    verify_kubectl_target(kubeconfig, context, allow_exec, exec_sha256)
     raise typer.Exit(
         run_logs(
             kubectl_logs_command(
@@ -290,7 +310,7 @@ def logs_run(
 def serve(
     archive: Annotated[Path, typer.Option(exists=True, readable=True)],
     kubeconfig: Annotated[Path, typer.Option(exists=True, readable=True)],
-    context: Annotated[MaybeString, typer.Option()] = None,
+    context: ContextOption,
     namespace: Annotated[
         MaybeString,
         typer.Option(help="Namespace for shortcuts and pods (default: the archive's)"),
@@ -313,6 +333,8 @@ def serve(
             "(port-conflict preflight first)"
         ),
     ] = False,
+    allow_exec: AllowExecOption = False,
+    exec_sha256: ExecSha256Option = None,
 ) -> None:
     """Open the local operations dashboard and optionally restore saved forwards."""
     config = load_ui_config(ui_config)
@@ -322,7 +344,12 @@ def serve(
             ref.namespace for ref in archive_resources(session_archive) if ref.namespace
         }
         namespace = archive_namespaces.pop() if len(archive_namespaces) == 1 else ""
-    reader = KubernetesDynamicInventoryReader(kubeconfig=kubeconfig, context=context)
+    policy = exec_policy(allow_exec, exec_sha256)
+    reader = guarded(
+        lambda: KubernetesDynamicInventoryReader(
+            kubeconfig=kubeconfig, context=context, exec_policy=policy
+        )
+    )
     store = PreferenceStore(preferences)
     plan_ids: tuple[str, ...] = ()
     if start_shortcuts:
@@ -399,7 +426,7 @@ def forwards_apply(
         ),
     ],
     kubeconfig: Annotated[Path, typer.Option(exists=True, readable=True)],
-    context: Annotated[MaybeString, typer.Option()] = None,
+    context: ContextOption,
     namespace: Annotated[
         MaybeString, typer.Option(help="Namespace for shortcuts that pin none")
     ] = None,
@@ -410,6 +437,8 @@ def forwards_apply(
     poll: Annotated[
         float, typer.Option(min=0.1, max=60, help="Status report cadence (seconds)")
     ] = 1.0,
+    allow_exec: AllowExecOption = False,
+    exec_sha256: ExecSha256Option = None,
 ) -> None:
     """Start every declared forward and supervise it in the foreground.
 
@@ -418,6 +447,7 @@ def forwards_apply(
     SIGHUP.  Exits 2 without starting anything when the port-conflict
     preflight fails.
     """
+    verify_kubectl_target(kubeconfig, context, allow_exec, exec_sha256)
     config = _selected(load_access_profile(profile), only)
     plan = _preflight_or_exit(config, namespace)
     plan_ids = plan.start

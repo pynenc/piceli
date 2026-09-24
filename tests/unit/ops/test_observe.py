@@ -165,6 +165,7 @@ def test_forward_supervisor_owns_only_saved_loopback_processes(tmp_path: Path) -
         preferences=store,
         user="jose",
         kubeconfig=tmp_path / "kubeconfig",
+        context="lab",
         kubectl="definitely-not-kubectl",
     )
     supervisor.restore()
@@ -199,6 +200,7 @@ def test_forward_supervisor_leaves_an_external_port_owner_untouched(
             preferences=store,
             user="jose",
             kubeconfig=tmp_path / "kubeconfig",
+            context="lab",
         )
         with patch("piceli.k8s.observe.subprocess.Popen") as spawn:
             supervisor.restore()
@@ -369,6 +371,7 @@ def test_forward_supervisor_has_no_shortcuts_without_config(tmp_path: Path) -> N
         preferences=PreferenceStore(tmp_path / "observe.json"),
         user="tester",
         kubeconfig=tmp_path / "kubeconfig",
+        context="lab",
     )
     assert supervisor.shortcuts_status(namespace="test-ns") == []
     with pytest.raises(ValueError, match="unknown shortcut"):
@@ -383,6 +386,7 @@ def test_forward_supervisor_shortcuts_and_dynamic_management(
         preferences=store,
         user="tester",
         kubeconfig=tmp_path / "kubeconfig",
+        context="lab",
         kubectl="definitely-not-kubectl",
         shortcuts=ui_config.shortcuts,
         namespace="served-ns",

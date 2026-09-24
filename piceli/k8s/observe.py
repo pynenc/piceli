@@ -23,11 +23,14 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from piceli.k8s.ops.discovery import ResourceIdentity
 from piceli.k8s.ops.session import DeploymentSessionArchive
 from piceli.k8s.ui_config import HealthProbe, RestartPolicy, UiShortcut, legacy_health
+
+if TYPE_CHECKING:
+    from piceli.k8s.ops.exec_credentials import ExecPolicy
 
 _NAME = re.compile(r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?")
 _FORWARD_TARGET = re.compile(
@@ -242,14 +245,26 @@ def observe_session(
 
 
 class KubernetesDynamicInventoryReader:
-    """Lazy Kubernetes-client adapter for explicit local kubeconfig observation."""
+    """Lazy Kubernetes-client adapter for explicit local kubeconfig observation.
 
-    def __init__(self, *, kubeconfig: Path, context: str | None = None) -> None:
-        from kubernetes import config
+    The client comes from the provider factory: an explicit kubeconfig file and
+    named context (never ``current-context``), the factory's refusals (proxy,
+    insecure TLS, auth-provider), and exec plugins only with ``exec_policy``.
+    """
+
+    def __init__(
+        self,
+        *,
+        kubeconfig: Path,
+        context: str,
+        exec_policy: ExecPolicy | None = None,
+    ) -> None:
         from kubernetes.dynamic import DynamicClient
 
+        from piceli.k8s.ops.provider_factory import api_client_from_kubeconfig
+
         self._client = DynamicClient(
-            config.new_client_from_config(config_file=str(kubeconfig), context=context)
+            api_client_from_kubeconfig(kubeconfig, context, exec_policy=exec_policy)
         )
 
     @staticmethod
@@ -364,9 +379,7 @@ class PortForward:
         self, *, kubectl: str, kubeconfig: Path, context: str | None
     ) -> list[str]:
         """Build the explicit, shell-free kubectl command for this preference."""
-        result = [kubectl, "--kubeconfig", str(kubeconfig)]
-        if context:
-            result.extend(["--context", context])
+        result = kubectl_target(kubectl, kubeconfig, context)
         return [
             *result,
             "--namespace",
@@ -645,6 +658,9 @@ class ForwardSupervisor:
         shortcuts: Iterable[UiShortcut] = (),
         namespace: str | None = None,
     ) -> None:
+        if not context:
+            # kubectl would otherwise fall back to the file's current-context.
+            raise ValueError("an explicit kubeconfig context is required")
         self._preferences = preferences
         self._user = user
         self._kubeconfig = kubeconfig
@@ -1152,6 +1168,16 @@ def run_port_forward(command: list[str]) -> int:
     return subprocess.run(command, check=False).returncode
 
 
+def kubectl_target(kubectl: str, kubeconfig: Path, context: str | None) -> list[str]:
+    """``kubectl --kubeconfig FILE --context NAME``; the context is required.
+
+    kubectl would otherwise fall back to the file's ``current-context``.
+    """
+    if not context:
+        raise ValueError("an explicit kubeconfig context is required")
+    return [kubectl, "--kubeconfig", str(kubeconfig), "--context", context]
+
+
 def kubectl_logs_command(
     *,
     kubectl: str,
@@ -1168,9 +1194,7 @@ def kubectl_logs_command(
         raise ValueError("invalid log namespace or target")
     if not isinstance(tail, int) or isinstance(tail, bool) or not 1 <= tail <= 10_000:
         raise ValueError("log tail must be between 1 and 10000")
-    result = [kubectl, "--kubeconfig", str(kubeconfig)]
-    if context:
-        result.extend(["--context", context])
+    result = kubectl_target(kubectl, kubeconfig, context)
     result.extend(["--namespace", namespace, "logs", target, f"--tail={tail}"])
     if container:
         if not _NAME.fullmatch(container):

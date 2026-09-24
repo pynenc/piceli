@@ -42,8 +42,9 @@ from piceli.k8s.ops.exec_credentials import (
     ExecPlugin,
     ExecPolicy,
     ProviderFactoryError,
-    decode_ca_data,
+    TlsMaterialError,
     resolve_plugin,
+    tls_context,
 )
 from piceli.k8s.ops.kubernetes_provider import KubernetesProvider
 
@@ -59,6 +60,7 @@ __all__ = [
     "build_provider",
     "credential_plugin",
     "read_cluster_identity",
+    "verify_kubeconfig_context",
 ]
 
 logger = logging.getLogger(__name__)
@@ -274,40 +276,154 @@ def api_client_from_kubeconfig(
     return _client(kubeconfig, context, "https", exec_policy or _NO_EXEC)
 
 
+def verify_kubeconfig_context(
+    kubeconfig: Path, context: str, *, exec_policy: ExecPolicy | None = None
+) -> dict[str, str] | None:
+    """Check ``context`` in ``kubeconfig`` without contacting the cluster.
+
+    Applies every refusal of :func:`api_client_from_kubeconfig` (explicit
+    context, no auth-provider, no proxy or insecure TLS, https, exec only with
+    ``exec_policy``) and, for an exec user, resolves and pins the plugin
+    without running it. Use it before handing the kubeconfig to ``kubectl``.
+    Returns the pinned plugin summary for an exec user, else ``None``.
+    """
+    policy = exec_policy or _NO_EXEC
+    path, entries = _entries_for(kubeconfig, context, "https", policy)
+    if "exec" in entries.user:
+        plugin = resolve_plugin(
+            entries.user["exec"], kubeconfig_dir=path.resolve().parent, policy=policy
+        )
+        return plugin.summary()
+    return None
+
+
+def _entries_for(
+    kubeconfig: Path, context: str, transport: str, policy: ExecPolicy
+) -> tuple[Path, _Entries]:
+    if not context:
+        raise ProviderFactoryError("an explicit kubeconfig context is required")
+    path = Path(kubeconfig).expanduser()
+    return path, _check_entries(_read_kubeconfig(path), context, transport, policy)
+
+
 def _client(
     kubeconfig: Path,
     context: str,
     transport: str,
     policy: ExecPolicy = _NO_EXEC,
 ) -> Any:
-    from kubernetes.client import ApiClient, Configuration
-    from kubernetes.config.config_exception import ConfigException
-    from kubernetes.config.kube_config import KubeConfigLoader
-
-    if not context:
-        raise ProviderFactoryError("an explicit kubeconfig context is required")
-    path = Path(kubeconfig).expanduser()
-    document = _read_kubeconfig(path)
-    entries = _check_entries(document, context, transport, policy)
+    path, entries = _entries_for(kubeconfig, context, transport, policy)
     if "exec" in entries.user:
         return _exec_client(path, entries, policy)
+    return _static_client(path, entries)
+
+
+def _ca(cluster: Mapping[str, Any], base: Path) -> tuple[str | None, Path | None]:
+    """The cluster CA as in-memory PEM text, or the file the kubeconfig names."""
+    import base64
+    import binascii
+
+    if cluster.get("certificate-authority-data"):
+        try:
+            data = base64.b64decode(
+                str(cluster["certificate-authority-data"]), validate=True
+            ).decode("ascii")
+        except (binascii.Error, UnicodeDecodeError, ValueError):
+            raise ProviderFactoryError(
+                "certificate-authority-data is not base64 PEM"
+            ) from None
+        return data, None
+    if cluster.get("certificate-authority"):
+        path = base / str(cluster["certificate-authority"])
+        if not path.is_file():
+            raise ProviderFactoryError("certificate-authority file not found")
+        return None, path
+    return None, None
+
+
+def _configuration(cluster: Mapping[str, Any]) -> Any:
+    from kubernetes.client import Configuration
+
     configuration = Configuration()
-    try:
-        loader = KubeConfigLoader(
-            config_dict=document,
-            active_context=context,
-            config_base_path=str(path.resolve().parent),
-        )
-        loader.load_and_set(configuration)
-    except ConfigException as error:
-        raise ProviderFactoryError(f"kubeconfig context rejected: {error}") from None
-    # The SDK installs a refresh hook for every token, including static ones.
-    # Exec/auth-provider users do not reach this path, so the hook could only
-    # re-read the same static token; dropping it keeps credentials explicit.
-    configuration.refresh_api_key_hook = None
+    configuration.host = str(cluster.get("server", "")).rstrip("/")
+    configuration.verify_ssl = True
     configuration.proxy = None
     configuration.retries = 0
-    return ApiClient(configuration)
+    configuration.refresh_api_key_hook = None
+    if cluster.get("tls-server-name"):
+        configuration.tls_server_name = str(cluster["tls-server-name"])
+    return configuration
+
+
+def _pem_data(user: Mapping[str, Any], key: str) -> bytes | None:
+    import base64
+    import binascii
+
+    value = user.get(key)
+    if not value:
+        return None
+    try:
+        return base64.b64decode(str(value), validate=True)
+    except (binascii.Error, ValueError):
+        raise ProviderFactoryError(f"kubeconfig {key} is not base64") from None
+
+
+def _static_client(path: Path, entries: _Entries) -> Any:
+    """An ``ApiClient`` for a static token or client certificate.
+
+    The SDK's kubeconfig loader is bypassed: it writes certificate data to
+    temporary files. Here ``*-data`` fields go to OpenSSL through pipes, the
+    CA is read in memory, and files the kubeconfig names are used in place.
+    No refresh hook is installed (a static token cannot be refreshed).
+    """
+    from kubernetes.client import ApiClient
+
+    base = path.resolve().parent
+    user = entries.user
+    configuration = _configuration(entries.cluster)
+    token = user.get("token")
+    if token is not None:
+        if not isinstance(token, str) or not token or "\n" in token:
+            raise ProviderFactoryError("kubeconfig token is invalid")
+        configuration.api_key["BearerToken"] = "Bearer " + token
+    cert = _pem_data(user, "client-certificate-data")
+    key = _pem_data(user, "client-key-data")
+    cert_file = key_file = None
+    if cert is None and user.get("client-certificate"):
+        cert_file = base / str(user["client-certificate"])
+    if key is None and user.get("client-key"):
+        key_file = base / str(user["client-key"])
+    ca_data, ca_file = _ca(entries.cluster, base)
+    try:
+        context = tls_context(
+            ca_data,
+            ca_file,
+            cert=cert,
+            key=key,
+            cert_file=cert_file,
+            key_file=key_file,
+        )
+    except TlsMaterialError as error:
+        raise ProviderFactoryError(str(error)) from None
+    client = ApiClient(configuration)
+    client.rest_client.pool_manager = _direct_pool(context, configuration)
+    return client
+
+
+def _direct_pool(context: Any, configuration: Any) -> Any:
+    import urllib3
+
+    return urllib3.PoolManager(
+        num_pools=4,
+        maxsize=4,
+        retries=False,
+        ssl_context=context,
+        **(
+            {"server_hostname": configuration.tls_server_name}
+            if configuration.tls_server_name
+            else {}
+        ),
+    )
 
 
 def _exec_client(path: Path, entries: _Entries, policy: ExecPolicy) -> Any:
@@ -317,30 +433,15 @@ def _exec_client(path: Path, entries: _Entries, policy: ExecPolicy) -> Any:
     and writes client certificates to temporary files. The cluster's CA is
     read in memory as well.
     """
-    from kubernetes.client import ApiClient, Configuration
+    from kubernetes.client import ApiClient
 
     base = path.resolve().parent
     plugin: ExecPlugin = resolve_plugin(
         entries.user["exec"], kubeconfig_dir=base, policy=policy
     )
     cluster = entries.cluster
-    ca_data = ca_file = None
-    if cluster.get("certificate-authority-data"):
-        ca_data = decode_ca_data(cluster["certificate-authority-data"])
-    elif cluster.get("certificate-authority"):
-        ca_file = base / str(cluster["certificate-authority"])
-        if not ca_file.is_file():
-            raise ProviderFactoryError("certificate-authority file not found")
-    server = str(cluster.get("server", "")).rstrip("/")
-    tls_server_name = cluster.get("tls-server-name")
-    configuration = Configuration()
-    configuration.host = server
-    configuration.verify_ssl = True
-    configuration.proxy = None
-    configuration.retries = 0
-    configuration.refresh_api_key_hook = None
-    if tls_server_name:
-        configuration.tls_server_name = str(tls_server_name)
+    ca_data, ca_file = _ca(cluster, base)
+    configuration = _configuration(cluster)
     client = ApiClient(configuration)
     try:
         ExecCredentialSource.attach(
@@ -348,9 +449,9 @@ def _exec_client(path: Path, entries: _Entries, policy: ExecPolicy) -> Any:
             plugin,
             policy,
             cluster=ClusterInfo(
-                server,
+                configuration.host,
                 cluster.get("certificate-authority-data") or None,
-                str(tls_server_name) if tls_server_name else None,
+                configuration.tls_server_name or None,
             ),
             ca_data=ca_data,
             ca_file=ca_file,

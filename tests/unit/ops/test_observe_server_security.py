@@ -34,6 +34,7 @@ def server(tmp_path: Path) -> Iterator[LocalObserveServer]:
         PreferenceStore(tmp_path / "observe.json"),
         state_store=state,
         kubeconfig=tmp_path / "kubeconfig",
+        context="lab",
         kubectl="definitely-not-kubectl",
     )
     thread = threading.Thread(target=instance.serve_forever, daemon=True)

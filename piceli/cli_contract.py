@@ -133,6 +133,11 @@ class CommandContract:
 
 
 _C = CommandContract
+_EXPLICIT_CONTEXT = (
+    "`--context` is required (current-context is never used, also not by the "
+    "kubectl processes it starts); exec credential plugins need `--allow-exec` "
+    "(optionally `--exec-sha256`)."
+)
 _RELEASE_READS = ("release.toml", "composition", "state_dir", "kubeconfig")
 _RELEASE_EXIT = (0, 1, 2, 3)
 _LEGACY_MODEL = ("model modules/folders",)
@@ -293,6 +298,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "Compare a session archive with live cluster state.",
             reads=("session archive", "kubeconfig"),
             cluster="reads",
+            notes=_EXPLICIT_CONTEXT,
         ),
         "observe forward-save": _C(
             "Save one port-forward preference.",
@@ -306,20 +312,24 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
         "observe forward-command": _C(
             "Print the kubectl argv for one saved forward.",
             reads=("preferences file",),
+            notes="`--context` is required; the argv always carries it.",
         ),
         "observe forward-run": _C(
             "Run one saved port forward until interrupted.",
             reads=("preferences file", "kubeconfig"),
             cluster="reads",
+            notes=_EXPLICIT_CONTEXT,
             long_running=True,
         ),
         "observe logs-command": _C(
             "Print the kubectl argv for a bounded log request.",
+            notes="`--context` is required; the argv always carries it.",
         ),
         "observe logs-run": _C(
             "Run a bounded log request in the foreground.",
             reads=("kubeconfig",),
             cluster="reads",
+            notes=_EXPLICIT_CONTEXT,
             long_running=True,
         ),
         "observe serve": _C(
@@ -327,12 +337,14 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             reads=("session archive", "kubeconfig", "preferences file"),
             writes=("preferences file",),
             cluster="reads",
+            notes=_EXPLICIT_CONTEXT,
             long_running=True,
         ),
         "observe forwards apply": _C(
             "Start and supervise the forwards of an access profile.",
             reads=("access profile", "kubeconfig"),
             cluster="reads",
+            notes=_EXPLICIT_CONTEXT,
             long_running=True,
             exit_codes=(0, 2),
         ),
@@ -346,6 +358,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "Print classified operator inventory.",
             reads=("kubeconfig", "archive", "catalog"),
             cluster="reads",
+            notes=_EXPLICIT_CONTEXT,
         ),
         "operator promote": _C(
             "Promote a built digest to a new catalog entry.",
@@ -374,6 +387,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             reads=("kubeconfig", "catalog", "archive", "preferences file"),
             writes=("preferences file", "state_dir"),
             cluster="reads",
+            notes=_EXPLICIT_CONTEXT,
             long_running=True,
         ),
         # ---------------------------------------------- legacy CLI engine

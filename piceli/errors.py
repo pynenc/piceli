@@ -189,8 +189,8 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
     _E(
         "forward-options-incomplete",
         "Port-forward options incomplete",
-        "`--via-forward` needs an explicit `--kubeconfig` (absolute) and `--namespace`.",
-        "Add `--kubeconfig PATH --namespace NAME`; Piceli never uses an ambient kube context.",
+        "`--via-forward` needs an explicit `--kubeconfig` (absolute), `--context` and `--namespace`.",
+        "Add `--kubeconfig PATH --context NAME --namespace NAME`; Piceli never uses an ambient kube context or the file's current-context.",
         False,
         "artifacts-input",
     ),
@@ -1373,6 +1373,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "images",
     ),
     # --- WP3.1 exec auth ---
+    _E(
+        "target-refused",
+        "Cluster target refused",
+        "The kubeconfig or context is not acceptable (missing or ambiguous context, unsupported user fields, proxy, insecure TLS, non-https server, invalid certificate data) or the cluster's observed identity differs from the expected one. The message names the cause; nothing was changed.",
+        "Fix the kubeconfig, the named context (`[target]` or `--context`) or the expected UIDs as the message says, then run the command again.",
+        False,
+        "target",
+    ),
     _E(
         "exec-auth-not-allowed",
         "Exec credential plugin not allowed",
