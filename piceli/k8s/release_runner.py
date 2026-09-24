@@ -765,10 +765,17 @@ class ReleaseRunner:
         nodes: Mapping[str, NodeRef],
     ) -> Callable[[Mapping[str, SecretVersionRef]], DeploymentComposition]:
         def factory(refs: Mapping[str, SecretVersionRef]) -> DeploymentComposition:
-            composition = function(self.spec.context(images, refs, nodes))
+            from piceli.app.app import App
+
+            context = self.spec.context(images, refs, nodes)
+            composition = function(context)
+            if isinstance(composition, App):
+                # Returning the App keeps its access declarations visible to
+                # `piceli access` / `piceli status`; render it here.
+                composition = composition.composition(context)
             if not isinstance(composition, DeploymentComposition):
                 raise ReleaseSpecError(
-                    "the composition function must return a DeploymentComposition"
+                    "the composition function must return an App or a DeploymentComposition"
                 )
             for component in composition.components:
                 for resource in component.resources:

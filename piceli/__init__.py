@@ -7,6 +7,7 @@ __version__ = version("piceli")
 # side effects; ``from piceli import App`` imports ``piceli.app`` on first use.
 _APP_EXPORTS = frozenset(
     {
+        "Access",
         "App",
         "Config",
         "ConfigKey",
@@ -16,6 +17,8 @@ _APP_EXPORTS = frozenset(
         "Deployment",
         "ExistingClaim",
         "FieldRef",
+        "Forward",
+        "HealthProbe",
         "MemoryVolume",
         "Mount",
         "NetworkPolicy",
@@ -31,6 +34,7 @@ _APP_EXPORTS = frozenset(
 
 if TYPE_CHECKING:
     from piceli.app import (  # noqa: F401
+        Access,
         App,
         Config,
         ConfigKey,
@@ -40,6 +44,8 @@ if TYPE_CHECKING:
         Deployment,
         ExistingClaim,
         FieldRef,
+        Forward,
+        HealthProbe,
         MemoryVolume,
         Mount,
         NetworkPolicy,
