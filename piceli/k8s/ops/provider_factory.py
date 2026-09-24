@@ -187,13 +187,16 @@ def _check_entries(document: Mapping[str, Any], context: str, transport: str) ->
             )
 
 
-def api_client_from_kubeconfig(kubeconfig: Path, context: str) -> Any:
+def api_client_from_kubeconfig(
+    kubeconfig: Path, context: str, *, transport: Transport = "https"
+) -> Any:
     """Return an ``ApiClient`` for exactly ``context`` in ``kubeconfig``.
 
     Never reads ``KUBECONFIG``, the default kubeconfig or in-cluster files, and
-    never falls back to the file's ``current-context``.
+    never falls back to the file's ``current-context``. ``transport`` is
+    ``https`` or, for a literal loopback test API, ``loopback-http``.
     """
-    return _client(kubeconfig, context, "https")
+    return _client(kubeconfig, context, transport)
 
 
 def _client(kubeconfig: Path, context: str, transport: str) -> Any:

@@ -41,6 +41,14 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from piceli.checks import (
+    Check,
+    CheckContext,
+    CheckReport,
+    PythonCheck,
+    parse_checks,
+    run_checks,
+)
 from piceli.k8s.ops.bounds import timestamp
 from piceli.k8s.ops.discovery import (
     RETAINED_KINDS,
@@ -58,6 +66,7 @@ from piceli.k8s.ops.executor import (
     ExecutionLimits,
     PlanExecutor,
 )
+from piceli.k8s.ops.kubernetes_provider import ProviderError
 from piceli.k8s.ops.plan import (
     DeploymentComposition,
     DeploymentPlan,
@@ -106,6 +115,8 @@ from piceli.k8s.release_spec import (
 POLICY_REVISION = "piceli.release-cli/v1"
 _HASH = re.compile(r"[0-9a-f]{64}")
 ProviderFactory = Callable[[ReleaseSpec], ProviderBinding]
+#: ``factory(spec, release name, {image name: stored image})`` → a check context.
+CheckContextFactory = Callable[[ReleaseSpec, str, Mapping[str, Any]], CheckContext]
 
 
 class ReleaseError(ValueError):
@@ -159,6 +170,37 @@ def default_provider_factory(spec: ReleaseSpec) -> ProviderBinding:
         owner_id=release.owner,
         inherited_owner_ids=release.inherited_owners,
     )
+
+
+def default_check_context(
+    spec: ReleaseSpec, release: str, images: Mapping[str, Any]
+) -> CheckContext:
+    """The check context of a release: the spec's ``[target]``, never ambient."""
+    target = spec.model.target
+    return CheckContext(
+        spec.resolve(target.kubeconfig),
+        target.context,
+        target.namespace,
+        release,
+        images,
+        values=spec.model.values,
+        base=spec.base,
+        transport=target.transport,
+        request_seconds=target.request_seconds,
+    )
+
+
+def _check_summary(value: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """The short form of a check outcome kept in the release history."""
+    if value is None:
+        return None
+    if value.get("skipped"):
+        return {"skipped": True, "flag": value.get("flag")}
+    return {
+        "passed": value["passed"],
+        "failed": list(value["failed"]),
+        "count": len(value["results"]),
+    }
 
 
 def _grant(
@@ -588,6 +630,8 @@ class PlanResult:
     # What this plan was authorized to adopt/replace (bound to the plan hash
     # through the ADOPT/REPLACE actions).
     authorized: dict[str, Any] = field(default_factory=dict)
+    # The post-deploy checks apply will run, and the rollback policy.
+    checks: dict[str, Any] = field(default_factory=dict)
 
     @property
     def plan_hash(self) -> str:
@@ -616,6 +660,7 @@ class PlanResult:
             "drift": self.drift,
             "adopt_not_needed": self.adopt_not_needed,
             "authorized": self.authorized,
+            "checks": self.checks,
             **({"plan": self.plan} if full else {}),
         }
 
@@ -690,9 +735,11 @@ class ReleaseRunner:
         spec: ReleaseSpec,
         *,
         provider_factory: ProviderFactory = default_provider_factory,
+        check_context_factory: CheckContextFactory = default_check_context,
     ) -> None:
         self.spec = spec
         self.provider_factory = provider_factory
+        self.check_context_factory = check_context_factory
         self.state = spec.state_dir
         self.history = _History(self.state / "history.json")
         # Restorable copies of objects deleted by ``replace`` (owner-only).
@@ -992,6 +1039,9 @@ class ReleaseRunner:
             raise ReleaseError(f"cannot rotate undeclared secrets: {unknown}")
         for entry in replace:
             parse_adopt_entry(entry, what="replace")
+        for check in spec.checks:
+            if isinstance(check, PythonCheck):
+                check.resolve(self.spec.base)  # refuse an unimportable check now
         requested = _Ownership(
             tuple(dict.fromkeys((*spec.release.adopt, *adopt))),
             tuple(dict.fromkeys((*spec.release.replace, *replace))),
@@ -1216,6 +1266,7 @@ class ReleaseRunner:
             _drift(composition, snapshot, settings.field_manager, adopt),
             resolved.adopt_not_needed,
             requested.report(resolved),
+            self._checks_policy(),
         )
         self._persist_plan(result, prune=settings.prune)
         return result
@@ -1270,6 +1321,7 @@ class ReleaseRunner:
             _drift(composition, snapshot, settings.field_manager, adopt),
             resolved.adopt_not_needed,
             requested.report(resolved),
+            self._checks_policy(),
         )
         self._persist_plan(
             result,
@@ -1305,10 +1357,23 @@ class ReleaseRunner:
                     "adopt": list(adopt),
                     "inherited_owners": list(inherited),
                     "replace": list(replace),
+                    # What apply checks is what was reviewed, not a later spec.
+                    "checks": [check.public_dict() for check in self.spec.model.checks],
+                    "rollback_on_failed_checks": (
+                        self.spec.model.release.rollback_on_failed_checks
+                    ),
                 }
             )
             + "\n",
         )
+
+    def _checks_policy(self) -> dict[str, Any]:
+        return {
+            "names": [check.label for check in self.spec.model.checks],
+            "rollback_on_failed_checks": (
+                self.spec.model.release.rollback_on_failed_checks
+            ),
+        }
 
     def pending_plan(self, plan_hash: str) -> dict[str, Any]:
         path = self._plan_path(plan_hash)
@@ -1406,8 +1471,18 @@ class ReleaseRunner:
         *,
         expected_intent: str | None = None,
         expected_release: str | None = None,
+        skip_checks: bool = False,
+        trigger: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Execute the persisted plan ``plan_hash`` (the approval)."""
+        """Execute the persisted plan ``plan_hash`` (the approval), then check it.
+
+        When the execution is ready, the plan's ``[[checks]]`` run; the
+        release is ``ready`` (and selected) only when they pass, otherwise
+        ``checks-failed``. With ``rollback_on_failed_checks`` the last other
+        ready release is re-planned and re-applied automatically (see
+        :meth:`_auto_rollback`). ``skip_checks`` skips them and is recorded.
+        ``trigger`` marks an automatic rollback (internal; never rolls back).
+        """
         pending = self.pending_plan(plan_hash)
         if expected_intent is not None and pending["intent"] != expected_intent:
             raise ReleaseError(
@@ -1420,12 +1495,17 @@ class ReleaseRunner:
                 f"not {expected_release!r}"
             )
         name = pending["release"]
+        checks = parse_checks(pending.get("checks", ()))
         binding = self.provider_factory(self.spec)
         try:
             catalog, journal, store = self._open()
             try:
                 self._check_target(catalog, binding.target)
                 record = catalog.get(name)
+                try:
+                    before: str | None = catalog.selected().name
+                except ValueError:
+                    before = None
                 executor = PlanExecutor(
                     binding.provider,
                     journal,
@@ -1506,6 +1586,8 @@ class ReleaseRunner:
                         "plan_hash": plan_hash,
                         "execution_id": execution_id,
                         "state": "running",
+                        **({"skip_checks": True} if skip_checks else {}),
+                        **dict(trigger or {}),
                     }
                 )
                 try:
@@ -1514,24 +1596,184 @@ class ReleaseRunner:
                     self.history.update(execution_id, state="refused")
                     raise ReleaseError(f"execution refused: {error}") from None
                 self._plan_path(plan_hash).unlink(missing_ok=True)
-                self.history.update(execution_id, state=result.get("state"))
-                if pending["mode"] == "create" and result.get("state") == "ready":
+                state, report = self._verify(
+                    name, execution_id, result, checks, skip_checks=skip_checks
+                )
+                self.history.update(
+                    execution_id, state=state, checks=_check_summary(report)
+                )
+                if state == "ready" and pending["mode"] == "create":
                     catalog.select(name)
-                return {
+                elif state == "checks-failed" and before is not None:
+                    # A re-apply selects its release when ready; a release
+                    # whose checks failed must not stay selected.
+                    catalog.select(before)
+                outcome = {
                     "release": name,
                     "intent": pending["intent"],
                     "mode": pending["mode"],
                     "plan_hash": plan_hash,
                     "source": record.source.to_dict(),
                     "execution": _execution_summary(result),
+                    "release_state": state,
+                    "checks": report,
                     "adopted": _adopted(journal, execution_id, result),
-                    "selected": catalog.selected().name,
+                    "selected": self._selected(catalog),
+                    **({"trigger": dict(trigger)} if trigger else {}),
                 }
             finally:
                 journal.close()
                 store.close()
         finally:
             binding.close()
+        if (
+            state == "checks-failed"
+            and pending.get("rollback_on_failed_checks")
+            and trigger is None
+        ):
+            outcome["rollback"] = self._auto_rollback(name, execution_id)
+        return outcome
+
+    @staticmethod
+    def _selected(catalog: ReleaseCatalog) -> str | None:
+        try:
+            return catalog.selected().name
+        except ValueError:
+            return None
+
+    # --------------------------------------------------------------- checks
+    def _verify(
+        self,
+        name: str,
+        execution_id: str,
+        result: Mapping[str, Any],
+        checks: Sequence[Check],
+        *,
+        skip_checks: bool,
+    ) -> tuple[str, dict[str, Any] | None]:
+        """The release state after an execution: run the checks when it is ready.
+
+        Returns ``(state, check report)``: the execution state when it did not
+        become ready or has no checks, else ``ready`` or ``checks-failed``.
+        The full report is also kept in ``state_dir/checks/<execution>.json``.
+        """
+        state = str(result.get("state"))
+        if state != "ready" or not checks:
+            return state, None
+        if skip_checks:
+            return state, {
+                "skipped": True,
+                "flag": "--skip-checks",
+                "declared": [check.label for check in checks],
+            }
+        images = self._sidecar(name).get("images", {})
+        with self.check_context_factory(self.spec, name, images) as context:
+            report: CheckReport = run_checks(checks, context)
+        value = report.to_dict()
+        _write_private(
+            self.state / "checks" / f"{execution_id}.json",
+            _canonical(
+                {
+                    "schema_version": 1,
+                    "release": name,
+                    "execution_id": execution_id,
+                    "at": _now().isoformat(),
+                    **value,
+                }
+            )
+            + "\n",
+        )
+        return ("ready" if report.passed else "checks-failed"), value
+
+    def _auto_rollback(self, failed: str, execution_id: str) -> dict[str, Any]:
+        """Re-plan and re-apply the last other ready release, without approval.
+
+        ``[release] rollback_on_failed_checks = true`` (bound into the plan
+        that failed its checks) is the standing approval. The rollback is an
+        ordinary journaled re-apply execution whose history entry carries
+        ``trigger = "checks-failed"``; it runs its own checks but never
+        triggers another rollback. The failed execution's history entry
+        records the outcome under ``rollback``.
+        """
+        target = next(
+            (item for item in reversed(self.history.deployed()) if item != failed),
+            None,
+        )
+        value: dict[str, Any]
+        if target is None:
+            value = {
+                "state": "unavailable",
+                "reason": "checks-rollback-unavailable",
+                "detail": "no earlier ready release to roll back to",
+            }
+            self.history.update(execution_id, rollback=value)
+            return value
+        trigger = {
+            "trigger": "checks-failed",
+            "rolled_back_from": failed,
+            "failed_execution_id": execution_id,
+        }
+        try:
+            planned = self.plan(rollback_to=target)
+            outcome = self.apply(
+                planned.plan_hash,
+                expected_intent="rollback",
+                expected_release=target,
+                trigger=trigger,
+            )
+        except (ValueError, OSError, ProviderError) as error:
+            value = {
+                "state": "failed",
+                "reason": "checks-rollback-failed",
+                "target": target,
+                "detail": str(error),
+            }
+        else:
+            done = outcome["release_state"] == "ready"
+            value = {
+                "state": "rolled-back" if done else "failed",
+                "target": target,
+                "plan_hash": planned.plan_hash,
+                "execution": outcome["execution"],
+                "release_state": outcome["release_state"],
+                "checks": outcome["checks"],
+                "selected": outcome["selected"],
+                **({} if done else {"reason": "checks-rollback-failed"}),
+            }
+        self.history.update(
+            execution_id,
+            rollback={
+                key: value[key] for key in ("state", "target", "reason") if key in value
+            }
+            | (
+                {"execution_id": value["execution"]["execution_id"]}
+                if "execution" in value
+                else {}
+            ),
+        )
+        return value
+
+    def check(self, release: str | None = None) -> dict[str, Any]:
+        """Run the spec's checks now against a release (default: the selected one).
+
+        Changes nothing: no state is written and no rollback is triggered.
+        """
+        checks = self.spec.model.checks
+        catalog = ReleaseCatalog(self.spec.catalog_path)
+        if release is None:
+            try:
+                release = catalog.selected().name
+            except ValueError:
+                raise ReleaseError("no release is selected yet") from None
+        else:
+            try:
+                catalog.get(release)
+            except ValueError:
+                raise ReleaseError(f"unknown release {release!r}") from None
+        images = self._sidecar(release).get("images", {})
+        with self.check_context_factory(self.spec, release, images) as context:
+            report = run_checks(checks, context)
+        return {"release": release, "intent": "check", "checks": report.to_dict()}
 
     # --------------------------------------------------------- resume/stop
     def _latest(self, release: str | None) -> dict[str, Any]:
@@ -1545,8 +1787,14 @@ class ReleaseRunner:
             raise ReleaseError("no execution recorded for this release")
         return entries[-1]
 
-    def resume(self, release: str | None = None) -> dict[str, Any]:
-        """Resume the created release's session execution (same grant, same ids)."""
+    def resume(
+        self, release: str | None = None, *, skip_checks: bool = False
+    ) -> dict[str, Any]:
+        """Resume the created release's session execution (same grant, same ids).
+
+        A resumed execution that becomes ready runs the spec's checks, with the
+        same outcome and automatic rollback as :meth:`apply`.
+        """
         entry = self._latest(release)
         if entry["mode"] != "create":
             raise ReleaseError(
@@ -1573,28 +1821,50 @@ class ReleaseRunner:
                     result = workflow.resume(executor, name)
                 except ValueError as error:
                     raise ReleaseError(f"resume refused: {error}") from None
+                state, report = self._verify(
+                    name,
+                    entry["execution_id"],
+                    result,
+                    self.spec.model.checks,
+                    skip_checks=skip_checks,
+                )
                 # Recorded after the run: a resume keeps the execution id, so a
                 # concurrent ``stop`` still finds it through the earlier entry.
                 self.history.append(
-                    entry
+                    {
+                        key: value
+                        for key, value in entry.items()
+                        if key not in {"checks", "rollback", "skip_checks"}
+                    }
                     | {
                         "at": _now().isoformat(),
                         "intent": "resume",
-                        "state": result.get("state"),
+                        "state": state,
+                        "checks": _check_summary(report),
+                        **({"skip_checks": True} if skip_checks else {}),
                     }
                 )
-                if result.get("state") == "ready":
+                if state == "ready":
                     catalog.select(name)
-                return {
+                outcome = {
                     "release": name,
                     "intent": "resume",
                     "execution": _execution_summary(result),
+                    "release_state": state,
+                    "checks": report,
                 }
             finally:
                 journal.close()
                 store.close()
         finally:
             binding.close()
+        if (
+            state == "checks-failed"
+            and self.spec.model.release.rollback_on_failed_checks
+            and "trigger" not in entry
+        ):
+            outcome["rollback"] = self._auto_rollback(name, entry["execution_id"])
+        return outcome
 
     def stop(self, release: str | None = None) -> dict[str, Any]:
         """Cancel the latest execution of a release, owner-checked."""
@@ -1682,6 +1952,11 @@ class ReleaseRunner:
                         summary
                         or {"execution_id": execution_id, "state": "not-started"}
                     )
+                checked = [
+                    entry
+                    for entry in entries
+                    if entry["release"] == record.name and entry.get("checks")
+                ]
                 releases.append(
                     {
                         "name": record.name,
@@ -1692,6 +1967,17 @@ class ReleaseRunner:
                         "revision_id": session["revision_id"],
                         "action_count": session["action_count"],
                         "executions": executions,
+                        # The latest check outcome: passed/failed names, or
+                        # skipped; full reports are in state_dir/checks/.
+                        "checks": (
+                            checked[-1]["checks"]
+                            | {
+                                "execution_id": checked[-1]["execution_id"],
+                                "state": checked[-1]["state"],
+                            }
+                            if checked
+                            else None
+                        ),
                     }
                 )
             releases.sort(key=lambda item: item["created_at"] or "")
@@ -1710,6 +1996,7 @@ class ReleaseRunner:
                     )
             return {
                 "namespace": self.spec.model.target.namespace,
+                "checks": self._checks_policy(),
                 "selected": selected,
                 "deployed": deployed[-1] if deployed else None,
                 "previous": self.history.previous(),

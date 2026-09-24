@@ -31,6 +31,7 @@ from pydantic import (
     model_validator,
 )
 
+from piceli.checks.model import Check, unique_names
 from piceli.k8s.ops.plan import DeploymentComposition
 from piceli.k8s.ops.provider_factory import KubeconfigTarget, NodeExpectation
 from piceli.k8s.ops.secret_versions import SecretVersionRef
@@ -114,6 +115,9 @@ class ReleaseSettings(_Strict):
     # Existing unmanaged objects this release may delete and recreate (with a
     # backup first), same entry syntax. Never retained or managed objects.
     replace: tuple[str, ...] = ()
+    # After a release's checks fail, re-apply the previous ready release
+    # automatically (journaled like any rollback). See docs/checks.md.
+    rollback_on_failed_checks: bool = False
 
     @field_validator("adopt")
     @classmethod
@@ -210,9 +214,12 @@ class ReleaseSpecModel(_Strict):
     images_from: Path | tuple[Path, ...] | None = None
     secrets: dict[str, SecretSpec] = Field(default_factory=dict)
     values: dict[str, Any] = Field(default_factory=dict)
+    # [[checks]]: post-deploy checks run after readiness (piceli.checks).
+    checks: tuple[Check, ...] = ()
 
     @model_validator(mode="after")
     def _names(self) -> ReleaseSpecModel:
+        unique_names(self.checks)
         for name in self.images:
             if not _IMAGE_NAME.fullmatch(name):
                 raise ValueError(f"invalid image name {name!r}")

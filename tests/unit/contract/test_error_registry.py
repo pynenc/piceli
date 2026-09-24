@@ -24,6 +24,8 @@ FIRST_ARGUMENT = {
     "_input",
     "SecretError",
     "ImageHandoffError",
+    "CheckError",
+    "CheckSpecError",
     "reject",
 }
 # ``_Failure(result, reason)`` in the delivery modules.
