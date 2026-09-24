@@ -79,10 +79,8 @@ credential Secret followed by a worker Deployment. Its caller supplies an actual
 image and a private version reference. Acceptance executes
 it only against the fake API and verifies dependency order.
 
-`piceli deploy plan --cluster-id ID` remains an offline preview CLI using empty
-observed state. It neither discovers nor executes a live plan. The recoverable
-executor is an explicit Python library API; legacy deploy CLI commands are not
-automatically routed through it.
+From the command line, `piceli release` runs this engine from a spec; see
+{doc}`release_cli`.
 
 ## Execution API
 

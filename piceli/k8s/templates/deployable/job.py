@@ -53,11 +53,3 @@ class Job(pod.Pod, base.Deployable):
             ),
         )
         return [obj]
-
-    # def wait(self, k8s: k8s_client.Kubernetes) -> None:
-    #     self._wait(
-    #         k8s=k8s,
-    #         func=k8s.batch_api.list_namespaced_job,
-    #         args=(DEFAULT_NAMESPACE,),
-    #         condition=k8s_client.WaitConditionJob.COMPLETE,
-    #     )

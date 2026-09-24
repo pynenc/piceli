@@ -1,10 +1,11 @@
 # Getting Started
 
-Welcome to the initial setup guide for Piceli, designed to facilitate a smooth introduction to managing your Kubernetes and cloud infrastructure. This guide will walk you through the installation process, different ways to define Kubernetes objects, and the basics of deploying with Piceli.
+This guide installs Piceli, describes a small app in typed Python, renders it
+without a cluster, and releases it to a namespace.
 
 ## Installation
 
-Start by installing Piceli using pip with the following command:
+Install Piceli with pip:
 
 ```bash
 pip install piceli
@@ -24,126 +25,110 @@ If an API described here is missing, install from the `main` branch:
 `pip install git+https://github.com/pynenc/piceli.git`.
 ```
 
-## Quick Start
+## 1. Describe the app
 
-Piceli supports defining Kubernetes objects using Piceli templates, the official Kubernetes Python client, YAML, JSON files, or a combination of these methods. Here's how to get started with each approach.
+Create `infra.py` with a function of the release context. `App(name)` collects
+declarations and validates each one as you make it:
 
-1. **Using Piceli Templates**:
+```python
+from piceli import App
+from piceli.k8s.ops.plan import DeploymentComposition
+from piceli.k8s.release_spec import ReleaseContext
 
-   Define a Kubernetes job in a Python file (e.g., `define_job.py`) using Piceli's templates:
 
-   ```python
-   from piceli.k8s import templates
-
-   job = templates.Job(
-       name="job0",
-       containers=[
-           templates.Container(
-               name="c0",
-               command=["python", "--version"],
-               image="python:latest",
-           )
-       ],
-   )
-   ```
-
-2. **With the Kubernetes Python Library**:
-
-   Alternatively, utilize the Kubernetes client in a Python file (e.g., `k8s_job.py`):
-
-   ```python
-   from kubernetes import client
-
-   job = client.V1Job(
-       api_version="batch/v1",
-       kind="Job",
-       metadata=client.V1ObjectMeta(name="job0"),
-       spec=client.V1JobSpec(
-           template=client.V1PodTemplateSpec(
-               metadata=client.V1ObjectMeta(name="job0"),
-               spec=client.V1PodSpec(
-                   containers=[
-                       client.V1Container(
-                           name="c0",
-                           image="python:latest",
-                           command=["python", "--version"],
-                       )
-                   ],
-               ),
-           ),
-       ),
-   )
-   ```
-
-3. **Defining Jobs with YAML or JSON Files**:
-
-   Kubernetes objects can be defined in YAML or JSON files (e.g., `job.yaml` or `job.json`):
-
-   ```yaml
-   apiVersion: batch/v1
-   kind: Job
-   metadata:
-     name: job0
-   spec:
-     template:
-       spec:
-         containers:
-           - name: c0
-             image: python:latest
-             command: ["python", "--version"]
-         restartPolicy: Never
-   ```
-
-## Configuration and Using Piceli CLI
-
-Piceli accommodates multiple sources for Kubernetes object definitions simultaneously, including YAML, JSON, Piceli templates, and Kubernetes Python client objects. Set `PICELI__FOLDER_PATH` for YAML/JSON directories, and use `PICELI__MODULE_NAME` or `PICELI__MODULE_PATH` for Python modules:
-
-```bash
-PICELI__FOLDER_PATH=/path/to/your/definitions PICELI__MODULE_NAME=your_module_name PICELI__MODULE_PATH=/path/to/your/module python -m piceli model list
+def build(ctx: ReleaseContext) -> DeploymentComposition:
+    app = App("hello")
+    web = app.deployment(
+        "web",
+        image=ctx.image("web"),
+        ports=[80],
+        ready=app.probe.http("/", 80),
+    )
+    app.service(web, port=80)
+    return app.composition(ctx)
 ```
 
-### Configuration via pyproject.toml
+`ctx.image("web")` is the image pinned by digest in the spec below. See
+{doc}`../typed_apps` for config, secrets, volumes, network policies and
+dependencies between components.
 
-If you're using Piceli as part of another Python project, you can define your configuration in the `pyproject.toml` file under the `[tool.piceli]` table. This is particularly useful for maintaining a clean and centralized project setup.
+## 2. Write the release spec
+
+Create `release.toml` next to it. It names the cluster, the namespace, the
+composition and the images:
 
 ```toml
-   [tool.piceli]
-   module_name = "path.to.model"
-   module_path = "path/to/model.py"
-   folder_path = "path/to/yamls/"
-   sub_elements = true # include sub folders/modules
+[target]
+kubeconfig = "hello.kubeconfig"   # an explicit file; never ~/.kube/config
+context = "kind-hello"            # an explicit context; never current-context
+namespace = "hello"               # must already exist
+
+[release]
+name = "hello"
+owner = "hello"
+field_manager = "hello"
+composition = "infra.py:build"
+state_dir = ".piceli-release"
+
+[images]
+web = "docker.io/library/nginx@sha256:<digest>"
 ```
 
-Here are some CLI commands for common Piceli operations:
+Relative paths resolve from the spec's directory. Every key is described in
+{doc}`../release_cli`.
 
-```{warning}
-`deploy run` uses the CLI engine, which **deletes and recreates** objects that
-already exist. Always review `deploy detail` first, and use a disposable namespace
-while evaluating Piceli. See {doc}`../overview` for the difference between the CLI
-engine and the recoverable engine.
+## 3. Render it without a cluster
+
+```bash
+piceli render --spec release.toml
 ```
 
-- **Deploying a Namespace**:
+`piceli render` prints one YAML document per object, grouped by component. It
+never contacts a cluster and never reads secret values. Add `--format json` for
+one JSON object.
 
-  ```bash
-  PICELI__FOLDER_PATH=/path/to/your/definitions PICELI__NAMESPACE=test-run python -m piceli deploy run
-  ```
+## 4. Plan and apply a release
 
-- **Showing Detailed Deployment Plan**:
+Point `[target]` at a disposable cluster (for example a
+[kind](https://kind.sigs.k8s.io/) cluster whose kubeconfig you export with
+`kind get kubeconfig --name hello > hello.kubeconfig`), create the namespace,
+then:
 
-  ```bash
-  PICELI__FOLDER_PATH=/path/to/your/definitions PICELI__NAMESPACE=test-run python -m piceli deploy detail
-  ```
+```console
+$ piceli release plan --spec release.toml
+release hello-3f2a9c1b7d20 (create, apply): 2 create
+   create Deployment/web
+   create Service/web
+plan hash: 4123ff6e…
+$ piceli release apply --spec release.toml --approve 4123ff6e…
+apply hello-3f2a9c1b7d20: ready
+```
 
-- **Hide No Action Required Details in Deployment Plan**:
+`plan` reads the live namespace and prints what would change. `apply` runs
+exactly that plan: it patches existing objects with server-side apply, waits
+for readiness, and records every step in a journal, so an interrupted apply can
+be resumed with `piceli release resume`. Objects that Piceli did not create are
+never changed unless you adopt them explicitly. `piceli release rollback
+previous` returns to the previous release.
 
-  ```bash
-  PICELI__FOLDER_PATH=/path/to/your/definitions PICELI__NAMESPACE=test-run python -m piceli deploy detail -hna
-  ```
+```{tip}
+`piceli deploy` runs the whole pipeline (verify inputs, build, deliver, plan,
+apply) as one resumable command. See
+[Deploy in one command](https://docs.pynenc.org/projects/piceli/en/latest/deploy.html).
+```
+
+## Other ways to model resources
+
+The typed `App` is the recommended model. A composition function can also use
+the {doc}`Piceli templates <../kubernetes_model/piceli_templates/index>`,
+official `kubernetes.client` objects, or existing YAML/JSON manifests; see
+{doc}`../kubernetes_model/index` and the FAQ entry on
+{ref}`existing YAML <faq-existing-yaml>`.
 
 ## Next steps
 
-- {doc}`../overview` covers the mental model, the two execution engines and a glossary.
-- {doc}`../kubernetes_model/piceli_templates/index` lists every template and its options.
-- {doc}`../deployment_planning` covers durable, resumable deployments from Python.
-- {doc}`../cli/index` is the full command reference.
+- {doc}`../overview` covers the mental model, the engine and a glossary.
+- {doc}`../typed_apps` describes everything a typed app can declare.
+- {doc}`../release_cli` covers adoption, secrets, rollback and resume.
+- {doc}`../cli/index` is the command overview; {doc}`../reference/cli` lists
+  every option.

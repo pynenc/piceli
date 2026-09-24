@@ -91,14 +91,8 @@ def test_help_json_covers_every_command_with_a_contract() -> None:
         assert contract is not None, path
         assert leaf["help"], path
         effects = contract["side_effects"]
-        assert effects["cluster"] in {
-            "none",
-            "reads",
-            "writes",
-            "ambient-reads",
-            "ambient-writes",
-        }
-        assert contract["contract"] in {"conforms", "partial", "legacy"}
+        assert effects["cluster"] in {"none", "reads", "writes"}
+        assert contract["contract"] in {"conforms", "partial"}
         assert set(contract["exit_codes"]) <= {str(c) for c in EXIT_CODES}
         for param in leaf["params"]:
             assert param["type"] in {
@@ -193,7 +187,7 @@ def test_agents_page_matches_command_metadata() -> None:
         changes = contract.approval_required or contract.cluster.endswith("writes")
         if name in safe:
             assert not changes, f"{path} changes state but is listed as safe"
-        if changes and path != "deploy run":
+        if changes:
             assert name in ask, f"{path} needs approval: list it in docs/agents.md"
 
 

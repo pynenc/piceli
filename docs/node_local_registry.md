@@ -59,8 +59,8 @@ from piceli.k8s import templates
 registry = templates.NodeLocalRegistry(node_name="worker-1", storage="20Gi")
 ```
 
-Apply it like any other template (`piceli deploy`, or `kubectl apply` of
-`registry.api_data()`), or add it to a `piceli release` composition:
+Add it to a `piceli release` composition (or `kubectl apply` the manifests
+from `registry.api_data()`):
 
 ```python
 registry.component(ctx.namespace)  # a DeploymentComponent
