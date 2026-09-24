@@ -1320,7 +1320,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 **Invalid secret template.** A template has a stray brace or a malformed placeholder.
 
-- **Fix:** Use {{ and }} for literal braces and {output} for values.
+- **Fix:** Double a brace to write it literally, and use {output} for values.
 - **Retry-safe:** no
 
 (error-secret-unknown-reference)=

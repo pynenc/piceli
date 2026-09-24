@@ -1182,7 +1182,7 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "secret-template-invalid",
         "Invalid secret template",
         "A template has a stray brace or a malformed placeholder.",
-        "Use {{ and }} for literal braces and {output} for values.",
+        "Double a brace to write it literally, and use {output} for values.",
         False,
         "secrets",
     ),
