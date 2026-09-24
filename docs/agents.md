@@ -60,6 +60,7 @@ exactly (including `explain`, `help-json`, `status`, `access` and `deploy`). For
 a refused release plan, see [If `plan` refuses](release_cli.md#if-plan-refuses)
 for the next step.
 
+(agents-contract-changes)=
 ### Contract changes in 0.4.0
 
 0.4.0 moved the remaining preview commands onto the contract. Their machine

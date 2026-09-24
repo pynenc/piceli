@@ -57,7 +57,7 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 - **Changed (machine output):** every preview command now follows the output
   contract: a refusal is `{"state": "rejected", "reason": "<code>",
   "message": "<sentence>"}` on stdout, and exit codes are unchanged. See
-  [the contract changes](agents.md#contract-changes-in-040) for each command.
+  {ref}`the contract changes <agents-contract-changes>` for each command.
   Release refusals keep `code` as an alias of `reason` for 0.4.x only; it
   will be removed in 0.5.0. Results of `release apply/rollback/resume/stop`
   add `state` (`succeeded`, or `failed` with `reason`).
