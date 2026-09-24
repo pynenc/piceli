@@ -43,7 +43,8 @@ from piceli.artifacts.registry_delivery import RegistryDelivery, RegistryForward
 from piceli.k8s.ops.bounds import strict_json
 
 
-def main(arguments: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """The ``piceli artifacts`` argument parser (also read by ``piceli help-json``)."""
     parser = argparse.ArgumentParser(prog="piceli artifacts")
     sub = parser.add_subparsers(dest="command", required=True)
     for action in ("preview", "build"):
@@ -100,7 +101,11 @@ def main(arguments: list[str] | None = None) -> int:
     cmd.add_argument("--kubectl", type=Path)
     cmd.add_argument("--kubectl-sha256")
     add_build_spec_commands(sub)
-    args = parser.parse_args(arguments)
+    return parser
+
+
+def main(arguments: list[str] | None = None) -> int:
+    args = build_parser().parse_args(arguments)
     if args.command == "build-spec":
         return run_build_spec_command(args)
     try:
