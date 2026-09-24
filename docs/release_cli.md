@@ -74,30 +74,149 @@ resolve from the spec's directory. A complete example lives in
 
 ### Images
 
-An image is `repository@sha256:…`, a bare `sha256:…` digest, or a table
-`{ ref = "registry/app:tag", digest = "sha256:…" }`. Tags alone are refused.
-With `images_from`, images come from `outputs.images.<name>` of a build
-receipt whose `revision` is `piceli.build-receipt.v1`; each entry has
-`image_id`, `digest` (may be null), `platform` and `ref`. The release records
-the registry digest, or the image ID when no digest exists.
+```{admonition} Status: preview
+:class: note
 
-To release an image pushed with `piceli artifacts deliver --to oci://…`, point
-the image at its delivery receipt: `api = { receipt = "api.delivery.json" }`.
-The receipt's `pull_ref` (the node-side registry address pinned to the
-manifest digest) becomes the image reference, and the manifest digest becomes
-the release identity. Only receipts with result `pushed` or
-`already-present` are accepted. Add `digest = "sha256:…"` to pin the expected
-manifest digest. This chains build → delivery → release without copying
-digests by hand:
+The immutability rule and the receipt formats below are stable. The merge
+rules for `images_from` lists and the refusal codes are new in this release
+and may still gain cases.
+```
+
+**Rule: a release only references an image by a name that no other build can
+move.** Every `ctx.image(name)` is one of:
+
+- `repository@sha256:<manifest digest>`: declared by hand, from a build
+  receipt that recorded a manifest digest, or the `pull_ref` of a
+  registry-delivery receipt; or
+- `repository:sha256-<hex>`: a **content tag**, accepted only from a
+  node-delivery receipt that proves the node holds that exact config digest
+  under that name. `<hex>` is a prefix (12 to 64 characters) of the config
+  digest, so the name can only ever point at this image.
+
+A plain tag (`app:dev`, `app:1.4.2`, `latest`) is never used. When nothing
+immutable is known, `ctx.image(name)` refuses with `image-not-immutable`; the
+image's `identity` is still available.
+
+Image sources:
+
+| Declared as | Reference | Release identity |
+| --- | --- | --- |
+| `web = "repo@sha256:…"`, or `{ ref = "repo:tag", digest = "sha256:…" }` | `repo@digest` | the digest |
+| a bare `"sha256:…"` | none (`identity` only) | the digest |
+| `images_from`: build receipt entry with a `digest` | `repo@digest` | the digest |
+| `images_from`: build receipt entry with `digest: null` | **refused** (`image-not-immutable`) until a delivery receipt replaces it | `image_id` |
+| `{ receipt = "…" }` or `images_from`: `piceli.registry-delivery.v1` | its `pull_ref` (`<node registry>/<repo>@<manifest digest>`) | the manifest digest |
+| `{ receipt = "…" }` or `images_from`: `piceli.node-delivery.v1` | its node `image.reference`, which must be a content tag | the config digest |
+
+A build receipt (`revision = "piceli.build-receipt.v1"`, from
+`piceli artifacts build-spec run`) lists `outputs.images.<name>` with
+`image_id` (the config digest with Docker's classic store), `digest` (the
+manifest digest, or `null` with the classic store), `platform` and `ref`.
+With the classic store, which keeps no manifest, the build alone cannot name
+an immutable reference: deliver the image first.
+
+Delivery receipts are accepted only when the delivery succeeded: result
+`pushed` or `already-present` for a registry delivery, `imported` or
+`already-present` for a node import. In `[images.<name>]`, `digest` pins the
+expected **manifest** digest of a registry receipt, or the expected **config**
+digest of a node receipt.
+
+#### `images_from` with several receipts
+
+`images_from` takes one receipt or a list. A list merges build and delivery
+receipts, in any order:
+
+1. Build receipts name the images. A name in two build receipts is refused
+   (`image-declared-twice`).
+2. Each delivery receipt replaces every built image with the same config
+   digest (for a containerd-store build, a registry delivery may instead
+   match the build's manifest digest). A delivery that matches no built image
+   is refused (`receipt-unmatched`); a delivery receipt carries no image name,
+   so use `[images.<name>] receipt = …` to release it without a build
+   receipt.
+3. An image delivered by two listed receipts is refused
+   (`image-declared-twice`).
+
+A name in both `[images]` and `images_from` is refused, with one exception:
+`[images.<name>] receipt = "…"` may replace a built image of that name. Its
+config digest must be the built image's, otherwise the spec is refused
+(`image-digest-mismatch`).
+
+```toml
+images_from = ["build.receipt.json", "api.delivery.json", "worker.node.json"]
+
+# or name a delivery explicitly (it must match the built "api"):
+# images_from = "build.receipt.json"
+# [images.api]
+# receipt = "api.delivery.json"
+```
+
+#### Refusal codes
+
+A refused spec exits with `2` and prints
+`{"state": "refused", "code": "…", "reason": "…"}`. The image codes are fixed
+words (`piceli.k8s.release_spec.ImageHandoffError.code`):
+
+| Code | Meaning | Fix |
+| --- | --- | --- |
+| `image-not-immutable` | The only name for the image is a tag that can move: a build receipt without a manifest digest, a node reference that is not a content tag, or a `pull_ref` not pinned to its manifest digest | Deliver to a registry, or node-import with `--ref <repo>:sha256-<12 hex>` (the error prints the exact tag) |
+| `receipt-invalid` | Unreadable JSON, an unknown schema or revision, or invalid digests | Pass the receipt the command wrote |
+| `delivery-not-succeeded` | The receipt records a rejected or failed delivery | Deliver again |
+| `image-digest-mismatch` | The delivery is of another image than the build of that name, or than the pinned `digest` | Deliver the image that was built, or update the pin |
+| `image-declared-twice` | One name from two sources (see the merge rules) | Keep one |
+| `receipt-unmatched` | A listed delivery receipt matches no built image | Add its build receipt, or name it with `[images.<name>] receipt` |
+
+#### Build → deliver → release
 
 ```bash
 piceli artifacts build-spec run --spec build.toml --approve-builder sha256:… --out build.receipt.json
 piceli artifacts deliver --image <image_id> --approve-digest <image_id> \
-  --to oci://127.0.0.1:15000/app/api:r1 --node-registry 127.0.0.1:5000 \
+  --to oci://127.0.0.1:15000/app/api --node-registry 127.0.0.1:5000 \
   --via-forward deployment/registry --namespace my-app --kubeconfig kc --context ctx \
-  --kubectl /usr/local/bin/kubectl --kubectl-sha256 sha256:… \
   --receipt api.delivery.json
+# release.toml: images_from = ["build.receipt.json", "api.delivery.json"]
 piceli release plan --spec release.toml
+```
+
+For node import, name the image by its content tag, which
+`piceli.k8s.release_spec.content_tag(config_digest)` also computes:
+
+```bash
+ID=$(docker image inspect --format '{{.Id}}' app/api:dev)   # classic store: the config digest
+piceli artifacts deliver --image "$ID" --approve-digest "$ID" \
+  --ref "app/api:sha256-${ID:7:12}" \
+  --to 'ssh://ops@node-1.example?runtime=k3s-containerd' --receipt api.node.json
+```
+
+A content-tag image is not pulled, so leave `imagePullPolicy` at its default
+(`IfNotPresent`) or set `Never`, and pin the workload to the node that holds it.
+
+#### Two images, one change
+
+`examples/two-images/` releases two small images from a node-local registry
+({doc}`node_local_registry`). `registry.toml` installs the registry as its own
+release; `release.toml` releases one Deployment per image from the two
+registry-delivery receipts:
+
+```{literalinclude} ../examples/two-images/composition.py
+:language: python
+:start-at: "def build"
+```
+
+Rebuilding and re-delivering one image changes one receipt, so the next plan
+differs in exactly one desired manifest, and only that Deployment rolls out.
+The opt-in test `tests/integration/test_two_images_kind.py` runs the whole
+flow on kind (see its docstring). Verified on kind v0.29.0 (Kubernetes
+v1.33.1): after `alpha` was rebuilt and re-delivered (2 blobs uploaded, the
+shared base layer skipped), `alpha` went to generation 2 with the new digest
+and `beta` stayed at generation 1.
+
+```{note}
+The plan summary still lists an unchanged Deployment as `apply`, not
+`no-op`: the planner compares the desired manifest with the live object
+including server defaults. Applying it changes nothing (no new generation,
+no rollout). Compare `artifact_digest` of the plan actions to see which
+desired manifests changed.
 ```
 
 ### The composition function
