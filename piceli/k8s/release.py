@@ -16,8 +16,9 @@ import re
 import subprocess
 import tempfile
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, TextIO
 
 from piceli.k8s.ops.execution_journal import ExecutionJournal
@@ -49,16 +50,24 @@ def _digest(value: Any) -> str:
 
 @dataclass(frozen=True)
 class ReleaseSource:
-    """Immutable release provenance without source content or secret material."""
+    """Immutable release provenance without source content or secret material.
+
+    Kinds: ``git`` (a commit), ``dirty`` (a checkout closure digest), ``oci``
+    (one image digest) and ``oci-set``: several images, each built and
+    delivered on its own. For ``oci-set``, ``images`` maps each image (a
+    component or container name) to its digest and ``identity`` is the
+    digest of that canonical map; build one with :meth:`image_set`.
+    """
 
     kind: str
     identity: str
     dirty_closure_sha256: str | None = None
     artifact_digest: str | None = None
     artifact_archive_sha256: str | None = None
+    images: Mapping[str, str] | None = field(default=None, hash=False)
 
     def __post_init__(self) -> None:
-        if self.kind not in {"git", "dirty", "oci"}:
+        if self.kind not in {"git", "dirty", "oci", "oci-set"}:
             raise ValueError("unsupported release source kind")
         if self.kind == "git" and not _GIT.fullmatch(self.identity):
             raise ValueError("Git release identity must be an immutable commit")
@@ -77,8 +86,26 @@ class ReleaseSource:
             raise ValueError("OCI release identity and artifact digest must match")
         if self.kind == "dirty" and self.dirty_closure_sha256 != self.identity:
             raise ValueError("dirty source identity and closure must match")
+        if (self.images is not None) != (self.kind == "oci-set"):
+            raise ValueError("an image set is recorded exactly for oci-set sources")
+        if self.images is not None:
+            images = dict(sorted(dict(self.images).items()))
+            if not images or not all(
+                isinstance(name, str) and name and _SHA256.fullmatch(str(value))
+                for name, value in images.items()
+            ):
+                raise ValueError("an image set maps names to sha256 digests")
+            if self.identity != "sha256:" + _digest(images):
+                raise ValueError("oci-set identity must be the digest of its images")
+            object.__setattr__(self, "images", MappingProxyType(images))
 
-    def to_dict(self) -> dict[str, str]:
+    @classmethod
+    def image_set(cls, images: Mapping[str, str]) -> ReleaseSource:
+        """An ``oci-set`` source for ``images`` (name → ``sha256:`` digest)."""
+        ordered = dict(sorted(images.items()))
+        return cls("oci-set", "sha256:" + _digest(ordered), images=ordered)
+
+    def to_dict(self) -> dict[str, Any]:
         return {
             key: value
             for key, value in {
@@ -87,6 +114,7 @@ class ReleaseSource:
                 "dirty_closure_sha256": self.dirty_closure_sha256,
                 "artifact_digest": self.artifact_digest,
                 "artifact_archive_sha256": self.artifact_archive_sha256,
+                "images": dict(self.images) if self.images is not None else None,
             }.items()
             if value is not None
         }
