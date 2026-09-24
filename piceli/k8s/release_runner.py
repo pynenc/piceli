@@ -82,7 +82,16 @@ from piceli.k8s.release import (
     ReleaseSource,
     ReleaseWorkflow,
 )
-from piceli.k8s.release_secrets import config_digest, generate, input_names
+from piceli.k8s.release_secret_spec import SecretError, consumed_outputs
+from piceli.k8s.release_secrets import (
+    ImportSources,
+    Materialized,
+    config_digest,
+    decode,
+    describe,
+    input_names,
+    materialize,
+)
 from piceli.k8s.release_spec import (
     ImageRef,
     NodeRef,
@@ -548,18 +557,23 @@ class ReleaseRunner:
 
         return factory
 
+    def _placeholders(self) -> dict[str, SecretVersionRef]:
+        """Deterministic stand-in references for every exposed secret input."""
+        return {
+            name: SecretVersionRef(
+                "0" * 32, hashlib.sha256(name.encode()).hexdigest()[:32]
+            )
+            for group in self._declared_inputs().values()
+            for name in group
+        }
+
     def _preview_composition(
         self,
         factory: Callable[[Mapping[str, SecretVersionRef]], DeploymentComposition],
     ) -> tuple[DeploymentComposition, list[dict[str, Any]]]:
         """Build with placeholder references to name the release and check bindings."""
-        names = [item for group in self._declared_inputs().values() for item in group]
-        placeholders = {
-            name: SecretVersionRef(
-                "0" * 32, hashlib.sha256(name.encode()).hexdigest()[:32]
-            )
-            for name in names
-        }
+        placeholders = self._placeholders()
+        names = list(placeholders)
         by_ref = {ref: name for name, ref in placeholders.items()}
         composition = factory(placeholders)
         bound: set[str] = set()
@@ -598,7 +612,9 @@ class ReleaseRunner:
                     "resources": resources,
                 }
             )
-        unused = sorted(set(names) - bound)
+        # Outputs a template consumes may stay unbound (they reach the cluster
+        # through the template); every other declared input must be bound.
+        unused = sorted(set(names) - bound - consumed_outputs(self.spec.model.secrets))
         if unused:
             raise ReleaseSpecError(
                 f"declared secret inputs are not bound by the composition: {unused}"
@@ -666,43 +682,60 @@ class ReleaseRunner:
         self,
         catalog: ReleaseCatalog,
         store: SecretVersionStore,
-        target: PlanTarget,
+        binding: ProviderBinding,
         rotate: Sequence[str],
-    ) -> tuple[dict[str, str], dict[str, str]]:
-        """Carry values over from earlier releases unless rotated or reconfigured."""
-        unknown = sorted(set(rotate) - set(self.spec.model.secrets))
-        if unknown:
-            raise ReleaseError(f"cannot rotate undeclared secrets: {unknown}")
+    ) -> Materialized:
+        """Carry values over from earlier releases unless rotated or reconfigured.
+
+        Called only after the plan was validated; imports read their source
+        here (a live Secret through the release's own provider).
+        """
         records = sorted(
             catalog.records(),
             key=lambda record: self._sidecar(record.name).get("created_at", ""),
             reverse=True,
         )
-        values: dict[str, str] = {}
-        origin: dict[str, str] = {}
-        for name, generator in sorted(self.spec.model.secrets.items()):
-            wanted = input_names(name, generator)
-            digest = config_digest(generator)
-            carried = None
-            if name not in rotate:
-                for record in records:
-                    if (
-                        self._sidecar(record.name).get("secrets", {}).get(name)
-                        != digest
-                    ):
-                        continue
-                    inputs = record.archive.inputs()
-                    if all(item in inputs for item in wanted):
-                        carried = {
-                            item: store.resolve(target, inputs[item]) for item in wanted
-                        }
-                        origin[name] = f"carried:{record.name}"
-                        break
-            if carried is None:
-                carried = generate(name, generator)
-                origin[name] = "rotated" if name in rotate else "generated"
-            values.update(carried)
-        return values, origin
+
+        def carry(
+            name: str, part: str, digest: str, wanted: tuple[str, ...]
+        ) -> tuple[dict[str, str], str] | None:
+            for record in records:
+                sidecar = self._sidecar(record.name)
+                recorded = sidecar.get("secret_parts", {}).get(name, {}).get(part)
+                if recorded is None and part == "":
+                    recorded = sidecar.get("secrets", {}).get(name)  # 0.2.0 releases
+                if recorded != digest:
+                    continue
+                refs = self._stored_refs(record, sidecar, store)
+                if all(item in refs for item in wanted):
+                    return (
+                        {
+                            item: store.resolve(binding.target, refs[item])
+                            for item in wanted
+                        },
+                        record.name,
+                    )
+            return None
+
+        def read_secret(name: str, key: str) -> bytes:
+            return binding.provider.read_secret_key(name, key)
+
+        return materialize(
+            self.spec.model.secrets,
+            rotate=rotate,
+            carry=carry,
+            sources=ImportSources(self.spec.resolve, read_secret),
+        )
+
+    @staticmethod
+    def _stored_refs(
+        record: ReleaseRecord, sidecar: Mapping[str, Any], store: SecretVersionStore
+    ) -> dict[str, SecretVersionRef]:
+        """Session inputs plus the release's unbound (internal) secret versions."""
+        refs = dict(record.archive.inputs())
+        for item, version in sidecar.get("secret_refs", {}).items():
+            refs.setdefault(item, SecretVersionRef(store.store_id, version))
+        return refs
 
     # ----------------------------------------------------------------- plan
     def plan(
@@ -722,6 +755,9 @@ class ReleaseRunner:
         spec = self.spec.model
         for entry in adopt:
             parse_adopt_entry(entry)
+        unknown = sorted(set(rotate) - set(spec.secrets))
+        if unknown:
+            raise ReleaseError(f"cannot rotate undeclared secrets: {unknown}")
         requested = tuple(dict.fromkeys((*spec.release.adopt, *adopt)))
         images = self.spec.images()
         function = self.spec.load_composition()
@@ -817,7 +853,13 @@ class ReleaseRunner:
         adopt, not_needed = resolve_adoptions(
             requested, composition, snapshot, inherited, settings.field_manager
         )
-        values, origin = self._private_inputs(catalog, store, binding.target, rotate)
+        plan_authorization = _plan_authorization(
+            binding.target,
+            prune=settings.prune,
+            adopt=adopt,
+            inherited=inherited,
+            field_manager=settings.field_manager,
+        )
         window = settings.approval_window_seconds
         expires_at = (_now() + timedelta(seconds=window)).isoformat()
         authorization_id = uuid.uuid4().hex
@@ -836,37 +878,62 @@ class ReleaseRunner:
                 inherited_owner_ids=inherited,
             )
 
-        workflow = ReleaseWorkflow(
-            catalog,
-            binding.target.namespace,
-            factory,
-            snapshot,
-            _plan_authorization(
-                binding.target,
-                prune=settings.prune,
-                adopt=adopt,
-                inherited=inherited,
-                field_manager=settings.field_manager,
-            ),
-            grant,
-            journal,
-            store,
-        )
-        # Discovery is persisted before the session so an interrupted plan can
-        # never leave a catalogued release without its evidence.
-        _write_private(self._discovery_path(name), artifact.to_private_json())
-        source = self._source(images)
+        # Validate the plan and its grant with the placeholder composition
+        # first: a refused plan must not generate, import or store any secret.
+        grant(build_plan(composition, snapshot, plan_authorization), snapshot)
+        secrets = self._private_inputs(catalog, store, binding, rotate)
+        origin = secrets.origin
+        placeholders = self._placeholders()
+        bound_refs = {
+            item.reference
+            for component in composition.components
+            for resource in component.resources
+            for item in resource.secret_bindings
+        }
+        bound = {n for n, ref in placeholders.items() if ref in bound_refs}
+        values = {n: v for n, v in secrets.values.items() if n in bound}
+        session_id = uuid.uuid4().hex
+        internal: dict[str, SecretVersionRef] = {}
         try:
-            previously_selected: str | None = catalog.selected().name
-        except ValueError:
-            previously_selected = None
-        record = workflow.create(
-            name=name,
-            source=source,
-            private_inputs=values,
-            session_id=uuid.uuid4().hex,
-            execution_id=uuid.uuid4().hex,
-        )
+            for item, value in sorted(secrets.values.items()):
+                if item not in bound:
+                    internal[item] = store.put(binding.target, value)
+
+            def session_factory(
+                refs: Mapping[str, SecretVersionRef],
+            ) -> DeploymentComposition:
+                exposed = {n: r for n, r in internal.items() if n in placeholders}
+                return factory({**exposed, **refs})
+
+            workflow = ReleaseWorkflow(
+                catalog,
+                binding.target.namespace,
+                session_factory,
+                snapshot,
+                plan_authorization,
+                grant,
+                journal,
+                store,
+            )
+            # Discovery is persisted before the session so an interrupted plan
+            # can never leave a catalogued release without its evidence.
+            _write_private(self._discovery_path(name), artifact.to_private_json())
+            source = self._source(images)
+            try:
+                previously_selected: str | None = catalog.selected().name
+            except ValueError:
+                previously_selected = None
+            record = workflow.create(
+                name=name,
+                source=source,
+                private_inputs=values,
+                session_id=session_id,
+                execution_id=uuid.uuid4().hex,
+            )
+        except BaseException:
+            # The release was not recorded: its versions would be orphans.
+            store.discard(binding.target, internal.values(), session_id=session_id)
+            raise
         if previously_selected is not None:
             # ``create`` selects the new record; selection should keep meaning
             # "last release that became ready", so restore it until apply.
@@ -881,6 +948,12 @@ class ReleaseRunner:
                     "secrets": {
                         n: config_digest(g) for n, g in self.spec.model.secrets.items()
                     },
+                    # Private bookkeeping: opaque versions of unbound outputs,
+                    # carry-over digests, and public generator metadata.
+                    "secret_refs": {n: r.version for n, r in internal.items()},
+                    "secret_parts": secrets.parts,
+                    "secret_meta": secrets.meta,
+                    "secret_origin": origin,
                     "prune": settings.prune,
                     # The plan authorization, so the session reopens exactly.
                     "adopt": adopt,
@@ -1390,3 +1463,122 @@ class ReleaseRunner:
         finally:
             if journal is not None:
                 journal.close()
+
+    # -------------------------------------------------------------- secrets
+    def _secret_record(
+        self, catalog: ReleaseCatalog, name: str, release: str | None
+    ) -> tuple[ReleaseRecord, dict[str, Any], dict[str, Any]]:
+        """The release holding ``name`` (``release``, else selected, else newest)."""
+        if release is not None:
+            try:
+                record = catalog.get(release)
+            except ValueError:
+                raise ReleaseError(f"unknown release {release!r}") from None
+        else:
+            try:
+                record = catalog.selected()
+            except ValueError:
+                records = sorted(
+                    catalog.records(),
+                    key=lambda item: self._sidecar(item.name).get("created_at", ""),
+                )
+                if not records:
+                    raise SecretError(
+                        "secret-not-found", "no release has materialized secrets yet"
+                    ) from None
+                record = records[-1]
+        sidecar = self._sidecar(record.name)
+        meta = sidecar.get("secret_meta", {}).get(name)
+        if meta is None and name in sidecar.get("secrets", {}):
+            generator = self.spec.model.secrets.get(name)
+            if generator is not None:  # a release made before metadata was kept
+                meta = describe(name, generator)
+        if meta is None:
+            raise SecretError(
+                "secret-not-found",
+                f"release {record.name!r} has no secret {name!r}; declared: "
+                f"{sorted(sidecar.get('secrets', {}))}",
+            )
+        return record, sidecar, meta
+
+    def _secret_first(self, name: str, release: str) -> tuple[str, str | None]:
+        """Follow carry-over back to the release that created the value."""
+        seen: set[str] = set()
+        while release not in seen:
+            seen.add(release)
+            origin = self._sidecar(release).get("secret_origin", {}).get(name)
+            if not isinstance(origin, str) or not origin.startswith("carried:"):
+                return release, origin
+            release = origin.split(":", 1)[1]
+        return release, None
+
+    def secret_metadata(
+        self, name: str, *, release: str | None = None
+    ) -> dict[str, Any]:
+        """Public facts about one generator's value; never the value itself.
+
+        Reads only the local state directory; never contacts the cluster.
+        """
+        if not self.state.exists():
+            raise SecretError("secret-not-found", "no release state exists yet")
+        catalog = ReleaseCatalog(self.spec.catalog_path)
+        record, sidecar, meta = self._secret_record(catalog, name, release)
+        first, first_origin = self._secret_first(name, record.name)
+        return {
+            "secret": name,
+            "release": record.name,
+            "type": meta["type"],
+            "encoding": meta["encoding"],
+            "keys": sorted(key for key in meta["outputs"] if key),
+            "internal": meta.get("internal", []),
+            "origin": sidecar.get("secret_origin", {}).get(name),
+            "first_release": first,
+            "first_origin": first_origin,
+            **{
+                key: meta[key]
+                for key in ("source", "rotate", "depends_on")
+                if key in meta
+            },
+        }
+
+    def reveal_secret(
+        self, name: str, *, key: str | None = None, release: str | None = None
+    ) -> dict[str, bytes]:
+        """Decoded values of one generator's outputs (``key`` selects one).
+
+        Only for the owner's explicit reveal; the caller must never log them.
+        """
+        if not self.state.exists():
+            raise SecretError("secret-not-found", "no release state exists yet")
+        catalog = ReleaseCatalog(self.spec.catalog_path)
+        record, sidecar, meta = self._secret_record(catalog, name, release)
+        wanted: dict[str, str] = dict(meta["outputs"])
+        if key is not None:
+            selected = {k: v for k, v in wanted.items() if key in {k, v}}
+            if not selected:
+                raise SecretError(
+                    "secret-not-found",
+                    f"secret {name!r} has no key {key!r}; keys: "
+                    f"{sorted(k for k in wanted if k)}",
+                )
+            wanted = selected
+        target = PlanTarget(
+            **record.archive.to_dict()["revision"]["desired_state"]["target"]
+        )
+        store = SecretVersionStore(self.spec.secret_store_path)
+        try:
+            refs = self._stored_refs(record, sidecar, store)
+            missing = sorted(output for output in wanted.values() if output not in refs)
+            if missing:
+                raise SecretError(
+                    "secret-not-found",
+                    f"release {record.name!r} stored no value for {missing}",
+                )
+            return {
+                (k or name): decode(
+                    str(store.resolve(target, refs[output])), meta["encoding"]
+                )
+                for k, output in sorted(wanted.items())
+            }
+        finally:
+            store.close()

@@ -20,11 +20,13 @@ piceli release rollback <release|previous> --spec release.toml [--approve <hash>
 piceli release resume   --spec release.toml [--release NAME]
 piceli release stop     --spec release.toml [--release NAME]
 piceli release status   --spec release.toml
+piceli release secret show NAME --spec release.toml [--key KEY] [--release NAME] [--reveal] [--json]
 ```
 
 JSON goes to stdout and a short summary to stderr. Exit codes: `0` success,
 `1` the execution did not become ready, `2` refused (invalid spec, identity
-mismatch, unknown or expired plan), `3` approval required.
+mismatch, unknown or expired plan), `3` approval required. A refusal with a
+stable cause also carries a `code` (for example `secret-import-unavailable`).
 
 ## The spec
 
@@ -71,6 +73,7 @@ type = "tls-self-signed"
 dns_names = ["web.release-demo.svc", "web"]
 days = 365
 openssl = "/usr/bin/openssl"        # absolute path; add openssl_sha256 to pin the binary
+# more types: tls-ca, template, import, static (see "Secret generators")
 
 [values]                            # free-form, passed to the composition
 greeting = "hello"
@@ -136,21 +139,40 @@ def build(ctx: ReleaseContext) -> DeploymentComposition:
 `ctx` carries `namespace`, `images` (use `ctx.image(name)` for the pull
 reference), `values`, verified `nodes` and opaque `secrets` references.
 Secret values never reach the function. Every declared secret input must be
-bound. Resources must be namespaced and in the target namespace.
+bound, except outputs that a `template` generator uses. Resources must be
+namespaced and in the target namespace.
 
 ### Secret generators
 
-Generators run when a release is created. `random` produces
-`token_urlsafe(bytes)`; `tls-self-signed` produces an RSA key and a
-self-signed certificate for the given DNS names and IPs by calling the pinned
-`openssl` with an explicit argv. Inputs are named `<name>` (random) and
-`<name>.crt` / `<name>.key` (TLS). `encoding = "base64"` (default) fits
-`Secret.data`; `"raw"` fits `stringData`.
+```{toctree}
+:hidden:
 
-Values are stored once per release in the private `SecretVersionStore`. A new
-release **carries over** the previous release's values unless the generator's
-settings changed or you pass `--rotate NAME`. Rotation always creates a new
-release.
+secrets
+```
+
+The how-to {doc}`secrets` covers every generator with examples, `secret
+show`, rotation and the error codes. In short:
+
+| `type` | Settings | Outputs |
+| --- | --- | --- |
+| `random` | `bytes` (16–512, default 32) | `<name>` |
+| `tls-self-signed` | `dns_names`, `ip_addresses`, `days`, `rsa_bits`, `openssl`, `openssl_sha256` | `<name>.crt`, `<name>.key` |
+| `tls-ca` | `leaves = {leaf = {dns_names, ip_addresses}}` (or `leaf = [dns names]`), `common_name`, `ca_days`, `days`, `rsa_bits`, `openssl`, `openssl_sha256` | `<name>.ca.crt`, `<name>.<leaf>.crt`, `<name>.<leaf>.key`; `<name>.ca.key` is internal |
+| `template` | `template` with `{output}` / `{secret:output}` placeholders, `{{`/`}}` for braces | `<name>` |
+| `import` | exactly one of `file`, `env`, `secret = {name, key}`; `trim_newline` (default true, file/env), `rotate` (`random` or `reimport`), `bytes` | `<name>` |
+| `static` | `value` (public) | `<name>` |
+
+All take `encoding = "base64"` (default, fits `Secret.data`) or `"raw"`
+(fits `stringData`; UTF-8 text only). Certificates come from the pinned
+`openssl` called with an explicit argv, never a shell.
+
+Values are produced only after the plan and its grant validate, so a refused
+plan generates, imports and stores nothing. They are stored once per release
+in the private `SecretVersionStore`. A new release **carries over** the
+previous release's values unless the generator's settings changed or you pass
+`--rotate NAME` (rotation always creates a new release; templates are
+re-rendered from their inputs). An imported value is the first version, is
+carried over like the others and is rotatable with `--rotate`.
 
 Secrets are retained objects: Piceli never rewrites or deletes an existing
 Secret, so a rotated value must go into a **new** Secret. Put a generation in
@@ -351,9 +373,12 @@ did not become ready, the last ready release itself.
    hard-coded images with `ctx.image(...)` and inline secret values with
    `ResourceIntent.with_secret(pointer, ctx.secret(name))`.
 2. Declare the target, identities, images (or `images_from`) and generators in
-   `release.toml`, and delete the script's password and certificate code. The
-   first release generates fresh values; importing existing values is not
-   supported yet, so plan a rotation window for anything clients cache.
+   `release.toml`, and delete the script's password, certificate and
+   config-file code: `tls-ca` replaces hand-made certificates and `template`
+   replaces init-container scripts that write DSNs or config files. To keep a
+   service with existing data working, `import` the values it already uses
+   (from a live Secret, a file or an environment variable); see
+   {doc}`secrets`.
 3. Ownership: objects that already carry `piceli.io/owner` are managed if you
    keep that owner or list it in `release.inherited_owners`. Objects created
    by plain `kubectl` are unmanaged and planning refuses them until you adopt

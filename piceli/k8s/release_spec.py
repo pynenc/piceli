@@ -20,7 +20,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import Annotated, Any, Literal
+from typing import Any, Literal
 
 from pydantic import (
     BaseModel,
@@ -34,14 +34,22 @@ from pydantic import (
 from piceli.k8s.ops.plan import DeploymentComposition
 from piceli.k8s.ops.provider_factory import KubeconfigTarget, NodeExpectation
 from piceli.k8s.ops.secret_versions import SecretVersionRef
+from piceli.k8s.release_secret_spec import (  # noqa: F401 (re-exported)
+    GeneratorSpec,
+    ImportSecretSpec,
+    RandomSecretSpec,
+    SecretSpec,
+    StaticSecretSpec,
+    TemplateSecretSpec,
+    TlsCaSpec,
+    TlsSelfSignedSpec,
+    check_secrets,
+)
 
 BUILD_RECEIPT_REVISION = "piceli.build-receipt.v1"
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 _IMAGE_NAME = re.compile(r"[a-z][a-z0-9_-]{0,62}")
-_SECRET_NAME = re.compile(r"[a-z][a-z0-9-]{0,62}")
-_DNS = re.compile(
-    r"(?:\*\.)?(?:[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?"
-)
+_SECRET_NAME = re.compile(r"[a-z][a-z0-9_-]{0,62}")
 _RELEASE_PREFIX = re.compile(r"[a-z0-9](?:[-a-z0-9]{0,40}[a-z0-9])?")
 _KIND = re.compile(r"(?:[a-z0-9.-]+/)?[a-z][a-z0-9]*/[A-Za-z][A-Za-z0-9]*")
 
@@ -176,59 +184,6 @@ class ImageSpec(_Strict):
         if self.receipt is not None and self.ref is not None:
             raise ValueError("ref comes from the receipt; do not declare both")
         return self
-
-
-class RandomSecretSpec(_Strict):
-    type: Literal["random"]
-    bytes: int = Field(default=32, ge=16, le=512)
-    encoding: Literal["base64", "raw"] = "base64"
-
-
-class TlsSelfSignedSpec(_Strict):
-    type: Literal["tls-self-signed"]
-    dns_names: tuple[str, ...] = Field(min_length=1, max_length=32)
-    ip_addresses: tuple[str, ...] = ()
-    days: int = Field(default=365, ge=1, le=3650)
-    rsa_bits: Literal[2048, 3072, 4096] = 2048
-    encoding: Literal["base64", "raw"] = "base64"
-    openssl: Path = Path("/usr/bin/openssl")
-    openssl_sha256: str | None = None
-
-    @field_validator("dns_names")
-    @classmethod
-    def _dns(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        for item in value:
-            if len(item) > 253 or not _DNS.fullmatch(item):
-                raise ValueError(f"invalid DNS name {item!r}")
-        return value
-
-    @field_validator("ip_addresses")
-    @classmethod
-    def _ips(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        import ipaddress
-
-        for item in value:
-            ipaddress.ip_address(item)
-        return value
-
-    @field_validator("openssl")
-    @classmethod
-    def _tool(cls, value: Path) -> Path:
-        if not value.is_absolute():
-            raise ValueError("openssl must be an absolute path (a pinned tool)")
-        return value
-
-    @field_validator("openssl_sha256")
-    @classmethod
-    def _tool_digest(cls, value: str | None) -> str | None:
-        if value is not None and not _DIGEST.fullmatch(value):
-            raise ValueError("openssl_sha256 must be sha256:<64 hex>")
-        return value
-
-
-SecretSpec = Annotated[
-    RandomSecretSpec | TlsSelfSignedSpec, Field(discriminator="type")
-]
 
 
 class ReleaseSpecModel(_Strict):
@@ -515,6 +470,7 @@ class ReleaseSpec:
                 for item in error.errors()
             )
             raise ReleaseSpecError(f"invalid release spec: {problems}") from None
+        check_secrets(model.secrets)
         return cls(model, base.resolve())
 
     @classmethod

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import ipaddress
 import json
@@ -473,6 +474,39 @@ class KubernetesProvider:
             if error.status == 404:
                 return None
             raise
+
+    def read_secret_key(
+        self, name: str, key: str, *, deadline: float | None = None
+    ) -> bytes:
+        """Read one data key of a Secret in the target namespace (an explicit import).
+
+        The value is returned to the caller only; it is never logged, and a
+        failure carries an allowlisted category, never the server's body.
+        """
+        manifest = self._request(
+            "GET",
+            "/api/v1/namespaces/"
+            + quote(self.target.namespace, safe="")
+            + "/secrets/"
+            + quote(text(name, "Secret name"), safe=""),
+            deadline=deadline,
+        )
+        metadata = manifest.get("metadata") or {}
+        if (
+            manifest.get("apiVersion") != "v1"
+            or manifest.get("kind") != "Secret"
+            or metadata.get("name") != name
+            or metadata.get("namespace") != self.target.namespace
+        ):
+            raise ProviderError("identity-mismatch")
+        data = manifest.get("data") or {}
+        value = data.get(key) if isinstance(data, dict) else None
+        if not isinstance(value, str):
+            raise ProviderError("secret-key-missing")
+        try:
+            return base64.b64decode(value, validate=True)
+        except ValueError:
+            raise ProviderError("invalid-secret-data") from None
 
     def write(
         self,
