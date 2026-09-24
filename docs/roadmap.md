@@ -14,6 +14,7 @@ Priorities may change. Progress is tracked in
 | Capability | Status |
 | --- | --- |
 | Define resources in Python, YAML or JSON | ✅ Available |
+| Typed apps (`App`, `piceli render`) that render to release intents | 🟡 Preview: Deployments, Services, ConfigMaps, Secrets, NetworkPolicies |
 | Typed templates for common workloads | 🟡 Core kinds only; no Ingress/Gateway, NetworkPolicy, DaemonSet, PDB, Namespace or cluster-scoped RBAC yet |
 | Dependency-ordered plan and apply | ✅ Available |
 | Server-side apply with preconditions, journal and resume | 🟡 Python API only; not yet used by the CLI |
