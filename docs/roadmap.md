@@ -22,6 +22,7 @@ Priorities may change. Progress is tracked in
 | Field-level diff | ❌ Not yet: plans show the action per object |
 | Safe pruning of removed resources | 🟡 Opt-in (`prune = true`) |
 | Adopt or replace objects created by other tools (`release --adopt`, `--adopt-all-desired`, `--replace`) | 🟡 Preview |
+| Post-deploy checks (http, exec, metric, Python) with automatic rollback | 🟡 Preview |
 | Environments and overlays (Kustomize equivalent) | ❌ Not yet: plain Python functions for now |
 | Reusable, versioned packages (Helm equivalent) | ❌ Not yet |
 | Custom resources (CRDs) | 🟡 As raw manifests in a composition |
@@ -47,6 +48,7 @@ Every feature page starts with its maturity, and this table lists them all:
 | Typed apps (`piceli.App`, `piceli render`) | {doc}`typed_apps` | preview |
 | Engine: discovery, plans, executor, journals (Python API) | {doc}`deployment_planning` | preview |
 | Releases from a spec (`piceli release`) | {doc}`release_cli` | preview |
+| Post-deploy checks and automatic rollback (`[[checks]]`, `piceli.checks`, `release check`) | {doc}`checks` | preview |
 | Source identity (`piceli inputs`) | {doc}`source_identity` | preview |
 | Containerized builds (`piceli artifacts build-spec`) | {doc}`containerized_builds` | preview |
 | Deterministic OCI builds (artifact API) | {doc}`artifact_delivery` | preview |

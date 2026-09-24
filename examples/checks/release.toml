@@ -1,0 +1,54 @@
+# Check a release and roll back automatically (docs/checks.md).
+#
+#   docker build -t shop/web:good examples/checks
+#   docker build --build-arg LOGIN=no -t shop/web:broken examples/checks
+#   ID=$(docker image inspect --format '{{.Id}}' shop/web:good)
+#   piceli artifacts deliver --image "$ID" --approve-digest "$ID" \
+#     --ref "registry.test/shop/web:sha256-${ID:7:12}" \
+#     --to 'docker://shop-control-plane?runtime=containerd' \
+#     --receipt examples/checks/web.delivery.json
+#   piceli release apply --spec examples/checks/release.toml --auto-approve
+#
+# Deliver the broken image to the same receipt and apply again: the checks
+# fail and the good release is re-applied automatically.
+
+[target]
+kubeconfig = "shop.kubeconfig"
+context = "kind-shop"
+namespace = "shop"
+
+[release]
+name = "shop"
+owner = "shop"
+field_manager = "shop"
+composition = "composition.py:build"
+state_dir = ".piceli-release"
+rollback_on_failed_checks = true
+
+[execution]
+readiness_seconds = 120
+
+[images.web]
+receipt = "web.delivery.json"         # a piceli.node-delivery.v1 receipt
+
+[[checks]]
+type = "http"
+name = "login"
+target = "service/web"
+path = "/login"
+expect = 200
+body_contains = "Sign in"
+
+[[checks]]
+type = "exec"
+name = "login-file"
+target = "deployment/web"
+command = ["cat", "/www/login"]
+output_contains = "Sign in"
+retries = 1
+
+[[checks]]
+type = "python"
+name = "login-python"
+call = "checks.py:login_page"
+retries = 0

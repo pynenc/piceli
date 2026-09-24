@@ -15,10 +15,11 @@ resumed, stopped and rolled back.
 ```text
 piceli release plan     --spec release.toml [--rotate NAME] [OWNERSHIP…] [--out plan.json]
 piceli release preview  --spec release.toml          # alias of plan
-piceli release apply    --spec release.toml --approve <plan-hash> | --auto-approve [OWNERSHIP…]
-piceli release rollback <release|previous> --spec release.toml [--approve <hash> | --auto-approve [OWNERSHIP…]]
-piceli release resume   --spec release.toml [--release NAME]
+piceli release apply    --spec release.toml --approve <plan-hash> | --auto-approve [OWNERSHIP…] [--skip-checks]
+piceli release rollback <release|previous> --spec release.toml [--approve <hash> | --auto-approve [OWNERSHIP…]] [--skip-checks]
+piceli release resume   --spec release.toml [--release NAME] [--skip-checks]
 piceli release stop     --spec release.toml [--release NAME]
+piceli release check    --spec release.toml [--release NAME]
 piceli release status   --spec release.toml
 piceli release secret show NAME --spec release.toml [--key KEY] [--release NAME] [--reveal] [--json]
 ```
@@ -32,8 +33,9 @@ objects: `--adopt Kind/name`, `--adopt-all-desired` and `--replace Kind/name`
 fields may still change before 1.0.
 
 JSON goes to stdout and a short summary to stderr. Exit codes: `0` success,
-`1` the execution did not become ready, `2` rejected (invalid spec, identity
-mismatch, unknown or expired plan), `3` approval required. See
+`1` the execution did not become ready or its `[[checks]]` failed (reason
+`check-failed`), `2` rejected (invalid spec, identity mismatch, unknown or
+expired plan), `3` approval required. See
 [Output and exit codes](#output-and-exit-codes) for the objects each case
 prints.
 
@@ -65,6 +67,7 @@ prune = false                       # delete managed objects a release drops
 # inherited_owners = ["old-owner"]  # earlier owner ids whose objects count as ours
 # adopt = ["Deployment/web", "PersistentVolumeClaim/data"]   # see "Adopting existing objects"
 # replace = ["Deployment/legacy"]   # one-off delete-and-recreate, see "Replacing an object"
+# rollback_on_failed_checks = true  # re-apply the previous ready release when [[checks]] fail
 
 [execution]
 max_seconds = 300
@@ -87,6 +90,12 @@ openssl = "/usr/bin/openssl"        # absolute path; add openssl_sha256 to pin t
 
 [values]                            # free-form, passed to the composition
 greeting = "hello"
+
+[[checks]]                          # optional post-deploy checks, run after readiness
+type = "http"                       # http | exec | metric | python (see docs/checks.md)
+target = "service/web"
+path = "/"
+expect = 200
 ```
 
 Unknown keys are rejected everywhere except `[values]`. Relative paths
@@ -600,6 +609,34 @@ Execution failures of these paths (`failure_category` of `apply`):
 | `invalid-metadata-change` | A metadata-only write was asked to set a non-string value or Piceli's own annotations. | Fix the composition's labels/annotations. |
 | `retained-content-precondition-failed` | A retained object's content (for example a private Secret value) differs from the composition at apply time. Nothing was written. | Use a new object name (see "Secret generators"). |
 
+## Post-deploy checks
+
+`[[checks]]` tables declare checks that run after an execution becomes ready
+(`apply`, `rollback` and `resume`). A release is `ready` only when every check
+passes; otherwise the result has `release_state = "checks-failed"`, the command
+exits `1` and the release is not selected. With
+`[release] rollback_on_failed_checks = true` the previous ready release is
+re-applied automatically and the result carries a `rollback` object.
+`--skip-checks` skips them (recorded in the history). `release check` runs the
+checks against a release without changing anything. The how-to, every check
+type and the state machine are in {doc}`checks`.
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `type` | `http`, `exec`, `metric`, `python` | required | The check type |
+| `name` | string | derived, e.g. `http-service-web-login` | Unique name in the spec |
+| `timeout` | seconds | `10` | Limit of one attempt |
+| `retries` | integer | `3` | Extra attempts after a failed one |
+| `interval` | seconds | `2` | Wait between attempts |
+| `target` | `kind/name` | required (not `python`) | `service`/`deployment`/`pod` for http and metric; `deployment`/`statefulset`/`daemonset`/`pod` for exec |
+| `path`, `port`, `expect`, `body_contains` | | `/`, target's first port, `[200, 299]`, none | `http` |
+| `command`, `container`, `expect_exit`, `output_contains` | | required, first container, `0`, none | `exec` |
+| `query`, `op`, `threshold`, `port`, `path`, `empty` | | required, `<=`, required, target's first port, `/api/v1/query`, `fail` | `metric` |
+| `call` | `module:function` or `file.py:function` | required | `python` |
+
+The checks and the rollback policy are stored with the plan, so `apply` runs
+exactly what was reviewed; the plan JSON shows them under `checks`.
+
 ## Rollback
 
 `rollback <release>` re-plans the named release's archived composition
@@ -608,7 +645,9 @@ against current discovery and, once approved, executes it as a new execution
 becomes ready. It reuses the release's own secret versions; nothing is
 regenerated. `previous` means what was running before the latest change: the
 last ready release other than the current one, or, when the latest execution
-did not become ready, the last ready release itself.
+did not become ready (including `checks-failed`), the last ready release
+itself. A rollback runs the spec's `[[checks]]` too; an automatic rollback
+after failed checks is described in {doc}`checks`.
 
 ## Resume, stop and status
 
@@ -618,8 +657,9 @@ did not become ready, the last ready release itself.
 * `stop` cancels the latest unfinished execution after checking the owner
   and target. A stopped execution is not resumed.
 * `status` reads the catalog, journal and history without contacting the
-  cluster: releases with their image identities and executions, the deployed
-  and previous release, pending plans and recent history.
+  cluster: releases with their image identities, executions and latest check
+  outcome (`checks`), the deployed and previous release, pending plans and
+  recent history.
 
 Their refusals: `no-execution-recorded`, `not-resumable`, `resume-refused`,
 `nothing-to-stop`, `execution-not-started`, `execution-other-owner` and

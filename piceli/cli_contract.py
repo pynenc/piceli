@@ -262,33 +262,48 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "Execute an approved plan (--approve HASH).",
             contract="conforms",
             reads=_RELEASE_READS,
-            writes=("state_dir (catalog, journal, secret store)",),
+            writes=("state_dir (catalog, journal, secret store, check reports)",),
             cluster="writes",
             approval_required=True,
             safe_to_retry=False,
             exit_codes=_RELEASE_EXIT,
-            notes="After an interruption use `release resume`, not apply.",
+            notes="After an interruption use `release resume`, not apply. Runs "
+            "[[checks]] after readiness (exit 1 with release_state "
+            "checks-failed); with rollback_on_failed_checks it re-applies the "
+            "previous ready release without a further approval. --skip-checks "
+            "is recorded.",
         ),
         "release rollback": _C(
             "Re-plan and re-apply an earlier release.",
             contract="conforms",
             reads=_RELEASE_READS,
-            writes=("state_dir (catalog, journal)",),
+            writes=("state_dir (catalog, journal, check reports)",),
             cluster="writes",
             approval_required=True,
             safe_to_retry=False,
             exit_codes=_RELEASE_EXIT,
+            notes="Runs [[checks]] after readiness, as apply does.",
+        ),
+        "release check": _C(
+            "Run the spec's [[checks]] now against a release.",
+            reads=_RELEASE_READS,
+            cluster="reads",
+            exit_codes=(0, 1, 2),
+            notes="Writes no state and never rolls back. Checks open temporary "
+            "loopback port forwards, may exec declared commands in pods and "
+            "run declared Python check functions.",
         ),
         "release resume": _C(
             "Resume an interrupted apply with the same grant and ids.",
             contract="conforms",
             reads=_RELEASE_READS,
-            writes=("state_dir (journal)",),
+            writes=("state_dir (journal, check reports)",),
             cluster="writes",
             approval_required=False,
             safe_to_retry=True,
             exit_codes=(0, 1, 2),
-            notes="Continues an already approved execution; needs no new approval.",
+            notes="Continues an already approved execution; needs no new approval. "
+            "Runs [[checks]] when it becomes ready, as apply does.",
         ),
         "release stop": _C(
             "Cancel the latest execution of a release.",

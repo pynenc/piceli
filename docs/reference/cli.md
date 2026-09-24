@@ -53,6 +53,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli operator serve`](#cli-operator-serve) | Launch the Piceli Operator dashboard and unified REST API. | reads | no |
 | [`piceli operator status`](#cli-operator-status) | Print classified operator inventory: managed, unmanaged, unknown, and releases. | reads | no |
 | [`piceli release apply`](#cli-release-apply) | Execute an approved plan (``--approve HASH``), or plan and confirm. | writes | yes |
+| [`piceli release check`](#cli-release-check) | Run the spec's [[checks]] now against a release; changes nothing. | reads | no |
 | [`piceli release plan`](#cli-release-plan) | Capture live discovery and persist an approvable plan (prints its hash). | reads | no |
 | [`piceli release preview`](#cli-release-preview) | Alias of `plan`. | reads | no |
 | [`piceli release resume`](#cli-release-resume) | Resume an interrupted apply of a created release (same grant and ids). | writes | no |
@@ -775,17 +776,39 @@ Execute an approved plan (``--approve HASH``), or plan and confirm.
 | `--adopt` | text (repeatable) |  | Authorize adopting this existing object, as Kind/name or apiVersion/Kind/name (repeatable; adds to [release] adopt) |
 | `--replace` | text (repeatable) |  | Authorize deleting this existing unmanaged object and creating it from the release, after writing a restorable backup (repeatable; adds to [release] replace; never retained or managed objects) |
 | `--adopt-all-desired` | boolean | `False` | Authorize adopting every existing unmanaged object the composition declares (each is listed in the plan and bound to its hash) |
+| `--skip-checks` | boolean | `False` | Do not run the spec's [[checks]] after readiness (emergencies only; recorded in the release history) |
 
 **Contract**
 
 - **Reads:** release.toml, composition, state_dir, kubeconfig
-- **Writes:** state_dir (catalog, journal, secret store)
+- **Writes:** state_dir (catalog, journal, secret store, check reports)
 - **Cluster:** writes
 - **Approval required:** yes
 - **Safe to retry:** no
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** After an interruption use `release resume`, not apply.
+- **Notes:** After an interruption use `release resume`, not apply. Runs [[checks]] after readiness (exit 1 with release_state checks-failed); with rollback_on_failed_checks it re-applies the previous ready release without a further approval. --skip-checks is recorded.
+
+(cli-release-check)=
+### `piceli release check`
+
+Run the spec's [[checks]] now against a release; changes nothing.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--spec` | path | required | release.toml describing the release |
+| `--release` | text |  | Release to check (default: the selected one) |
+
+**Contract**
+
+- **Reads:** release.toml, composition, state_dir, kubeconfig
+- **Writes:** nothing (read-only)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** partial
+- **Notes:** Writes no state and never rolls back. Checks open temporary loopback port forwards, may exec declared commands in pods and run declared Python check functions.
 
 (cli-release-plan)=
 ### `piceli release plan`
@@ -845,17 +868,18 @@ Resume an interrupted apply of a created release (same grant and ids).
 | --- | --- | --- | --- |
 | `--spec` | path | required | release.toml describing the release |
 | `--release` | text |  | Release name (default: the latest execution) |
+| `--skip-checks` | boolean | `False` | Do not run the spec's [[checks]] after readiness (emergencies only; recorded in the release history) |
 
 **Contract**
 
 - **Reads:** release.toml, composition, state_dir, kubeconfig
-- **Writes:** state_dir (journal)
+- **Writes:** state_dir (journal, check reports)
 - **Cluster:** writes
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** Continues an already approved execution; needs no new approval.
+- **Notes:** Continues an already approved execution; needs no new approval. Runs [[checks]] when it becomes ready, as apply does.
 
 (cli-release-rollback)=
 ### `piceli release rollback`
@@ -871,16 +895,18 @@ Re-plan and re-apply an earlier release against current cluster state.
 | `--adopt` | text (repeatable) |  | Authorize adopting this existing object, as Kind/name or apiVersion/Kind/name (repeatable; adds to [release] adopt) |
 | `--replace` | text (repeatable) |  | Authorize deleting this existing unmanaged object and creating it from the release, after writing a restorable backup (repeatable; adds to [release] replace; never retained or managed objects) |
 | `--adopt-all-desired` | boolean | `False` | Authorize adopting every existing unmanaged object the composition declares (each is listed in the plan and bound to its hash) |
+| `--skip-checks` | boolean | `False` | Do not run the spec's [[checks]] after readiness (emergencies only; recorded in the release history) |
 
 **Contract**
 
 - **Reads:** release.toml, composition, state_dir, kubeconfig
-- **Writes:** state_dir (catalog, journal)
+- **Writes:** state_dir (catalog, journal, check reports)
 - **Cluster:** writes
 - **Approval required:** yes
 - **Safe to retry:** no
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
+- **Notes:** Runs [[checks]] after readiness, as apply does.
 
 (cli-release-secret-show)=
 ### `piceli release secret show`

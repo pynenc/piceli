@@ -32,6 +32,19 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`build-timed-out`](#error-build-timed-out) | build-spec | yes |
 | [`builder-not-approved`](#error-builder-not-approved) | build-spec | no |
 | [`cancelled`](#error-cancelled) | artifacts-delivery | yes |
+| [`check-api-unavailable`](#error-check-api-unavailable) | checks | yes |
+| [`check-callable-invalid`](#error-check-callable-invalid) | checks | no |
+| [`check-exec-unavailable`](#error-check-exec-unavailable) | checks | no |
+| [`check-failed`](#error-check-failed) | checks | yes |
+| [`check-forward-unavailable`](#error-check-forward-unavailable) | checks | yes |
+| [`check-invalid`](#error-check-invalid) | checks | no |
+| [`check-metric-invalid`](#error-check-metric-invalid) | checks | no |
+| [`check-port-unknown`](#error-check-port-unknown) | checks | no |
+| [`check-raised`](#error-check-raised) | checks | no |
+| [`check-target-not-found`](#error-check-target-not-found) | checks | yes |
+| [`check-timed-out`](#error-check-timed-out) | checks | yes |
+| [`checks-rollback-failed`](#error-checks-rollback-failed) | checks | no |
+| [`checks-rollback-unavailable`](#error-checks-rollback-unavailable) | checks | no |
 | [`cluster-identity-changed`](#error-cluster-identity-changed) | release | no |
 | [`cluster-identity-unreadable`](#error-cluster-identity-unreadable) | kubernetes | yes |
 | [`command-cancelled`](#error-command-cancelled) | artifacts-delivery | yes |
@@ -2167,4 +2180,111 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Unknown shortcut id.** `--only` names a shortcut id the access profile does not declare.
 
 - **Fix:** Use ids declared as [[shortcuts]] id in the profile.
+- **Retry-safe:** no
+
+
+## Post-deploy checks and automatic rollback (`[[checks]]`, `piceli.checks`)
+
+(error-check-api-unavailable)=
+### `check-api-unavailable`
+
+**Kubernetes API unavailable for a check.** The check could not build an API client from the explicit kubeconfig context, or an API read failed (RBAC, network).
+
+- **Fix:** Check the `[target]` kubeconfig and context and that the credentials may read Services, Pods and workloads in the namespace.
+- **Retry-safe:** yes
+
+(error-check-callable-invalid)=
+### `check-callable-invalid`
+
+**Python check cannot be loaded.** A `python` check's `call` names a module or file that cannot be imported, or an attribute that is not callable.
+
+- **Fix:** Use `module:function` (importable) or `path/file.py:function` relative to release.toml.
+- **Retry-safe:** no
+
+(error-check-exec-unavailable)=
+### `check-exec-unavailable`
+
+**Check exec unavailable.** The Kubernetes API refused or could not run the exec (for example no `pods/exec` permission, or the command does not exist in the container).
+
+- **Fix:** Grant `create` on `pods/exec` in the namespace, or fix `command`/`container`.
+- **Retry-safe:** no
+
+(error-check-failed)=
+### `check-failed`
+
+**Check failed.** A check ran and its condition was not met: an HTTP status outside `expect` or missing `body_contains`, an exec exit code or output mismatch, a metric sample violating the threshold (or no samples), or a Python check returning False or a failure string.
+
+- **Fix:** Read the check's `detail`; fix the application and apply a new release, or roll back (`piceli release rollback previous`).
+- **Retry-safe:** yes
+
+(error-check-forward-unavailable)=
+### `check-forward-unavailable`
+
+**Check port forward unavailable.** The temporary loopback port forward to the target did not become healthy in time, or the connection through it failed.
+
+- **Fix:** Make sure `kubectl` is on PATH and the target has a ready pod listening on the port; run `piceli release check` to retry.
+- **Retry-safe:** yes
+
+(error-check-invalid)=
+### `check-invalid`
+
+**Check declaration invalid.** A `[[checks]]` table or `Checks.*` call is malformed: an unknown type or key, a target kind the check type does not support, or two checks with the same name.
+
+- **Fix:** Fix the declaration as the message says; `piceli release plan` validates `[[checks]]` without running them.
+- **Retry-safe:** no
+
+(error-check-metric-invalid)=
+### `check-metric-invalid`
+
+**Metric response invalid.** The metric endpoint did not answer with a successful Prometheus query result of type vector or scalar.
+
+- **Fix:** Point the check at a Prometheus-compatible query API (`path`, `port`) and check the query.
+- **Retry-safe:** no
+
+(error-check-port-unknown)=
+### `check-port-unknown`
+
+**Check port unknown.** An http or metric check has no `port` and its target declares none.
+
+- **Fix:** Set `port = …` on the check.
+- **Retry-safe:** no
+
+(error-check-raised)=
+### `check-raised`
+
+**Check raised an exception.** A Python check raised an unexpected exception or returned an unsupported value; only the exception type is recorded.
+
+- **Fix:** Run the function locally; raise `piceli.checks.CheckFailed(detail)` or return False/a string to fail on purpose.
+- **Retry-safe:** no
+
+(error-check-target-not-found)=
+### `check-target-not-found`
+
+**Check target not found.** The check's target Service, workload or pod does not exist in the namespace, or the workload has no ready pod.
+
+- **Fix:** Check the target name (`kind/name`) against the composition; for exec, wait until a pod is ready.
+- **Retry-safe:** yes
+
+(error-check-timed-out)=
+### `check-timed-out`
+
+**Check timed out.** One attempt took longer than the check's `timeout`.
+
+- **Fix:** Raise `timeout` or `retries`, or find out why the endpoint or command is slow.
+- **Retry-safe:** yes
+
+(error-checks-rollback-failed)=
+### `checks-rollback-failed`
+
+**Automatic rollback failed.** A release failed its checks and the automatic rollback to the previous release was refused, did not become ready or failed its own checks.
+
+- **Fix:** Run `piceli release status` and roll back by hand (`piceli release rollback previous`), with `--skip-checks` only in an emergency.
+- **Retry-safe:** no
+
+(error-checks-rollback-unavailable)=
+### `checks-rollback-unavailable`
+
+**No release to roll back to.** A release failed its checks with `rollback_on_failed_checks = true`, but no other release has ever been ready here.
+
+- **Fix:** Fix the application and apply a new release; the failed release is left running and is not selected.
 - **Retry-safe:** no

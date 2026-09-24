@@ -112,6 +112,7 @@ Ask before running these, and show the owner what will happen first.
 | `piceli release rollback` | The cluster | `--approve <plan hash>` from `release rollback <target>` without `--approve` |
 | `piceli release resume` | The cluster (continues an approved execution) | The owner's go-ahead to continue |
 | `piceli release stop` | Local journal (cancels an execution) | The owner's go-ahead |
+| `piceli release check` | Nothing by itself, but runs the spec's checks (declared pod execs and Python functions) | The owner's go-ahead for a spec you did not write |
 | `piceli artifacts deliver` | A registry or node | `--approve-digest <config digest>` |
 | `piceli artifacts build-spec run` | Runs a build, writes outputs and images | `--approve-builder <digest>` and `--approve-plan <hash>` |
 | `piceli artifacts execute-command` | Runs a pinned tool | `--approve-plan <hash>` |
@@ -131,10 +132,14 @@ unattended CI job for this exact spec.
 3. Wait for the owner to approve **that plan hash**. A plan expires after
    `approval_window_seconds`; if it did, plan again and ask again.
 4. Run `piceli release apply --spec release.toml --approve <hash>`.
-5. Exit `0` means the release is ready. Exit `1` means it ran but did not
-   become ready: report `reason` (the failure category, or
-   `execution-not-ready`) and `execution.state`, and offer
-   `piceli release rollback previous` (which needs its own approval).
+5. Exit `0` means the release is ready and its `[[checks]]` passed. Exit `1`
+   means it ran but is not ready. Report `reason` (`check-failed`, the failure
+   category, or `execution-not-ready`) and `execution.state`. When
+   `release_state` is `checks-failed`, report the failed checks and the
+   `rollback` object; an automatic rollback has already run if the spec
+   enables it. Offer `piceli release rollback previous` (which needs its own
+   approval) only when no automatic rollback succeeded. Never add
+   `--skip-checks` unless the owner asked for it (see {doc}`checks`).
 
 ## When something fails
 

@@ -24,6 +24,8 @@ FIRST_ARGUMENT = {
     "_input",
     "SecretError",
     "ImageHandoffError",
+    "CheckError",
+    "CheckSpecError",
     "reject",
     "fail",
     "rejection",
