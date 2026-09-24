@@ -39,6 +39,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`cross-origin-location-refused`](#error-cross-origin-location-refused) | artifacts-registry | no |
 | [`deadline-exceeded`](#error-deadline-exceeded) | kubernetes | yes |
 | [`deleted-resource-reappeared`](#error-deleted-resource-reappeared) | execution | no |
+| [`delivery-not-succeeded`](#error-delivery-not-succeeded) | images | no |
 | [`digest-mismatch`](#error-digest-mismatch) | artifacts-delivery | no |
 | [`docker-socket-required`](#error-docker-socket-required) | artifacts-input | no |
 | [`docker-tool-required`](#error-docker-tool-required) | artifacts-input | no |
@@ -54,8 +55,11 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`grant-expired`](#error-grant-expired) | build-spec | yes |
 | [`grant-mismatch`](#error-grant-mismatch) | artifacts-input | yes |
 | [`identity-mismatch`](#error-identity-mismatch) | kubernetes | no |
+| [`image-declared-twice`](#error-image-declared-twice) | images | no |
+| [`image-digest-mismatch`](#error-image-digest-mismatch) | images | no |
 | [`image-invalid`](#error-image-invalid) | build-spec | no |
 | [`image-mismatch`](#error-image-mismatch) | build-spec | no |
+| [`image-not-immutable`](#error-image-not-immutable) | images | no |
 | [`import-cancelled`](#error-import-cancelled) | artifacts-delivery | yes |
 | [`import-failed`](#error-import-failed) | artifacts-delivery | yes |
 | [`import-output-limit`](#error-import-output-limit) | artifacts-delivery | no |
@@ -111,6 +115,8 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`rbac-denied`](#error-rbac-denied) | kubernetes | no |
 | [`readiness-timeout`](#error-readiness-timeout) | execution | no |
 | [`readiness-unsupported`](#error-readiness-unsupported) | execution | no |
+| [`receipt-invalid`](#error-receipt-invalid) | images | no |
+| [`receipt-unmatched`](#error-receipt-unmatched) | images | no |
 | [`recreated-object`](#error-recreated-object) | execution | no |
 | [`reference-required`](#error-reference-required) | artifacts-input | no |
 | [`registry-digest-mismatch`](#error-registry-digest-mismatch) | artifacts-registry | no |
@@ -1411,4 +1417,55 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Render target invalid.** The module:attr target cannot be imported or is not an App, composition or composition function.
 
 - **Fix:** Point at `module:attr` or `file.py:attr` of an App, DeploymentComposition or build(ctx) function.
+- **Retry-safe:** no
+
+
+## Image references in releases (`[images]`, `images_from`, receipts)
+
+(error-delivery-not-succeeded)=
+### `delivery-not-succeeded`
+
+**Delivery did not succeed.** The delivery receipt's result is not pushed/imported/already-present.
+
+- **Fix:** Deliver the image again and use the new receipt.
+- **Retry-safe:** no
+
+(error-image-declared-twice)=
+### `image-declared-twice`
+
+**Image declared twice.** The same image name, or the same delivered image, appears in more than one source.
+
+- **Fix:** Keep one declaration per image.
+- **Retry-safe:** no
+
+(error-image-digest-mismatch)=
+### `image-digest-mismatch`
+
+**Image digest mismatch.** A pinned digest, or a build and delivery receipt for the same image, disagree on the digest.
+
+- **Fix:** Use receipts from the same build, or update the pinned digest.
+- **Retry-safe:** no
+
+(error-image-not-immutable)=
+### `image-not-immutable`
+
+**Image reference is not immutable.** A build receipt entry has no registry digest, so its only reference is a movable tag.
+
+- **Fix:** Deliver the image (`piceli artifacts deliver --to oci://…` or node import with a content tag `--ref repo:sha256-<12hex>`) and use the delivery receipt.
+- **Retry-safe:** no
+
+(error-receipt-invalid)=
+### `receipt-invalid`
+
+**Receipt invalid.** A receipt could not be read, has an unknown schema, or has malformed fields.
+
+- **Fix:** Pass a receipt written by `piceli artifacts build-spec run` or `piceli artifacts deliver`.
+- **Retry-safe:** no
+
+(error-receipt-unmatched)=
+### `receipt-unmatched`
+
+**Delivery receipt matches no image.** A delivery receipt in `images_from` matches no built image by config digest.
+
+- **Fix:** Add the build receipt that produced the image, or use `[images.<name>] receipt = …`.
 - **Retry-safe:** no

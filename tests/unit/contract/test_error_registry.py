@@ -23,6 +23,7 @@ FIRST_ARGUMENT = {
     "RegistryError",
     "_input",
     "SecretError",
+    "ImageHandoffError",
     "reject",
 }
 # ``_Failure(result, reason)`` in the delivery modules.

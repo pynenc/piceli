@@ -6,6 +6,31 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ## Unreleased
 
+- **Safety fix:** the dry-run admission check before a delete really deleted
+  the object, because the API server ignores a `dryRun` query parameter when a
+  DeleteOptions body is sent. `dryRun` is now sent in the body. This affected
+  opt-in pruning in 0.1.0 and 0.2.0: objects that were about to be deleted
+  anyway lost the check-before-write guarantee.
+- **Ownership transitions (preview):**
+  - `piceli release --replace KIND/NAME` / `[release] replace` deletes and
+    recreates an unmanaged, non-retained object after writing a restorable
+    backup (`kubectl create -f`). It always needs a per-object flag.
+  - `--adopt-all-desired` adopts every unmanaged object the composition
+    declares.
+  - Plan refusals list every blocking object with suggested flags and codes.
+    The human text of each blocking entry is in its `message` field.
+  - Retained objects, including those with inherited owners, whose only
+    difference is labels or annotations get a metadata-only write.
+- **Immutable image references (preview):**
+  - A build receipt without a registry digest is refused with
+    `image-not-immutable` instead of falling back to its movable tag.
+  - `[images.<name>] receipt` and `images_from` accept
+    `piceli.node-delivery.v1` receipts, which need a content tag
+    `repo:sha256-<12hex>`.
+  - `images_from` takes a list of build and delivery receipts, merged by config
+    digest.
+  - New `examples/two-images`, with an opt-in kind acceptance test.
+
 - **Typed apps (preview):** `from piceli import App, ExistingClaim, …`
   describes Deployments (sidecars, init containers, probes, resources,
   memory/config/secret volumes, node pinning), Services, ConfigMaps, Secrets

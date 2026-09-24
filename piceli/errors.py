@@ -37,6 +37,7 @@ AREAS: Mapping[str, str] = MappingProxyType(
         "inputs": "Source identities (`piceli inputs record|verify`)",
         "secrets": "Release secret generators and `piceli release secret show`",
         "render": "Typed apps and `piceli render`",
+        "images": "Image references in releases (`[images]`, `images_from`, receipts)",
     }
 )
 
@@ -1321,6 +1322,54 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "Report a bug; this should not happen.",
         False,
         "kubernetes",
+    ),
+    _E(
+        "image-not-immutable",
+        "Image reference is not immutable",
+        "A build receipt entry has no registry digest, so its only reference is a movable tag.",
+        "Deliver the image (`piceli artifacts deliver --to oci://…` or node import with a content tag `--ref repo:sha256-<12hex>`) and use the delivery receipt.",
+        False,
+        "images",
+    ),
+    _E(
+        "receipt-invalid",
+        "Receipt invalid",
+        "A receipt could not be read, has an unknown schema, or has malformed fields.",
+        "Pass a receipt written by `piceli artifacts build-spec run` or `piceli artifacts deliver`.",
+        False,
+        "images",
+    ),
+    _E(
+        "delivery-not-succeeded",
+        "Delivery did not succeed",
+        "The delivery receipt's result is not pushed/imported/already-present.",
+        "Deliver the image again and use the new receipt.",
+        False,
+        "images",
+    ),
+    _E(
+        "image-digest-mismatch",
+        "Image digest mismatch",
+        "A pinned digest, or a build and delivery receipt for the same image, disagree on the digest.",
+        "Use receipts from the same build, or update the pinned digest.",
+        False,
+        "images",
+    ),
+    _E(
+        "image-declared-twice",
+        "Image declared twice",
+        "The same image name, or the same delivered image, appears in more than one source.",
+        "Keep one declaration per image.",
+        False,
+        "images",
+    ),
+    _E(
+        "receipt-unmatched",
+        "Delivery receipt matches no image",
+        "A delivery receipt in `images_from` matches no built image by config digest.",
+        "Add the build receipt that produced the image, or use `[images.<name>] receipt = …`.",
+        False,
+        "images",
     ),
 )
 
