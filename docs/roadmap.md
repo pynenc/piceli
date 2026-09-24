@@ -19,7 +19,7 @@ Priorities may change. Progress is tracked in
 | Dependency-ordered plan and apply | ✅ Available |
 | Image handoff by digest (build → deliver → release, immutable references only) | 🟡 Preview |
 | Server-side apply with preconditions, journal and resume | 🟡 Python API only; not yet used by the CLI |
-| Field-level diff | 🟡 `deploy detail` (CLI engine) only |
+| Field-level diff and true no-op plans | 🟡 Preview: `release plan`/`release diff` (server dry runs) |
 | Safe pruning of removed resources | 🟡 Recoverable engine only, opt-in |
 | Adopt or replace objects created by other tools (`release --adopt`, `--adopt-all-desired`, `--replace`) | 🟡 Preview |
 | Environments and overlays (Kustomize equivalent) | ❌ Not yet: plain Python functions for now |
@@ -45,6 +45,7 @@ Every feature page starts with its maturity, and this table lists them all:
 | Object model: templates, `kubernetes` client models, YAML/JSON | {doc}`kubernetes_model/index` | stable |
 | Recoverable engine: discovery, plans, executor, journals (Python API) | {doc}`deployment_planning` | preview |
 | Releases from a spec (`piceli release`) | {doc}`release_cli` | preview |
+| Field-level diffs and no-op detection (`release plan`, `release diff`) | {doc}`plans_and_diffs` | preview |
 | Source identity (`piceli inputs`) | {doc}`source_identity` | preview |
 | Containerized builds (`piceli artifacts build-spec`) | {doc}`containerized_builds` | preview |
 | Deterministic OCI builds (artifact API) | {doc}`artifact_delivery` | preview |

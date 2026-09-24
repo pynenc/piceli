@@ -126,6 +126,7 @@ kubernetes_model/index
 typed_apps
 deployment_planning
 release_cli
+plans_and_diffs
 secrets
 source_identity
 containerized_builds

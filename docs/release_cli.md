@@ -15,6 +15,7 @@ resumed, stopped and rolled back.
 ```text
 piceli release plan     --spec release.toml [--rotate NAME] [OWNERSHIP…] [--out plan.json]
 piceli release preview  --spec release.toml          # alias of plan
+piceli release diff     --spec release.toml [OWNERSHIP…] [--exit-code]   # read-only
 piceli release apply    --spec release.toml --approve <plan-hash> | --auto-approve [OWNERSHIP…]
 piceli release rollback <release|previous> --spec release.toml [--approve <hash> | --auto-approve [OWNERSHIP…]]
 piceli release resume   --spec release.toml [--release NAME]
@@ -234,13 +235,9 @@ v1.33.1): after `alpha` was rebuilt and re-delivered (2 blobs uploaded, the
 shared base layer skipped), `alpha` went to generation 2 with the new digest
 and `beta` stayed at generation 1.
 
-```{note}
-The plan summary still lists an unchanged Deployment as `apply`, not
-`no-op`: the planner compares the desired manifest with the live object
-including server defaults. Applying it changes nothing (no new generation,
-no rollout). Compare `artifact_digest` of the plan actions to see which
-desired manifests changed.
-```
+The plan of the rebuilt release lists `Deployment/beta` as `no-op` and
+`Deployment/alpha` as `apply` with a single field change, its image (see
+[What a plan shows](#release-plan-output)).
 
 ### The composition function
 
@@ -350,6 +347,68 @@ plan hash: 4123ff6e…29b8e4 (valid until 2026-09-24T17:24:59+00:00)
 $ piceli release apply --spec release.toml --approve 4123ff6e…29b8e4
 apply web-716dfe62698b: ready
 ```
+
+(release-plan-output)=
+### What a plan shows
+
+Each object gets one operation: `create`, `adopt`, `replace`, `apply`,
+`no-op` or `delete`. An object that exists and that the release already
+manages is `no-op` when applying it would change nothing, and `apply`
+otherwise. {doc}`plans_and_diffs` explains how that is decided (a server-side
+dry run of the write, so server defaults never make an unchanged object look
+changed).
+
+Every `apply`, `adopt` and `replace` comes with a **field-level diff**. The
+human summary prints up to 12 changed fields per object; the JSON output has
+all of them under `diffs`:
+
+```console
+$ piceli release plan --spec release.toml
+release web-3c1d0a9e22f4 (create, apply): 2 apply, 2 no-op
+    apply Secret/web-token
+            secret-bound values not compared: /data/token
+    apply Deployment/web
+            ~ /spec/template/spec/containers/0/image: "docker.io/library/nginx@sha256:6564…" -> "docker.io/library/nginx@sha256:1ead…"
+plan hash: 9b0f…c4d1 (valid until 2026-09-24T18:02:11+00:00)
+```
+
+```json
+"diffs": [
+  {
+    "resource": {"api_version": "apps/v1", "kind": "Deployment", "namespace": "shop", "name": "web"},
+    "operation": "apply",
+    "basis": "server-dry-run",
+    "changes": [
+      {"path": "/spec/template/spec/containers/0/image", "op": "replace",
+       "before": "docker.io/library/nginx@sha256:6564…", "after": "docker.io/library/nginx@sha256:1ead…"}
+    ],
+    "not_compared": [],
+    "unified": "--- live/Deployment/web\n+++ release/Deployment/web\n@@ …"
+  }
+],
+"dry_run_unavailable": []
+```
+
+* `path` is a JSON pointer into the object, `op` is `add`, `remove` or
+  `replace`, and `before`/`after` are `null` when absent. Secret values are
+  shown as `"<redacted>"`; values bound to secret versions are listed in
+  `not_compared` and never compared, so an object with a secret binding is
+  always `apply`.
+* `basis` is `server-dry-run` when the "after" side is the API server's
+  answer to a dry run of the write, or `client` when no dry run was available
+  and the desired manifest was merged onto the live object locally (server
+  defaults are then missing from "after").
+* `dry_run_unavailable` lists managed objects without a dry run and why
+  (`rbac-denied`, `conflict`, `dry-run-limit-exceeded`, …). Such an object is
+  compared literally and may show as `apply` although unchanged.
+* The diff is evidence, not part of the plan: it is not in the plan hash.
+
+`piceli release diff --spec release.toml` prints only the diffs: unified
+diffs on stderr and `{"state": "diffed", "summary", "changes", "actions",
+"diffs", "dry_run_unavailable"}` on stdout. It stores no plan and no local
+state and sends the cluster only reads and `dryRun=All` requests, so it is
+safe to run at any time. With `--exit-code` it exits `1` when the release
+would change something.
 
 ## Adopting existing objects
 
@@ -627,6 +686,9 @@ did not become ready, the last ready release itself.
   restorable backup before a delete guarded by UID and resourceVersion.
 * Plans, discovery evidence and secrets stay in the private state directory
   (owner-only). Reports and the catalog contain opaque references only.
+* `plan` and `diff` send server-side dry runs (`dryRun=All`) of the writes an
+  apply would make; the API server persists nothing for them. They need the
+  `patch` verb; without it objects are compared literally.
 
 ## Migrating from a custom deploy script
 
