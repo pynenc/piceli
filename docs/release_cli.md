@@ -7,14 +7,22 @@ the plan executor and its journal, so each release can be previewed, applied,
 resumed, stopped and rolled back.
 
 ```text
-piceli release plan     --spec release.toml [--rotate NAME] [--adopt Kind/name] [--out plan.json]
+piceli release plan     --spec release.toml [--rotate NAME] [OWNERSHIP…] [--out plan.json]
 piceli release preview  --spec release.toml          # alias of plan
-piceli release apply    --spec release.toml --approve <plan-hash> | --auto-approve [--adopt Kind/name]
-piceli release rollback <release|previous> --spec release.toml [--approve <hash> | --auto-approve [--adopt Kind/name]]
+piceli release apply    --spec release.toml --approve <plan-hash> | --auto-approve [OWNERSHIP…]
+piceli release rollback <release|previous> --spec release.toml [--approve <hash> | --auto-approve [OWNERSHIP…]]
 piceli release resume   --spec release.toml [--release NAME]
 piceli release stop     --spec release.toml [--release NAME]
 piceli release status   --spec release.toml
 ```
+
+`OWNERSHIP…` are the planning flags that authorize taking over existing
+objects: `--adopt Kind/name`, `--adopt-all-desired` and `--replace Kind/name`
+(see [If `plan` refuses](#if-plan-refuses)).
+
+**Maturity:** `piceli release` is `preview`. Ownership transitions
+(`--adopt`, `--adopt-all-desired`, `--replace`) are `preview`: flags and JSON
+fields may still change before 1.0.
 
 JSON goes to stdout and a short summary to stderr. Exit codes: `0` success,
 `1` the execution did not become ready, `2` refused (invalid spec, identity
@@ -44,6 +52,7 @@ approval_window_seconds = 900       # plan validity and evidence age limit
 prune = false                       # delete managed objects a release drops
 # inherited_owners = ["old-owner"]  # earlier owner ids whose objects count as ours
 # adopt = ["Deployment/web", "PersistentVolumeClaim/data"]   # see "Adopting existing objects"
+# replace = ["Deployment/legacy"]   # one-off delete-and-recreate, see "Replacing an object"
 
 [execution]
 max_seconds = 300
@@ -229,13 +238,15 @@ apply web-06c982ec7fe9: ready
 ```
 
 * **Retained objects** (PVC, Secret, or `piceli.io/retained: "true"`) are
-  adopted **metadata-only**: Piceli writes only its owner annotation, never
-  spec or data, and only when the live object already contains everything the
-  composition declares for it (labels and annotations included). Declare a
-  PVC with the same spec as the live claim; declare an existing Secret without
-  `data` to adopt it and keep its value. A different declared value is refused
-  before any write. A retained object of an `inherited_owners` id can be
-  adopted the same way; its owner annotation is re-stamped.
+  adopted **metadata-only**: one merge patch writes Piceli's owner annotation
+  and the labels and annotations the composition declares that differ from
+  the live object (listed as `metadata_changes`), never spec or data, and
+  only when the live object already contains everything else the composition
+  declares for it. Keys are set, never removed. Declare a PVC with the same
+  spec as the live claim; declare an existing Secret without `data` to adopt
+  it and keep its value. A different declared spec or value is refused before
+  any write. A retained object of an `inherited_owners` id can be adopted the
+  same way; its owner annotation is re-stamped.
 * **Everything else** is adopted by a **takeover**, which makes the
   composition the object's full desired state. Every field written by a
   client (`kubectl-client-side-apply`, `kubectl-create`, `kubectl-set`,
@@ -265,12 +276,158 @@ apply web-06c982ec7fe9: ready
   persists nothing.
 
 The `apply` JSON lists `adopted` objects with `mode`, `previous_owner`,
-`transferred_managers` and `completed_transfer`; the journal records the same.
+`transferred_managers`, `completed_transfer` and `metadata_changes`; the
+journal records the same. Replaced objects appear there with `mode: replace`
+and their backup file.
 Rolling back to an earlier release re-applies its archived composition as
 usual; adopted retained objects and their data are never touched by a
 rollback. If a takeover is interrupted, the apply ends `blocked` and `resume`
 converges it. A takeover that was approved with a different transfer list
 (for example by an older Piceli) cannot be resumed; plan again with `--adopt`.
+
+### Adopting everything the composition declares
+
+`--adopt-all-desired` authorizes adopting **every** existing unmanaged object
+the composition declares, and nothing else: objects that are not in the
+composition are never touched, and objects named by `--replace` are replaced
+instead. The plan still lists each adoption with its mode, and the
+`authorized` field of the plan JSON names every adopted and replaced object,
+all bound to the plan hash you approve. Retained objects are still adopted
+metadata-only. It is a planning flag only; there is no spec equivalent, so a
+later plan never adopts new objects silently.
+
+```console
+$ piceli release plan --spec release.toml --adopt-all-desired --replace Deployment/web
+release shop-8eebc4a5b6fb (create, apply): 2 adopt, 1 apply, 1 replace
+    adopt PersistentVolumeClaim/cache  [metadata-only: owner annotation and labels/app.kubernetes.io/part-of; previous owner: none]
+    apply PersistentVolumeClaim/state  [retained, metadata-only: sets labels/app.kubernetes.io/part-of; spec and data untouched]
+  replace Deployment/web  [DELETES uid 86d938d2-… and recreates it from the release; backup written first; dependents: deleted]
+    adopt Service/web  [takeover: transfers field managers: kubectl-client-side-apply; fields they own that the release does not declare will be REMOVED; previous owner: none]
+plan hash: c354b73f…1e280c (valid until 2026-09-24T20:47:52+00:00)
+```
+
+### Metadata changes on retained objects
+
+A retained object that this release already manages (its own owner id, or an
+id in `inherited_owners`) is never rewritten. When the only difference from
+the composition is in labels or annotations, the plan shows an `apply` marked
+`metadata_only` and the executor writes exactly those keys, plus Piceli's
+owner and operation annotations, with one merge patch guarded by the observed
+UID and resourceVersion. Spec and data are never sent, and the object is
+re-stamped with this release's owner. This covers the common migration case of
+a volume claim created by a retired tool: list the tool's owner id in
+`inherited_owners` and add your labels in the composition. A difference in
+spec or data refuses the plan with `retained-content-differs`.
+
+### Replacing an object (delete and recreate)
+
+Some objects cannot be adopted into the desired state: a Deployment whose
+`spec.selector` (immutable) must change, or a Service whose type change the
+API rejects. `--replace Kind/name` (repeatable; or `[release] replace`)
+authorizes deleting such an object and creating it from the release. Every
+replace needs its own explicit entry; there is no "replace all".
+
+Replace is allowed only for objects that are **unmanaged**, **not retained**
+and **not owned by another object** (`ownerReferences`). It is refused, before
+any write, for:
+
+* retained kinds and objects (Namespace, PersistentVolume, PVC, Secret,
+  `piceli.io/retained: "true"`): adopt them instead;
+* objects already managed by this release (including inherited owners): the
+  release already updates them;
+* objects owned by another object, and workloads whose retained dependents a
+  background delete would remove.
+
+What `apply` does for each replaced object:
+
+1. re-checks the live object against the planned evidence (UID,
+   resourceVersion, field managers, content) and sends a `dryRun` delete;
+2. writes a **backup**: the live object as JSON, cleaned so that
+   `kubectl create -f` accepts it (no `status`, `uid`, `resourceVersion`,
+   `managedFields`, `creationTimestamp`, `generation`), to
+   `<state_dir>/backups/<execution-id>/<n>-<Kind>-<name>.json` with mode
+   `0600` in `0700` directories. The journal records its path and SHA-256
+   together with the intent, before the delete;
+3. deletes the object with UID and resourceVersion preconditions. Workload
+   controllers (Deployment, ReplicaSet, DaemonSet, Job, CronJob) are deleted
+   with `propagationPolicy=Background`, so their old pods go too: expect a
+   short downtime. Everything else, including StatefulSets (so a PVC
+   retention policy can never delete claims), uses `Orphan`;
+4. waits until the object is gone and creates it from the release with
+   Piceli's owner annotation.
+
+The apply output names the backup:
+
+```console
+  replaced Deployment/web (deleted uid 86d938d2-…; backup: .piceli-release/backups/9669…/0002-Deployment-web.json; to restore the previous object: kubectl delete Deployment/web, then kubectl create -f .piceli-release/backups/9669…/0002-Deployment-web.json)
+```
+
+**Recovery and rollback.** A replace is not undone automatically:
+compensation and `rollback` never delete a replaced object or restore its
+backup. `rollback previous` re-applies an earlier release as usual, which
+updates the recreated object like any managed object. To go back to the
+object as it was before Piceli, restore the backup by hand:
+
+```bash
+kubectl delete deployment web
+kubectl create -f .piceli-release/backups/<execution>/<n>-Deployment-web.json
+```
+
+If the apply stops after the delete (the create failed, the process was
+interrupted, the object took too long to disappear), the execution is
+`blocked`, the backup is on disk and the journal records the step reached.
+`piceli release resume` finishes the create for a created release; for a
+re-apply, plan and apply again (the object is now absent and is simply
+created). If someone else created an object with the same name in between,
+the resume stops with `replace-recreated-by-another-writer` instead of
+touching it.
+
+## If `plan` refuses
+
+A plan that meets objects it may not change refuses with exit code `2` and
+lists **every** blocking object at once, each with the flags that would
+unblock it, in the JSON `blocking` array and on stderr:
+
+```console
+$ piceli release plan --spec release.toml
+refused: existing objects are not managed by this release's owner: Deployment/web (--adopt Deployment/web or --replace Deployment/web), PersistentVolumeClaim/cache (--adopt PersistentVolumeClaim/cache), Service/web (--adopt Service/web or --replace Service/web); …
+  blocking Deployment/web: exists and is not managed by this release's owner -> --adopt Deployment/web or --replace Deployment/web
+  blocking PersistentVolumeClaim/cache: exists and is not managed by this release's owner; retained: replace is never allowed -> --adopt PersistentVolumeClaim/cache
+  blocking Service/web: exists and is not managed by this release's owner -> --adopt Service/web or --replace Service/web
+```
+
+Choosing between adopt and replace:
+
+| Situation | Use | Effect |
+| --- | --- | --- |
+| The live object can become the composition's object by an update | `--adopt Kind/name` | Takeover: field ownership moves to Piceli and fields the composition does not declare are removed. No downtime, same UID. |
+| Adopt everything the composition declares, after reviewing the list | `--adopt-all-desired` | The same takeover for each unmanaged declared object; retained ones metadata-only. |
+| A volume claim, Secret or other retained object | `--adopt Kind/name` (never replace) | Metadata-only: owner annotation and declared labels/annotations; the spec/data must already match. |
+| An immutable field must change (selector, Service `clusterIP`…), or an adoption fails with `invalid-request` | `--replace Kind/name` | Backup, delete, create. New UID; workload pods restart. |
+| The object is not yours to change | neither | Rename the object in the composition, or remove it from the composition. |
+
+Refusal codes (`code` in the JSON, also per object in `blocking[].code`):
+
+| Code | Cause | Fix |
+| --- | --- | --- |
+| `resource-requires-adoption` | An object the composition declares exists without this release's owner. | `--adopt` or `--replace` it (see `suggest`), `--adopt-all-desired`, or delete it. |
+| `replace-refused` | `--replace` names a retained object, an object already managed, or one owned by another object. | Adopt a retained object instead; remove managed objects from the replace list (`[release] replace` is for a one-off migration). |
+| `retained-content-differs` | A retained object's spec or data differ from the composition; only labels and annotations may change. | Make the composition match the live object (or create a new object under a new name). |
+| `adopt-and-replace` | The same object is named by an adopt and a replace entry. | Keep one. |
+| `adopt-entry-not-declared`, `replace-entry-not-declared` | An entry does not name exactly one resource the composition declares. | Fix the `Kind/name` (or use `apiVersion/Kind/name`). |
+| `plan-blocked` | Several of the above at once. | See each `blocking[].code`. |
+
+Execution failures of these paths (`failure_category` of `apply`):
+
+| Category | Cause | Fix |
+| --- | --- | --- |
+| `replace-precondition-failed` | At apply time the object is managed, retained or owned by another object, or no backup directory is available. Nothing was deleted. | Plan again. |
+| `replace-backup-failed` | The backup could not be written (permissions, disk). Nothing was deleted. | Fix the state directory, plan again. |
+| `replace-delete-timeout` | The deleted object was still present after `readiness_seconds` (finalizers). Execution `blocked`. | Inspect the finalizers, then `resume` or plan again. |
+| `replace-recreated-by-another-writer` | Another client created an object with the same name after the delete. Execution `blocked`; the object is not touched. | Decide which object to keep; the backup holds the deleted one. |
+| `replace-delete-not-observed` | On resume, the original object is still there although the journal recorded its delete. Execution `blocked`. | Inspect the object, then plan again. |
+| `invalid-metadata-change` | A metadata-only write was asked to set a non-string value or Piceli's own annotations. | Fix the composition's labels/annotations. |
+| `retained-content-precondition-failed` | A retained object's content (for example a private Secret value) differs from the composition at apply time. Nothing was written. | Use a new object name (see "Secret generators"). |
 
 ## Rollback
 
@@ -301,10 +458,12 @@ did not become ready, the last ready release itself.
 * A state directory serves one cluster and namespace: releases record the
   kube-system UID, and a later run against another cluster is refused.
 * Objects are owned by exact `owner` match. Objects created by other tools are
-  unmanaged; planning them fails until they are adopted explicitly
-  (`--adopt` / `[release] adopt`). A takeover transfers field ownership and
-  applies without force; retained objects are adopted by an owner-annotation
-  change only.
+  unmanaged; planning them fails until they are adopted or replaced
+  explicitly (`--adopt`, `--adopt-all-desired`, `--replace`). A takeover
+  transfers field ownership and applies without force; retained objects are
+  only ever changed in metadata (owner annotation, declared labels and
+  annotations) and are never deleted or replaced. A replace writes a
+  restorable backup before a delete guarded by UID and resourceVersion.
 * Plans, discovery evidence and secrets stay in the private state directory
   (owner-only). Reports and the catalog contain opaque references only.
 
@@ -319,9 +478,10 @@ did not become ready, the last ready release itself.
    supported yet, so plan a rotation window for anything clients cache.
 3. Ownership: objects that already carry `piceli.io/owner` are managed if you
    keep that owner or list it in `release.inherited_owners`. Objects created
-   by plain `kubectl` are unmanaged and planning refuses them until you adopt
-   them with `--adopt Kind/name` (see
-   [Adopting existing objects](#adopting-existing-objects)).
+   by plain `kubectl` are unmanaged and planning refuses them, listing each
+   one, until you adopt them (`--adopt Kind/name` or `--adopt-all-desired`)
+   or replace them (`--replace Kind/name`); see
+   [If `plan` refuses](#if-plan-refuses).
 4. Replace `kubectl apply`, hand-written rollout waits and state files with
    `plan`/`apply`, and ad-hoc rollback with `rollback previous`. Keep the
    state directory: it is the release history, and the secret store holds
