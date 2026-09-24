@@ -307,19 +307,26 @@ def test_exact_grant_tool_and_inputs_required_before_execution(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "code,limits,state",
+    "code,limits,state,max_seconds",
     [
-        ("raise SystemExit(7)", ProcessLimits(1), "failed"),
-        ("import time; time.sleep(10)", ProcessLimits(0.15), "timed-out"),
-        ("import os; os.write(1,b'x'*10000)", ProcessLimits(1, 10), "output-limit"),
+        # Generous budgets where timing is not under test: a loaded machine can
+        # take more than a second just to start the interpreter.
+        ("raise SystemExit(7)", ProcessLimits(20), "failed", 15),
+        ("import time; time.sleep(10)", ProcessLimits(0.15), "timed-out", 5),
+        (
+            "import os; os.write(1,b'x'*10000)",
+            ProcessLimits(20, 10),
+            "output-limit",
+            15,
+        ),
     ],
 )
-def test_bounded_process_failures(tmp_path, code, limits, state):
+def test_bounded_process_failures(tmp_path, code, limits, state, max_seconds):
     cmd = command(code)
     started = time.monotonic()
     receipt = cmd.execute(tmp_path, grant(cmd), limits=limits)
     assert receipt["state"] == state
-    assert time.monotonic() - started < 2
+    assert time.monotonic() - started < max_seconds
 
 
 def test_cancellation_kills_process_group_and_output_never_leaks(tmp_path, monkeypatch):

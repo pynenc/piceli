@@ -152,8 +152,14 @@ def test_ignores_git_redirect_environment(
 ) -> None:
     repo = make_repo(tmp_path)
     other = make_repo(tmp_path, "service-b")
+    # Give the two repositories different commits, and read the expected commit
+    # before GIT_DIR is set: otherwise the reference itself reads the other repo.
+    (other / "README.md").write_text("other service\n")
+    git(other, "commit", "-qam", "diverge")
+    expected = git(repo, "rev-parse", "HEAD")
+    assert expected != git(other, "rev-parse", "HEAD")
     monkeypatch.setenv("GIT_DIR", str(other / ".git"))
-    assert identity(repo).commit == git(repo, "rev-parse", "HEAD")
+    assert identity(repo).commit == expected
 
 
 def test_redact_remote() -> None:
