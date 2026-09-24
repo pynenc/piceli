@@ -80,7 +80,9 @@ def kinds_of(intents):
     )
 
 
-def prepare(provider, desired, *, adopt=(), inherited=(), grant_inherited=()):
+def prepare(
+    provider, desired, *, adopt=(), inherited=(), grant_inherited=(), replace_refs=()
+):
     intents = tuple(
         item if isinstance(item, ResourceIntent) else ResourceIntent.from_manifest(item)
         for item in desired
@@ -98,7 +100,12 @@ def prepare(provider, desired, *, adopt=(), inherited=(), grant_inherited=()):
     plan = build_plan(
         composition,
         snapshot,
-        PlanAuthorization(TARGET, tuple(adopt), inherited_owner_ids=tuple(inherited)),
+        PlanAuthorization(
+            TARGET,
+            tuple(adopt),
+            inherited_owner_ids=tuple(inherited),
+            replace_resources=tuple(replace_refs),
+        ),
     )
     return plan, snapshot, grant(provider, plan, snapshot, grant_inherited)
 
@@ -307,10 +314,170 @@ def test_retained_adoption_refuses_a_spec_difference(api_url, provider, tmp_path
     intent = ResourceIntent.from_manifest(pvc(storage="2Gi"))
     with pytest.raises(ValueError, match="already contains the desired manifest"):
         prepare(provider, [intent], adopt=(intent.ref,))
+    # Labels and annotations are metadata: they may differ (see below).
     labelled = ResourceIntent.from_manifest(pvc(labels={"tier": "db"}))
-    with pytest.raises(ValueError, match="already contains the desired manifest"):
-        prepare(provider, [labelled], adopt=(labelled.ref,))
+    plan, _, _ = prepare(provider, [labelled], adopt=(labelled.ref,))
+    assert plan.actions[0].adoption == Adoption(
+        AdoptionMode.METADATA_ONLY, None, metadata_changes=("labels/tier",)
+    )
     assert mutations(api) == []
+
+
+def metadata_write(api):
+    [write] = mutations(api)
+    assert write["method"] == "PATCH"
+    assert write["content_type"] == "application/merge-patch+json"
+    assert set(write["body"]) == {"metadata"}
+    return write["body"]["metadata"]
+
+
+def test_retained_adoption_with_a_metadata_difference_writes_only_metadata(
+    api_url, provider, tmp_path
+):
+    api, _ = api_url
+    before = live_pvc(api)
+    intent = ResourceIntent.from_manifest(
+        pvc(labels={"tier": "db"}, annotations={"example.test/backup": "daily"})
+    )
+    plan, snapshot, authorization = prepare(provider, [intent], adopt=(intent.ref,))
+    assert plan.actions[0].summary()["adoption"] == {
+        "mode": "metadata-only",
+        "previous_owner": None,
+        "transferred_managers": [],
+        "metadata_changes": ["annotations/example.test/backup", "labels/tier"],
+    }
+    run = executor(provider, tmp_path)
+    assert run.run("labels", plan, snapshot, authorization)["state"] == "ready"
+    body = metadata_write(api)
+    assert set(body) == {"uid", "resourceVersion", "labels", "annotations"}
+    assert body["labels"] == {"tier": "db"}
+    assert set(body["annotations"]) == {
+        "example.test/backup",
+        "piceli.io/owner",
+        "piceli.io/operation",
+    }
+    after = api.objects[("PersistentVolumeClaim", "data")]
+    assert after["spec"] == before["spec"]
+    assert after["metadata"]["labels"] == {"tier": "db"}
+    assert payloads(run, "labels")[0]["adoption"]["metadata_changes"] == [
+        "annotations/example.test/backup",
+        "labels/tier",
+    ]
+    assert forced(api) == []
+
+
+def test_inherited_owner_retained_apply_with_a_metadata_difference(
+    api_url, provider, tmp_path
+):
+    """A retained claim of a retired owner, managed through inherited owners,
+    whose only difference is metadata: a metadata-only write, never spec."""
+    api, _ = api_url
+    before = live_pvc(api, owner="previous-owner")
+    intent = ResourceIntent.from_manifest(
+        pvc(
+            labels={"app.kubernetes.io/part-of": "shop"},
+            annotations={"example.test/tier": "state"},
+        )
+    )
+    plan, snapshot, authorization = prepare(
+        provider, [intent], grant_inherited=("previous-owner",)
+    )
+    [action] = plan.actions
+    assert action.operation is PlanOperation.APPLY
+    assert action.metadata_changes == (
+        "annotations/example.test/tier",
+        "labels/app.kubernetes.io/part-of",
+    )
+    assert action.summary()["metadata_only"] == list(action.metadata_changes)
+    run = executor(provider, tmp_path)
+    assert run.run("inherited", plan, snapshot, authorization)["state"] == "ready"
+    body = metadata_write(api)
+    assert set(body) == {"uid", "resourceVersion", "labels", "annotations"}
+    assert "spec" not in body
+    after = api.objects[("PersistentVolumeClaim", "data")]
+    assert after["spec"] == before["spec"]
+    assert after["metadata"]["uid"] == before["metadata"]["uid"]
+    assert after["metadata"]["labels"] == {"app.kubernetes.io/part-of": "shop"}
+    assert after["metadata"]["annotations"]["example.test/tier"] == "state"
+    assert after["metadata"]["annotations"]["piceli.io/owner"] == provider.owner_id
+    assert payloads(run, "inherited")[0]["metadata_only"] == {
+        "mode": "metadata-only",
+        "previous_owner": "previous-owner",
+        "metadata_changes": list(action.metadata_changes),
+    }
+    assert forced(api) == []
+
+    # The next plan has nothing left to write.
+    writes = len(mutations(api))
+    plan, snapshot, authorization = prepare(
+        provider, [intent], grant_inherited=("previous-owner",)
+    )
+    assert not plan.actions[0].metadata_changes
+    run = executor(provider, tmp_path / "again")
+    assert run.run("again", plan, snapshot, authorization)["state"] == "ready"
+    assert len(mutations(api)) == writes
+
+
+def test_inherited_retained_metadata_apply_without_the_grant_writes_nothing(
+    api_url, provider, tmp_path
+):
+    api, _ = api_url
+    live_pvc(api, owner="previous-owner")
+    intent = ResourceIntent.from_manifest(pvc(labels={"tier": "db"}))
+    plan, snapshot, authorization = prepare(provider, [intent])
+    report = executor(provider, tmp_path).run(
+        "ungranted", plan, snapshot, authorization
+    )
+    assert report["failure_category"] == "ownership-precondition-failed"
+    assert mutations(api) == []
+
+
+def test_retained_apply_with_a_spec_difference_is_refused_at_plan_time(
+    api_url, provider
+):
+    api, _ = api_url
+    live_pvc(api, owner=provider.owner_id)
+    intent = ResourceIntent.from_manifest(pvc(storage="5Gi", labels={"tier": "db"}))
+    with pytest.raises(ValueError, match="only metadata labels and annotations"):
+        prepare(provider, [intent])
+    assert mutations(api) == []
+
+
+def test_forged_metadata_changes_are_refused_before_any_write(
+    api_url, provider, tmp_path
+):
+    api, _ = api_url
+    live_pvc(api, owner=provider.owner_id)
+    intent = ResourceIntent.from_manifest(pvc(labels={"tier": "db"}))
+    plan, snapshot, _ = prepare(provider, [intent])
+    forged = replace(
+        plan, actions=(replace(plan.actions[0], metadata_changes=("labels/other",)),)
+    )
+    with pytest.raises(ValueError, match="metadata-only changes"):
+        executor(provider, tmp_path).run(
+            "forged", forged, snapshot, grant(provider, forged, snapshot)
+        )
+    assert mutations(api) == []
+
+
+def test_interrupted_metadata_write_is_reconciled_on_resume(
+    api_url, provider, tmp_path
+):
+    api, _ = api_url
+    live_pvc(api, owner=provider.owner_id)
+    intent = ResourceIntent.from_manifest(pvc(labels={"tier": "db"}))
+    plan, snapshot, authorization = prepare(provider, [intent])
+    api.inject("PATCH", "/data", disconnect_after=True, dry_run=False)
+    run = executor(provider, tmp_path)
+    first = run.run("cut", plan, snapshot, authorization)
+    assert first["state"] == "blocked"
+    assert run.journal.actions("cut")[0]["state"] == "intent"
+    second = run.run("cut", plan, snapshot, authorization, resume=True)
+    assert second["state"] == "ready"
+    assert len(mutations(api)) == 1
+    assert api.objects[("PersistentVolumeClaim", "data")]["metadata"]["labels"] == {
+        "tier": "db"
+    }
 
 
 def test_secret_adoption_with_a_different_private_value_is_refused_before_writes(

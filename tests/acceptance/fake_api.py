@@ -522,15 +522,15 @@ class FakeAPI:
         if method == "DELETE":
             if current is None:
                 return 404, {}
-            if (
-                body.get("preconditions")
-                != {
-                    "uid": current["metadata"]["uid"],
-                    "resourceVersion": current["metadata"]["resourceVersion"],
-                }
-                or body.get("propagationPolicy") != "Orphan"
-            ):
+            if body.get("preconditions") != {
+                "uid": current["metadata"]["uid"],
+                "resourceVersion": current["metadata"]["resourceVersion"],
+            } or body.get("propagationPolicy") not in {"Orphan", "Background"}:
                 return 409, {}
+            # Like the API server: with a body, DeleteOptions come from the
+            # body only (a dryRun query parameter alone would delete).
+            if body.get("dryRun") == ["All"]:
+                return 200, {"kind": "Status", "status": "Success"}
             del self.objects[(kind, name)]
             self.version += 1
             return 200, {"kind": "Status", "status": "Success"}

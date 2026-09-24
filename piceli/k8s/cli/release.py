@@ -56,6 +56,27 @@ AdoptOption = Annotated[
         ),
     ),
 ]
+ReplaceOption = Annotated[
+    list[str] | None,
+    typer.Option(
+        "--replace",
+        help=(
+            "Authorize deleting this existing unmanaged object and creating it "
+            "from the release, after writing a restorable backup (repeatable; "
+            "adds to [release] replace; never retained or managed objects)"
+        ),
+    ),
+]
+AdoptAllOption = Annotated[
+    bool,
+    typer.Option(
+        "--adopt-all-desired",
+        help=(
+            "Authorize adopting every existing unmanaged object the composition "
+            "declares (each is listed in the plan and bound to its hash)"
+        ),
+    ),
+]
 ReleaseOption = Annotated[
     str | None,
     typer.Option("--release", help="Release name (default: the latest execution)"),
@@ -88,8 +109,22 @@ def _refusals() -> tuple[type[BaseException], ...]:
 
 
 def _refuse(error: BaseException) -> None:
-    _emit({"state": "refused", "reason": str(error) or type(error).__name__})
+    code = getattr(error, "code", None)
+    details = getattr(error, "details", None) or {}
+    _emit(
+        {
+            "state": "refused",
+            "reason": str(error) or type(error).__name__,
+            **({"code": code} if code else {}),
+            **details,
+        }
+    )
     _say(f"refused: {error}")
+    for item in details.get("blocking", ()):
+        _say(
+            f"  blocking {item['kind']}/{item['name']}: {item['reason']}"
+            + (f" -> {' or '.join(item['suggest'])}" if item["suggest"] else "")
+        )
     raise typer.Exit(EXIT_REFUSED)
 
 
@@ -102,6 +137,7 @@ def _describe_plan(result: Any, spec: Path, command: str) -> None:
             _say(
                 f"  {action['operation']:>7} {action['kind']}/{action['name']}"
                 + _adoption_note(action.get("adoption"))
+                + _write_note(action)
             )
     for item in report["drift"]:
         resource = item["resource"]
@@ -111,6 +147,8 @@ def _describe_plan(result: Any, spec: Path, command: str) -> None:
         )
     for entry in report["adopt_not_needed"]:
         _say(f"  adopt {entry}: not needed (absent or already managed)")
+    for entry in report["authorized"].get("replace_not_needed", ()):
+        _say(f"  replace {entry}: not needed (absent)")
     for name, origin in result.secrets.items():
         _say(f"  secret {name}: {origin}")
     _say(f"plan hash: {result.plan_hash} (valid until {result.expires_at})")
@@ -130,7 +168,29 @@ def _adoption_note(adoption: dict[str, Any] | None) -> str:
             f"that the release does not declare will be REMOVED; previous owner: "
             f"{owner}]"
         )
-    return f"  [metadata-only: owner annotation only; previous owner: {owner}]"
+    changes = adoption.get("metadata_changes")
+    return (
+        "  [metadata-only: owner annotation"
+        + (f" and {', '.join(changes)}" if changes else " only")
+        + f"; previous owner: {owner}]"
+    )
+
+
+def _write_note(action: dict[str, Any]) -> str:
+    if action.get("metadata_only"):
+        return (
+            "  [retained, metadata-only: sets "
+            + ", ".join(action["metadata_only"])
+            + "; spec and data untouched]"
+        )
+    replace = action.get("replace")
+    if replace:
+        return (
+            f"  [DELETES uid {replace['deletes_uid']} and recreates it from the "
+            f"release; backup written first; dependents: "
+            f"{'deleted' if replace['propagation'] == 'Background' else 'orphaned'}]"
+        )
+    return ""
 
 
 def _confirm(result: Any) -> bool:
@@ -145,6 +205,14 @@ def _confirm(result: Any) -> bool:
 def _finish(outcome: dict[str, Any]) -> None:
     _emit(outcome)
     for item in outcome.get("adopted", ()):
+        if item["mode"] == "replace":
+            _say(
+                f"  replaced {item['kind']}/{item['name']} (deleted uid "
+                f"{item['deleted_uid']}; backup: {item['backup']}; to restore the "
+                f"previous object: kubectl delete {item['kind']}/{item['name']}, "
+                f"then kubectl create -f {item['backup']})"
+            )
+            continue
         moved = item.get("completed_transfer")
         _say(
             f"  adopted {item['kind']}/{item['name']} ({item['mode']}"
@@ -173,11 +241,13 @@ def _plan_then_execute(
     rotate: list[str] | None = None,
     rollback_to: str | None = None,
     adopt: list[str] | None = None,
+    replace: list[str] | None = None,
+    adopt_all_desired: bool = False,
 ) -> None:
     try:
         runner = _runner(spec)
         if approve is not None:
-            if auto_approve or rotate or adopt:
+            if auto_approve or rotate or adopt or replace or adopt_all_desired:
                 raise ValueError("--approve cannot be combined with planning flags")
             expected = None
             if rollback_to is not None:
@@ -189,7 +259,11 @@ def _plan_then_execute(
             )
         else:
             result = runner.plan(
-                rotate=rotate or (), rollback_to=rollback_to, adopt=adopt or ()
+                rotate=rotate or (),
+                rollback_to=rollback_to,
+                adopt=adopt or (),
+                replace=replace or (),
+                adopt_all_desired=adopt_all_desired,
             )
             _describe_plan(result, spec, command)
             if not auto_approve and not _confirm(result):
@@ -207,6 +281,8 @@ def plan(
     spec: SpecOption,
     rotate: RotateOption = None,
     adopt: AdoptOption = None,
+    replace: ReplaceOption = None,
+    adopt_all_desired: AdoptAllOption = False,
     out: Annotated[
         Path | None,
         typer.Option("--out", help="Also write the full redacted plan JSON here"),
@@ -214,7 +290,12 @@ def plan(
 ) -> None:
     """Capture live discovery and persist an approvable plan (prints its hash)."""
     try:
-        result = _runner(spec).plan(rotate=rotate or (), adopt=adopt or ())
+        result = _runner(spec).plan(
+            rotate=rotate or (),
+            adopt=adopt or (),
+            replace=replace or (),
+            adopt_all_desired=adopt_all_desired,
+        )
         if out is not None:
             out.write_text(
                 json.dumps(result.to_dict(full=True), sort_keys=True, indent=2)
@@ -236,6 +317,8 @@ def apply(
     auto_approve: AutoApproveOption = False,
     rotate: RotateOption = None,
     adopt: AdoptOption = None,
+    replace: ReplaceOption = None,
+    adopt_all_desired: AdoptAllOption = False,
 ) -> None:
     """Execute an approved plan (``--approve HASH``), or plan and confirm."""
     _plan_then_execute(
@@ -245,6 +328,8 @@ def apply(
         auto_approve=auto_approve,
         rotate=rotate,
         adopt=adopt,
+        replace=replace,
+        adopt_all_desired=adopt_all_desired,
     )
 
 
@@ -257,6 +342,8 @@ def rollback(
     approve: ApproveOption = None,
     auto_approve: AutoApproveOption = False,
     adopt: AdoptOption = None,
+    replace: ReplaceOption = None,
+    adopt_all_desired: AdoptAllOption = False,
 ) -> None:
     """Re-plan and re-apply an earlier release against current cluster state."""
     _plan_then_execute(
@@ -266,6 +353,8 @@ def rollback(
         auto_approve=auto_approve,
         rollback_to=target,
         adopt=adopt,
+        replace=replace,
+        adopt_all_desired=adopt_all_desired,
     )
 
 

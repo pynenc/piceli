@@ -56,12 +56,14 @@ _ADOPT_ENTRY = re.compile(
 )
 
 
-def parse_adopt_entry(value: str) -> tuple[str | None, str, str]:
+def parse_adopt_entry(
+    value: str, *, what: str = "adopt"
+) -> tuple[str | None, str, str]:
     """``Kind/name`` or ``apiVersion/Kind/name`` → (api_version, kind, name)."""
     match = _ADOPT_ENTRY.fullmatch(value) if isinstance(value, str) else None
     if match is None or len(match["name"]) > 253:
         raise ReleaseSpecError(
-            f"adopt entry must be 'Kind/name' or 'apiVersion/Kind/name', got {value!r}"
+            f"{what} entry must be 'Kind/name' or 'apiVersion/Kind/name', got {value!r}"
         )
     return match["api"], match["kind"], match["name"]
 
@@ -101,12 +103,22 @@ class ReleaseSettings(_Strict):
     # Existing objects this release may adopt: "Kind/name" or
     # "apiVersion/Kind/name", in the target namespace. See docs/release_cli.md.
     adopt: tuple[str, ...] = ()
+    # Existing unmanaged objects this release may delete and recreate (with a
+    # backup first), same entry syntax. Never retained or managed objects.
+    replace: tuple[str, ...] = ()
 
     @field_validator("adopt")
     @classmethod
     def _adopt(cls, value: tuple[str, ...]) -> tuple[str, ...]:
         for item in value:
             parse_adopt_entry(item)
+        return value
+
+    @field_validator("replace")
+    @classmethod
+    def _replace(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        for item in value:
+            parse_adopt_entry(item, what="replace")
         return value
 
     @field_validator("name")

@@ -720,6 +720,11 @@ class PlanAuthorization:
     ``inherited_owner_ids`` are earlier owner ids whose retained objects may be
     re-stamped by an explicit adoption. They do not change ownership
     classification, which the provider performs during discovery.
+
+    ``replace_resources`` names existing **unmanaged, non-retained** objects
+    the plan may delete and recreate from the release (a ``replace`` action).
+    Retained kinds and objects, objects already managed (including by an
+    inherited owner) and objects owned by another object are refused.
     """
 
     target: PlanTarget
@@ -727,11 +732,20 @@ class PlanAuthorization:
     prune_managed: bool = False
     inherited_owner_ids: tuple[str, ...] = ()
     field_manager: str | None = None
+    replace_resources: tuple[ResourceRef, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(
             self, "adopt_resources", tuple(sorted(set(self.adopt_resources)))
         )
+        object.__setattr__(
+            self, "replace_resources", tuple(sorted(set(self.replace_resources)))
+        )
+        both = set(self.adopt_resources) & set(self.replace_resources)
+        if both:
+            raise ValueError(
+                f"a resource cannot be both adopted and replaced: {sorted(both)}"
+            )
         if self.field_manager is not None and (
             not isinstance(self.field_manager, str) or not self.field_manager
         ):
@@ -751,6 +765,8 @@ class PlanOperation(StrEnum):
     APPLY = "apply"
     NOOP = "no-op"
     DELETE = "delete"
+    # Delete an unmanaged, non-retained object and create it from the release.
+    REPLACE = "replace"
 
 
 class AdoptionMode(StrEnum):
@@ -772,6 +788,9 @@ class Adoption:
     mode: AdoptionMode
     previous_owner: str | None = None
     transferred_managers: tuple[str, ...] = ()
+    # Metadata-only adoptions: desired labels/annotations (``labels/<key>``,
+    # ``annotations/<key>``) the write sets besides the owner annotation.
+    metadata_changes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.mode, AdoptionMode):
@@ -781,8 +800,13 @@ class Adoption:
             "transferred_managers",
             tuple(sorted(set(self.transferred_managers))),
         )
+        object.__setattr__(
+            self, "metadata_changes", tuple(sorted(set(self.metadata_changes)))
+        )
         if self.mode is AdoptionMode.METADATA_ONLY and self.transferred_managers:
             raise ValueError("metadata-only adoption cannot transfer field managers")
+        if self.mode is AdoptionMode.TAKEOVER and self.metadata_changes:
+            raise ValueError("a takeover applies the whole manifest")
 
     def summary(self) -> dict[str, Any]:
         value: dict[str, Any] = {
@@ -792,6 +816,8 @@ class Adoption:
         }
         if self.mode is AdoptionMode.TAKEOVER:
             value["removes_undeclared_fields"] = True
+        if self.metadata_changes:
+            value["metadata_changes"] = list(self.metadata_changes)
         return value
 
 
@@ -804,13 +830,22 @@ class PlanAction:
     # Set for every ADOPT built by ``build_plan``. ``None`` only for actions
     # restored from older plans; those never force field ownership.
     adoption: Adoption | None = None
+    # An APPLY on a retained object whose only difference is metadata: the
+    # executor writes these labels/annotations (and the owner annotation)
+    # with a metadata-only patch, never spec or data.
+    metadata_changes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.adoption is not None and self.operation is not PlanOperation.ADOPT:
             raise ValueError("only adopt actions carry adoption details")
+        object.__setattr__(
+            self, "metadata_changes", tuple(sorted(set(self.metadata_changes)))
+        )
+        if self.metadata_changes and self.operation is not PlanOperation.APPLY:
+            raise ValueError("only apply actions carry metadata-only changes")
 
     def summary(self) -> dict[str, Any]:
-        value = {
+        value: dict[str, Any] = {
             "operation": self.operation.value,
             "resource": self.resource.ref.__dict__,
             "artifact_digest": self.resource.artifact_digest,
@@ -820,6 +855,14 @@ class PlanAction:
         }
         if self.adoption is not None:
             value["adoption"] = self.adoption.summary()
+        if self.metadata_changes:
+            value["metadata_only"] = list(self.metadata_changes)
+        if self.operation is PlanOperation.REPLACE:
+            value["replace"] = {
+                "deletes_uid": self.precondition.uid,
+                "propagation": replace_propagation(self.resource.ref.kind),
+                "backup": "written to the state directory before the delete",
+            }
         return value
 
 
@@ -991,6 +1034,18 @@ def _equivalent(
     return left == right
 
 
+def _propagation_deletes_protected(
+    resource: ObservedResource, snapshot: ObservedSnapshot
+) -> bool:
+    """A background delete of ``resource`` would reach a protected child."""
+    if replace_propagation(resource.intent.ref.kind) != "Background":
+        return False
+    uid = resource.precondition.uid
+    return any(
+        uid in child.owner_uids and child.retained for child in snapshot.resources
+    )
+
+
 def _deletion_depth(
     resource: ObservedResource,
     by_uid: Mapping[str, ObservedResource],
@@ -1032,6 +1087,32 @@ def _without_pointers(
     return manifest
 
 
+# Kinds whose dependents (ReplicaSets, Pods, Jobs) are deleted with them by a
+# replace; every other kind's dependents are orphaned. A StatefulSet is
+# orphaned so a PVC retention policy can never delete claims.
+_BACKGROUND_REPLACE_KINDS = frozenset(
+    {"Deployment", "ReplicaSet", "DaemonSet", "Job", "CronJob"}
+)
+
+
+def replace_propagation(kind: str) -> str:
+    """Deletion propagation a replace uses for ``kind``."""
+    return "Background" if kind in _BACKGROUND_REPLACE_KINDS else "Orphan"
+
+
+def replace_refusal(resource: ObservedResource) -> str | None:
+    """Why an observed object cannot be replaced, or ``None``."""
+    if resource.retained or resource.intent.ref.kind in _RETAINED_KINDS:
+        return "retained objects are never deleted; adopt it instead"
+    if resource.ownership is not Ownership.UNMANAGED:
+        return (
+            "the object is already managed; replace applies only to unmanaged objects"
+        )
+    if resource.owner_uids:
+        return "the object is owned by another object (ownerReferences)"
+    return None
+
+
 def adoption_for(
     desired: ResourceIntent,
     current: ObservedResource,
@@ -1039,18 +1120,19 @@ def adoption_for(
 ) -> Adoption:
     """Choose the adoption mode from the live object; refuse unsafe ones."""
     if current.retained:
-        # Private values are compared by the executor after resolution; the
-        # public plan never reveals whether a secret value matches.
-        expected = _without_pointers(
-            desired.manifest,
-            (binding.json_pointer for binding in desired.secret_bindings),
-        )
-        if not manifest_contains(current.intent.manifest, expected):
+        # Only labels and annotations may differ: they are written by the
+        # metadata-only patch. Spec and data must already match.
+        if not retained_content_contained(desired, current):
             raise ValueError(
                 "retained resource can only be adopted when the live object "
-                f"already contains the desired manifest: {desired.ref}"
+                "already contains the desired manifest (only metadata labels "
+                f"and annotations may differ): {desired.ref}"
             )
-        return Adoption(AdoptionMode.METADATA_ONLY, current.owner)
+        return Adoption(
+            AdoptionMode.METADATA_ONLY,
+            current.owner,
+            metadata_changes=_public_metadata_changes(desired, current),
+        )
     return Adoption(
         AdoptionMode.TAKEOVER,
         current.owner,
@@ -1079,6 +1161,99 @@ def manifest_contains(actual: Any, expected: Any) -> bool:
             for left, right in zip(actual, expected, strict=True)
         )
     return bool(actual == expected)
+
+
+_METADATA_MAPS = ("labels", "annotations")
+
+
+def without_metadata_maps(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    """Object content minus ``metadata.labels`` and ``metadata.annotations``.
+
+    This is the part of a retained object that a metadata-only write never
+    changes (spec, data, every other metadata field).
+    """
+    value = json.loads(_canonical_json(manifest))
+    metadata = value.get("metadata")
+    if isinstance(metadata, dict):
+        for key in _METADATA_MAPS:
+            metadata.pop(key, None)
+    return dict(value)
+
+
+def metadata_changes(
+    desired: Mapping[str, Any], live: Mapping[str, Any]
+) -> tuple[str, ...]:
+    """Desired labels/annotations whose live value differs.
+
+    Returned as ``labels/<key>`` and ``annotations/<key>``. A metadata-only
+    write sets exactly these keys; it never removes a live key.
+    """
+    changes = []
+    desired_metadata = desired.get("metadata")
+    live_metadata = live.get("metadata")
+    for section in _METADATA_MAPS:
+        wanted = (
+            desired_metadata.get(section)
+            if isinstance(desired_metadata, Mapping)
+            else None
+        )
+        actual = (
+            live_metadata.get(section) if isinstance(live_metadata, Mapping) else None
+        )
+        if not isinstance(wanted, Mapping):
+            continue
+        actual = actual if isinstance(actual, Mapping) else {}
+        for key, value in wanted.items():
+            if section == "annotations" and key in _EXECUTION_ANNOTATIONS:
+                continue
+            if actual.get(key) != value:
+                changes.append(f"{section}/{key}")
+    return tuple(sorted(changes))
+
+
+def metadata_patch(
+    desired: Mapping[str, Any], changes: Iterable[str]
+) -> dict[str, dict[str, Any]]:
+    """The ``{labels: {...}, annotations: {...}}`` values of ``changes``."""
+    metadata = desired.get("metadata")
+    patch: dict[str, dict[str, Any]] = {}
+    for change in changes:
+        section, _, key = change.partition("/")
+        source = metadata.get(section) if isinstance(metadata, Mapping) else None
+        if section not in _METADATA_MAPS or not isinstance(source, Mapping):
+            raise ValueError(f"invalid metadata change: {change!r}")
+        if key not in source:
+            raise ValueError(f"invalid metadata change: {change!r}")
+        patch.setdefault(section, {})[key] = source[key]
+    return patch
+
+
+def retained_content_contained(
+    desired: ResourceIntent, current: ObservedResource
+) -> bool:
+    """The live retained object already holds everything but desired metadata.
+
+    Private values are compared by the executor after resolution; the public
+    plan never reveals whether a secret value matches.
+    """
+    expected = _without_pointers(
+        desired.manifest,
+        (binding.json_pointer for binding in desired.secret_bindings),
+    )
+    return manifest_contains(
+        without_metadata_maps(current.intent.manifest),
+        without_metadata_maps(expected),
+    )
+
+
+def _public_metadata_changes(
+    desired: ResourceIntent, current: ObservedResource
+) -> tuple[str, ...]:
+    expected = _without_pointers(
+        desired.manifest,
+        (binding.json_pointer for binding in desired.secret_bindings),
+    )
+    return metadata_changes(expected, current.intent.manifest)
 
 
 def field_drift(
@@ -1123,7 +1298,7 @@ def build_plan(
     """Build a deterministic, non-executable plan from supplied state only."""
     if authorization.target != snapshot.target:
         raise ValueError("authorization target does not match observed target")
-    for ref in authorization.adopt_resources:
+    for ref in (*authorization.adopt_resources, *authorization.replace_resources):
         _validate_target_ref(snapshot.target, ref)
     desired = {
         resource.ref: resource
@@ -1144,9 +1319,21 @@ def build_plan(
             "adoption authorization does not match unmanaged desired resources: "
             f"{sorted(unused_adoptions)}"
         )
+    for ref in authorization.replace_resources:
+        replaced = observed.get(ref)
+        if ref not in desired or replaced is None:
+            raise ValueError(
+                f"replace authorization does not name an existing desired resource: {ref}"
+            )
+        refusal = replace_refusal(replaced)
+        if refusal is not None:
+            raise ValueError(f"cannot replace {ref}: {refusal}")
+        if _propagation_deletes_protected(replaced, snapshot):
+            raise ValueError(f"cannot replace {ref}: retained descendants exist")
     dependencies = _desired_dependencies(composition)
     levels = _topological_levels(dependencies)
     actions: list[PlanAction] = []
+    changes: tuple[str, ...]
     for level in levels:
         for ref in level:
             current = observed.get(ref)
@@ -1158,6 +1345,7 @@ def build_plan(
                 operation = PlanOperation.CREATE
                 precondition = ResourcePrecondition(must_not_exist=True)
                 adoption = None
+                changes = ()
             else:
                 if ref in snapshot.incomplete_content:
                     raise ValueError(
@@ -1165,7 +1353,10 @@ def build_plan(
                     )
                 precondition = current.precondition
                 adoption = None
-                if ref in authorization.adopt_resources:
+                changes = ()
+                if ref in authorization.replace_resources:
+                    operation = PlanOperation.REPLACE
+                elif ref in authorization.adopt_resources:
                     operation = PlanOperation.ADOPT
                     adoption = adoption_for(
                         desired[ref], current, authorization.field_manager
@@ -1178,6 +1369,17 @@ def build_plan(
                     operation = PlanOperation.NOOP
                 else:
                     operation = PlanOperation.APPLY
+                    if current.retained:
+                        # A retained object is never rewritten: only its
+                        # labels and annotations may change, with a
+                        # metadata-only write.
+                        if not retained_content_contained(desired[ref], current):
+                            raise ValueError(
+                                "retained resource content differs from the live "
+                                "object; only metadata labels and annotations can "
+                                f"change on a retained object: {ref}"
+                            )
+                        changes = _public_metadata_changes(desired[ref], current)
             actions.append(
                 PlanAction(
                     operation,
@@ -1185,6 +1387,7 @@ def build_plan(
                     tuple(sorted(dependencies[ref])),
                     precondition,
                     adoption,
+                    changes,
                 )
             )
 
