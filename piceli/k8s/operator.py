@@ -20,6 +20,7 @@ from piceli.k8s.observe import (
     ObservationRef,
     ObservedObject,
     archive_resources,
+    reader_warnings,
 )
 from piceli.k8s.ops.session import DeploymentSessionArchive
 from piceli.k8s.release import ReleaseCatalog
@@ -233,7 +234,8 @@ def build_operator_report(
 
     for api_version, kind in sorted(types_to_scan):
         try:
-            live_items = reader.list(api_version, kind, namespace)
+            # Materialize inside the boundary: dynamic readers decode lazily.
+            live_items = tuple(reader.list(api_version, kind, namespace))
         except Exception as error:
             scan_errors.append(f"{api_version}/{kind}: {type(error).__name__}")
             continue
@@ -271,6 +273,7 @@ def build_operator_report(
                     )
                 )
 
+    scan_errors.extend(reader_warnings(reader))
     return OperatorReport(
         namespace=namespace,
         session_id=session_id,

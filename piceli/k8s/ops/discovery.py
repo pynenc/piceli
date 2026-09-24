@@ -171,6 +171,28 @@ class ResourceType:
             raise ValueError("invalid resource type")
 
 
+_DNS_SUBDOMAIN = re.compile(r"[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?")
+# Kinds whose API server validation only requires a valid path segment
+# (``path.IsValidPathSegmentName``), not a DNS subdomain.  Bootstrap RBAC
+# objects such as ``system:controller:token-cleaner`` rely on this.
+_PATH_SEGMENT_NAME_KINDS = frozenset(
+    ("rbac.authorization.k8s.io", kind)
+    for kind in ("ClusterRole", "ClusterRoleBinding", "Role", "RoleBinding")
+)
+
+
+def valid_resource_name(api_version: str, kind: str, name: str) -> bool:
+    """Whether Kubernetes accepts ``name`` as ``metadata.name`` for this kind.
+
+    Most kinds require an RFC 1123 DNS subdomain.  RBAC kinds accept any path
+    segment: not ``.`` or ``..`` and without ``/`` or ``%``.  Control
+    characters are always refused by the caller's ``text`` bound.
+    """
+    if (api_version.rpartition("/")[0], kind) in _PATH_SEGMENT_NAME_KINDS:
+        return name not in {".", ".."} and not any(c in name for c in "/%")
+    return _DNS_SUBDOMAIN.fullmatch(name) is not None
+
+
 @dataclass(frozen=True, order=True)
 class ResourceIdentity:
     api_version: str
@@ -182,7 +204,7 @@ class ResourceIdentity:
         ResourceType(self.api_version, self.kind)
         text(self.namespace, "namespace", empty=True)
         text(self.name, "name")
-        if not re.fullmatch(r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?", self.name):
+        if not valid_resource_name(self.api_version, self.kind, self.name):
             raise ValueError("invalid resource name")
 
 
