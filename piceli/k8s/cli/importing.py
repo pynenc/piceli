@@ -27,6 +27,7 @@ import typer
 from piceli.cli_contract import emit_json, reject, say
 
 app = typer.Typer(
+    rich_markup_mode=None,
     help="Generate a typed app module from live objects or manifest files.",
     no_args_is_help=True,
 )

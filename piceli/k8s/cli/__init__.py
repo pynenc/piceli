@@ -10,7 +10,7 @@ from piceli.k8s.cli.operator import app as operator_app
 from piceli.k8s.cli.release import app as release_app
 from piceli.k8s.cli.render import render
 
-app = typer.Typer()
+app = typer.Typer(rich_markup_mode=None)
 app.add_typer(import_app, name="import")
 app.command("deploy")(deploy)
 app.add_typer(inputs_app, name="inputs")

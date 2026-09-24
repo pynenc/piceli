@@ -18,6 +18,7 @@ from typing import Annotated, Any, NoReturn
 import typer
 
 app = typer.Typer(
+    rich_markup_mode=None,
     help="Plan, apply and roll back releases described by a release.toml spec.",
     no_args_is_help=True,
 )
@@ -607,6 +608,7 @@ def status(spec: SpecOption) -> None:
 
 
 secret_app = typer.Typer(
+    rich_markup_mode=None,
     help="Inspect the secret values of a release (owner only; values need --reveal).",
     no_args_is_help=True,
 )

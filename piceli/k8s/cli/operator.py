@@ -50,6 +50,7 @@ from piceli.k8s.release import ReleaseCatalog
 from piceli.k8s.ui_config import UI_CONFIG_ENV
 
 app = typer.Typer(
+    rich_markup_mode=None,
     help="Piceli Operator commands for reactive delivery, inventory, and artifacts."
 )
 

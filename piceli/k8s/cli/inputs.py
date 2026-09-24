@@ -26,6 +26,7 @@ from piceli.artifacts.source_identity import (
 from piceli.cli_contract import EXIT_FAILED, emit_json, reject_error, say
 
 app = typer.Typer(
+    rich_markup_mode=None,
     help="Record and verify source identities (commit, dirty flag, diff digest)."
 )
 

@@ -56,9 +56,11 @@ MaybeString = str | None
 MaybePath = Path | None
 
 app = typer.Typer(
+    rich_markup_mode=None,
     help="Inspect a deployed Piceli session and local access preferences."
 )
 forwards_app = typer.Typer(
+    rich_markup_mode=None,
     help="Supervise the port forwards declared in an access profile, with health probes."
 )
 app.add_typer(forwards_app, name="forwards")
