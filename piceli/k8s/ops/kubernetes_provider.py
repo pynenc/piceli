@@ -30,6 +30,7 @@ from piceli.k8s.ops.discovery import (
     ResourceScope,
     ResourceType,
 )
+from piceli.k8s.ops.exec_credentials import approved_refresh
 from piceli.k8s.ops.plan import (
     FieldManagerEntry,
     ResourceIntent,
@@ -152,9 +153,12 @@ class KubernetesProvider:
                 raise ValueError("live provider requires verified HTTPS")
         else:
             raise ValueError("provider source must be explicit loopback or live")
-        if (
+        # A refresh hook is accepted only when Piceli's exec credential source
+        # installed it on this very client (explicit allow_exec, pinned plugin);
+        # hooks from the SDK's loaders or any other callable are refused.
+        if api_client.configuration.proxy or (
             api_client.configuration.refresh_api_key_hook is not None
-            or api_client.configuration.proxy
+            and not approved_refresh(api_client)
         ):
             raise ValueError(
                 "provider requires explicit credentials and direct transport"

@@ -31,6 +31,7 @@ from pydantic import (
     model_validator,
 )
 
+from piceli.k8s.ops.exec_credentials import ExecPolicy
 from piceli.k8s.ops.plan import DeploymentComposition
 from piceli.k8s.ops.provider_factory import KubeconfigTarget, NodeExpectation
 from piceli.k8s.ops.secret_versions import SecretVersionRef
@@ -94,6 +95,28 @@ class TargetSpec(_Strict):
     transport: Literal["https", "loopback-http"] = "https"
     request_seconds: float = Field(default=10.0, gt=0, le=60)
     nodes: dict[str, NodeSpec] = Field(default_factory=dict)
+    # Exec credential plugins (GKE/EKS/AKS/OIDC). Off unless explicitly allowed;
+    # see docs/managed_clusters.md.
+    allow_exec: bool = Field(default=False, strict=True)
+    exec_sha256: str | None = None
+    exec_pass_env: tuple[str, ...] = ()
+    exec_timeout_seconds: float = Field(default=60.0, gt=0, le=300)
+
+    @model_validator(mode="after")
+    def _exec(self) -> TargetSpec:
+        if not self.allow_exec and self.model_fields_set & {
+            "exec_sha256",
+            "exec_pass_env",
+            "exec_timeout_seconds",
+        }:
+            raise ValueError("exec_* keys require allow_exec = true")
+        ExecPolicy(
+            self.allow_exec,
+            self.exec_sha256,
+            self.exec_pass_env,
+            self.exec_timeout_seconds,
+        )
+        return self
 
 
 class ReleaseSettings(_Strict):
@@ -763,6 +786,10 @@ class ReleaseSpec:
             namespace_uid=target.namespace_uid,
             transport=target.transport,
             request_seconds=target.request_seconds,
+            allow_exec=target.allow_exec,
+            exec_sha256=target.exec_sha256,
+            exec_pass_env=target.exec_pass_env,
+            exec_timeout_seconds=target.exec_timeout_seconds,
             nodes={
                 alias: NodeExpectation(node.name, node.uid)
                 for alias, node in target.nodes.items()
