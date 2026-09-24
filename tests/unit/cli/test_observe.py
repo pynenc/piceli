@@ -107,5 +107,5 @@ def test_serve_reports_an_occupied_port_without_a_traceback(tmp_path: Path) -> N
             ],
         )
     assert result.exit_code != 0
-    assert "already in use" in result.stdout
-    assert "Traceback" not in result.stdout
+    assert "already in use" in result.output
+    assert "Traceback" not in result.output

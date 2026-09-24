@@ -7,28 +7,36 @@ the most impact.
 
 ## Development setup
 
-Piceli uses [uv](https://docs.astral.sh/uv/) to manage Python environments.
+Piceli uses [uv](https://docs.astral.sh/uv/) for environments, locking and builds.
 
 ```bash
 git clone https://github.com/pynenc/piceli.git
 cd piceli
-make local-test-env        # create .venv with hash-locked test dependencies
-make test-local-executor   # unit tests + fault-injected API acceptance tests
+make install              # uv sync --all-extras (creates .venv from uv.lock)
+make install-pre-commit   # ruff, mypy, uv-lock and commit-message hooks
+make test                 # unit + fault-injected API acceptance tests
 ```
 
-These tests never contact a real cluster. The acceptance suite runs the real
+`make test` never contacts a real cluster. The acceptance suite runs the real
 Kubernetes client against an in-process fake API server that injects faults.
 
-To run a subset directly:
+Other targets (`make help` lists them all):
 
-```bash
-.venv/bin/python -m pytest tests/unit
-.venv/bin/python -m pytest tests/acceptance
-```
+| Target | What it does |
+| --- | --- |
+| `make lint` | Every pre-commit hook on all files (ruff lint + format, uv lock check, YAML/TOML) |
+| `make typecheck` | mypy on the `piceli` package |
+| `make test-unit` / `make test-acceptance` | One test suite |
+| `make test-integration` | Integration tests against your **current kubeconfig context**. Use a disposable cluster, e.g. `kind create cluster` |
+| `make coverage` | Tests with an HTML coverage report in `htmlcov/` |
+| `make docs` | Build the documentation with warnings treated as errors |
+| `make build` | Build the sdist and wheel into `dist/` |
 
-`tests/integration` needs a real, disposable cluster (for example
-[kind](https://kind.sigs.k8s.io/) or minikube) reachable through your current
-kubeconfig context.
+Add dependencies with `uv add <package>` (or `uv add --group test <package>` for
+development-only tools) so that `pyproject.toml` and `uv.lock` stay in sync.
+
+CI runs the same commands on Python 3.12, 3.13 and 3.14, plus the integration
+tests on a [kind](https://kind.sigs.k8s.io/) cluster and a strict docs build.
 
 ## Guidelines
 
@@ -36,7 +44,8 @@ kubeconfig context.
   network calls at import time or in pure planning code.
 - Add tests with every change. Template changes need unit tests that check the
   generated manifest.
-- Public APIs are typed and checked with mypy.
+- Code is formatted and linted with ruff, and public APIs are typed and checked
+  with mypy. `make lint` runs both.
 - Use [Conventional Commits](https://www.conventionalcommits.org/) for commit
   messages (`feat:`, `fix:`, `docs:` …).
 - Update the documentation and the changelog when behaviour changes.

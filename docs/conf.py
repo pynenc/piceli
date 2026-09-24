@@ -49,6 +49,8 @@ intersphinx_mapping = {
 # -- Autodoc settings ---------------------------------------------------
 autodoc2_render_plugin = "myst"
 autodoc2_packages = [{"path": "../piceli"}]
+# Regex constants render as MyST link syntax and break the -W build.
+autodoc2_hidden_regexes = [r"piceli\.k8s\.templates\.auxiliary\.names\..*_REGEX"]
 # autodoc2_hidden_objects = ["dunder", "private", "inherited"]
 
 # autodoc2_replace_annotations = [

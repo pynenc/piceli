@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_FROZEN: "1"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --all-extras --python 3.12
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+      - run: uv run pre-commit run --all-files --show-diff-on-failure
+
+  test:
+    name: test (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --all-extras --python ${{ matrix.python }}
+      - name: Unit and acceptance tests
+        run: uv run pytest --cov --cov-report=term --cov-report=xml
+      - name: Store coverage data
+        if: matrix.python == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-data-unit
+          path: .coverage
+          include-hidden-files: true
+
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          node_image: kindest/node:v1.33.1
+          cluster_name: piceli-ci
+      - run: uv sync --all-extras --python 3.12
+      - name: Integration tests
+        run: uv run pytest tests/integration --cov --cov-report=term
+      - name: Store coverage data
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-data-integration
+          path: .coverage
+          include-hidden-files: true
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --all-extras --group docs --python 3.12
+      - run: uv run sphinx-build -W --keep-going -b html docs docs/_build/html
+
+  coverage:
+    needs: [test, integration]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --python 3.12
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-data-*
+      - run: |
+          uv run coverage combine coverage-data-unit/.coverage coverage-data-integration/.coverage
+          uv run coverage report
+          uv run coverage html --show-contexts --title "Combined coverage"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html
+          path: htmlcov

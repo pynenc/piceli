@@ -58,8 +58,8 @@ infrastructure lifecycle and Argo CD-style continuous delivery (see the
 - **Recoverable Execution API**: Pure target-bound plans, validated discovery,
   private secret versions and journaled apply/readiness/cancel/resume/compensation.
   See the [execution guide](docs/deployment_planning.md). Run
-  `make local-test-env` and `make test-local-executor` for local API acceptance;
-  this does not qualify or contact a live cluster.
+  `make test-acceptance` for the fault-injected API acceptance suite;
+  this does not contact a live cluster.
 
 - **Modern Streamed Container Pipeline & Micro-Images**: Decouple monolithic
   runtimes into specialized 20-30MB micro-images sharing cached base layers.

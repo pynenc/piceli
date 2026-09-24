@@ -84,8 +84,8 @@ def test_operator_serve_reports_an_occupied_port_without_a_traceback(
             ],
         )
     assert result.exit_code != 0
-    assert "already in use" in result.stdout
-    assert "Traceback" not in result.stdout
+    assert "already in use" in result.output
+    assert "Traceback" not in result.output
 
 
 def test_operator_serve_rejects_invalid_ui_config(tmp_path: Path) -> None:

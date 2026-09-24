@@ -171,4 +171,3 @@ sa.json
 
 # Sphinx autodoc2 output (regenerated on every build)
 docs/apidocs/
-.venv-docs/

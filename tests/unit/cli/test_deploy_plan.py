@@ -48,4 +48,4 @@ def test_plan_with_validation_failure(k8s_objects: list[K8sObject]) -> None:
 def test_plan_requires_explicit_cluster_binding() -> None:
     result = runner.invoke(app, ["deploy", "plan"])
     assert result.exit_code != 0
-    assert "--cluster-id" in result.stdout
+    assert "--cluster-id" in result.output

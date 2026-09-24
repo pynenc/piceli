@@ -6,6 +6,16 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ## Unreleased
 
+- **Tooling:** migrated from Poetry to [uv](https://docs.astral.sh/uv/) with
+  PEP 621 metadata and the hatchling build backend. Python 3.12+ is required.
+  ruff replaces black and isort. CI runs on Python 3.12–3.14 including the
+  acceptance suite, runs integration tests on kind, and builds the docs strictly.
+  Releases use PyPI trusted publishing.
+- **Packaging:** the Google Cloud dependencies moved to the `gcp` extra
+  (`pip install "piceli[gcp]"`) and OpenTelemetry to the `telemetry` extra.
+  PyYAML is now a declared dependency. The unused `textual` dependency was
+  removed. `typer` ≥ 0.12 is required.
+
 - **Safety:** resource ownership is now an exact match on the owner annotation.
   Previously, any owner id sharing the prefix before the first `-` was treated
   as the same owner, so pruning could remove another owner's objects. To take

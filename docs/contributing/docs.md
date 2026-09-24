@@ -13,14 +13,12 @@ subproject of the Pynenc documentation.
 From the repository root:
 
 ```bash
-uv venv --python 3.12 .venv-docs
-uv pip install --python .venv-docs/bin/python -e . \
-  "sphinx>=8,<10" "myst-parser>=4" "furo>=2024" sphinx-copybutton \
-  "sphinx-design>=0.6" sphinx-inline-tabs "sphinx-autodoc2>=0.5"
-.venv-docs/bin/python -m sphinx -b html docs docs/_build/html
+make docs
 ```
 
-Then open `docs/_build/html/index.html` in a browser.
+This runs `uv run --group docs sphinx-build -W --keep-going -b html docs docs/_build/html`.
+Warnings are treated as errors, the same as in CI and on Read the Docs. Then open
+`docs/_build/html/index.html` in a browser.
 
 The API reference under `docs/apidocs/` is regenerated from docstrings on every
 build, so do not edit those files by hand.

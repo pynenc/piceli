@@ -252,29 +252,22 @@ does not itself verify an image build/import or a live rollback.
 ## Local acceptance
 
 ```sh
-make local-test-env
-make test-local-executor
+make install
+make test-acceptance   # or `make test` for unit + acceptance
 ```
 
-Bootstrap uses available Python 3.12, the hash-locked
-`tests/local-requirements.lock` and an editable install of this checkout. It fixes
-relocated entrypoints; no exact `python3.11.7` interpreter is required. To review
-and regenerate the lock explicitly:
+The acceptance suite runs the real Kubernetes client SDK against a
+fault-injecting loopback API. It exercises:
 
-```sh
-uv pip compile pyproject.toml tests/local-requirements.txt --generate-hashes --output-file tests/local-requirements.lock
-```
+- no-op reapply and partial discovery;
+- RBAC and conflict errors, byte and deadline bounds;
+- private secret versions and lost replies;
+- object and namespace recreation;
+- SIGKILL after a response but before the receipt is written;
+- readiness timeout, cancellation, resume and conservative compensation.
 
-Set `VENV=/absolute/path/to/a/new/venv` on both make commands to validate an
-isolated environment. The entire acceptance suite also passes from a fresh
-Python 3.12.7 environment using that override.
-
-The test command runs unit tests plus the actual SDK transport against a
-fault-injecting loopback API. It exercises no-op reapply, partial discovery,
-RBAC/conflict, byte/deadline bounds, private versions, lost replies, object/namespace
-recreation, SIGKILL after response before receipt, readiness timeout, cancellation,
-resume and conservative compensation. Reports and source pins are retained in
-`target/local-executor/{results.xml,evidence.json}`. Imports/planning remain
-client-free. The fake server checks request semantics; it does not reproduce all
-Kubernetes admission, SSA ownership/defaulting or controller behavior. No live
-cluster or homelab readiness is qualified by these results.
+Imports and planning remain client-free. The fake server checks request
+semantics, but it does not reproduce all of Kubernetes admission, SSA
+ownership/defaulting or controller behaviour, so these results do not qualify a
+live cluster. `make test-integration` covers that part against a disposable
+cluster (CI uses kind).
