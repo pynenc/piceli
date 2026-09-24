@@ -124,14 +124,11 @@ def test_cold_import_does_not_load_kubernetes_client() -> None:
     probe = textwrap.dedent(
         """
         import sys
-        import types
 
-        class ClientTrap(types.ModuleType):
-            def __getattr__(self, name):
-                raise AssertionError(f"planning imported Kubernetes client attribute {name}")
-
-        sys.modules["piceli.k8s.k8s_client.client"] = ClientTrap("client")
         import piceli.k8s.ops.plan
+
+        loaded = sorted(name for name in sys.modules if name.startswith("kubernetes"))
+        assert not loaded, f"planning imported the Kubernetes client: {loaded}"
         """
     )
     subprocess.run([sys.executable, "-c", probe], check=True)
@@ -141,7 +138,7 @@ def test_plan_compares_supplied_snapshot_without_cluster_access() -> None:
     desired = manifest("Deployment", "worker", replicas=2)
     changed = observed(manifest("Deployment", "worker", replicas=1), uid="worker-uid")
     with mock.patch(
-        "piceli.k8s.k8s_client.client.ClientManager.get_client",
+        "kubernetes.client.ApiClient",
         side_effect=AssertionError("planning must not create a Kubernetes client"),
     ):
         plan = plan_for([desired], (changed,))

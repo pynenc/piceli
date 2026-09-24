@@ -9,7 +9,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 - **stdout** is for machine output: one JSON object (JSON lines for streaming commands).
 - **stderr** is for human text: summaries and hints.
 - A refusal prints `{"state": "rejected", "reason": "<code>"}` and exits `2`; see {doc}`errors` or run `piceli explain <code>`.
-- **Output contract** `conforms` means the command follows these rules exactly; `partial` means it prints JSON but its refusals do not yet use the rejection shape above; `legacy` means human-oriented output.
+- **Output contract** `conforms` means the command follows these rules exactly; `partial` means it prints JSON but its refusals do not yet use the rejection shape above.
 
 | Exit code | Meaning |
 | --- | --- |
@@ -17,18 +17,6 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | `1` | the operation ran but did not succeed (not ready, drift, build failed) |
 | `2` | rejected before any change (stdout: the rejection object) |
 | `3` | approval required; nothing was executed |
-
-## Global options
-
-These apply to `model` and `deploy` (the legacy CLI engine).
-
-| Option | Type | Default | Description |
-| --- | --- | --- | --- |
-| `--namespace`, `-n` | text | env `PICELI__NAMESPACE` | Namespace on the kubernetes cluster |
-| `--module-name`, `-mn` | text | env `PICELI__MODULE_NAME` | Folder containing Kubernetes objects specifications. |
-| `--module-path`, `-mp` | text | env `PICELI__MODULE_PATH` | Folder containing Kubernetes objects specifications. |
-| `--folder-path`, `-fp` | text | env `PICELI__FOLDER_PATH` | Folder containing Kubernetes objects specifications. |
-| `--sub-elements`, `-se` | boolean | env `PICELI__SUB_ELEMENTS` | Should load kubernetes objects from sub folders/modules |
 
 ## Commands
 
@@ -44,14 +32,10 @@ These apply to `model` and `deploy` (the legacy CLI engine).
 | [`piceli artifacts pin`](#cli-artifacts-pin) | Pin one public source file by digest. | none | no |
 | [`piceli artifacts preview`](#cli-artifacts-preview) | Preview a deterministic OCI build plan (no tools run). | none | no |
 | [`piceli artifacts preview-command`](#cli-artifacts-preview-command) | Preview a pinned external build command. | none | no |
-| [`piceli deploy detail`](#cli-deploy-detail) | Analyze the required changes to deploy the specified kubernetes object model | ambient-reads | no |
-| [`piceli deploy plan`](#cli-deploy-plan) | Deployment plan for the kubernetes object model. | none | no |
-| [`piceli deploy run`](#cli-deploy-run) | Deploy Kubernetes Object Model to the current cluster. | ambient-writes | no |
 | [`piceli explain`](#cli-explain) | Explain an error code: cause, fix and whether a retry can succeed. | none | no |
 | [`piceli help-json`](#cli-help-json) | Print the whole CLI tree (commands, options, contracts) as JSON. | none | no |
 | [`piceli inputs record`](#cli-inputs-record) | Capture each declared source (or the ``--only`` ones) and write a lock. | none | no |
 | [`piceli inputs verify`](#cli-inputs-verify) | Recapture the sources and compare them with the lock (exit 1 on drift). | none | no |
-| [`piceli model list`](#cli-model-list) | Lists Kubernetes objects based on the command options. | none | no |
 | [`piceli observe forward-command`](#cli-observe-forward-command) | Print a JSON argv array for one explicit loopback-only port forward. | none | no |
 | [`piceli observe forward-list`](#cli-observe-forward-list) | List a user's saved port-forward preferences without starting a process. | none | no |
 | [`piceli observe forward-run`](#cli-observe-forward-run) | Run one saved loopback-only port forward until the caller interrupts it. | reads | no |
@@ -319,65 +303,6 @@ Preview a pinned external build command.
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** partial
 
-(cli-deploy-detail)=
-### `piceli deploy detail`
-
-Analyze the required changes to deploy the specified kubernetes object model
-
-| Option | Type | Default | Description |
-| --- | --- | --- | --- |
-| `--hide-no-action`, `-hna` | boolean | `False` | Hide the comparison details when no action is needed. |
-
-**Contract**
-
-- **Reads:** model modules/folders
-- **Writes:** nothing (read-only)
-- **Cluster:** ambient-reads
-- **Approval required:** no
-- **Safe to retry:** yes
-- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** legacy
-
-(cli-deploy-plan)=
-### `piceli deploy plan`
-
-Deployment plan for the kubernetes object model.
-
-| Option | Type | Default | Description |
-| --- | --- | --- | --- |
-| `--cluster-id` | text | required | Stable cluster identity to bind into this offline plan. |
-| `--validate`, `-v` | boolean | `False` | Validate the deployment graph for cycles and errors before showing the plan. |
-
-**Contract**
-
-- **Reads:** model modules/folders
-- **Writes:** nothing (read-only)
-- **Cluster:** none
-- **Approval required:** no
-- **Safe to retry:** yes
-- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** legacy
-
-(cli-deploy-run)=
-### `piceli deploy run`
-
-Deploy Kubernetes Object Model to the current cluster.
-
-| Option | Type | Default | Description |
-| --- | --- | --- | --- |
-| `--create-namespace`, `-c` | boolean | `True` | Create the namespace if it does not exist. |
-
-**Contract**
-
-- **Reads:** model modules/folders
-- **Writes:** nothing (read-only)
-- **Cluster:** ambient-writes
-- **Approval required:** no
-- **Safe to retry:** no
-- **Exit codes:** `0` success
-- **Output contract:** legacy
-- **Notes:** Legacy engine: uses the current kube context and has no approval step.
-
 (cli-explain)=
 ### `piceli explain`
 
@@ -460,23 +385,6 @@ Recapture the sources and compare them with the lock (exit 1 on drift).
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** partial
 - **Notes:** Refusal reasons are free text today (D0b).
-
-(cli-model-list)=
-### `piceli model list`
-
-Lists Kubernetes objects based on the command options.
-
-No options.
-
-**Contract**
-
-- **Reads:** model modules/folders
-- **Writes:** nothing (read-only)
-- **Cluster:** none
-- **Approval required:** no
-- **Safe to retry:** yes
-- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** legacy
 
 (cli-observe-forward-command)=
 ### `piceli observe forward-command`

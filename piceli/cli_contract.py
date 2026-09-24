@@ -90,15 +90,14 @@ class CommandContract:
     :param summary: One line; used when the command definition has no help.
     :param reads: Local inputs it reads (files, tools, daemons).
     :param writes: Local state it writes; empty for read-only commands.
-    :param cluster: ``"none"``, ``"reads"`` or ``"writes"`` (via an explicit
-        kubeconfig), or ``"ambient-writes"`` / ``"ambient-reads"`` for legacy
-        commands that use the current kube context.
+    :param cluster: ``"none"``, ``"reads"`` or ``"writes"`` (always via an
+        explicit kubeconfig).
     :param approval_required: The command changes a cluster, registry or node,
         or runs code, only with an explicit approval (hash/digest/flag).
     :param safe_to_retry: Re-running it after an interruption cannot cause
         harm (it is read-only, idempotent or resumable).
-    :param contract: ``"conforms"`` (this module's convention), ``"partial"``
-        (JSON on stdout, but refusals differ) or ``"legacy"`` (human output).
+    :param contract: ``"conforms"`` (this module's convention) or ``"partial"``
+        (JSON on stdout, but refusals differ).
     """
 
     summary: str
@@ -120,8 +119,7 @@ class CommandContract:
                 "writes": list(self.writes),
                 "cluster": self.cluster,
                 "contacts_cluster": self.cluster != "none",
-                "read_only": not self.writes
-                and self.cluster in {"none", "reads", "ambient-reads"},
+                "read_only": not self.writes and self.cluster in {"none", "reads"},
             },
             "approval_required": self.approval_required,
             "safe_to_retry": self.safe_to_retry,
@@ -135,7 +133,6 @@ class CommandContract:
 _C = CommandContract
 _RELEASE_READS = ("release.toml", "composition", "state_dir", "kubeconfig")
 _RELEASE_EXIT = (0, 1, 2, 3)
-_LEGACY_MODEL = ("model modules/folders",)
 
 COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
     {
@@ -375,32 +372,6 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             writes=("preferences file", "state_dir"),
             cluster="reads",
             long_running=True,
-        ),
-        # ---------------------------------------------- legacy CLI engine
-        "model list": _C(
-            "List the objects loaded from the model.",
-            reads=_LEGACY_MODEL,
-            contract="legacy",
-        ),
-        "deploy plan": _C(
-            "Show the deployment order of the model.",
-            reads=_LEGACY_MODEL,
-            contract="legacy",
-        ),
-        "deploy detail": _C(
-            "Compare the model with the cluster (current kube context).",
-            reads=_LEGACY_MODEL,
-            cluster="ambient-reads",
-            contract="legacy",
-        ),
-        "deploy run": _C(
-            "Apply the model to the current kube context (delete and recreate).",
-            reads=_LEGACY_MODEL,
-            cluster="ambient-writes",
-            safe_to_retry=False,
-            contract="legacy",
-            exit_codes=(0,),
-            notes="Legacy engine: uses the current kube context and has no approval step.",
         ),
     }
 )

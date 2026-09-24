@@ -56,25 +56,3 @@ class Service(base.Deployable):
             ),
         )
         return [obj]
-
-    # def wait(self, k8s: k8s_client.Kubernetes) -> None:
-    #     log.info("Waiting for service %s", self.name)
-    #     for event in k8s.watch.stream(
-    #         k8s.core_api.list_namespaced_endpoints,
-    #         DEFAULT_NAMESPACE,
-    #         field_selector=f"metadata.name={self.name}",
-    #         timeout_seconds=WAIT_TIMEOUT,
-    #     ):
-    #         details = []
-    #         for subset in getattr(event["object"], "subsets", []) or []:
-    #             for address in subset.addresses or []:
-    #                 details.append(
-    #                     f"Endpoint({address.ip} --> {address.target_ref.kind} {address.target_ref.name})"
-    #                 )
-    #         if details:
-    #             k8s.watch.stop()
-    #             log.info(
-    #                 "Done, found endpoints for service %s : %s", self.name, details
-    #             )
-    #             return
-    #     raise RuntimeError(f"Service {self.name} is not available")

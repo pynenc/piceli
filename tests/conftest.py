@@ -6,9 +6,6 @@ from typing import Any
 
 import pytest
 from kubernetes import config as kube_config
-from kubernetes.client.exceptions import ApiException
-
-from piceli.k8s.exceptions import api_exceptions
 
 
 class AmbientClusterAccessError(RuntimeError):
@@ -75,25 +72,3 @@ RESOURCE_JSON = '{"apiVersion": "batch/v1", "kind": "Job", "metadata": {"name": 
 def resource_dict() -> dict:
     """Parse JSON string to a Python dictionary."""
     return json.loads(RESOURCE_JSON)
-
-
-@pytest.fixture
-def not_found_api_op_exception() -> api_exceptions.ApiOperationException:
-    api = ApiException()
-    api.status = 404
-    api.reason = "NotFound"
-    api.message = "Service not found"
-    api.body = '{"kind":"Status","apiVersion":"v1","metadata":{},"status":"Failure","message":"cronjobs.batch \\"cronjob-name\\" not found","reason":"NotFound","details":{"name":"cronjob-name","group":"batch","kind":"cronjobs"},"code":404}\n'
-
-    return api_exceptions.ApiOperationException.from_api_exception(api)
-
-
-@pytest.fixture
-def todo() -> api_exceptions.ApiOperationException:
-    api = ApiException()
-    api.status = 404
-    api.reason = "NotFound"
-    api.message = "Service not found"
-    api.body = '{"kind":"Status","apiVersion":"v1","metadata":{},"status":"Failure","message":"cronjobs.batch \\"cronjob-name\\" not found","reason":"NotFound","details":{"name":"cronjob-name","group":"batch","kind":"cronjobs"},"code":404}\n'
-
-    return api_exceptions.ApiOperationException.from_api_exception(api)

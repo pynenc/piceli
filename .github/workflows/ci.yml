@@ -97,7 +97,10 @@ jobs:
           /tmp/core/bin/piceli release --help
           /tmp/core/bin/piceli inputs --help
           /tmp/core/bin/piceli observe forwards --help
-          /tmp/core/bin/piceli --folder-path tests/unit/templates/resources model list
+          /tmp/core/bin/piceli render --help
+          /tmp/core/bin/piceli render --spec examples/typed_app/release.toml > /tmp/render.yaml
+          grep -q "kind: Deployment" /tmp/render.yaml
+          /tmp/core/bin/piceli render --spec examples/typed_app/release.toml --format json | /tmp/core/bin/python -c "import json, sys; assert json.load(sys.stdin)"
 
   build-spec-arm64:
     # Real containerized build of examples/builds/rust-hello on a native arm64 runner.

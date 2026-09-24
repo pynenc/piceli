@@ -507,24 +507,6 @@ wheels = [
 ]
 
 [[package]]
-name = "cistell"
-version = "0.1.2"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/15/f7/5f61e097b8e42e560165a16780927905013d6c647032764c7f985d8e8102/cistell-0.1.2.tar.gz", hash = "sha256:5c52a043dfae476cc26611d86fbac87320ecd0efa13882c17a7b4842f57a7f42", size = 64221, upload-time = "2026-04-08T21:25:10.77Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/99/be/c4721f34183d8dd9013dbfcd8f0f835fc1fd4ca8a58d78746dfb7efed67f/cistell-0.1.2-cp312-cp312-macosx_10_12_x86_64.whl", hash = "sha256:413cea81e9e71d6e1e898c3e57c7cf1bd91d65bb7f312a8177d38111b485823f", size = 503501, upload-time = "2026-04-08T21:24:59.085Z" },
-    { url = "https://files.pythonhosted.org/packages/20/04/1428e16aa927e9418dc6ee1f32f2e946aa8aa98d0fd7069ab97d4923e282/cistell-0.1.2-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:83ce9fe60483662850b5e15dec13c185685d1a371adc6bf63ac292492948420d", size = 488537, upload-time = "2026-04-08T21:25:00.159Z" },
-    { url = "https://files.pythonhosted.org/packages/4b/9e/d3a15168268d24a1e4cbb93ccd4bdf033d724a20f92e1465733fed1f6adf/cistell-0.1.2-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:1c2f20b72aa35adad68656119131871508dfabaf3b33a21f95c0331f6eec3ea6", size = 533276, upload-time = "2026-04-08T21:25:01.228Z" },
-    { url = "https://files.pythonhosted.org/packages/d3/2a/98363c20c5194c70641ba23010d643f4899f198372a39d2db544a853c80f/cistell-0.1.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:20d5ccb244326cc6d0d9cb14c5a000d4e5e9b73769e2613b21240e36f03e8531", size = 554857, upload-time = "2026-04-08T21:25:02.541Z" },
-    { url = "https://files.pythonhosted.org/packages/43/90/408fded608241343853516a3f8dd54c1df7f75f3efabdb731d19f008e9f8/cistell-0.1.2-cp312-cp312-win_amd64.whl", hash = "sha256:92369593799c5854aad5887dcbe77ca2f3091a752058dd079e64e44c589c6e4a", size = 380718, upload-time = "2026-04-08T21:25:03.88Z" },
-    { url = "https://files.pythonhosted.org/packages/7a/71/f457c23cb36418a0ed4973c1e41967f7f113c0bdefc16d40a30bf32de0ea/cistell-0.1.2-cp313-cp313-macosx_10_12_x86_64.whl", hash = "sha256:3f6ae14eb63fd3460110a758371349f6e8f3b3218e8e061be00f21fb9e2e7809", size = 502973, upload-time = "2026-04-08T21:25:04.873Z" },
-    { url = "https://files.pythonhosted.org/packages/39/1a/a505281e86b491c2eeb82edcdc8a22e1452bf851a598fa631adac6ae1cf7/cistell-0.1.2-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:a134393c288d809a9a88ca2ca389891f3ef70ca1d5197ac80ea043ee6b946c60", size = 487870, upload-time = "2026-04-08T21:25:05.927Z" },
-    { url = "https://files.pythonhosted.org/packages/95/63/70fe87e14eaa05918a817bbae58c0013725501522eb15fe0adb3f683d9d8/cistell-0.1.2-cp313-cp313-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:7fe79b0f8ebab6cf11a801cb71cf5e8fcabfaf9ffefefc0f9e48c5fe567095c4", size = 532664, upload-time = "2026-04-08T21:25:06.979Z" },
-    { url = "https://files.pythonhosted.org/packages/bc/77/1b9b90aa0bf9be051c4e5c3fa466c2581c51ec1b32facfb53b3d5e060290/cistell-0.1.2-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:e956ec8b5429555e92f2026f8e8d593c0130050aee2492e5fd917359589b75e8", size = 554495, upload-time = "2026-04-08T21:25:07.957Z" },
-    { url = "https://files.pythonhosted.org/packages/a8/9d/f3881d2606339ca1f8340444d5e8dc87b7b53bd2b120a8af4eca91895959/cistell-0.1.2-cp313-cp313-win_amd64.whl", hash = "sha256:c3f2a2964cab33e66f2810dd8bdd21d4e71e737e1fdd20a66c7e357d3358d322", size = 380254, upload-time = "2026-04-08T21:25:09.368Z" },
-]
-
-[[package]]
 name = "colorama"
 version = "0.4.6"
 source = { registry = "https://pypi.org/simple" }
@@ -1541,13 +1523,11 @@ name = "piceli"
 version = "0.3.0"
 source = { editable = "." }
 dependencies = [
-    { name = "cistell" },
     { name = "cron-validator" },
     { name = "kubernetes" },
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "rich" },
-    { name = "tenacity" },
     { name = "typer" },
 ]
 
@@ -1556,6 +1536,7 @@ gcp = [
     { name = "google-api-core" },
     { name = "google-auth" },
     { name = "google-cloud-container" },
+    { name = "tenacity" },
 ]
 telemetry = [
     { name = "opentelemetry-api" },
@@ -1599,7 +1580,6 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cistell", specifier = ">=0.0.4" },
     { name = "cron-validator", specifier = ">=1.0.8" },
     { name = "google-api-core", marker = "extra == 'gcp'", specifier = ">=2.17" },
     { name = "google-auth", marker = "extra == 'gcp'", specifier = ">=2.27" },
@@ -1610,7 +1590,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.6" },
     { name = "pyyaml", specifier = ">=6.0.1" },
     { name = "rich", specifier = ">=13.7" },
-    { name = "tenacity", specifier = ">=8.2.3" },
+    { name = "tenacity", marker = "extra == 'gcp'", specifier = ">=8.2.3" },
     { name = "typer", specifier = ">=0.12" },
 ]
 provides-extras = ["gcp", "telemetry"]
