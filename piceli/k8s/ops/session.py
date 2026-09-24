@@ -29,6 +29,7 @@ from piceli.k8s.ops.plan import (
     ResourceIntent,
     ResourceRef,
     build_plan,
+    private_evidence,
 )
 from piceli.k8s.ops.revision import DeploymentRevision, ExecutionBundle
 from piceli.k8s.ops.secret_versions import SecretVersionRef, SecretVersionStore
@@ -382,7 +383,16 @@ class DeploymentSession:
             raise TypeError("composition factory must return DeploymentComposition")
         if _composition_references(composition) != set(inputs.values()):
             raise ValueError("deployment session composition/private input mismatch")
-        plan = build_plan(composition, snapshot, plan_authorization)
+        plan = build_plan(
+            composition,
+            snapshot,
+            plan_authorization,
+            private=private_evidence(
+                composition,
+                snapshot,
+                lambda reference: secrets.resolve(snapshot.target, reference),
+            ),
+        )
         authorization = authorization_factory(plan, snapshot)
         if timestamp(authorization.expires_at, allow_future=True) <= datetime.now(UTC):
             raise ValueError("deployment session authorization expired")

@@ -157,9 +157,11 @@ stage's outputs.
 | `checks` | The release name | No checks are declared, or the apply was skipped and this release already passed its checks |
 
 `apply` objects in an unchanged release are live objects whose form differs
-only by server defaults, and secret-bound objects (a plan never compares
-private values). A change by another client (`kubectl edit`, `scale`,
-`set image`) shows as drift and is re-applied. `--reapply` forces the apply.
+only by server defaults that no dry run could confirm (secret-bound objects
+are compared privately and are `no-op` when unchanged). An action that
+removes fields an earlier release declared always runs. A change by another
+client (`kubectl edit`, `scale`, `set image`) shows as drift and is
+re-applied. `--reapply` forces the apply.
 
 ## The combined hash
 

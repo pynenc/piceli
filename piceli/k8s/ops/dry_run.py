@@ -89,8 +89,9 @@ def probe_candidates(
 ) -> list[tuple[ResourceIntent, DiscoveredResource]]:
     """Desired objects that exist, are managed and can be compared.
 
-    Objects with secret bindings (and every Secret) are never probed: their
-    private values are never compared, so they always plan as ``apply``.
+    Objects with secret bindings (and every Secret) are never probed: a dry
+    run answer would carry their private values. They are compared in-process
+    instead (see :func:`~piceli.k8s.ops.plan.private_evidence`).
     """
     live = {resource.identity: resource for resource in artifact.resources}
     candidates = []

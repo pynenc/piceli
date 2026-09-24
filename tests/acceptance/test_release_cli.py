@@ -187,8 +187,8 @@ def test_plan_apply_release_per_digest_and_rollback(release_env):
     assert pending["intent"] == "rollback"
     assert pending["mode"] == "reapply"
     operations = {item["name"]: item["operation"] for item in pending["actions"]}
-    # Private Secret content is never compared, so the Secret is re-applied.
-    assert operations == {"settings": "no-op", "credential": "apply", "worker": "apply"}
+    # The Secret's private content is compared in-process: unchanged.
+    assert operations == {"settings": "no-op", "credential": "no-op", "worker": "apply"}
 
     code, rolled, _ = _run(
         tmp_path, "rollback", "previous", "--approve", pending["plan_hash"]
@@ -227,7 +227,8 @@ def test_unchanged_spec_replans_existing_release_as_noop(release_env):
     assert planned["release"] == applied["release"]
     assert planned["mode"] == "reapply"
     operations = {item["name"]: item["operation"] for item in planned["actions"]}
-    assert operations == {"settings": "no-op", "credential": "apply", "worker": "no-op"}
+    assert operations == {"settings": "no-op", "credential": "no-op", "worker": "no-op"}
+    assert planned["summary"] == {"no-op": 3} and planned["diffs"] == []
 
 
 def test_approval_required_without_tty_and_bad_hash(release_env):

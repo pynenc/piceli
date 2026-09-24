@@ -76,10 +76,13 @@ from piceli.k8s.ops.plan import (
     ObservedSnapshot,
     Ownership,
     PlanAuthorization,
+    PrivateEvidence,
     ResourceIntent,
     ResourceRef,
     build_plan,
+    declared_union,
     field_drift,
+    private_evidence,
     replace_refusal,
     retained_content_contained,
     transferable_managers,
@@ -246,6 +249,7 @@ def _plan_authorization(
     inherited: Sequence[str] = (),
     field_manager: str,
     replace: Sequence[Mapping[str, str]] = (),
+    previous: Sequence[ResourceIntent] = (),
 ) -> PlanAuthorization:
     return PlanAuthorization(
         target,
@@ -254,6 +258,39 @@ def _plan_authorization(
         tuple(inherited),
         field_manager,
         tuple(ResourceRef(**item) for item in replace),
+        tuple(previous),
+    )
+
+
+def _previous_declared(
+    catalog: ReleaseCatalog, names: Sequence[str]
+) -> tuple[ResourceIntent, ...]:
+    """What the named catalogued releases declared, merged per object.
+
+    Records are immutable, so the same names always give the same result; a
+    record that no longer exists contributes nothing.
+    """
+    intents: list[ResourceIntent] = []
+    for name in names:
+        try:
+            record = catalog.get(name)
+        except ValueError:
+            continue
+        for component in composition_from_archive(record.archive).components:
+            intents.extend(component.resources)
+    return declared_union(intents)
+
+
+def _private(
+    composition: DeploymentComposition,
+    snapshot: ObservedSnapshot,
+    store: SecretVersionStore,
+) -> PrivateEvidence:
+    """Private evidence for secret-bound objects (see ``private_evidence``)."""
+    return private_evidence(
+        composition,
+        snapshot,
+        lambda reference: store.resolve(snapshot.target, reference),
     )
 
 
@@ -512,6 +549,7 @@ def _compact_actions(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
                 else {}
             ),
             **({"replace": action["replace"]} if "replace" in action else {}),
+            **({"removes": action["removes"]} if "removes" in action else {}),
         }
         for action in plan["actions"]
     ]
@@ -1102,18 +1140,7 @@ class ReleaseRunner:
                 factory = self._factory(function, images, self._nodes(binding))
                 if rollback_to is None:
                     composition, material = self._preview_composition(factory)
-                    fingerprint = hashlib.sha256(
-                        _canonical(
-                            {
-                                "images": {n: i.identity for n, i in images.items()},
-                                "composition": material,
-                                "secrets": {
-                                    n: config_digest(g) for n, g in spec.secrets.items()
-                                },
-                                "rotation": uuid.uuid4().hex if rotate else None,
-                            }
-                        ).encode()
-                    ).hexdigest()
+                    fingerprint = self._fingerprint(images, material, rotate)
                     name = f"{spec.release.name}-{fingerprint[:12]}"
                     existing = {record.name for record in catalog.records()}
                     if name not in existing:
@@ -1139,12 +1166,34 @@ class ReleaseRunner:
                         )
                     name = self.resolve_rollback_target(rollback_to, catalog)
                     intent = "rollback"
-                return self._plan_reapply(name, intent, binding, catalog, requested)
+                return self._plan_reapply(
+                    name, intent, binding, catalog, store, requested
+                )
             finally:
                 journal.close()
                 store.close()
         finally:
             binding.close()
+
+    def _fingerprint(
+        self,
+        images: Mapping[str, ImageRef],
+        material: list[dict[str, Any]],
+        rotate: Sequence[str] = (),
+    ) -> str:
+        """The release fingerprint; its first 12 characters name the release."""
+        return hashlib.sha256(
+            _canonical(
+                {
+                    "images": {n: i.identity for n, i in images.items()},
+                    "composition": material,
+                    "secrets": {
+                        n: config_digest(g) for n, g in self.spec.model.secrets.items()
+                    },
+                    "rotation": uuid.uuid4().hex if rotate else None,
+                }
+            ).encode()
+        ).hexdigest()
 
     def diff(
         self,
@@ -1158,7 +1207,9 @@ class ReleaseRunner:
         Captures discovery and the server dry runs like ``plan`` but builds
         the plan in memory only: no plan, release, secret or discovery file is
         written, and the cluster receives only reads and ``dryRun=All``
-        requests. Secret-bound values are never compared.
+        requests. Secret-bound objects are compared privately only for an
+        unchanged release (a new release's secret inputs are not
+        materialized), and their values are never shown.
         """
         spec = self.spec.model
         for entry in adopt:
@@ -1178,10 +1229,17 @@ class ReleaseRunner:
             catalog = ReleaseCatalog(self.spec.catalog_path)
             self._check_target(catalog, binding.target)
             factory = self._factory(function, images, self._nodes(binding))
-            composition, _ = self._preview_composition(factory)
+            composition, material = self._preview_composition(factory)
+            records = {record.name: record for record in catalog.records()}
+            name = f"{settings.name}-{self._fingerprint(images, material)[:12]}"
+            existing = records.get(name)
+            if existing is not None:
+                # An unchanged release: its archived composition carries the
+                # real secret versions, so bound objects can be compared.
+                composition = composition_from_archive(existing.archive)
             kinds = self._kinds(composition)
             if settings.prune:
-                for record in catalog.records():
+                for record in records.values():
                     kinds |= self._kinds(composition_from_archive(record.archive))
             artifact, unavailable = self._dry_runs(
                 binding, composition, self._discover(binding, kinds)
@@ -1191,6 +1249,13 @@ class ReleaseRunner:
             resolved = requested.resolve(
                 composition, snapshot, inherited, settings.field_manager
             )
+            private = None
+            if existing is not None and self.spec.secret_store_path.exists():
+                store = SecretVersionStore(self.spec.secret_store_path)
+                try:
+                    private = _private(composition, snapshot, store)
+                finally:
+                    store.close()
             plan = build_plan(
                 composition,
                 snapshot,
@@ -1201,7 +1266,9 @@ class ReleaseRunner:
                     inherited=inherited,
                     field_manager=settings.field_manager,
                     replace=resolved.replace,
+                    previous=_previous_declared(catalog, sorted(records)),
                 ),
+                private=private,
             )
         finally:
             binding.close()
@@ -1267,6 +1334,7 @@ class ReleaseRunner:
             composition, snapshot, inherited, settings.field_manager
         )
         adopt, replace = resolved.adopt, resolved.replace
+        previous_releases = sorted(record.name for record in catalog.records())
         plan_authorization = _plan_authorization(
             binding.target,
             prune=settings.prune,
@@ -1274,6 +1342,7 @@ class ReleaseRunner:
             inherited=inherited,
             field_manager=settings.field_manager,
             replace=replace,
+            previous=_previous_declared(catalog, previous_releases),
         )
         window = settings.approval_window_seconds
         expires_at = (_now() + timedelta(seconds=window)).isoformat()
@@ -1375,11 +1444,23 @@ class ReleaseRunner:
                     "adopt": adopt,
                     "inherited_owners": inherited,
                     "replace": replace,
+                    # Earlier releases whose declarations the plan's field
+                    # removals are computed from (records are immutable).
+                    "previous_releases": previous_releases,
                 }
             )
             + "\n",
         )
         plan = record.archive.to_dict()["revision"]["desired_state"]
+        # The stored plan (real secret versions, so bound objects are compared
+        # privately); the placeholder preview only validated the grant.
+        stored = composition_from_archive(record.archive)
+        planned = build_plan(
+            stored,
+            snapshot,
+            plan_authorization,
+            private=_private(stored, snapshot, store),
+        )
         result = PlanResult(
             name,
             "create",
@@ -1393,9 +1474,7 @@ class ReleaseRunner:
             resolved.adopt_not_needed,
             requested.report(resolved),
             self._checks_policy(),
-            # The placeholder composition differs from the stored one only
-            # in secret references, which diffs never compare.
-            plan_diffs(preview, snapshot),
+            plan_diffs(planned, snapshot),
             unavailable,
         )
         self._persist_plan(result, prune=settings.prune)
@@ -1407,6 +1486,7 @@ class ReleaseRunner:
         intent: str,
         binding: ProviderBinding,
         catalog: ReleaseCatalog,
+        store: SecretVersionStore,
         requested: _Ownership,
     ) -> PlanResult:
         settings = self.spec.model.release
@@ -1425,6 +1505,7 @@ class ReleaseRunner:
             composition, snapshot, inherited, settings.field_manager
         )
         adopt, replace = resolved.adopt, resolved.replace
+        previous_releases = sorted(other.name for other in catalog.records())
         plan = build_plan(
             composition,
             snapshot,
@@ -1435,7 +1516,9 @@ class ReleaseRunner:
                 inherited=inherited,
                 field_manager=settings.field_manager,
                 replace=replace,
+                previous=_previous_declared(catalog, previous_releases),
             ),
+            private=_private(composition, snapshot, store),
         )
         expires_at = (
             _now() + timedelta(seconds=settings.approval_window_seconds)
@@ -1464,6 +1547,7 @@ class ReleaseRunner:
             adopt=adopt,
             inherited=inherited,
             replace=replace,
+            previous_releases=previous_releases,
         )
         return result
 
@@ -1476,6 +1560,7 @@ class ReleaseRunner:
         adopt: Sequence[Mapping[str, str]] = (),
         inherited: Sequence[str] = (),
         replace: Sequence[Mapping[str, str]] = (),
+        previous_releases: Sequence[str] = (),
     ) -> None:
         _write_private(
             self._plan_path(result.plan_hash),
@@ -1491,6 +1576,7 @@ class ReleaseRunner:
                     "adopt": list(adopt),
                     "inherited_owners": list(inherited),
                     "replace": list(replace),
+                    "previous_releases": list(previous_releases),
                     # What apply checks is what was reviewed, not a later spec.
                     "checks": [check.public_dict() for check in self.spec.model.checks],
                     "rollback_on_failed_checks": (
@@ -1598,6 +1684,9 @@ class ReleaseRunner:
                 inherited=sidecar.get("inherited_owners", ()),
                 field_manager=archived["field_manager"],
                 replace=sidecar.get("replace", ()),
+                previous=_previous_declared(
+                    catalog, sidecar.get("previous_releases", ())
+                ),
             ),
             grant,
             journal,
@@ -1679,10 +1768,18 @@ class ReleaseRunner:
                         inherited=pending.get("inherited_owners", ()),
                         field_manager=self.spec.model.release.field_manager,
                         replace=pending.get("replace", ()),
+                        previous=_previous_declared(
+                            catalog, pending.get("previous_releases", ())
+                        ),
                     )
                     composition = composition_from_archive(record.archive)
                     if (
-                        build_plan(composition, snapshot, plan_authorization).plan_hash
+                        build_plan(
+                            composition,
+                            snapshot,
+                            plan_authorization,
+                            private=_private(composition, snapshot, store),
+                        ).plan_hash
                         != plan_hash
                     ):
                         raise ReleaseError(

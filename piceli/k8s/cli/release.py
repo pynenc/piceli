@@ -169,7 +169,7 @@ def _say_changes(diff: dict[str, Any] | None, limit: int | None) -> None:
         )
     if diff["not_compared"]:
         _say(
-            "            secret-bound values not compared: "
+            "            secret-bound values not shown: "
             + ", ".join(diff["not_compared"])
         )
 
@@ -254,6 +254,11 @@ def _write_note(action: dict[str, Any]) -> str:
             f"  [DELETES uid {replace['deletes_uid']} and recreates it from the "
             f"release; backup written first; dependents: "
             f"{'deleted' if replace['propagation'] == 'Background' else 'orphaned'}]"
+        )
+    removes = action.get("removes")
+    if removes:
+        return (
+            "  [removes fields an earlier release declared: " + ", ".join(removes) + "]"
         )
     return ""
 
@@ -460,7 +465,7 @@ def diff(
         if item["unified"]:
             _say(item["unified"].rstrip("\n"))
         if item["not_compared"]:
-            _say("secret-bound values not compared: " + ", ".join(item["not_compared"]))
+            _say("secret-bound values not shown: " + ", ".join(item["not_compared"]))
     counts = ", ".join(f"{n} {op}" for op, n in value["summary"].items())
     _say(f"release {value['release']}: {counts or 'no actions'}")
     _emit({"state": "diffed", **value})
