@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import signal
 from pathlib import Path
@@ -222,13 +223,24 @@ def serve(
             preferences=store, user=user, kubeconfig=kubeconfig, context=context
         )
         supervisor.restore()
-    server = LocalObserveServer(
-        ("127.0.0.1", port),
-        lambda: observe_session(session_archive, reader),
-        store,
-        supervisor,
-        user,
-    )
+    try:
+        server = LocalObserveServer(
+            ("127.0.0.1", port),
+            lambda: observe_session(session_archive, reader),
+            store,
+            supervisor,
+            user,
+        )
+    except OSError as error:
+        if supervisor:
+            supervisor.close()
+        if error.errno == errno.EADDRINUSE:
+            raise typer.BadParameter(
+                f"local port {port} is already in use; choose another port or "
+                "stop the process that owns it",
+                param_hint="--port",
+            ) from None
+        raise
     typer.echo(json.dumps({"address": f"http://127.0.0.1:{port}", "local_only": True}))
 
     def stop_server(_signal: int, _frame: FrameType | None) -> None:

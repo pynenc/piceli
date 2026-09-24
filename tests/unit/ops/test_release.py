@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -13,6 +14,7 @@ from piceli.k8s.release import (
     ReleaseRecord,
     ReleaseSource,
     load_release_input,
+    source_closure,
 )
 
 
@@ -66,6 +68,39 @@ def test_catalog_is_atomic_selectable_and_immutable(tmp_path: Path) -> None:
                 ttl_seconds=3600,
             )
         )
+
+
+def test_source_closure_distinguishes_clean_git_and_private_dirty_content(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "source"
+    root.mkdir()
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True)
+
+    git("init", "-q")
+    git("config", "user.email", "piceli@example.invalid")
+    git("config", "user.name", "Piceli Test")
+    tracked = root / "deployment.py"
+    tracked.write_text("VERSION = 1\n")
+    git("add", "deployment.py")
+    git("commit", "-qm", "initial")
+
+    clean = source_closure(root)
+    assert clean.kind == "git"
+    assert len(clean.identity) == 40
+
+    tracked.write_text("VERSION = 2\n")
+    private = root / "private.py"
+    private.write_text("LOCAL = True\n")
+    dirty = source_closure(root)
+    assert dirty.kind == "dirty"
+    assert dirty.identity == dirty.dirty_closure_sha256
+    assert dirty.identity == source_closure(root).identity
+
+    private.write_text("LOCAL = False\n")
+    assert source_closure(root).identity != dirty.identity
 
 
 def test_retained_pvcs_cannot_be_expiry_cleanup() -> None:

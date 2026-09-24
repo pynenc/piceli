@@ -15,6 +15,7 @@ import subprocess
 import time
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
 from typing import Any
 
 from piceli.artifacts.gc import ImageSpaceEntry, ImageSpaceInventory, SafeGarbageCollector
@@ -452,11 +453,16 @@ _PAGE_HTML = """<!doctype html>
     }
     button.btn-open:hover, a.btn-open:hover { background: #0369a1; }
     a.btn-disabled {
-      opacity: 0.4;
-      pointer-events: none;
+      opacity: 0.6;
       background: var(--card);
       color: var(--muted);
       border-color: var(--border);
+      cursor: pointer;
+    }
+    a.btn-disabled:hover {
+      opacity: 0.9;
+      color: var(--text);
+      border-color: var(--accent);
     }
 
     .log-terminal {
@@ -471,6 +477,55 @@ _PAGE_HTML = """<!doctype html>
       overflow-y: auto;
       white-space: pre-wrap;
       box-shadow: inset 0 2px 8px rgba(0,0,0,0.5);
+    }
+    .log-terminal[data-size="small"] { font-size: 11px; line-height: 1.35; }
+    .log-terminal[data-size="normal"] { font-size: 12px; line-height: 1.55; }
+    .log-terminal[data-size="large"] { font-size: 14px; line-height: 1.7; }
+    .pod-selector-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      gap: 6px;
+      flex: 1 1 520px;
+      min-width: 320px;
+      max-height: 190px;
+      overflow-y: auto;
+      padding-right: 4px;
+    }
+    .pod-choice {
+      display: grid;
+      grid-template-columns: auto 8px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 8px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 12px;
+      min-width: 0;
+    }
+    .pod-choice span:nth-child(3) {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .log-line {
+      display: grid;
+      grid-template-columns: auto minmax(112px, 150px) minmax(0, 1fr);
+      gap: 6px;
+      padding: 1px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.03);
+    }
+    .log-badge {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 600;
+      color: #fff;
+      text-align: center;
     }
     .tab-pane { display: none; }
     .tab-pane.active { display: block; }
@@ -601,6 +656,16 @@ _PAGE_HTML = """<!doctype html>
         </div>
       </div>
 
+      <div class="section-box" data-testid="section-deployment-plan">
+        <h2>Desired vs Live Deployment Plan</h2>
+        <table>
+          <thead>
+            <tr><th>Action</th><th>Kind</th><th>Name</th><th>Reason</th><th>Image / Phase</th></tr>
+          </thead>
+          <tbody id="tbl-plan" data-testid="tbl-plan"><tr><td colspan="5" style="color: var(--muted);">Loading plan...</td></tr></tbody>
+        </table>
+      </div>
+
       <!-- System Topology & Architecture Tiers View -->
       <div class="section-box" data-testid="section-system-topology">
         <h2>
@@ -639,9 +704,9 @@ _PAGE_HTML = """<!doctype html>
         <h2>Active & Supervised Loopback Forwards</h2>
         <table>
           <thead>
-            <tr><th>Name</th><th>Namespace</th><th>Target</th><th>Local Port</th><th>Remote Port</th><th>Live Web Link</th><th>Status</th><th>Actions</th></tr>
+            <tr><th>Name</th><th>Namespace</th><th>Target</th><th>Local Port</th><th>Remote Port</th><th>Live Web Link</th><th>Health</th><th>Status</th><th>Actions</th></tr>
           </thead>
-          <tbody id="tbl-forwards" data-testid="tbl-forwards"><tr><td colspan="8" style="color: var(--muted);">No forwards active</td></tr></tbody>
+          <tbody id="tbl-forwards" data-testid="tbl-forwards"><tr><td colspan="9" style="color: var(--muted);">No forwards active</td></tr></tbody>
         </table>
       </div>
 
@@ -734,18 +799,33 @@ _PAGE_HTML = """<!doctype html>
       </div>
     </div>
 
-    <!-- TAB 6: LOGS -->
+    <!-- TAB 6: MULTI-POD LOGS -->
     <div id="tab-logs" class="tab-pane">
       <div class="section-box">
-        <h2>Bounded Workload Logs</h2>
-        <div class="form-inline">
-          <input type="text" id="log-target" data-testid="input-log-target" placeholder="Target (e.g. deployment/app or pod/...)" style="width: 280px;">
-          <input type="number" id="log-tail" data-testid="input-log-tail" value="200" min="1" max="1000" style="width: 90px;">
-          <input type="text" id="log-container" data-testid="input-log-container" placeholder="Container (optional)">
-          <label><input type="checkbox" id="log-prev" data-testid="chk-log-prev"> Previous</label>
-          <button class="btn" data-testid="btn-fetch-logs" onclick="fetchLogs()">Fetch Logs</button>
+        <h2>Multi-Pod Log Streaming</h2>
+        <div style="display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap;">
+          <div id="pod-selector" data-testid="pod-selector" class="pod-selector-grid">
+            <div style="color: var(--muted); font-size: 12px;">Loading pods...</div>
+          </div>
+          <div style="display: flex; gap: 8px; align-items: center; flex-shrink: 0;">
+            <button class="btn btn-sec" data-testid="btn-select-all" onclick="toggleAllPods(true)" style="font-size: 11px; padding: 4px 10px;">Select All</button>
+            <button class="btn btn-sec" data-testid="btn-deselect-all" onclick="toggleAllPods(false)" style="font-size: 11px; padding: 4px 10px;">Deselect All</button>
+            <select id="log-tail-multi" data-testid="select-log-tail" style="padding: 5px 8px; background: var(--card); border: 1px solid var(--border); color: var(--text); border-radius: 6px; font-size: 12px;">
+              <option value="50">50 lines</option>
+              <option value="100" selected>100 lines</option>
+              <option value="250">250 lines</option>
+              <option value="500">500 lines</option>
+            </select>
+            <button class="btn" data-testid="btn-fetch-multi-logs" onclick="fetchMultiLogs()">Fetch Logs</button>
+            <button class="btn btn-sec" id="btn-live-toggle" data-testid="btn-live-toggle" onclick="toggleLiveStream()">&#9654; Live</button>
+            <button class="btn btn-sec" data-testid="btn-log-smaller" onclick="setLogSize(-1)">A-</button>
+            <button class="btn btn-sec" data-testid="btn-log-larger" onclick="setLogSize(1)">A+</button>
+          </div>
         </div>
-        <div class="log-terminal" id="log-output" data-testid="log-output">Logs will appear here...</div>
+        <div style="margin-top: 8px;">
+          <input type="text" id="log-filter" data-testid="input-log-filter" placeholder="Filter logs..." style="width: 100%; padding: 6px 10px; background: var(--card); border: 1px solid var(--border); color: var(--text); border-radius: 6px; font-size: 12px;">
+        </div>
+        <div class="log-terminal" id="multi-log-output" data-testid="multi-log-output" data-size="normal" style="margin-top: 10px; max-height: 600px; overflow-y: auto;">Logs will appear here...</div>
       </div>
     </div>
 
@@ -863,10 +943,12 @@ _PAGE_HTML = """<!doctype html>
     ];
 
     function viewLogsFor(target) {
-      const input = document.getElementById('log-target');
-      if (input) input.value = target;
+      const podName = target.replace(/^(deployment|pod)\\//, '');
+      document.querySelectorAll('.pod-checkbox').forEach(cb => {
+        cb.checked = cb.value.startsWith(podName);
+      });
       switchTab('logs', document.querySelector('[data-testid="nav-logs"]'));
-      fetchLogs();
+      fetchMultiLogs();
     }
 
     const token = __PICELI_TOKEN__;
@@ -875,6 +957,22 @@ _PAGE_HTML = """<!doctype html>
     let currentNamespace = '';
 
     const esc = v => String(v ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const POD_COLORS = ['#38bdf8','#22c55e','#eab308','#a855f7','#ef4444','#f97316','#06b6d4','#ec4899','#14b8a6','#6366f1'];
+    const LOG_SIZES = ['small', 'normal', 'large'];
+
+    function colorForName(name) {
+      let hash = 0;
+      for (const ch of String(name || '')) hash = ((hash << 5) - hash + ch.charCodeAt(0)) | 0;
+      return POD_COLORS[Math.abs(hash) % POD_COLORS.length];
+    }
+
+    function setLogSize(delta) {
+      const el = document.getElementById('multi-log-output');
+      if (!el) return;
+      const current = LOG_SIZES.indexOf(el.dataset.size || 'normal');
+      const next = Math.max(0, Math.min(LOG_SIZES.length - 1, current + delta));
+      el.dataset.size = LOG_SIZES[next];
+    }
 
     function showToast(msg, type = 'info') {
       const c = document.getElementById('toasts');
@@ -948,6 +1046,47 @@ _PAGE_HTML = """<!doctype html>
         document.getElementById('m-unmanaged').textContent = (status.unmanaged || []).length;
         document.getElementById('m-unknown').textContent = (status.unknown || []).length;
         document.getElementById('m-release').textContent = status.active_release || 'None';
+
+        const planRows = [];
+        (status.managed || []).forEach(r => {
+          const state = r.state || 'unknown';
+          const action = state === 'present' ? 'no-op' : (state === 'missing' ? 'create' : 'inspect');
+          const reason = state === 'present' ? 'declared and live' : (state === 'missing' ? 'declared but absent' : (r.error || 'reader could not prove state'));
+          planRows.push({
+            action,
+            kind: r.ref?.kind || '',
+            name: r.ref?.name || '',
+            reason,
+            detail: (r.observed?.images || []).join(', ') || r.observed?.phase || '-'
+          });
+        });
+        (status.unmanaged || []).forEach(r => {
+          planRows.push({
+            action: 'unmanaged',
+            kind: r.ref?.kind || '',
+            name: (r.ref?.namespace ? r.ref.namespace + '/' : '') + (r.ref?.name || ''),
+            reason: 'live object outside selected deployment archive',
+            detail: r.phase || (r.images || []).join(', ') || '-'
+          });
+        });
+        (status.unknown || []).forEach(r => {
+          planRows.push({
+            action: 'inspect',
+            kind: r.ref?.kind || '',
+            name: r.ref?.name || '',
+            reason: r.error || 'unknown live state',
+            detail: '-'
+          });
+        });
+        document.getElementById('tbl-plan').innerHTML = planRows.map(row => `
+          <tr>
+            <td><span class="badge badge-${esc(row.action === 'no-op' ? 'present' : row.action === 'create' ? 'unknown' : row.action)}">${esc(row.action)}</span></td>
+            <td>${esc(row.kind)}</td>
+            <td><code>${esc(row.name)}</code></td>
+            <td>${esc(row.reason)}</td>
+            <td><code>${esc(row.detail)}</code></td>
+          </tr>
+        `).join('') || '<tr><td colspan="5" style="color:var(--muted);">No deployment plan available</td></tr>';
 
         // Render Quick Shortcuts Cards
         const shortcuts = shortcutsData.shortcuts || [];
@@ -1068,7 +1207,7 @@ _PAGE_HTML = """<!doctype html>
 
         // Forwards table
         document.getElementById('tbl-forwards').innerHTML = (forwards.forwards || []).map(f => {
-          const isRunning = (f.state === 'running');
+          const isRunning = (f.state === 'running' || f.state === 'degraded');
           const liveUrl = `http://127.0.0.1:${f.local_port}`;
           return `
             <tr data-testid="row-fwd-${esc(f.name)}">
@@ -1080,6 +1219,7 @@ _PAGE_HTML = """<!doctype html>
               <td>
                 ${isRunning ? `<a href="${esc(liveUrl)}" target="_blank" class="live-link" data-testid="link-fwd-${esc(f.name)}">${esc(liveUrl)} ↗</a>` : '<span style="color:var(--muted);">-</span>'}
               </td>
+              <td><span class="badge badge-${f.reachable === false ? 'unknown' : 'present'}">${f.reachable === false ? 'unreachable' : f.reachable === true ? 'reachable' : 'unchecked'}</span></td>
               <td><span class="badge badge-${esc(f.state)}">${esc(f.state)}${f.pid ? ' (' + f.pid + ')' : ''}</span></td>
               <td>
                 ${isRunning ? `
@@ -1091,7 +1231,7 @@ _PAGE_HTML = """<!doctype html>
               </td>
             </tr>
           `;
-        }).join('') || '<tr><td colspan="8" style="color:var(--muted);">No forwards supervised. Use shortcuts above or add one below.</td></tr>';
+        }).join('') || '<tr><td colspan="9" style="color:var(--muted);">No forwards supervised. Use shortcuts above or add one below.</td></tr>';
 
         // Artifacts
         if (artifacts.total_bytes !== undefined) {
@@ -1224,17 +1364,95 @@ _PAGE_HTML = """<!doctype html>
       loadAll();
     }
 
-    async function fetchLogs() {
-      const target = document.getElementById('log-target').value.trim();
-      const tail = parseInt(document.getElementById('log-tail').value || '200', 10);
-      const container = document.getElementById('log-container').value.trim();
-      const prev = document.getElementById('log-prev').checked;
-      if (!target) return showToast('Log target required (e.g. deployment/app)', 'error');
+    let liveStreamTimer = null;
+    let liveStreamActive = false;
+    let userScrolledUp = false;
 
-      showToast('Fetching logs for ' + target + '...', 'info');
-      const res = await req('/v1/logs?target=' + encodeURIComponent(target) + '&tail=' + tail + '&container=' + encodeURIComponent(container) + '&previous=' + prev);
-      document.getElementById('log-output').textContent = (res.lines || []).join(String.fromCharCode(10)) || res.error || 'No log lines returned.';
+    async function loadPods() {
+      try {
+        const res = await req('/v1/pods');
+        const container = document.getElementById('pod-selector');
+        if (!container) return;
+        const pods = res.pods || [];
+        if (pods.length === 0) {
+          container.innerHTML = '<div style="color: var(--muted); font-size: 12px;">No pods found in namespace</div>';
+          return;
+        }
+        container.innerHTML = pods.map((p, i) => {
+          const color = colorForName(p.name);
+          const phaseClass = p.phase === 'Running' ? 'badge-present' : 'badge-unknown';
+          return `<label class="pod-choice" data-testid="pod-chk-${esc(p.name)}" onmouseenter="this.style.borderColor='${color}'" onmouseleave="this.style.borderColor='var(--border)'">`+
+            `<input type="checkbox" class="pod-checkbox" value="${esc(p.name)}" data-color="${color}" checked style="accent-color: ${color};">`+
+            `<span style="width: 8px; height: 8px; border-radius: 50%; background: ${color}; display: inline-block;"></span>`+
+            `<span>${esc(p.name)}</span>`+
+            `<span class="badge ${phaseClass}" style="font-size: 10px; padding: 1px 6px;">${esc(p.phase)}</span>`+
+          `</label>`;
+        }).join('');
+      } catch(e) { /* ignore */ }
     }
+
+    function toggleAllPods(state) {
+      document.querySelectorAll('.pod-checkbox').forEach(cb => cb.checked = state);
+    }
+
+    function getSelectedPods() {
+      return Array.from(document.querySelectorAll('.pod-checkbox:checked')).map(cb => cb.value);
+    }
+
+    async function fetchMultiLogs() {
+      const pods = getSelectedPods();
+      if (pods.length === 0) return showToast('Select at least one pod', 'error');
+      const tail = document.getElementById('log-tail-multi').value;
+      const res = await req('/v1/logs/multi?pods=' + encodeURIComponent(pods.join(',')) + '&tail=' + tail);
+      renderMultiLogs(res.lines || []);
+    }
+
+    function renderMultiLogs(lines) {
+      const filter = (document.getElementById('log-filter').value || '').toLowerCase();
+      const el = document.getElementById('multi-log-output');
+      if (!el) return;
+      const wasAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 30;
+      if (lines.length === 0) {
+        el.innerHTML = '<div style="color: var(--muted);">No log lines returned.</div>';
+        return;
+      }
+      const html = lines
+        .filter(l => !filter || (l.msg && l.msg.toLowerCase().includes(filter)) || (l.pod && l.pod.toLowerCase().includes(filter)))
+        .map(l => {
+          const ts = l.ts ? `<span style="color: var(--muted); margin-right: 6px;">${esc(l.ts.substring(11, 23))}</span>` : '';
+          const color = colorForName(l.pod);
+          const badge = `<span class="log-badge" style="background: ${color}40; border: 1px solid ${color}80;">${esc(l.badge)}</span>`;
+          return `<div class="log-line">${ts}${badge}<span>${esc(l.msg)}</span></div>`;
+        }).join('');
+      el.innerHTML = html;
+      if (wasAtBottom && !userScrolledUp) el.scrollTop = el.scrollHeight;
+    }
+
+    function toggleLiveStream() {
+      liveStreamActive = !liveStreamActive;
+      const btn = document.getElementById('btn-live-toggle');
+      if (liveStreamActive) {
+        btn.innerHTML = '&#9208; Pause';
+        btn.classList.remove('btn-sec');
+        btn.classList.add('btn-danger');
+        fetchMultiLogs();
+        liveStreamTimer = setInterval(fetchMultiLogs, 2000);
+        showToast('Live log streaming started (2s refresh)', 'success');
+      } else {
+        btn.innerHTML = '&#9654; Live';
+        btn.classList.remove('btn-danger');
+        btn.classList.add('btn-sec');
+        if (liveStreamTimer) { clearInterval(liveStreamTimer); liveStreamTimer = null; }
+        showToast('Live log streaming paused', 'info');
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      const logEl = document.getElementById('multi-log-output');
+      if (logEl) logEl.addEventListener('scroll', () => {
+        userScrolledUp = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight > 50;
+      });
+    });
 
     async function createBackup() {
       showToast('Creating backup archive...', 'info');
@@ -1253,6 +1471,7 @@ _PAGE_HTML = """<!doctype html>
     }
 
     loadAll();
+    loadPods();
     startRefreshLoop();
   </script>
 </body>
@@ -1277,6 +1496,9 @@ class LocalObserveServer(ThreadingHTTPServer):
         artifact_inventory: ImageSpaceInventory | None = None,
         log_reader_fn: Callable[..., list[str]] | None = None,
         namespace: str = "default",
+        kubeconfig: Path | None = None,
+        kubectl: str = "kubectl",
+        context: str | None = None,
     ) -> None:
         if address[0] not in {"127.0.0.1", "::1"}:
             raise ValueError("Piceli observe server must bind to loopback")
@@ -1290,6 +1512,9 @@ class LocalObserveServer(ThreadingHTTPServer):
         self.artifact_inventory = artifact_inventory
         self.log_reader_fn = log_reader_fn
         self.namespace = namespace
+        self.kubeconfig = kubeconfig
+        self.kubectl = kubectl
+        self.context = context
         self.local_token = secrets.token_urlsafe(24)
         super().__init__(address, LocalObserveHandler)
 
@@ -1365,7 +1590,7 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
                     "users": [
                         {
                             "user": item.user,
-                            "forwards": [forward.__dict__ for forward in item.forwards],
+                            "forwards": [forward.public_dict() for forward in item.forwards],
                         }
                         for item in sorted(selected, key=lambda item: item.user)
                     ]
@@ -1424,6 +1649,12 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
                     })
             self._json(200, {"policies": policies_data, "watched_branches": []})
             return
+        if self.path == "/v1/pods":
+            self._handle_pods()
+            return
+        if self.path.startswith("/v1/logs/multi"):
+            self._handle_logs_multi()
+            return
         if self.path.startswith("/v1/logs"):
             if self.server.log_reader_fn:
                 try:
@@ -1436,6 +1667,101 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
             return
 
         self._json(404, {"error": "not-found"})
+
+    def _handle_pods(self) -> None:
+        """List running pods in the configured namespace."""
+        if not self.server.kubeconfig:
+            self._json(200, {"pods": []})
+            return
+        cmd = [
+            self.server.kubectl,
+            "--kubeconfig", str(self.server.kubeconfig),
+        ]
+        if self.server.context:
+            cmd.extend(["--context", self.server.context])
+        newline = chr(10)
+        cmd.extend([
+            "--namespace", self.server.namespace,
+            "get", "pods",
+            "-o", f"jsonpath={{range .items[*]}}{{.metadata.name}}|{{.status.phase}}|{{.status.containerStatuses[0].restartCount}}|{{.status.containerStatuses[*].name}}{newline}{{end}}",
+        ])
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            pods = []
+            for line in result.stdout.strip().splitlines():
+                parts = line.split("|")
+                if len(parts) >= 2:
+                    pods.append({
+                        "name": parts[0],
+                        "phase": parts[1],
+                        "restarts": parts[2] if len(parts) > 2 else "0",
+                        "containers": parts[3] if len(parts) > 3 else "",
+                    })
+            self._json(200, {"pods": pods})
+        except Exception as e:
+            self._json(500, {"error": str(e)})
+
+    def _handle_logs_multi(self) -> None:
+        """Fetch and merge logs from multiple pods."""
+        if not self.server.kubeconfig:
+            self._json(200, {"lines": []})
+            return
+        parsed = urlparse(self.path)
+        params = parse_qs(parsed.query)
+        pod_names = [p.strip() for p in params.get("pods", [""])[0].split(",") if p.strip()]
+        tail = min(int(params.get("tail", ["100"])[0]), 2000)
+        if not pod_names:
+            self._json(400, {"error": "no pods specified"})
+            return
+        POD_COLORS = [
+            "#38bdf8", "#22c55e", "#eab308", "#a855f7", "#ef4444",
+            "#f97316", "#06b6d4", "#ec4899", "#14b8a6", "#6366f1",
+        ]
+        all_lines = []
+        for idx, pod in enumerate(pod_names[:10]):
+            if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,252}", pod):
+                continue
+            cmd = [
+                self.server.kubectl,
+                "--kubeconfig", str(self.server.kubeconfig),
+            ]
+            if self.server.context:
+                cmd.extend(["--context", self.server.context])
+            cmd.extend([
+                "--namespace", self.server.namespace,
+                "logs", f"pod/{pod}",
+                f"--tail={tail}",
+                "--timestamps=true",
+                "--all-containers=true",
+            ])
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+                color = POD_COLORS[idx % len(POD_COLORS)]
+                short_name = pod.split("-")[0:3]
+                badge = "-".join(short_name) if len(short_name) > 1 else pod[:20]
+                for raw_line in result.stdout.strip().splitlines():
+                    ts = ""
+                    msg = raw_line
+                    if len(raw_line) > 30 and raw_line[4] == "-":
+                        ts = raw_line[:30]
+                        msg = raw_line[31:] if len(raw_line) > 31 else ""
+                    all_lines.append({
+                        "ts": ts,
+                        "pod": pod,
+                        "badge": badge,
+                        "color": color,
+                        "msg": msg,
+                    })
+            except Exception:
+                all_lines.append({
+                    "ts": "",
+                    "pod": pod,
+                    "badge": pod[:20],
+                    "color": POD_COLORS[idx % len(POD_COLORS)],
+                    "msg": f"[error fetching logs from {pod}]",
+                })
+        all_lines.sort(key=lambda x: x.get("ts", ""))
+        self._json(200, {"lines": all_lines})
 
     def do_POST(self) -> None:  # noqa: N802
         if not self._check_auth():

@@ -151,12 +151,11 @@ def serve(
     pref_store = PreferenceStore(preferences)
     file_state = FileStateStore(state_dir) if state_dir else None
 
-    supervisor = None
-    if user:
-        supervisor = ForwardSupervisor(
-            preferences=pref_store, user=user, kubeconfig=kubeconfig, context=context
-        )
-        supervisor.restore()
+    effective_user = user or os.environ.get("USER") or "operator"
+    supervisor = ForwardSupervisor(
+        preferences=pref_store, user=effective_user, kubeconfig=kubeconfig, context=context
+    )
+    supervisor.restore()
 
     def report_fn() -> Any:
         return build_operator_report(
@@ -171,9 +170,12 @@ def serve(
         report_fn,
         pref_store,
         supervisor=supervisor,
-        user=user,
+        user=effective_user,
         catalog=cat,
         state_store=file_state,
+        namespace=namespace,
+        kubeconfig=kubeconfig,
+        context=context,
     )
 
     typer.echo(json.dumps({"address": f"http://127.0.0.1:{port}", "operator": True}))

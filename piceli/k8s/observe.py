@@ -9,9 +9,11 @@ that archive.  It never applies, adopts, deletes, or resolves Secret values.
 from __future__ import annotations
 
 import json
+import http.client
 import os
 import re
 import signal
+import socket
 import subprocess
 import tempfile
 import threading
@@ -167,13 +169,19 @@ def archive_resources(archive: DeploymentSessionArchive) -> tuple[ObservationRef
         items = component.get("resources", [component])
         for resource in items:
             reference = resource.get("resource", resource)
-            if isinstance(reference, Mapping) and "kind" in reference and "name" in reference:
-                refs.add(ObservationRef(
-                    api_version=str(reference.get("api_version", "v1")),
-                    kind=str(reference["kind"]),
-                    namespace=str(reference.get("namespace", "")),
-                    name=str(reference["name"]),
-                ))
+            if (
+                isinstance(reference, Mapping)
+                and "kind" in reference
+                and "name" in reference
+            ):
+                refs.add(
+                    ObservationRef(
+                        api_version=str(reference.get("api_version", "v1")),
+                        kind=str(reference["kind"]),
+                        namespace=str(reference.get("namespace", "")),
+                        name=str(reference["name"]),
+                    )
+                )
     return tuple(sorted(refs))
 
 
@@ -212,7 +220,11 @@ def observe_session(
     for namespace in sorted(namespaces):
         for api_version, kind in sorted(types):
             try:
-                objects = reader.list(api_version, kind, namespace)
+                # Dynamic Kubernetes readers can defer decoding until iteration.
+                # Materialize inside this boundary so one malformed or
+                # cluster-scoped object becomes an honest scan warning rather
+                # than taking down the complete local dashboard.
+                objects = tuple(reader.list(api_version, kind, namespace))
             except Exception as error:  # Access boundaries remain visible to callers.
                 errors.append(f"{api_version}/{kind}: {type(error).__name__}")
                 continue
@@ -321,6 +333,7 @@ class PortForward:
     target: str
     local_port: int
     remote_port: int
+    health_path: str | None = None
 
     def __post_init__(self) -> None:
         if not _NAME.fullmatch(self.name) or not _NAME.fullmatch(self.namespace):
@@ -334,6 +347,12 @@ class PortForward:
                 or not 1 <= port <= 65535
             ):
                 raise ValueError("forward ports must be between 1 and 65535")
+        if self.health_path is not None and (
+            not self.health_path.startswith("/")
+            or "\\r" in self.health_path
+            or "\\n" in self.health_path
+        ):
+            raise ValueError("forward health path must be a safe absolute path")
 
     def command(
         self, *, kubectl: str, kubeconfig: Path, context: str | None
@@ -352,6 +371,19 @@ class PortForward:
             "--address",
             "127.0.0.1",
         ]
+
+    def public_dict(self) -> dict[str, Any]:
+        """Return stable non-secret preference JSON without optional unset fields."""
+        value: dict[str, Any] = {
+            "name": self.name,
+            "namespace": self.namespace,
+            "target": self.target,
+            "local_port": self.local_port,
+            "remote_port": self.remote_port,
+        }
+        if self.health_path is not None:
+            value["health_path"] = self.health_path
+        return value
 
 
 @dataclass(frozen=True)
@@ -443,6 +475,7 @@ KNOWN_SHORTCUTS: dict[str, dict[str, Any]] = {
         "local_port": 3000,
         "remote_port": 3000,
         "default_namespace": "infinite-haiku-p2",
+        "health_path": "/",
     },
     "monitor": {
         "label": "Rustvello / Pynenc Monitor",
@@ -451,6 +484,7 @@ KNOWN_SHORTCUTS: dict[str, dict[str, Any]] = {
         "local_port": 18084,
         "remote_port": 18084,
         "default_namespace": "infinite-haiku-p2",
+        "health_path": "/",
     },
     "poet": {
         "label": "Poet Telemetry API",
@@ -459,12 +493,21 @@ KNOWN_SHORTCUTS: dict[str, dict[str, Any]] = {
         "local_port": 18086,
         "remote_port": 18080,
         "default_namespace": "infinite-haiku-p2",
+        "health_path": "/healthz",
     },
     "shibuya": {
         "label": "Shibuya Signaling API",
         "description": "Realtime Signaling & Offload Coordinator",
         "target": "service/ih-shibuya",
         "local_port": 18083,
+        "remote_port": 18083,
+        "default_namespace": "infinite-haiku-p2",
+    },
+    "shibuya-ws": {
+        "label": "Shibuya WebSocket (Kabuki)",
+        "description": "Browser WebSocket Signaling Gateway for Kabuki",
+        "target": "service/ih-shibuya",
+        "local_port": 18082,
         "remote_port": 18083,
         "default_namespace": "infinite-haiku-p2",
     },
@@ -484,9 +527,10 @@ class ForwardStatus:
     local_port: int = 0
     remote_port: int = 0
     namespace: str = ""
+    reachable: bool | None = None
 
     def __post_init__(self) -> None:
-        if self.state not in {"stopped", "running", "backoff", "failed"}:
+        if self.state not in {"stopped", "running", "degraded", "backoff", "failed"}:
             raise ValueError("invalid port-forward state")
 
 
@@ -499,6 +543,7 @@ class _ManagedForward:
     restarts: int = 0
     next_start: float = 0.0
     error: str | None = None
+    started_at: float = 0.0
 
 
 class ForwardSupervisor:
@@ -560,16 +605,21 @@ class ForwardSupervisor:
                 fwd = managed.forward
                 process = managed.process
                 if process is not None and process.poll() is None:
+                    reachable = self._probe(managed.forward)
                     result.append(
                         ForwardStatus(
                             name=name,
-                            state="running",
+                            state="running" if reachable else "degraded",
                             pid=process.pid,
                             restarts=managed.restarts,
+                            error=None
+                            if reachable
+                            else "loopback endpoint is unavailable",
                             target=fwd.target,
                             local_port=fwd.local_port,
                             remote_port=fwd.remote_port,
                             namespace=fwd.namespace,
+                            reachable=reachable,
                         )
                     )
                 elif managed.next_start > time.monotonic():
@@ -624,6 +674,7 @@ class ForwardSupervisor:
                         target=sc["target"],
                         local_port=sc["local_port"],
                         remote_port=sc["remote_port"],
+                        health_path=sc.get("health_path"),
                     )
                     self._forwards[name] = _ManagedForward(fwd)
                 else:
@@ -646,6 +697,7 @@ class ForwardSupervisor:
                     target=sc["target"],
                     local_port=sc["local_port"],
                     remote_port=sc["remote_port"],
+                    health_path=sc.get("health_path"),
                 )
                 self._forwards[shortcut_id] = _ManagedForward(fwd)
             managed = self._forwards[shortcut_id]
@@ -677,7 +729,9 @@ class ForwardSupervisor:
                 existing = [f for f in user_pref.forwards if f.name != forward.name]
                 existing.append(forward)
                 self._preferences.replace_user(
-                    UserPreferences(self._user, tuple(sorted(existing, key=lambda f: f.name)))
+                    UserPreferences(
+                        self._user, tuple(sorted(existing, key=lambda f: f.name))
+                    )
                 )
             except Exception:
                 pass
@@ -693,7 +747,9 @@ class ForwardSupervisor:
                 user_pref = users.get(self._user, UserPreferences(self._user))
                 existing = [f for f in user_pref.forwards if f.name != name]
                 self._preferences.replace_user(
-                    UserPreferences(self._user, tuple(sorted(existing, key=lambda f: f.name)))
+                    UserPreferences(
+                        self._user, tuple(sorted(existing, key=lambda f: f.name))
+                    )
                 )
             except Exception:
                 pass
@@ -704,7 +760,11 @@ class ForwardSupervisor:
             results = []
             for sc_id, sc in KNOWN_SHORTCUTS.items():
                 managed = self._forwards.get(sc_id)
-                ns = managed.forward.namespace if managed else (namespace or sc["default_namespace"])
+                ns = (
+                    managed.forward.namespace
+                    if managed
+                    else (namespace or sc["default_namespace"])
+                )
                 state = "stopped"
                 pid = None
                 restarts = 0
@@ -713,28 +773,35 @@ class ForwardSupervisor:
                     restarts = managed.restarts
                     process = managed.process
                     if process is not None and process.poll() is None:
-                        state = "running"
+                        reachable = self._probe(managed.forward)
+                        state = "running" if reachable else "degraded"
                         pid = process.pid
+                        error = (
+                            None if reachable else "loopback endpoint is unavailable"
+                        )
                     elif managed.next_start > time.monotonic():
                         state = "backoff"
                         error = managed.error
                     elif managed.error:
                         state = "failed"
                         error = managed.error
-                results.append({
-                    "id": sc_id,
-                    "label": sc["label"],
-                    "description": sc["description"],
-                    "target": sc["target"],
-                    "local_port": sc["local_port"],
-                    "remote_port": sc["remote_port"],
-                    "namespace": ns,
-                    "state": state,
-                    "pid": pid,
-                    "restarts": restarts,
-                    "error": error,
-                    "url": f"http://127.0.0.1:{sc['local_port']}",
-                })
+                results.append(
+                    {
+                        "id": sc_id,
+                        "label": sc["label"],
+                        "description": sc["description"],
+                        "target": sc["target"],
+                        "local_port": sc["local_port"],
+                        "remote_port": sc["remote_port"],
+                        "namespace": ns,
+                        "state": state,
+                        "pid": pid,
+                        "restarts": restarts,
+                        "error": error,
+                        "reachable": state == "running",
+                        "url": f"http://127.0.0.1:{sc['local_port']}",
+                    }
+                )
             return results
 
     def stop(self, name: str) -> None:
@@ -762,6 +829,20 @@ class ForwardSupervisor:
         for managed in self._forwards.values():
             process = managed.process
             if process is not None and process.poll() is None:
+                # A running kubectl process is not sufficient evidence that the
+                # local browser can reach its upstream. Give a just-spawned
+                # forward a brief bind grace period, then restart only this
+                # supervisor-owned process when its loopback endpoint fails.
+                if time.monotonic() - managed.started_at >= 3.0 and not self._probe(
+                    managed.forward
+                ):
+                    self._stop_process(process)
+                    managed.process = None
+                    managed.restarts += 1
+                    managed.error = "loopback endpoint is unavailable"
+                    managed.next_start = time.monotonic() + min(
+                        30.0, float(2 ** min(managed.restarts, 5))
+                    )
                 continue
             if process is not None:
                 managed.process = None
@@ -775,6 +856,13 @@ class ForwardSupervisor:
     def _start_locked(self, managed: _ManagedForward) -> None:
         if managed.process is not None and managed.process.poll() is None:
             return
+        if not self._port_available(managed.forward.local_port):
+            # An ambient loopback listener is not ours to inspect, adopt, or
+            # terminate. Leave it alone and make the conflict visible while
+            # periodically retrying in case its owner intentionally stops it.
+            managed.error = "loopback port is occupied by an external process"
+            managed.next_start = time.monotonic() + 1.0
+            return
         command = managed.forward.command(
             kubectl=self._kubectl, kubeconfig=self._kubeconfig, context=self._context
         )
@@ -787,6 +875,7 @@ class ForwardSupervisor:
                 start_new_session=True,
             )
             managed.error = None
+            managed.started_at = time.monotonic()
         except OSError as error:
             managed.process = None
             managed.restarts += 1
@@ -803,14 +892,51 @@ class ForwardSupervisor:
         managed.process = None
         managed.next_start = float("inf")
         if process is not None and process.poll() is None:
+            self._stop_process(process)
+
+    @staticmethod
+    def _stop_process(process: subprocess.Popen[bytes]) -> None:
+        """Terminate one fresh process group previously created by this supervisor."""
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+            process.wait(timeout=3)
+        except (OSError, subprocess.TimeoutExpired):
             try:
-                os.killpg(process.pid, signal.SIGTERM)
-                process.wait(timeout=3)
-            except (OSError, subprocess.TimeoutExpired):
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except OSError:
-                    pass
+                os.killpg(process.pid, signal.SIGKILL)
+            except OSError:
+                pass
+
+    @staticmethod
+    def _probe(forward: PortForward) -> bool:
+        """Check the owned loopback endpoint without sending credentials or cluster traffic."""
+        try:
+            if forward.health_path is None:
+                with socket.create_connection(
+                    ("127.0.0.1", forward.local_port), timeout=0.5
+                ):
+                    return True
+            connection = http.client.HTTPConnection(
+                "127.0.0.1", forward.local_port, timeout=0.75
+            )
+            try:
+                connection.request("GET", forward.health_path)
+                # Authentication challenges and redirects still prove that the
+                # forward reaches a live owned upstream. Server errors do not.
+                return connection.getresponse().status < 500
+            finally:
+                connection.close()
+        except (OSError, http.client.HTTPException):
+            return False
+
+    @staticmethod
+    def _port_available(port: int) -> bool:
+        """Return whether a loopback port can be safely owned by this supervisor."""
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+                listener.bind(("127.0.0.1", port))
+        except OSError:
+            return False
+        return True
 
 
 def run_port_forward(command: list[str]) -> int:
