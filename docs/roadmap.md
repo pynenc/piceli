@@ -20,6 +20,7 @@ Priorities may change. Progress is tracked in
 | Server-side apply with preconditions, journal and resume | 🟡 Python API only; not yet used by the CLI |
 | Field-level diff | 🟡 `deploy detail` (CLI engine) only |
 | Safe pruning of removed resources | 🟡 Recoverable engine only, opt-in |
+| Adopt or replace objects created by other tools (`release --adopt`, `--adopt-all-desired`, `--replace`) | 🟡 Preview |
 | Environments and overlays (Kustomize equivalent) | ❌ Not yet: plain Python functions for now |
 | Reusable, versioned packages (Helm equivalent) | ❌ Not yet |
 | Custom resources (CRDs) | 🟡 As raw manifests in the recoverable engine |

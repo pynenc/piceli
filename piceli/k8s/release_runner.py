@@ -64,9 +64,12 @@ from piceli.k8s.ops.plan import (
     ObservedSnapshot,
     Ownership,
     PlanAuthorization,
+    ResourceIntent,
     ResourceRef,
     build_plan,
     field_drift,
+    replace_refusal,
+    retained_content_contained,
     transferable_managers,
 )
 from piceli.k8s.ops.provider_factory import ProviderBinding, build_provider
@@ -106,7 +109,22 @@ ProviderFactory = Callable[[ReleaseSpec], ProviderBinding]
 
 
 class ReleaseError(ValueError):
-    """A release operation was refused; the message is safe to print."""
+    """A release operation was refused; the message is safe to print.
+
+    ``code`` names the refusal (see docs/release_cli.md) and ``details`` holds
+    structured, printable data such as the list of blocking objects.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str | None = None,
+        details: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.details = dict(details or {})
 
 
 def _canonical(value: Any) -> str:
@@ -182,6 +200,7 @@ def _plan_authorization(
     adopt: Sequence[Mapping[str, str]] = (),
     inherited: Sequence[str] = (),
     field_manager: str,
+    replace: Sequence[Mapping[str, str]] = (),
 ) -> PlanAuthorization:
     return PlanAuthorization(
         target,
@@ -189,49 +208,120 @@ def _plan_authorization(
         prune,
         tuple(inherited),
         field_manager,
+        tuple(ResourceRef(**item) for item in replace),
     )
 
 
-def resolve_adoptions(
+def _declared_match(
+    entry: str, declared: Sequence[ResourceRef], what: str
+) -> ResourceRef:
+    api_version, kind, name = parse_adopt_entry(entry, what=what)
+    matches = [
+        ref
+        for ref in declared
+        if ref.kind == kind
+        and ref.name == name
+        and (api_version is None or ref.api_version == api_version)
+    ]
+    if len(matches) != 1:
+        raise ReleaseError(
+            f"{what} {entry!r} does not name exactly one resource declared by "
+            "the composition",
+            code=f"{what}-entry-not-declared",
+        )
+    return matches[0]
+
+
+def _label(ref: ResourceRef) -> str:
+    return f"{ref.kind}/{ref.name}"
+
+
+@dataclass(frozen=True)
+class OwnershipResolution:
+    """What a plan is authorized to adopt or replace, and what was not needed."""
+
+    adopt: list[dict[str, str]]
+    replace: list[dict[str, str]]
+    adopt_not_needed: list[str]
+    replace_not_needed: list[str]
+
+
+def resolve_ownership(
     requested: Sequence[str],
     composition: DeploymentComposition,
     snapshot: ObservedSnapshot,
     inherited: Sequence[str],
     field_manager: str,
-) -> tuple[list[dict[str, str]], list[str]]:
-    """Map ``Kind/name`` entries to declared resources that need adoption.
+    *,
+    replace: Sequence[str] = (),
+    adopt_all_desired: bool = False,
+) -> OwnershipResolution:
+    """Map ``Kind/name`` entries to declared resources that need adoption or replace.
 
     An entry must name a resource the composition declares (a typo is an
-    error, never a silent no-op). Entries whose object is absent, or already
-    managed with nothing to reclaim, need no adoption and are returned
+    error, never a silent no-op). Adopt entries whose object is absent, or
+    already managed with nothing to reclaim, need no adoption and are returned
     separately for the report, so a standing ``[release] adopt`` list keeps
     working after the first release. A managed, non-retained object that
     other clients have written to since (transferable foreign field managers)
     is taken over again, which reclaims those fields.
+
+    Replace entries must name an existing **unmanaged, non-retained** object
+    that no other object owns; absent objects are reported as not needed and
+    every other case is refused. ``adopt_all_desired`` adopts every unmanaged
+    object the composition declares that is not replaced, and nothing else.
+
+    Every object that blocks the plan is reported in one refusal, each with
+    the flags that would unblock it.
     """
     declared = [
         resource.ref
         for component in composition.components
         for resource in component.resources
     ]
+    intents: dict[ResourceRef, ResourceIntent] = {
+        resource.ref: resource
+        for component in composition.components
+        for resource in component.resources
+    }
     observed = {item.intent.ref: item for item in snapshot.resources}
     adopt: set[ResourceRef] = set()
+    replaced: set[ResourceRef] = set()
     not_needed: set[str] = set()
-    for entry in dict.fromkeys(requested):
-        api_version, kind, name = parse_adopt_entry(entry)
-        matches = [
-            ref
-            for ref in declared
-            if ref.kind == kind
-            and ref.name == name
-            and (api_version is None or ref.api_version == api_version)
-        ]
-        if len(matches) != 1:
-            raise ReleaseError(
-                f"adopt {entry!r} does not name exactly one resource declared by "
-                "the composition"
+    replace_not_needed: set[str] = set()
+    blocking: list[dict[str, Any]] = []
+    refused: set[ResourceRef] = set()
+    for entry in dict.fromkeys(replace):
+        ref = _declared_match(entry, declared, "replace")
+        current = observed.get(ref)
+        if current is None:
+            replace_not_needed.add(_label(ref))
+            continue
+        refusal = replace_refusal(current)
+        if refusal is not None:
+            refused.add(ref)
+            blocking.append(
+                {
+                    "kind": ref.kind,
+                    "name": ref.name,
+                    "code": "replace-refused",
+                    "reason": refusal,
+                    "suggest": (
+                        [f"--adopt {_label(ref)}"]
+                        if current.ownership is Ownership.UNMANAGED
+                        else [f"remove {_label(ref)} from --replace/[release] replace"]
+                    ),
+                }
             )
-        ref = matches[0]
+            continue
+        replaced.add(ref)
+    for entry in dict.fromkeys(requested):
+        ref = _declared_match(entry, declared, "adopt")
+        if ref in replaced:
+            raise ReleaseError(
+                f"{_label(ref)} is named by both adopt and replace; choose one",
+                code="adopt-and-replace",
+            )
         current = observed.get(ref)
         if current is not None and (
             current.ownership is Ownership.UNMANAGED
@@ -245,21 +335,100 @@ def resolve_adoptions(
         ):
             adopt.add(ref)
         else:
-            not_needed.add(f"{ref.kind}/{ref.name}")
-    unauthorized = sorted(
-        f"{ref.kind}/{ref.name}"
-        for ref in declared
-        if ref not in adopt
-        and ref in observed
-        and observed[ref].ownership is Ownership.UNMANAGED
-    )
-    if unauthorized:
+            not_needed.add(_label(ref))
+    if adopt_all_desired:
+        adopt |= {
+            ref
+            for ref in declared
+            if ref in observed
+            and ref not in replaced
+            and observed[ref].ownership is Ownership.UNMANAGED
+        }
+    for ref in declared:
+        current = observed.get(ref)
+        if current is None or ref in refused:
+            continue
+        if (
+            ref not in adopt
+            and ref not in replaced
+            and current.ownership is Ownership.UNMANAGED
+        ):
+            retained = current.retained
+            blocking.append(
+                {
+                    "kind": ref.kind,
+                    "name": ref.name,
+                    "code": "resource-requires-adoption",
+                    "reason": "exists and is not managed by this release's owner"
+                    + ("; retained: replace is never allowed" if retained else ""),
+                    "suggest": [f"--adopt {_label(ref)}"]
+                    + ([] if retained else [f"--replace {_label(ref)}"]),
+                }
+            )
+        elif (
+            current.retained
+            and (ref in adopt or current.ownership is Ownership.MANAGED)
+            and not retained_content_contained(intents[ref], current)
+        ):
+            blocking.append(
+                {
+                    "kind": ref.kind,
+                    "name": ref.name,
+                    "code": "retained-content-differs",
+                    "reason": "retained object: its spec/data differ from the "
+                    "composition, and only labels and annotations may change",
+                    "suggest": [
+                        "change the composition to match the live object",
+                    ],
+                }
+            )
+    if blocking:
+        blocking.sort(key=lambda item: (item["kind"], item["name"]))
+        unmanaged = [
+            item for item in blocking if item["code"] == "resource-requires-adoption"
+        ]
+        parts = []
+        if unmanaged:
+            parts.append(
+                "existing objects are not managed by this release's owner: "
+                + ", ".join(
+                    f"{item['kind']}/{item['name']} ({' or '.join(item['suggest'])})"
+                    for item in unmanaged
+                )
+                + "; authorize them with --adopt or --replace Kind/name "
+                "(repeatable), [release] adopt/replace or --adopt-all-desired, "
+                "or delete them"
+            )
+        for item in blocking:
+            if item["code"] != "resource-requires-adoption":
+                parts.append(f"{item['kind']}/{item['name']}: {item['reason']}")
         raise ReleaseError(
-            "existing objects are not managed by this release's owner: "
-            f"{', '.join(unauthorized)}; authorize adopting them with --adopt "
-            "Kind/name (repeatable) or [release] adopt, or delete them"
+            "; ".join(parts),
+            code=blocking[0]["code"]
+            if len({item["code"] for item in blocking}) == 1
+            else "plan-blocked",
+            details={"blocking": blocking},
         )
-    return [ref.__dict__ for ref in sorted(adopt)], sorted(not_needed)
+    return OwnershipResolution(
+        [ref.__dict__ for ref in sorted(adopt)],
+        [ref.__dict__ for ref in sorted(replaced)],
+        sorted(not_needed),
+        sorted(replace_not_needed),
+    )
+
+
+def resolve_adoptions(
+    requested: Sequence[str],
+    composition: DeploymentComposition,
+    snapshot: ObservedSnapshot,
+    inherited: Sequence[str],
+    field_manager: str,
+) -> tuple[list[dict[str, str]], list[str]]:
+    """Adoption-only view of :func:`resolve_ownership` (kept for callers)."""
+    resolved = resolve_ownership(
+        requested, composition, snapshot, inherited, field_manager
+    )
+    return resolved.adopt, resolved.adopt_not_needed
 
 
 def _drift(
@@ -292,6 +461,12 @@ def _compact_actions(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
             "name": action["resource"]["name"],
             "artifact_digest": action["artifact_digest"],
             **({"adoption": action["adoption"]} if "adoption" in action else {}),
+            **(
+                {"metadata_only": action["metadata_only"]}
+                if "metadata_only" in action
+                else {}
+            ),
+            **({"replace": action["replace"]} if "replace" in action else {}),
         }
         for action in plan["actions"]
     ]
@@ -327,6 +502,19 @@ def _adopted(
     planned = desired.get("actions", []) if isinstance(desired, dict) else []
     adopted = []
     for row, action in zip(rows["actions"], planned, strict=False):
+        replace = row["payload"].get("replace")
+        if isinstance(replace, dict) and row["state"] in {"applied", "ready"}:
+            adopted.append(
+                {
+                    "kind": action["resource"]["kind"],
+                    "name": action["resource"]["name"],
+                    "mode": "replace",
+                    "backup": replace.get("backup"),
+                    "backup_sha256": replace.get("backup_sha256"),
+                    "deleted_uid": replace.get("deleted_uid"),
+                }
+            )
+            continue
         adoption = row["payload"].get("adoption")
         if isinstance(adoption, dict) and row["state"] in {"applied", "ready"}:
             adopted.append(
@@ -340,12 +528,47 @@ def _adopted(
                             "previous_owner",
                             "transferred_managers",
                             "completed_transfer",
+                            "metadata_changes",
                         )
                         if key in adoption
                     },
                 }
             )
     return adopted
+
+
+@dataclass(frozen=True)
+class _Ownership:
+    """Requested ownership transitions of one plan (spec lists plus flags)."""
+
+    adopt: tuple[str, ...] = ()
+    replace: tuple[str, ...] = ()
+    adopt_all_desired: bool = False
+
+    def resolve(
+        self,
+        composition: DeploymentComposition,
+        snapshot: ObservedSnapshot,
+        inherited: Sequence[str],
+        field_manager: str,
+    ) -> OwnershipResolution:
+        return resolve_ownership(
+            self.adopt,
+            composition,
+            snapshot,
+            inherited,
+            field_manager,
+            replace=self.replace,
+            adopt_all_desired=self.adopt_all_desired,
+        )
+
+    def report(self, resolved: OwnershipResolution) -> dict[str, Any]:
+        return {
+            "adopt": sorted(f"{i['kind']}/{i['name']}" for i in resolved.adopt),
+            "replace": sorted(f"{i['kind']}/{i['name']}" for i in resolved.replace),
+            "adopt_all_desired": self.adopt_all_desired,
+            "replace_not_needed": resolved.replace_not_needed,
+        }
 
 
 @dataclass
@@ -362,6 +585,9 @@ class PlanResult:
     expires_at: str
     drift: list[dict[str, Any]] = field(default_factory=list)
     adopt_not_needed: list[str] = field(default_factory=list)
+    # What this plan was authorized to adopt/replace (bound to the plan hash
+    # through the ADOPT/REPLACE actions).
+    authorized: dict[str, Any] = field(default_factory=dict)
 
     @property
     def plan_hash(self) -> str:
@@ -389,6 +615,7 @@ class PlanResult:
             "actions": _compact_actions(self.plan),
             "drift": self.drift,
             "adopt_not_needed": self.adopt_not_needed,
+            "authorized": self.authorized,
             **({"plan": self.plan} if full else {}),
         }
 
@@ -468,6 +695,8 @@ class ReleaseRunner:
         self.provider_factory = provider_factory
         self.state = spec.state_dir
         self.history = _History(self.state / "history.json")
+        # Restorable copies of objects deleted by ``replace`` (owner-only).
+        self.backups = self.state / "backups"
 
     # ------------------------------------------------------------------ state
     def _open(self) -> tuple[ReleaseCatalog, ExecutionJournal, SecretVersionStore]:
@@ -744,13 +973,16 @@ class ReleaseRunner:
         rotate: Sequence[str] = (),
         rollback_to: str | None = None,
         adopt: Sequence[str] = (),
+        replace: Sequence[str] = (),
+        adopt_all_desired: bool = False,
     ) -> PlanResult:
         """Capture discovery and persist an approvable plan.
 
         Without ``rollback_to`` the spec decides the release; with it, an
         existing catalogued release (a name or ``previous``) is re-planned.
-        ``adopt`` adds ``Kind/name`` entries to the spec's ``[release] adopt``
-        list for this plan only.
+        ``adopt`` and ``replace`` add ``Kind/name`` entries to the spec's
+        ``[release] adopt``/``replace`` lists for this plan only;
+        ``adopt_all_desired`` adopts every unmanaged declared object.
         """
         spec = self.spec.model
         for entry in adopt:
@@ -758,7 +990,13 @@ class ReleaseRunner:
         unknown = sorted(set(rotate) - set(spec.secrets))
         if unknown:
             raise ReleaseError(f"cannot rotate undeclared secrets: {unknown}")
-        requested = tuple(dict.fromkeys((*spec.release.adopt, *adopt)))
+        for entry in replace:
+            parse_adopt_entry(entry, what="replace")
+        requested = _Ownership(
+            tuple(dict.fromkeys((*spec.release.adopt, *adopt))),
+            tuple(dict.fromkeys((*spec.release.replace, *replace))),
+            adopt_all_desired,
+        )
         images = self.spec.images()
         function = self.spec.load_composition()
         binding = self.provider_factory(self.spec)
@@ -840,7 +1078,7 @@ class ReleaseRunner:
         journal: ExecutionJournal,
         store: SecretVersionStore,
         rotate: Sequence[str],
-        requested: Sequence[str],
+        requested: _Ownership,
     ) -> PlanResult:
         settings = self.spec.model.release
         kinds = self._kinds(composition)
@@ -850,15 +1088,17 @@ class ReleaseRunner:
         artifact = self._discover(binding, kinds)
         snapshot = ObservedSnapshot.from_discovery(artifact)
         inherited = list(settings.inherited_owners)
-        adopt, not_needed = resolve_adoptions(
-            requested, composition, snapshot, inherited, settings.field_manager
+        resolved = requested.resolve(
+            composition, snapshot, inherited, settings.field_manager
         )
+        adopt, replace = resolved.adopt, resolved.replace
         plan_authorization = _plan_authorization(
             binding.target,
             prune=settings.prune,
             adopt=adopt,
             inherited=inherited,
             field_manager=settings.field_manager,
+            replace=replace,
         )
         window = settings.approval_window_seconds
         expires_at = (_now() + timedelta(seconds=window)).isoformat()
@@ -958,6 +1198,7 @@ class ReleaseRunner:
                     # The plan authorization, so the session reopens exactly.
                     "adopt": adopt,
                     "inherited_owners": inherited,
+                    "replace": replace,
                 }
             )
             + "\n",
@@ -973,7 +1214,8 @@ class ReleaseRunner:
             origin,
             expires_at,
             _drift(composition, snapshot, settings.field_manager, adopt),
-            not_needed,
+            resolved.adopt_not_needed,
+            requested.report(resolved),
         )
         self._persist_plan(result, prune=settings.prune)
         return result
@@ -984,7 +1226,7 @@ class ReleaseRunner:
         intent: str,
         binding: ProviderBinding,
         catalog: ReleaseCatalog,
-        requested: Sequence[str],
+        requested: _Ownership,
     ) -> PlanResult:
         settings = self.spec.model.release
         record = catalog.get(name)
@@ -996,9 +1238,10 @@ class ReleaseRunner:
         artifact = self._discover(binding, kinds)
         snapshot = ObservedSnapshot.from_discovery(artifact)
         inherited = list(settings.inherited_owners)
-        adopt, not_needed = resolve_adoptions(
-            requested, composition, snapshot, inherited, settings.field_manager
+        resolved = requested.resolve(
+            composition, snapshot, inherited, settings.field_manager
         )
+        adopt, replace = resolved.adopt, resolved.replace
         plan = build_plan(
             composition,
             snapshot,
@@ -1008,6 +1251,7 @@ class ReleaseRunner:
                 adopt=adopt,
                 inherited=inherited,
                 field_manager=settings.field_manager,
+                replace=replace,
             ),
         )
         expires_at = (
@@ -1024,7 +1268,8 @@ class ReleaseRunner:
             {},
             expires_at,
             _drift(composition, snapshot, settings.field_manager, adopt),
-            not_needed,
+            resolved.adopt_not_needed,
+            requested.report(resolved),
         )
         self._persist_plan(
             result,
@@ -1032,6 +1277,7 @@ class ReleaseRunner:
             discovery=artifact.to_private_json(),
             adopt=adopt,
             inherited=inherited,
+            replace=replace,
         )
         return result
 
@@ -1043,6 +1289,7 @@ class ReleaseRunner:
         discovery: str | None = None,
         adopt: Sequence[Mapping[str, str]] = (),
         inherited: Sequence[str] = (),
+        replace: Sequence[Mapping[str, str]] = (),
     ) -> None:
         _write_private(
             self._plan_path(result.plan_hash),
@@ -1057,6 +1304,7 @@ class ReleaseRunner:
                     "discovery": discovery,
                     "adopt": list(adopt),
                     "inherited_owners": list(inherited),
+                    "replace": list(replace),
                 }
             )
             + "\n",
@@ -1145,6 +1393,7 @@ class ReleaseRunner:
                 adopt=sidecar.get("adopt", ()),
                 inherited=sidecar.get("inherited_owners", ()),
                 field_manager=archived["field_manager"],
+                replace=sidecar.get("replace", ()),
             ),
             grant,
             journal,
@@ -1178,7 +1427,11 @@ class ReleaseRunner:
                 self._check_target(catalog, binding.target)
                 record = catalog.get(name)
                 executor = PlanExecutor(
-                    binding.provider, journal, store, limits=self._limits()
+                    binding.provider,
+                    journal,
+                    store,
+                    limits=self._limits(),
+                    backups=self.backups,
                 )
                 if pending["mode"] == "create":
                     workflow = self._session_workflow(
@@ -1201,6 +1454,7 @@ class ReleaseRunner:
                         adopt=pending.get("adopt", ()),
                         inherited=pending.get("inherited_owners", ()),
                         field_manager=self.spec.model.release.field_manager,
+                        replace=pending.get("replace", ()),
                     )
                     composition = composition_from_archive(record.archive)
                     if (
@@ -1309,7 +1563,11 @@ class ReleaseRunner:
                     catalog.get(name), catalog, journal, store, binding.target
                 )
                 executor = PlanExecutor(
-                    binding.provider, journal, store, limits=self._limits()
+                    binding.provider,
+                    journal,
+                    store,
+                    limits=self._limits(),
+                    backups=self.backups,
                 )
                 try:
                     result = workflow.resume(executor, name)

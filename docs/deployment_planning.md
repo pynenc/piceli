@@ -12,7 +12,7 @@ The recoverable engine is a tested Python API; names and fields may still change
 1. **Discover**: `capture_discovery` reads the target namespace within strict limits
    and produces an `ObservedSnapshot`.
 2. **Plan**: `build_plan(composition, snapshot, authorization)` is a pure,
-   deterministic function that returns ordered create/adopt/apply/no-op/delete actions.
+   deterministic function that returns ordered create/adopt/replace/apply/no-op/delete actions.
 3. **Execute**: `PlanExecutor.run(...)` applies the plan through a
    `KubernetesProvider`, writing every step to an `ExecutionJournal` so it can
    be cancelled, resumed or compensated.
@@ -61,10 +61,10 @@ acceptance requires a literal loopback HTTP origin.
 `ResourceIntent`, `DeploymentComponent` and `DeploymentComposition` own immutable
 manifest copies and dependency order. `ObservedSnapshot` binds coverage, provenance,
 defaults and resource identities. `build_plan(composition, snapshot, authorization)`
-produces deterministic create/adopt/apply/no-op/delete actions and a public hash.
-Existing unmanaged objects require exact adoption grants
-(`PlanAuthorization(adopt_resources=...)`); see "Adoption by ownership
-transfer" below. Explicit
+produces deterministic create/adopt/replace/apply/no-op/delete actions and a
+public hash. Existing unmanaged objects require exact adoption or replace
+grants (`PlanAuthorization(adopt_resources=..., replace_resources=...)`); see
+"Adoption by ownership transfer" and "Replace" below. Explicit
 desired values always participate in comparison, even when the API supplies a
 default.
 
@@ -102,7 +102,8 @@ for objects this owner already manages, a merge patch) and UID/resourceVersion
 preconditions; nothing is persisted with `force=true`. A dry-run admission
 check precedes each write (for a takeover adoption, described below, it is
 the one request sent with `force=true`).
-Deletes carry UID/version preconditions and `propagationPolicy=Orphan`.
+Deletes carry UID/version preconditions and `propagationPolicy=Orphan`
+(a replace of a workload controller uses `Background`, see "Replace").
 No retained kind is deleted. Target identity is rechecked for mutations and each
 readiness poll; resource identity, the declared fields' values and their field
 owners are checked against receipts. Fields the plan does not declare are not
@@ -124,8 +125,8 @@ owned, explicitly authorized changes under current UID/version/field-owner
 preconditions. Created objects may be removed; owned updates may be restored.
 A takeover adoption is reversed like an update: the pre-adoption content is
 re-applied with `force=false` and the object stays owned (the transferred
-field managers are not restored). Metadata-only adoptions, deleted objects and
-retained resources are kept. Interrupted
+field managers are not restored). Metadata-only adoptions, deleted and
+replaced objects and retained resources are kept. Interrupted
 compensation is also journaled and reconciled by observation. This is not a
 Kubernetes-wide rollback transaction. Unknown scope, object recreation, drift,
 descendants or conflicting ownership prevent unsafe reversal.
@@ -151,17 +152,33 @@ the action (`PlanAction.adoption`), so it is part of the plan hash:
 
 | Mode | Objects | Write |
 | --- | --- | --- |
-| `metadata-only` | retained: Namespace, PV, PVC, Secret, or `piceli.io/retained: "true"` | one merge patch with only `piceli.io/owner`, `piceli.io/operation` and the observed UID/resourceVersion |
+| `metadata-only` | retained: Namespace, PV, PVC, Secret, or `piceli.io/retained: "true"` | one merge patch with `piceli.io/owner`, `piceli.io/operation`, the declared labels/annotations that differ (`Adoption.metadata_changes`) and the observed UID/resourceVersion |
 | `takeover` | everything else | transfer of client field managers to this manager (a `managedFields` merge patch), then a server-side apply with `force=false` that removes undeclared transferred fields |
 
 **Metadata-only.** Planning refuses unless the live object already contains
-the desired manifest (labels and annotations included). Private values are
-compared by the executor after resolution and before any write; the refusal
-names the resource, never the value. Spec and data are never part of the
-request, and the response must differ from the observed object only in those
-two annotations. Compensation never touches the object. A retained object
-owned by an earlier owner id can be adopted the same way when that id is in
+the desired manifest apart from `metadata.labels` and `metadata.annotations`
+(`plan.retained_content_contained`). Desired labels and annotations whose live
+value differs are listed in `Adoption.metadata_changes` (`labels/<key>`,
+`annotations/<key>`) and written by the same patch; keys are set, never
+removed. Private values are compared by the executor after resolution and
+before any write; the refusal names the resource, never the value. Spec and
+data are never part of the request, and the response must differ from the
+observed object only in the owner/operation annotations and the planned keys.
+Compensation never touches the object. A retained object owned by an earlier
+owner id can be adopted the same way when that id is in
 `PlanAuthorization.inherited_owner_ids`; the owner annotation is re-stamped.
+
+**Retained APPLY with a metadata difference.** A retained object that is
+already managed (this owner, or an inherited owner granted by
+`ExecutionAuthorization.inherited_owner_ids`) and differs from the desired
+manifest only in labels/annotations is planned as an APPLY with
+`PlanAction.metadata_changes` (`metadata_only` in the summary, part of the
+plan hash). The executor re-derives the changes from the evidence, refuses a
+mismatch before any write, and sends the same metadata-only patch
+(`KubernetesProvider.adopt_metadata(labels=..., annotations=...)`), which
+re-stamps the owner. A spec/data difference on a retained object refuses the
+plan (`retained resource content differs`). An interrupted write is reconciled
+on resume by its operation annotation and content.
 
 **Takeover.** It makes the desired manifest the object's full desired state,
 as Flux does for objects written by `kubectl`. `transferred_managers` in the
@@ -228,6 +245,43 @@ lets the executor treat retained objects of those earlier owner ids as its own
 also lists in `KubernetesProvider(inherited_owner_ids=...)` are honoured, and
 a grant listing others is refused. The grant is part of the revision identity
 when it is not empty.
+
+### Replace (delete and recreate)
+
+`PlanAuthorization(replace_resources=...)` authorizes a REPLACE action for an
+existing object that is unmanaged, not retained (kind or annotation) and has
+no `ownerReferences` (`plan.replace_refusal` gives the reason otherwise); a
+resource cannot be both adopted and replaced. The action's precondition is the
+observed UID/resourceVersion and its summary records `replace.deletes_uid`
+and `replace.propagation` (`plan.replace_propagation`: `Background` for
+Deployment, ReplicaSet, DaemonSet, Job and CronJob, `Orphan` otherwise; a
+background delete that would reach a retained dependent is refused).
+
+The executor needs `PlanExecutor(backups=<private directory>)`; without it a
+plan with a REPLACE is refused before any write. For each REPLACE it:
+
+1. checks the live object against the planned evidence like any update, and
+   re-checks it is unmanaged, not retained and not owned;
+2. sends a `dryRun` delete (the dry-run flag goes in the `DeleteOptions`
+   body: the API server ignores query parameters when a body is sent);
+3. writes the backup (`replace_backup.write_backup`: the object without
+   server-populated fields, `0600` file, `0700` directories, fsynced) and
+   journals intent with `replace.backup`, `backup_sha256`, `deleted_uid`,
+   `deleted_resource_version` and `phase: deleting`;
+4. deletes with UID/resourceVersion preconditions, journals `phase: deleted`,
+   waits (bounded by `readiness_seconds`) until the object is absent, and
+   creates it from the desired manifest with the owner and operation
+   annotations.
+
+A non-ambiguous failure of the delete records the action `failed` (nothing
+was deleted). Every failure after the delete is reported as ambiguous, so the
+row stays `intent` and the execution `blocked`; resume observes the cluster:
+the created object (new UID with this operation id) completes the action, an
+absent object is created, the original object still present is deleted again
+only if its resourceVersion is unchanged and the delete was not yet
+recorded, and anything else blocks (`replace-recreated-by-another-writer`,
+`replace-delete-not-observed`). Compensation never reverses a replace; the
+backup is restored by an operator with `kubectl create -f`.
 
 **Rotating a retained Secret.** A retained Secret is never rewritten, so a new
 value under the same name fails with `retained-content-precondition-failed`.
