@@ -22,6 +22,8 @@ Priorities may change. Progress is tracked in
 | Field-level diff | 🟡 `deploy detail` (CLI engine) only |
 | Safe pruning of removed resources | 🟡 Recoverable engine only, opt-in |
 | Adopt or replace objects created by other tools (`release --adopt`, `--adopt-all-desired`, `--replace`) | 🟡 Preview |
+| Import a live namespace or manifest files as a typed app module (`piceli import live`, `piceli import yaml`) | 🟡 Preview |
+| Public fake Kubernetes API for consumers' tests (`piceli.testing`) | 🟡 Preview |
 | Environments and overlays (Kustomize equivalent) | ❌ Not yet: plain Python functions for now |
 | Reusable, versioned packages (Helm equivalent) | ❌ Not yet |
 | Custom resources (CRDs) | 🟡 As raw manifests in the recoverable engine |
@@ -52,6 +54,8 @@ Every feature page starts with its maturity, and this table lists them all:
 | Node-local registry template | {doc}`node_local_registry` | preview |
 | Operations lens (`piceli observe`) | {doc}`operations_lens` | preview |
 | CLI contract: `piceli explain`, `piceli help-json`, error codes | {doc}`agents` | preview |
+| Import and migration kit (`piceli import live`, `piceli import yaml`, `App.override`) | {doc}`migrate_from_kubectl` | preview |
+| Test double: fake Kubernetes API (`piceli.testing`) | {doc}`testing` | preview |
 | Operator workflow (`piceli operator`) | {doc}`operator_workflow` | experimental |
 | Legacy CLI engine (`piceli model`, `piceli deploy`) | {doc}`cli/index` | experimental |
 

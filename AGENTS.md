@@ -75,7 +75,8 @@ These are enforced by tests or review. Do not weaken them.
 ## Tests
 
 - `tests/unit`: pure logic. `tests/acceptance`: the real Kubernetes client
-  against an in-process fake API server with fault injection. Both run in
+  against an in-process fake API server with fault injection (the public
+  `piceli.testing`; `tests/acceptance/fake_api.py` re-exports it). Both run in
   `make test` and must not need a cluster.
 - `tests/conftest.py` has an **autouse cluster guard**: outside
   `tests/integration`, `KUBECONFIG` points at a missing file and
@@ -97,6 +98,9 @@ These are enforced by tests or review. Do not weaken them.
 | Discovery, plans, executor, journal, sessions | `piceli/k8s/ops/` |
 | Releases from a spec | `piceli/k8s/release_spec.py`, `release_runner.py`, `release_secrets.py`, `piceli/k8s/cli/release.py` |
 | Builds, source identity, image delivery | `piceli/artifacts/` |
+| Typed apps (`App`, `app.override`) | `piceli/app/` |
+| Import live objects or YAML as a typed module (`piceli import`) | `piceli/importing/`, `piceli/k8s/cli/importing.py` |
+| Public fake Kubernetes API for tests | `piceli/testing/` |
 | Observe / operator UI and REST API | `piceli/k8s/observe*.py`, `piceli/k8s/operator*.py` |
 | Examples (run in CI where possible) | `examples/` |
 | Docs (Sphinx + MyST) | `docs/`; agent entry points `llms.txt`, `docs/agents.md` |

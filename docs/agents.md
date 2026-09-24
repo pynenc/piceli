@@ -75,6 +75,10 @@ noted.
 - `piceli observe forward-list`, `piceli observe forward-command`,
   `piceli observe logs-command`: print what would run, start nothing.
 - `piceli model list`, `piceli deploy plan`: read local model files only.
+- `piceli import live` (reads the cluster through an explicit `--kubeconfig`
+  and `--context`) and `piceli import yaml` (reads local files): generate a
+  typed module; `--out` writes that one file and refuses to overwrite it
+  without `--force`. Secret values are never read into the output.
 - `piceli artifacts build`: assembles an OCI layout in `--output` without
   running any code.
 - `piceli observe forward-save`, `piceli operator backup`: write a local

@@ -145,6 +145,30 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             reads=("module/app file", "release.toml (optional)", "local receipts"),
             notes="Never contacts a cluster; secret values are placeholders.",
         ),
+        # ------------------------------------------------------- import
+        "import live": _C(
+            "Generate a typed app module from the objects of a live namespace.",
+            reads=("kubeconfig",),
+            writes=("--out file",),
+            cluster="reads",
+            contract="conforms",
+            notes=(
+                "Read-only on the cluster: lists ConfigMaps, Secrets, Services, "
+                "PersistentVolumeClaims, Deployments, NetworkPolicies and Pods. "
+                "Secret values are never written; --out refuses to overwrite "
+                "without --force."
+            ),
+        ),
+        "import yaml": _C(
+            "Generate a typed app module from a directory of manifests.",
+            reads=("manifest directory",),
+            writes=("--out file",),
+            contract="conforms",
+            notes=(
+                "Never contacts a cluster. Secret values are never written; --out "
+                "refuses to overwrite without --force."
+            ),
+        ),
         "explain": _C(
             "Print the registry entry for an error code.",
             contract="conforms",

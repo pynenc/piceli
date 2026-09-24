@@ -25,6 +25,7 @@ FIRST_ARGUMENT = {
     "SecretError",
     "ImageHandoffError",
     "reject",
+    "ImportFailure",
 }
 # ``_Failure(result, reason)`` in the delivery modules.
 SECOND_ARGUMENT = {"_Failure"}

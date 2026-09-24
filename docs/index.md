@@ -116,6 +116,7 @@ workload.
 getting_started/index
 overview
 kubernetes_model/index
+migrate_from_kubectl
 ```
 
 ```{toctree}
@@ -134,6 +135,7 @@ node_delivery
 node_local_registry
 operations_lens
 operator_workflow
+testing
 ```
 
 ```{toctree}

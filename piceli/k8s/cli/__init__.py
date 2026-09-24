@@ -7,6 +7,7 @@ from piceli.conf.config_k8s_model import ConfigK8sModel
 from piceli.k8s.cli.context import ContextObject
 from piceli.k8s.cli.contract import register as register_contract_commands
 from piceli.k8s.cli.deploy import app as deploy_app
+from piceli.k8s.cli.importing import app as import_app
 from piceli.k8s.cli.inputs import app as inputs_app
 from piceli.k8s.cli.model import app as model_app
 from piceli.k8s.cli.observe import app as observe_app
@@ -20,6 +21,7 @@ from piceli.k8s.cli.render import render
 
 app = typer.Typer()
 app.add_typer(deploy_app, name="deploy")
+app.add_typer(import_app, name="import")
 app.add_typer(inputs_app, name="inputs")
 app.add_typer(model_app, name="model")
 app.add_typer(observe_app, name="observe")

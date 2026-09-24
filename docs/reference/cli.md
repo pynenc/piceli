@@ -49,6 +49,8 @@ These apply to `model` and `deploy` (the legacy CLI engine).
 | [`piceli deploy run`](#cli-deploy-run) | Deploy Kubernetes Object Model to the current cluster. | ambient-writes | no |
 | [`piceli explain`](#cli-explain) | Explain an error code: cause, fix and whether a retry can succeed. | none | no |
 | [`piceli help-json`](#cli-help-json) | Print the whole CLI tree (commands, options, contracts) as JSON. | none | no |
+| [`piceli import live`](#cli-import-live) | Generate a typed module from the objects of a live namespace (read-only). | reads | no |
+| [`piceli import yaml`](#cli-import-yaml) | Generate a typed module from a directory of manifests (no cluster). | none | no |
 | [`piceli inputs record`](#cli-inputs-record) | Capture each declared source (or the ``--only`` ones) and write a lock. | none | no |
 | [`piceli inputs verify`](#cli-inputs-verify) | Recapture the sources and compare them with the lock (exit 1 on drift). | none | no |
 | [`piceli model list`](#cli-model-list) | Lists Kubernetes objects based on the command options. | none | no |
@@ -414,6 +416,60 @@ No options.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success
 - **Output contract:** conforms
+
+(cli-import-live)=
+### `piceli import live`
+
+Generate a typed module from the objects of a live namespace (read-only).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--kubeconfig` | path | required | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text | required | Explicit context (never current-context) |
+| `--namespace` | text | required | Namespace to import |
+| `--select` | text (repeatable) |  | Kind/name or label=value; import only matching objects (repeatable) |
+| `--out` | path |  | Write the module here (stdout: a JSON summary) |
+| `--force` | boolean | `False` | Overwrite an existing --out file |
+| `--name` | text |  | App name (default: the namespace) |
+| `--json` | boolean | `False` | Without --out: print one JSON object with the module |
+| `--transport` | choice | `https` | https, or loopback-http for a local test API server only |
+
+**Contract**
+
+- **Reads:** kubeconfig
+- **Writes:** --out file
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Read-only on the cluster: lists ConfigMaps, Secrets, Services, PersistentVolumeClaims, Deployments, NetworkPolicies and Pods. Secret values are never written; --out refuses to overwrite without --force.
+
+(cli-import-yaml)=
+### `piceli import yaml`
+
+Generate a typed module from a directory of manifests (no cluster).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `DIRECTORY` | path | required |  |
+| `--namespace` | text |  | Namespace to render into (default: the one the files name, else 'default') |
+| `--select` | text (repeatable) |  | Kind/name or label=value; import only matching objects (repeatable) |
+| `--out` | path |  | Write the module here (stdout: a JSON summary) |
+| `--force` | boolean | `False` | Overwrite an existing --out file |
+| `--name` | text |  | App name (default: the namespace) |
+| `--json` | boolean | `False` | Without --out: print one JSON object with the module |
+
+**Contract**
+
+- **Reads:** manifest directory
+- **Writes:** --out file
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Never contacts a cluster. Secret values are never written; --out refuses to overwrite without --force.
 
 (cli-inputs-record)=
 ### `piceli inputs record`

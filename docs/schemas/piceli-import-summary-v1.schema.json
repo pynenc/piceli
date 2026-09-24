@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.piceli.pynenc.org/schemas/piceli-import-summary-v1.schema.json",
+  "title": "Piceli import summary v1 (stdout of `piceli import live|yaml`)",
+  "description": "Fields are only added within a major version.",
+  "type": "object",
+  "required": ["state", "app", "namespace", "source", "out", "module_sha256", "objects", "secret_inputs", "skipped", "images"],
+  "properties": {
+    "state": {"const": "imported"},
+    "app": {"type": "string"},
+    "namespace": {"type": "string"},
+    "source": {"enum": ["live", "yaml"]},
+    "out": {"type": ["string", "null"]},
+    "module": {"type": "string", "description": "Only without --out and with --json."},
+    "module_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "objects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "name", "as", "untyped_fields"],
+        "properties": {
+          "kind": {"type": "string"},
+          "name": {"type": "string"},
+          "as": {"enum": ["typed", "raw", "existing-claim"]},
+          "untyped_fields": {"type": "array", "items": {"type": "string"}},
+          "reason": {"type": "string"}
+        }
+      }
+    },
+    "secret_inputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["input", "secret", "key"],
+        "properties": {
+          "input": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,62}$"},
+          "secret": {"type": "string"},
+          "key": {"type": "string"}
+        }
+      }
+    },
+    "skipped": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "name", "reason"],
+        "properties": {
+          "kind": {"type": "string"},
+          "name": {"type": "string"},
+          "reason": {"type": "string"}
+        }
+      }
+    },
+    "images": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["deployment", "container", "image", "running_digest_ref"],
+        "properties": {
+          "deployment": {"type": "string"},
+          "container": {"type": "string"},
+          "image": {"type": "string"},
+          "running_digest_ref": {"type": ["string", "null"]}
+        }
+      }
+    }
+  }
+}
