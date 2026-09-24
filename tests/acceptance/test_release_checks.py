@@ -248,7 +248,8 @@ def test_invalid_checks_are_refused_before_planning(release_env, tables, message
     spec.write_text(spec.read_text() + tables)
     code, refused, result = _run(tmp_path, "plan")
     assert code == 2, result.output
-    assert message in refused["reason"]
+    assert refused["reason"] == "invalid-release-spec"
+    assert message in refused["message"]
 
 
 def test_unimportable_python_check_is_refused_at_plan(release_env):  # noqa: F811
