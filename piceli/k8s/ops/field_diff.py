@@ -12,7 +12,12 @@ the plan hash. Each changed object gets
   answered to a dry run of the write (defaults included), or ``client`` when
   it is the desired manifest merged onto the live object locally;
 * ``not_compared``: JSON pointers bound to secret versions. Their values are
-  never compared or shown.
+  never shown (whether they match the live object is decided privately, see
+  :class:`~piceli.k8s.ops.plan.PrivateEvidence`).
+
+Keys an earlier release declared and the composition dropped (three-way
+removal, :attr:`~piceli.k8s.ops.plan.PlanAction.removals`) appear as
+``remove`` changes.
 
 Values are redacted with the same rules as public plans and discovery
 (:func:`~piceli.k8s.ops.discovery.public_manifest`): a secret value is shown as
@@ -37,7 +42,9 @@ from piceli.k8s.ops.plan import (
     PlanOperation,
     ResourceIntent,
     normalized_manifest,
+    removal_patch,
     usable_dry_run,
+    without_removed_fields,
 )
 from piceli.k8s.ops.secret_versions import replace_pointer
 
@@ -198,10 +205,18 @@ def action_diff(
         else None
     )
     if evidence is not None:
-        after = normalized_manifest(evidence.manifest)
+        # The dry run carries no removals; the write's nulls delete exactly
+        # these keys from what the server would store.
+        after = without_removed_fields(
+            normalized_manifest(evidence.manifest), action.removals
+        )
         basis = BASIS_SERVER
     else:
-        after = normalized_manifest(merge_patch(before, action.resource.manifest))
+        after = normalized_manifest(
+            merge_patch(
+                before, removal_patch(action.resource.manifest, action.removals)
+            )
+        )
         basis = BASIS_CLIENT
     private = tuple(
         sorted(binding.json_pointer for binding in action.resource.secret_bindings)

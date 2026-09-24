@@ -68,17 +68,70 @@ or still matches the server's answer from planning.
   object is compared literally with the desired manifest, which can only
   report a change that is not there. The plan lists these objects in
   `dry_run_unavailable` with a reason code.
-* **Secret values are never compared.** Objects with values bound to secret
-  versions (and every `Secret`) are not dry-run and always plan as `apply`.
-  Their bound fields appear in the diff's `not_compared` list, never their
-  values.
+* **Secret values are never shown.** Objects with values bound to secret
+  versions (and every `Secret`) are not dry-run. They are compared privately
+  instead (see below). Their bound fields appear in the diff's
+  `not_compared` list, never their values.
 * **Unmanaged objects** are never dry-run: planning them requires an explicit
   `--adopt` or `--replace` (see {doc}`release_cli`).
 
-A map key that the composition no longer declares (a label, a ConfigMap key)
-is not removed by an `apply` today, because a merge patch only sets the keys
-it carries. The server's answer keeps the key, so the plan shows no change for
-it. Remove such a key with a one-off edit, or replace the object.
+## Secret-bound objects: private comparison
+
+A `Secret`, or any object with a value bound to a secret version, is `no-op`
+when its live content already equals the desired content with the secret
+versions resolved. The comparison runs in the planning process only:
+
+* the bound versions are resolved from the local secret store and put into
+  the desired manifest in memory; the live side is the private discovery
+  evidence (never the public discovery JSON);
+* both sides are reduced to an HMAC-SHA256 under a random key that exists
+  only for that one comparison, and compared in constant time. No value,
+  digest or fingerprint is stored, printed, journaled or sent in an event;
+  the plan only records the resulting operation, `no-op` or `apply`;
+* the rules are the literal ones: a Secret's `stringData` is compared as the
+  base64 `data` the server stores, an omitted `type` matches `Opaque`, and
+  discovery's defaulted fields are ignored. Anything else that differs (a
+  rotated value, an extra key, a changed label) is `apply`;
+* only objects this release already manages are compared, and a version that
+  cannot be resolved counts as a difference.
+
+This reveals one bit per object, whether it changed, to anyone who can read
+the plan; the value itself is never reachable. A new release carries its
+secret values over from earlier releases (see {doc}`secrets`), so changing an
+image leaves the Secret `no-op`. `release diff` compares privately only when
+the composition is unchanged (it never materializes the secret inputs of a new
+release), so there the Secret of a changed composition shows as `apply`.
+
+## Removing keys the composition dropped (three-way)
+
+An `apply` of an object the release owns is a JSON merge patch, and a merge
+patch only changes the keys it carries: a label or ConfigMap key that the
+composition no longer declares would stay on the object. (Lists, such as a
+container's `env`, are replaced whole by a merge patch, so a dropped list item
+is already removed.)
+
+The plan therefore compares three manifests per object: what earlier releases
+of this owner declared (every release in the catalog, merged), the new desired
+manifest, and the live object. A map key is removed when:
+
+* an earlier release declared it (a key only some other writer ever added is
+  never removed);
+* the new desired manifest does not declare it;
+* it is present on the live object; and
+* no other field manager owns it in `metadata.managedFields` (the status
+  subresource aside). A key that `kubectl edit` or a controller has since
+  written is left alone.
+
+The removals are part of the action (`removes`, a list of JSON pointers, in
+`release plan --json` and in the plan hash), turn an otherwise unchanged
+object into `apply`, and appear in the diff as `remove` changes. The executor
+sends them as explicit `null`s in its merge patch, which deletes exactly those
+keys. Within `metadata`, only `labels` and `annotations` keys are removed, and
+never Piceli's own annotations. Retained objects (PVCs, Secrets, …) are never
+rewritten, so they get no removals.
+
+The release names whose declarations were used are stored with the plan, so
+`apply --approve <hash>` rebuilds exactly the same removals.
 
 ## Evidence, hashes and purity
 
@@ -105,7 +158,7 @@ Each changed object in `release plan --json` (and in `release diff`) has:
 | `changes` | `{path, op, before, after}` per field: `path` is a JSON pointer, `op` is `add`, `remove` or `replace`; lists are compared by position |
 | `unified` | the same change as a unified diff of the object in YAML |
 | `basis` | `server-dry-run` (the "after" side is the server's answer) or `client` (desired manifest merged locally; no server defaults) |
-| `not_compared` | JSON pointers bound to secret versions |
+| `not_compared` | JSON pointers bound to secret versions (compared privately, never shown) |
 
 Values are redacted with the same rules as public plans: a secret value is
 shown as `"<redacted>"`.

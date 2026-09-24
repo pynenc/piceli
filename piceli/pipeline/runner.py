@@ -22,8 +22,8 @@ is unchanged:
     against live discovery.
 ``apply``
     Skipped when the planned release is the one already deployed and ready
-    and the plan changes nothing but secret-bound objects (whose private
-    values a plan never compares); ``--reapply`` forces it.
+    and its remaining ``apply`` actions remove no field and differ only in
+    what a plan cannot confirm; ``--reapply`` forces it.
 ``checks``
     Runs the pipeline's checks; the run is ``ready`` only when they pass.
     With ``rollback_on_failed_checks`` the previous release is re-applied and
@@ -175,8 +175,8 @@ def unchanged(runner: ReleaseRunner, result: PlanResult) -> bool:
     ready, the plan creates, deletes, adopts and replaces nothing, and no
     other field manager owns a desired field (``drift``: someone edited,
     patched or scaled an object). Remaining ``apply`` actions are objects
-    whose live form differs only by server defaults, and secret-bound
-    objects, whose private values a plan never compares.
+    whose live form differs only by server defaults a dry run could not
+    confirm; an action that removes fields (three-way removal) always runs.
     """
     history = runner.history
     entries = history.entries()
@@ -185,7 +185,10 @@ def unchanged(runner: ReleaseRunner, result: PlanResult) -> bool:
         return False
     if deployed[-1] != result.release or result.drift:
         return False
-    return all(item["operation"] == "apply" for item in _changes(result))
+    actions = result.to_dict()["actions"]
+    return not any("removes" in item for item in actions) and all(
+        item["operation"] == "apply" for item in _changes(result)
+    )
 
 
 def classify(error: BaseException) -> PipelineError:

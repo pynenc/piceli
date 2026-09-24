@@ -294,8 +294,8 @@ def test_deploy_rerun_is_noop_and_one_change_moves_one_deployment(shop) -> None:
         )
     )["stages"]["plan"]["output"]
     changed = {(c["kind"], c["name"]) for c in plan["changes"]}
-    # The Secret is always re-applied (private values are never compared).
-    assert changed == {("Deployment", "web"), ("Secret", "credentials")}
+    # The carried-over Secret matches privately, so it is a no-op.
+    assert changed == {("Deployment", "web")}
 
 
 def test_plan_changed_and_approval_required(shop) -> None:

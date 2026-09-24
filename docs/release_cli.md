@@ -409,9 +409,7 @@ all of them under `diffs`:
 
 ```console
 $ piceli release plan --spec release.toml
-release web-3c1d0a9e22f4 (create, apply): 2 apply, 2 no-op
-    apply Secret/web-token
-            secret-bound values not compared: /data/token
+release web-3c1d0a9e22f4 (create, apply): 1 apply, 3 no-op
     apply Deployment/web
             ~ /spec/template/spec/containers/0/image: "docker.io/library/nginx@sha256:6564…" -> "docker.io/library/nginx@sha256:1ead…"
 plan hash: 9b0f…c4d1 (valid until 2026-09-24T18:02:11+00:00)
@@ -437,8 +435,11 @@ plan hash: 9b0f…c4d1 (valid until 2026-09-24T18:02:11+00:00)
 * `path` is a JSON pointer into the object, `op` is `add`, `remove` or
   `replace`, and `before`/`after` are `null` when absent. Secret values are
   shown as `"<redacted>"`; values bound to secret versions are listed in
-  `not_compared` and never compared, so an object with a secret binding is
-  always `apply`.
+  `not_compared` and never shown. They are compared privately (in-process,
+  see {doc}`plans_and_diffs`), so an unchanged Secret is `no-op`.
+* A `remove` change on a map key (a label, a ConfigMap key) is a three-way
+  removal: an earlier release declared the key and this one no longer does.
+  The action lists them under `removes`; see {doc}`plans_and_diffs`.
 * `basis` is `server-dry-run` when the "after" side is the API server's
   answer to a dry run of the write, or `client` when no dry run was available
   and the desired manifest was merged onto the live object locally (server

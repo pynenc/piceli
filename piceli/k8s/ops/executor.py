@@ -44,10 +44,13 @@ from piceli.k8s.ops.plan import (
     adoption_for,
     dry_run_confirms,
     field_manager_entries,
+    has_removed_field,
     manifest_contains,
     metadata_changes,
     metadata_patch,
     overlapping_managers,
+    private_comparable,
+    removal_patch,
     replace_propagation,
     replace_refusal,
     without_metadata_maps,
@@ -397,6 +400,14 @@ class PlanExecutor:
                     raise ValueError("unsafe retained or unmanaged descendants")
             else:
                 manifest = self._manifest(action.resource)
+                if action.removals and (
+                    current is None
+                    or current.retained
+                    or current.ownership is not Ownership.MANAGED
+                ):
+                    raise ValueError(
+                        "field removals require a managed, non-retained object"
+                    )
                 if action.operation is PlanOperation.ADOPT:
                     assert current is not None
                     self._validate_adoption(action, current, manifest, authorization)
@@ -596,7 +607,7 @@ class PlanExecutor:
             action.operation is PlanOperation.NOOP
             and not _contains(
                 ResourceIntent.from_manifest(current.manifest).manifest,
-                self._manifest(action.resource),
+                private_comparable(self._manifest(action.resource)),
             )
             # A no-op planned from the server's dry run: declared values may
             # be stored in canonical form (``cpu: 0.5`` as ``500m``).
@@ -978,9 +989,9 @@ class PlanExecutor:
                 and metadata["uid"] != action.precondition.uid
             ):
                 raise ProviderError("recreated-object", ambiguous=True)
-            if not _contains(
-                ResourceIntent.from_manifest(current.manifest).manifest,
-                self._manifest(action.resource),
+            live = ResourceIntent.from_manifest(current.manifest).manifest
+            if not _contains(live, self._manifest(action.resource)) or (
+                has_removed_field(live, action.removals)
             ):
                 raise ProviderError("ambiguous-content-blocked", ambiguous=True)
             return current, False
@@ -1273,6 +1284,12 @@ class PlanExecutor:
                                     # crash safety without forcing that ownership.
                                     annotations.pop(OPERATION_ANNOTATION, None)
                                     payload["same_owner_update"] = True
+                                    # Three-way removal: explicit nulls for the
+                                    # keys an earlier release declared.
+                                    manifest = removal_patch(manifest, action.removals)
+                                    metadata = manifest["metadata"]
+                                elif action.removals:
+                                    raise ProviderError("ownership-precondition-failed")
                                 else:
                                     annotations[OPERATION_ANNOTATION] = row[
                                         "operation_id"

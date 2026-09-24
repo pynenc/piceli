@@ -248,23 +248,22 @@ Change the module, then plan and apply:
 
 ```console
 $ piceli release plan --spec deploy/release.toml
-release shop-9ee3975e08b5 (reapply, apply): 3 apply, 1 no-op
-    apply Secret/web-token
-    apply Deployment/web
-    apply Service/web
+release shop-9ee3975e08b5 (reapply, apply): 4 no-op
 ```
 
-A plan right after the adoption changes nothing. It can still list `apply`
-for two kinds of object, and applying them writes the same values (no
-rollout, same cluster IP):
+A plan right after the adoption changes nothing, and it says so: every object
+is `no-op`.
 
-- a **Secret**: public plans never compare secret values, so a Secret with
-  generated or imported inputs always plans a metadata-only `apply`;
-- an object whose **API-server defaults** the plan still compares, such as a
-  Service's allocated cluster IP or a Deployment's defaulted
-  `progressDeadlineSeconds`. A field-level comparison that ignores server
-  defaults is planned for 0.4.0; until then, `piceli render --spec
-  deploy/release.toml` shows exactly the fields the release sets.
+- A **Secret** is compared privately: the resolved secret values are compared
+  with the live Secret in-process, and only the resulting `no-op`/`apply`
+  reaches the plan (see {doc}`plans_and_diffs`).
+- **API-server defaults** (a Service's allocated cluster IP, a Deployment's
+  defaulted `progressDeadlineSeconds`) never make an object look changed: the
+  plan compares the server's dry-run answer to the write with the live object.
+
+If an object still plans `apply`, its field diff shows exactly what would
+change; `piceli render --spec deploy/release.toml` shows the fields the
+release sets.
 
 Delete the `kubectl` scripts. From now on `plan`, `apply` and `rollback` are
 the only commands that change the namespace.

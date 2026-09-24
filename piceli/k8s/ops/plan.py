@@ -6,9 +6,13 @@ snapshot; planning rejects ambiguous ownership and stale execution inputs.
 
 from __future__ import annotations
 
+import base64
+import copy
 import hashlib
+import hmac
 import json
-from collections.abc import Iterable, Mapping
+import secrets
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
@@ -776,11 +780,22 @@ class PlanAuthorization:
     inherited_owner_ids: tuple[str, ...] = ()
     field_manager: str | None = None
     replace_resources: tuple[ResourceRef, ...] = ()
+    # What earlier releases of this owner declared, one merged intent per
+    # object (see :func:`declared_union`). A same-owner ``apply`` removes the
+    # map keys declared there that the composition no longer declares (see
+    # :func:`planned_removals`); without it no field is ever removed.
+    previous: tuple[ResourceIntent, ...] = field(default=(), repr=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(
             self, "adopt_resources", tuple(sorted(set(self.adopt_resources)))
         )
+        previous = tuple(sorted(self.previous, key=lambda item: item.ref))
+        if any(not isinstance(item, ResourceIntent) for item in previous) or len(
+            {item.ref for item in previous}
+        ) != len(previous):
+            raise ValueError("previous declarations must be unique resource intents")
+        object.__setattr__(self, "previous", previous)
         object.__setattr__(
             self, "replace_resources", tuple(sorted(set(self.replace_resources)))
         )
@@ -877,6 +892,10 @@ class PlanAction:
     # executor writes these labels/annotations (and the owner annotation)
     # with a metadata-only patch, never spec or data.
     metadata_changes: tuple[str, ...] = ()
+    # JSON pointers of map keys an earlier release declared, the composition
+    # dropped and no other field manager owns: a same-owner APPLY sends them
+    # as explicit nulls in its merge patch (three-way removal).
+    removals: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.adoption is not None and self.operation is not PlanOperation.ADOPT:
@@ -886,6 +905,13 @@ class PlanAction:
         )
         if self.metadata_changes and self.operation is not PlanOperation.APPLY:
             raise ValueError("only apply actions carry metadata-only changes")
+        object.__setattr__(self, "removals", tuple(sorted(set(self.removals))))
+        if self.removals and (
+            self.operation is not PlanOperation.APPLY or self.metadata_changes
+        ):
+            raise ValueError("only full apply actions carry field removals")
+        for pointer in self.removals:
+            _removal_parts(pointer)
 
     def summary(self) -> dict[str, Any]:
         value: dict[str, Any] = {
@@ -900,6 +926,8 @@ class PlanAction:
             value["adoption"] = self.adoption.summary()
         if self.metadata_changes:
             value["metadata_only"] = list(self.metadata_changes)
+        if self.removals:
+            value["removes"] = list(self.removals)
         if self.operation is PlanOperation.REPLACE:
             value["replace"] = {
                 "deletes_uid": self.precondition.uid,
@@ -1064,13 +1092,20 @@ def _equivalent(
     observed: ResourceIntent,
     defaulted: Iterable[DefaultedField],
 ) -> bool:
-    # Never expose equality of secret values through a public plan operation.
+    # Secret-bound values are compared only through PrivateEvidence.
     if desired.secret_bindings:
         return False
-    left = desired.manifest
-    right = observed.manifest
+    return _literal_equal(desired.ref, desired.manifest, observed.manifest, defaulted)
+
+
+def _literal_equal(
+    ref: ResourceRef,
+    left: dict[str, Any],
+    right: dict[str, Any],
+    defaulted: Iterable[DefaultedField],
+) -> bool:
     for defaulted_field in defaulted:
-        if defaulted_field.resource == desired.ref and not _has_json_pointer(
+        if defaulted_field.resource == ref and not _has_json_pointer(
             left, defaulted_field.json_pointer
         ):
             _remove_json_pointer(right, defaulted_field.json_pointer)
@@ -1125,6 +1160,261 @@ def dry_run_confirms(
     return usable is not None and _normalized_manifest(
         usable.manifest
     ) == _normalized_manifest(live)
+
+
+def private_comparable(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    """``manifest`` in the form the API server stores it, for private comparison.
+
+    A Secret's ``stringData`` is stored base64-encoded in ``data``; every
+    other kind is returned unchanged.
+    """
+    value = copy.deepcopy(dict(manifest))
+    if value.get("kind") != "Secret" or value.get("apiVersion") != "v1":
+        return value
+    string_data = value.pop("stringData", None)
+    if isinstance(string_data, Mapping):
+        data = dict(value.get("data") or {})
+        for key, item in string_data.items():
+            if not isinstance(item, str):
+                raise ValueError("Secret stringData values must be strings")
+            data[key] = base64.b64encode(item.encode()).decode()
+        value["data"] = data
+    return value
+
+
+@dataclass(frozen=True)
+class PrivateEvidence:
+    """Which secret-bound objects already hold their desired private content.
+
+    Computed in-process by :func:`private_evidence` from resolved secret
+    versions and the private discovery evidence. It holds only object
+    references: no value, digest or fingerprint of a value is kept, rendered
+    or serialised. A plan reveals one bit per object, ``no-op`` or ``apply``.
+    """
+
+    matching: frozenset[ResourceRef] = frozenset()
+
+
+def private_evidence(
+    composition: DeploymentComposition,
+    snapshot: ObservedSnapshot,
+    resolve: Callable[[SecretVersionRef], Any],
+) -> PrivateEvidence:
+    """Compare resolved secret-bound desired objects with the live objects.
+
+    Only managed objects with complete private content are compared. Both
+    sides are reduced to an HMAC-SHA256 under a random key that lives only for
+    this call and are compared in constant time; an unresolvable version
+    counts as a difference. Server defaults are handled like the literal
+    comparison (discovery's defaulted fields, a Secret's ``type`` and
+    ``stringData``); anything else the server adds makes the object ``apply``.
+    """
+    observed = {resource.intent.ref: resource for resource in snapshot.resources}
+    key = secrets.token_bytes(32)
+
+    def keyed(value: Any) -> bytes:
+        return hmac.new(key, _canonical_json(value).encode(), hashlib.sha256).digest()
+
+    matching: set[ResourceRef] = set()
+    for component in composition.components:
+        for resource in component.resources:
+            current = observed.get(resource.ref)
+            if (
+                not resource.secret_bindings
+                or current is None
+                or current.ownership is not Ownership.MANAGED
+                or resource.ref in snapshot.incomplete_content
+            ):
+                continue
+            try:
+                manifest = resource.manifest
+                for binding in resource.secret_bindings:
+                    replace_pointer(
+                        manifest, binding.json_pointer, resolve(binding.reference)
+                    )
+                desired = private_comparable(manifest)
+            except (ValueError, KeyError, TypeError):
+                continue
+            live = current.intent.manifest
+            if (
+                resource.ref.kind == "Secret"
+                and "type" not in desired
+                and live.get("type") == "Opaque"
+            ):
+                live.pop("type")  # the API server's default
+            for defaulted_field in snapshot.defaulted_fields:
+                if defaulted_field.resource == resource.ref and not _has_json_pointer(
+                    desired, defaulted_field.json_pointer
+                ):
+                    _remove_json_pointer(live, defaulted_field.json_pointer)
+            if hmac.compare_digest(keyed(desired), keyed(live)):
+                matching.add(resource.ref)
+    return PrivateEvidence(frozenset(matching))
+
+
+def _removal_parts(pointer: str) -> list[str]:
+    if not isinstance(pointer, str) or not pointer.startswith("/"):
+        raise ValueError(f"field removal must be a JSON pointer: {pointer!r}")
+    parts = [
+        part.replace("~1", "/").replace("~0", "~") for part in pointer[1:].split("/")
+    ]
+    if (
+        parts[0] in {"", "apiVersion", "kind", "status"}
+        or (
+            parts[0] == "metadata"
+            and (len(parts) < 3 or parts[1] not in _METADATA_MAPS)
+        )
+        or (
+            parts[0] == "metadata"
+            and parts[1] == "annotations"
+            and parts[2] in _EXECUTION_ANNOTATIONS
+        )
+    ):
+        raise ValueError(f"field removal cannot remove {pointer!r}")
+    return parts
+
+
+def _escape_pointer(token: str) -> str:
+    return token.replace("~", "~0").replace("/", "~1")
+
+
+def _dropped_keys(
+    previous: Mapping[str, Any],
+    desired: Mapping[str, Any],
+    live: Mapping[str, Any],
+    path: tuple[str, ...],
+) -> list[tuple[str, ...]]:
+    """Map keys ``previous`` declares, ``desired`` does not and ``live`` has.
+
+    Recurses only through maps (a merge patch replaces lists whole, so a
+    dropped list item is already removed). A dropped map is removed key by key,
+    so keys that only another writer added survive.
+    """
+    dropped: list[tuple[str, ...]] = []
+    for key in sorted(previous):
+        if key not in live:
+            continue
+        child = path + (key,)
+        if not path and key in {"apiVersion", "kind", "status"}:
+            continue
+        if path == ("metadata",) and key not in _METADATA_MAPS:
+            continue
+        if path == ("metadata", "annotations") and key in _EXECUTION_ANNOTATIONS:
+            continue
+        before, now = previous[key], live[key]
+        if key in desired:
+            wanted = desired[key]
+            if (
+                isinstance(before, Mapping)
+                and isinstance(wanted, Mapping)
+                and isinstance(now, Mapping)
+            ):
+                dropped.extend(_dropped_keys(before, wanted, now, child))
+        elif isinstance(before, Mapping) and isinstance(now, Mapping):
+            dropped.extend(_dropped_keys(before, {}, now, child))
+        else:
+            dropped.append(child)
+    return dropped
+
+
+def _sparse(value: Mapping[str, Any], parts: tuple[str, ...]) -> dict[str, Any]:
+    """The value at ``parts`` of ``value``, nested under the same keys."""
+    node: Any = value
+    for part in parts:
+        node = node[part]
+    for part in reversed(parts):
+        node = {part: node}
+    return dict(node)
+
+
+def planned_removals(
+    previous: ResourceIntent | None,
+    desired: ResourceIntent,
+    current: ObservedResource,
+    field_manager: str | None,
+) -> tuple[str, ...]:
+    """Three-way removal: keys an earlier release declared and this one dropped.
+
+    A key is removed only when an earlier release of this owner declared it
+    (``previous``), the desired manifest no longer declares it, it is live, and
+    no other field manager owns it (``managedFields``; the status subresource
+    and this release's own ``field_manager`` excepted). Retained objects are
+    never rewritten, so they get no removals.
+    """
+    if previous is None or current.retained:
+        return ()
+    live = current.intent.manifest
+    removals = []
+    for parts in _dropped_keys(previous.manifest, desired.manifest, live, ()):
+        if overlapping_managers(
+            current.field_managers,
+            _sparse(live, parts),
+            exclude=() if field_manager is None else (field_manager,),
+        ):
+            continue
+        removals.append("/" + "/".join(_escape_pointer(part) for part in parts))
+    return tuple(sorted(removals))
+
+
+def removal_patch(
+    manifest: Mapping[str, Any], removals: Iterable[str]
+) -> dict[str, Any]:
+    """``manifest`` with an explicit ``null`` (merge-patch delete) per removal."""
+    patch = copy.deepcopy(dict(manifest))
+    for pointer in removals:
+        parts = _removal_parts(pointer)
+        node = patch
+        for part in parts[:-1]:
+            child = node.get(part)
+            if child is None:
+                child = node[part] = {}
+            if not isinstance(child, dict):
+                raise ValueError(f"field removal crosses a non-map value: {pointer!r}")
+            node = child
+        if parts[-1] in node and node[parts[-1]] is not None:
+            raise ValueError(f"field removal names a declared field: {pointer!r}")
+        node[parts[-1]] = None
+    return patch
+
+
+def has_removed_field(manifest: Mapping[str, Any], removals: Iterable[str]) -> bool:
+    """Whether any removed field is still present in ``manifest``."""
+    value = dict(manifest)
+    return any(_has_json_pointer(value, pointer) for pointer in removals)
+
+
+def without_removed_fields(
+    manifest: Mapping[str, Any], removals: Iterable[str]
+) -> dict[str, Any]:
+    """``manifest`` without the removed fields (what the write leaves)."""
+    value = copy.deepcopy(dict(manifest))
+    for pointer in removals:
+        _remove_json_pointer(value, pointer)
+    return value
+
+
+def declared_union(intents: Iterable[ResourceIntent]) -> tuple[ResourceIntent, ...]:
+    """Merge earlier declarations of each object into one intent per object.
+
+    Maps are merged key by key; for any other value the last one wins (only
+    which keys were declared matters for removals).
+    """
+
+    def merge(left: Any, right: Any) -> Any:
+        if isinstance(left, dict) and isinstance(right, dict):
+            merged = dict(left)
+            for key, value in right.items():
+                merged[key] = merge(left.get(key), value)
+            return merged
+        return right
+
+    merged: dict[ResourceRef, dict[str, Any]] = {}
+    for intent in intents:
+        merged[intent.ref] = merge(merged.get(intent.ref), intent.manifest)
+    return tuple(
+        ResourceIntent(ref, _canonical_json(manifest))
+        for ref, manifest in sorted(merged.items())
+    )
 
 
 def _propagation_deletes_protected(
@@ -1387,8 +1677,15 @@ def build_plan(
     composition: DeploymentComposition,
     snapshot: ObservedSnapshot,
     authorization: PlanAuthorization,
+    *,
+    private: PrivateEvidence | None = None,
 ) -> DeploymentPlan:
-    """Build a deterministic, non-executable plan from supplied state only."""
+    """Build a deterministic, non-executable plan from supplied state only.
+
+    ``private`` (see :func:`private_evidence`) lets a secret-bound object whose
+    live content already matches plan as ``no-op``; without it such objects
+    always plan as ``apply``.
+    """
     if authorization.target != snapshot.target:
         raise ValueError("authorization target does not match observed target")
     for ref in (*authorization.adopt_resources, *authorization.replace_resources):
@@ -1427,9 +1724,11 @@ def build_plan(
     levels = _topological_levels(dependencies)
     actions: list[PlanAction] = []
     changes: tuple[str, ...]
+    previous = {intent.ref: intent for intent in authorization.previous}
     for level in levels:
         for ref in level:
             current = observed.get(ref)
+            removals: tuple[str, ...] = ()
             if current is None:
                 if not snapshot.coverage.is_complete_for(ref.api_version, ref.kind):
                     raise ValueError(
@@ -1456,10 +1755,19 @@ def build_plan(
                     )
                 elif current.ownership is Ownership.UNMANAGED:
                     raise ValueError(f"resource requires explicit adoption: {ref}")
-                elif _equivalent(
-                    desired[ref], current.intent, snapshot.defaulted_fields
-                ) or server_equivalent(
-                    desired[ref], current, snapshot.server_dry_run(ref)
+                elif not (
+                    removals := planned_removals(
+                        previous.get(ref),
+                        desired[ref],
+                        current,
+                        authorization.field_manager,
+                    )
+                ) and (
+                    _equivalent(desired[ref], current.intent, snapshot.defaulted_fields)
+                    or server_equivalent(
+                        desired[ref], current, snapshot.server_dry_run(ref)
+                    )
+                    or (private is not None and ref in private.matching)
                 ):
                     operation = PlanOperation.NOOP
                 else:
@@ -1483,6 +1791,9 @@ def build_plan(
                     precondition,
                     adoption,
                     changes,
+                    removals
+                    if operation is PlanOperation.APPLY and not changes
+                    else (),
                 )
             )
 

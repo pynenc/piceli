@@ -23,7 +23,12 @@ from typing import Any, TextIO
 
 from piceli.k8s.ops.execution_journal import ExecutionJournal
 from piceli.k8s.ops.executor import PlanExecutor
-from piceli.k8s.ops.plan import ObservedSnapshot, PlanAuthorization, build_plan
+from piceli.k8s.ops.plan import (
+    ObservedSnapshot,
+    PlanAuthorization,
+    build_plan,
+    private_evidence,
+)
 from piceli.k8s.ops.revision import DeploymentRevision, ExecutionBundle
 from piceli.k8s.ops.secret_versions import SecretVersionStore
 from piceli.k8s.ops.session import (
@@ -513,7 +518,16 @@ class ReleaseWorkflow:
         }
         if actual != expected:
             raise ValueError("rollback composition/private input mismatch")
-        plan = build_plan(composition, self.snapshot, self.plan_authorization)
+        plan = build_plan(
+            composition,
+            self.snapshot,
+            self.plan_authorization,
+            private=private_evidence(
+                composition,
+                self.snapshot,
+                lambda reference: self.secrets.resolve(self.snapshot.target, reference),
+            ),
+        )
         authorization = self.authorization_factory(plan, self.snapshot)
         revision = DeploymentRevision.create(plan, self.snapshot, authorization)
         bundle = ExecutionBundle.create(revision, execution_id=execution_id)

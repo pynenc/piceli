@@ -264,8 +264,8 @@ def test_imported_namespace_is_all_no_op_after_adoption(tmp_path: Path) -> None:
             ("Deployment", "cache"): "no-op",
             ("NetworkPolicy", "cache-ingress"): "no-op",
             ("Service", "cache"): "no-op",  # server dry run absorbs the cluster IP
-            # secret values are never compared in public plans
-            ("Secret", "cache-auth"): "apply",
+            # compared privately: the imported value is unchanged
+            ("Secret", "cache-auth"): "no-op",
         }
         code, _, output = _release(
             "apply", "--spec", str(spec), "--approve", again["plan_hash"]

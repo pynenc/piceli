@@ -11,7 +11,7 @@ Runs only when the variables name a disposable cluster, for example::
 The test never reads the ambient kubeconfig. In a uniquely named namespace it
 releases the node-local registry (``examples/two-images/registry.py``) and a
 workload (ConfigMap, bound Secret, PVC, Deployment, Service), re-plans both
-unchanged, checks that every comparable object is a no-op and that planning
+unchanged, checks that every object (the bound Secret too) is a no-op and that planning
 changed no object (server dry runs only), then changes one image and checks
 that the diff shows exactly that field.
 """
@@ -224,8 +224,8 @@ def test_unchanged_releases_plan_as_noop_and_one_image_diff(tmp_path, namespace)
     assert _operations(planned) == {
         "ConfigMap/web-config": "no-op",
         "PersistentVolumeClaim/web-data": "no-op",
-        # Secret-bound values are never compared.
-        "Secret/web-token": "apply",
+        # Secret-bound values are compared privately (in-process).
+        "Secret/web-token": "no-op",
         "Deployment/web": "no-op",
         "Service/web": "no-op",
     }, planned["diffs"]
@@ -262,12 +262,9 @@ def test_unchanged_releases_plan_as_noop_and_one_image_diff(tmp_path, namespace)
     assert code == 0, (applied, stderr)
     code, again, stderr = _run(web, "plan")
     assert code == 0, (again, stderr)
-    assert {
-        name: operation
-        for name, operation in _operations(again).items()
-        if not name.startswith("Secret/")
-    } == {
+    assert _operations(again) == {
         "ConfigMap/web-config": "no-op",
+        "Secret/web-token": "no-op",
         "PersistentVolumeClaim/web-data": "no-op",
         "Deployment/web": "no-op",
         "Service/web": "no-op",

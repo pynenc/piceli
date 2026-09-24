@@ -189,16 +189,15 @@ def test_unchanged_release_plans_all_noop_despite_server_defaults(release_env):
     assert _operations(planned) == {
         "ConfigMap/settings": "no-op",
         "PersistentVolumeClaim/data": "no-op",
-        # Private values are never compared, so a bound Secret is re-applied.
-        "Secret/credential": "apply",
+        # The bound Secret is compared privately (in-process, keyed digests).
+        "Secret/credential": "no-op",
         "Deployment/worker": "no-op",
         "Service/worker": "no-op",
     }
     assert planned["dry_run_unavailable"] == []
-    assert [item["resource"]["kind"] for item in planned["diffs"]] == ["Secret"]
-    secret_diff = planned["diffs"][0]
-    assert secret_diff["not_compared"] == ["/data/password"]
-    assert secret_diff["changes"] == []
+    assert planned["diffs"] == []
+    password = api.objects[("Secret", "credential")]["data"]["password"]
+    assert password not in json.dumps(planned) + result.stderr
 
     # One dry run per managed, comparable object, all persisted nothing.
     probes = _dry_runs(api)
@@ -227,6 +226,7 @@ def test_unchanged_release_plans_all_noop_despite_server_defaults(release_env):
     after = _versions(api)
     for key in (
         ("ConfigMap", "settings"),
+        ("Secret", "credential"),
         ("Deployment", "worker"),
         ("Service", "worker"),
         ("PersistentVolumeClaim", "data"),
@@ -252,11 +252,13 @@ def test_changed_image_diff_shows_exactly_that_field(release_env):
     assert _operations(planned) == {
         "ConfigMap/settings": "no-op",
         "PersistentVolumeClaim/data": "no-op",
-        "Secret/credential": "apply",
+        # A new release carries the value over, so its Secret is unchanged.
+        "Secret/credential": "no-op",
         "Deployment/worker": "apply",
         "Service/worker": "no-op",
     }
     diffs = {item["resource"]["kind"]: item for item in planned["diffs"]}
+    assert set(diffs) == {"Deployment"}
     worker = diffs["Deployment"]
     assert worker["basis"] == "server-dry-run"
     assert worker["changes"] == [
@@ -308,6 +310,8 @@ def test_release_diff_is_read_only(release_env):
     assert value["changes"] is True
     assert value["summary"] == {"apply": 2, "no-op": 3}
     kinds = [item["resource"]["kind"] for item in value["diffs"]]
+    # ``diff`` never materializes secret inputs of a new release, so the
+    # bound Secret of a changed composition is not compared.
     assert kinds == ["Secret", "Deployment"]
     assert "release/Deployment/worker" in result.stderr
     assert f"+      - image: registry.example/app/api@{DIGEST_2}" in result.stderr
@@ -346,3 +350,106 @@ def test_denied_dry_run_falls_back_to_a_literal_comparison(release_env):
     )
     assert worker["basis"] == "client"
     assert SECRET_VALUE_MARKER not in result.stdout + result.stderr
+
+
+def _drop(tmp_path: Path) -> None:
+    """Drop a ConfigMap key and label and a container env var from the module."""
+    module = (tmp_path / "compose.py").read_text()
+    for old, new in (
+        (
+            '"data": {"mode": "blue"}}',
+            '"data": {"mode": "blue", "extra": "x"},\n'
+            '         "metadata": {**meta("settings"), "labels": {"tier": "front"}}}',
+        ),
+        (
+            '"resources": {"requests": {"cpu": "0.5"}}}',
+            '"resources": {"requests": {"cpu": "0.5"}},\n'
+            '                                    "env": [{"name": "A", "value": "1"},\n'
+            '                                            {"name": "B", "value": "2"}]}',
+        ),
+    ):
+        assert old in module
+        module = module.replace(old, new)
+    # Composition modules are cached per path: the earlier release is a copy.
+    (tmp_path / "compose_v1.py").write_text(module)
+    _use(tmp_path, "compose_v1.py")
+
+
+def _use(tmp_path: Path, module: str) -> None:
+    spec = tmp_path / "release.toml"
+    text = spec.read_text()
+    for name in ("compose.py", "compose_v1.py"):
+        text = text.replace(f'composition = "{name}:build"', "composition = @")
+    spec.write_text(text.replace("composition = @", f'composition = "{module}:build"'))
+
+
+def test_keys_dropped_from_the_composition_are_removed_live(release_env):
+    api, tmp_path = release_env
+    _drop(tmp_path)
+    code, _, result = _run(tmp_path, "apply", "--auto-approve")
+    assert code == 0, result.output
+    settings = api.objects[("ConfigMap", "settings")]
+    assert settings["data"]["extra"] == "x"
+    assert settings["metadata"]["labels"] == {"tier": "front"}
+    # Another writer adds a key the release never declared.
+    settings["data"]["foreign"] = "keep"
+
+    _use(tmp_path, "compose.py")
+    api.requests.clear()
+    code, planned, result = _run(tmp_path, "plan")
+    assert code == 0, result.output
+    operations = _operations(planned)
+    assert operations["ConfigMap/settings"] == "apply"
+    assert operations["Deployment/worker"] == "apply"
+    assert operations["Secret/credential"] == "no-op"
+    diffs = {item["resource"]["kind"]: item for item in planned["diffs"]}
+    assert [
+        (change["path"], change["op"]) for change in diffs["ConfigMap"]["changes"]
+    ] == [("/data/extra", "remove"), ("/metadata/labels/tier", "remove")]
+    env = [
+        change for change in diffs["Deployment"]["changes"] if "/env" in change["path"]
+    ]
+    assert env and all(change["op"] == "remove" for change in env)
+    (action,) = [item for item in planned["actions"] if item["name"] == "settings"]
+    assert action["removes"] == ["/data/extra", "/metadata/labels/tier"]
+
+    code, outcome, result = _run(tmp_path, "apply", "--approve", planned["plan_hash"])
+    assert code == 0, result.output
+    assert outcome["execution"]["state"] == "ready"
+    (write,) = [
+        request
+        for request in api.requests
+        if request["method"] == "PATCH"
+        and request["path"].endswith("/configmaps/settings")
+        and "dryRun" not in request["query"]
+    ]
+    assert write["body"]["data"]["extra"] is None
+    assert write["body"]["metadata"]["labels"] == {"tier": None}
+    settings = api.objects[("ConfigMap", "settings")]
+    assert settings["data"] == {"mode": "blue", "foreign": "keep"}
+    assert not settings["metadata"].get("labels")
+    container = api.objects[("Deployment", "worker")]["spec"]["template"]["spec"][
+        "containers"
+    ][0]
+    assert "env" not in container
+
+    code, again, result = _run(tmp_path, "plan")
+    assert code == 0, result.output
+    assert set(_operations(again).values()) == {"no-op"}, again["diffs"]
+
+
+def test_diff_of_an_unchanged_release_compares_secrets_privately(release_env):
+    api, tmp_path = release_env
+    code, _, result = _run(tmp_path, "apply", "--auto-approve")
+    assert code == 0, result.output
+    state = tmp_path / "state"
+    files = {path: path.read_bytes() for path in state.rglob("*") if path.is_file()}
+
+    code, value, result = _run(tmp_path, "diff", "--exit-code")
+    assert code == 0, result.output
+    assert value["summary"] == {"no-op": 5} and value["diffs"] == []
+    password = api.objects[("Secret", "credential")]["data"]["password"]
+    assert password not in result.stdout + result.stderr
+    assert {
+        path: path.read_bytes() for path in state.rglob("*") if path.is_file()
+    } == files
