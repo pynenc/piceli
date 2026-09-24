@@ -165,9 +165,21 @@ def serve(
             exists=True, readable=True, envvar=UI_CONFIG_ENV, help=UI_CONFIG_HELP
         ),
     ] = None,
+    access: Annotated[
+        MaybeString,
+        typer.Option(
+            help="release.toml or module:attr whose model access declarations "
+            "become the dashboard shortcuts (--ui-config entries win by id)"
+        ),
+    ] = None,
 ) -> None:
     """Launch the Piceli Operator dashboard and unified REST API."""
     config = load_ui_config(ui_config)
+    if access is not None:
+        from piceli.k8s.access import access_ui_config
+        from piceli.k8s.cli.access import _resolve
+
+        config = access_ui_config(config, _resolve(access))
     reader = KubernetesDynamicInventoryReader(kubeconfig=kubeconfig, context=context)
     cat = ReleaseCatalog(catalog) if catalog else None
     arch = _archive(archive) if archive else None

@@ -66,16 +66,26 @@ class Rejected(SystemExit):
         self.reason = reason
 
 
-def reject(code: str, *, exit_code: int = EXIT_REJECTED) -> NoReturn:
+def reject(
+    code: str,
+    *,
+    exit_code: int = EXIT_REJECTED,
+    details: Mapping[str, Any] | None = None,
+) -> NoReturn:
     """Print the rejection for ``code`` and exit with ``exit_code``.
 
     ``code`` must be registered in :data:`piceli.errors.ERRORS`; an
     unregistered code is a programming error and raises ``ValueError``.
+    ``details`` adds structured, non-secret fields to the rejection object
+    (never ``state`` or ``reason``).
     """
     entry = ERRORS.get(code)
     if entry is None:
         raise ValueError(f"unregistered error code {code!r}")
-    emit_json({"state": "rejected", "reason": code})
+    extra = dict(details or {})
+    if {"state", "reason"} & set(extra):
+        raise ValueError("details cannot override state or reason")
+    emit_json({**extra, "state": "rejected", "reason": code})
     say(f"rejected: {entry.title} ({code}). {entry.fix}")
     raise Rejected(code, exit_code)
 
@@ -153,6 +163,31 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "Print the whole CLI tree, with contracts, as JSON.",
             contract="conforms",
             exit_codes=(0,),
+        ),
+        # ---------------------------------------------- access / status
+        "access": _C(
+            "Supervise the app's declared port forwards until interrupted.",
+            reads=("release.toml or module:attr", "kubeconfig", "kubectl"),
+            writes=("loopback ports (kubectl port-forward processes it owns)",),
+            cluster="reads",
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            notes="Refuses (access-port-conflict) when a declared local port is "
+            "held by another process and names its pid and command; never takes "
+            "a port over. Stops every forward it started on Ctrl-C/SIGTERM/SIGHUP. "
+            "Exit 1 only when every forward gave up.",
+        ),
+        "status": _C(
+            "Say whether the app is up and how to reach it (release, images, "
+            "health, URLs).",
+            reads=("release.toml or module:attr", "state_dir", "kubeconfig"),
+            cluster="reads",
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            notes="Read-only. Exit 0 when every workload is ready, 1 otherwise "
+            "(including an unreadable cluster). Probes forwards on 127.0.0.1 only. "
+            "JSON schema: docs/schemas/piceli-status-v1.schema.json.",
         ),
         # ------------------------------------------------------ release
         "release plan": _C(

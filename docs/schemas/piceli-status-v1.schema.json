@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.piceli.pynenc.org/schemas/piceli-status-v1.schema.json",
+  "title": "piceli status --json (piceli.status.v1)",
+  "description": "Whether an app is up and how to reach it. Fields are only added within a major version.",
+  "type": "object",
+  "required": ["schema", "state", "app", "namespace", "context", "source", "release", "workloads", "access", "checks", "errors"],
+  "properties": {
+    "schema": {"const": "piceli.status.v1"},
+    "state": {
+      "description": "up: every workload ready; degraded: some not ready; down: none ready or all missing; unknown: the cluster could not be read or there is no workload.",
+      "enum": ["up", "degraded", "down", "unknown"]
+    },
+    "app": {"type": "string"},
+    "namespace": {"type": "string"},
+    "context": {"type": "string"},
+    "source": {"enum": ["release-spec", "pipeline"]},
+    "release": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "required": ["name", "state"],
+          "properties": {
+            "name": {"type": "string", "description": "The release name prefix from release.toml."},
+            "state": {"type": "string", "description": "State of the latest execution (ready, failed, running, cancelled, …), not-deployed, or unknown."},
+            "current": {"type": ["string", "null"], "description": "The deployed (else selected) catalog release."},
+            "previous": {"type": ["string", "null"]},
+            "latest": {
+              "type": ["object", "null"],
+              "properties": {
+                "release": {"type": ["string", "null"]},
+                "intent": {"type": ["string", "null"]},
+                "state": {"type": ["string", "null"]},
+                "at": {"type": ["string", "null"]},
+                "execution_id": {"type": ["string", "null"]}
+              }
+            },
+            "images": {"type": "object", "description": "Image references recorded with the current release, by image name."},
+            "pending_plans": {"type": "integer", "minimum": 0},
+            "error": {"type": "string", "description": "An error code when the state directory could not be read."}
+          }
+        }
+      ]
+    },
+    "workloads": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "name", "health", "ready", "replicas", "images", "problems", "error"],
+        "properties": {
+          "kind": {"enum": ["Deployment", "StatefulSet", "DaemonSet"]},
+          "name": {"type": "string"},
+          "health": {"enum": ["ready", "idle", "progressing", "unavailable", "missing", "unknown"]},
+          "ready": {"type": "boolean"},
+          "replicas": {
+            "oneOf": [
+              {"type": "null"},
+              {
+                "type": "object",
+                "required": ["desired", "ready", "updated", "available", "current"],
+                "properties": {
+                  "desired": {"type": "integer", "minimum": 0},
+                  "ready": {"type": "integer", "minimum": 0},
+                  "updated": {"type": "integer", "minimum": 0},
+                  "available": {"type": "integer", "minimum": 0},
+                  "current": {"type": "integer", "minimum": 0}
+                }
+              }
+            ]
+          },
+          "images": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["container", "image", "digest", "pinned", "running"],
+              "properties": {
+                "container": {"type": "string"},
+                "image": {"type": ["string", "null"]},
+                "digest": {"type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$"},
+                "pinned": {"type": "boolean", "description": "The spec references the image by digest."},
+                "running": {"type": "array", "items": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}, "description": "Digests the pods report (imageID)."}
+              }
+            }
+          },
+          "problems": {"type": "array", "items": {"type": "string"}},
+          "error": {"type": ["string", "null"], "description": "An error code, e.g. status-cluster-unreadable."}
+        }
+      }
+    },
+    "access": {
+      "type": "object",
+      "required": ["state", "forwards"],
+      "properties": {
+        "state": {"enum": ["up", "partial", "down", "none"]},
+        "forwards": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "label", "target", "url", "local_port", "remote_port", "required", "forward", "error", "owner", "probe"],
+            "properties": {
+              "id": {"type": "string"},
+              "label": {"type": "string"},
+              "target": {"type": "string", "pattern": "^(service|deployment|pod)/"},
+              "url": {"type": "string", "pattern": "^http://127\\.0\\.0\\.1:[0-9]+/"},
+              "local_port": {"type": "integer", "minimum": 1, "maximum": 65535},
+              "remote_port": {"type": "integer", "minimum": 1, "maximum": 65535},
+              "required": {"type": "boolean"},
+              "forward": {"enum": ["up", "unhealthy", "down"]},
+              "error": {"type": ["string", "null"]},
+              "owner": {
+                "oneOf": [
+                  {"type": "null"},
+                  {
+                    "type": "object",
+                    "required": ["port", "pid", "command", "parent"],
+                    "properties": {
+                      "port": {"type": "integer"},
+                      "pid": {"type": "integer"},
+                      "command": {"type": ["string", "null"]},
+                      "parent": {
+                        "oneOf": [
+                          {"type": "null"},
+                          {"type": "object", "required": ["pid", "command"], "properties": {"pid": {"type": "integer"}, "command": {"type": ["string", "null"]}}}
+                        ]
+                      }
+                    }
+                  }
+                ]
+              },
+              "probe": {"type": "object"}
+            }
+          }
+        }
+      }
+    },
+    "checks": {"description": "The latest checks result when the target records one, else null."},
+    "errors": {"type": "array", "items": {"type": "string"}, "description": "Error codes (piceli explain <code>)."}
+  }
+}

@@ -24,6 +24,7 @@ FIRST_ARGUMENT = {
     "_input",
     "SecretError",
     "ImageHandoffError",
+    "AccessTargetError",
     "reject",
 }
 # ``_Failure(result, reason)`` in the delivery modules.
@@ -60,6 +61,10 @@ DYNAMIC = {
     "smoke-timed-out",
     # artifacts/cli.py fallback for unclassified input errors
     "invalid-or-unavailable-artifact-input",
+    # k8s/access.py: codes recorded in `piceli status` fields ("error", "errors")
+    "status-cluster-unreadable",
+    "status-release-unreadable",
+    "status-checks-unreadable",
 }
 # Registered for the CLI contract itself (piceli/cli_contract.py users).
 CONTRACT = {"unknown-error-code"}

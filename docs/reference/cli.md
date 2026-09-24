@@ -34,6 +34,7 @@ These apply to `model` and `deploy` (the legacy CLI engine).
 
 | Command | Summary | Cluster | Approval |
 | --- | --- | --- | --- |
+| [`piceli access`](#cli-access) | Forward the app's declared ports to 127.0.0.1 and keep them healthy. | reads | no |
 | [`piceli artifacts build`](#cli-artifacts-build) | Assemble an OCI image layout from a plan without running code. | none | no |
 | [`piceli artifacts build-spec preview`](#cli-artifacts-build-spec-preview) | Preview a containerized build and its plan hash. | none | no |
 | [`piceli artifacts build-spec run`](#cli-artifacts-build-spec-run) | Run an approved containerized build and write a receipt. | none | yes |
@@ -77,6 +78,33 @@ These apply to `model` and `deploy` (the legacy CLI engine).
 | [`piceli release status`](#cli-release-status) | Show catalogued releases, their executions and history (no cluster access). | none | no |
 | [`piceli release stop`](#cli-release-stop) | Cancel the latest execution of a release (exact owner only). | reads | no |
 | [`piceli render`](#cli-render) | Print the manifests of a typed app or composition. Never contacts a cluster. | none | no |
+| [`piceli status`](#cli-status) | Say whether the app is up and how to reach it. Read-only. | reads | no |
+
+(cli-access)=
+### `piceli access`
+
+Forward the app's declared ports to 127.0.0.1 and keep them healthy.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `TARGET` | text | required |  |
+| `--only` | text (repeatable) |  | Supervise only this forward id (repeatable) |
+| `--json` | boolean | `False` | Print JSON lines: started, status, stopped |
+| `--kubectl` | text | `kubectl` | kubectl executable |
+| `--poll` | float | `1.0` | Status report cadence (seconds) |
+| `--dashboard` | integer |  | Also serve the local dashboard on this loopback port, with these forwards as its shortcuts |
+| `--ui-config` | path | env `PICELI__UI_CONFIG` | Optional dashboard TOML (badges, tiers, extra shortcuts) |
+
+**Contract**
+
+- **Reads:** release.toml or module:attr, kubeconfig, kubectl
+- **Writes:** loopback ports (kubectl port-forward processes it owns)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Refuses (access-port-conflict) when a declared local port is held by another process and names its pid and command; never takes a port over. Stops every forward it started on Ctrl-C/SIGTERM/SIGHUP. Exit 1 only when every forward gave up.
 
 (cli-artifacts-build)=
 ### `piceli artifacts build`
@@ -818,6 +846,7 @@ Launch the Piceli Operator dashboard and unified REST API.
 | `--user` | text |  |  |
 | `--port` | integer | `9876` |  |
 | `--ui-config` | path | env `PICELI__UI_CONFIG` | TOML file with dashboard shortcuts, topology tiers, and badges (also $PICELI__UI_CONFIG) |
+| `--access` | text |  | release.toml or module:attr whose model access declarations become the dashboard shortcuts (--ui-config entries win by id) |
 
 **Contract**
 
@@ -1061,3 +1090,25 @@ Print the manifests of a typed app or composition. Never contacts a cluster.
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** partial
 - **Notes:** Never contacts a cluster; secret values are placeholders.
+
+(cli-status)=
+### `piceli status`
+
+Say whether the app is up and how to reach it. Read-only.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `TARGET` | text | required |  |
+| `--json` | boolean | `False` | Print one piceli.status.v1 JSON object |
+| `--timeout` | float | `10.0` | Per-request API timeout (seconds) |
+
+**Contract**
+
+- **Reads:** release.toml or module:attr, state_dir, kubeconfig
+- **Writes:** nothing (read-only)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Read-only. Exit 0 when every workload is ready, 1 otherwise (including an unreadable cluster). Probes forwards on 127.0.0.1 only. JSON schema: docs/schemas/piceli-status-v1.schema.json.

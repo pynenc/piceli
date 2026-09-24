@@ -16,6 +16,13 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | Code | Area | Retry-safe |
 | --- | --- | --- |
 | [`absence-precondition-failed`](#error-absence-precondition-failed) | execution | no |
+| [`access-forwards-failed`](#error-access-forwards-failed) | access | yes |
+| [`access-kubeconfig-invalid`](#error-access-kubeconfig-invalid) | access | no |
+| [`access-kubectl-missing`](#error-access-kubectl-missing) | access | no |
+| [`access-none-declared`](#error-access-none-declared) | access | no |
+| [`access-port-conflict`](#error-access-port-conflict) | access | no |
+| [`access-target-invalid`](#error-access-target-invalid) | access | no |
+| [`access-unknown-forward`](#error-access-unknown-forward) | access | no |
 | [`ambiguous-content-blocked`](#error-ambiguous-content-blocked) | execution | no |
 | [`ambiguous-delete-blocked`](#error-ambiguous-delete-blocked) | execution | no |
 | [`ambiguous-write-blocked`](#error-ambiguous-write-blocked) | execution | no |
@@ -162,6 +169,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`spec-changed`](#error-spec-changed) | build-spec | yes |
 | [`spec-unreadable`](#error-spec-unreadable) | build-spec | no |
 | [`ssh-tool-required`](#error-ssh-tool-required) | artifacts-input | no |
+| [`status-checks-unreadable`](#error-status-checks-unreadable) | access | yes |
+| [`status-cluster-unreadable`](#error-status-cluster-unreadable) | access | yes |
+| [`status-release-unreadable`](#error-status-release-unreadable) | access | no |
 | [`takeover-conflict`](#error-takeover-conflict) | kubernetes | no |
 | [`target-mismatch`](#error-target-mismatch) | kubernetes | no |
 | [`timed-out`](#error-timed-out) | artifacts-delivery | yes |
@@ -1468,4 +1478,87 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Delivery receipt matches no image.** A delivery receipt in `images_from` matches no built image by config digest.
 
 - **Fix:** Add the build receipt that produced the image, or use `[images.<name>] receipt = …`.
+- **Retry-safe:** no
+
+
+## Access and status from the model (`piceli access`, `piceli status`)
+
+(error-access-forwards-failed)=
+### `access-forwards-failed`
+
+**Every forward failed.** All supervised forwards gave up: the restart budget was spent, or a port was taken by another process while supervising.
+
+- **Fix:** Run `piceli status TARGET` to see whether the workloads are ready and who holds each port, fix it, then run `piceli access` again.
+- **Retry-safe:** yes
+
+(error-access-kubeconfig-invalid)=
+### `access-kubeconfig-invalid`
+
+**Kubeconfig unusable.** The target's kubeconfig or context cannot be loaded (missing file or context, exec/auth-provider credentials, insecure or proxied transport).
+
+- **Fix:** Point the target at a kubeconfig file with a static-credential context; Piceli never falls back to the current context.
+- **Retry-safe:** no
+
+(error-access-kubectl-missing)=
+### `access-kubectl-missing`
+
+**kubectl required.** `piceli access` runs `kubectl port-forward` and no kubectl was found or it is not executable.
+
+- **Fix:** Install kubectl or pass `--kubectl PATH`.
+- **Retry-safe:** no
+
+(error-access-none-declared)=
+### `access-none-declared`
+
+**No access declared.** The app declares no forward, so there is nothing to supervise. A composition function that returns `app.composition(ctx)` hides the App's declarations.
+
+- **Fix:** Add `access=app.access.forward(local=PORT)` to a Service, and return the App itself from the composition function.
+- **Retry-safe:** no
+
+(error-access-port-conflict)=
+### `access-port-conflict`
+
+**Declared local port already in use.** A required forward's local port is already held by another process (often an older `piceli access`, dashboard or `kubectl port-forward`). Piceli never takes a port over; the rejection lists each port's owner pid and command when it can be found.
+
+- **Fix:** Stop the listed process (or the dashboard that supervises it), or change `local=` in the model, then run the command again.
+- **Retry-safe:** no
+
+(error-access-target-invalid)=
+### `access-target-invalid`
+
+**Access target invalid.** TARGET is neither a readable release.toml whose composition yields an App or composition, nor `module:attr` of an object with `.app` (a piceli App) and `.target` (explicit kubeconfig, context and namespace).
+
+- **Fix:** Pass `path/to/release.toml`, or `module:attr` of a pipeline object; the message says which part is missing.
+- **Retry-safe:** no
+
+(error-access-unknown-forward)=
+### `access-unknown-forward`
+
+**Unknown forward.** `--only` names a forward id the app does not declare.
+
+- **Fix:** Use an id from `piceli status TARGET --json` (`access.forwards[].id`); it defaults to the Service name.
+- **Retry-safe:** no
+
+(error-status-checks-unreadable)=
+### `status-checks-unreadable`
+
+**Checks result unreadable.** The target's `last_checks()` hook raised.
+
+- **Fix:** Run the checks again; the rest of the status is still valid.
+- **Retry-safe:** yes
+
+(error-status-cluster-unreadable)=
+### `status-cluster-unreadable`
+
+**Cluster unreadable.** Reading a workload failed (network, authentication, RBAC or timeout). The detail is withheld because it could contain credentials.
+
+- **Fix:** Check that the target's kubeconfig context reaches the cluster and may read Deployments and Pods in the namespace, then retry.
+- **Retry-safe:** yes
+
+(error-status-release-unreadable)=
+### `status-release-unreadable`
+
+**Release state unreadable.** The release state directory (catalog, journal or history) could not be read.
+
+- **Fix:** Check `[release] state_dir` and run `piceli release status --spec release.toml`.
 - **Retry-safe:** no
