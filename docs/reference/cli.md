@@ -97,7 +97,7 @@ Assemble an OCI image layout from a plan without running code.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-artifacts-build-spec-preview)=
 ### `piceli artifacts build-spec preview`
@@ -117,7 +117,7 @@ Preview a containerized build and its plan hash.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-artifacts-build-spec-run)=
 ### `piceli artifacts build-spec run`
@@ -148,7 +148,7 @@ Run an approved containerized build and write a receipt.
 - **Approval required:** yes
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-artifacts-deliver)=
 ### `piceli artifacts deliver`
@@ -192,7 +192,7 @@ Mutually exclusive: `archive` / `image`.
 - **Approval required:** yes
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 - **Notes:** Registry pushes are content-addressed and idempotent. Contacts the cluster only for --via-forward (port-forward).
 
 (cli-artifacts-execute-command)=
@@ -217,7 +217,7 @@ Run a pinned external build command under an approved plan.
 - **Approval required:** yes
 - **Safe to retry:** no
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-artifacts-import-local)=
 ### `piceli artifacts import-local`
@@ -239,8 +239,8 @@ Import an OCI layout into the local Docker daemon.
 - **Cluster:** none
 - **Approval required:** yes
 - **Safe to retry:** yes
-- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
 
 (cli-artifacts-inspect)=
 ### `piceli artifacts inspect`
@@ -259,7 +259,7 @@ Recheck an OCI layout and print its summary.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-artifacts-pin)=
 ### `piceli artifacts pin`
@@ -279,7 +279,7 @@ Pin one public source file by digest.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-artifacts-preview)=
 ### `piceli artifacts preview`
@@ -298,7 +298,7 @@ Preview a deterministic OCI build plan (no tools run).
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-artifacts-preview-command)=
 ### `piceli artifacts preview-command`
@@ -317,7 +317,7 @@ Preview a pinned external build command.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-deploy-detail)=
 ### `piceli deploy detail`
@@ -435,8 +435,7 @@ Capture each declared source (or the ``--only`` ones) and write a lock.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
-- **Notes:** Refusal reasons are free text today (D0b).
+- **Output contract:** conforms
 
 (cli-inputs-verify)=
 ### `piceli inputs verify`
@@ -458,8 +457,7 @@ Recapture the sources and compare them with the lock (exit 1 on drift).
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
-- **Notes:** Refusal reasons are free text today (D0b).
+- **Output contract:** conforms
 
 (cli-model-list)=
 ### `piceli model list`
@@ -500,7 +498,7 @@ Print a JSON argv array for one explicit loopback-only port forward.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-observe-forward-list)=
 ### `piceli observe forward-list`
@@ -520,7 +518,7 @@ List a user's saved port-forward preferences without starting a process.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-observe-forward-run)=
 ### `piceli observe forward-run`
@@ -544,7 +542,8 @@ Run one saved loopback-only port forward until the caller interrupts it.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
+- **Notes:** After the checks, output and exit status are kubectl's own.
 
 (cli-observe-forward-save)=
 ### `piceli observe forward-save`
@@ -569,7 +568,7 @@ Persist one harmless port-forward preference for a local user.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-observe-forwards-apply)=
 ### `piceli observe forwards apply`
@@ -594,7 +593,7 @@ Start every declared forward and supervise it in the foreground.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-observe-forwards-status)=
 ### `piceli observe forwards status`
@@ -613,8 +612,8 @@ Probe each declared forward's loopback endpoint once and print JSON.
 - **Cluster:** none
 - **Approval required:** no
 - **Safe to retry:** yes
-- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed)
-- **Output contract:** partial
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
 
 (cli-observe-logs-command)=
 ### `piceli observe logs-command`
@@ -640,7 +639,7 @@ Print JSON argv for a bounded, explicit workload-log request.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-observe-logs-run)=
 ### `piceli observe logs-run`
@@ -666,7 +665,8 @@ Run a bounded workload-log request in the caller's foreground terminal.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
+- **Notes:** After the checks, output and exit status are kubectl's own.
 
 (cli-observe-serve)=
 ### `piceli observe serve`
@@ -693,7 +693,7 @@ Open the local operations dashboard and optionally restore saved forwards.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-observe-status)=
 ### `piceli observe status`
@@ -715,7 +715,7 @@ Print declared resources, live state, and objects absent from the archive.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-operator-approve)=
 ### `piceli operator approve`
@@ -738,7 +738,7 @@ Record an explicit operator approval for a pull request rollout.
 - **Approval required:** yes
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-operator-backup)=
 ### `piceli operator backup`
@@ -758,7 +758,7 @@ Create a verified, mode-restricted backup archive of operator state.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-operator-promote)=
 ### `piceli operator promote`
@@ -779,7 +779,7 @@ Promote an existing built digest to a new tag without rebuilding.
 - **Approval required:** no
 - **Safe to retry:** no
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-operator-restore)=
 ### `piceli operator restore`
@@ -799,7 +799,7 @@ Safely verify and restore operator state into empty destination.
 - **Approval required:** no
 - **Safe to retry:** no
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-operator-serve)=
 ### `piceli operator serve`
@@ -827,7 +827,7 @@ Launch the Piceli Operator dashboard and unified REST API.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-operator-status)=
 ### `piceli operator status`
@@ -851,7 +851,7 @@ Print classified operator inventory: managed, unmanaged, unknown, and releases.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-release-apply)=
 ### `piceli release apply`
@@ -876,7 +876,7 @@ Execute an approved plan (``--approve HASH``), or plan and confirm.
 - **Approval required:** yes
 - **Safe to retry:** no
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
-- **Output contract:** partial
+- **Output contract:** conforms
 - **Notes:** After an interruption use `release resume`, not apply.
 
 (cli-release-plan)=
@@ -901,7 +901,7 @@ Capture live discovery and persist an approvable plan (prints its hash).
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 - **Notes:** Never changes the cluster. Prints the plan hash to approve.
 
 (cli-release-preview)=
@@ -926,7 +926,7 @@ Alias of `plan`.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-release-resume)=
 ### `piceli release resume`
@@ -946,7 +946,7 @@ Resume an interrupted apply of a created release (same grant and ids).
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 - **Notes:** Continues an already approved execution; needs no new approval.
 
 (cli-release-rollback)=
@@ -972,7 +972,7 @@ Re-plan and re-apply an earlier release against current cluster state.
 - **Approval required:** yes
 - **Safe to retry:** no
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-release-secret-show)=
 ### `piceli release secret show`
@@ -996,7 +996,7 @@ Show a secret's metadata, and its value with --reveal (never logged).
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 - **Notes:** Owner only. Never contacts the cluster; values print only with --reveal or a terminal confirmation.
 
 (cli-release-status)=
@@ -1016,7 +1016,7 @@ Show catalogued releases, their executions and history (no cluster access).
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-release-stop)=
 ### `piceli release stop`
@@ -1036,7 +1036,7 @@ Cancel the latest execution of a release (exact owner only).
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 - **Notes:** Checks the cluster identity; records the cancellation locally.
 
 (cli-render)=

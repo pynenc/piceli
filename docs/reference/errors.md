@@ -16,18 +16,28 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | Code | Area | Retry-safe |
 | --- | --- | --- |
 | [`absence-precondition-failed`](#error-absence-precondition-failed) | execution | no |
+| [`adopt-and-replace`](#error-adopt-and-replace) | release | no |
+| [`adopt-entry-not-declared`](#error-adopt-entry-not-declared) | release | no |
 | [`ambiguous-content-blocked`](#error-ambiguous-content-blocked) | execution | no |
 | [`ambiguous-delete-blocked`](#error-ambiguous-delete-blocked) | execution | no |
 | [`ambiguous-write-blocked`](#error-ambiguous-write-blocked) | execution | no |
 | [`api-unavailable`](#error-api-unavailable) | kubernetes | yes |
 | [`applied-resource-drift`](#error-applied-resource-drift) | execution | no |
+| [`approve-with-planning-flags`](#error-approve-with-planning-flags) | release | no |
 | [`authorization-expired`](#error-authorization-expired) | execution | no |
+| [`backup-refused`](#error-backup-refused) | observe | no |
 | [`blob-digest-mismatch`](#error-blob-digest-mismatch) | artifacts-registry | yes |
 | [`blob-source-truncated`](#error-blob-source-truncated) | artifacts-registry | yes |
 | [`build-failed`](#error-build-failed) | build-spec | no |
 | [`build-timed-out`](#error-build-timed-out) | build-spec | yes |
 | [`builder-not-approved`](#error-builder-not-approved) | build-spec | no |
 | [`cancelled`](#error-cancelled) | artifacts-delivery | yes |
+| [`cluster-identity-changed`](#error-cluster-identity-changed) | release | no |
+| [`cluster-identity-unreadable`](#error-cluster-identity-unreadable) | kubernetes | yes |
+| [`command-cancelled`](#error-command-cancelled) | artifacts-delivery | yes |
+| [`command-failed`](#error-command-failed) | artifacts-delivery | no |
+| [`command-output-limit`](#error-command-output-limit) | artifacts-delivery | no |
+| [`command-timed-out`](#error-command-timed-out) | artifacts-delivery | yes |
 | [`compensation-already-started`](#error-compensation-already-started) | execution | no |
 | [`conflict`](#error-conflict) | kubernetes | no |
 | [`context-budget-exceeded`](#error-context-budget-exceeded) | build-spec | no |
@@ -41,17 +51,27 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`deleted-resource-reappeared`](#error-deleted-resource-reappeared) | execution | no |
 | [`delivery-not-succeeded`](#error-delivery-not-succeeded) | images | no |
 | [`digest-mismatch`](#error-digest-mismatch) | artifacts-delivery | no |
+| [`discovery-incomplete`](#error-discovery-incomplete) | release | yes |
 | [`docker-socket-required`](#error-docker-socket-required) | artifacts-input | no |
 | [`docker-tool-required`](#error-docker-tool-required) | artifacts-input | no |
 | [`docker-unavailable`](#error-docker-unavailable) | build-spec | yes |
 | [`dockerfile-unpinned`](#error-dockerfile-unpinned) | build-spec | no |
+| [`execution-not-ready`](#error-execution-not-ready) | release | no |
+| [`execution-not-started`](#error-execution-not-started) | release | no |
+| [`execution-other-owner`](#error-execution-other-owner) | release | no |
+| [`execution-other-target`](#error-execution-other-target) | release | no |
+| [`execution-refused`](#error-execution-refused) | release | no |
 | [`field-owner-precondition-failed`](#error-field-owner-precondition-failed) | execution | no |
 | [`forward-options-incomplete`](#error-forward-options-incomplete) | artifacts-input | no |
 | [`forward-options-without-forward`](#error-forward-options-without-forward) | artifacts-input | no |
+| [`forward-port-conflict`](#error-forward-port-conflict) | observe | yes |
 | [`forward-port-in-use`](#error-forward-port-in-use) | artifacts-delivery | yes |
 | [`forward-target-not-loopback`](#error-forward-target-not-loopback) | artifacts-input | no |
 | [`forward-unavailable`](#error-forward-unavailable) | artifacts-delivery | yes |
+| [`forward-unhealthy`](#error-forward-unhealthy) | observe | yes |
 | [`generation-precondition-failed`](#error-generation-precondition-failed) | execution | no |
+| [`git-timed-out`](#error-git-timed-out) | inputs | yes |
+| [`git-unavailable`](#error-git-unavailable) | inputs | no |
 | [`grant-expired`](#error-grant-expired) | build-spec | yes |
 | [`grant-mismatch`](#error-grant-mismatch) | artifacts-input | yes |
 | [`identity-mismatch`](#error-identity-mismatch) | kubernetes | no |
@@ -64,27 +84,40 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`import-failed`](#error-import-failed) | artifacts-delivery | yes |
 | [`import-output-limit`](#error-import-output-limit) | artifacts-delivery | no |
 | [`import-timed-out`](#error-import-timed-out) | artifacts-delivery | yes |
+| [`inputs-io-error`](#error-inputs-io-error) | inputs | yes |
+| [`inputs-lock-invalid`](#error-inputs-lock-invalid) | inputs | no |
+| [`invalid-access-profile`](#error-invalid-access-profile) | observe | no |
+| [`invalid-adopt-entry`](#error-invalid-adopt-entry) | release | no |
 | [`invalid-approved-digest`](#error-invalid-approved-digest) | artifacts-input | no |
 | [`invalid-archive`](#error-invalid-archive) | artifacts-delivery | no |
 | [`invalid-ca-file`](#error-invalid-ca-file) | artifacts-input | no |
+| [`invalid-composition`](#error-invalid-composition) | release | no |
 | [`invalid-credentials-file`](#error-invalid-credentials-file) | artifacts-input | no |
 | [`invalid-delivery-input`](#error-invalid-delivery-input) | artifacts-input | no |
 | [`invalid-field-ownership-evidence`](#error-invalid-field-ownership-evidence) | execution | no |
 | [`invalid-force`](#error-invalid-force) | kubernetes | no |
 | [`invalid-forward`](#error-invalid-forward) | artifacts-input | no |
+| [`invalid-forward-preference`](#error-invalid-forward-preference) | observe | no |
 | [`invalid-grant`](#error-invalid-grant) | build-spec | no |
 | [`invalid-image-stream`](#error-invalid-image-stream) | artifacts-delivery | no |
 | [`invalid-inputs`](#error-invalid-inputs) | build-spec | no |
+| [`invalid-inputs-spec`](#error-invalid-inputs-spec) | inputs | no |
+| [`invalid-log-request`](#error-invalid-log-request) | observe | no |
 | [`invalid-metadata-change`](#error-invalid-metadata-change) | kubernetes | no |
 | [`invalid-node-registry`](#error-invalid-node-registry) | artifacts-input | no |
 | [`invalid-or-unavailable-artifact-input`](#error-invalid-or-unavailable-artifact-input) | cli | no |
 | [`invalid-or-unavailable-build-input`](#error-invalid-or-unavailable-build-input) | build-spec | no |
 | [`invalid-page`](#error-invalid-page) | kubernetes | yes |
+| [`invalid-plan-hash`](#error-invalid-plan-hash) | release | no |
+| [`invalid-preference-store`](#error-invalid-preference-store) | observe | no |
 | [`invalid-propagation`](#error-invalid-propagation) | kubernetes | no |
 | [`invalid-receipt`](#error-invalid-receipt) | build-spec | no |
 | [`invalid-reference`](#error-invalid-reference) | artifacts-input | no |
+| [`invalid-release-catalog`](#error-invalid-release-catalog) | observe | no |
+| [`invalid-release-spec`](#error-invalid-release-spec) | release | no |
 | [`invalid-request`](#error-invalid-request) | kubernetes | no |
 | [`invalid-secret-data`](#error-invalid-secret-data) | secrets | no |
+| [`invalid-session-archive`](#error-invalid-session-archive) | observe | no |
 | [`invalid-source`](#error-invalid-source) | artifacts-input | no |
 | [`invalid-spec`](#error-invalid-spec) | build-spec | no |
 | [`invalid-ssh-agent-socket`](#error-invalid-ssh-agent-socket) | artifacts-input | no |
@@ -93,24 +126,42 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`invalid-token-realm`](#error-invalid-token-realm) | artifacts-registry | no |
 | [`invalid-tool`](#error-invalid-tool) | build-spec | no |
 | [`invalid-write-response`](#error-invalid-write-response) | kubernetes | no |
+| [`kubeconfig-rejected`](#error-kubeconfig-rejected) | kubernetes | no |
 | [`kubectl-tool-required`](#error-kubectl-tool-required) | artifacts-input | no |
 | [`limit-exceeded`](#error-limit-exceeded) | kubernetes | no |
+| [`local-port-in-use`](#error-local-port-in-use) | observe | yes |
 | [`manifest-not-found`](#error-manifest-not-found) | artifacts-registry | yes |
 | [`manifest-rejected`](#error-manifest-rejected) | artifacts-registry | no |
 | [`missing-precondition`](#error-missing-precondition) | kubernetes | no |
+| [`namespace-not-found`](#error-namespace-not-found) | kubernetes | no |
 | [`network-not-granted`](#error-network-not-granted) | build-spec | no |
+| [`no-execution-recorded`](#error-no-execution-recorded) | release | no |
 | [`no-op-content-mismatch`](#error-no-op-content-mismatch) | execution | no |
+| [`no-previous-release`](#error-no-previous-release) | release | no |
+| [`no-release-applied`](#error-no-release-applied) | release | no |
+| [`no-saved-forwards`](#error-no-saved-forwards) | observe | no |
+| [`node-identity-mismatch`](#error-node-identity-mismatch) | kubernetes | no |
+| [`node-not-found`](#error-node-not-found) | kubernetes | no |
 | [`node-options-on-registry-target`](#error-node-options-on-registry-target) | artifacts-input | no |
 | [`node-query-failed`](#error-node-query-failed) | artifacts-delivery | yes |
 | [`node-registry-required`](#error-node-registry-required) | artifacts-input | no |
 | [`not-found`](#error-not-found) | kubernetes | no |
+| [`not-resumable`](#error-not-resumable) | release | no |
 | [`not-retained`](#error-not-retained) | kubernetes | no |
+| [`nothing-to-stop`](#error-nothing-to-stop) | release | no |
 | [`operation-identity-mismatch`](#error-operation-identity-mismatch) | execution | no |
+| [`operator-state-unavailable`](#error-operator-state-unavailable) | observe | no |
 | [`output-invalid`](#error-output-invalid) | build-spec | no |
 | [`ownership-precondition-failed`](#error-ownership-precondition-failed) | execution | no |
 | [`plain-http-not-loopback`](#error-plain-http-not-loopback) | artifacts-input | no |
 | [`plain-http-refused`](#error-plain-http-refused) | artifacts-registry | no |
+| [`plan-blocked`](#error-plan-blocked) | release | no |
+| [`plan-expired`](#error-plan-expired) | release | no |
+| [`plan-intent-mismatch`](#error-plan-intent-mismatch) | release | no |
 | [`plan-not-approved`](#error-plan-not-approved) | build-spec | no |
+| [`plan-not-found`](#error-plan-not-found) | release | no |
+| [`plan-release-mismatch`](#error-plan-release-mismatch) | release | no |
+| [`promote-refused`](#error-promote-refused) | observe | no |
 | [`provider-error`](#error-provider-error) | kubernetes | yes |
 | [`rbac-denied`](#error-rbac-denied) | kubernetes | no |
 | [`readiness-timeout`](#error-readiness-timeout) | execution | no |
@@ -127,19 +178,30 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`registry-response-too-large`](#error-registry-response-too-large) | artifacts-registry | no |
 | [`registry-unauthorized`](#error-registry-unauthorized) | artifacts-registry | no |
 | [`registry-unreachable`](#error-registry-unreachable) | artifacts-registry | yes |
+| [`release-history-malformed`](#error-release-history-malformed) | release | no |
+| [`release-owner-mismatch`](#error-release-owner-mismatch) | release | no |
+| [`release-refused`](#error-release-refused) | release | no |
+| [`release-state-unavailable`](#error-release-state-unavailable) | release | yes |
 | [`render-model-invalid`](#error-render-model-invalid) | render | no |
 | [`render-target-invalid`](#error-render-target-invalid) | render | no |
 | [`replace-backup-failed`](#error-replace-backup-failed) | execution | yes |
 | [`replace-delete-not-observed`](#error-replace-delete-not-observed) | execution | no |
 | [`replace-delete-timeout`](#error-replace-delete-timeout) | execution | yes |
+| [`replace-entry-not-declared`](#error-replace-entry-not-declared) | release | no |
 | [`replace-precondition-failed`](#error-replace-precondition-failed) | execution | no |
 | [`replace-recreated-by-another-writer`](#error-replace-recreated-by-another-writer) | execution | no |
+| [`replace-refused`](#error-replace-refused) | release | no |
 | [`request-byte-limit`](#error-request-byte-limit) | kubernetes | no |
 | [`resource-content-precondition-failed`](#error-resource-content-precondition-failed) | execution | no |
+| [`resource-requires-adoption`](#error-resource-requires-adoption) | release | no |
 | [`response-byte-limit`](#error-response-byte-limit) | kubernetes | no |
+| [`restore-refused`](#error-restore-refused) | observe | no |
+| [`resume-refused`](#error-resume-refused) | release | no |
 | [`retained-adoption-precondition-failed`](#error-retained-adoption-precondition-failed) | execution | no |
+| [`retained-content-differs`](#error-retained-content-differs) | release | no |
 | [`retained-content-precondition-failed`](#error-retained-content-precondition-failed) | execution | no |
 | [`retained-resource`](#error-retained-resource) | execution | no |
+| [`rotate-not-valid-for-rollback`](#error-rotate-not-valid-for-rollback) | release | no |
 | [`scope-mismatch`](#error-scope-mismatch) | kubernetes | no |
 | [`secret-dependency-cycle`](#error-secret-dependency-cycle) | secrets | no |
 | [`secret-generator-failed`](#error-secret-generator-failed) | secrets | yes |
@@ -155,13 +217,24 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`server-target-identity-mismatch`](#error-server-target-identity-mismatch) | kubernetes | no |
 | [`smoke-failed`](#error-smoke-failed) | build-spec | no |
 | [`smoke-timed-out`](#error-smoke-timed-out) | build-spec | no |
+| [`source-capture-failed`](#error-source-capture-failed) | inputs | no |
 | [`source-changed`](#error-source-changed) | artifacts-delivery | yes |
+| [`source-dirty`](#error-source-dirty) | inputs | no |
 | [`source-drift`](#error-source-drift) | build-spec | no |
+| [`source-has-no-commit`](#error-source-has-no-commit) | inputs | no |
 | [`source-identity`](#error-source-identity) | build-spec | no |
+| [`source-not-git`](#error-source-not-git) | inputs | no |
+| [`source-ref-mismatch`](#error-source-ref-mismatch) | inputs | no |
+| [`source-ref-not-found`](#error-source-ref-not-found) | inputs | no |
+| [`source-subpath-missing`](#error-source-subpath-missing) | inputs | no |
 | [`source-unavailable`](#error-source-unavailable) | artifacts-delivery | yes |
 | [`spec-changed`](#error-spec-changed) | build-spec | yes |
 | [`spec-unreadable`](#error-spec-unreadable) | build-spec | no |
 | [`ssh-tool-required`](#error-ssh-tool-required) | artifacts-input | no |
+| [`state-locked`](#error-state-locked) | observe | yes |
+| [`stored-discovery-missing`](#error-stored-discovery-missing) | release | no |
+| [`stored-evidence-mismatch`](#error-stored-evidence-mismatch) | release | no |
+| [`stored-release-mismatch`](#error-stored-release-mismatch) | release | no |
 | [`takeover-conflict`](#error-takeover-conflict) | kubernetes | no |
 | [`target-mismatch`](#error-target-mismatch) | kubernetes | no |
 | [`timed-out`](#error-timed-out) | artifacts-delivery | yes |
@@ -170,6 +243,10 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`uid-version-precondition-failed`](#error-uid-version-precondition-failed) | execution | no |
 | [`undiscovered-api`](#error-undiscovered-api) | kubernetes | no |
 | [`unknown-error-code`](#error-unknown-error-code) | cli | no |
+| [`unknown-forward`](#error-unknown-forward) | observe | no |
+| [`unknown-release`](#error-unknown-release) | release | no |
+| [`unknown-rotate-secret`](#error-unknown-rotate-secret) | release | no |
+| [`unknown-shortcut`](#error-unknown-shortcut) | observe | no |
 | [`unknown-source`](#error-unknown-source) | inputs | no |
 | [`upload-rejected`](#error-upload-rejected) | artifacts-registry | yes |
 | [`verification-failed`](#error-verification-failed) | artifacts-delivery | yes |
@@ -412,6 +489,38 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Cancelled.** The operation was cancelled (interrupt, stop request or cancelled execution).
 
 - **Fix:** Re-run the command when ready; recoverable executions can be resumed with `piceli release resume`.
+- **Retry-safe:** yes
+
+(error-command-cancelled)=
+### `command-cancelled`
+
+**Build command cancelled.** The pinned external command was cancelled before it finished.
+
+- **Fix:** Run it again.
+- **Retry-safe:** yes
+
+(error-command-failed)=
+### `command-failed`
+
+**Build command failed.** The pinned external command exited with a non-zero status.
+
+- **Fix:** Fix the build inputs, preview again and approve the new plan.
+- **Retry-safe:** no
+
+(error-command-output-limit)=
+### `command-output-limit`
+
+**Build command output limit.** The pinned external command printed more output than allowed.
+
+- **Fix:** Reduce the command's output, then run it again.
+- **Retry-safe:** no
+
+(error-command-timed-out)=
+### `command-timed-out`
+
+**Build command timed out.** The pinned external command ran longer than `--timeout`.
+
+- **Fix:** Retry with a larger `--timeout`.
 - **Retry-safe:** yes
 
 (error-digest-mismatch)=
@@ -887,6 +996,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Wait for the API server to recover, then retry.
 - **Retry-safe:** yes
 
+(error-cluster-identity-unreadable)=
+### `cluster-identity-unreadable`
+
+**Cluster identity unreadable.** The kube-system namespace (the cluster identity) could not be read, or the answer had no UID.
+
+- **Fix:** Check that the context can `get` namespaces (and pinned nodes), then retry.
+- **Retry-safe:** yes
+
 (error-conflict)=
 ### `conflict`
 
@@ -959,6 +1076,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Inspect the object with a read-only tool; when it matches the release, run `piceli release resume --spec release.toml`, otherwise plan again.
 - **Retry-safe:** no
 
+(error-kubeconfig-rejected)=
+### `kubeconfig-rejected`
+
+**Kubeconfig rejected.** The kubeconfig or context is missing, unreadable or uses a feature Piceli refuses (exec credentials, proxies, disabled TLS verification, a non-https server).
+
+- **Fix:** Pass a kubeconfig file and an explicit context with a static certificate or token over https.
+- **Retry-safe:** no
+
 (error-limit-exceeded)=
 ### `limit-exceeded`
 
@@ -973,6 +1098,30 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Missing write precondition.** An update was requested without the object's UID and resourceVersion.
 
 - **Fix:** This is an internal contract violation; report it.
+- **Retry-safe:** no
+
+(error-namespace-not-found)=
+### `namespace-not-found`
+
+**Namespace not found.** The target namespace does not exist; Piceli never creates it implicitly.
+
+- **Fix:** Create the namespace explicitly, then retry.
+- **Retry-safe:** no
+
+(error-node-identity-mismatch)=
+### `node-identity-mismatch`
+
+**Node identity mismatch.** A node's UID differs from the one pinned in the spec.
+
+- **Fix:** Check the kubeconfig and context; update the pinned uid only if the node was replaced.
+- **Retry-safe:** no
+
+(error-node-not-found)=
+### `node-not-found`
+
+**Node not found.** A node named in `[target.nodes]` does not exist.
+
+- **Fix:** Fix the node name in the spec, or remove the entry.
 - **Retry-safe:** no
 
 (error-not-found)=
@@ -1293,6 +1442,102 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 ## Source identities (`piceli inputs record|verify`)
 
+(error-git-timed-out)=
+### `git-timed-out`
+
+**git timed out.** A git call took longer than `--timeout` seconds.
+
+- **Fix:** Retry, or pass a larger `--timeout`.
+- **Retry-safe:** yes
+
+(error-git-unavailable)=
+### `git-unavailable`
+
+**git not available.** The `git` executable was not found on PATH.
+
+- **Fix:** Install git or add it to PATH.
+- **Retry-safe:** no
+
+(error-inputs-io-error)=
+### `inputs-io-error`
+
+**Inputs file unavailable.** A file the command reads or writes (spec, lock or `--out`) could not be accessed.
+
+- **Fix:** Check the paths and their permissions.
+- **Retry-safe:** yes
+
+(error-inputs-lock-invalid)=
+### `inputs-lock-invalid`
+
+**Invalid inputs lock.** The lock passed to `--lock` is not a valid `piceli inputs record` lock.
+
+- **Fix:** Record a new lock with `piceli inputs record --spec inputs.toml --out inputs.lock`.
+- **Retry-safe:** no
+
+(error-invalid-inputs-spec)=
+### `invalid-inputs-spec`
+
+**Invalid inputs spec.** inputs.toml could not be parsed or declares an invalid source (the message names the field).
+
+- **Fix:** Fix inputs.toml: only [[source]] tables with name, path and optional ref, allow_dirty and subpath.
+- **Retry-safe:** no
+
+(error-source-capture-failed)=
+### `source-capture-failed`
+
+**Source capture failed.** git could not describe a source (a git call failed, its output exceeded the budget, or a changed path has an unsupported type).
+
+- **Fix:** Run `git status` in the source named in `message` and fix what it reports.
+- **Retry-safe:** no
+
+(error-source-dirty)=
+### `source-dirty`
+
+**Source has uncommitted changes.** A source has uncommitted changes and does not set `allow_dirty = true`.
+
+- **Fix:** Commit or stash the changes, or set `allow_dirty = true` for that source.
+- **Retry-safe:** no
+
+(error-source-has-no-commit)=
+### `source-has-no-commit`
+
+**Source has no commit.** The source repository has no commit at HEAD.
+
+- **Fix:** Commit at least once, then record again.
+- **Retry-safe:** no
+
+(error-source-not-git)=
+### `source-not-git`
+
+**Source is not a git work tree.** A declared source path is not a directory or not the top level of a git work tree.
+
+- **Fix:** Declare the repository root as `path` and use `subpath` for a directory inside it.
+- **Retry-safe:** no
+
+(error-source-ref-mismatch)=
+### `source-ref-mismatch`
+
+**Source not at required ref.** A source's HEAD differs from the commit its `ref` resolves to.
+
+- **Fix:** Check out the required ref, or change `ref` in inputs.toml.
+- **Retry-safe:** no
+
+(error-source-ref-not-found)=
+### `source-ref-not-found`
+
+**Required ref not found.** The `ref` a source requires does not resolve to a commit in its repository.
+
+- **Fix:** Fetch the ref or fix `ref` in inputs.toml.
+- **Retry-safe:** no
+
+(error-source-subpath-missing)=
+### `source-subpath-missing`
+
+**Source subpath missing.** The declared `subpath` does not exist in the source repository.
+
+- **Fix:** Fix `subpath` in inputs.toml.
+- **Retry-safe:** no
+
 (error-unknown-source)=
 ### `unknown-source`
 
@@ -1468,4 +1713,458 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Delivery receipt matches no image.** A delivery receipt in `images_from` matches no built image by config digest.
 
 - **Fix:** Add the build receipt that produced the image, or use `[images.<name>] receipt = …`.
+- **Retry-safe:** no
+
+
+## Release commands (`piceli release plan|apply|rollback|resume|stop|status`)
+
+(error-adopt-and-replace)=
+### `adopt-and-replace`
+
+**Object named by adopt and replace.** The same object is listed for adoption and for replacement.
+
+- **Fix:** Keep it in only one of `--adopt`/`[release] adopt` and `--replace`/`[release] replace`.
+- **Retry-safe:** no
+
+(error-adopt-entry-not-declared)=
+### `adopt-entry-not-declared`
+
+**Adopt entry names no declared object.** An adopt entry does not name exactly one resource that the composition declares (a typo is refused, never ignored).
+
+- **Fix:** Use the kind and name of a resource the composition declares; add `apiVersion/` when two kinds share a name.
+- **Retry-safe:** no
+
+(error-approve-with-planning-flags)=
+### `approve-with-planning-flags`
+
+**--approve combined with planning flags.** `--approve` executes a stored plan, so it cannot be combined with `--auto-approve`, `--rotate`, `--adopt`, `--replace` or `--adopt-all-desired`.
+
+- **Fix:** Plan with those flags first, then run apply with only `--spec` and `--approve <hash>`.
+- **Retry-safe:** no
+
+(error-cluster-identity-changed)=
+### `cluster-identity-changed`
+
+**Cluster identity changed.** The cluster or namespace differs from the one recorded in this state directory; a state directory serves one cluster and namespace.
+
+- **Fix:** Point `[target]` back at the recorded cluster, or use a new `state_dir` for the other cluster.
+- **Retry-safe:** no
+
+(error-discovery-incomplete)=
+### `discovery-incomplete`
+
+**Discovery incomplete.** Live discovery could not read every kind the plan needs, so the plan would not be authoritative (the message lists the failing kinds).
+
+- **Fix:** Check RBAC and API availability for the listed kinds, then plan again.
+- **Retry-safe:** yes
+
+(error-execution-not-ready)=
+### `execution-not-ready`
+
+**Execution not ready.** The execution ran but did not become ready, and recorded no more specific failure (see `execution.state`).
+
+- **Fix:** Run `piceli release status --spec release.toml`; resume, fix and apply, or roll back.
+- **Retry-safe:** no
+
+(error-execution-not-started)=
+### `execution-not-started`
+
+**Execution not started.** The latest execution was recorded but never started, so there is nothing to stop.
+
+- **Fix:** Run `piceli release status --spec release.toml` to see its state.
+- **Retry-safe:** no
+
+(error-execution-other-owner)=
+### `execution-other-owner`
+
+**Execution belongs to another owner.** The execution was granted to another owner than `[release] owner`.
+
+- **Fix:** Stop it with the spec (and owner) that started it.
+- **Retry-safe:** no
+
+(error-execution-other-target)=
+### `execution-other-target`
+
+**Execution belongs to another target.** The execution was granted for another cluster or namespace.
+
+- **Fix:** Stop it with the spec whose `[target]` started it.
+- **Retry-safe:** no
+
+(error-execution-refused)=
+### `execution-refused`
+
+**Execution refused.** The executor refused the approved plan before changing anything (the message says why).
+
+- **Fix:** Run `piceli release plan --spec release.toml` again and approve the new plan hash.
+- **Retry-safe:** no
+
+(error-invalid-adopt-entry)=
+### `invalid-adopt-entry`
+
+**Invalid adopt or replace entry.** An `--adopt`/`--replace` flag or a `[release] adopt`/`replace` entry is not `Kind/name` or `apiVersion/Kind/name`.
+
+- **Fix:** Write the entry as `Kind/name`, e.g. `--adopt Deployment/web`.
+- **Retry-safe:** no
+
+(error-invalid-composition)=
+### `invalid-composition`
+
+**Invalid composition.** The composition entry point could not be loaded, did not return a DeploymentComposition, declared a cluster-scoped object or another namespace, or its secret bindings do not match the declared secret inputs.
+
+- **Fix:** Fix the composition function named by `[release] composition`, then plan again.
+- **Retry-safe:** no
+
+(error-invalid-plan-hash)=
+### `invalid-plan-hash`
+
+**Invalid plan hash.** `--approve` is not 64 lowercase hex characters.
+
+- **Fix:** Copy the full `plan_hash` from the `release plan` output.
+- **Retry-safe:** no
+
+(error-invalid-release-spec)=
+### `invalid-release-spec`
+
+**Invalid release spec.** release.toml could not be read or parsed, or a value in it is invalid (the message names the field).
+
+- **Fix:** Fix the field named in `message`, then run `piceli release plan --spec release.toml`.
+- **Retry-safe:** no
+
+(error-no-execution-recorded)=
+### `no-execution-recorded`
+
+**No execution recorded.** There is no apply, rollback or resume of this release in the history.
+
+- **Fix:** Check `--release`, or apply the release first.
+- **Retry-safe:** no
+
+(error-no-previous-release)=
+### `no-previous-release`
+
+**No previous release.** Only one release has been ready, so `previous` has nothing to roll back to.
+
+- **Fix:** Name a release explicitly (`piceli release status` lists them), or apply a new one.
+- **Retry-safe:** no
+
+(error-no-release-applied)=
+### `no-release-applied`
+
+**No release applied.** `rollback previous` was asked before any release became ready.
+
+- **Fix:** Apply a release first; there is nothing to roll back to.
+- **Retry-safe:** no
+
+(error-not-resumable)=
+### `not-resumable`
+
+**Execution not resumable.** Only first applies of a created release can resume; re-applies and rollbacks cannot.
+
+- **Fix:** Run `piceli release plan` (or `rollback`) again and approve the new plan.
+- **Retry-safe:** no
+
+(error-nothing-to-stop)=
+### `nothing-to-stop`
+
+**Nothing to stop.** The latest execution of the release is already ready or cancelled.
+
+- **Fix:** No action needed; `piceli release status` shows the result.
+- **Retry-safe:** no
+
+(error-plan-blocked)=
+### `plan-blocked`
+
+**Plan blocked.** Several objects block the plan for different reasons; each is listed in `blocking` with its own `code`.
+
+- **Fix:** Resolve every entry of `blocking` (run `piceli explain <code>` for each), then plan again.
+- **Retry-safe:** no
+
+(error-plan-expired)=
+### `plan-expired`
+
+**Plan expired.** The approved plan is older than `approval_window_seconds`.
+
+- **Fix:** Run `piceli release plan --spec release.toml` again and approve the new plan hash.
+- **Retry-safe:** no
+
+(error-plan-intent-mismatch)=
+### `plan-intent-mismatch`
+
+**Plan intent mismatch.** The hash approves an apply plan where a rollback plan was expected, or the reverse.
+
+- **Fix:** Approve the hash printed by the same command (`release rollback <target>` for a rollback).
+- **Retry-safe:** no
+
+(error-plan-not-found)=
+### `plan-not-found`
+
+**Plan not found.** No pending plan has this hash: it is unknown, expired or already applied.
+
+- **Fix:** Run `piceli release plan --spec release.toml` again and approve the new plan hash.
+- **Retry-safe:** no
+
+(error-plan-release-mismatch)=
+### `plan-release-mismatch`
+
+**Plan release mismatch.** The hash approves a plan for another release than the rollback target.
+
+- **Fix:** Run `piceli release rollback <target> --spec release.toml` and approve the hash it prints.
+- **Retry-safe:** no
+
+(error-release-history-malformed)=
+### `release-history-malformed`
+
+**Release history malformed.** `history.json` in the state directory is not a valid history file.
+
+- **Fix:** Restore the state directory from a backup; do not edit it by hand.
+- **Retry-safe:** no
+
+(error-release-owner-mismatch)=
+### `release-owner-mismatch`
+
+**Release owner mismatch.** The stored release was planned for another owner or field manager than `[release]` now names.
+
+- **Fix:** Restore the original `owner`/`field_manager`, or plan a new release.
+- **Retry-safe:** no
+
+(error-release-refused)=
+### `release-refused`
+
+**Release command refused.** A release command was refused for a reason without a more specific code (the message says why).
+
+- **Fix:** Read `message`; fix the input it names, then run the command again.
+- **Retry-safe:** no
+
+(error-release-state-unavailable)=
+### `release-state-unavailable`
+
+**Release state unavailable.** A file in the spec's `state_dir` (or a file the spec names) could not be read or written.
+
+- **Fix:** Check that the paths exist and are readable and writable by this user.
+- **Retry-safe:** yes
+
+(error-replace-entry-not-declared)=
+### `replace-entry-not-declared`
+
+**Replace entry names no declared object.** A replace entry does not name exactly one resource that the composition declares.
+
+- **Fix:** Use the kind and name of a resource the composition declares.
+- **Retry-safe:** no
+
+(error-replace-refused)=
+### `replace-refused`
+
+**Replace refused.** A `--replace` entry names an object that may not be replaced: it is managed, retained or owned by another object (see `blocking`).
+
+- **Fix:** Use `--adopt Kind/name` for an unmanaged object, or remove the entry from `--replace`/`[release] replace`.
+- **Retry-safe:** no
+
+(error-resource-requires-adoption)=
+### `resource-requires-adoption`
+
+**Existing object requires adoption.** An object the composition declares already exists and is not managed by this release's owner (see `blocking` for each object and the flags that unblock it).
+
+- **Fix:** Plan again with `--adopt Kind/name` (or `--replace Kind/name` for non-retained objects), `[release] adopt`/`replace`, or `--adopt-all-desired`; or delete the object.
+- **Retry-safe:** no
+
+(error-resume-refused)=
+### `resume-refused`
+
+**Resume refused.** The executor refused to resume the execution (the message says why).
+
+- **Fix:** Run `piceli release status --spec release.toml`; plan and apply again if the execution cannot continue.
+- **Retry-safe:** no
+
+(error-retained-content-differs)=
+### `retained-content-differs`
+
+**Retained object differs.** A retained object's spec or data differs from the composition; only its labels and annotations may change.
+
+- **Fix:** Change the composition to match the live object, then plan again.
+- **Retry-safe:** no
+
+(error-rotate-not-valid-for-rollback)=
+### `rotate-not-valid-for-rollback`
+
+**--rotate with rollback.** A rollback re-applies a stored release with its stored secret values, so it cannot rotate.
+
+- **Fix:** Roll back without `--rotate`; rotate later with `piceli release plan --rotate NAME`.
+- **Retry-safe:** no
+
+(error-stored-discovery-missing)=
+### `stored-discovery-missing`
+
+**Stored discovery missing.** The release was planned but its stored discovery is missing from the state directory.
+
+- **Fix:** Run `piceli release plan --spec release.toml` again and approve the new plan hash.
+- **Retry-safe:** no
+
+(error-stored-evidence-mismatch)=
+### `stored-evidence-mismatch`
+
+**Stored evidence mismatch.** The stored discovery no longer reproduces the approved plan hash.
+
+- **Fix:** Run `piceli release plan --spec release.toml` again and approve the new plan hash.
+- **Retry-safe:** no
+
+(error-stored-release-mismatch)=
+### `stored-release-mismatch`
+
+**Stored release mismatch.** The catalogued release no longer reproduces the approved plan.
+
+- **Fix:** Run `piceli release plan --spec release.toml` again and approve the new plan hash.
+- **Retry-safe:** no
+
+(error-unknown-release)=
+### `unknown-release`
+
+**Unknown release.** The release name is not in this state directory's catalog.
+
+- **Fix:** Run `piceli release status --spec release.toml` to list the releases.
+- **Retry-safe:** no
+
+(error-unknown-rotate-secret)=
+### `unknown-rotate-secret`
+
+**Unknown secret to rotate.** `--rotate` names a secret generator that `[secrets]` does not declare.
+
+- **Fix:** Use a name declared under `[secrets]`.
+- **Retry-safe:** no
+
+
+## Operations commands (`piceli observe …`, `piceli operator …`)
+
+(error-backup-refused)=
+### `backup-refused`
+
+**Backup refused.** The operator state could not be backed up (the message says why).
+
+- **Fix:** Check `--state-dir` and that `--output` does not exist yet.
+- **Retry-safe:** no
+
+(error-forward-port-conflict)=
+### `forward-port-conflict`
+
+**Forward port conflict.** A required forward's local port is already in use or declared twice, or a shortcut has no namespace; nothing was started (see `preflight.errors`).
+
+- **Fix:** Stop the process that owns the port, change `local_port` in the profile, or pass `--namespace`.
+- **Retry-safe:** yes
+
+(error-forward-unhealthy)=
+### `forward-unhealthy`
+
+**Forward unhealthy.** A required forward's health probe failed (see `forwards[].error`).
+
+- **Fix:** Start the forwards with `piceli observe forwards apply`, or check the service behind the port.
+- **Retry-safe:** yes
+
+(error-invalid-access-profile)=
+### `invalid-access-profile`
+
+**Invalid access profile.** The access profile or `--ui-config` TOML could not be read or validated (the message names the field).
+
+- **Fix:** Fix the TOML named in `message`.
+- **Retry-safe:** no
+
+(error-invalid-forward-preference)=
+### `invalid-forward-preference`
+
+**Invalid forward preference.** The port-forward preference is invalid (name, namespace, target or ports).
+
+- **Fix:** Use DNS names, a service/, deployment/ or pod/ target and ports between 1 and 65535.
+- **Retry-safe:** no
+
+(error-invalid-log-request)=
+### `invalid-log-request`
+
+**Invalid log request.** The namespace, target, container or tail of the log request is invalid.
+
+- **Fix:** Use a DNS namespace, a pod/ or workload target and `--tail` between 1 and 10000.
+- **Retry-safe:** no
+
+(error-invalid-preference-store)=
+### `invalid-preference-store`
+
+**Invalid preference store.** The preferences file is not a valid Piceli preference store.
+
+- **Fix:** Fix or remove the file passed to `--preferences` (or the default one).
+- **Retry-safe:** no
+
+(error-invalid-release-catalog)=
+### `invalid-release-catalog`
+
+**Invalid release catalog.** The `--catalog` file is not a valid Piceli release catalog.
+
+- **Fix:** Pass the catalog written by Piceli.
+- **Retry-safe:** no
+
+(error-invalid-session-archive)=
+### `invalid-session-archive`
+
+**Invalid session archive.** The `--archive` file is not a canonical Piceli deployment session archive.
+
+- **Fix:** Pass the session archive written by the release that deployed the objects.
+- **Retry-safe:** no
+
+(error-local-port-in-use)=
+### `local-port-in-use`
+
+**Local port in use.** The `--port` for the local server is already in use.
+
+- **Fix:** Choose another `--port`, or stop the process that owns it.
+- **Retry-safe:** yes
+
+(error-no-saved-forwards)=
+### `no-saved-forwards`
+
+**No saved forwards.** The user has no saved port-forward preferences.
+
+- **Fix:** Save one with `piceli observe forward-save`.
+- **Retry-safe:** no
+
+(error-operator-state-unavailable)=
+### `operator-state-unavailable`
+
+**Operator state unavailable.** A file in the operator state directory is corrupt, or the directory cannot be read or written.
+
+- **Fix:** Check `--state-dir` and its permissions; restore it with `piceli operator restore` if a file is corrupt.
+- **Retry-safe:** no
+
+(error-promote-refused)=
+### `promote-refused`
+
+**Promotion refused.** The promotion could not be recorded: the source release is unknown or the target name is taken or invalid (the message says which).
+
+- **Fix:** Check the names with `piceli operator status`, then retry with a new target name.
+- **Retry-safe:** no
+
+(error-restore-refused)=
+### `restore-refused`
+
+**Restore refused.** The backup archive is invalid or unsafe, or the destination is not empty.
+
+- **Fix:** Restore a backup made by `piceli operator backup` into an empty directory.
+- **Retry-safe:** no
+
+(error-state-locked)=
+### `state-locked`
+
+**Operator state locked.** Another process holds the operator state directory's writer lock.
+
+- **Fix:** Stop the other writer (for example `piceli operator serve`), then retry.
+- **Retry-safe:** yes
+
+(error-unknown-forward)=
+### `unknown-forward`
+
+**Unknown saved forward.** The user has no saved port forward with this name.
+
+- **Fix:** List them with `piceli observe forward-list --user USER`.
+- **Retry-safe:** no
+
+(error-unknown-shortcut)=
+### `unknown-shortcut`
+
+**Unknown shortcut id.** `--only` names a shortcut id the access profile does not declare.
+
+- **Fix:** Use ids declared as [[shortcuts]] id in the profile.
 - **Retry-safe:** no

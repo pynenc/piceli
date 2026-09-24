@@ -229,7 +229,7 @@ def test_adopt_kubectl_objects_then_drift_and_rollback(namespace, tmp_path):
 
     spec = _spec(tmp_path, namespace, DIGEST_1)
     code, refused = _cli(spec, "plan")
-    assert code == 2 and "--adopt" in refused["reason"]
+    assert code == 2 and "--adopt" in refused["message"]
     adopt = [
         "--adopt",
         "Deployment/web",

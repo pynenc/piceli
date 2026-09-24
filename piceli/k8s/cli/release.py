@@ -1,8 +1,11 @@
 """``piceli release``: plan, apply, rollback, resume, stop and status from a spec.
 
 JSON goes to stdout; a short human summary goes to stderr. Exit codes:
-``0`` success, ``1`` the execution did not become ready, ``2`` refused
-(invalid spec, identity mismatch, unknown plan), ``3`` approval required.
+``0`` success, ``1`` the execution did not become ready
+(``{"state": "failed", "reason": "<code>", …}``), ``2`` rejected
+(``{"state": "rejected", "reason": "<code>", "message": …}``; invalid spec,
+identity mismatch, unknown plan), ``3`` approval required. Every ``reason`` is
+a registered error code (``piceli explain <code>``).
 """
 
 from __future__ import annotations
@@ -10,7 +13,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, NoReturn
 
 import typer
 
@@ -108,24 +111,31 @@ def _refusals() -> tuple[type[BaseException], ...]:
     return (ValueError, OSError, ProviderError)
 
 
-def _refuse(error: BaseException) -> None:
-    code = getattr(error, "code", None)
-    details = getattr(error, "details", None) or {}
-    _emit(
-        {
-            "state": "refused",
-            "reason": str(error) or type(error).__name__,
-            **({"code": code} if isinstance(code, str) else {}),
-            **details,
-        }
+def _refuse(error: BaseException) -> NoReturn:
+    """Print ``{"state": "rejected", "reason": <code>, …}`` and exit 2.
+
+    ``code`` repeats ``reason`` for one release (0.3.0 printed ``code`` next to
+    a free-text ``reason``); ``details`` (such as ``blocking``) are kept.
+    """
+    from piceli.cli_contract import error_code, reject
+
+    default = (
+        "release-state-unavailable" if isinstance(error, OSError) else "release-refused"
     )
-    _say(f"refused: {error}")
-    for item in details.get("blocking", ()):
-        _say(
-            f"  blocking {item['kind']}/{item['name']}: {item['message']}"
-            + (f" -> {' or '.join(item['suggest'])}" if item["suggest"] else "")
-        )
-    raise typer.Exit(EXIT_REFUSED)
+    reason = error_code(error, default)
+    details = dict(getattr(error, "details", None) or {})
+    hints = [
+        f"blocking {item['kind']}/{item['name']}: {item['message']}"
+        + (f" -> {' or '.join(item['suggest'])}" if item["suggest"] else "")
+        for item in details.get("blocking", ())
+    ]
+    reject(
+        reason,
+        str(error) or type(error).__name__,
+        hints=hints,
+        **details,
+        code=reason,
+    )
 
 
 def _describe_plan(result: Any, spec: Path, command: str) -> None:
@@ -203,7 +213,16 @@ def _confirm(result: Any) -> bool:
 
 
 def _finish(outcome: dict[str, Any]) -> None:
-    _emit(outcome)
+    from piceli.errors import ERRORS
+
+    execution = outcome["execution"]
+    failed = execution["state"] != "ready" and outcome["intent"] != "stop"
+    if failed:
+        category = execution.get("failure_category")
+        reason = category if category in ERRORS else "execution-not-ready"
+        _emit({**outcome, "state": "failed", "reason": reason})
+    else:
+        _emit({**outcome, "state": "succeeded"})
     for item in outcome.get("adopted", ()):
         if item["mode"] == "replace":
             _say(
@@ -219,7 +238,6 @@ def _finish(outcome: dict[str, Any]) -> None:
             + (f"; transferred field managers: {', '.join(moved)}" if moved else "")
             + ")"
         )
-    execution = outcome["execution"]
     _say(
         f"{outcome['intent']} {outcome['release']}: {execution['state']}"
         + (
@@ -228,7 +246,7 @@ def _finish(outcome: dict[str, Any]) -> None:
             else ""
         )
     )
-    if execution["state"] != "ready" and outcome["intent"] != "stop":
+    if failed:
         raise typer.Exit(EXIT_NOT_READY)
 
 
@@ -248,7 +266,13 @@ def _plan_then_execute(
         runner = _runner(spec)
         if approve is not None:
             if auto_approve or rotate or adopt or replace or adopt_all_desired:
-                raise ValueError("--approve cannot be combined with planning flags")
+                from piceli.cli_contract import reject
+
+                reject(
+                    "approve-with-planning-flags",
+                    "--approve cannot be combined with planning flags",
+                    code="approve-with-planning-flags",
+                )
             expected = None
             if rollback_to is not None:
                 expected = runner.resolve_rollback_target(rollback_to)

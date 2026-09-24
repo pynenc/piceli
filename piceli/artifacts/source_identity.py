@@ -69,7 +69,18 @@ _GIT_REDIRECTS = (
 
 
 class SourceIdentityError(ValueError):
-    """A source cannot be identified or violates its declared policy."""
+    """A source cannot be identified or violates its declared policy.
+
+    ``code`` is the registered error code when the failure has a specific one
+    (``piceli explain``); ``None`` leaves the choice to the caller.
+    """
+
+    code: str | None = None
+
+    def __init__(self, message: str, *, code: str | None = None) -> None:
+        super().__init__(message)
+        if code is not None:
+            self.code = code
 
 
 class UnknownSourceError(SourceIdentityError):
@@ -448,7 +459,9 @@ class InputsLock:
 def _git(repo: Path, *args: str, timeout: float, check: bool = True) -> bytes:
     executable = shutil.which("git")
     if executable is None:
-        raise SourceIdentityError("git executable not found on PATH")
+        raise SourceIdentityError(
+            "git executable not found on PATH", code="git-unavailable"
+        )
     env = {key: value for key, value in os.environ.items() if key not in _GIT_REDIRECTS}
     env.update({"GIT_OPTIONAL_LOCKS": "0", "LC_ALL": "C", "GIT_TERMINAL_PROMPT": "0"})
     argv = [
@@ -472,7 +485,8 @@ def _git(repo: Path, *args: str, timeout: float, check: bool = True) -> bytes:
         )
     except subprocess.TimeoutExpired:
         raise SourceIdentityError(
-            f"git {args[0]} timed out after {timeout:g}s in {repo}"
+            f"git {args[0]} timed out after {timeout:g}s in {repo}",
+            code="git-timed-out",
         ) from None
     if len(result.stdout) > MAX_GIT_OUTPUT:
         raise SourceIdentityError(f"git {args[0]} output exceeds budget in {repo}")
@@ -569,12 +583,15 @@ def capture_source_identity(
     seconds(timeout, "git", 600)
     _subpath(subpath)
     if not path.is_dir():
-        raise SourceIdentityError(f"source {name!r}: {path} is not a directory")
+        raise SourceIdentityError(
+            f"source {name!r}: {path} is not a directory", code="source-not-git"
+        )
     top = _git(path, "rev-parse", "--show-toplevel", timeout=timeout).decode().strip()
     if not top or Path(top).resolve() != path.resolve():
         raise SourceIdentityError(
             f"source {name!r}: {path} is not the top level of a git work tree"
-            " (declare the repository root and use subpath)"
+            " (declare the repository root and use subpath)",
+            code="source-not-git",
         )
     repo = Path(top)
     commit = (
@@ -591,9 +608,15 @@ def capture_source_identity(
         .strip()
     )
     if not commit:
-        raise SourceIdentityError(f"source {name!r}: {repo} has no commit at HEAD")
+        raise SourceIdentityError(
+            f"source {name!r}: {repo} has no commit at HEAD",
+            code="source-has-no-commit",
+        )
     if subpath and not (repo / subpath).exists():
-        raise SourceIdentityError(f"source {name!r}: subpath {subpath!r} is missing")
+        raise SourceIdentityError(
+            f"source {name!r}: subpath {subpath!r} is missing",
+            code="source-subpath-missing",
+        )
     remote = _git(
         repo, "config", "--get", "remote.origin.url", timeout=timeout, check=False
     ).decode(errors="replace")
@@ -645,18 +668,21 @@ def _capture(
     if identity.dirty and not source.allow_dirty:
         raise SourceIdentityError(
             f"source {source.name!r} has {identity.changed_paths} uncommitted "
-            "change(s); commit them or set allow_dirty = true"
+            "change(s); commit them or set allow_dirty = true",
+            code="source-dirty",
         )
     if source.ref is not None:
         expected = _resolve_ref(Path(path), source.ref, timeout)
         if not expected:
             raise SourceIdentityError(
-                f"source {source.name!r}: required ref {source.ref!r} not found"
+                f"source {source.name!r}: required ref {source.ref!r} not found",
+                code="source-ref-not-found",
             )
         if expected != identity.commit:
             raise SourceIdentityError(
                 f"source {source.name!r} is at {identity.commit[:12]}, "
-                f"but ref {source.ref!r} requires {expected[:12]}"
+                f"but ref {source.ref!r} requires {expected[:12]}",
+                code="source-ref-mismatch",
             )
     return identity
 

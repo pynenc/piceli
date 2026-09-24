@@ -25,9 +25,14 @@ FIRST_ARGUMENT = {
     "SecretError",
     "ImageHandoffError",
     "reject",
+    "fail",
+    "rejection",
+    "_result_error",
 }
-# ``_Failure(result, reason)`` in the delivery modules.
-SECOND_ARGUMENT = {"_Failure"}
+# ``_Failure(result, reason)`` in the delivery modules; ``reject_error(error, default)``.
+SECOND_ARGUMENT = {"_Failure", "reject_error"}
+# ``rejecting((ExceptionTypes, "default-code"), ...)`` in the CLI modules.
+RULES = {"rejecting"}
 
 # Codes built at runtime, which a literal scan cannot see. Keep this list next
 # to the code that builds them.
@@ -60,6 +65,26 @@ DYNAMIC = {
     "smoke-timed-out",
     # artifacts/cli.py fallback for unclassified input errors
     "invalid-or-unavailable-artifact-input",
+    # artifacts/cli.py: "command-" + RunResult.state for execute-command
+    "command-failed",
+    "command-timed-out",
+    "command-cancelled",
+    "command-output-limit",
+    # k8s/cli/release.py: fallbacks chosen by exception type
+    "release-refused",
+    "release-state-unavailable",
+    # k8s/release_runner.resolve_ownership: several blocking codes at once
+    "plan-blocked",
+    # k8s/release_runner._declared_match: f"{what}-entry-not-declared"
+    "adopt-entry-not-declared",
+    "replace-entry-not-declared",
+    # k8s/cli/release.py: an execution that failed without a failure category
+    "execution-not-ready",
+    # k8s/cli/inputs.py: phase defaults passed to _reject(error, default)
+    "invalid-inputs-spec",
+    "inputs-lock-invalid",
+    "source-capture-failed",
+    "inputs-io-error",
 }
 # Registered for the CLI contract itself (piceli/cli_contract.py users).
 CONTRACT = {"unknown-error-code"}
@@ -94,6 +119,18 @@ def emitted_codes() -> dict[str, set[str]]:
                     codes.append(_literal(node.args[0]))
                 if name in SECOND_ARGUMENT and len(node.args) > 1:
                     codes.append(_literal(node.args[1]))
+                if name in RULES:
+                    codes += [
+                        _literal(rule.elts[1])
+                        for rule in node.args
+                        if isinstance(rule, ast.Tuple) and len(rule.elts) == 2
+                    ]
+                # ``SomeError(message, code="...")``: a keyword code.
+                codes += [
+                    _literal(keyword.value)
+                    for keyword in node.keywords
+                    if keyword.arg == "code"
+                ]
             elif isinstance(node, ast.ClassDef):
                 # Error classes with a fixed class-level ``code = "..."``.
                 codes += [
@@ -109,7 +146,7 @@ def emitted_codes() -> dict[str, set[str]]:
                 codes += [
                     _literal(value)
                     for key, value in zip(node.keys, node.values, strict=True)
-                    if key is not None and _literal(key) == "reason"
+                    if key is not None and _literal(key) in {"reason", "code"}
                 ]
             for code in codes:
                 if code is not None:

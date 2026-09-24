@@ -631,10 +631,14 @@ class _History:
             return []
         value = json.loads(self.path.read_text())
         if not isinstance(value, dict) or value.get("schema_version") != 1:
-            raise ReleaseError("release history is malformed")
+            raise ReleaseError(
+                "release history is malformed", code="release-history-malformed"
+            )
         entries = value.get("entries")
         if not isinstance(entries, list):
-            raise ReleaseError("release history is malformed")
+            raise ReleaseError(
+                "release history is malformed", code="release-history-malformed"
+            )
         return entries
 
     @contextmanager
@@ -715,7 +719,10 @@ class ReleaseRunner:
 
     def _plan_path(self, plan_hash: str) -> Path:
         if not _HASH.fullmatch(plan_hash):
-            raise ReleaseError("plan hash must be 64 lowercase hex characters")
+            raise ReleaseError(
+                "plan hash must be 64 lowercase hex characters",
+                code="invalid-plan-hash",
+            )
         return self.state / "plans" / f"{plan_hash}.json"
 
     def _sidecar(self, name: str) -> dict[str, Any]:
@@ -742,7 +749,8 @@ class ReleaseRunner:
             if archived != target.__dict__:
                 raise ReleaseError(
                     "cluster identity differs from the one recorded in this state "
-                    f"directory (release {record.name!r}); refusing to continue"
+                    f"directory (release {record.name!r}); refusing to continue",
+                    code="cluster-identity-changed",
                 )
 
     # ---------------------------------------------------------- composition
@@ -768,19 +776,22 @@ class ReleaseRunner:
             composition = function(self.spec.context(images, refs, nodes))
             if not isinstance(composition, DeploymentComposition):
                 raise ReleaseSpecError(
-                    "the composition function must return a DeploymentComposition"
+                    "the composition function must return a DeploymentComposition",
+                    code="invalid-composition",
                 )
             for component in composition.components:
                 for resource in component.resources:
                     if not resource.ref.namespace:
                         raise ReleaseSpecError(
                             "cluster-scoped resources are not supported by "
-                            f"releases: {resource.ref.kind}/{resource.ref.name}"
+                            f"releases: {resource.ref.kind}/{resource.ref.name}",
+                            code="invalid-composition",
                         )
                     if resource.ref.namespace != self.spec.model.target.namespace:
                         raise ReleaseSpecError(
                             f"{resource.ref.kind}/{resource.ref.name} targets "
-                            f"namespace {resource.ref.namespace!r}"
+                            f"namespace {resource.ref.namespace!r}",
+                            code="invalid-composition",
                         )
             return composition
 
@@ -815,7 +826,8 @@ class ReleaseRunner:
                     if binding.reference not in by_ref:
                         raise ReleaseSpecError(
                             "the composition binds a reference that is not a "
-                            "declared secret input"
+                            "declared secret input",
+                            code="invalid-composition",
                         )
                     bound.add(by_ref[binding.reference])
                     bindings.append(
@@ -846,7 +858,8 @@ class ReleaseRunner:
         unused = sorted(set(names) - bound - consumed_outputs(self.spec.model.secrets))
         if unused:
             raise ReleaseSpecError(
-                f"declared secret inputs are not bound by the composition: {unused}"
+                f"declared secret inputs are not bound by the composition: {unused}",
+                code="invalid-composition",
             )
         return composition, material
 
@@ -902,7 +915,8 @@ class ReleaseRunner:
             ]
             raise ReleaseError(
                 "discovery is incomplete, refusing to plan"
-                + (f" ({'; '.join(failures)})" if failures else "")
+                + (f" ({'; '.join(failures)})" if failures else ""),
+                code="discovery-incomplete",
             )
         return artifact
 
@@ -989,7 +1003,10 @@ class ReleaseRunner:
             parse_adopt_entry(entry)
         unknown = sorted(set(rotate) - set(spec.secrets))
         if unknown:
-            raise ReleaseError(f"cannot rotate undeclared secrets: {unknown}")
+            raise ReleaseError(
+                f"cannot rotate undeclared secrets: {unknown}",
+                code="unknown-rotate-secret",
+            )
         for entry in replace:
             parse_adopt_entry(entry, what="replace")
         requested = _Ownership(
@@ -1039,7 +1056,10 @@ class ReleaseRunner:
                     intent = "apply"
                 else:
                     if rotate:
-                        raise ReleaseError("--rotate is not valid for a rollback")
+                        raise ReleaseError(
+                            "--rotate is not valid for a rollback",
+                            code="rotate-not-valid-for-rollback",
+                        )
                     name = self.resolve_rollback_target(rollback_to, catalog)
                     intent = "rollback"
                 return self._plan_reapply(name, intent, binding, catalog, requested)
@@ -1057,13 +1077,19 @@ class ReleaseRunner:
             try:
                 catalog.get(target)
             except ValueError:
-                raise ReleaseError(f"unknown release {target!r}") from None
+                raise ReleaseError(
+                    f"unknown release {target!r}", code="unknown-release"
+                ) from None
             return target
         if not self.history.deployed():
-            raise ReleaseError("no release has been applied yet")
+            raise ReleaseError(
+                "no release has been applied yet", code="no-release-applied"
+            )
         previous = self.history.previous()
         if previous is None:
-            raise ReleaseError("no previous release to roll back to")
+            raise ReleaseError(
+                "no previous release to roll back to", code="no-previous-release"
+            )
         return previous
 
     def _plan_create(
@@ -1315,12 +1341,15 @@ class ReleaseRunner:
         if not path.exists():
             raise ReleaseError(
                 "no pending plan with this hash (unknown, expired or already "
-                "applied); run `piceli release plan` again"
+                "applied); run `piceli release plan` again",
+                code="plan-not-found",
             )
         value = json.loads(path.read_text())
         if timestamp(value["expires_at"], allow_future=True) <= _now():
             path.unlink(missing_ok=True)
-            raise ReleaseError("the approved plan expired; run plan again")
+            raise ReleaseError(
+                "the approved plan expired; run plan again", code="plan-expired"
+            )
         return dict(value)
 
     # ---------------------------------------------------------------- apply
@@ -1351,7 +1380,8 @@ class ReleaseRunner:
         path = self._discovery_path(record.name)
         if not path.exists():
             raise ReleaseError(
-                f"release {record.name!r} has no stored discovery; re-plan it"
+                f"release {record.name!r} has no stored discovery; re-plan it",
+                code="stored-discovery-missing",
             )
         snapshot = ObservedSnapshot.from_discovery(
             DiscoveryArtifact.from_private_json(path.read_text())
@@ -1363,7 +1393,8 @@ class ReleaseRunner:
             or archived["field_manager"] != settings.field_manager
         ):
             raise ReleaseError(
-                f"release {record.name!r} was planned for another owner/field manager"
+                f"release {record.name!r} was planned for another owner/field manager",
+                code="release-owner-mismatch",
             )
         sidecar = self._sidecar(record.name)
         prune = bool(sidecar.get("prune", False))
@@ -1412,12 +1443,14 @@ class ReleaseRunner:
         if expected_intent is not None and pending["intent"] != expected_intent:
             raise ReleaseError(
                 f"plan {plan_hash[:12]} is a {pending['intent']} plan, "
-                f"not a {expected_intent} plan"
+                f"not a {expected_intent} plan",
+                code="plan-intent-mismatch",
             )
         if expected_release is not None and pending["release"] != expected_release:
             raise ReleaseError(
                 f"plan {plan_hash[:12]} targets {pending['release']!r}, "
-                f"not {expected_release!r}"
+                f"not {expected_release!r}",
+                code="plan-release-mismatch",
             )
         name = pending["release"]
         binding = self.provider_factory(self.spec)
@@ -1439,7 +1472,10 @@ class ReleaseRunner:
                     )
                     session = workflow.reopen(name)
                     if session.revision.plan.plan_hash != plan_hash:
-                        raise ReleaseError("stored release does not match the plan")
+                        raise ReleaseError(
+                            "stored release does not match the plan",
+                            code="stored-release-mismatch",
+                        )
                     execution_id = session.bundle.execution_id
 
                     def run() -> dict[str, Any]:
@@ -1461,7 +1497,10 @@ class ReleaseRunner:
                         build_plan(composition, snapshot, plan_authorization).plan_hash
                         != plan_hash
                     ):
-                        raise ReleaseError("stored evidence does not match the plan")
+                        raise ReleaseError(
+                            "stored evidence does not match the plan",
+                            code="stored-evidence-mismatch",
+                        )
                     settings = self.spec.model.release
                     authorization_id = uuid.uuid4().hex
                     expires_at = pending["expires_at"]
@@ -1512,7 +1551,9 @@ class ReleaseRunner:
                     result = run()
                 except ValueError as error:
                     self.history.update(execution_id, state="refused")
-                    raise ReleaseError(f"execution refused: {error}") from None
+                    raise ReleaseError(
+                        f"execution refused: {error}", code="execution-refused"
+                    ) from None
                 self._plan_path(plan_hash).unlink(missing_ok=True)
                 self.history.update(execution_id, state=result.get("state"))
                 if pending["mode"] == "create" and result.get("state") == "ready":
@@ -1542,7 +1583,9 @@ class ReleaseRunner:
             and (release is None or entry["release"] == release)
         ]
         if not entries:
-            raise ReleaseError("no execution recorded for this release")
+            raise ReleaseError(
+                "no execution recorded for this release", code="no-execution-recorded"
+            )
         return entries[-1]
 
     def resume(self, release: str | None = None) -> dict[str, Any]:
@@ -1551,7 +1594,8 @@ class ReleaseRunner:
         if entry["mode"] != "create":
             raise ReleaseError(
                 "re-apply and rollback executions are not resumable; "
-                "run plan/apply (or rollback) again"
+                "run plan/apply (or rollback) again",
+                code="not-resumable",
             )
         name = entry["release"]
         binding = self.provider_factory(self.spec)
@@ -1572,7 +1616,9 @@ class ReleaseRunner:
                 try:
                     result = workflow.resume(executor, name)
                 except ValueError as error:
-                    raise ReleaseError(f"resume refused: {error}") from None
+                    raise ReleaseError(
+                        f"resume refused: {error}", code="resume-refused"
+                    ) from None
                 # Recorded after the run: a resume keeps the execution id, so a
                 # concurrent ``stop`` still finds it through the earlier entry.
                 self.history.append(
@@ -1609,11 +1655,14 @@ class ReleaseRunner:
                 try:
                     current = journal.summary(entry["execution_id"])
                 except ValueError:
-                    raise ReleaseError("the execution has not started") from None
+                    raise ReleaseError(
+                        "the execution has not started", code="execution-not-started"
+                    ) from None
                 if current["state"] in {"ready", "cancelled"}:
                     raise ReleaseError(
                         f"the latest execution of {name!r} is already "
-                        f"{current['state']}; nothing to stop"
+                        f"{current['state']}; nothing to stop",
+                        code="nothing-to-stop",
                     )
                 if entry["mode"] == "create":
                     workflow = self._session_workflow(
@@ -1624,9 +1673,15 @@ class ReleaseRunner:
                     execution = journal.export_execution(entry["execution_id"])
                     authorization = execution["binding"]["revision"]["authorization"]
                     if authorization["owner_id"] != binding.provider.owner_id:
-                        raise ReleaseError("execution belongs to another owner")
+                        raise ReleaseError(
+                            "execution belongs to another owner",
+                            code="execution-other-owner",
+                        )
                     if authorization["target"] != binding.target.__dict__:
-                        raise ReleaseError("execution belongs to another target")
+                        raise ReleaseError(
+                            "execution belongs to another target",
+                            code="execution-other-target",
+                        )
                     result = executor.cancel(entry["execution_id"])
                 self.history.update(entry["execution_id"], state=result.get("state"))
                 return {
@@ -1731,7 +1786,9 @@ class ReleaseRunner:
             try:
                 record = catalog.get(release)
             except ValueError:
-                raise ReleaseError(f"unknown release {release!r}") from None
+                raise ReleaseError(
+                    f"unknown release {release!r}", code="unknown-release"
+                ) from None
         else:
             try:
                 record = catalog.selected()

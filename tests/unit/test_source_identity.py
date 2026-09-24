@@ -330,12 +330,16 @@ def test_cli_record_and_verify(tmp_path: Path) -> None:
         app, ["inputs", "verify", "--spec", str(spec), "--lock", str(lock)]
     )
     assert drifted.exit_code == 1
-    assert json.loads(drifted.stdout)["state"] == "drift"
+    drift = json.loads(drifted.stdout)
+    assert (drift["state"], drift["reason"]) == ("drift", "source-drift")
     assert "source drift: service-a: dirty" in drifted.stderr
 
     rejected = runner.invoke(app, ["inputs", "record", "--spec", str(spec)])
     assert rejected.exit_code == 2
-    assert "allow_dirty" in json.loads(rejected.stderr)["reason"]
+    body = json.loads(rejected.stdout)
+    assert (body["state"], body["reason"]) == ("rejected", "source-dirty")
+    assert "allow_dirty" in body["message"]
+    assert "[source-dirty]" in rejected.stderr
 
 
 def test_nested_repository_contributes_its_commit(tmp_path: Path) -> None:
@@ -439,8 +443,9 @@ def test_cli_only(tmp_path: Path) -> None:
         + ["--only", "nope"],
     )
     assert unknown.exit_code == 2
-    assert json.loads(unknown.stderr) == {
+    assert json.loads(unknown.stdout) == {
         "state": "rejected",
         "reason": "unknown-source",
+        "message": "unknown source 'nope'",
         "source": "nope",
     }

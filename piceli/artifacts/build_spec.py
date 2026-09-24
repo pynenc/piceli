@@ -1875,8 +1875,9 @@ def run_build_spec_command(
 
     Exit 1 means a docker build step or a smoke check failed (the steps are
     printed, never their output). Exit 2 means the input or grant was
-    rejected. The result is always the last line of stderr (on failure) or
-    stdout (on success); earlier stderr lines are progress. Error output
+    rejected. The result object is printed on stdout in every case
+    (``{"state": "failed"|"rejected", "reason": <code>, "message": …}`` on
+    failure); stderr carries progress and a human summary only. Error output
     carries only a fixed reason code, never paths, output or secrets.
     """
     try:
@@ -1918,26 +1919,24 @@ def run_build_spec_command(
         return 0
     except BuildSpecError as error:
         failed = error.code in FAILED_CODES
-        body: dict[str, Any] = {
-            "state": "failed" if failed else "rejected",
-            "reason": error.code,
-        }
+        body: dict[str, Any] = {}
         if error.steps:
             body["steps"] = list(error.steps)
-        print(json.dumps(body, sort_keys=True), file=sys.stderr)
-        return 1 if failed else 2
+        return _result_error(error.code, failed=failed, **body)
     except SourceIdentityError:
-        print(
-            json.dumps({"state": "rejected", "reason": "invalid-inputs"}),
-            file=sys.stderr,
-        )
-        return 2
+        return _result_error("invalid-inputs")
     except (ValueError, KeyError, TypeError, OSError):
         # Never echo private paths, process output or attacker-controlled text.
-        print(
-            json.dumps(
-                {"state": "rejected", "reason": "invalid-or-unavailable-build-input"}
-            ),
-            file=sys.stderr,
-        )
-        return 2
+        return _result_error("invalid-or-unavailable-build-input")
+
+
+def _result_error(reason: str, *, failed: bool = False, **fields: Any) -> int:
+    """Print the failure or rejection for ``reason``; return exit 1 or 2."""
+    from piceli.cli_contract import Rejected, fail, reject
+
+    try:
+        if failed:
+            fail(reason, **fields)
+        reject(reason, **fields)
+    except Rejected as rejected:
+        return int(rejected.code or 2)

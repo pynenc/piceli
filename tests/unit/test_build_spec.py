@@ -31,6 +31,7 @@ from piceli.artifacts.build_spec import (
     run_build_spec_command,
 )
 from piceli.artifacts.process import ProcessLimits, ToolPin
+from piceli.errors import ERRORS
 
 ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE = ROOT / "examples/builds/rust-hello"
@@ -930,16 +931,21 @@ def test_cli_rejections_use_fixed_codes(
         runner=FakeDocker(),
         docker=docker_tool,
     )
-    error = capsys.readouterr().err
+    captured = capsys.readouterr()
     assert code == 2
-    assert json.loads(error) == {"state": "rejected", "reason": "builder-not-approved"}
+    assert json.loads(captured.out) == {
+        "state": "rejected",
+        "reason": "builder-not-approved",
+        "message": ERRORS["builder-not-approved"].title,
+    }
+    assert "[builder-not-approved]" in captured.err
     assert not out.exists()
     code = run_build_spec_command(
         parse("preview", "--spec", str(tmp_path / "secret-dir" / "missing.toml"))
     )
-    error = capsys.readouterr().err
-    assert code == 2 and "secret-dir" not in error
-    assert json.loads(error)["reason"] == "spec-unreadable"
+    captured = capsys.readouterr()
+    assert code == 2 and "secret-dir" not in captured.out + captured.err
+    assert json.loads(captured.out)["reason"] == "spec-unreadable"
 
 
 def test_cli_build_failure_exit_code(
@@ -959,16 +965,18 @@ def test_cli_build_failure_exit_code(
         runner=FakeDocker(fail="piceli-files"),
         docker=docker_tool,
     )
-    error = capsys.readouterr().err
+    captured = capsys.readouterr()
+    error = captured.err
     assert code == 1
-    *progress, last = error.splitlines()
-    assert progress == [
+    assert error.splitlines()[:2] == [
         "[piceli] 1/2 linux/arm64 files: running",
         "[piceli] 1/2 linux/arm64 files: failed in 0.01s",
     ]
-    body = json.loads(last)
+    assert "failed: Build step failed [build-failed]" in error
+    body = json.loads(captured.out)
     assert body["state"] == "failed" and body["reason"] == "build-failed"
-    assert "secret-token" not in error and str(tmp_path) not in error
+    for text in (error, captured.out):
+        assert "secret-token" not in text and str(tmp_path) not in text
 
 
 # --- build log, tag templates, smoke ----------------------------------------------
@@ -1173,7 +1181,7 @@ def test_failing_smoke_check_rejects_the_receipt(
         runner=fake,
         docker=docker_tool,
     )
-    body = json.loads(capsys.readouterr().err.splitlines()[-1])
+    body = json.loads(capsys.readouterr().out)
     assert code == 1 and not out.exists()
     assert body["state"] == "failed" and body["reason"] == "smoke-failed"
     assert body["steps"][-1]["kind"] == "smoke:svc"
