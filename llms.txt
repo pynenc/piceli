@@ -1,0 +1,31 @@
+# Piceli
+
+> Piceli is Kubernetes infrastructure as typed Python: describe resources with Python templates, `kubernetes` client models or YAML/JSON, compute a reviewable plan against the live cluster, apply it only with an explicit approval of the plan hash, and resume, roll back and observe the result. It also records source identity, runs pinned containerized builds and delivers digest-approved images to a registry or node.
+
+Rules for agents: run `piceli help-json` for every command's options, side effects and approval rules; plan before apply and never approve on the owner's behalf; parse JSON from stdout (human text is on stderr); on exit code 2 read `reason` and run `piceli explain <reason> --json`; never read or print secret values; never rely on the current kube context. The project is pre-alpha: check each page's maturity label (stable, preview, experimental).
+
+## Start here
+
+- [Using Piceli from an agent](https://docs.pynenc.org/projects/piceli/en/latest/agents.html): safe commands, approvals, output contract, errors, resume, secrets
+- [Command reference](https://docs.pynenc.org/projects/piceli/en/latest/reference/cli.html): every command with options and its contract (generated from `piceli help-json`)
+- [Error codes](https://docs.pynenc.org/projects/piceli/en/latest/reference/errors.html): every refusal code with cause, fix and whether a retry can succeed (same as `piceli explain`)
+
+## Docs
+
+- [Overview and architecture](https://docs.pynenc.org/projects/piceli/en/latest/overview.html): model, plan, execute, observe; the two engines; glossary
+- [Getting started](https://docs.pynenc.org/projects/piceli/en/latest/getting_started/index.html): install and define a first set of objects
+- [Releases from a spec](https://docs.pynenc.org/projects/piceli/en/latest/release_cli.html): `piceli release` plan, apply, adopt, roll back, resume; "If plan refuses"
+- [Deployment planning](https://docs.pynenc.org/projects/piceli/en/latest/deployment_planning.html): discovery, pure plans, authorized execution and journals (Python API)
+- [Containerized builds](https://docs.pynenc.org/projects/piceli/en/latest/containerized_builds.html): `build.toml`, pinned builders, build receipts
+- [Source identity](https://docs.pynenc.org/projects/piceli/en/latest/source_identity.html): `piceli inputs record/verify` and source drift
+- [Image delivery](https://docs.pynenc.org/projects/piceli/en/latest/node_delivery.html): `piceli artifacts deliver` to a registry (default) or a node
+- [Node-local registry](https://docs.pynenc.org/projects/piceli/en/latest/node_local_registry.html): a registry one node pulls from without configuration
+- [Operations lens](https://docs.pynenc.org/projects/piceli/en/latest/operations_lens.html): `piceli observe`, local UI, logs and port forwards
+- [Roadmap and feature status](https://docs.pynenc.org/projects/piceli/en/latest/roadmap.html): maturity of every feature
+
+## Optional
+
+- [Kubernetes model](https://docs.pynenc.org/projects/piceli/en/latest/kubernetes_model/index.html): templates, client models and YAML/JSON definitions
+- [Operator workflow](https://docs.pynenc.org/projects/piceli/en/latest/operator_workflow.html): experimental inventory, catalog, approvals and backups
+- [Contributing](https://github.com/pynenc/piceli/blob/main/AGENTS.md): how to work on Piceli itself (setup, tests, invariants)
+- [Changelog](https://docs.pynenc.org/projects/piceli/en/latest/changelog.html)

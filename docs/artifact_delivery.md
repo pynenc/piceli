@@ -1,5 +1,11 @@
 # Artifact delivery and operation telemetry
 
+```{admonition} Maturity: preview
+:class: note
+
+The artifact API may still change in a minor release, with a changelog entry. See the {doc}`roadmap` for every feature's status.
+```
+
 For registry-free delivery of an image straight to cluster nodes, see
 {doc}`node_delivery`.
 

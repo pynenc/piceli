@@ -64,9 +64,12 @@ from piceli.k8s.ops.plan import (
     ObservedSnapshot,
     Ownership,
     PlanAuthorization,
+    ResourceIntent,
     ResourceRef,
     build_plan,
     field_drift,
+    replace_refusal,
+    retained_content_contained,
     transferable_managers,
 )
 from piceli.k8s.ops.provider_factory import ProviderBinding, build_provider
@@ -82,7 +85,16 @@ from piceli.k8s.release import (
     ReleaseSource,
     ReleaseWorkflow,
 )
-from piceli.k8s.release_secrets import config_digest, generate, input_names
+from piceli.k8s.release_secret_spec import SecretError, consumed_outputs
+from piceli.k8s.release_secrets import (
+    ImportSources,
+    Materialized,
+    config_digest,
+    decode,
+    describe,
+    input_names,
+    materialize,
+)
 from piceli.k8s.release_spec import (
     ImageRef,
     NodeRef,
@@ -97,7 +109,22 @@ ProviderFactory = Callable[[ReleaseSpec], ProviderBinding]
 
 
 class ReleaseError(ValueError):
-    """A release operation was refused; the message is safe to print."""
+    """A release operation was refused; the message is safe to print.
+
+    ``code`` names the refusal (see docs/release_cli.md) and ``details`` holds
+    structured, printable data such as the list of blocking objects.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str | None = None,
+        details: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.details = dict(details or {})
 
 
 def _canonical(value: Any) -> str:
@@ -173,6 +200,7 @@ def _plan_authorization(
     adopt: Sequence[Mapping[str, str]] = (),
     inherited: Sequence[str] = (),
     field_manager: str,
+    replace: Sequence[Mapping[str, str]] = (),
 ) -> PlanAuthorization:
     return PlanAuthorization(
         target,
@@ -180,49 +208,120 @@ def _plan_authorization(
         prune,
         tuple(inherited),
         field_manager,
+        tuple(ResourceRef(**item) for item in replace),
     )
 
 
-def resolve_adoptions(
+def _declared_match(
+    entry: str, declared: Sequence[ResourceRef], what: str
+) -> ResourceRef:
+    api_version, kind, name = parse_adopt_entry(entry, what=what)
+    matches = [
+        ref
+        for ref in declared
+        if ref.kind == kind
+        and ref.name == name
+        and (api_version is None or ref.api_version == api_version)
+    ]
+    if len(matches) != 1:
+        raise ReleaseError(
+            f"{what} {entry!r} does not name exactly one resource declared by "
+            "the composition",
+            code=f"{what}-entry-not-declared",
+        )
+    return matches[0]
+
+
+def _label(ref: ResourceRef) -> str:
+    return f"{ref.kind}/{ref.name}"
+
+
+@dataclass(frozen=True)
+class OwnershipResolution:
+    """What a plan is authorized to adopt or replace, and what was not needed."""
+
+    adopt: list[dict[str, str]]
+    replace: list[dict[str, str]]
+    adopt_not_needed: list[str]
+    replace_not_needed: list[str]
+
+
+def resolve_ownership(
     requested: Sequence[str],
     composition: DeploymentComposition,
     snapshot: ObservedSnapshot,
     inherited: Sequence[str],
     field_manager: str,
-) -> tuple[list[dict[str, str]], list[str]]:
-    """Map ``Kind/name`` entries to declared resources that need adoption.
+    *,
+    replace: Sequence[str] = (),
+    adopt_all_desired: bool = False,
+) -> OwnershipResolution:
+    """Map ``Kind/name`` entries to declared resources that need adoption or replace.
 
     An entry must name a resource the composition declares (a typo is an
-    error, never a silent no-op). Entries whose object is absent, or already
-    managed with nothing to reclaim, need no adoption and are returned
+    error, never a silent no-op). Adopt entries whose object is absent, or
+    already managed with nothing to reclaim, need no adoption and are returned
     separately for the report, so a standing ``[release] adopt`` list keeps
     working after the first release. A managed, non-retained object that
     other clients have written to since (transferable foreign field managers)
     is taken over again, which reclaims those fields.
+
+    Replace entries must name an existing **unmanaged, non-retained** object
+    that no other object owns; absent objects are reported as not needed and
+    every other case is refused. ``adopt_all_desired`` adopts every unmanaged
+    object the composition declares that is not replaced, and nothing else.
+
+    Every object that blocks the plan is reported in one refusal, each with
+    the flags that would unblock it.
     """
     declared = [
         resource.ref
         for component in composition.components
         for resource in component.resources
     ]
+    intents: dict[ResourceRef, ResourceIntent] = {
+        resource.ref: resource
+        for component in composition.components
+        for resource in component.resources
+    }
     observed = {item.intent.ref: item for item in snapshot.resources}
     adopt: set[ResourceRef] = set()
+    replaced: set[ResourceRef] = set()
     not_needed: set[str] = set()
-    for entry in dict.fromkeys(requested):
-        api_version, kind, name = parse_adopt_entry(entry)
-        matches = [
-            ref
-            for ref in declared
-            if ref.kind == kind
-            and ref.name == name
-            and (api_version is None or ref.api_version == api_version)
-        ]
-        if len(matches) != 1:
-            raise ReleaseError(
-                f"adopt {entry!r} does not name exactly one resource declared by "
-                "the composition"
+    replace_not_needed: set[str] = set()
+    blocking: list[dict[str, Any]] = []
+    refused: set[ResourceRef] = set()
+    for entry in dict.fromkeys(replace):
+        ref = _declared_match(entry, declared, "replace")
+        current = observed.get(ref)
+        if current is None:
+            replace_not_needed.add(_label(ref))
+            continue
+        refusal = replace_refusal(current)
+        if refusal is not None:
+            refused.add(ref)
+            blocking.append(
+                {
+                    "kind": ref.kind,
+                    "name": ref.name,
+                    "code": "replace-refused",
+                    "message": refusal,
+                    "suggest": (
+                        [f"--adopt {_label(ref)}"]
+                        if current.ownership is Ownership.UNMANAGED
+                        else [f"remove {_label(ref)} from --replace/[release] replace"]
+                    ),
+                }
             )
-        ref = matches[0]
+            continue
+        replaced.add(ref)
+    for entry in dict.fromkeys(requested):
+        ref = _declared_match(entry, declared, "adopt")
+        if ref in replaced:
+            raise ReleaseError(
+                f"{_label(ref)} is named by both adopt and replace; choose one",
+                code="adopt-and-replace",
+            )
         current = observed.get(ref)
         if current is not None and (
             current.ownership is Ownership.UNMANAGED
@@ -236,21 +335,100 @@ def resolve_adoptions(
         ):
             adopt.add(ref)
         else:
-            not_needed.add(f"{ref.kind}/{ref.name}")
-    unauthorized = sorted(
-        f"{ref.kind}/{ref.name}"
-        for ref in declared
-        if ref not in adopt
-        and ref in observed
-        and observed[ref].ownership is Ownership.UNMANAGED
-    )
-    if unauthorized:
+            not_needed.add(_label(ref))
+    if adopt_all_desired:
+        adopt |= {
+            ref
+            for ref in declared
+            if ref in observed
+            and ref not in replaced
+            and observed[ref].ownership is Ownership.UNMANAGED
+        }
+    for ref in declared:
+        current = observed.get(ref)
+        if current is None or ref in refused:
+            continue
+        if (
+            ref not in adopt
+            and ref not in replaced
+            and current.ownership is Ownership.UNMANAGED
+        ):
+            retained = current.retained
+            blocking.append(
+                {
+                    "kind": ref.kind,
+                    "name": ref.name,
+                    "code": "resource-requires-adoption",
+                    "message": "exists and is not managed by this release's owner"
+                    + ("; retained: replace is never allowed" if retained else ""),
+                    "suggest": [f"--adopt {_label(ref)}"]
+                    + ([] if retained else [f"--replace {_label(ref)}"]),
+                }
+            )
+        elif (
+            current.retained
+            and (ref in adopt or current.ownership is Ownership.MANAGED)
+            and not retained_content_contained(intents[ref], current)
+        ):
+            blocking.append(
+                {
+                    "kind": ref.kind,
+                    "name": ref.name,
+                    "code": "retained-content-differs",
+                    "message": "retained object: its spec/data differ from the "
+                    "composition, and only labels and annotations may change",
+                    "suggest": [
+                        "change the composition to match the live object",
+                    ],
+                }
+            )
+    if blocking:
+        blocking.sort(key=lambda item: (item["kind"], item["name"]))
+        unmanaged = [
+            item for item in blocking if item["code"] == "resource-requires-adoption"
+        ]
+        parts = []
+        if unmanaged:
+            parts.append(
+                "existing objects are not managed by this release's owner: "
+                + ", ".join(
+                    f"{item['kind']}/{item['name']} ({' or '.join(item['suggest'])})"
+                    for item in unmanaged
+                )
+                + "; authorize them with --adopt or --replace Kind/name "
+                "(repeatable), [release] adopt/replace or --adopt-all-desired, "
+                "or delete them"
+            )
+        for item in blocking:
+            if item["code"] != "resource-requires-adoption":
+                parts.append(f"{item['kind']}/{item['name']}: {item['message']}")
         raise ReleaseError(
-            "existing objects are not managed by this release's owner: "
-            f"{', '.join(unauthorized)}; authorize adopting them with --adopt "
-            "Kind/name (repeatable) or [release] adopt, or delete them"
+            "; ".join(parts),
+            code=blocking[0]["code"]
+            if len({item["code"] for item in blocking}) == 1
+            else "plan-blocked",
+            details={"blocking": blocking},
         )
-    return [ref.__dict__ for ref in sorted(adopt)], sorted(not_needed)
+    return OwnershipResolution(
+        [ref.__dict__ for ref in sorted(adopt)],
+        [ref.__dict__ for ref in sorted(replaced)],
+        sorted(not_needed),
+        sorted(replace_not_needed),
+    )
+
+
+def resolve_adoptions(
+    requested: Sequence[str],
+    composition: DeploymentComposition,
+    snapshot: ObservedSnapshot,
+    inherited: Sequence[str],
+    field_manager: str,
+) -> tuple[list[dict[str, str]], list[str]]:
+    """Adoption-only view of :func:`resolve_ownership` (kept for callers)."""
+    resolved = resolve_ownership(
+        requested, composition, snapshot, inherited, field_manager
+    )
+    return resolved.adopt, resolved.adopt_not_needed
 
 
 def _drift(
@@ -283,6 +461,12 @@ def _compact_actions(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
             "name": action["resource"]["name"],
             "artifact_digest": action["artifact_digest"],
             **({"adoption": action["adoption"]} if "adoption" in action else {}),
+            **(
+                {"metadata_only": action["metadata_only"]}
+                if "metadata_only" in action
+                else {}
+            ),
+            **({"replace": action["replace"]} if "replace" in action else {}),
         }
         for action in plan["actions"]
     ]
@@ -318,6 +502,19 @@ def _adopted(
     planned = desired.get("actions", []) if isinstance(desired, dict) else []
     adopted = []
     for row, action in zip(rows["actions"], planned, strict=False):
+        replace = row["payload"].get("replace")
+        if isinstance(replace, dict) and row["state"] in {"applied", "ready"}:
+            adopted.append(
+                {
+                    "kind": action["resource"]["kind"],
+                    "name": action["resource"]["name"],
+                    "mode": "replace",
+                    "backup": replace.get("backup"),
+                    "backup_sha256": replace.get("backup_sha256"),
+                    "deleted_uid": replace.get("deleted_uid"),
+                }
+            )
+            continue
         adoption = row["payload"].get("adoption")
         if isinstance(adoption, dict) and row["state"] in {"applied", "ready"}:
             adopted.append(
@@ -331,12 +528,47 @@ def _adopted(
                             "previous_owner",
                             "transferred_managers",
                             "completed_transfer",
+                            "metadata_changes",
                         )
                         if key in adoption
                     },
                 }
             )
     return adopted
+
+
+@dataclass(frozen=True)
+class _Ownership:
+    """Requested ownership transitions of one plan (spec lists plus flags)."""
+
+    adopt: tuple[str, ...] = ()
+    replace: tuple[str, ...] = ()
+    adopt_all_desired: bool = False
+
+    def resolve(
+        self,
+        composition: DeploymentComposition,
+        snapshot: ObservedSnapshot,
+        inherited: Sequence[str],
+        field_manager: str,
+    ) -> OwnershipResolution:
+        return resolve_ownership(
+            self.adopt,
+            composition,
+            snapshot,
+            inherited,
+            field_manager,
+            replace=self.replace,
+            adopt_all_desired=self.adopt_all_desired,
+        )
+
+    def report(self, resolved: OwnershipResolution) -> dict[str, Any]:
+        return {
+            "adopt": sorted(f"{i['kind']}/{i['name']}" for i in resolved.adopt),
+            "replace": sorted(f"{i['kind']}/{i['name']}" for i in resolved.replace),
+            "adopt_all_desired": self.adopt_all_desired,
+            "replace_not_needed": resolved.replace_not_needed,
+        }
 
 
 @dataclass
@@ -353,6 +585,9 @@ class PlanResult:
     expires_at: str
     drift: list[dict[str, Any]] = field(default_factory=list)
     adopt_not_needed: list[str] = field(default_factory=list)
+    # What this plan was authorized to adopt/replace (bound to the plan hash
+    # through the ADOPT/REPLACE actions).
+    authorized: dict[str, Any] = field(default_factory=dict)
 
     @property
     def plan_hash(self) -> str:
@@ -380,6 +615,7 @@ class PlanResult:
             "actions": _compact_actions(self.plan),
             "drift": self.drift,
             "adopt_not_needed": self.adopt_not_needed,
+            "authorized": self.authorized,
             **({"plan": self.plan} if full else {}),
         }
 
@@ -459,6 +695,8 @@ class ReleaseRunner:
         self.provider_factory = provider_factory
         self.state = spec.state_dir
         self.history = _History(self.state / "history.json")
+        # Restorable copies of objects deleted by ``replace`` (owner-only).
+        self.backups = self.state / "backups"
 
     # ------------------------------------------------------------------ state
     def _open(self) -> tuple[ReleaseCatalog, ExecutionJournal, SecretVersionStore]:
@@ -548,18 +786,23 @@ class ReleaseRunner:
 
         return factory
 
+    def _placeholders(self) -> dict[str, SecretVersionRef]:
+        """Deterministic stand-in references for every exposed secret input."""
+        return {
+            name: SecretVersionRef(
+                "0" * 32, hashlib.sha256(name.encode()).hexdigest()[:32]
+            )
+            for group in self._declared_inputs().values()
+            for name in group
+        }
+
     def _preview_composition(
         self,
         factory: Callable[[Mapping[str, SecretVersionRef]], DeploymentComposition],
     ) -> tuple[DeploymentComposition, list[dict[str, Any]]]:
         """Build with placeholder references to name the release and check bindings."""
-        names = [item for group in self._declared_inputs().values() for item in group]
-        placeholders = {
-            name: SecretVersionRef(
-                "0" * 32, hashlib.sha256(name.encode()).hexdigest()[:32]
-            )
-            for name in names
-        }
+        placeholders = self._placeholders()
+        names = list(placeholders)
         by_ref = {ref: name for name, ref in placeholders.items()}
         composition = factory(placeholders)
         bound: set[str] = set()
@@ -598,7 +841,9 @@ class ReleaseRunner:
                     "resources": resources,
                 }
             )
-        unused = sorted(set(names) - bound)
+        # Outputs a template consumes may stay unbound (they reach the cluster
+        # through the template); every other declared input must be bound.
+        unused = sorted(set(names) - bound - consumed_outputs(self.spec.model.secrets))
         if unused:
             raise ReleaseSpecError(
                 f"declared secret inputs are not bound by the composition: {unused}"
@@ -666,43 +911,60 @@ class ReleaseRunner:
         self,
         catalog: ReleaseCatalog,
         store: SecretVersionStore,
-        target: PlanTarget,
+        binding: ProviderBinding,
         rotate: Sequence[str],
-    ) -> tuple[dict[str, str], dict[str, str]]:
-        """Carry values over from earlier releases unless rotated or reconfigured."""
-        unknown = sorted(set(rotate) - set(self.spec.model.secrets))
-        if unknown:
-            raise ReleaseError(f"cannot rotate undeclared secrets: {unknown}")
+    ) -> Materialized:
+        """Carry values over from earlier releases unless rotated or reconfigured.
+
+        Called only after the plan was validated; imports read their source
+        here (a live Secret through the release's own provider).
+        """
         records = sorted(
             catalog.records(),
             key=lambda record: self._sidecar(record.name).get("created_at", ""),
             reverse=True,
         )
-        values: dict[str, str] = {}
-        origin: dict[str, str] = {}
-        for name, generator in sorted(self.spec.model.secrets.items()):
-            wanted = input_names(name, generator)
-            digest = config_digest(generator)
-            carried = None
-            if name not in rotate:
-                for record in records:
-                    if (
-                        self._sidecar(record.name).get("secrets", {}).get(name)
-                        != digest
-                    ):
-                        continue
-                    inputs = record.archive.inputs()
-                    if all(item in inputs for item in wanted):
-                        carried = {
-                            item: store.resolve(target, inputs[item]) for item in wanted
-                        }
-                        origin[name] = f"carried:{record.name}"
-                        break
-            if carried is None:
-                carried = generate(name, generator)
-                origin[name] = "rotated" if name in rotate else "generated"
-            values.update(carried)
-        return values, origin
+
+        def carry(
+            name: str, part: str, digest: str, wanted: tuple[str, ...]
+        ) -> tuple[dict[str, str], str] | None:
+            for record in records:
+                sidecar = self._sidecar(record.name)
+                recorded = sidecar.get("secret_parts", {}).get(name, {}).get(part)
+                if recorded is None and part == "":
+                    recorded = sidecar.get("secrets", {}).get(name)  # 0.2.0 releases
+                if recorded != digest:
+                    continue
+                refs = self._stored_refs(record, sidecar, store)
+                if all(item in refs for item in wanted):
+                    return (
+                        {
+                            item: store.resolve(binding.target, refs[item])
+                            for item in wanted
+                        },
+                        record.name,
+                    )
+            return None
+
+        def read_secret(name: str, key: str) -> bytes:
+            return binding.provider.read_secret_key(name, key)
+
+        return materialize(
+            self.spec.model.secrets,
+            rotate=rotate,
+            carry=carry,
+            sources=ImportSources(self.spec.resolve, read_secret),
+        )
+
+    @staticmethod
+    def _stored_refs(
+        record: ReleaseRecord, sidecar: Mapping[str, Any], store: SecretVersionStore
+    ) -> dict[str, SecretVersionRef]:
+        """Session inputs plus the release's unbound (internal) secret versions."""
+        refs = dict(record.archive.inputs())
+        for item, version in sidecar.get("secret_refs", {}).items():
+            refs.setdefault(item, SecretVersionRef(store.store_id, version))
+        return refs
 
     # ----------------------------------------------------------------- plan
     def plan(
@@ -711,18 +973,30 @@ class ReleaseRunner:
         rotate: Sequence[str] = (),
         rollback_to: str | None = None,
         adopt: Sequence[str] = (),
+        replace: Sequence[str] = (),
+        adopt_all_desired: bool = False,
     ) -> PlanResult:
         """Capture discovery and persist an approvable plan.
 
         Without ``rollback_to`` the spec decides the release; with it, an
         existing catalogued release (a name or ``previous``) is re-planned.
-        ``adopt`` adds ``Kind/name`` entries to the spec's ``[release] adopt``
-        list for this plan only.
+        ``adopt`` and ``replace`` add ``Kind/name`` entries to the spec's
+        ``[release] adopt``/``replace`` lists for this plan only;
+        ``adopt_all_desired`` adopts every unmanaged declared object.
         """
         spec = self.spec.model
         for entry in adopt:
             parse_adopt_entry(entry)
-        requested = tuple(dict.fromkeys((*spec.release.adopt, *adopt)))
+        unknown = sorted(set(rotate) - set(spec.secrets))
+        if unknown:
+            raise ReleaseError(f"cannot rotate undeclared secrets: {unknown}")
+        for entry in replace:
+            parse_adopt_entry(entry, what="replace")
+        requested = _Ownership(
+            tuple(dict.fromkeys((*spec.release.adopt, *adopt))),
+            tuple(dict.fromkeys((*spec.release.replace, *replace))),
+            adopt_all_desired,
+        )
         images = self.spec.images()
         function = self.spec.load_composition()
         binding = self.provider_factory(self.spec)
@@ -804,7 +1078,7 @@ class ReleaseRunner:
         journal: ExecutionJournal,
         store: SecretVersionStore,
         rotate: Sequence[str],
-        requested: Sequence[str],
+        requested: _Ownership,
     ) -> PlanResult:
         settings = self.spec.model.release
         kinds = self._kinds(composition)
@@ -814,10 +1088,18 @@ class ReleaseRunner:
         artifact = self._discover(binding, kinds)
         snapshot = ObservedSnapshot.from_discovery(artifact)
         inherited = list(settings.inherited_owners)
-        adopt, not_needed = resolve_adoptions(
-            requested, composition, snapshot, inherited, settings.field_manager
+        resolved = requested.resolve(
+            composition, snapshot, inherited, settings.field_manager
         )
-        values, origin = self._private_inputs(catalog, store, binding.target, rotate)
+        adopt, replace = resolved.adopt, resolved.replace
+        plan_authorization = _plan_authorization(
+            binding.target,
+            prune=settings.prune,
+            adopt=adopt,
+            inherited=inherited,
+            field_manager=settings.field_manager,
+            replace=replace,
+        )
         window = settings.approval_window_seconds
         expires_at = (_now() + timedelta(seconds=window)).isoformat()
         authorization_id = uuid.uuid4().hex
@@ -836,37 +1118,62 @@ class ReleaseRunner:
                 inherited_owner_ids=inherited,
             )
 
-        workflow = ReleaseWorkflow(
-            catalog,
-            binding.target.namespace,
-            factory,
-            snapshot,
-            _plan_authorization(
-                binding.target,
-                prune=settings.prune,
-                adopt=adopt,
-                inherited=inherited,
-                field_manager=settings.field_manager,
-            ),
-            grant,
-            journal,
-            store,
-        )
-        # Discovery is persisted before the session so an interrupted plan can
-        # never leave a catalogued release without its evidence.
-        _write_private(self._discovery_path(name), artifact.to_private_json())
-        source = self._source(images)
+        # Validate the plan and its grant with the placeholder composition
+        # first: a refused plan must not generate, import or store any secret.
+        grant(build_plan(composition, snapshot, plan_authorization), snapshot)
+        secrets = self._private_inputs(catalog, store, binding, rotate)
+        origin = secrets.origin
+        placeholders = self._placeholders()
+        bound_refs = {
+            item.reference
+            for component in composition.components
+            for resource in component.resources
+            for item in resource.secret_bindings
+        }
+        bound = {n for n, ref in placeholders.items() if ref in bound_refs}
+        values = {n: v for n, v in secrets.values.items() if n in bound}
+        session_id = uuid.uuid4().hex
+        internal: dict[str, SecretVersionRef] = {}
         try:
-            previously_selected: str | None = catalog.selected().name
-        except ValueError:
-            previously_selected = None
-        record = workflow.create(
-            name=name,
-            source=source,
-            private_inputs=values,
-            session_id=uuid.uuid4().hex,
-            execution_id=uuid.uuid4().hex,
-        )
+            for item, value in sorted(secrets.values.items()):
+                if item not in bound:
+                    internal[item] = store.put(binding.target, value)
+
+            def session_factory(
+                refs: Mapping[str, SecretVersionRef],
+            ) -> DeploymentComposition:
+                exposed = {n: r for n, r in internal.items() if n in placeholders}
+                return factory({**exposed, **refs})
+
+            workflow = ReleaseWorkflow(
+                catalog,
+                binding.target.namespace,
+                session_factory,
+                snapshot,
+                plan_authorization,
+                grant,
+                journal,
+                store,
+            )
+            # Discovery is persisted before the session so an interrupted plan
+            # can never leave a catalogued release without its evidence.
+            _write_private(self._discovery_path(name), artifact.to_private_json())
+            source = self._source(images)
+            try:
+                previously_selected: str | None = catalog.selected().name
+            except ValueError:
+                previously_selected = None
+            record = workflow.create(
+                name=name,
+                source=source,
+                private_inputs=values,
+                session_id=session_id,
+                execution_id=uuid.uuid4().hex,
+            )
+        except BaseException:
+            # The release was not recorded: its versions would be orphans.
+            store.discard(binding.target, internal.values(), session_id=session_id)
+            raise
         if previously_selected is not None:
             # ``create`` selects the new record; selection should keep meaning
             # "last release that became ready", so restore it until apply.
@@ -881,10 +1188,17 @@ class ReleaseRunner:
                     "secrets": {
                         n: config_digest(g) for n, g in self.spec.model.secrets.items()
                     },
+                    # Private bookkeeping: opaque versions of unbound outputs,
+                    # carry-over digests, and public generator metadata.
+                    "secret_refs": {n: r.version for n, r in internal.items()},
+                    "secret_parts": secrets.parts,
+                    "secret_meta": secrets.meta,
+                    "secret_origin": origin,
                     "prune": settings.prune,
                     # The plan authorization, so the session reopens exactly.
                     "adopt": adopt,
                     "inherited_owners": inherited,
+                    "replace": replace,
                 }
             )
             + "\n",
@@ -900,7 +1214,8 @@ class ReleaseRunner:
             origin,
             expires_at,
             _drift(composition, snapshot, settings.field_manager, adopt),
-            not_needed,
+            resolved.adopt_not_needed,
+            requested.report(resolved),
         )
         self._persist_plan(result, prune=settings.prune)
         return result
@@ -911,7 +1226,7 @@ class ReleaseRunner:
         intent: str,
         binding: ProviderBinding,
         catalog: ReleaseCatalog,
-        requested: Sequence[str],
+        requested: _Ownership,
     ) -> PlanResult:
         settings = self.spec.model.release
         record = catalog.get(name)
@@ -923,9 +1238,10 @@ class ReleaseRunner:
         artifact = self._discover(binding, kinds)
         snapshot = ObservedSnapshot.from_discovery(artifact)
         inherited = list(settings.inherited_owners)
-        adopt, not_needed = resolve_adoptions(
-            requested, composition, snapshot, inherited, settings.field_manager
+        resolved = requested.resolve(
+            composition, snapshot, inherited, settings.field_manager
         )
+        adopt, replace = resolved.adopt, resolved.replace
         plan = build_plan(
             composition,
             snapshot,
@@ -935,6 +1251,7 @@ class ReleaseRunner:
                 adopt=adopt,
                 inherited=inherited,
                 field_manager=settings.field_manager,
+                replace=replace,
             ),
         )
         expires_at = (
@@ -951,7 +1268,8 @@ class ReleaseRunner:
             {},
             expires_at,
             _drift(composition, snapshot, settings.field_manager, adopt),
-            not_needed,
+            resolved.adopt_not_needed,
+            requested.report(resolved),
         )
         self._persist_plan(
             result,
@@ -959,6 +1277,7 @@ class ReleaseRunner:
             discovery=artifact.to_private_json(),
             adopt=adopt,
             inherited=inherited,
+            replace=replace,
         )
         return result
 
@@ -970,6 +1289,7 @@ class ReleaseRunner:
         discovery: str | None = None,
         adopt: Sequence[Mapping[str, str]] = (),
         inherited: Sequence[str] = (),
+        replace: Sequence[Mapping[str, str]] = (),
     ) -> None:
         _write_private(
             self._plan_path(result.plan_hash),
@@ -984,6 +1304,7 @@ class ReleaseRunner:
                     "discovery": discovery,
                     "adopt": list(adopt),
                     "inherited_owners": list(inherited),
+                    "replace": list(replace),
                 }
             )
             + "\n",
@@ -1072,6 +1393,7 @@ class ReleaseRunner:
                 adopt=sidecar.get("adopt", ()),
                 inherited=sidecar.get("inherited_owners", ()),
                 field_manager=archived["field_manager"],
+                replace=sidecar.get("replace", ()),
             ),
             grant,
             journal,
@@ -1105,7 +1427,11 @@ class ReleaseRunner:
                 self._check_target(catalog, binding.target)
                 record = catalog.get(name)
                 executor = PlanExecutor(
-                    binding.provider, journal, store, limits=self._limits()
+                    binding.provider,
+                    journal,
+                    store,
+                    limits=self._limits(),
+                    backups=self.backups,
                 )
                 if pending["mode"] == "create":
                     workflow = self._session_workflow(
@@ -1128,6 +1454,7 @@ class ReleaseRunner:
                         adopt=pending.get("adopt", ()),
                         inherited=pending.get("inherited_owners", ()),
                         field_manager=self.spec.model.release.field_manager,
+                        replace=pending.get("replace", ()),
                     )
                     composition = composition_from_archive(record.archive)
                     if (
@@ -1236,7 +1563,11 @@ class ReleaseRunner:
                     catalog.get(name), catalog, journal, store, binding.target
                 )
                 executor = PlanExecutor(
-                    binding.provider, journal, store, limits=self._limits()
+                    binding.provider,
+                    journal,
+                    store,
+                    limits=self._limits(),
+                    backups=self.backups,
                 )
                 try:
                     result = workflow.resume(executor, name)
@@ -1390,3 +1721,122 @@ class ReleaseRunner:
         finally:
             if journal is not None:
                 journal.close()
+
+    # -------------------------------------------------------------- secrets
+    def _secret_record(
+        self, catalog: ReleaseCatalog, name: str, release: str | None
+    ) -> tuple[ReleaseRecord, dict[str, Any], dict[str, Any]]:
+        """The release holding ``name`` (``release``, else selected, else newest)."""
+        if release is not None:
+            try:
+                record = catalog.get(release)
+            except ValueError:
+                raise ReleaseError(f"unknown release {release!r}") from None
+        else:
+            try:
+                record = catalog.selected()
+            except ValueError:
+                records = sorted(
+                    catalog.records(),
+                    key=lambda item: self._sidecar(item.name).get("created_at", ""),
+                )
+                if not records:
+                    raise SecretError(
+                        "secret-not-found", "no release has materialized secrets yet"
+                    ) from None
+                record = records[-1]
+        sidecar = self._sidecar(record.name)
+        meta = sidecar.get("secret_meta", {}).get(name)
+        if meta is None and name in sidecar.get("secrets", {}):
+            generator = self.spec.model.secrets.get(name)
+            if generator is not None:  # a release made before metadata was kept
+                meta = describe(name, generator)
+        if meta is None:
+            raise SecretError(
+                "secret-not-found",
+                f"release {record.name!r} has no secret {name!r}; declared: "
+                f"{sorted(sidecar.get('secrets', {}))}",
+            )
+        return record, sidecar, meta
+
+    def _secret_first(self, name: str, release: str) -> tuple[str, str | None]:
+        """Follow carry-over back to the release that created the value."""
+        seen: set[str] = set()
+        while release not in seen:
+            seen.add(release)
+            origin = self._sidecar(release).get("secret_origin", {}).get(name)
+            if not isinstance(origin, str) or not origin.startswith("carried:"):
+                return release, origin
+            release = origin.split(":", 1)[1]
+        return release, None
+
+    def secret_metadata(
+        self, name: str, *, release: str | None = None
+    ) -> dict[str, Any]:
+        """Public facts about one generator's value; never the value itself.
+
+        Reads only the local state directory; never contacts the cluster.
+        """
+        if not self.state.exists():
+            raise SecretError("secret-not-found", "no release state exists yet")
+        catalog = ReleaseCatalog(self.spec.catalog_path)
+        record, sidecar, meta = self._secret_record(catalog, name, release)
+        first, first_origin = self._secret_first(name, record.name)
+        return {
+            "secret": name,
+            "release": record.name,
+            "type": meta["type"],
+            "encoding": meta["encoding"],
+            "keys": sorted(key for key in meta["outputs"] if key),
+            "internal": meta.get("internal", []),
+            "origin": sidecar.get("secret_origin", {}).get(name),
+            "first_release": first,
+            "first_origin": first_origin,
+            **{
+                key: meta[key]
+                for key in ("source", "rotate", "depends_on")
+                if key in meta
+            },
+        }
+
+    def reveal_secret(
+        self, name: str, *, key: str | None = None, release: str | None = None
+    ) -> dict[str, bytes]:
+        """Decoded values of one generator's outputs (``key`` selects one).
+
+        Only for the owner's explicit reveal; the caller must never log them.
+        """
+        if not self.state.exists():
+            raise SecretError("secret-not-found", "no release state exists yet")
+        catalog = ReleaseCatalog(self.spec.catalog_path)
+        record, sidecar, meta = self._secret_record(catalog, name, release)
+        wanted: dict[str, str] = dict(meta["outputs"])
+        if key is not None:
+            selected = {k: v for k, v in wanted.items() if key in {k, v}}
+            if not selected:
+                raise SecretError(
+                    "secret-not-found",
+                    f"secret {name!r} has no key {key!r}; keys: "
+                    f"{sorted(k for k in wanted if k)}",
+                )
+            wanted = selected
+        target = PlanTarget(
+            **record.archive.to_dict()["revision"]["desired_state"]["target"]
+        )
+        store = SecretVersionStore(self.spec.secret_store_path)
+        try:
+            refs = self._stored_refs(record, sidecar, store)
+            missing = sorted(output for output in wanted.values() if output not in refs)
+            if missing:
+                raise SecretError(
+                    "secret-not-found",
+                    f"release {record.name!r} stored no value for {missing}",
+                )
+            return {
+                (k or name): decode(
+                    str(store.resolve(target, refs[output])), meta["encoding"]
+                )
+                for k, output in sorted(wanted.items())
+            }
+        finally:
+            store.close()

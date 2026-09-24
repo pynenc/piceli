@@ -1,5 +1,11 @@
 # Releases from a spec (`piceli release`)
 
+```{admonition} Maturity: preview
+:class: note
+
+`piceli release` is tested end to end against kind; options and JSON fields may still change in a minor release, with a changelog entry. See the {doc}`roadmap` for every feature's status.
+```
+
 `piceli release` deploys a composition to one namespace as a sequence of
 immutable, catalogued **releases**. It is a thin command layer over
 `ReleaseWorkflow`: every write goes through the durable deployment session,
@@ -7,22 +13,35 @@ the plan executor and its journal, so each release can be previewed, applied,
 resumed, stopped and rolled back.
 
 ```text
-piceli release plan     --spec release.toml [--rotate NAME] [--adopt Kind/name] [--out plan.json]
+piceli release plan     --spec release.toml [--rotate NAME] [OWNERSHIP…] [--out plan.json]
 piceli release preview  --spec release.toml          # alias of plan
-piceli release apply    --spec release.toml --approve <plan-hash> | --auto-approve [--adopt Kind/name]
-piceli release rollback <release|previous> --spec release.toml [--approve <hash> | --auto-approve [--adopt Kind/name]]
+piceli release apply    --spec release.toml --approve <plan-hash> | --auto-approve [OWNERSHIP…]
+piceli release rollback <release|previous> --spec release.toml [--approve <hash> | --auto-approve [OWNERSHIP…]]
 piceli release resume   --spec release.toml [--release NAME]
 piceli release stop     --spec release.toml [--release NAME]
 piceli release status   --spec release.toml
+piceli release secret show NAME --spec release.toml [--key KEY] [--release NAME] [--reveal] [--json]
 ```
+
+`OWNERSHIP…` are the planning flags that authorize taking over existing
+objects: `--adopt Kind/name`, `--adopt-all-desired` and `--replace Kind/name`
+(see [If `plan` refuses](#if-plan-refuses)).
+
+**Maturity:** `piceli release` is `preview`. Ownership transitions
+(`--adopt`, `--adopt-all-desired`, `--replace`) are `preview`: flags and JSON
+fields may still change before 1.0.
 
 JSON goes to stdout and a short summary to stderr. Exit codes: `0` success,
 `1` the execution did not become ready, `2` refused (invalid spec, identity
-mismatch, unknown or expired plan), `3` approval required.
+mismatch, unknown or expired plan), `3` approval required. A refusal with a
+stable cause also carries a `code` (for example `secret-import-unavailable`).
 
 ## The spec
 
 ```toml
+# Top-level keys come before the first [table].
+# images_from = "build.receipt.json"   # optional: images from a piceli.build-receipt.v1 receipt
+
 [target]
 kubeconfig = "release.kubeconfig"   # explicit file; KUBECONFIG and ~/.kube/config are never read
 context = "kind-release-demo"       # explicit context; current-context is never used
@@ -44,6 +63,7 @@ approval_window_seconds = 900       # plan validity and evidence age limit
 prune = false                       # delete managed objects a release drops
 # inherited_owners = ["old-owner"]  # earlier owner ids whose objects count as ours
 # adopt = ["Deployment/web", "PersistentVolumeClaim/data"]   # see "Adopting existing objects"
+# replace = ["Deployment/legacy"]   # one-off delete-and-recreate, see "Replacing an object"
 
 [execution]
 max_seconds = 300
@@ -52,7 +72,6 @@ readiness_seconds = 240
 [images]                            # pinned by digest
 web = "docker.io/library/nginx@sha256:…"
 # api = { receipt = "api.delivery.json" }  # a piceli.registry-delivery.v1 receipt
-# images_from = "build.receipt.json"   # a piceli.build-receipt.v1 receipt
 
 [secrets.api-token]
 type = "random"
@@ -63,6 +82,7 @@ type = "tls-self-signed"
 dns_names = ["web.release-demo.svc", "web"]
 days = 365
 openssl = "/usr/bin/openssl"        # absolute path; add openssl_sha256 to pin the binary
+# more types: tls-ca, template, import, static (see "Secret generators")
 
 [values]                            # free-form, passed to the composition
 greeting = "hello"
@@ -74,30 +94,152 @@ resolve from the spec's directory. A complete example lives in
 
 ### Images
 
-An image is `repository@sha256:…`, a bare `sha256:…` digest, or a table
-`{ ref = "registry/app:tag", digest = "sha256:…" }`. Tags alone are refused.
-With `images_from`, images come from `outputs.images.<name>` of a build
-receipt whose `revision` is `piceli.build-receipt.v1`; each entry has
-`image_id`, `digest` (may be null), `platform` and `ref`. The release records
-the registry digest, or the image ID when no digest exists.
+`images_from` is a **top-level** key: write it before the first `[table]`,
+never inside `[images]`.
 
-To release an image pushed with `piceli artifacts deliver --to oci://…`, point
-the image at its delivery receipt: `api = { receipt = "api.delivery.json" }`.
-The receipt's `pull_ref` (the node-side registry address pinned to the
-manifest digest) becomes the image reference, and the manifest digest becomes
-the release identity. Only receipts with result `pushed` or
-`already-present` are accepted. Add `digest = "sha256:…"` to pin the expected
-manifest digest. This chains build → delivery → release without copying
-digests by hand:
+```{admonition} Status: preview
+:class: note
+
+The immutability rule and the receipt formats below are stable. The merge
+rules for `images_from` lists and the refusal codes are new in this release
+and may still gain cases.
+```
+
+**Rule: a release only references an image by a name that no other build can
+move.** Every `ctx.image(name)` is one of:
+
+- `repository@sha256:<manifest digest>`: declared by hand, from a build
+  receipt that recorded a manifest digest, or the `pull_ref` of a
+  registry-delivery receipt; or
+- `repository:sha256-<hex>`: a **content tag**, accepted only from a
+  node-delivery receipt that proves the node holds that exact config digest
+  under that name. `<hex>` is a prefix (12 to 64 characters) of the config
+  digest, so the name can only ever point at this image.
+
+A plain tag (`app:dev`, `app:1.4.2`, `latest`) is never used. When nothing
+immutable is known, `ctx.image(name)` refuses with `image-not-immutable`; the
+image's `identity` is still available.
+
+Image sources:
+
+| Declared as | Reference | Release identity |
+| --- | --- | --- |
+| `web = "repo@sha256:…"`, or `{ ref = "repo:tag", digest = "sha256:…" }` | `repo@digest` | the digest |
+| a bare `"sha256:…"` | none (`identity` only) | the digest |
+| `images_from`: build receipt entry with a `digest` | `repo@digest` | the digest |
+| `images_from`: build receipt entry with `digest: null` | **refused** (`image-not-immutable`) until a delivery receipt replaces it | `image_id` |
+| `{ receipt = "…" }` or `images_from`: `piceli.registry-delivery.v1` | its `pull_ref` (`<node registry>/<repo>@<manifest digest>`) | the manifest digest |
+| `{ receipt = "…" }` or `images_from`: `piceli.node-delivery.v1` | its node `image.reference`, which must be a content tag | the config digest |
+
+A build receipt (`revision = "piceli.build-receipt.v1"`, from
+`piceli artifacts build-spec run`) lists `outputs.images.<name>` with
+`image_id` (the config digest with Docker's classic store), `digest` (the
+manifest digest, or `null` with the classic store), `platform` and `ref`.
+With the classic store, which keeps no manifest, the build alone cannot name
+an immutable reference: deliver the image first.
+
+Delivery receipts are accepted only when the delivery succeeded: result
+`pushed` or `already-present` for a registry delivery, `imported` or
+`already-present` for a node import. In `[images.<name>]`, `digest` pins the
+expected **manifest** digest of a registry receipt, or the expected **config**
+digest of a node receipt.
+
+#### `images_from` with several receipts
+
+`images_from` takes one receipt or a list. A list merges build and delivery
+receipts, in any order:
+
+1. Build receipts name the images. A name in two build receipts is refused
+   (`image-declared-twice`).
+2. Each delivery receipt replaces every built image with the same config
+   digest (for a containerd-store build, a registry delivery may instead
+   match the build's manifest digest). A delivery that matches no built image
+   is refused (`receipt-unmatched`); a delivery receipt carries no image name,
+   so use `[images.<name>] receipt = …` to release it without a build
+   receipt.
+3. An image delivered by two listed receipts is refused
+   (`image-declared-twice`).
+
+A name in both `[images]` and `images_from` is refused, with one exception:
+`[images.<name>] receipt = "…"` may replace a built image of that name. Its
+config digest must be the built image's, otherwise the spec is refused
+(`image-digest-mismatch`).
+
+```toml
+images_from = ["build.receipt.json", "api.delivery.json", "worker.node.json"]
+
+# or name a delivery explicitly (it must match the built "api"):
+# images_from = "build.receipt.json"
+# [images.api]
+# receipt = "api.delivery.json"
+```
+
+#### Refusal codes
+
+A refused spec exits with `2` and prints
+`{"state": "refused", "code": "…", "reason": "…"}`. The image codes are fixed
+words (`piceli.k8s.release_spec.ImageHandoffError.code`):
+
+| Code | Meaning | Fix |
+| --- | --- | --- |
+| `image-not-immutable` | The only name for the image is a tag that can move: a build receipt without a manifest digest, a node reference that is not a content tag, or a `pull_ref` not pinned to its manifest digest | Deliver to a registry, or node-import with `--ref <repo>:sha256-<12 hex>` (the error prints the exact tag) |
+| `receipt-invalid` | Unreadable JSON, an unknown schema or revision, or invalid digests | Pass the receipt the command wrote |
+| `delivery-not-succeeded` | The receipt records a rejected or failed delivery | Deliver again |
+| `image-digest-mismatch` | The delivery is of another image than the build of that name, or than the pinned `digest` | Deliver the image that was built, or update the pin |
+| `image-declared-twice` | One name from two sources (see the merge rules) | Keep one |
+| `receipt-unmatched` | A listed delivery receipt matches no built image | Add its build receipt, or name it with `[images.<name>] receipt` |
+
+#### Build → deliver → release
 
 ```bash
 piceli artifacts build-spec run --spec build.toml --approve-builder sha256:… --out build.receipt.json
 piceli artifacts deliver --image <image_id> --approve-digest <image_id> \
-  --to oci://127.0.0.1:15000/app/api:r1 --node-registry 127.0.0.1:5000 \
+  --to oci://127.0.0.1:15000/app/api --node-registry 127.0.0.1:5000 \
   --via-forward deployment/registry --namespace my-app --kubeconfig kc --context ctx \
-  --kubectl /usr/local/bin/kubectl --kubectl-sha256 sha256:… \
   --receipt api.delivery.json
+# release.toml: images_from = ["build.receipt.json", "api.delivery.json"]
 piceli release plan --spec release.toml
+```
+
+For node import, name the image by its content tag, which
+`piceli.k8s.release_spec.content_tag(config_digest)` also computes:
+
+```bash
+ID=$(docker image inspect --format '{{.Id}}' app/api:dev)   # classic store: the config digest
+piceli artifacts deliver --image "$ID" --approve-digest "$ID" \
+  --ref "app/api:sha256-${ID:7:12}" \
+  --to 'ssh://ops@node-1.example?runtime=k3s-containerd' --receipt api.node.json
+```
+
+A content-tag image is not pulled, so leave `imagePullPolicy` at its default
+(`IfNotPresent`) or set `Never`, and pin the workload to the node that holds it.
+
+#### Two images, one change
+
+`examples/two-images/` releases two small images from a node-local registry
+({doc}`node_local_registry`). `registry.toml` installs the registry as its own
+release; `release.toml` releases one Deployment per image from the two
+registry-delivery receipts:
+
+```{literalinclude} ../examples/two-images/composition.py
+:language: python
+:start-at: "def build"
+```
+
+Rebuilding and re-delivering one image changes one receipt, so the next plan
+differs in exactly one desired manifest, and only that Deployment rolls out.
+The opt-in test `tests/integration/test_two_images_kind.py` runs the whole
+flow on kind (see its docstring). Verified on kind v0.29.0 (Kubernetes
+v1.33.1): after `alpha` was rebuilt and re-delivered (2 blobs uploaded, the
+shared base layer skipped), `alpha` went to generation 2 with the new digest
+and `beta` stayed at generation 1.
+
+```{note}
+The plan summary still lists an unchanged Deployment as `apply`, not
+`no-op`: the planner compares the desired manifest with the live object
+including server defaults. Applying it changes nothing (no new generation,
+no rollout). Compare `artifact_digest` of the plan actions to see which
+desired manifests changed.
 ```
 
 ### The composition function
@@ -127,21 +269,34 @@ def build(ctx: ReleaseContext) -> DeploymentComposition:
 `ctx` carries `namespace`, `images` (use `ctx.image(name)` for the pull
 reference), `values`, verified `nodes` and opaque `secrets` references.
 Secret values never reach the function. Every declared secret input must be
-bound. Resources must be namespaced and in the target namespace.
+bound, except outputs that a `template` generator uses. Resources must be
+namespaced and in the target namespace.
 
 ### Secret generators
 
-Generators run when a release is created. `random` produces
-`token_urlsafe(bytes)`; `tls-self-signed` produces an RSA key and a
-self-signed certificate for the given DNS names and IPs by calling the pinned
-`openssl` with an explicit argv. Inputs are named `<name>` (random) and
-`<name>.crt` / `<name>.key` (TLS). `encoding = "base64"` (default) fits
-`Secret.data`; `"raw"` fits `stringData`.
+The how-to {doc}`secrets` covers every generator with examples, `secret
+show`, rotation and the error codes. In short:
 
-Values are stored once per release in the private `SecretVersionStore`. A new
-release **carries over** the previous release's values unless the generator's
-settings changed or you pass `--rotate NAME`. Rotation always creates a new
-release.
+| `type` | Settings | Outputs |
+| --- | --- | --- |
+| `random` | `bytes` (16–512, default 32) | `<name>` |
+| `tls-self-signed` | `dns_names`, `ip_addresses`, `days`, `rsa_bits`, `openssl`, `openssl_sha256` | `<name>.crt`, `<name>.key` |
+| `tls-ca` | `leaves = {leaf = {dns_names, ip_addresses}}` (or `leaf = [dns names]`), `common_name`, `ca_days`, `days`, `rsa_bits`, `openssl`, `openssl_sha256` | `<name>.ca.crt`, `<name>.<leaf>.crt`, `<name>.<leaf>.key`; `<name>.ca.key` is internal |
+| `template` | `template` with `{output}` / `{secret:output}` placeholders, `{{`/`}}` for braces | `<name>` |
+| `import` | exactly one of `file`, `env`, `secret = {name, key}`; `trim_newline` (default true, file/env), `rotate` (`random` or `reimport`), `bytes` | `<name>` |
+| `static` | `value` (public) | `<name>` |
+
+All take `encoding = "base64"` (default, fits `Secret.data`) or `"raw"`
+(fits `stringData`; UTF-8 text only). Certificates come from the pinned
+`openssl` called with an explicit argv, never a shell.
+
+Values are produced only after the plan and its grant validate, so a refused
+plan generates, imports and stores nothing. They are stored once per release
+in the private `SecretVersionStore`. A new release **carries over** the
+previous release's values unless the generator's settings changed or you pass
+`--rotate NAME` (rotation always creates a new release; templates are
+re-rendered from their inputs). An imported value is the first version, is
+carried over like the others and is rotatable with `--rotate`.
 
 Secrets are retained objects: Piceli never rewrites or deletes an existing
 Secret, so a rotated value must go into a **new** Secret. Put a generation in
@@ -229,13 +384,15 @@ apply web-06c982ec7fe9: ready
 ```
 
 * **Retained objects** (PVC, Secret, or `piceli.io/retained: "true"`) are
-  adopted **metadata-only**: Piceli writes only its owner annotation, never
-  spec or data, and only when the live object already contains everything the
-  composition declares for it (labels and annotations included). Declare a
-  PVC with the same spec as the live claim; declare an existing Secret without
-  `data` to adopt it and keep its value. A different declared value is refused
-  before any write. A retained object of an `inherited_owners` id can be
-  adopted the same way; its owner annotation is re-stamped.
+  adopted **metadata-only**: one merge patch writes Piceli's owner annotation
+  and the labels and annotations the composition declares that differ from
+  the live object (listed as `metadata_changes`), never spec or data, and
+  only when the live object already contains everything else the composition
+  declares for it. Keys are set, never removed. Declare a PVC with the same
+  spec as the live claim; declare an existing Secret without `data` to adopt
+  it and keep its value. A different declared spec or value is refused before
+  any write. A retained object of an `inherited_owners` id can be adopted the
+  same way; its owner annotation is re-stamped.
 * **Everything else** is adopted by a **takeover**, which makes the
   composition the object's full desired state. Every field written by a
   client (`kubectl-client-side-apply`, `kubectl-create`, `kubectl-set`,
@@ -265,12 +422,173 @@ apply web-06c982ec7fe9: ready
   persists nothing.
 
 The `apply` JSON lists `adopted` objects with `mode`, `previous_owner`,
-`transferred_managers` and `completed_transfer`; the journal records the same.
+`transferred_managers`, `completed_transfer` and `metadata_changes`; the
+journal records the same. Replaced objects appear there with `mode: replace`
+and their backup file.
 Rolling back to an earlier release re-applies its archived composition as
 usual; adopted retained objects and their data are never touched by a
 rollback. If a takeover is interrupted, the apply ends `blocked` and `resume`
 converges it. A takeover that was approved with a different transfer list
 (for example by an older Piceli) cannot be resumed; plan again with `--adopt`.
+
+### Adopting everything the composition declares
+
+`--adopt-all-desired` authorizes adopting **every** existing unmanaged object
+the composition declares, and nothing else: objects that are not in the
+composition are never touched, and objects named by `--replace` are replaced
+instead. The plan still lists each adoption with its mode, and the
+`authorized` field of the plan JSON names every adopted and replaced object,
+all bound to the plan hash you approve. Retained objects are still adopted
+metadata-only. It is a planning flag only; there is no spec equivalent, so a
+later plan never adopts new objects silently.
+
+```console
+$ piceli release plan --spec release.toml --adopt-all-desired --replace Deployment/web
+release shop-8eebc4a5b6fb (create, apply): 2 adopt, 1 apply, 1 replace
+    adopt PersistentVolumeClaim/cache  [metadata-only: owner annotation and labels/app.kubernetes.io/part-of; previous owner: none]
+    apply PersistentVolumeClaim/state  [retained, metadata-only: sets labels/app.kubernetes.io/part-of; spec and data untouched]
+  replace Deployment/web  [DELETES uid 86d938d2-… and recreates it from the release; backup written first; dependents: deleted]
+    adopt Service/web  [takeover: transfers field managers: kubectl-client-side-apply; fields they own that the release does not declare will be REMOVED; previous owner: none]
+plan hash: c354b73f…1e280c (valid until 2026-09-24T20:47:52+00:00)
+```
+
+### Metadata changes on retained objects
+
+A retained object that this release already manages (its own owner id, or an
+id in `inherited_owners`) is never rewritten. When the only difference from
+the composition is in labels or annotations, the plan shows an `apply` marked
+`metadata_only` and the executor writes exactly those keys, plus Piceli's
+owner and operation annotations, with one merge patch guarded by the observed
+UID and resourceVersion. Spec and data are never sent, and the object is
+re-stamped with this release's owner. This covers the common migration case of
+a volume claim created by a retired tool: list the tool's owner id in
+`inherited_owners` and add your labels in the composition. A difference in
+spec or data refuses the plan with `retained-content-differs`.
+
+### Replacing an object (delete and recreate)
+
+Some objects cannot be adopted into the desired state: a Deployment whose
+`spec.selector` (immutable) must change, or a Service whose type change the
+API rejects. `--replace Kind/name` (repeatable; or `[release] replace`)
+authorizes deleting such an object and creating it from the release. Every
+replace needs its own explicit entry; there is no "replace all".
+
+Replace is allowed only for objects that are **unmanaged**, **not retained**
+and **not owned by another object** (`ownerReferences`). It is refused, before
+any write, for:
+
+* retained kinds and objects (Namespace, PersistentVolume, PVC, Secret,
+  `piceli.io/retained: "true"`): adopt them instead;
+* objects already managed by this release (including inherited owners): the
+  release already updates them;
+* objects owned by another object, and workloads whose retained dependents a
+  background delete would remove.
+
+What `apply` does for each replaced object:
+
+1. re-checks the live object against the planned evidence (UID,
+   resourceVersion, field managers, content) and sends a `dryRun` delete;
+2. writes a **backup**: the live object as JSON, cleaned so that
+   `kubectl create -f` accepts it (no `status`, `uid`, `resourceVersion`,
+   `managedFields`, `creationTimestamp`, `generation`), to
+   `<state_dir>/backups/<execution-id>/<n>-<Kind>-<name>.json` with mode
+   `0600` in `0700` directories. The journal records its path and SHA-256
+   together with the intent, before the delete;
+3. deletes the object with UID and resourceVersion preconditions. Workload
+   controllers (Deployment, ReplicaSet, DaemonSet, Job, CronJob) are deleted
+   with `propagationPolicy=Background`, so their old pods go too: expect a
+   short downtime. Everything else, including StatefulSets (so a PVC
+   retention policy can never delete claims), uses `Orphan`;
+4. waits until the object is gone and creates it from the release with
+   Piceli's owner annotation.
+
+The apply output names the backup:
+
+```console
+  replaced Deployment/web (deleted uid 86d938d2-…; backup: .piceli-release/backups/9669…/0002-Deployment-web.json; to restore the previous object: kubectl delete Deployment/web, then kubectl create -f .piceli-release/backups/9669…/0002-Deployment-web.json)
+```
+
+**Recovery and rollback.** A replace is not undone automatically:
+compensation and `rollback` never delete a replaced object or restore its
+backup. `rollback previous` re-applies an earlier release as usual, which
+updates the recreated object like any managed object. To go back to the
+object as it was before Piceli, restore the backup by hand:
+
+```bash
+kubectl delete deployment web
+kubectl create -f .piceli-release/backups/<execution>/<n>-Deployment-web.json
+```
+
+If the apply stops after the delete (the create failed, the process was
+interrupted, the object took too long to disappear), the execution is
+`blocked`, the backup is on disk and the journal records the step reached.
+`piceli release resume` finishes the create for a created release; for a
+re-apply, plan and apply again (the object is now absent and is simply
+created). If someone else created an object with the same name in between,
+the resume stops with `replace-recreated-by-another-writer` instead of
+touching it.
+
+## If `plan` refuses
+
+A plan that meets objects it may not change refuses with exit code `2` and
+lists **every** blocking object at once, each with the flags that would
+unblock it, in the JSON `blocking` array and on stderr:
+
+```console
+$ piceli release plan --spec release.toml
+refused: existing objects are not managed by this release's owner: Deployment/web (--adopt Deployment/web or --replace Deployment/web), PersistentVolumeClaim/cache (--adopt PersistentVolumeClaim/cache), Service/web (--adopt Service/web or --replace Service/web); …
+  blocking Deployment/web: exists and is not managed by this release's owner -> --adopt Deployment/web or --replace Deployment/web
+  blocking PersistentVolumeClaim/cache: exists and is not managed by this release's owner; retained: replace is never allowed -> --adopt PersistentVolumeClaim/cache
+  blocking Service/web: exists and is not managed by this release's owner -> --adopt Service/web or --replace Service/web
+```
+
+Choosing between adopt and replace:
+
+| Situation | Use | Effect |
+| --- | --- | --- |
+| The live object can become the composition's object by an update | `--adopt Kind/name` | Takeover: field ownership moves to Piceli and fields the composition does not declare are removed. No downtime, same UID. |
+| Adopt everything the composition declares, after reviewing the list | `--adopt-all-desired` | The same takeover for each unmanaged declared object; retained ones metadata-only. |
+| A volume claim, Secret or other retained object | `--adopt Kind/name` (never replace) | Metadata-only: owner annotation and declared labels/annotations; the spec/data must already match. |
+| An immutable field must change (selector, Service `clusterIP`…), or an adoption fails with `invalid-request` | `--replace Kind/name` | Backup, delete, create. New UID; workload pods restart. |
+| The object is not yours to change | neither | Rename the object in the composition, or remove it from the composition. |
+
+Refusal codes (`code` in the JSON, also per object in `blocking[].code`):
+
+| Code | Cause | Fix |
+| --- | --- | --- |
+| `resource-requires-adoption` | An object the composition declares exists without this release's owner. | `--adopt` or `--replace` it (see `suggest`), `--adopt-all-desired`, or delete it. |
+| `replace-refused` | `--replace` names a retained object, an object already managed, or one owned by another object. | Adopt a retained object instead; remove managed objects from the replace list (`[release] replace` is for a one-off migration). |
+| `retained-content-differs` | A retained object's spec or data differ from the composition; only labels and annotations may change. | Make the composition match the live object (or create a new object under a new name). |
+| `adopt-and-replace` | The same object is named by an adopt and a replace entry. | Keep one. |
+| `adopt-entry-not-declared`, `replace-entry-not-declared` | An entry does not name exactly one resource the composition declares. | Fix the `Kind/name` (or use `apiVersion/Kind/name`). |
+| `plan-blocked` | Several of the above at once. | See each `blocking[].code`. |
+
+Other refusals:
+
+| The reason says | What to do |
+| --- | --- |
+| `discovery is incomplete, refusing to plan (…)` | Each item names a resource type and a code: `rbac-denied` (grant list/get on it to the spec's identity), `limit-exceeded` (raise `[discovery]` limits), `api-unavailable` or `deadline-exceeded` (retry). |
+| `cluster identity differs from the one recorded in this state directory` | The kubeconfig/context points at another cluster than the one this `state_dir` deployed to. Fix `[target]`; never reuse a `state_dir` across clusters. |
+| `cannot rotate undeclared secrets: …` | `--rotate` names must be `[secrets.<name>]` entries of the spec. |
+| `invalid release spec: …` | Fix the named key. `images_from` is a top-level key (before the first `[table]`), not part of `[images]`. |
+| A single code such as `rbac-denied` or `server-target-identity-mismatch` | Run `piceli explain <code>`, or see {doc}`reference/errors`. |
+
+`apply --approve HASH` refuses a hash that is unknown, expired or already
+applied (`no pending plan with this hash`): run `plan` again and approve the
+new hash. Any code can be looked up with `piceli explain <code>` or in
+{doc}`reference/errors`.
+
+Execution failures of these paths (`failure_category` of `apply`):
+
+| Category | Cause | Fix |
+| --- | --- | --- |
+| `replace-precondition-failed` | At apply time the object is managed, retained or owned by another object, or no backup directory is available. Nothing was deleted. | Plan again. |
+| `replace-backup-failed` | The backup could not be written (permissions, disk). Nothing was deleted. | Fix the state directory, plan again. |
+| `replace-delete-timeout` | The deleted object was still present after `readiness_seconds` (finalizers). Execution `blocked`. | Inspect the finalizers, then `resume` or plan again. |
+| `replace-recreated-by-another-writer` | Another client created an object with the same name after the delete. Execution `blocked`; the object is not touched. | Decide which object to keep; the backup holds the deleted one. |
+| `replace-delete-not-observed` | On resume, the original object is still there although the journal recorded its delete. Execution `blocked`. | Inspect the object, then plan again. |
+| `invalid-metadata-change` | A metadata-only write was asked to set a non-string value or Piceli's own annotations. | Fix the composition's labels/annotations. |
+| `retained-content-precondition-failed` | A retained object's content (for example a private Secret value) differs from the composition at apply time. Nothing was written. | Use a new object name (see "Secret generators"). |
 
 ## Rollback
 
@@ -301,10 +619,12 @@ did not become ready, the last ready release itself.
 * A state directory serves one cluster and namespace: releases record the
   kube-system UID, and a later run against another cluster is refused.
 * Objects are owned by exact `owner` match. Objects created by other tools are
-  unmanaged; planning them fails until they are adopted explicitly
-  (`--adopt` / `[release] adopt`). A takeover transfers field ownership and
-  applies without force; retained objects are adopted by an owner-annotation
-  change only.
+  unmanaged; planning them fails until they are adopted or replaced
+  explicitly (`--adopt`, `--adopt-all-desired`, `--replace`). A takeover
+  transfers field ownership and applies without force; retained objects are
+  only ever changed in metadata (owner annotation, declared labels and
+  annotations) and are never deleted or replaced. A replace writes a
+  restorable backup before a delete guarded by UID and resourceVersion.
 * Plans, discovery evidence and secrets stay in the private state directory
   (owner-only). Reports and the catalog contain opaque references only.
 
@@ -314,14 +634,18 @@ did not become ready, the last ready release itself.
    hard-coded images with `ctx.image(...)` and inline secret values with
    `ResourceIntent.with_secret(pointer, ctx.secret(name))`.
 2. Declare the target, identities, images (or `images_from`) and generators in
-   `release.toml`, and delete the script's password and certificate code. The
-   first release generates fresh values; importing existing values is not
-   supported yet, so plan a rotation window for anything clients cache.
+   `release.toml`, and delete the script's password, certificate and
+   config-file code: `tls-ca` replaces hand-made certificates and `template`
+   replaces init-container scripts that write DSNs or config files. To keep a
+   service with existing data working, `import` the values it already uses
+   (from a live Secret, a file or an environment variable); see
+   {doc}`secrets`.
 3. Ownership: objects that already carry `piceli.io/owner` are managed if you
    keep that owner or list it in `release.inherited_owners`. Objects created
-   by plain `kubectl` are unmanaged and planning refuses them until you adopt
-   them with `--adopt Kind/name` (see
-   [Adopting existing objects](#adopting-existing-objects)).
+   by plain `kubectl` are unmanaged and planning refuses them, listing each
+   one, until you adopt them (`--adopt Kind/name` or `--adopt-all-desired`)
+   or replace them (`--replace Kind/name`); see
+   [If `plan` refuses](#if-plan-refuses).
 4. Replace `kubectl apply`, hand-written rollout waits and state files with
    `plan`/`apply`, and ad-hoc rollback with `rollback previous`. Keep the
    state directory: it is the release history, and the secret store holds

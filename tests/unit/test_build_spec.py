@@ -5,11 +5,13 @@ Set ``PICELI_DOCKER_TESTS=1`` to also run the real ``rust-hello`` example.
 """
 
 import argparse
+import dataclasses
 import hashlib
 import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import time
 import tomllib
@@ -47,6 +49,9 @@ class FakeDocker:
         self.environments: list[dict[str, str]] = []
         self.images: dict[str, dict[str, Any]] = {}
         self.on_build: Any = None
+        self.smoke_exit = 0
+        self.smoke_state = "succeeded"
+        self.salt = ""
 
     def __call__(
         self,
@@ -55,11 +60,29 @@ class FakeDocker:
         limits: ProcessLimits,
         environment: dict[str, str],
         expires_at: float | None,
+        /,
+        *,
+        on_output: Any = None,
     ) -> tuple[dict[str, Any], bytes, bytes]:
         self.calls.append(argv)
         self.environments.append(environment)
         ok = {"state": "succeeded", "exit_code": 0, "seconds": 0.01}
         command = argv[1:]
+        if command[:1] == ["tag"]:
+            self.images[command[2]] = self.images[command[1]]
+            return ok, b"", b""
+        if command[:2] == ["image", "rm"]:
+            self.images.pop(command[-1], None)
+            return ok, b"", b""
+        if command[:1] == ["rm"]:
+            return ok, b"", b""
+        if command[:1] == ["run"]:
+            if on_output is not None:
+                on_output("stdout", b"self-test output\n")
+            state = self.smoke_state
+            if state == "succeeded" and self.smoke_exit:
+                state = "failed"
+            return {**ok, "state": state, "exit_code": self.smoke_exit}, b"", b""
         if command[:2] == ["buildx", "version"]:
             return ok, b"github.com/docker/buildx v0.99.0 fake\n", b""
         if command[:2] == ["context", "show"]:
@@ -74,7 +97,12 @@ class FakeDocker:
         assert command[:2] == ["buildx", "build"], argv
         if self.on_build is not None:
             self.on_build()
+        if on_output is not None:
+            on_output("stderr", b"#1 [internal] load build definition\n#1 DONE")
+            on_output("stderr", b" 0.0s\n")
         if self.fail is not None and self.fail in " ".join(argv):
+            if on_output is not None:
+                on_output("stderr", b"secret-token-in-log /private/path")
             return (
                 {**ok, "state": "failed", "exit_code": 1},
                 b"",
@@ -83,7 +111,7 @@ class FakeDocker:
         option = dict(zip(command, [*command[1:], ""], strict=False))
         platform = option["--platform"]
         dockerfile = Path(option["--file"]).read_text()
-        seed = hashlib.sha256((dockerfile + platform).encode()).hexdigest()
+        seed = hashlib.sha256((dockerfile + platform + self.salt).encode()).hexdigest()
         metadata: dict[str, Any] = {
             "containerimage.buildinfo": {
                 "sources": [
@@ -515,8 +543,8 @@ def test_undeclared_or_missing_outputs_rejected(
     spec = make_spec(tmp_path)
 
     class Extra(FakeDocker):
-        def __call__(self, argv, cwd, limits, environment, expires_at):  # type: ignore[no-untyped-def]
-            result = super().__call__(argv, cwd, limits, environment, expires_at)
+        def __call__(self, argv, cwd, limits, environment, expires_at, **kw):  # type: ignore[no-untyped-def]
+            result = super().__call__(argv, cwd, limits, environment, expires_at, **kw)
             if "--output" in argv:
                 dest = argv[argv.index("--output") + 1].split("dest=", 1)[1]
                 Path(dest, "surprise").write_text("x")
@@ -527,8 +555,8 @@ def test_undeclared_or_missing_outputs_rejected(
     assert extra.value.code == "output-invalid"
 
     class Missing(FakeDocker):
-        def __call__(self, argv, cwd, limits, environment, expires_at):  # type: ignore[no-untyped-def]
-            result = super().__call__(argv, cwd, limits, environment, expires_at)
+        def __call__(self, argv, cwd, limits, environment, expires_at, **kw):  # type: ignore[no-untyped-def]
+            result = super().__call__(argv, cwd, limits, environment, expires_at, **kw)
             if "--output" in argv:
                 dest = argv[argv.index("--output") + 1].split("dest=", 1)[1]
                 Path(dest, "bin/svc").unlink()
@@ -545,8 +573,8 @@ def test_loaded_image_must_match_platform(
     spec = make_spec(tmp_path)
 
     class Wrong(FakeDocker):
-        def __call__(self, argv, cwd, limits, environment, expires_at):  # type: ignore[no-untyped-def]
-            result = super().__call__(argv, cwd, limits, environment, expires_at)
+        def __call__(self, argv, cwd, limits, environment, expires_at, **kw):  # type: ignore[no-untyped-def]
+            result = super().__call__(argv, cwd, limits, environment, expires_at, **kw)
             for image in self.images.values():
                 image["Architecture"] = "amd64"
             return result
@@ -563,10 +591,10 @@ def test_context_change_between_plan_and_staging(
     fake = FakeDocker()
     original = fake.__call__
 
-    def runner(argv, cwd, limits, environment, expires_at):  # type: ignore[no-untyped-def]
+    def runner(argv, cwd, limits, environment, expires_at, **kw):  # type: ignore[no-untyped-def]
         if argv[1:3] == ["buildx", "version"]:
             (tmp_path / "project/src/main.rs").write_text("changed\n")
-        return original(argv, cwd, limits, environment, expires_at)
+        return original(argv, cwd, limits, environment, expires_at, **kw)
 
     with pytest.raises(BuildSpecError) as error:
         spec.run(grant(), tmp_path / "o", docker=docker_tool, runner=runner)
@@ -622,15 +650,75 @@ def test_receipt_records_source_identities(
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
-def test_source_changed_during_build_fails(
+def test_unrelated_file_changed_during_build_is_provenance_only(
     tmp_path: Path, docker_tool: DockerTool
 ) -> None:
     spec = sourced(tmp_path)
     fake = FakeDocker()
     fake.on_build = lambda: (tmp_path / "project/README.md").write_text("drift\n")
+    receipt = spec.run(
+        grant(), tmp_path / "dist", docker=docker_tool, runner=fake
+    ).to_dict()
+    # The receipt keeps the identity from the start and records the move.
+    [source] = receipt["sources"]
+    assert source["dirty"] is False
+    assert receipt["sources_changed_during_build"] == ["app"]
+    assert (tmp_path / "dist/bin/svc").is_file()
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+def test_staged_file_changed_during_build_fails(
+    tmp_path: Path, docker_tool: DockerTool
+) -> None:
+    spec = sourced(tmp_path)
+    fake = FakeDocker()
+    fake.on_build = lambda: (tmp_path / "project/src/main.rs").write_text("x\n")
     with pytest.raises(BuildSpecError) as error:
         spec.run(grant(), tmp_path / "dist", docker=docker_tool, runner=fake)
-    assert error.value.code == "source-drift"
+    assert error.value.code == "context-changed"
+    assert not (tmp_path / "dist/bin/svc").exists()
+
+
+def test_staged_file_change_fails_without_sources(
+    tmp_path: Path, docker_tool: DockerTool
+) -> None:
+    spec = make_spec(tmp_path)
+    fake = FakeDocker()
+    fake.on_build = lambda: (tmp_path / "project/Cargo.lock").chmod(0o755)
+    with pytest.raises(BuildSpecError) as error:
+        spec.run(grant(), tmp_path / "o", docker=docker_tool, runner=fake)
+    assert error.value.code == "context-changed"
+
+
+def test_unstaged_files_in_context_directory_may_change(
+    tmp_path: Path, docker_tool: DockerTool
+) -> None:
+    spec = make_spec(tmp_path)
+    fake = FakeDocker()
+
+    def edit() -> None:
+        (tmp_path / "project/README.md").write_text("new\n")
+        (tmp_path / "project/src/extra.rs").write_text("// not staged\n")
+
+    fake.on_build = edit
+    receipt = spec.run(grant(), tmp_path / "o", docker=docker_tool, runner=fake)
+    assert receipt.to_dict()["sources_changed_during_build"] == []
+
+
+def test_spec_file_change_during_build_fails(
+    tmp_path: Path, docker_tool: DockerTool
+) -> None:
+    path = write_spec(tmp_path)
+    spec = BuildSpec.from_toml(path)
+    fake = FakeDocker()
+    original = path.read_text()
+    # A comment is not a change to the declaration; a new tag is.
+    fake.on_build = lambda: path.write_text(original + "\n# note\n")
+    spec.run(grant(), tmp_path / "a", docker=docker_tool, runner=fake)
+    fake.on_build = lambda: path.write_text(original.replace('"dev"', '"other"'))
+    with pytest.raises(BuildSpecError) as error:
+        spec.run(grant(), tmp_path / "b", docker=docker_tool, runner=fake)
+    assert error.value.code == "spec-changed"
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
@@ -873,9 +961,258 @@ def test_cli_build_failure_exit_code(
     )
     error = capsys.readouterr().err
     assert code == 1
-    body = json.loads(error)
+    *progress, last = error.splitlines()
+    assert progress == [
+        "[piceli] 1/2 linux/arm64 files: running",
+        "[piceli] 1/2 linux/arm64 files: failed in 0.01s",
+    ]
+    body = json.loads(last)
     assert body["state"] == "failed" and body["reason"] == "build-failed"
     assert "secret-token" not in error and str(tmp_path) not in error
+
+
+# --- build log, tag templates, smoke ----------------------------------------------
+
+
+def image_doc(**image: Any) -> dict[str, Any]:
+    doc = document()
+    doc["output"]["image"][0].update(image)
+    return doc
+
+
+def test_log_streams_during_the_build_and_never_reaches_receipt(
+    tmp_path: Path, docker_tool: DockerTool
+) -> None:
+    spec = make_spec(tmp_path)
+    log = tmp_path / "logs" / "build.log"
+    fake = FakeDocker()
+    seen: list[bytes] = []
+    fake.on_build = lambda: seen.append(log.read_bytes())
+    progress: list[str] = []
+    raw: list[bytes] = []
+    receipt = spec.run(
+        grant(),
+        tmp_path / "o",
+        docker=docker_tool,
+        runner=fake,
+        log=log,
+        progress=progress.append,
+        raw_output=raw.append,
+    )
+    # While the second build step runs, the first step's output is on disk.
+    assert b"### linux/arm64 files started" in seen[0]
+    assert b"### linux/arm64 files succeeded" in seen[1]
+    assert b"#1 DONE 0.0s\n" in seen[1]
+    assert stat.S_IMODE(log.stat().st_mode) == 0o600
+    assert progress == [
+        "[piceli] 1/2 linux/arm64 files: running",
+        "[piceli] 1/2 linux/arm64 files: succeeded in 0.01s",
+        "[piceli] 2/2 linux/arm64 image:svc: running",
+        "[piceli] 2/2 linux/arm64 image:svc: succeeded in 0.01s",
+        "[piceli] drift check: 3 staged file(s) unchanged",
+    ]
+    assert b"".join(raw).count(b"#1 DONE") == 2
+    assert "load build definition" not in receipt.to_json()
+
+
+def test_cli_progress_modes(
+    tmp_path: Path, capfd: pytest.CaptureFixture[str], docker_tool: DockerTool
+) -> None:
+    spec = write_spec(tmp_path)
+    for mode, expect_progress, expect_raw in (
+        ("quiet", False, False),
+        ("steps", True, False),
+        ("plain", True, True),
+    ):
+        code = run_build_spec_command(
+            parse(
+                "run",
+                "--spec",
+                str(spec),
+                "--approve-builder",
+                BUILDER,
+                "--out",
+                str(tmp_path / mode / "r.json"),
+                "--progress",
+                mode,
+            ),
+            runner=FakeDocker(),
+            docker=docker_tool,
+        )
+        err = capfd.readouterr().err
+        assert code == 0
+        assert ("[piceli] 1/2" in err) is expect_progress
+        assert ("load build definition" in err) is expect_raw
+
+
+def test_tag_template_resolves_from_image_id(
+    tmp_path: Path, docker_tool: DockerTool
+) -> None:
+    project(tmp_path)
+    spec = BuildSpec.from_dict(image_doc(tag="dev-{image_id:12}"), tmp_path)
+    plan = spec.plan()
+    assert plan.preview()["outputs"]["images"] == {
+        "svc": ["example/svc:dev-{image_id:12}"]
+    }
+    [argv] = [item["argv"] for item in plan.invocations if item["kind"] == "image:svc"]
+    assert "example/svc:piceli-pending-<nonce>" in argv
+    fake = FakeDocker()
+    first = spec.run(grant(), tmp_path / "a", docker=docker_tool, runner=fake)
+    image = first.images["svc"]
+    assert image["ref"] == f"example/svc:dev-{image['image_id'][7:19]}"
+    assert not any(ref.startswith("example/svc:piceli-pending-") for ref in fake.images)
+    # Different content gives a different tag; both images stay addressable.
+    fake.salt = "changed"
+    second = spec.run(grant(), tmp_path / "b", docker=docker_tool, runner=fake)
+    other = second.images["svc"]
+    assert other["ref"] != image["ref"]
+    assert fake.images[image["ref"]]["Id"] == image["image_id"]
+    assert fake.images[other["ref"]]["Id"] == other["image_id"]
+
+
+def test_tag_template_multi_platform_and_full_width(
+    tmp_path: Path, docker_tool: DockerTool
+) -> None:
+    project(tmp_path)
+    doc = image_doc(tag="{image_id}")
+    doc["build"]["platforms"] = ["linux/arm64", "linux/amd64"]
+    spec = BuildSpec.from_dict(doc, tmp_path)
+    receipt = spec.run(grant(), tmp_path / "o", docker=docker_tool, runner=FakeDocker())
+    for key, arch in (("svc/linux-arm64", "arm64"), ("svc/linux-amd64", "amd64")):
+        image = receipt.images[key]
+        assert image["ref"] == f"example/svc:{image['image_id'][7:]}-{arch}"
+
+
+@pytest.mark.parametrize(
+    "tag",
+    ["{image_id:3}", "{image_id:65}", "{spec}", "{image_id", "dev}", "-{image_id:8}"],
+)
+def test_invalid_tag_templates_rejected(tmp_path: Path, tag: str) -> None:
+    with pytest.raises(BuildSpecError) as error:
+        BuildSpec.from_dict(image_doc(tag=tag), tmp_path)
+    assert error.value.code == "invalid-spec"
+
+
+def test_literal_specs_keep_their_digest(tmp_path: Path) -> None:
+    # Adding smoke/templates must not move the digest of existing specs.
+    spec = make_spec(tmp_path)
+    assert "smoke" not in spec.to_dict()["images"][0]
+    smoked = BuildSpec.from_dict(
+        image_doc(smoke={"command": ["--self-test"]}), tmp_path
+    )
+    assert smoked.to_dict()["images"][0]["smoke"] == {
+        "command": ["--self-test"],
+        "expect_exit": 0,
+        "timeout_seconds": 60.0,
+    }
+    assert smoked.spec_sha256 != spec.spec_sha256
+
+
+def test_smoke_check_runs_isolated_and_is_recorded(
+    tmp_path: Path, docker_tool: DockerTool
+) -> None:
+    project(tmp_path)
+    spec = BuildSpec.from_dict(
+        image_doc(smoke={"command": ["--self-test"], "timeout_seconds": 30}),
+        tmp_path,
+    )
+    fake = FakeDocker()
+    log = tmp_path / "build.log"
+    receipt = spec.run(
+        grant(), tmp_path / "o", docker=docker_tool, runner=fake, log=log
+    ).to_dict()
+    [run] = [argv for argv in fake.calls if argv[1] == "run"]
+    image_id = receipt["outputs"]["images"]["svc"]["image_id"]
+    assert run[-2:] == [image_id, "--self-test"]
+    for flag in (
+        ["--network", "none"],
+        ["--pull", "never"],
+        ["--platform", "linux/arm64"],
+        ["--cap-drop", "ALL"],
+        ["--security-opt", "no-new-privileges"],
+    ):
+        index = run.index(flag[0])
+        assert run[index : index + 2] == flag
+    assert "--read-only" in run and "--rm" in run
+    assert receipt["steps"][-1] == {
+        "platform": "linux/arm64",
+        "kind": "smoke:svc",
+        "state": "succeeded",
+        "exit_code": 0,
+        "seconds": 0.01,
+    }
+    assert b"self-test output" in log.read_bytes()
+    assert "self-test output" not in json.dumps(receipt)
+
+
+def test_smoke_expected_nonzero_exit(tmp_path: Path, docker_tool: DockerTool) -> None:
+    project(tmp_path)
+    spec = BuildSpec.from_dict(
+        image_doc(smoke={"command": [], "expect_exit": 3}), tmp_path
+    )
+    fake = FakeDocker()
+    fake.smoke_exit = 3
+    receipt = spec.run(grant(), tmp_path / "o", docker=docker_tool, runner=fake)
+    assert receipt.to_dict()["steps"][-1]["state"] == "succeeded"
+    [run] = [argv for argv in fake.calls if argv[1] == "run"]
+    assert run[-1].startswith("sha256:")
+
+
+def test_failing_smoke_check_rejects_the_receipt(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], docker_tool: DockerTool
+) -> None:
+    doc = image_doc(smoke={"command": ["--self-test"]})
+    path = write_spec(tmp_path, doc)
+    fake = FakeDocker()
+    fake.smoke_exit = 1
+    out = tmp_path / "r.json"
+    code = run_build_spec_command(
+        parse(
+            "run", "--spec", str(path), "--approve-builder", BUILDER, "--out", str(out)
+        ),
+        runner=fake,
+        docker=docker_tool,
+    )
+    body = json.loads(capsys.readouterr().err.splitlines()[-1])
+    assert code == 1 and not out.exists()
+    assert body["state"] == "failed" and body["reason"] == "smoke-failed"
+    assert body["steps"][-1]["kind"] == "smoke:svc"
+    assert body["steps"][-1]["state"] == "failed"
+    assert not (tmp_path / "bin/svc").exists()
+
+
+def test_smoke_timeout_removes_the_container(
+    tmp_path: Path, docker_tool: DockerTool
+) -> None:
+    project(tmp_path)
+    spec = BuildSpec.from_dict(image_doc(smoke={"command": ["--hang"]}), tmp_path)
+    fake = FakeDocker()
+    fake.smoke_state = "timed-out"
+    with pytest.raises(BuildSpecError) as error:
+        spec.run(grant(), tmp_path / "o", docker=docker_tool, runner=fake)
+    assert error.value.code == "smoke-timed-out"
+    [run] = [argv for argv in fake.calls if argv[1] == "run"]
+    name = run[run.index("--name") + 1]
+    assert [argv for argv in fake.calls if argv[1] == "rm"] == [
+        [str(docker_tool.tool.path), "rm", "--force", name]
+    ]
+
+
+@pytest.mark.parametrize(
+    "smoke",
+    [
+        {"command": "--self-test"},
+        {"command": ["--self-test"], "expect_exit": 256},
+        {"command": ["--self-test"], "expect_exit": True},
+        {"command": ["--self-test"], "timeout_seconds": 0},
+        {"command": ["--self-test"], "timeout_seconds": 601},
+        {"command": ["--self-test"], "network": "default"},
+    ],
+)
+def test_invalid_smoke_rejected(tmp_path: Path, smoke: dict[str, Any]) -> None:
+    with pytest.raises(BuildSpecError) as error:
+        BuildSpec.from_dict(image_doc(smoke=smoke), tmp_path)
+    assert error.value.code == "invalid-spec"
 
 
 # --- opt-in real docker ------------------------------------------------------------
@@ -887,16 +1224,40 @@ def test_cli_build_failure_exit_code(
 )
 @pytest.mark.timeout(1800)
 def test_rust_hello_example_is_reproducible(tmp_path: Path) -> None:
+    from piceli.artifacts.build_spec import _default_runner
+
     spec = BuildSpec.from_toml(EXAMPLE / "build.toml")
-    first = spec.run(
-        BuildGrant(spec.builder.digest, time.time() + 1800), tmp_path / "a"
-    ).to_dict()
+    unrelated = EXAMPLE / "UNRELATED-EDIT.md"
+    edits: list[str] = []
+
+    def editing_runner(argv, cwd, limits, environment, expires_at, **kw):  # type: ignore[no-untyped-def]
+        # An unrelated file of the same source changes while the build runs.
+        if argv[1:3] == ["buildx", "build"] and not edits:
+            unrelated.write_text("edited during the build\n")
+            edits.append("edited")
+        return _default_runner(argv, cwd, limits, environment, expires_at, **kw)
+
+    log = tmp_path / "build.log"
+    try:
+        first = spec.run(
+            BuildGrant(spec.builder.digest, time.time() + 1800),
+            tmp_path / "a",
+            runner=editing_runner,
+            log=log,
+        ).to_dict()
+    finally:
+        unrelated.unlink(missing_ok=True)
+    assert first["sources_changed_during_build"] == ["piceli"]
+    assert b"### linux/arm64 image:rust-hello succeeded" in log.read_bytes()
     second = spec.run(
         BuildGrant(spec.builder.digest, time.time() + 1800), tmp_path / "b"
     ).to_dict()
     assert first["outputs"] == second["outputs"]
-    assert first["outputs"]["images"]["rust-hello"]["platform"] == "linux/arm64"
-    image = first["outputs"]["images"]["rust-hello"]["image_id"]
+    image = first["outputs"]["images"]["rust-hello"]
+    assert image["platform"] == "linux/arm64"
+    assert image["ref"] == f"piceli-examples/rust-hello:{image['image_id'][7:19]}"
+    assert first["steps"][-1]["kind"] == "smoke:rust-hello"
+    assert first["steps"][-1]["state"] == "succeeded"
     smoke = subprocess.run(
         [
             "docker",
@@ -905,7 +1266,7 @@ def test_rust_hello_example_is_reproducible(tmp_path: Path) -> None:
             "--network",
             "none",
             "--read-only",
-            image,
+            image["ref"],
             "--self-test",
         ],
         capture_output=True,
@@ -914,3 +1275,18 @@ def test_rust_hello_example_is_reproducible(tmp_path: Path) -> None:
         check=False,
     )
     assert smoke.returncode == 0 and "self-test ok" in smoke.stdout
+    # A smoke check that expects another exit code rejects the build.
+    [declared] = spec.images
+    assert declared.smoke is not None
+    failing = dataclasses.replace(
+        spec,
+        images=(
+            dataclasses.replace(
+                declared, smoke=dataclasses.replace(declared.smoke, expect_exit=3)
+            ),
+        ),
+        origin=None,
+    )
+    with pytest.raises(BuildSpecError) as error:
+        failing.run(BuildGrant(spec.builder.digest, time.time() + 1800), tmp_path / "c")
+    assert error.value.code == "smoke-failed"

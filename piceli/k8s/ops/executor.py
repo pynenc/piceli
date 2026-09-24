@@ -8,6 +8,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from piceli.k8s.ops.bounds import positive, seconds, text, timestamp
@@ -43,8 +44,14 @@ from piceli.k8s.ops.plan import (
     adoption_for,
     field_manager_entries,
     manifest_contains,
+    metadata_changes,
+    metadata_patch,
     overlapping_managers,
+    replace_propagation,
+    replace_refusal,
+    without_metadata_maps,
 )
+from piceli.k8s.ops.replace_backup import write_backup
 from piceli.k8s.ops.secret_versions import (
     PRIVATE_VALUE,
     SecretBinding,
@@ -248,8 +255,12 @@ class PlanExecutor:
         limits: ExecutionLimits | None = None,
         after_response: Callable[[int], None] | None = None,
         telemetry: NoopTelemetry | None = None,
+        backups: Path | None = None,
     ) -> None:
         self.provider = provider
+        # Private directory for replace backups; a plan with a REPLACE action
+        # is refused before any write when it is not configured.
+        self.backups = backups
         self.journal = journal
         self.secrets = secrets
         self.limits = limits or ExecutionLimits()
@@ -357,11 +368,23 @@ class PlanExecutor:
                     raise ValueError("create requires absence precondition")
             elif current is None:
                 raise ValueError("existing action requires observed resource")
-            elif (
-                current.ownership is Ownership.UNMANAGED
-                and action.operation is not PlanOperation.ADOPT
-            ):
+            elif current.ownership is Ownership.UNMANAGED and action.operation not in {
+                PlanOperation.ADOPT,
+                PlanOperation.REPLACE,
+            }:
                 raise ValueError("unmanaged resource requires exact adoption action")
+            if action.operation is PlanOperation.REPLACE:
+                assert current is not None
+                refusal = replace_refusal(current)
+                if refusal is not None or ref.kind in RETAINED_KINDS:
+                    raise ValueError(f"replace refused for {ref}: {refusal}")
+                if self.backups is None:
+                    raise ValueError("replace requires a private backup directory")
+                if replace_propagation(ref.kind) == "Background" and any(
+                    current.precondition.uid in child.owner_uids and child.retained
+                    for child in snapshot.resources
+                ):
+                    raise ValueError("unsafe retained descendants")
             if action.operation is PlanOperation.DELETE:
                 if current is None or current.retained or ref.kind in RETAINED_KINDS:
                     raise ValueError("retained resource cannot be deleted")
@@ -376,6 +399,15 @@ class PlanExecutor:
                 if action.operation is PlanOperation.ADOPT:
                     assert current is not None
                     self._validate_adoption(action, current, manifest, authorization)
+                elif action.metadata_changes:
+                    assert current is not None
+                    if not current.retained:
+                        raise ValueError(
+                            "metadata-only apply requires a retained object"
+                        )
+                    self._validate_metadata_write(
+                        action, current, manifest, action.metadata_changes
+                    )
         self.provider.verify_target(deadline=deadline)
 
     def _granted_owners(self, authorization: ExecutionAuthorization) -> frozenset[str]:
@@ -402,10 +434,12 @@ class PlanExecutor:
             adoption.mode,
             adoption.previous_owner,
             set(adoption.transferred_managers) - {self.provider.field_manager},
+            adoption.metadata_changes,
         ) != (
             expected.mode,
             expected.previous_owner,
             set(expected.transferred_managers),
+            expected.metadata_changes,
         ):
             raise ValueError("adoption details do not match discovery evidence")
         if adoption.mode is AdoptionMode.METADATA_ONLY:
@@ -415,15 +449,29 @@ class PlanExecutor:
                 current.owner not in self._granted_owners(authorization)
             ):
                 raise ValueError("retained adoption owner is not granted")
-            if not _contains(current.intent.manifest, manifest):
-                # Value-free: the private content differs from the live object.
-                raise ValueError(
-                    "retained adoption requires the live object to contain the "
-                    f"desired manifest: {action.resource.ref}"
-                )
+            self._validate_metadata_write(
+                action, current, manifest, adoption.metadata_changes
+            )
             return
         if current.retained or action.resource.ref.kind in RETAINED_KINDS:
             raise ValueError("takeover adoption requires a non-retained object")
+
+    @staticmethod
+    def _validate_metadata_write(
+        action: PlanAction,
+        current: ObservedResource,
+        manifest: dict[str, Any],
+        planned: tuple[str, ...],
+    ) -> None:
+        """A metadata-only write may change exactly the planned labels/annotations."""
+        if not _spec_contained(current.intent.manifest, manifest):
+            # Value-free: the private content differs from the live object.
+            raise ValueError(
+                "retained adoption requires the live object to contain the "
+                f"desired manifest: {action.resource.ref}"
+            )
+        if metadata_changes(manifest, current.intent.manifest) != planned:
+            raise ValueError("metadata-only changes do not match discovery evidence")
 
     def _binding(
         self, plan: DeploymentPlan, authorization: ExecutionAuthorization
@@ -528,13 +576,21 @@ class PlanExecutor:
             current
         ) != _receipt_intent(baseline):
             raise ProviderError("resource-content-precondition-failed")
-        if (
-            current.ownership is Ownership.UNMANAGED
-            and action.operation is not PlanOperation.ADOPT
-        ):
+        if current.ownership is Ownership.UNMANAGED and action.operation not in {
+            PlanOperation.ADOPT,
+            PlanOperation.REPLACE,
+        }:
             raise ProviderError("ownership-precondition-failed")
-        if action.operation is PlanOperation.DELETE and current.retained:
+        if (
+            action.operation in {PlanOperation.DELETE, PlanOperation.REPLACE}
+            and current.retained
+        ):
             raise ProviderError("retained-resource")
+        if action.operation is PlanOperation.REPLACE and (
+            current.ownership is not Ownership.UNMANAGED
+            or current.manifest["metadata"].get("ownerReferences")
+        ):
+            raise ProviderError("replace-precondition-failed")
         if action.operation is PlanOperation.NOOP and not _contains(
             ResourceIntent.from_manifest(current.manifest).manifest,
             self._manifest(action.resource),
@@ -585,7 +641,12 @@ class PlanExecutor:
         authorization: ExecutionAuthorization,
         deadline: float,
     ) -> None:
-        """Metadata-only adoption: stamp the owner, never touch spec or data."""
+        """Metadata-only write of a retained object: never spec or data.
+
+        Used by a metadata-only ADOPT and by an APPLY whose only difference is
+        metadata (including objects of a granted inherited owner). The patch
+        sets the owner annotation and the planned labels/annotations.
+        """
         if not current.retained:
             raise ProviderError("retained-adoption-precondition-failed")
         previous = (
@@ -593,28 +654,50 @@ class PlanExecutor:
         )
         if current.ownership is Ownership.MANAGED and previous not in self._owners:
             raise ProviderError("ownership-precondition-failed")
-        if not _contains(
-            ResourceIntent.from_manifest(current.manifest).manifest,
-            self._manifest(action.resource),
+        if action.operation is not PlanOperation.ADOPT and (
+            current.ownership is not Ownership.MANAGED
         ):
+            raise ProviderError("ownership-precondition-failed")
+        manifest = self._manifest(action.resource)
+        live = ResourceIntent.from_manifest(current.manifest).manifest
+        if not _spec_contained(live, manifest):
             raise ProviderError("retained-content-precondition-failed")
-        if previous == self.provider.owner_id:
+        planned = (
+            action.adoption.metadata_changes
+            if action.adoption is not None
+            else action.metadata_changes
+        )
+        changes = metadata_changes(manifest, live)
+        if changes != planned:
+            raise ProviderError("retained-content-precondition-failed")
+        if previous == self.provider.owner_id and not changes:
             # Already ours (e.g. adopted by an earlier execution): observe only.
             receipt = self._receipt(current, payload | {"retained_reconciled": True})
             self.journal.record(execution, row["ordinal"], "applied", receipt)
             return
-        payload["adoption"] = {
+        detail = {
             "mode": AdoptionMode.METADATA_ONLY.value,
             "previous_owner": previous if isinstance(previous, str) else None,
-        }
+        } | ({"metadata_changes": list(changes)} if changes else {})
+        payload["adoption" if action.adoption is not None else "metadata_only"] = detail
+        patch = metadata_patch(manifest, changes)
         self.provider.adopt_metadata(
-            current, operation_id=row["operation_id"], dry_run=True, deadline=deadline
+            current,
+            operation_id=row["operation_id"],
+            dry_run=True,
+            deadline=deadline,
+            labels=patch.get("labels"),
+            annotations=patch.get("annotations"),
         )
         self._guard(execution, authorization, deadline)
         self.journal.record(execution, row["ordinal"], "intent", payload)
         try:
             result = self.provider.adopt_metadata(
-                current, operation_id=row["operation_id"], deadline=deadline
+                current,
+                operation_id=row["operation_id"],
+                deadline=deadline,
+                labels=patch.get("labels"),
+                annotations=patch.get("annotations"),
             )
             if self.after_response is not None:
                 self.after_response(row["ordinal"])
@@ -626,6 +709,196 @@ class PlanExecutor:
             if not error.ambiguous:
                 self.journal.record(execution, row["ordinal"], "failed", payload)
             raise
+
+    def _replace_manifest(
+        self, action: PlanAction, operation_id: str
+    ) -> dict[str, Any]:
+        manifest = self._manifest(action.resource)
+        manifest["metadata"].setdefault("annotations", {}).update(
+            {
+                OWNER_ANNOTATION: self.provider.owner_id,
+                OPERATION_ANNOTATION: operation_id,
+            }
+        )
+        return manifest
+
+    def _replace(
+        self,
+        execution: str,
+        row: dict[str, Any],
+        action: PlanAction,
+        current: DiscoveredResource,
+        payload: dict[str, Any],
+        authorization: ExecutionAuthorization,
+        deadline: float,
+    ) -> None:
+        """Delete an unmanaged object and create it from the release.
+
+        Order: a restorable backup of the live object is written (owner-only
+        file) and journaled with the intent; the delete carries the observed
+        UID and resourceVersion as preconditions; the create requires absence.
+        A failure after the delete is reported as ambiguous so the row stays
+        ``intent`` and ``resume`` finishes the create (the backup restores the
+        previous object by hand, see docs/release_cli.md).
+        """
+        ref = action.resource.ref
+        metadata = current.manifest["metadata"]
+        if (
+            self.backups is None
+            or current.retained
+            or ref.kind in RETAINED_KINDS
+            or current.ownership is not Ownership.UNMANAGED
+            or metadata.get("ownerReferences")
+        ):
+            raise ProviderError("replace-precondition-failed")
+        manifest = self._replace_manifest(action, row["operation_id"])
+        propagation = replace_propagation(ref.kind)
+        uid, version = metadata["uid"], metadata["resourceVersion"]
+        # Admission gate for the delete; persists nothing.
+        self.provider.delete(
+            current.identity,
+            uid=uid,
+            resource_version=version,
+            propagation=propagation,
+            dry_run=True,
+            deadline=deadline,
+        )
+        try:
+            path, digest = write_backup(
+                self.backups,
+                execution=execution,
+                ordinal=row["ordinal"],
+                manifest=current.manifest,
+            )
+        except (OSError, ValueError):
+            raise ProviderError("replace-backup-failed") from None
+        payload["replace"] = {
+            "backup": str(path),
+            "backup_sha256": digest,
+            "deleted_uid": uid,
+            "deleted_resource_version": version,
+            "propagation": propagation,
+            "phase": "deleting",
+        }
+        self._guard(execution, authorization, deadline)
+        self.journal.record(execution, row["ordinal"], "intent", payload)
+        try:
+            self.provider.delete(
+                current.identity,
+                uid=uid,
+                resource_version=version,
+                propagation=propagation,
+                deadline=deadline,
+            )
+        except ProviderError as error:
+            if not error.ambiguous:
+                # Nothing was deleted: a retry starts from the precondition.
+                self.journal.record(execution, row["ordinal"], "failed", payload)
+            raise
+        payload["replace"]["phase"] = "deleted"
+        self.journal.record(execution, row["ordinal"], "intent", payload)
+        result = self._create_replacement(
+            execution, action, manifest, uid, authorization, deadline
+        )
+        if self.after_response is not None:
+            self.after_response(row["ordinal"])
+        self.journal.record(
+            execution, row["ordinal"], "applied", self._receipt(result, payload)
+        )
+
+    def _create_replacement(
+        self,
+        execution: str,
+        action: PlanAction,
+        manifest: dict[str, Any],
+        deleted_uid: str,
+        authorization: ExecutionAuthorization,
+        deadline: float,
+    ) -> DiscoveredResource:
+        """Wait until the deleted object is gone, then create (after the delete,
+        every failure is ambiguous: the row stays ``intent`` for ``resume``)."""
+        identity = _identity(action.resource.ref)
+        try:
+            end = min(deadline, time.monotonic() + self.limits.readiness_seconds)
+            for _ in range(self.limits.max_polls):
+                self._guard(execution, authorization, deadline)
+                current = self.provider.get(identity, deadline=deadline)
+                if current is None:
+                    break
+                if current.manifest["metadata"].get("uid") != deleted_uid:
+                    raise ProviderError("replace-recreated-by-another-writer")
+                if time.monotonic() >= end:
+                    raise ProviderError("replace-delete-timeout")
+                time.sleep(
+                    min(self.limits.poll_seconds, max(0, end - time.monotonic()))
+                )
+            else:
+                raise ProviderError("replace-delete-timeout")
+            result = self.provider.write(
+                identity, manifest, create=True, deadline=deadline
+            )
+            if result is None:
+                raise ProviderError("invalid-write-response")
+            return result
+        except ProviderError as error:
+            raise ProviderError(
+                error.category, status=error.status, ambiguous=True
+            ) from None
+
+    def _resume_replace(
+        self,
+        execution: str,
+        row: dict[str, Any],
+        action: PlanAction,
+        payload: dict[str, Any],
+        authorization: ExecutionAuthorization,
+        deadline: float,
+    ) -> DiscoveredResource:
+        """Finish an interrupted replace from what the cluster shows now."""
+        replace = payload["replace"]
+        deleted_uid = replace["deleted_uid"]
+        identity = _identity(action.resource.ref)
+        manifest = self._replace_manifest(action, row["operation_id"])
+        current = self.provider.get(identity, deadline=deadline)
+        if current is not None:
+            metadata = current.manifest["metadata"]
+            if metadata.get("uid") != deleted_uid:
+                annotations = metadata.get("annotations", {})
+                if (
+                    current.ownership is Ownership.MANAGED
+                    and annotations.get(OPERATION_ANNOTATION) == row["operation_id"]
+                    and _contains(
+                        ResourceIntent.from_manifest(current.manifest).manifest,
+                        self._manifest(action.resource),
+                    )
+                ):
+                    return current
+                raise ProviderError(
+                    "replace-recreated-by-another-writer", ambiguous=True
+                )
+            if not metadata.get("deletionTimestamp"):
+                if (
+                    replace.get("phase") != "deleting"
+                    or metadata.get("resourceVersion")
+                    != replace["deleted_resource_version"]
+                ):
+                    raise ProviderError("replace-delete-not-observed", ambiguous=True)
+                self._guard(execution, authorization, deadline)
+                try:
+                    self.provider.delete(
+                        current.identity,
+                        uid=deleted_uid,
+                        resource_version=replace["deleted_resource_version"],
+                        propagation=replace["propagation"],
+                        deadline=deadline,
+                    )
+                except ProviderError as error:
+                    raise ProviderError(
+                        error.category, status=error.status, ambiguous=True
+                    ) from None
+        return self._create_replacement(
+            execution, action, manifest, deleted_uid, authorization, deadline
+        )
 
     def _resume_takeover(
         self,
@@ -672,7 +945,7 @@ class PlanExecutor:
             raise ProviderError("ambiguous-delete-blocked", ambiguous=True)
         if current is None:
             raise ProviderError("ambiguous-write-blocked", ambiguous=True)
-        if _mode(action) is AdoptionMode.METADATA_ONLY:
+        if _metadata_write(action):
             annotations = current.manifest["metadata"].get("annotations", {})
             if (
                 current.manifest["metadata"]["uid"] != action.precondition.uid
@@ -942,9 +1215,20 @@ class PlanExecutor:
                             self.journal.record(
                                 execution, row["ordinal"], "applied", payload
                             )
-                        elif _mode(action) is AdoptionMode.METADATA_ONLY:
+                        elif _metadata_write(action):
                             assert current is not None
                             self._adopt_retained(
+                                execution,
+                                row,
+                                action,
+                                current,
+                                payload,
+                                authorization,
+                                deadline,
+                            )
+                        elif action.operation is PlanOperation.REPLACE:
+                            assert current is not None
+                            self._replace(
                                 execution,
                                 row,
                                 action,
@@ -1100,7 +1384,12 @@ class PlanExecutor:
                     elif row["state"] == "intent":
                         base = dict(row["payload"])
                         adoption = base.get("adoption")
-                        if _is_takeover(row):
+                        if "replace" in base:
+                            result = self._resume_replace(
+                                execution, row, action, base, authorization, deadline
+                            )
+                            retained_reconciled = False
+                        elif _is_takeover(row):
                             # The takeover is idempotent: converge again from
                             # whatever step was interrupted.
                             assert isinstance(adoption, dict)
@@ -1236,6 +1525,9 @@ class PlanExecutor:
                 } or action.operation in {
                     PlanOperation.NOOP,
                     PlanOperation.DELETE,
+                    # A replaced object is restored from its backup file, by
+                    # an operator (see docs/release_cli.md), never here.
+                    PlanOperation.REPLACE,
                 }:
                     continue
                 if action.operation is PlanOperation.ADOPT and not _is_takeover(row):
@@ -1369,6 +1661,20 @@ def _is_takeover(row: dict[str, Any]) -> bool:
     return (
         isinstance(adoption, dict)
         and adoption.get("mode") == AdoptionMode.TAKEOVER.value
+    )
+
+
+def _metadata_write(action: PlanAction) -> bool:
+    """Metadata-only adoption, or an APPLY that changes only retained metadata."""
+    return _mode(action) is AdoptionMode.METADATA_ONLY or (
+        action.operation is PlanOperation.APPLY and bool(action.metadata_changes)
+    )
+
+
+def _spec_contained(actual: Any, expected: Any) -> bool:
+    """Everything but labels/annotations is contained (retained objects)."""
+    return manifest_contains(
+        without_metadata_maps(actual), without_metadata_maps(expected)
     )
 
 

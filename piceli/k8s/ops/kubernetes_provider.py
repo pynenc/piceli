@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import ipaddress
 import json
@@ -474,6 +475,39 @@ class KubernetesProvider:
                 return None
             raise
 
+    def read_secret_key(
+        self, name: str, key: str, *, deadline: float | None = None
+    ) -> bytes:
+        """Read one data key of a Secret in the target namespace (an explicit import).
+
+        The value is returned to the caller only; it is never logged, and a
+        failure carries an allowlisted category, never the server's body.
+        """
+        manifest = self._request(
+            "GET",
+            "/api/v1/namespaces/"
+            + quote(self.target.namespace, safe="")
+            + "/secrets/"
+            + quote(text(name, "Secret name"), safe=""),
+            deadline=deadline,
+        )
+        metadata = manifest.get("metadata") or {}
+        if (
+            manifest.get("apiVersion") != "v1"
+            or manifest.get("kind") != "Secret"
+            or metadata.get("name") != name
+            or metadata.get("namespace") != self.target.namespace
+        ):
+            raise ProviderError("identity-mismatch")
+        data = manifest.get("data") or {}
+        value = data.get(key) if isinstance(data, dict) else None
+        if not isinstance(value, str):
+            raise ProviderError("secret-key-missing")
+        try:
+            return base64.b64decode(value, validate=True)
+        except ValueError:
+            raise ProviderError("invalid-secret-data") from None
+
     def write(
         self,
         identity: ResourceIdentity,
@@ -903,32 +937,48 @@ class KubernetesProvider:
         operation_id: str,
         dry_run: bool = False,
         deadline: float | None = None,
+        labels: dict[str, Any] | None = None,
+        annotations: dict[str, Any] | None = None,
     ) -> DiscoveredResource | None:
-        """Metadata-only ownership transfer of a retained object.
+        """Metadata-only write of a retained object (ownership and metadata).
 
-        The merge patch carries only the owner and operation annotations plus
-        the observed UID and resourceVersion as preconditions, so spec, data
-        and every other field are never part of the request. The response is
-        checked to differ from the observed object in those annotations only.
+        The merge patch carries the owner and operation annotations, the
+        given ``labels``/``annotations`` (set, never removed) and the observed
+        UID and resourceVersion as preconditions, so spec, data and every
+        other field are never part of the request. The response is checked to
+        differ from the observed object in exactly those keys.
         """
         identity = current.identity
         if not current.retained:
             raise ProviderError("not-retained")
         observed = current.manifest["metadata"]
         text(operation_id, "operation id")
+        labels = dict(labels or {})
+        annotations = dict(annotations or {})
+        if (
+            any(
+                not isinstance(key, str) or not isinstance(value, str)
+                for key, value in (*labels.items(), *annotations.items())
+            )
+            or {OWNER_ANNOTATION, OPERATION_ANNOTATION} & annotations.keys()
+        ):
+            raise ProviderError("invalid-metadata-change")
+        patch: dict[str, Any] = {
+            "uid": observed["uid"],
+            "resourceVersion": observed["resourceVersion"],
+            "annotations": annotations
+            | {OWNER_ANNOTATION: self.owner_id, OPERATION_ANNOTATION: operation_id},
+        }
+        if labels:
+            patch["labels"] = labels
+        expected = json.loads(json.dumps(current.manifest))
+        for section, values in (("labels", labels), ("annotations", annotations)):
+            if values:
+                expected["metadata"].setdefault(section, {}).update(values)
         raw = self._request(
             "PATCH",
             self._path(self.api_for(identity, deadline=deadline), identity.name),
-            body={
-                "metadata": {
-                    "uid": observed["uid"],
-                    "resourceVersion": observed["resourceVersion"],
-                    "annotations": {
-                        OWNER_ANNOTATION: self.owner_id,
-                        OPERATION_ANNOTATION: operation_id,
-                    },
-                }
-            },
+            body={"metadata": patch},
             query={"fieldManager": self.field_manager}
             | ({"dryRun": "All"} if dry_run else {}),
             deadline=deadline,
@@ -942,15 +992,14 @@ class KubernetesProvider:
             result = self._resource(raw, self.api_for(identity, deadline=deadline))
         except (ValueError, ProviderError):
             raise ProviderError("invalid-write-response", ambiguous=True) from None
-        annotations = result.manifest["metadata"].get("annotations", {})
+        returned = result.manifest["metadata"].get("annotations", {})
         if (
             result.identity != identity
             or result.manifest["metadata"].get("uid") != observed["uid"]
             or result.ownership is not Ownership.MANAGED
-            or annotations.get(OWNER_ANNOTATION) != self.owner_id
-            or annotations.get(OPERATION_ANNOTATION) != operation_id
-            or _without_ownership(result.manifest)
-            != _without_ownership(current.manifest)
+            or returned.get(OWNER_ANNOTATION) != self.owner_id
+            or returned.get(OPERATION_ANNOTATION) != operation_id
+            or _without_ownership(result.manifest) != _without_ownership(expected)
         ):
             raise ProviderError("invalid-write-response", ambiguous=True)
         return result
@@ -962,20 +1011,37 @@ class KubernetesProvider:
         uid: str,
         resource_version: str,
         deadline: float | None = None,
+        propagation: str = "Orphan",
+        dry_run: bool = False,
     ) -> None:
+        """Delete with UID and resourceVersion preconditions (never a retained kind).
+
+        ``propagation`` is ``Orphan`` (dependents are kept) unless a replace
+        chooses ``Background`` for a workload controller (see
+        :func:`piceli.k8s.ops.plan.replace_propagation`).
+        """
         if identity.kind in RETAINED_KINDS:
             raise ProviderError("retained-resource")
+        if propagation not in {"Orphan", "Background"}:
+            raise ProviderError("invalid-propagation")
         text(uid, "uid")
         text(resource_version, "resource version")
+        body: dict[str, Any] = {
+            "apiVersion": "v1",
+            "kind": "DeleteOptions",
+            "propagationPolicy": propagation,
+            "preconditions": {"uid": uid, "resourceVersion": resource_version},
+        }
+        if dry_run:
+            # The API server reads DeleteOptions from the body and ignores
+            # the query string when a body is sent: dryRun must be in both
+            # (the query marks the request as non-mutating here).
+            body["dryRun"] = ["All"]
         self._request(
             "DELETE",
             self._path(self.api_for(identity, deadline=deadline), identity.name),
-            body={
-                "apiVersion": "v1",
-                "kind": "DeleteOptions",
-                "propagationPolicy": "Orphan",
-                "preconditions": {"uid": uid, "resourceVersion": resource_version},
-            },
+            body=body,
+            query={"dryRun": "All"} if dry_run else None,
             deadline=deadline,
         )
 

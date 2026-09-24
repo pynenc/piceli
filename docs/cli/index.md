@@ -1,6 +1,12 @@
 # Piceli Command Line Interface (CLI) Guide
 
-The `piceli` command (also available as `python -m piceli`) has seven command groups:
+```{admonition} Maturity: experimental
+:class: warning
+
+The `model` and `deploy` commands use the legacy CLI engine (delete and recreate, current kube context). They will be replaced by the recoverable engine; prefer `piceli release`. See the {doc}`../roadmap` for every feature's status.
+```
+
+The `piceli` command (also available as `python -m piceli`) has seven command groups, the `render` command and two contract commands:
 
 | Group | Purpose | Cluster access | Output |
 | --- | --- | --- | --- |
@@ -10,7 +16,14 @@ The `piceli` command (also available as `python -m piceli`) has seven command gr
 | `operator` | Inventory, releases, approvals, backups, local UI | Explicit `--kubeconfig` | JSON |
 | `artifacts` | Deterministic OCI builds and explicit local import | None (local tools only) | JSON |
 | `inputs` | Record and verify the git identity of build sources | None (local git only) | JSON |
-| `release` | Plan, apply, roll back, resume and stop releases from a `release.toml` spec (recoverable engine). See {doc}`../release_cli` | Explicit kubeconfig file + context from the spec | JSON + summary on stderr |
+| `render` | Print the manifests of a typed app or composition (preview). See {doc}`../typed_apps` | None | YAML or JSON |
+| `release` | Plan, apply, roll back, resume and stop releases from a `release.toml` spec (recoverable engine); `release secret show` inspects secret values (owner, `--reveal`). See {doc}`../release_cli` and {doc}`../secrets` | Explicit kubeconfig file + context from the spec | JSON + summary on stderr |
+| `explain` | Explain an error code: cause, fix, whether a retry can succeed | None | Text, or JSON with `--json` |
+| `help-json` | The whole command tree with options, side effects and approval rules | None | JSON |
+
+Every command, option and contract is listed in {doc}`../reference/cli`,
+generated from `piceli help-json`. Refusal codes are explained in
+{doc}`../reference/errors`. Agents should start with {doc}`../agents`.
 
 The global options below (`--namespace`, `--module-*`, `--folder-path`) apply to
 `model` and `deploy`. The `observe`, `operator` and `artifacts` groups take their

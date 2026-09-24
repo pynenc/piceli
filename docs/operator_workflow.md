@@ -7,7 +7,7 @@ collection, and backup/restore of operator state. Like the {doc}`operations lens
 <operations_lens>`, it runs on the operator's machine and needs no external
 database or public registry.
 
-```{admonition} Status: experimental
+```{admonition} Maturity: experimental
 :class: warning
 
 These features are available as Python library APIs, and some of them through

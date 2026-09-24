@@ -8,6 +8,7 @@ import re
 import sqlite3
 import stat
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -234,6 +235,46 @@ class SecretVersionStore:
             ).fetchone()
             is not None
         )
+
+    def discard(
+        self,
+        target: PlanTarget,
+        references: Iterable[SecretVersionRef] = (),
+        *,
+        session_id: str | None = None,
+    ) -> int:
+        """Delete versions that no release references (a refused or failed plan).
+
+        Removes ``references`` and every version bound to ``session_id``,
+        within ``target`` only. Callers must discard only versions they created
+        for a release that was never recorded; returns the number removed.
+        """
+        versions = {
+            reference.version
+            for reference in references
+            if reference.store_id == self.store_id
+        }
+        with self.connection:
+            if session_id is not None:
+                versions |= {
+                    row[0]
+                    for row in self.connection.execute(
+                        "SELECT version FROM session_bindings WHERE session_id=?",
+                        (session_id,),
+                    )
+                }
+                self.connection.execute(
+                    "DELETE FROM session_bindings WHERE session_id=?", (session_id,)
+                )
+            removed = 0
+            for version in sorted(versions):
+                removed += self.connection.execute(
+                    "DELETE FROM versions WHERE version=? AND cluster_id=? "
+                    "AND namespace=? AND version NOT IN "
+                    "(SELECT version FROM session_bindings)",
+                    (version, target.cluster_id, target.namespace),
+                ).rowcount
+        return removed
 
     def close(self) -> None:
         self.connection.close()

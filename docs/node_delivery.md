@@ -1,5 +1,11 @@
 # Image delivery
 
+```{admonition} Maturity: preview
+:class: note
+
+`piceli artifacts deliver` options and receipts may still change in a minor release, with a changelog entry. See the {doc}`roadmap` for every feature's status.
+```
+
 `piceli artifacts deliver` moves one digest-approved image to where a cluster
 can run it, and writes a JSON receipt. It has two modes:
 
@@ -464,6 +470,26 @@ python -m piceli artifacts deliver \
 
 Exit codes and input rejection codes are the same as for registry delivery
 (see Exit codes and input rejections above).
+
+### Releasing a node-imported image
+
+`piceli release` accepts a `piceli.node-delivery.v1` receipt (in
+`images_from` or `[images.<name>] receipt`) only when the node reference is a
+**content tag** of the config digest: `repository:sha256-<hex>`, where `<hex>`
+is the first 12 to 64 characters of the config digest. Any other tag could be
+moved by the next import, so it is refused with `image-not-immutable`. Import
+with a content tag:
+
+```sh
+ID=$(docker image inspect --format '{{.Id}}' example/app:1.4.2)   # classic store
+python -m piceli artifacts deliver --image "$ID" --approve-digest "$ID" \
+  --ref "registry.test/app:sha256-${ID:7:12}" \
+  --to 'ssh://ops@node-1.example?runtime=k3s-containerd' --receipt app.node.json
+```
+
+The release then references `registry.test/app:sha256-…` and records the
+config digest as its identity. See {doc}`release_cli` (Images) for the full
+rule and the refusal codes.
 
 ### Python API
 

@@ -4,6 +4,64 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.3.0
+
+- **Safety fix:** the dry-run admission check before a delete really deleted
+  the object, because the API server ignores a `dryRun` query parameter when a
+  DeleteOptions body is sent. `dryRun` is now sent in the body. This affected
+  opt-in pruning in 0.1.0 and 0.2.0: objects that were about to be deleted
+  anyway lost the check-before-write guarantee.
+- **Ownership transitions (preview):**
+  - `piceli release --replace KIND/NAME` / `[release] replace` deletes and
+    recreates an unmanaged, non-retained object after writing a restorable
+    backup (`kubectl create -f`). It always needs a per-object flag.
+  - `--adopt-all-desired` adopts every unmanaged object the composition
+    declares.
+  - Plan refusals list every blocking object with suggested flags and codes.
+    The human text of each blocking entry is in its `message` field.
+  - Retained objects, including those with inherited owners, whose only
+    difference is labels or annotations get a metadata-only write.
+- **Immutable image references (preview):**
+  - A build receipt without a registry digest is refused with
+    `image-not-immutable` instead of falling back to its movable tag.
+  - `[images.<name>] receipt` and `images_from` accept
+    `piceli.node-delivery.v1` receipts, which need a content tag
+    `repo:sha256-<12hex>`.
+  - `images_from` takes a list of build and delivery receipts, merged by config
+    digest.
+  - New `examples/two-images`, with an opt-in kind acceptance test.
+
+- **Typed apps (preview):** `from piceli import App, ExistingClaim, …`
+  describes Deployments (sidecars, init containers, probes, resources,
+  memory/config/secret volumes, node pinning), Services, ConfigMaps, Secrets
+  and NetworkPolicies as typed Python that renders to release intents.
+  - `ExistingClaim` mounts a claim that the release never creates, changes or
+    deletes.
+  - Selectors derive only from the Deployment name.
+  - `piceli render` prints the manifests without a cluster.
+  - `examples/release` is now typed and renders identically.
+- **Secrets (preview):** new `tls-ca`, `template`, `import` (file, env, or a
+  live Secret; rotatable with `--rotate`) and `static` generators, and
+  `piceli release secret show NAME [--key] --reveal`. A refused
+  `release plan` no longer generates, imports or stores any secret version.
+- **Builds:**
+  - Drift is checked over the staged files and the spec. Whole-source identity
+    is kept as provenance (`sources_changed_during_build`), so edits to
+    unrelated files no longer reject a build.
+  - `--log` streams during the build, and `--progress steps|plain|quiet`
+    shows step progress.
+  - `tag = "{image_id:N}"` content tags.
+  - Optional per-image `smoke` checks run in an isolated container.
+  - `piceli inputs record|verify --only NAME`.
+- **Agent and contract foundations (preview):**
+  - a registry of error codes with `piceli explain <code> [--json]`;
+  - `piceli help-json` / `--help-json` (the CLI tree with side effects,
+    approval and retry metadata);
+  - generated `reference/errors` and `reference/cli` pages;
+  - `AGENTS.md`, `llms.txt` and `docs/agents.md`;
+  - maturity labels on every feature page;
+  - a clear error for a misplaced `images_from`.
+
 ## Version 0.2.0
 
 - `release.toml` images can point at a registry delivery receipt:

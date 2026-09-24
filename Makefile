@@ -40,6 +40,10 @@ test-integration: ## Integration tests against the current kubeconfig context (u
 coverage: ## Unit + acceptance tests with an HTML coverage report
 	uv run pytest --cov --cov-report=term --cov-report=html
 
+.PHONY: docs-reference
+docs-reference: ## Regenerate docs/reference/{errors,cli}.md from code
+	uv run python -m piceli.reference_docs
+
 .PHONY: docs
 docs: ## Build the documentation (warnings are errors)
 	uv run --group docs sphinx-build -W --keep-going -b html docs docs/_build/html

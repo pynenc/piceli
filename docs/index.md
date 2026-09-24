@@ -123,8 +123,10 @@ kubernetes_model/index
 :maxdepth: 2
 :caption: Guides
 
+typed_apps
 deployment_planning
 release_cli
+secrets
 source_identity
 containerized_builds
 artifact_delivery
@@ -140,7 +142,17 @@ operator_workflow
 :caption: Reference
 
 cli/index
+reference/cli
+reference/errors
 apidocs/index
+```
+
+```{toctree}
+:hidden:
+:maxdepth: 1
+:caption: Agents
+
+agents
 ```
 
 ```{toctree}

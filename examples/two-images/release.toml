@@ -1,0 +1,34 @@
+# Step 3: release two images delivered to the node-local registry.
+#
+#   # step 2, once per image (and again for an image that changed):
+#   docker build --build-arg MESSAGE=alpha-v1 -t two-images/alpha:dev examples/two-images
+#   ID=$(docker image inspect --format '{{.Id}}' two-images/alpha:dev)
+#   piceli artifacts deliver --image "$ID" --approve-digest "$ID" \
+#     --to oci://127.0.0.1:15000/two-images/alpha --node-registry 127.0.0.1:5000 \
+#     --via-forward deployment/registry --namespace two-images \
+#     --kubeconfig examples/two-images/two-images.kubeconfig --context kind-two-images \
+#     --receipt examples/two-images/alpha.delivery.json
+#
+#   piceli release plan  --spec examples/two-images/release.toml
+#   piceli release apply --spec examples/two-images/release.toml --approve <plan-hash>
+
+[target]
+kubeconfig = "two-images.kubeconfig"
+context = "kind-two-images"
+namespace = "two-images"
+[target.nodes.primary]               # must be the registry's node
+name = "two-images-control-plane"
+
+[release]
+name = "apps"
+owner = "two-images"
+field_manager = "two-images"
+composition = "composition.py:build"
+state_dir = ".piceli-release"
+
+# Registry delivery receipts: the image reference is the receipt's pull_ref,
+# 127.0.0.1:5000/two-images/<name>@sha256:<manifest digest>.
+[images.alpha]
+receipt = "alpha.delivery.json"
+[images.beta]
+receipt = "beta.delivery.json"

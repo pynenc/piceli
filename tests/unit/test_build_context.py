@@ -10,6 +10,7 @@ from piceli.artifacts.build_context import (
     ContextSelection,
     Glob,
     stage_context,
+    verify_staged,
 )
 
 
@@ -175,3 +176,25 @@ def test_stage_refuses_symlink_swapped_in(tmp_path: Path) -> None:
     with pytest.raises(BuildContextError) as error:
         stage_context(root, manifest, tmp_path / "staged")
     assert error.value.code == "context-changed"
+
+
+def test_verify_staged_checks_only_the_staged_files(tmp_path: Path) -> None:
+    root = workspace(tmp_path)
+    manifest = ContextSelection(("src/**/*.rs",)).scan(root)
+    # Unstaged files (even new ones matching the patterns) are not drift.
+    (root / "README.md").write_text("edited\n")
+    (root / "src/notes.md").write_text("edited\n")
+    (root / "src/new.rs").write_text("// added after the scan\n")
+    verify_staged(root, manifest)
+    changes = {
+        "content": lambda base: (base / "src/net/mod.rs").write_text("// changed\n"),
+        "mode": lambda base: (base / "src/main.rs").chmod(0o755),
+        "deleted": lambda base: (base / "src/main.rs").unlink(),
+    }
+    for name, change in changes.items():
+        fresh = workspace(tmp_path / name)
+        before = ContextSelection(("src/**/*.rs",)).scan(fresh)
+        change(fresh)
+        with pytest.raises(BuildContextError) as error:
+            verify_staged(fresh, before)
+        assert error.value.code == "context-changed"

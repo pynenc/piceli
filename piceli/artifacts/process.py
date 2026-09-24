@@ -9,6 +9,7 @@ import signal
 import subprocess
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -188,8 +189,13 @@ def _run_process(
     cancel: threading.Event | None = None,
     expires_at: float | None = None,
     environment: dict[str, str] | None = None,
+    on_output: Callable[[str, bytes], None] | None = None,
 ) -> tuple[dict[str, Any], bytes, bytes]:
-    """Run with bounded private output for trusted adapters; callers redact it."""
+    """Run with bounded private output for trusted adapters; callers redact it.
+
+    ``on_output(stream, block)`` receives each block as it is read
+    (``stream`` is ``"stdout"`` or ``"stderr"``), so callers can stream it.
+    """
     if os.name != "posix":
         raise ValueError("bounded process-group execution currently requires POSIX")
     started = time.monotonic()
@@ -236,6 +242,8 @@ def _run_process(
                     consumed += len(block)
                     stream = "stdout" if key.fileobj is proc.stdout else "stderr"
                     output[stream].extend(block)
+                    if on_output is not None:
+                        on_output(stream, block)
                     if consumed > limits.max_output_bytes:
                         state = "output-limit"
                         break

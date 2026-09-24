@@ -142,6 +142,8 @@ html_favicon = "_static/logo.webp"
 
 language = "en"
 html_static_path = ["_static"]
+# Served at the site root: the index for language models (see AGENTS.md).
+html_extra_path = ["../llms.txt"]
 html_theme_options: dict[str, Any] = {
     "navigation_with_keys": True,
     "footer_icons": [

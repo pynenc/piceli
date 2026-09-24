@@ -1,0 +1,224 @@
+---
+# component: api (depends on: cache, cache-password)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/name: api
+    app.kubernetes.io/part-of: shop
+  name: api
+  namespace: shop
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: api
+        app.kubernetes.io/part-of: shop
+    spec:
+      containers:
+      - env:
+        - name: CACHE_HOST
+          value: cache
+        - name: CACHE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              key: password
+              name: cache-password
+        image: registry.example/shop/api@sha256:0000000000000000000000000000000000000000000000000000000000000000
+        name: api
+        ports:
+        - containerPort: 8080
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+---
+# component: api (depends on: cache, cache-password)
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/part-of: shop
+  name: api
+  namespace: shop
+spec:
+  ports:
+  - port: 80
+    protocol: TCP
+    targetPort: 8080
+  selector:
+    app.kubernetes.io/name: api
+---
+# component: cache (depends on: cache-password, cache-settings, cache-tls)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/name: cache
+    app.kubernetes.io/part-of: shop
+  name: cache
+  namespace: shop
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cache
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cache
+        app.kubernetes.io/part-of: shop
+    spec:
+      containers:
+      - command:
+        - redis-server
+        - /run/cache/redis.conf
+        env:
+        - name: MAXMEMORY
+          valueFrom:
+            configMapKeyRef:
+              key: maxmemory
+              name: cache-settings
+        image: docker.io/library/redis@sha256:0000000000000000000000000000000000000000000000000000000000000000
+        name: cache
+        ports:
+        - containerPort: 6380
+        readinessProbe:
+          periodSeconds: 5
+          tcpSocket:
+            port: 6380
+        resources:
+          limits:
+            memory: 256Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        volumeMounts:
+        - mountPath: /data
+          name: cache-state
+        - mountPath: /run/cache
+          name: run-cache
+        - mountPath: /etc/cache-tls
+          name: cache-tls
+      - image: docker.io/oliver006/redis_exporter@sha256:0000000000000000000000000000000000000000000000000000000000000000
+        livenessProbe:
+          httpGet:
+            path: /metrics
+            port: 9121
+        name: exporter
+        ports:
+        - containerPort: 9121
+        volumeMounts:
+        - mountPath: /run/cache
+          name: run-cache
+      initContainers:
+      - command:
+        - sh
+        - -c
+        - echo "requirepass $PASSWORD" > /run/cache/redis.conf
+        env:
+        - name: PASSWORD
+          valueFrom:
+            secretKeyRef:
+              key: password
+              name: cache-password
+        image: docker.io/library/busybox@sha256:0000000000000000000000000000000000000000000000000000000000000000
+        name: render-config
+        volumeMounts:
+        - mountPath: /run/cache
+          name: run-cache
+      nodeSelector:
+        kubernetes.io/hostname: node-a
+      shareProcessNamespace: true
+      volumes:
+      - emptyDir:
+          medium: Memory
+          sizeLimit: 16Mi
+        name: run-cache
+      - name: cache-state
+        persistentVolumeClaim:
+          claimName: cache-state
+      - name: cache-tls
+        secret:
+          secretName: cache-tls
+---
+# component: cache (depends on: cache-password, cache-settings, cache-tls)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/part-of: shop
+  name: cache-ingress
+  namespace: shop
+spec:
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: api
+    ports:
+    - port: 6380
+      protocol: TCP
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cache
+  policyTypes:
+  - Ingress
+---
+# component: cache (depends on: cache-password, cache-settings, cache-tls)
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/part-of: shop
+  name: cache
+  namespace: shop
+spec:
+  ports:
+  - port: 6380
+    protocol: TCP
+    targetPort: 6380
+  selector:
+    app.kubernetes.io/name: cache
+---
+# component: cache-password (depends on: -)
+apiVersion: v1
+data:
+  password: <redacted>
+kind: Secret
+metadata:
+  labels:
+    app.kubernetes.io/part-of: shop
+  name: cache-password
+  namespace: shop
+type: Opaque
+---
+# component: cache-settings (depends on: -)
+apiVersion: v1
+data:
+  maxmemory: 64mb
+kind: ConfigMap
+metadata:
+  labels:
+    app.kubernetes.io/part-of: shop
+  name: cache-settings
+  namespace: shop
+---
+# component: cache-tls (depends on: -)
+apiVersion: v1
+data:
+  tls.crt: <redacted>
+  tls.key: <redacted>
+kind: Secret
+metadata:
+  labels:
+    app.kubernetes.io/part-of: shop
+  name: cache-tls
+  namespace: shop
+type: kubernetes.io/tls

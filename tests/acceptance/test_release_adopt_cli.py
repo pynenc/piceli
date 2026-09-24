@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import copy
+import json
+from pathlib import Path
 
 from tests.acceptance.fake_api import TARGET, manifest
 from tests.acceptance.test_release_cli import (  # noqa: F401 (pytest fixture)
@@ -277,3 +279,186 @@ def test_adopt_entries_must_name_declared_resources(release_env):
     code, refused, _ = _run(tmp_path, "plan", "--adopt", "deployment/worker")
     assert code == 2 and "Kind/name" in refused["reason"]
     assert mutations(api) == []
+
+
+def test_plan_lists_every_blocking_object_with_suggested_flags(release_env):
+    api, tmp_path = release_env
+    kubectl_objects(api)
+    api.put(manifest("Secret", "credential", value="a3ViZWN0bA=="))
+    code, refused, result = _run(tmp_path, "plan")
+    assert code == 2
+    assert refused["code"] == "resource-requires-adoption"
+    assert refused["blocking"] == [
+        {
+            "kind": "ConfigMap",
+            "name": "settings",
+            "code": "resource-requires-adoption",
+            "message": "exists and is not managed by this release's owner",
+            "suggest": ["--adopt ConfigMap/settings", "--replace ConfigMap/settings"],
+        },
+        {
+            "kind": "Deployment",
+            "name": "worker",
+            "code": "resource-requires-adoption",
+            "message": "exists and is not managed by this release's owner",
+            "suggest": ["--adopt Deployment/worker", "--replace Deployment/worker"],
+        },
+        {
+            "kind": "Secret",
+            "name": "credential",
+            "code": "resource-requires-adoption",
+            "message": "exists and is not managed by this release's owner; "
+            "retained: replace is never allowed",
+            "suggest": ["--adopt Secret/credential"],
+        },
+    ]
+    assert "Secret/credential (--adopt Secret/credential)" in refused["reason"]
+    assert (
+        "blocking Deployment/worker: exists and is not managed by this release's "
+        "owner -> --adopt Deployment/worker or --replace Deployment/worker"
+    ) in result.stderr
+    assert mutations(api) == []
+
+
+def test_adopt_all_desired_adopts_every_unmanaged_declared_object(release_env):
+    api, tmp_path = release_env
+    kubectl_objects(api)
+    unrelated = manifest("ConfigMap", "unrelated")
+    api.put(unrelated)
+    before = copy.deepcopy(api.objects[("ConfigMap", "unrelated")])
+    code, planned, result = _run(tmp_path, "plan", "--adopt-all-desired")
+    assert code == 0, result.output
+    assert planned["authorized"] == {
+        "adopt": ["ConfigMap/settings", "Deployment/worker"],
+        "replace": [],
+        "adopt_all_desired": True,
+        "replace_not_needed": [],
+    }
+    operations = {item["name"]: item["operation"] for item in planned["actions"]}
+    assert operations == {
+        "settings": "adopt",
+        "worker": "adopt",
+        "credential": "create",
+    }
+    assert "adopt Deployment/worker  [takeover" in result.stderr
+
+    code, refused, _ = _run(
+        tmp_path, "apply", "--approve", planned["plan_hash"], "--adopt-all-desired"
+    )
+    assert code == 2 and "planning flags" in refused["reason"]
+    assert mutations(api) == []
+    code, applied, result = _run(tmp_path, "apply", "--approve", planned["plan_hash"])
+    assert code == 0, result.output
+    assert {item["name"] for item in applied["adopted"]} == {"settings", "worker"}
+    assert api.objects[("ConfigMap", "unrelated")] == before
+
+
+def test_adopt_all_desired_keeps_retained_objects_metadata_only(release_env):
+    api, tmp_path = release_env
+    kubectl_objects(api)
+    api.put(manifest("Secret", "credential", value="a3ViZWN0bA=="))
+    code, planned, result = _run(tmp_path, "plan", "--adopt-all-desired")
+    assert code == 0, result.output
+    secret = next(item for item in planned["actions"] if item["kind"] == "Secret")
+    assert secret["operation"] == "adopt"
+    assert secret["adoption"]["mode"] == "metadata-only"
+    # The generated value differs from the live one: refused before writes.
+    code, refused, _ = _run(tmp_path, "apply", "--approve", planned["plan_hash"])
+    assert code == 2 and "contain the desired manifest" in refused["reason"]
+    assert mutations(api) == []
+
+
+def test_cli_replace_writes_a_backup_then_recreates(release_env):
+    api, tmp_path = release_env
+    kubectl_objects(api)
+    old = copy.deepcopy(api.objects[("Deployment", "worker")])
+    code, planned, result = _run(
+        tmp_path,
+        "plan",
+        "--replace",
+        "Deployment/worker",
+        "--adopt",
+        "ConfigMap/settings",
+    )
+    assert code == 0, result.output
+    worker = next(item for item in planned["actions"] if item["name"] == "worker")
+    assert worker["operation"] == "replace"
+    assert worker["replace"]["deletes_uid"] == old["metadata"]["uid"]
+    assert planned["authorized"]["replace"] == ["Deployment/worker"]
+    assert (
+        f"replace Deployment/worker  [DELETES uid {old['metadata']['uid']} and "
+        "recreates it from the release; backup written first; dependents: deleted]"
+    ) in result.stderr
+    assert mutations(api) == []
+
+    code, applied, result = _run(tmp_path, "apply", "--approve", planned["plan_hash"])
+    assert code == 0, result.output
+    [replaced] = [item for item in applied["adopted"] if item["mode"] == "replace"]
+    backup = tmp_path / "state" / "backups"
+    assert replaced["backup"].startswith(str(backup))
+    saved = json.loads(Path(replaced["backup"]).read_text())
+    assert saved["spec"] == old["spec"]
+    assert "uid" not in saved["metadata"]
+    assert "kubectl create -f " + replaced["backup"] in result.stderr
+    live = api.objects[("Deployment", "worker")]
+    assert live["metadata"]["uid"] != old["metadata"]["uid"]
+    assert _image(api) == f"registry.example/app/api@{DIGEST_1}"
+    assert set(api.managers("Deployment", "worker")) == {f"{MANAGER}/Update"}
+
+    # Once managed, a replace is refused (nothing is deleted).
+    code, refused, _ = _run(tmp_path, "plan", "--replace", "Deployment/worker")
+    assert code == 2 and refused["code"] == "replace-refused"
+    assert "already managed" in refused["reason"]
+
+
+def test_cli_replace_refusals_happen_before_any_write(release_env):
+    api, tmp_path = release_env
+    kubectl_objects(api)
+    api.put(manifest("Secret", "credential", value="a3ViZWN0bA=="))
+    code, refused, _ = _run(
+        tmp_path,
+        "plan",
+        "--replace",
+        "Secret/credential",
+        "--adopt-all-desired",
+    )
+    assert code == 2
+    assert refused["blocking"] == [
+        {
+            "kind": "Secret",
+            "name": "credential",
+            "code": "replace-refused",
+            "message": "retained objects are never deleted; adopt it instead",
+            "suggest": ["--adopt Secret/credential"],
+        }
+    ]
+    code, refused, _ = _run(
+        tmp_path,
+        "plan",
+        "--replace",
+        "Deployment/worker",
+        "--adopt",
+        "Deployment/worker",
+    )
+    assert code == 2 and refused["code"] == "adopt-and-replace"
+    code, refused, _ = _run(tmp_path, "plan", "--replace", "Deployment/wroker")
+    assert code == 2 and refused["code"] == "replace-entry-not-declared"
+    code, refused, _ = _run(tmp_path, "plan", "--replace", "deployment/worker")
+    assert code == 2 and "replace entry must be" in refused["reason"]
+    assert mutations(api) == []
+
+
+def test_spec_replace_list_and_absent_objects(release_env):
+    api, tmp_path = release_env
+    spec = tmp_path / "release.toml"
+    spec.write_text(
+        spec.read_text().replace(
+            'state_dir = "state"',
+            'state_dir = "state"\nreplace = ["Deployment/worker"]',
+        )
+    )
+    code, planned, result = _run(tmp_path, "plan")
+    assert code == 0, result.output
+    assert planned["authorized"]["replace_not_needed"] == ["Deployment/worker"]
+    assert "replace Deployment/worker: not needed (absent)" in result.stderr
+    assert {item["operation"] for item in planned["actions"]} == {"create"}

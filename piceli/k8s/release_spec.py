@@ -16,11 +16,11 @@ import json
 import re
 import sys
 import tomllib
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
-from typing import Annotated, Any, Literal
+from typing import Any, Literal
 
 from pydantic import (
     BaseModel,
@@ -34,14 +34,22 @@ from pydantic import (
 from piceli.k8s.ops.plan import DeploymentComposition
 from piceli.k8s.ops.provider_factory import KubeconfigTarget, NodeExpectation
 from piceli.k8s.ops.secret_versions import SecretVersionRef
+from piceli.k8s.release_secret_spec import (  # noqa: F401 (re-exported)
+    GeneratorSpec,
+    ImportSecretSpec,
+    RandomSecretSpec,
+    SecretSpec,
+    StaticSecretSpec,
+    TemplateSecretSpec,
+    TlsCaSpec,
+    TlsSelfSignedSpec,
+    check_secrets,
+)
 
 BUILD_RECEIPT_REVISION = "piceli.build-receipt.v1"
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 _IMAGE_NAME = re.compile(r"[a-z][a-z0-9_-]{0,62}")
-_SECRET_NAME = re.compile(r"[a-z][a-z0-9-]{0,62}")
-_DNS = re.compile(
-    r"(?:\*\.)?(?:[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?"
-)
+_SECRET_NAME = re.compile(r"[a-z][a-z0-9_-]{0,62}")
 _RELEASE_PREFIX = re.compile(r"[a-z0-9](?:[-a-z0-9]{0,40}[a-z0-9])?")
 _KIND = re.compile(r"(?:[a-z0-9.-]+/)?[a-z][a-z0-9]*/[A-Za-z][A-Za-z0-9]*")
 
@@ -56,12 +64,14 @@ _ADOPT_ENTRY = re.compile(
 )
 
 
-def parse_adopt_entry(value: str) -> tuple[str | None, str, str]:
+def parse_adopt_entry(
+    value: str, *, what: str = "adopt"
+) -> tuple[str | None, str, str]:
     """``Kind/name`` or ``apiVersion/Kind/name`` → (api_version, kind, name)."""
     match = _ADOPT_ENTRY.fullmatch(value) if isinstance(value, str) else None
     if match is None or len(match["name"]) > 253:
         raise ReleaseSpecError(
-            f"adopt entry must be 'Kind/name' or 'apiVersion/Kind/name', got {value!r}"
+            f"{what} entry must be 'Kind/name' or 'apiVersion/Kind/name', got {value!r}"
         )
     return match["api"], match["kind"], match["name"]
 
@@ -101,12 +111,22 @@ class ReleaseSettings(_Strict):
     # Existing objects this release may adopt: "Kind/name" or
     # "apiVersion/Kind/name", in the target namespace. See docs/release_cli.md.
     adopt: tuple[str, ...] = ()
+    # Existing unmanaged objects this release may delete and recreate (with a
+    # backup first), same entry syntax. Never retained or managed objects.
+    replace: tuple[str, ...] = ()
 
     @field_validator("adopt")
     @classmethod
     def _adopt(cls, value: tuple[str, ...]) -> tuple[str, ...]:
         for item in value:
             parse_adopt_entry(item)
+        return value
+
+    @field_validator("replace")
+    @classmethod
+    def _replace(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        for item in value:
+            parse_adopt_entry(item, what="replace")
         return value
 
     @field_validator("name")
@@ -152,10 +172,12 @@ class DiscoverySpec(_Strict):
 class ImageSpec(_Strict):
     """A pinned image: ``digest`` (+ optional ``ref``), or a delivery ``receipt``.
 
-    ``receipt`` points at a ``piceli.registry-delivery.v1`` receipt from
-    ``piceli artifacts deliver --to oci://…``; its ``pull_ref`` (the registry
-    manifest digest as seen from the node) becomes the image reference. A
-    ``digest`` given together with ``receipt`` pins the expected manifest digest.
+    ``receipt`` points at a receipt from ``piceli artifacts deliver``. For
+    ``piceli.registry-delivery.v1`` its ``pull_ref`` (the registry manifest
+    digest as seen from the node) becomes the image reference, and ``digest``
+    pins the expected manifest digest. For ``piceli.node-delivery.v1`` its node
+    reference (a content tag of the config digest) becomes the reference, and
+    ``digest`` pins the expected config digest.
     """
 
     ref: str | None = None
@@ -178,66 +200,14 @@ class ImageSpec(_Strict):
         return self
 
 
-class RandomSecretSpec(_Strict):
-    type: Literal["random"]
-    bytes: int = Field(default=32, ge=16, le=512)
-    encoding: Literal["base64", "raw"] = "base64"
-
-
-class TlsSelfSignedSpec(_Strict):
-    type: Literal["tls-self-signed"]
-    dns_names: tuple[str, ...] = Field(min_length=1, max_length=32)
-    ip_addresses: tuple[str, ...] = ()
-    days: int = Field(default=365, ge=1, le=3650)
-    rsa_bits: Literal[2048, 3072, 4096] = 2048
-    encoding: Literal["base64", "raw"] = "base64"
-    openssl: Path = Path("/usr/bin/openssl")
-    openssl_sha256: str | None = None
-
-    @field_validator("dns_names")
-    @classmethod
-    def _dns(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        for item in value:
-            if len(item) > 253 or not _DNS.fullmatch(item):
-                raise ValueError(f"invalid DNS name {item!r}")
-        return value
-
-    @field_validator("ip_addresses")
-    @classmethod
-    def _ips(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        import ipaddress
-
-        for item in value:
-            ipaddress.ip_address(item)
-        return value
-
-    @field_validator("openssl")
-    @classmethod
-    def _tool(cls, value: Path) -> Path:
-        if not value.is_absolute():
-            raise ValueError("openssl must be an absolute path (a pinned tool)")
-        return value
-
-    @field_validator("openssl_sha256")
-    @classmethod
-    def _tool_digest(cls, value: str | None) -> str | None:
-        if value is not None and not _DIGEST.fullmatch(value):
-            raise ValueError("openssl_sha256 must be sha256:<64 hex>")
-        return value
-
-
-SecretSpec = Annotated[
-    RandomSecretSpec | TlsSelfSignedSpec, Field(discriminator="type")
-]
-
-
 class ReleaseSpecModel(_Strict):
     target: TargetSpec
     release: ReleaseSettings
     execution: ExecutionSpec = ExecutionSpec()
     discovery: DiscoverySpec = DiscoverySpec()
     images: dict[str, str | ImageSpec] = Field(default_factory=dict)
-    images_from: Path | None = None
+    # one receipt, or a list of build and delivery receipts (merged)
+    images_from: Path | tuple[Path, ...] | None = None
     secrets: dict[str, SecretSpec] = Field(default_factory=dict)
     values: dict[str, Any] = Field(default_factory=dict)
 
@@ -251,15 +221,61 @@ class ReleaseSpecModel(_Strict):
                 raise ValueError(f"invalid secret name {name!r}")
         if not self.images and self.images_from is None:
             raise ValueError("declare [images] or images_from")
+        if self.images_from == ():
+            raise ValueError("images_from lists no receipt")
         return self
+
+
+REGISTRY_DELIVERY_SCHEMA = "piceli.registry-delivery.v1"
+NODE_DELIVERY_SCHEMA = "piceli.node-delivery.v1"
+DELIVERY_RECEIPT_SCHEMA = REGISTRY_DELIVERY_SCHEMA  # the 0.2.0 name
+DELIVERY_SCHEMAS = (REGISTRY_DELIVERY_SCHEMA, NODE_DELIVERY_SCHEMA)
+_CONTENT_TAG = re.compile(r"sha256-([0-9a-f]{12,64})")
+
+
+class ImageHandoffError(ReleaseSpecError):
+    """An image cannot be pinned immutably. ``code`` is one fixed word.
+
+    Codes: ``image-not-immutable``, ``receipt-invalid``,
+    ``delivery-not-succeeded``, ``image-digest-mismatch``,
+    ``image-declared-twice`` and ``receipt-unmatched``.
+    """
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(f"{code}: {message}")
+        self.code = code
+
+
+def content_tag(config_digest: str, length: int = 12) -> str:
+    """The node-import tag derived from a config digest: ``sha256-<hex prefix>``.
+
+    Import an image into a node under ``repository:<content tag>`` (``piceli
+    artifacts deliver --ref``) so that the node-side name can only ever point
+    at this configuration.
+    """
+    if not _DIGEST.fullmatch(config_digest) or not 12 <= length <= 64:
+        raise ValueError("content_tag needs sha256:<64 hex> and 12..64 characters")
+    return "sha256-" + config_digest[7 : 7 + length]
+
+
+def _is_content_tag(tag: str | None, config_digest: str | None) -> bool:
+    match = _CONTENT_TAG.fullmatch(tag) if tag else None
+    return bool(
+        match
+        and config_digest
+        and _DIGEST.fullmatch(config_digest)
+        and config_digest[7:].startswith(match[1])
+    )
 
 
 @dataclass(frozen=True)
 class ImageRef:
     """One pinned image as seen by the composition function.
 
-    ``identity`` is the digest recorded in the release (the registry digest
-    when known, otherwise the local image ID from the build receipt).
+    ``identity`` is the digest recorded in the release: the registry manifest
+    digest when known, otherwise the config digest (``image_id``). ``source``
+    names the document the image came from (a receipt schema, or ``None`` for
+    ``[images]``).
     """
 
     name: str
@@ -270,14 +286,46 @@ class ImageRef:
     image_id: str | None = None
     platform: str | None = None
     ref: str | None = None
+    source: str | None = None
+
+    @property
+    def immutable(self) -> bool:
+        """Whether :attr:`reference` names exactly this image and nothing else."""
+        if self.repository and self.digest:
+            return True
+        return self.source == NODE_DELIVERY_SCHEMA and _is_content_tag(
+            self.tag, self.image_id
+        )
 
     @property
     def reference(self) -> str:
-        """The pull reference: ``repository@digest`` when possible, else ``ref``."""
+        """The pull reference, always immutable.
+
+        ``repository@digest`` when a registry digest is known; otherwise the
+        node-import content tag proven by a ``piceli.node-delivery.v1`` receipt.
+        A movable tag is refused with ``image-not-immutable``.
+        """
         if self.repository and self.digest:
             return f"{self.repository}@{self.digest}"
-        if self.ref:
+        if self.immutable and self.ref:
             return self.ref
+        if self.ref:
+            hint = (
+                f"{self.repository}:{content_tag(self.image_id)}"
+                if self.repository
+                and self.image_id
+                and _DIGEST.fullmatch(self.image_id)
+                else "<repository>:sha256-<12 hex of the config digest>"
+            )
+            raise ImageHandoffError(
+                "image-not-immutable",
+                f"image {self.name!r} has no registry digest and {self.ref!r} is "
+                "a tag another build can move. Deliver it to a registry "
+                "(`piceli artifacts deliver --to oci://…`) or import it into the "
+                f"node under a content tag (`--ref {hint}`), then list the "
+                "delivery receipt in images_from or [images."
+                f"{self.name}] receipt",
+            )
         raise ReleaseSpecError(
             f"image {self.name!r} has no repository; declare it as "
             "'repository@sha256:...' or use ImageRef.identity"
@@ -294,6 +342,7 @@ class ImageRef:
                 "image_id": self.image_id,
                 "platform": self.platform,
                 "ref": self.ref,
+                "source": self.source,
             }.items()
             if value is not None
         }
@@ -314,53 +363,128 @@ def _split_ref(ref: str) -> tuple[str, str | None, str | None]:
     return ref, tag, digest
 
 
-DELIVERY_RECEIPT_SCHEMA = "piceli.registry-delivery.v1"
-
-
-def load_delivery_receipt(name: str, path: Path, pin: str | None = None) -> ImageRef:
-    """Read the pull reference from a ``piceli.registry-delivery.v1`` receipt."""
+def _read_document(path: Path, what: str) -> dict[str, Any]:
     try:
         document = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError) as error:
-        raise ReleaseSpecError(
-            f"cannot read delivery receipt {path}: {error}"
+        raise ImageHandoffError(
+            "receipt-invalid", f"cannot read {what} {path}: {error}"
         ) from None
-    if (
-        not isinstance(document, dict)
-        or document.get("schema") != DELIVERY_RECEIPT_SCHEMA
-    ):
-        raise ReleaseSpecError(
-            f"image {name!r}: receipt must have schema {DELIVERY_RECEIPT_SCHEMA!r}"
+    if not isinstance(document, dict):
+        raise ImageHandoffError("receipt-invalid", f"{what} {path} is not an object")
+    return document
+
+
+def load_delivery_receipt(name: str, path: Path, pin: str | None = None) -> ImageRef:
+    """Read the image reference from a delivery receipt.
+
+    ``piceli.registry-delivery.v1``: the digest-pinned ``pull_ref``; ``pin``
+    is the expected manifest digest. ``piceli.node-delivery.v1``: the node
+    reference, which must be a content tag of the config digest; ``pin`` is the
+    expected config digest.
+    """
+    return _delivery_image(name, _read_document(path, "delivery receipt"), pin)
+
+
+def _delivery_image(name: str, document: dict[str, Any], pin: str | None) -> ImageRef:
+    schema = document.get("schema")
+    if schema not in DELIVERY_SCHEMAS:
+        raise ImageHandoffError(
+            "receipt-invalid",
+            f"image {name!r}: receipt must have schema "
+            f"{REGISTRY_DELIVERY_SCHEMA!r} or {NODE_DELIVERY_SCHEMA!r}",
         )
-    if document.get("result") not in {"pushed", "already-present"}:
-        raise ReleaseSpecError(
-            f"image {name!r}: delivery did not succeed ({document.get('result')!r})"
+    accepted = (
+        {"pushed", "already-present"}
+        if schema == REGISTRY_DELIVERY_SCHEMA
+        else {"imported", "already-present"}
+    )
+    if document.get("result") not in accepted:
+        raise ImageHandoffError(
+            "delivery-not-succeeded",
+            f"image {name!r}: delivery did not succeed ({document.get('result')!r})",
         )
     image = document.get("image")
     image = image if isinstance(image, dict) else {}
-    manifest = image.get("manifest_digest")
     config = image.get("config_digest")
+    if not (isinstance(config, str) and _DIGEST.fullmatch(config)):
+        raise ImageHandoffError(
+            "receipt-invalid", f"image {name!r}: receipt digests are invalid"
+        )
+    if schema == NODE_DELIVERY_SCHEMA:
+        return _node_image(name, document, image, config, pin)
+    manifest = image.get("manifest_digest")
     pull_ref = document.get("pull_ref")
-    if not (
-        isinstance(manifest, str)
-        and isinstance(config, str)
-        and _DIGEST.fullmatch(manifest)
-        and _DIGEST.fullmatch(config)
-    ):
-        raise ReleaseSpecError(f"image {name!r}: receipt digests are invalid")
+    if not (isinstance(manifest, str) and _DIGEST.fullmatch(manifest)):
+        raise ImageHandoffError(
+            "receipt-invalid", f"image {name!r}: receipt digests are invalid"
+        )
     if not isinstance(pull_ref, str):
-        raise ReleaseSpecError(f"image {name!r}: receipt has no pull_ref")
+        raise ImageHandoffError(
+            "receipt-invalid", f"image {name!r}: receipt has no pull_ref"
+        )
     repository, tag, embedded = _split_ref(pull_ref)
     if embedded != manifest:
-        raise ReleaseSpecError(
-            f"image {name!r}: receipt pull_ref is not pinned to its manifest digest"
+        raise ImageHandoffError(
+            "image-not-immutable",
+            f"image {name!r}: receipt pull_ref is not pinned to its manifest digest",
         )
     if pin is not None and pin != manifest:
-        raise ReleaseSpecError(
-            f"image {name!r}: receipt manifest digest does not match the pinned digest"
+        raise ImageHandoffError(
+            "image-digest-mismatch",
+            f"image {name!r}: receipt manifest digest does not match the pinned digest",
         )
     return ImageRef(
-        name, manifest, repository, tag, manifest, image_id=config, ref=pull_ref
+        name,
+        manifest,
+        repository,
+        tag,
+        manifest,
+        image_id=config,
+        ref=pull_ref,
+        source=REGISTRY_DELIVERY_SCHEMA,
+    )
+
+
+def _node_image(
+    name: str,
+    document: dict[str, Any],
+    image: dict[str, Any],
+    config: str,
+    pin: str | None,
+) -> ImageRef:
+    reference = image.get("reference")
+    if document.get("approved_digest") != config:
+        raise ImageHandoffError(
+            "receipt-invalid",
+            f"image {name!r}: receipt config digest is not the approved digest",
+        )
+    if not isinstance(reference, str) or "@" in reference:
+        raise ImageHandoffError(
+            "receipt-invalid", f"image {name!r}: receipt has no node reference"
+        )
+    repository, tag, _ = _split_ref(reference)
+    if not _is_content_tag(tag, config):
+        raise ImageHandoffError(
+            "image-not-immutable",
+            f"image {name!r}: node reference {reference!r} is a tag another "
+            "import can move; import it under a content tag of its config "
+            f"digest (`--ref {repository}:{content_tag(config)}`)",
+        )
+    if pin is not None and pin != config:
+        raise ImageHandoffError(
+            "image-digest-mismatch",
+            f"image {name!r}: receipt config digest does not match the pinned digest",
+        )
+    return ImageRef(
+        name,
+        config,
+        repository,
+        tag,
+        None,
+        image_id=config,
+        ref=reference,
+        source=NODE_DELIVERY_SCHEMA,
     )
 
 
@@ -391,22 +515,27 @@ def _image_from_spec(
 
 
 def load_build_receipt(path: Path) -> dict[str, ImageRef]:
-    """Read ``outputs.images`` from a ``piceli.build-receipt.v1`` receipt."""
-    try:
-        document = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError) as error:
-        raise ReleaseSpecError(f"cannot read build receipt {path}: {error}") from None
-    if (
-        not isinstance(document, dict)
-        or document.get("revision") != BUILD_RECEIPT_REVISION
-    ):
-        raise ReleaseSpecError(
-            f"build receipt must have revision {BUILD_RECEIPT_REVISION!r}"
+    """Read ``outputs.images`` from a ``piceli.build-receipt.v1`` receipt.
+
+    An entry without a registry ``digest`` loads, but its
+    :attr:`ImageRef.reference` is refused (``image-not-immutable``) until a
+    delivery receipt supplies an immutable reference.
+    """
+    return _build_images(_read_document(path, "build receipt"))
+
+
+def _build_images(document: dict[str, Any]) -> dict[str, ImageRef]:
+    if document.get("revision") != BUILD_RECEIPT_REVISION:
+        raise ImageHandoffError(
+            "receipt-invalid",
+            f"build receipt must have revision {BUILD_RECEIPT_REVISION!r}",
         )
     outputs = document.get("outputs")
     images = outputs.get("images") if isinstance(outputs, dict) else None
     if not isinstance(images, dict) or not images:
-        raise ReleaseSpecError("build receipt has no outputs.images")
+        raise ImageHandoffError(
+            "receipt-invalid", "build receipt has no outputs.images"
+        )
     result: dict[str, ImageRef] = {}
     for name, entry in images.items():
         if not isinstance(name, str) or not _IMAGE_NAME.fullmatch(name):
@@ -441,7 +570,78 @@ def load_build_receipt(path: Path) -> dict[str, ImageRef]:
             image_id,
             platform,
             ref,
+            BUILD_RECEIPT_REVISION,
         )
+    return result
+
+
+def _same_image(built: ImageRef, delivered: ImageRef) -> bool:
+    """A delivery is of a built image when the config digests (or, for a
+    containerd-store build, the manifest digests) are equal."""
+    if delivered.image_id is not None and delivered.image_id == built.image_id:
+        return True
+    return built.digest is not None and built.digest == delivered.digest
+
+
+def _delivered(name: str, built: ImageRef, delivered: ImageRef) -> ImageRef:
+    if not _same_image(built, delivered):
+        raise ImageHandoffError(
+            "image-digest-mismatch",
+            f"image {name!r}: the delivery receipt's config digest "
+            f"{delivered.image_id} is not the built image {built.image_id}",
+        )
+    return replace(delivered, name=name, platform=built.platform)
+
+
+def load_images_from(paths: Sequence[Path]) -> dict[str, ImageRef]:
+    """Merge build and delivery receipts into one image per name.
+
+    Build receipts name the images; a name may appear in only one of them.
+    Each delivery receipt (``piceli.registry-delivery.v1`` or
+    ``piceli.node-delivery.v1``) replaces every built image with its config
+    digest, and must match at least one. An image may be delivered by only one
+    listed receipt.
+    """
+    built: dict[str, ImageRef] = {}
+    deliveries: list[tuple[str, dict[str, Any]]] = []
+    for path in paths:
+        document = _read_document(path, "receipt")
+        if document.get("revision") == BUILD_RECEIPT_REVISION:
+            for name, image in _build_images(document).items():
+                if name in built:
+                    raise ImageHandoffError(
+                        "image-declared-twice",
+                        f"image {name!r} appears in more than one build receipt",
+                    )
+                built[name] = image
+        elif document.get("schema") in DELIVERY_SCHEMAS:
+            deliveries.append((path.name, document))
+        else:
+            raise ImageHandoffError(
+                "receipt-invalid",
+                f"{path.name} is neither a {BUILD_RECEIPT_REVISION!r} nor a "
+                f"{REGISTRY_DELIVERY_SCHEMA!r}/{NODE_DELIVERY_SCHEMA!r} receipt",
+            )
+    result = dict(built)
+    delivered_by: dict[str, str] = {}
+    for label, document in deliveries:
+        image = _delivery_image(label, document, None)
+        names = [name for name, item in built.items() if _same_image(item, image)]
+        if not names:
+            raise ImageHandoffError(
+                "receipt-unmatched",
+                f"delivery receipt {label} matches no image of the listed build "
+                "receipts; name it with [images.<name>] receipt = …",
+            )
+        for name in names:
+            if name in delivered_by:
+                raise ImageHandoffError(
+                    "image-declared-twice",
+                    f"image {name!r} is delivered by both {delivered_by[name]} "
+                    f"and {label}",
+                )
+            delivered_by[name] = label
+            result[name] = _delivered(name, built[name], image)
     return result
 
 
@@ -500,6 +700,13 @@ class ReleaseSpec:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any], base: Path) -> ReleaseSpec:
+        for table, content in value.items():
+            if isinstance(content, Mapping) and "images_from" in content:
+                raise ReleaseSpecError(
+                    f"invalid release spec: images_from is a top-level key but "
+                    f"was found inside [{table}]; move it above the first "
+                    "[table] of the spec"
+                )
         try:
             model = ReleaseSpecModel.model_validate(dict(value))
         except ValidationError as error:
@@ -508,6 +715,7 @@ class ReleaseSpec:
                 for item in error.errors()
             )
             raise ReleaseSpecError(f"invalid release spec: {problems}") from None
+        check_secrets(model.secrets)
         return cls(model, base.resolve())
 
     @classmethod
@@ -562,20 +770,35 @@ class ReleaseSpec:
         )
 
     def images(self) -> dict[str, ImageRef]:
-        """Declared images plus the build receipt's, rejecting name collisions."""
+        """Declared images plus the ``images_from`` receipts' (merged).
+
+        A name in both is refused, except ``[images.<name>] receipt = …``
+        over a built image: the delivery receipt wins when its config digest
+        matches the build, and is refused otherwise.
+        """
         result = {
             name: _image_from_spec(name, value, self.resolve)
             for name, value in self.model.images.items()
         }
-        if self.model.images_from is not None:
-            for name, image in load_build_receipt(
-                self.resolve(self.model.images_from)
-            ).items():
-                if name in result:
-                    raise ReleaseSpecError(
-                        f"image {name!r} is declared in both [images] and images_from"
+        sources = self.model.images_from
+        if sources is not None:
+            paths = [sources] if isinstance(sources, Path) else list(sources)
+            loaded = load_images_from([self.resolve(path) for path in paths])
+            for name, image in loaded.items():
+                declared = self.model.images.get(name)
+                if name not in result:
+                    result[name] = image
+                elif (
+                    isinstance(declared, ImageSpec)
+                    and declared.receipt is not None
+                    and image.source == BUILD_RECEIPT_REVISION
+                ):
+                    result[name] = _delivered(name, image, result[name])
+                else:
+                    raise ImageHandoffError(
+                        "image-declared-twice",
+                        f"image {name!r} is declared in both [images] and images_from",
                     )
-                result[name] = image
         return dict(sorted(result.items()))
 
     def load_composition(self) -> CompositionFunction:

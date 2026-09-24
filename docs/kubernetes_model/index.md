@@ -1,5 +1,11 @@
 # Kubernetes Model
 
+```{admonition} Maturity: stable
+:class: tip
+
+Defining objects with templates, `kubernetes` client models or YAML/JSON is stable: existing definitions keep loading within a major version. See the {doc}`../roadmap` for every feature's status.
+```
+
 The Kubernetes model in Piceli offers a flexible and powerful way to define and manage your Kubernetes objects. Piceli supports several methods for defining Kubernetes objects, catering to different preferences and project requirements. These include using Piceli templates, the official Kubernetes Python library, and YAML or JSON files.
 
 ## Defining Kubernetes Objects

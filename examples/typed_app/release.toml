@@ -1,0 +1,24 @@
+# `piceli release` spec for examples/typed_app. See docs/typed_apps.md.
+#
+#   piceli render --spec examples/typed_app/release.toml
+#   piceli release plan --spec examples/typed_app/release.toml
+
+[target]
+kubeconfig = "shop.kubeconfig"      # an explicit file; never ~/.kube/config
+context = "kind-shop"               # an explicit context; never current-context
+namespace = "shop"                  # must already exist
+
+[release]
+name = "shop"
+owner = "shop"
+field_manager = "shop"
+composition = "app.py:build"
+state_dir = ".piceli-release"
+
+[images]
+cache = "docker.io/library/redis:7.2.3@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+api = "registry.example/shop/api@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+[secrets.cache-password]
+type = "random"
+bytes = 32
