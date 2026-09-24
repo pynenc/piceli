@@ -1,4 +1,9 @@
-"""Human and agent-friendly read-only operations commands."""
+"""Human and agent-friendly read-only operations commands.
+
+Machine JSON goes to stdout (JSON lines for ``forwards apply``), human text to
+stderr. Refusals print ``{"state": "rejected", "reason": "<code>", "message":
+…}`` and exit 2 (see ``piceli explain <code>``).
+"""
 
 from __future__ import annotations
 
@@ -14,6 +19,7 @@ from typing import Annotated
 
 import typer
 
+from piceli.cli_contract import EXIT_FAILED, reject, rejecting, say
 from piceli.k8s.observe import (
     AccessPlan,
     ForwardSupervisor,
@@ -51,7 +57,35 @@ app.add_typer(forwards_app, name="forwards")
 
 
 def _archive(path: Path) -> DeploymentSessionArchive:
-    return DeploymentSessionArchive.from_json(path.read_text())
+    with rejecting(((ValueError, OSError), "invalid-session-archive")):
+        return DeploymentSessionArchive.from_json(path.read_text())
+
+
+def _reader(kubeconfig: Path, context: str | None) -> KubernetesDynamicInventoryReader:
+    """The inventory reader; an unusable kubeconfig or context is a rejection."""
+    with rejecting((Exception, "kubeconfig-rejected")):
+        return KubernetesDynamicInventoryReader(kubeconfig=kubeconfig, context=context)
+
+
+def _profile(path: Path | None, *, access: bool = False) -> UiConfig:
+    with rejecting(((ValueError, OSError), "invalid-access-profile")):
+        return load_access_profile(path) if access and path else load_ui_config(path)
+
+
+def _preferences(store: PreferenceStore) -> dict[str, UserPreferences]:
+    with rejecting(((ValueError, OSError), "invalid-preference-store")):
+        return store.load()
+
+
+def _saved(preferences: Path | None, user: str, name: str) -> PortForward:
+    """The user's saved forward ``name``, or a rejection."""
+    preference = _preferences(PreferenceStore(preferences)).get(user)
+    if preference is None:
+        reject("no-saved-forwards", "user has no saved port forwards", user=user)
+    for forward in preference.forwards:
+        if forward.name == name:
+            return forward
+    reject("unknown-forward", "saved port forward does not exist", name=name)
 
 
 UI_CONFIG_HELP = (
@@ -72,11 +106,12 @@ def bind_local_server(
         if supervisor:
             supervisor.close()
         if error.errno == errno.EADDRINUSE:
-            raise typer.BadParameter(
+            reject(
+                "local-port-in-use",
                 f"local port {port} is already in use; choose another port or "
                 "stop the process that owns it",
-                param_hint="--port",
-            ) from None
+                port=port,
+            )
         raise
 
 
@@ -129,7 +164,7 @@ def status(
     """Print declared resources, live state, and objects absent from the archive."""
     report = observe_session(
         _archive(archive),
-        KubernetesDynamicInventoryReader(kubeconfig=kubeconfig, context=context),
+        _reader(kubeconfig, context),
         include_common_types=include_common_types,
     )
     typer.echo(json.dumps(report.to_dict(), sort_keys=True))
@@ -149,14 +184,15 @@ def forward_save(
 ) -> None:
     """Persist one harmless port-forward preference for a local user."""
     store = PreferenceStore(preferences)
-    existing = store.load().get(user, UserPreferences(user))
-    updated = {item.name: item for item in existing.forwards}
-    updated[name] = PortForward(name, namespace, target, local_port, remote_port)
-    store.replace_user(
-        UserPreferences(
+    with rejecting((ValueError, "invalid-forward-preference")):
+        existing = _preferences(store).get(user, UserPreferences(user))
+        updated = {item.name: item for item in existing.forwards}
+        updated[name] = PortForward(name, namespace, target, local_port, remote_port)
+        replacement = UserPreferences(
             user, tuple(sorted(updated.values(), key=lambda item: item.name))
         )
-    )
+    with rejecting(((ValueError, OSError), "invalid-preference-store")):
+        store.replace_user(replacement)
     typer.echo(json.dumps({"saved": name, "user": user}, sort_keys=True))
 
 
@@ -166,7 +202,9 @@ def forward_list(
     preferences: Annotated[MaybePath, typer.Option()] = None,
 ) -> None:
     """List a user's saved port-forward preferences without starting a process."""
-    preference = PreferenceStore(preferences).load().get(user, UserPreferences(user))
+    preference = _preferences(PreferenceStore(preferences)).get(
+        user, UserPreferences(user)
+    )
     typer.echo(
         json.dumps(
             {"user": user, "forwards": [item.__dict__ for item in preference.forwards]},
@@ -185,20 +223,12 @@ def forward_command(
     preferences: Annotated[MaybePath, typer.Option()] = None,
 ) -> None:
     """Print a JSON argv array for one explicit loopback-only port forward."""
-    preference = PreferenceStore(preferences).load().get(user)
-    if preference is None:
-        raise typer.BadParameter("user has no saved port forwards")
-    for forward in preference.forwards:
-        if forward.name == name:
-            typer.echo(
-                json.dumps(
-                    forward.command(
-                        kubectl=kubectl, kubeconfig=kubeconfig, context=context
-                    )
-                )
-            )
-            return
-    raise typer.BadParameter("saved port forward does not exist")
+    forward = _saved(preferences, user, name)
+    typer.echo(
+        json.dumps(
+            forward.command(kubectl=kubectl, kubeconfig=kubeconfig, context=context)
+        )
+    )
 
 
 @app.command("forward-run")
@@ -211,19 +241,12 @@ def forward_run(
     preferences: Annotated[MaybePath, typer.Option()] = None,
 ) -> None:
     """Run one saved loopback-only port forward until the caller interrupts it."""
-    preference = PreferenceStore(preferences).load().get(user)
-    if preference is None:
-        raise typer.BadParameter("user has no saved port forwards")
-    for forward in preference.forwards:
-        if forward.name == name:
-            raise typer.Exit(
-                run_port_forward(
-                    forward.command(
-                        kubectl=kubectl, kubeconfig=kubeconfig, context=context
-                    )
-                )
-            )
-    raise typer.BadParameter("saved port forward does not exist")
+    forward = _saved(preferences, user, name)
+    with rejecting((ValueError, "invalid-forward-preference")):
+        command = forward.command(
+            kubectl=kubectl, kubeconfig=kubeconfig, context=context
+        )
+    raise typer.Exit(run_port_forward(command))
 
 
 @app.command("logs-command")
@@ -240,20 +263,18 @@ def logs_command(
     kubectl: Annotated[str, typer.Option()] = "kubectl",
 ) -> None:
     """Print JSON argv for a bounded, explicit workload-log request."""
-    typer.echo(
-        json.dumps(
-            kubectl_logs_command(
-                kubectl=kubectl,
-                kubeconfig=kubeconfig,
-                context=context,
-                namespace=namespace,
-                target=target,
-                tail=tail,
-                container=container,
-                previous=previous,
-            )
+    with rejecting((ValueError, "invalid-log-request")):
+        command = kubectl_logs_command(
+            kubectl=kubectl,
+            kubeconfig=kubeconfig,
+            context=context,
+            namespace=namespace,
+            target=target,
+            tail=tail,
+            container=container,
+            previous=previous,
         )
-    )
+    typer.echo(json.dumps(command))
 
 
 @app.command("logs-run")
@@ -270,20 +291,18 @@ def logs_run(
     kubectl: Annotated[str, typer.Option()] = "kubectl",
 ) -> None:
     """Run a bounded workload-log request in the caller's foreground terminal."""
-    raise typer.Exit(
-        run_logs(
-            kubectl_logs_command(
-                kubectl=kubectl,
-                kubeconfig=kubeconfig,
-                context=context,
-                namespace=namespace,
-                target=target,
-                tail=tail,
-                container=container,
-                previous=previous,
-            )
+    with rejecting((ValueError, "invalid-log-request")):
+        command = kubectl_logs_command(
+            kubectl=kubectl,
+            kubeconfig=kubeconfig,
+            context=context,
+            namespace=namespace,
+            target=target,
+            tail=tail,
+            container=container,
+            previous=previous,
         )
-    )
+    raise typer.Exit(run_logs(command))
 
 
 @app.command("serve")
@@ -315,14 +334,14 @@ def serve(
     ] = False,
 ) -> None:
     """Open the local operations dashboard and optionally restore saved forwards."""
-    config = load_ui_config(ui_config)
+    config = _profile(ui_config)
     session_archive = _archive(archive)
     if namespace is None:
         archive_namespaces = {
             ref.namespace for ref in archive_resources(session_archive) if ref.namespace
         }
         namespace = archive_namespaces.pop() if len(archive_namespaces) == 1 else ""
-    reader = KubernetesDynamicInventoryReader(kubeconfig=kubeconfig, context=context)
+    reader = _reader(kubeconfig, context)
     store = PreferenceStore(preferences)
     plan_ids: tuple[str, ...] = ()
     if start_shortcuts:
@@ -338,7 +357,8 @@ def serve(
             namespace=namespace or None,
         )
         if user:
-            supervisor.restore()
+            with rejecting((ValueError, "invalid-preference-store")):
+                supervisor.restore()
         for shortcut_id in plan_ids:
             supervisor.quick_start(shortcut_id, namespace or None)
     server = bind_local_server(
@@ -363,8 +383,10 @@ def _selected(config: UiConfig, only: list[str] | None) -> UiConfig:
         return config
     unknown = sorted(set(only) - {shortcut.id for shortcut in config.shortcuts})
     if unknown:
-        raise typer.BadParameter(
-            f"unknown shortcut id(s): {', '.join(unknown)}", param_hint="--only"
+        reject(
+            "unknown-shortcut",
+            f"unknown shortcut id(s): {', '.join(unknown)}",
+            unknown=unknown,
         )
     return UiConfig(
         shortcuts=tuple(item for item in config.shortcuts if item.id in set(only))
@@ -375,11 +397,12 @@ def _preflight_or_exit(config: UiConfig, namespace: str | None) -> AccessPlan:
     """Refuse to start anything when a required local port is already taken."""
     plan = preflight_shortcuts(config.shortcuts, namespace=namespace)
     if plan.errors:
-        typer.echo(
-            json.dumps({"ok": False, "preflight": plan.to_dict()}, sort_keys=True),
-            err=True,
+        reject(
+            "forward-port-conflict",
+            "; ".join(str(item) for item in plan.errors),
+            ok=False,
+            preflight=plan.to_dict(),
         )
-        raise typer.Exit(2)
     return plan
 
 
@@ -418,7 +441,7 @@ def forwards_apply(
     SIGHUP.  Exits 2 without starting anything when the port-conflict
     preflight fails.
     """
-    config = _selected(load_access_profile(profile), only)
+    config = _selected(_profile(profile, access=True), only)
     plan = _preflight_or_exit(config, namespace)
     plan_ids = plan.start
     supervisor = ForwardSupervisor(
@@ -473,7 +496,7 @@ def forwards_status(
     running ``forwards apply`` (or any other owner of the ports).  Exits 1 when
     a required forward is unhealthy.
     """
-    config = _selected(load_access_profile(profile), only)
+    config = _selected(_profile(profile, access=True), only)
     items = []
     healthy_required = True
     for shortcut in config.shortcuts:
@@ -493,6 +516,15 @@ def forwards_status(
                 "probe": shortcut.probe.public_dict(),
             }
         )
-    typer.echo(json.dumps({"ok": healthy_required, "forwards": items}, sort_keys=True))
+    result: dict[str, object] = {"ok": healthy_required, "forwards": items}
     if not healthy_required:
-        raise typer.Exit(1)
+        unhealthy = [item["id"] for item in items if item["health"] != "healthy"]
+        typer.echo(
+            json.dumps(
+                {**result, "state": "failed", "reason": "forward-unhealthy"},
+                sort_keys=True,
+            )
+        )
+        say(f"unhealthy forwards: {', '.join(map(str, unhealthy))} [forward-unhealthy]")
+        raise typer.Exit(EXIT_FAILED)
+    typer.echo(json.dumps({**result, "state": "healthy"}, sort_keys=True))

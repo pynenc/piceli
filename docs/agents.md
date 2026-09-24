@@ -7,8 +7,10 @@ the errors, how to resume, and what never to print.
 ```{admonition} Maturity: preview
 :class: note
 
-The output contract below is new in this release. Commands marked `partial` in
-{doc}`reference/cli` do not follow it fully yet. See the {doc}`roadmap` for
+The output contract below is new in 0.3.0 and, since 0.4.0, covers every
+`release`, `inputs`, `artifacts`, `observe` and `operator` command (marked
+`conforms` in {doc}`reference/cli`). Only `render` is still `partial`, and the
+legacy `model`/`deploy` commands are `legacy`. See the {doc}`roadmap` for
 every feature's status.
 ```
 
@@ -30,10 +32,22 @@ interruption is harmless.
 ## The output contract
 
 - **stdout** carries machine output: one JSON object per command, or JSON lines
-  for streaming commands. Parse it; do not scrape stderr.
+  for streaming commands (`observe forwards apply`). Parse it; do not scrape
+  stderr.
 - **stderr** carries human text: summaries, hints and the plan hash to approve.
-- A refusal prints `{"state": "rejected", "reason": "<code>"}` and changes
-  nothing. The code is stable and explained by `piceli explain <code>`.
+  It never carries a JSON object.
+- A refusal prints
+  `{"state": "rejected", "reason": "<code>", "message": "<human text>", …}`
+  and changes nothing. `reason` is stable and explained by
+  `piceli explain <code>`; `message` is for people and may change. Some
+  commands add fields: `release` refusals keep `blocking[]` (each item with
+  its own `code` and `message`), `inputs` adds `source`, `observe forwards
+  apply` adds `preflight`.
+- An operation that ran but did not succeed exits `1` and its result names
+  the code in `reason`: `{"state": "failed", "reason": …}` for `release
+  apply|rollback|resume` and `artifacts build-spec run`, `"state": "drift"`
+  for `inputs verify`, a receipt with `state` `failed`/`rejected` for
+  `artifacts deliver`.
 
 | Exit code | Meaning | What to do |
 | --- | --- | --- |
@@ -43,18 +57,22 @@ interruption is harmless.
 | `3` | Approval required; nothing was executed | Show the plan to the owner and wait. |
 
 Commands whose contract is `conforms` in {doc}`reference/cli` follow these rules
-exactly (`explain`, `help-json`). Commands marked `partial` print JSON on stdout
-but still differ in how they refuse:
+exactly. For a refused release plan, see
+[If `plan` refuses](release_cli.md#if-plan-refuses) for the next step.
 
-- `piceli release …` prints `{"state": "refused", "reason": "<sentence>"}` on
-  stdout. Rely on the exit code `2`; see
-  [If `plan` refuses](release_cli.md#if-plan-refuses) for the next step.
-- `piceli artifacts …` (including `build-spec`) prints the rejection object on
-  **stderr** with a registered code.
-- `piceli inputs …` prints `{"state": "rejected", "reason": "<sentence>"}` on
-  stderr.
+### Contract changes in 0.4.0
 
-These will converge on the contract in a later release.
+0.4.0 moved the remaining preview commands onto the contract. Their machine
+output changed as follows; exit codes did not change.
+
+| Commands | Before (0.3.0) | Now (0.4.0) |
+| --- | --- | --- |
+| `release plan/preview/apply/rollback/resume/stop/status/secret show` | Refusal `{"state": "refused", "reason": "<sentence>", "code": "<code>"?}` on stdout | `{"state": "rejected", "reason": "<code>", "message": "<sentence>", "code": "<code>"}`; `code` is an alias of `reason` for 0.4.x only. Results of `apply`/`rollback`/`resume`/`stop` add `state` (`succeeded`, or `failed` with `reason`). |
+| `inputs record/verify` | Refusal on **stderr**, `reason` a sentence | Refusal on stdout, `reason` a code, sentence in `message`; drift adds `"reason": "source-drift"` |
+| `artifacts …` including `build-spec` and `deliver` | Refusal on **stderr** (`build-spec`: the last stderr line) | Refusal or failure object on stdout, with `message` (the code's title); a failed `execute-command`/`import-local` result adds `reason` |
+| `observe …`, `operator …` | Usage errors, tracebacks, or `{"ok": false, "preflight": …}` on stderr | Refusal on stdout with a code; `forwards status` adds `state` and, on exit 1, `reason` |
+
+See also {ref}`the release contract changes <release-contract-changes>`.
 
 ## Commands an agent may run without asking
 
@@ -76,6 +94,9 @@ noted.
   explicit `--kubeconfig`.
 - `piceli observe forward-list`, `piceli observe forward-command`,
   `piceli observe logs-command`: print what would run, start nothing.
+- `piceli observe forwards status`: probes the declared loopback ports once
+  (never the cluster); exit `1` with `"reason": "forward-unhealthy"` when a
+  required forward is down.
 - `piceli artifacts build`: assembles an OCI layout in `--output` without
   running any code.
 - `piceli observe forward-save`, `piceli operator backup`: write a local
@@ -111,7 +132,8 @@ unattended CI job for this exact spec.
    `approval_window_seconds`; if it did, plan again and ask again.
 4. Run `piceli release apply --spec release.toml --approve <hash>`.
 5. Exit `0` means the release is ready. Exit `1` means it ran but did not
-   become ready: report `execution.failure_category`, and offer
+   become ready: report `reason` (the failure category, or
+   `execution-not-ready`) and `execution.state`, and offer
    `piceli release rollback previous` (which needs its own approval).
 
 ## When something fails
@@ -121,8 +143,9 @@ unattended CI job for this exact spec.
    `retry_safe`.
 3. If `retry_safe` is `true`, re-run the same command once. Otherwise apply the
    `fix` (it names the flag or command) or report it to the owner.
-4. An unknown code (`piceli explain` exits `2` with `unknown-error-code`) means
-   the reason is a sentence from a `partial` command: report it verbatim.
+4. An unknown code (`piceli explain` exits `2` with `unknown-error-code`)
+   should not happen for a `conforms` command: report the whole JSON object
+   verbatim.
 
 ## Resuming interrupted work
 

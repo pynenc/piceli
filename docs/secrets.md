@@ -229,7 +229,8 @@ Contract:
 - Metadata fields: `secret`, `release`, `type`, `encoding`, `keys`,
   `internal`, `origin`, `first_release`, `first_origin`, and `source`,
   `rotate` (imports) or `depends_on` (templates).
-- Exit codes: `0` shown, `2` refused.
+- Exit codes: `0` shown, `2` rejected: `{"state": "rejected", "reason":
+  "<code>", "message": …}` on stdout (the value is never part of it).
 
 ## Rotate a value
 
@@ -263,8 +264,10 @@ under `secrets`:
 
 ## If it fails
 
-Refusals exit with code `2` and print `{"state": "refused", "reason": …,
-"code": …}`. No secret version is left behind by a refused plan.
+Refusals exit with code `2` and print `{"state": "rejected", "reason":
+"<code>", "message": …}` on stdout (0.4.0 changed this from
+`{"state": "refused", …}`; see {ref}`release-contract-changes`). No secret
+version is left behind by a refused plan.
 
 | Code | Cause | Fix |
 | --- | --- | --- |

@@ -166,7 +166,7 @@ def test_plan_apply_release_per_digest_and_rollback(release_env):
     assert base64.b64decode(password)
     # The approval is one-shot.
     code, refused, _ = _run(tmp_path, "apply", "--approve", planned["plan_hash"])
-    assert code == 2 and refused["state"] == "refused"
+    assert code == 2 and refused["state"] == "rejected"
 
     _receipt(tmp_path / "build.receipt.json", DIGEST_2)
     code, second_apply, result = _run(tmp_path, "apply", "--auto-approve")
@@ -237,7 +237,8 @@ def test_approval_required_without_tty_and_bad_hash(release_env):
     assert pending["state"] == "approval-required"
     assert ("Deployment", "worker") not in api.objects
     code, refused, _ = _run(tmp_path, "apply", "--approve", "f" * 64)
-    assert code == 2 and "no pending plan" in refused["reason"]
+    assert code == 2 and "no pending plan" in refused["message"]
+    assert refused["reason"] == refused["code"] == "plan-not-found"
     code, refused, _ = _run(tmp_path, "apply", "--approve", "not-a-hash")
     assert code == 2
 
@@ -257,7 +258,8 @@ def test_resume_and_stop_use_the_session_execution(release_env):
     assert resumed["execution"]["execution_id"] == execution_id
     assert resumed["execution"]["state"] == "ready"
     code, refused, _ = _run(tmp_path, "stop")
-    assert code == 2 and "nothing to stop" in refused["reason"]
+    assert code == 2 and "nothing to stop" in refused["message"]
+    assert refused["reason"] == refused["code"] == "nothing-to-stop"
 
     _receipt(tmp_path / "build.receipt.json", DIGEST_2)
     api.ready = False
@@ -289,7 +291,8 @@ def test_cluster_identity_pin_is_enforced(release_env):
     )
     code, refused, _ = _run(tmp_path, "plan")
     assert code == 2
-    assert "cluster identity mismatch" in refused["reason"]
+    assert "cluster identity mismatch" in refused["message"]
+    assert refused["reason"] == "server-target-identity-mismatch"
     assert not (tmp_path / "state").exists()
 
 
@@ -299,4 +302,5 @@ def test_unknown_spec_keys_are_rejected(release_env):
     spec.write_text(spec.read_text().replace("[values]", "surprise = 1\n[values]"))
     code, refused, _ = _run(tmp_path, "plan")
     assert code == 2
-    assert "surprise" in refused["reason"]
+    assert "surprise" in refused["message"]
+    assert refused["reason"] == "invalid-release-spec"

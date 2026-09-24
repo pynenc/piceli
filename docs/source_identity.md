@@ -53,17 +53,33 @@ piceli inputs record --spec inputs.toml --out inputs.lock.json
 piceli inputs verify --spec inputs.toml --lock inputs.lock.json
 ```
 
-`record` fails (exit 2) if a source is not a git repository root, has no
-commit, does not match its `ref`, or has uncommitted changes without
-`allow_dirty = true`. It prints the lock as JSON and writes it atomically to
-`--out`.
+`record` is rejected (exit 2) if a source is not a git repository root
+(`source-not-git`), has no commit (`source-has-no-commit`), does not match
+its `ref` (`source-ref-not-found`, `source-ref-mismatch`), or has uncommitted
+changes without `allow_dirty = true` (`source-dirty`). It prints the lock as
+JSON on stdout and writes it atomically to `--out`.
 
 `verify` recaptures every source (or the lock's selection, see `--only`) and compares `commit`, `dirty`,
 `diff_sha256` and `subpath` with the lock. It also compares a digest of the
 declaration, so editing `inputs.toml` after recording is reported. It prints a
 `piceli.inputs-verification.v1` JSON document and exits `0` when everything
-matches, `1` on drift (with a one-line summary on stderr), and `2` on invalid
-input. Moving a checkout or changing its remote is not drift.
+matches, `1` on drift (the document has `"state": "drift"` and
+`"reason": "source-drift"`, with a one-line summary on stderr), and `2` on
+invalid input. Moving a checkout or changing its remote is not drift.
+
+### Output and rejections
+
+Both commands print exactly one JSON object on stdout and human text on
+stderr. A rejection (exit 2) is
+`{"state": "rejected", "reason": "<code>", "message": "<human text>"}`;
+`piceli explain <code>` says what to do. Besides the codes above:
+`invalid-inputs-spec` (inputs.toml), `inputs-lock-invalid` (`--lock`),
+`unknown-source` (`--only`), `git-unavailable`, `git-timed-out`,
+`source-capture-failed`, `source-subpath-missing`, `invalid-timeout` and
+`inputs-io-error`.
+
+Changed in 0.4.0: rejections moved from stderr to stdout, and `reason` is a
+registered code instead of a sentence (the sentence is now `message`).
 
 ### Check some sources: `--only`
 
@@ -75,8 +91,8 @@ piceli inputs record --spec inputs.toml --only shared-lib --only service-a --out
 `--only NAME` (repeatable) limits `record` or `verify` to the named sources of
 the same `inputs.toml`, so you can check one pinned dependency before building
 only that dependency, without a second declaration. An unknown name is
-rejected (exit 2) with the fixed reason
-`{"state": "rejected", "reason": "unknown-source", "source": "<NAME>"}`.
+rejected (exit 2) with
+`{"state": "rejected", "reason": "unknown-source", "message": "…", "source": "<NAME>"}`.
 
 - `verify --only` compares just those sources with the lock's entries for
   them; drift in other sources is not reported. A name that the lock does

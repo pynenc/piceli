@@ -48,7 +48,17 @@ _STATIC_USER_KEYS = frozenset(
 
 
 class ProviderFactoryError(ValueError):
-    """The kubeconfig, context or observed cluster identity is not acceptable."""
+    """The kubeconfig, context or observed cluster identity is not acceptable.
+
+    ``code`` is the registered error code the CLI prints (``piceli explain``).
+    """
+
+    code = "kubeconfig-rejected"
+
+    def __init__(self, message: str, *, code: str | None = None) -> None:
+        super().__init__(message)
+        if code is not None:
+            self.code = code
 
 
 @dataclass(frozen=True)
@@ -240,11 +250,13 @@ def _read_uid(api_client: Any, kind: str, name: str, timeout: float) -> str | No
         if error.status == 404:
             return None
         raise ProviderFactoryError(
-            f"cluster identity read failed with HTTP {error.status}"
+            f"cluster identity read failed with HTTP {error.status}",
+            code="cluster-identity-unreadable",
         ) from None
     except Exception as error:  # transport details may contain credentials
         raise ProviderFactoryError(
-            f"cluster identity read failed: {type(error).__name__}"
+            f"cluster identity read failed: {type(error).__name__}",
+            code="cluster-identity-unreadable",
         ) from None
     if (
         not isinstance(data, dict)
@@ -252,10 +264,14 @@ def _read_uid(api_client: Any, kind: str, name: str, timeout: float) -> str | No
         or not isinstance(data.get("metadata"), dict)
         or data["metadata"].get("name") != name
     ):
-        raise ProviderFactoryError(f"unexpected {kind} identity response")
+        raise ProviderFactoryError(
+            f"unexpected {kind} identity response", code="cluster-identity-unreadable"
+        )
     uid = data["metadata"].get("uid")
     if not isinstance(uid, str) or not _UID.fullmatch(uid):
-        raise ProviderFactoryError(f"{kind} identity has no uid")
+        raise ProviderFactoryError(
+            f"{kind} identity has no uid", code="cluster-identity-unreadable"
+        )
     return uid
 
 
@@ -264,28 +280,36 @@ def read_cluster_identity(api_client: Any, target: KubeconfigTarget) -> ClusterI
     seconds = target.request_seconds
     cluster = _read_uid(api_client, "Namespace", "kube-system", seconds)
     if cluster is None:
-        raise ProviderFactoryError("kube-system namespace is not readable")
+        raise ProviderFactoryError(
+            "kube-system namespace is not readable", code="cluster-identity-unreadable"
+        )
     namespace = _read_uid(api_client, "Namespace", target.namespace, seconds)
     if namespace is None:
         raise ProviderFactoryError(
-            f"namespace {target.namespace!r} does not exist; create it explicitly"
+            f"namespace {target.namespace!r} does not exist; create it explicitly",
+            code="namespace-not-found",
         )
     if target.cluster_uid is not None and cluster != target.cluster_uid:
         raise ProviderFactoryError(
-            "cluster identity mismatch: kube-system UID differs from the spec"
+            "cluster identity mismatch: kube-system UID differs from the spec",
+            code="server-target-identity-mismatch",
         )
     if target.namespace_uid is not None and namespace != target.namespace_uid:
         raise ProviderFactoryError(
-            "namespace identity mismatch: namespace UID differs from the spec"
+            "namespace identity mismatch: namespace UID differs from the spec",
+            code="server-target-identity-mismatch",
         )
     nodes: dict[str, NodeExpectation] = {}
     for alias, expected in target.nodes.items():
         uid = _read_uid(api_client, "Node", expected.name, seconds)
         if uid is None:
-            raise ProviderFactoryError(f"node {expected.name!r} ({alias}) not found")
+            raise ProviderFactoryError(
+                f"node {expected.name!r} ({alias}) not found", code="node-not-found"
+            )
         if expected.uid is not None and uid != expected.uid:
             raise ProviderFactoryError(
-                f"node identity mismatch for {alias!r}: UID differs from the spec"
+                f"node identity mismatch for {alias!r}: UID differs from the spec",
+                code="node-identity-mismatch",
             )
         nodes[alias] = NodeExpectation(expected.name, uid)
     return ClusterIdentity(cluster, namespace, nodes)

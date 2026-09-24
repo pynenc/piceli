@@ -32,9 +32,10 @@ objects: `--adopt Kind/name`, `--adopt-all-desired` and `--replace Kind/name`
 fields may still change before 1.0.
 
 JSON goes to stdout and a short summary to stderr. Exit codes: `0` success,
-`1` the execution did not become ready, `2` refused (invalid spec, identity
-mismatch, unknown or expired plan), `3` approval required. A refusal with a
-stable cause also carries a `code` (for example `secret-import-unavailable`).
+`1` the execution did not become ready, `2` rejected (invalid spec, identity
+mismatch, unknown or expired plan), `3` approval required. See
+[Output and exit codes](#output-and-exit-codes) for the objects each case
+prints.
 
 ## The spec
 
@@ -177,7 +178,8 @@ images_from = ["build.receipt.json", "api.delivery.json", "worker.node.json"]
 #### Refusal codes
 
 A refused spec exits with `2` and prints
-`{"state": "refused", "code": "…", "reason": "…"}`. The image codes are fixed
+`{"state": "rejected", "reason": "<code>", "message": "…"}` (see
+[Output and exit codes](#output-and-exit-codes)). The image codes are fixed
 words (`piceli.k8s.release_spec.ImageHandoffError.code`):
 
 | Code | Meaning | Fix |
@@ -536,10 +538,17 @@ unblock it, in the JSON `blocking` array and on stderr:
 
 ```console
 $ piceli release plan --spec release.toml
-refused: existing objects are not managed by this release's owner: Deployment/web (--adopt Deployment/web or --replace Deployment/web), PersistentVolumeClaim/cache (--adopt PersistentVolumeClaim/cache), Service/web (--adopt Service/web or --replace Service/web); …
+{"blocking": [{"code": "resource-requires-adoption", "kind": "Deployment", "message": "exists and is not managed by this release's owner", "name": "web", "suggest": ["--adopt Deployment/web", "--replace Deployment/web"]}, …], "code": "resource-requires-adoption", "message": "existing objects are not managed by this release's owner: …", "reason": "resource-requires-adoption", "state": "rejected"}
+```
+
+and on stderr:
+
+```text
+rejected: existing objects are not managed by this release's owner: Deployment/web (--adopt Deployment/web or --replace Deployment/web), PersistentVolumeClaim/cache (--adopt PersistentVolumeClaim/cache), Service/web (--adopt Service/web or --replace Service/web); … [resource-requires-adoption]
   blocking Deployment/web: exists and is not managed by this release's owner -> --adopt Deployment/web or --replace Deployment/web
   blocking PersistentVolumeClaim/cache: exists and is not managed by this release's owner; retained: replace is never allowed -> --adopt PersistentVolumeClaim/cache
   blocking Service/web: exists and is not managed by this release's owner -> --adopt Service/web or --replace Service/web
+  next: Plan again with `--adopt Kind/name` …
 ```
 
 Choosing between adopt and replace:
@@ -552,7 +561,7 @@ Choosing between adopt and replace:
 | An immutable field must change (selector, Service `clusterIP`…), or an adoption fails with `invalid-request` | `--replace Kind/name` | Backup, delete, create. New UID; workload pods restart. |
 | The object is not yours to change | neither | Rename the object in the composition, or remove it from the composition. |
 
-Refusal codes (`code` in the JSON, also per object in `blocking[].code`):
+Refusal codes (`reason` in the JSON, also per object in `blocking[].code`):
 
 | Code | Cause | Fix |
 | --- | --- | --- |
@@ -565,16 +574,17 @@ Refusal codes (`code` in the JSON, also per object in `blocking[].code`):
 
 Other refusals:
 
-| The reason says | What to do |
+| `reason` | What to do |
 | --- | --- |
-| `discovery is incomplete, refusing to plan (…)` | Each item names a resource type and a code: `rbac-denied` (grant list/get on it to the spec's identity), `limit-exceeded` (raise `[discovery]` limits), `api-unavailable` or `deadline-exceeded` (retry). |
-| `cluster identity differs from the one recorded in this state directory` | The kubeconfig/context points at another cluster than the one this `state_dir` deployed to. Fix `[target]`; never reuse a `state_dir` across clusters. |
-| `cannot rotate undeclared secrets: …` | `--rotate` names must be `[secrets.<name>]` entries of the spec. |
-| `invalid release spec: …` | Fix the named key. `images_from` is a top-level key (before the first `[table]`), not part of `[images]`. |
-| A single code such as `rbac-denied` or `server-target-identity-mismatch` | Run `piceli explain <code>`, or see {doc}`reference/errors`. |
+| `discovery-incomplete` | The `message` names each resource type and a code: `rbac-denied` (grant list/get on it to the spec's identity), `limit-exceeded` (raise `[discovery]` limits), `api-unavailable` or `deadline-exceeded` (retry). |
+| `cluster-identity-changed` | The kubeconfig/context points at another cluster than the one this `state_dir` deployed to. Fix `[target]`; never reuse a `state_dir` across clusters. |
+| `unknown-rotate-secret` | `--rotate` names must be `[secrets.<name>]` entries of the spec. |
+| `invalid-release-spec` | Fix the key named in `message`. `images_from` is a top-level key (before the first `[table]`), not part of `[images]`. |
+| `invalid-composition` | Fix the composition function (it must return a `DeploymentComposition` in the target namespace and bind every declared secret input). |
+| `kubeconfig-rejected`, `namespace-not-found`, `server-target-identity-mismatch`, `rbac-denied`, … | Run `piceli explain <code>`, or see {doc}`reference/errors`. |
 
 `apply --approve HASH` refuses a hash that is unknown, expired or already
-applied (`no pending plan with this hash`): run `plan` again and approve the
+applied (`plan-not-found`, `plan-expired`): run `plan` again and approve the
 new hash. Any code can be looked up with `piceli explain <code>` or in
 {doc}`reference/errors`.
 
@@ -610,6 +620,45 @@ did not become ready, the last ready release itself.
 * `status` reads the catalog, journal and history without contacting the
   cluster: releases with their image identities and executions, the deployed
   and previous release, pending plans and recent history.
+
+Their refusals: `no-execution-recorded`, `not-resumable`, `resume-refused`,
+`nothing-to-stop`, `execution-not-started`, `execution-other-owner` and
+`execution-other-target` (see {doc}`reference/errors`).
+
+## Output and exit codes
+
+Every `piceli release` command prints exactly one JSON object on stdout and
+human text (summaries, the plan hash to approve, hints) on stderr:
+
+| Exit | stdout | When |
+| --- | --- | --- |
+| `0` | `{"state": "planned", "plan_hash": …}` (`plan`), `{"state": "succeeded", "execution": {…}, …}` (`apply`, `rollback`, `resume`, `stop`), the status object (`status`), the metadata (`secret show --json`) | Success |
+| `1` | `{"state": "failed", "reason": "<code>", "execution": {…}, …}` | The execution ran but did not become ready. `reason` is `execution.failure_category` when it is a registered code, otherwise `execution-not-ready`. |
+| `2` | `{"state": "rejected", "reason": "<code>", "message": "<human text>", "code": "<code>", …}` | Rejected before any change. Extra fields such as `blocking` are kept. |
+| `3` | `{"state": "approval-required", "plan_hash": …, …}` | `apply`/`rollback` without `--approve` and without a terminal confirmation. Nothing was executed. |
+
+`reason` is always a registered error code: `piceli explain <reason> --json`
+prints its cause, fix and whether a retry can succeed. `message` is for
+people; do not parse it. `secret show NAME --reveal` without `--json` prints
+the raw value on stdout by design (see {doc}`secrets`).
+
+(release-contract-changes)=
+### Contract changes in 0.4.0
+
+The output of `piceli release` changed to follow the CLI contract
+({doc}`agents`); scripts that parsed the 0.3.0 output need these updates:
+
+| 0.3.0 | 0.4.0 |
+| --- | --- |
+| Refusal `{"state": "refused", "reason": "<sentence>", "code": "<code>"?}` | `{"state": "rejected", "reason": "<code>", "message": "<sentence>", "code": "<code>"}` |
+| `reason` was free text; `code` present only for some refusals | `reason` is always a registered code; the sentence moved to `message` |
+| `code` | Kept as an alias of `reason` for 0.4.x only; it will be removed in 0.5.0. Read `reason`. |
+| Refusal stderr started with `refused:` | Starts with `rejected:` and ends with `[<code>]`, then a `next:` hint |
+| `apply`/`rollback`/`resume`/`stop` result had no top-level `state` | Adds `"state": "succeeded"`, or `"state": "failed"` with `reason` on exit 1 |
+| Result JSON was indented | The same object; refusals are printed on one line |
+
+`blocking[]` items keep their fields (`kind`, `name`, `code`, `message`,
+`suggest`). Exit codes did not change.
 
 ## Safety model
 

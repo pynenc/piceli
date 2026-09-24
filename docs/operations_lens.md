@@ -196,8 +196,11 @@ piceli observe forwards apply --profile ./access.toml \
 ```
 
 Before it starts anything, `apply` runs a port-conflict preflight. If another
-process already serves a required shortcut's local port, it prints the
-conflicts and exits with code 2 without starting any forward. An optional
+process already serves a required shortcut's local port, it prints
+`{"state": "rejected", "reason": "forward-port-conflict", "message": "…",
+"ok": false, "preflight": {…}}` on stdout and exits with code 2 without
+starting any forward (before 0.4.0 this object went to stderr, without
+`state`/`reason`). An optional
 shortcut (`required = false`) on an occupied port is listed as `external` and
 skipped. While running, it prints one JSON line per status change and stops
 every forward it owns on Ctrl-C, `SIGTERM` or `SIGHUP`. Use `--only ID`
@@ -205,7 +208,17 @@ every forward it owns on Ctrl-C, `SIGTERM` or `SIGHUP`. Use `--only ID`
 
 To check the declared endpoints once and print JSON, run
 `piceli observe forwards status --profile ./access.toml`. It probes loopback
-only and exits with code 1 if a required forward is unhealthy.
+only and exits with code 1 if a required forward is unhealthy
+(`"state": "failed"`, `"reason": "forward-unhealthy"`; otherwise
+`"state": "healthy"`).
+
+Every `observe` and `operator` command prints machine JSON on stdout and human
+text on stderr. A rejection prints `{"state": "rejected", "reason": "<code>",
+"message": "…"}` on stdout and exits 2, for example `invalid-session-archive`,
+`invalid-access-profile`, `unknown-shortcut`, `local-port-in-use`,
+`no-saved-forwards`, `unknown-forward`, `invalid-log-request` or
+`kubeconfig-rejected` (`piceli explain <code>` for each). Before 0.4.0 some
+of these were usage errors or tracebacks.
 
 To get the dashboard with the same forwards, pass the profile as `--ui-config`
 and add `--start-shortcuts` to `observe serve`.

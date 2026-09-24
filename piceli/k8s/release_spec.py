@@ -55,7 +55,17 @@ _KIND = re.compile(r"(?:[a-z0-9.-]+/)?[a-z][a-z0-9]*/[A-Za-z][A-Za-z0-9]*")
 
 
 class ReleaseSpecError(ValueError):
-    """The release spec, build receipt or composition entry point is invalid."""
+    """The release spec, build receipt or composition entry point is invalid.
+
+    ``code`` is the registered error code the CLI prints (``piceli explain``).
+    """
+
+    code = "invalid-release-spec"
+
+    def __init__(self, message: str, *, code: str | None = None) -> None:
+        super().__init__(message)
+        if code is not None:
+            self.code = code
 
 
 _ADOPT_ENTRY = re.compile(
@@ -71,7 +81,8 @@ def parse_adopt_entry(
     match = _ADOPT_ENTRY.fullmatch(value) if isinstance(value, str) else None
     if match is None or len(match["name"]) > 253:
         raise ReleaseSpecError(
-            f"{what} entry must be 'Kind/name' or 'apiVersion/Kind/name', got {value!r}"
+            f"{what} entry must be 'Kind/name' or 'apiVersion/Kind/name', got {value!r}",
+            code="invalid-adopt-entry",
         )
     return match["api"], match["kind"], match["name"]
 
@@ -808,14 +819,19 @@ class ReleaseSpec:
         if target.endswith(".py") or "/" in target:
             path = self.resolve(Path(target))
             if not path.is_file():
-                raise ReleaseSpecError(f"composition file not found: {path}")
+                raise ReleaseSpecError(
+                    f"composition file not found: {path}", code="invalid-composition"
+                )
             digest = hashlib.sha256(str(path).encode()).hexdigest()[:16]
             module_name = f"_piceli_release_composition_{digest}"
             module = sys.modules.get(module_name)
             if module is None:
                 loader_spec = importlib.util.spec_from_file_location(module_name, path)
                 if loader_spec is None or loader_spec.loader is None:
-                    raise ReleaseSpecError(f"cannot import composition file {path}")
+                    raise ReleaseSpecError(
+                        f"cannot import composition file {path}",
+                        code="invalid-composition",
+                    )
                 module = importlib.util.module_from_spec(loader_spec)
                 sys.modules[module_name] = module
                 try:
@@ -828,11 +844,15 @@ class ReleaseSpec:
                 module = importlib.import_module(target)
             except ImportError as error:
                 raise ReleaseSpecError(
-                    f"cannot import composition module {target!r}: {error}"
+                    f"cannot import composition module {target!r}: {error}",
+                    code="invalid-composition",
                 ) from None
         function = getattr(module, attribute, None)
         if not callable(function):
-            raise ReleaseSpecError(f"composition entry {entry!r} is not callable")
+            raise ReleaseSpecError(
+                f"composition entry {entry!r} is not callable",
+                code="invalid-composition",
+            )
         return function  # type: ignore[no-any-return]
 
     def context(
