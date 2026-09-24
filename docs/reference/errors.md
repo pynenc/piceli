@@ -21,6 +21,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`ambiguous-write-blocked`](#error-ambiguous-write-blocked) | execution | no |
 | [`api-unavailable`](#error-api-unavailable) | kubernetes | yes |
 | [`applied-resource-drift`](#error-applied-resource-drift) | execution | no |
+| [`auth-provider-refused`](#error-auth-provider-refused) | target | no |
 | [`authorization-expired`](#error-authorization-expired) | execution | no |
 | [`blob-digest-mismatch`](#error-blob-digest-mismatch) | artifacts-registry | yes |
 | [`blob-source-truncated`](#error-blob-source-truncated) | artifacts-registry | yes |
@@ -45,6 +46,15 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`docker-tool-required`](#error-docker-tool-required) | artifacts-input | no |
 | [`docker-unavailable`](#error-docker-unavailable) | build-spec | yes |
 | [`dockerfile-unpinned`](#error-dockerfile-unpinned) | build-spec | no |
+| [`exec-auth-not-allowed`](#error-exec-auth-not-allowed) | target | no |
+| [`exec-command-not-found`](#error-exec-command-not-found) | target | no |
+| [`exec-command-unsafe`](#error-exec-command-unsafe) | target | no |
+| [`exec-config-invalid`](#error-exec-config-invalid) | target | no |
+| [`exec-credential-invalid`](#error-exec-credential-invalid) | target | no |
+| [`exec-interactive-required`](#error-exec-interactive-required) | target | no |
+| [`exec-pin-mismatch`](#error-exec-pin-mismatch) | target | no |
+| [`exec-plugin-failed`](#error-exec-plugin-failed) | target | no |
+| [`exec-plugin-timed-out`](#error-exec-plugin-timed-out) | target | yes |
 | [`field-owner-precondition-failed`](#error-field-owner-precondition-failed) | execution | no |
 | [`forward-options-incomplete`](#error-forward-options-incomplete) | artifacts-input | no |
 | [`forward-options-without-forward`](#error-forward-options-without-forward) | artifacts-input | no |
@@ -1469,3 +1479,86 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Add the build receipt that produced the image, or use `[images.<name>] receipt = …`.
 - **Retry-safe:** no
+
+
+## Release target credentials (`[target]`, kubeconfig exec plugins)
+
+(error-auth-provider-refused)=
+### `auth-provider-refused`
+
+**Legacy auth-provider refused.** The target context's kubeconfig user uses a legacy `auth-provider` (gcp, oidc, azure). Piceli never runs these.
+
+- **Fix:** Regenerate the kubeconfig for the provider's exec plugin (`gke-gcloud-auth-plugin`, `kubelogin convert-kubeconfig`, an OIDC exec plugin) and set `allow_exec = true`.
+- **Retry-safe:** no
+
+(error-exec-auth-not-allowed)=
+### `exec-auth-not-allowed`
+
+**Exec credential plugin not allowed.** The target context's kubeconfig user runs an exec credential plugin (for example gke-gcloud-auth-plugin, aws or kubelogin) and `[target]` does not set `allow_exec = true`. The plugin was not run.
+
+- **Fix:** Review the kubeconfig user's `exec` command, then add `allow_exec = true` (and ideally `exec_sha256`) to `[target]`; see docs/managed_clusters.md.
+- **Retry-safe:** no
+
+(error-exec-command-not-found)=
+### `exec-command-not-found`
+
+**Exec command not found.** The exec plugin command is not in `PATH` (a bare name) or does not exist (a path, resolved from the kubeconfig's directory).
+
+- **Fix:** Install the plugin, or put its directory on `PATH`, then run the command again.
+- **Retry-safe:** no
+
+(error-exec-command-unsafe)=
+### `exec-command-unsafe`
+
+**Exec command unsafe.** The resolved exec command is not a regular executable file, exceeds 256 MB, or is writable by its group or other users.
+
+- **Fix:** Install the plugin somewhere only its owner can write (`chmod go-w <file>`), then run the command again.
+- **Retry-safe:** no
+
+(error-exec-config-invalid)=
+### `exec-config-invalid`
+
+**Exec configuration invalid.** The kubeconfig `exec` block is malformed (missing command, apiVersion other than client.authentication.k8s.io/v1 or v1beta1, bad args/env), its cluster CA data is not base64, or `exec_sha256` is set for a user without an exec plugin.
+
+- **Fix:** Fix the kubeconfig user or the `[target]` exec keys (regenerate the kubeconfig with the provider's CLI when in doubt).
+- **Retry-safe:** no
+
+(error-exec-credential-invalid)=
+### `exec-credential-invalid`
+
+**Exec credential invalid.** The plugin's output is not a valid ExecCredential of the configured apiVersion: not JSON, over 1 MB, no token or client certificate, invalid PEM, or an expiry in the past.
+
+- **Fix:** Run the plugin by hand and check its output format; upgrade the plugin if it is outdated.
+- **Retry-safe:** no
+
+(error-exec-interactive-required)=
+### `exec-interactive-required`
+
+**Exec plugin needs a terminal.** The kubeconfig exec block sets `interactiveMode: Always`; Piceli runs plugins without a terminal.
+
+- **Fix:** Log in with the plugin's own command first (for example `kubelogin get-token` or `gcloud auth login`) and use `interactiveMode: IfAvailable` or `Never`.
+- **Retry-safe:** no
+
+(error-exec-pin-mismatch)=
+### `exec-pin-mismatch`
+
+**Exec command pin mismatch.** The resolved exec command's sha256 differs from `exec_sha256` in `[target]`, or the file changed after Piceli pinned it during this run.
+
+- **Fix:** Check that the plugin upgrade is expected, then set `exec_sha256` to the digest named in the message (`shasum -a 256 <resolved path>`).
+- **Retry-safe:** no
+
+(error-exec-plugin-failed)=
+### `exec-plugin-failed`
+
+**Exec plugin failed.** The exec credential plugin could not start or exited with a non-zero status; its own message is on stderr.
+
+- **Fix:** Follow the plugin's message (usually: log in again, for example `gcloud auth login`, `aws sso login`, `az login`), then run the command again.
+- **Retry-safe:** no
+
+(error-exec-plugin-timed-out)=
+### `exec-plugin-timed-out`
+
+**Exec plugin timed out.** The exec credential plugin did not finish within `exec_timeout_seconds` and was stopped.
+
+- **Fix:** Run the command again; if it persists, check the plugin's network access or raise `exec_timeout_seconds`.
+- **Retry-safe:** yes

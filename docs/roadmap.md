@@ -45,6 +45,7 @@ Every feature page starts with its maturity, and this table lists them all:
 | Object model: templates, `kubernetes` client models, YAML/JSON | {doc}`kubernetes_model/index` | stable |
 | Recoverable engine: discovery, plans, executor, journals (Python API) | {doc}`deployment_planning` | preview |
 | Releases from a spec (`piceli release`) | {doc}`release_cli` | preview |
+| Managed-cluster credentials: exec plugins for GKE, EKS, AKS, OIDC (`[target] allow_exec`) | {doc}`managed_clusters` | preview |
 | Source identity (`piceli inputs`) | {doc}`source_identity` | preview |
 | Containerized builds (`piceli artifacts build-spec`) | {doc}`containerized_builds` | preview |
 | Deterministic OCI builds (artifact API) | {doc}`artifact_delivery` | preview |
