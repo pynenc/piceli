@@ -26,6 +26,32 @@ Priorities may change. Progress is tracked in
 | Continuous reconciliation from Git (Argo CD equivalent) | ❌ Not yet |
 | Cloud infrastructure lifecycle (Terraform/OpenTofu equivalent) | ❌ Not yet; GKE cluster helpers only |
 
+## Feature status
+
+Every feature page starts with its maturity, and this table lists them all:
+
+- **stable**: no breaking change within a major version; JSON output only
+  gains fields.
+- **preview**: works and is tested; options, file formats and JSON fields may
+  still change in a minor release, always with a changelog entry.
+- **experimental**: incomplete or not wired end to end; may change or be
+  removed without notice.
+
+| Feature | Page | Maturity |
+| --- | --- | --- |
+| Object model: templates, `kubernetes` client models, YAML/JSON | {doc}`kubernetes_model/index` | stable |
+| Recoverable engine: discovery, plans, executor, journals (Python API) | {doc}`deployment_planning` | preview |
+| Releases from a spec (`piceli release`) | {doc}`release_cli` | preview |
+| Source identity (`piceli inputs`) | {doc}`source_identity` | preview |
+| Containerized builds (`piceli artifacts build-spec`) | {doc}`containerized_builds` | preview |
+| Deterministic OCI builds (artifact API) | {doc}`artifact_delivery` | preview |
+| Image delivery (`piceli artifacts deliver`) | {doc}`node_delivery` | preview |
+| Node-local registry template | {doc}`node_local_registry` | preview |
+| Operations lens (`piceli observe`) | {doc}`operations_lens` | preview |
+| CLI contract: `piceli explain`, `piceli help-json`, error codes | {doc}`agents` | preview |
+| Operator workflow (`piceli operator`) | {doc}`operator_workflow` | experimental |
+| Legacy CLI engine (`piceli model`, `piceli deploy`) | {doc}`cli/index` | experimental |
+
 ## How Piceli compares
 
 | | Kustomize | Helm | OpenTofu / Terraform | Argo CD | Piceli (goal) |

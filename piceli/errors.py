@@ -1,0 +1,1127 @@
+"""The registry of fixed error codes that Piceli prints when it refuses or fails.
+
+Every refusal a command prints has the shape
+``{"state": "rejected", "reason": "<code>"}``; failures recorded in receipts or
+execution results use the same codes. This module is the single place where each
+code is explained: its cause, the fix, and whether retrying the same command
+unchanged can succeed. ``piceli explain <code>`` prints an entry and
+``docs/reference/errors.md`` is generated from it.
+
+Importing this module is side-effect free: it only defines constant data.
+
+Example::
+
+    from piceli.errors import lookup
+
+    entry = lookup("tool-pin-mismatch")
+    assert entry is not None and not entry.retry_safe
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass
+from types import MappingProxyType
+from typing import Any
+
+#: Areas group codes by the component that emits them.
+AREAS: Mapping[str, str] = MappingProxyType(
+    {
+        "cli": "Command-line contract (any command)",
+        "artifacts-input": "Artifact delivery inputs (`piceli artifacts deliver`)",
+        "artifacts-delivery": "Artifact delivery outcomes (delivery receipts)",
+        "artifacts-registry": "OCI registry transfers (`piceli artifacts deliver --to oci://…`)",
+        "build-spec": "Containerized builds (`piceli artifacts build-spec`)",
+        "kubernetes": "Kubernetes API access (release plan/apply, discovery)",
+        "execution": "Plan execution preconditions (release apply/resume/rollback)",
+    }
+)
+
+
+@dataclass(frozen=True)
+class ErrorCode:
+    """One fixed error code.
+
+    :param code: The stable, lowercase, dash-separated code printed as ``reason``.
+    :param title: A short noun phrase naming the problem.
+    :param cause: What made Piceli refuse or fail.
+    :param fix: The next step, as concrete as possible (a command or a flag).
+    :param retry_safe: ``True`` when re-running the same command unchanged is
+        safe and can succeed (a transient condition). ``False`` means something
+        must change first (an input, a flag, the cluster, a new plan).
+    :param area: The component that emits it; a key of :data:`AREAS`.
+
+    Codes never contain paths, secret values or server messages, so an entry
+    is always safe to print and to paste into an issue.
+    """
+
+    code: str
+    title: str
+    cause: str
+    fix: str
+    retry_safe: bool
+    area: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def _entries(*items: ErrorCode) -> Mapping[str, ErrorCode]:
+    table: dict[str, ErrorCode] = {}
+    for item in items:
+        if item.code in table:
+            raise ValueError(f"duplicate error code {item.code!r}")
+        table[item.code] = item
+    return MappingProxyType(dict(sorted(table.items())))
+
+
+_E = ErrorCode
+_REPLAN = "Run `piceli release plan` again and approve the new plan hash."
+_RESUME = (
+    "Inspect the object with a read-only tool; when it matches the release, run "
+    "`piceli release resume --spec release.toml`, otherwise plan again."
+)
+
+ERRORS: Mapping[str, ErrorCode] = _entries(
+    # ------------------------------------------------------------------ cli
+    _E(
+        "unknown-error-code",
+        "Unknown error code",
+        "`piceli explain` was given a code that is not in the registry.",
+        "Check the spelling; `piceli help-json` and docs/reference/errors.md list every code.",
+        False,
+        "cli",
+    ),
+    _E(
+        "invalid-or-unavailable-artifact-input",
+        "Invalid or unavailable artifact input",
+        "An `artifacts` command could not read or validate one of its inputs "
+        "(a plan, layout, spec or source file). The detail is withheld because "
+        "it could contain private paths.",
+        "Check that every path passed to the command exists, is readable and "
+        "holds the documented format; run the matching `preview` command first.",
+        False,
+        "cli",
+    ),
+    # ------------------------------------------------------ artifacts-input
+    _E(
+        "invalid-approved-digest",
+        "Invalid approved digest",
+        "`--approve-digest` is not `sha256:` followed by 64 lowercase hex characters.",
+        "Pass the image config digest, e.g. from `docker image inspect --format '{{.Id}}'`.",
+        False,
+        "artifacts-input",
+    ),
+    _E(
+        "invalid-timeout",
+        "Invalid timeout",
+        "`--timeout` is not a positive number within the allowed bounds.",
+        "Pass a positive number of seconds.",
+        False,
+        "artifacts-input",
+    ),
+    _E(
+        "invalid-source",
+        "Invalid delivery source",
+        "`--image` is not a valid local image reference, or `--archive` is not a usable file.",
+        "Pass exactly one of `--image NAME[:TAG]` or `--archive PATH` (an OCI or docker-save tar).",
+        False,
+        "artifacts-input",
+    ),
+    _E(
+        "invalid-target",
+        "Invalid delivery target",
+        "`--to` is not a supported target (`oci://host[:port]/repo[:tag]`, "
+        "`ssh://user@host`, `docker://container`), or the grant for it could not be built.",
+        "Fix `--to`; see docs/node_delivery.md for the accepted forms.",
+        False,
+        "artifacts-input",
+    ),
+    _E(
+        "invalid-reference",
+        "Invalid image reference",
+        "`--ref` is not a tagged image name (digests and option-like values are refused).",
+        "Pass a tagged name such as `my-app:1.0`.",
+        False,
+        "artifacts-input",
+    ),
+    _E(
+        "invalid-delivery-input",
+        "Invalid delivery input",
+        "The delivery could not be set up or failed on an input it could not "
+        "validate (the detail is withheld because it could contain private paths).",
+        "Re-check every delivery option; run with the same inputs against a "
+        "local target first to isolate the problem.",
+        False,
+        "artifacts-input",
+    ),
+    _E(
+        "invalid-credentials-file",
+        "Invalid registry credentials file",
+        "`--credentials` is not a small regular JSON file holding "
+        '`{"username": …, "password": …}` or `{"token": …}`.',
+        "Write the credentials file in one of the documented shapes.",
+        False,
+        "artifacts-input",
+    ),
+    _E(
+        "credentials-file-not-private",
+        "Credentials file is readable by others",
+        "The registry credentials file grants permissions to group or others.",
+        "Run `chmod 600` on the credentials file.",
+        False,
+        "artifacts-input",
+    ),
+    _E(
+        "invalid-forward",
+        "Invalid port-forward settings",
+        "A `--via-forward` setting (namespace, target, remote port or context) is invalid.",
+        "Pass `--via-forward deployment/NAME` with a valid `--namespace`, "
+        "`--forward-remote-port` and optional `--context`.",
+        False,
+        "artifacts-input",
+    ),
+    _E(
+        "forward-options-incomplete",
+        "Port-forward options incomplete",
+        "`--via-forward` needs an explicit `--kubeconfig` (absolute) and `--namespace`.",
+        "Add `--kubeconfig PATH --namespace NAME`; Piceli never uses an ambient kube context.",
+        False,
+        "artifacts-input",
+    ),
+    _E(
+        "forward-options-without-forward",
+        "Port-forward options without --via-forward",
+        "`--namespace`, `--kubeconfig`, `--context` or `--kubectl*` were given without `--via-forward`.",
+        "Add `--via-forward deployment/NAME` or remove those options.",
+        False,
+        "artifacts-input",
+    ),
+    _E(
+        "forward-target-not-loopback",
+        "Forwarded target is not loopback",
+        "With `--via-forward`, the `oci://` target must be a loopback address with an explicit port.",
+        "Use `--to oci://127.0.0.1:PORT/repository`.",
+        False,
+        "artifacts-input",
+    ),
+    _E(
+        "invalid-node-registry",
+        "Invalid node registry address",
+        "`--node-registry` is not `host[:port]`.",
+        "Pass the address the node pulls from, e.g. `127.0.0.1:5000`.",
+        False,
+        "artifacts-input",
+    ),
+    _E(
+        "node-registry-required",
+        "Node registry address required",
+        "A delivery through `--via-forward` cannot derive the address nodes pull from.",
+        "Add `--node-registry host[:port]` (the address as seen from the node).",
+        False,
+        "artifacts-input",
+    ),
+    _E(
+        "invalid-ca-file",
+        "Invalid CA file",
+        "`--ca-file` is not a readable PEM file.",
+        "Pass the registry's CA certificate bundle as a PEM file.",
+        False,
+        "artifacts-input",
+    ),
+    _E(
+        "plain-http-not-loopback",
+        "Plain HTTP to a non-loopback registry",
+        "The registry target asks for plain HTTP but its host is not a loopback address.",
+        "Use TLS for remote registries, or reach the registry through `--via-forward`.",
+        False,
+        "artifacts-input",
+    ),
+    _E(
+        "node-options-on-registry-target",
+        "Node options on a registry target",
+        "`--ref`, `--ssh*` or `--ssh-agent-socket` were given with an `oci://` target.",
+        "Remove the node-import options, or deliver to an `ssh://` / `docker://` target.",
+        False,
+        "artifacts-input",
+    ),
+    _E(
+        "registry-options-on-node-target",
+        "Registry options on a node target",
+        "Registry or forward options were given with an `ssh://` or `docker://` target.",
+        "Remove the registry options, or deliver to an `oci://` target.",
+        False,
+        "artifacts-input",
+    ),
+    _E(
+        "docker-tool-required",
+        "docker CLI required",
+        "The delivery needs the docker CLI and none was found or it is not executable.",
+        "Install docker or pass `--docker PATH` (and `--docker-sha256` to pin it).",
+        False,
+        "artifacts-input",
+    ),
+    _E(
+        "ssh-tool-required",
+        "ssh CLI required",
+        "An `ssh://` delivery needs the ssh client and none was found or it is not executable.",
+        "Install OpenSSH or pass `--ssh PATH` (and `--ssh-sha256` to pin it).",
+        False,
+        "artifacts-input",
+    ),
+    _E(
+        "kubectl-tool-required",
+        "kubectl CLI required",
+        "`--via-forward` needs kubectl and none was found or it is not executable.",
+        "Install kubectl or pass `--kubectl PATH` (and `--kubectl-sha256` to pin it).",
+        False,
+        "artifacts-input",
+    ),
+    _E(
+        "tool-pin-mismatch",
+        "Tool differs from its pin",
+        "A pinned tool binary (docker, ssh, kubectl) does not match the given "
+        "SHA-256, or changed during the operation.",
+        "Check which binary is on PATH; update the `--*-sha256` pin only if the change is expected.",
+        False,
+        "artifacts-input",
+    ),
+    _E(
+        "docker-socket-required",
+        "Local Docker socket required",
+        "The Docker endpoint is not an absolute `unix://` socket (TCP and SSH endpoints are refused).",
+        "Pass `--docker-socket /absolute/path/docker.sock` or point `DOCKER_HOST` at a unix socket.",
+        False,
+        "artifacts-input",
+    ),
+    _E(
+        "grant-mismatch",
+        "Delivery grant mismatch",
+        "The delivery grant does not name this exact target, or it expired before the delivery started.",
+        "Run the delivery again (a fresh grant is created per run); raise `--timeout` if it expired.",
+        True,
+        "artifacts-input",
+    ),
+    _E(
+        "invalid-ssh-agent-socket",
+        "Invalid ssh-agent socket",
+        "`--ssh-agent-socket` is not an absolute path.",
+        "Pass the absolute path of the agent socket (`$SSH_AUTH_SOCK`).",
+        False,
+        "artifacts-input",
+    ),
+    _E(
+        "reference-required",
+        "Image reference required",
+        "The archive has no single image name, so the node cannot name the import.",
+        "Add `--ref my-app:TAG`.",
+        False,
+        "artifacts-input",
+    ),
+    # --------------------------------------------------- artifacts-delivery
+    _E(
+        "digest-mismatch",
+        "Image does not match the approved digest",
+        "The streamed or stored image's config digest differs from `--approve-digest`.",
+        "Re-inspect the image and approve its actual config digest, or rebuild the image you meant.",
+        False,
+        "artifacts-delivery",
+    ),
+    _E(
+        "invalid-archive",
+        "Invalid image archive",
+        "The `--archive` file is not a valid OCI layout or docker-save tar within the size bounds.",
+        "Recreate it with `docker save` or an OCI build and check it with `piceli artifacts inspect`.",
+        False,
+        "artifacts-delivery",
+    ),
+    _E(
+        "invalid-image-stream",
+        "Invalid image stream",
+        "The image streamed by `docker save` could not be parsed or exceeded its bounds.",
+        "Check that the image exists locally and that docker works; then retry.",
+        False,
+        "artifacts-delivery",
+    ),
+    _E(
+        "source-unavailable",
+        "Image source unavailable",
+        "The local image or archive could not be read (for example docker failed to save it).",
+        "Check that the image exists (`docker image ls`) and the daemon is running, then retry.",
+        True,
+        "artifacts-delivery",
+    ),
+    _E(
+        "source-changed",
+        "Image source changed during delivery",
+        "The image was read twice (plan, then upload) and the second read differed.",
+        "Make sure nothing retags or rebuilds the image during delivery, then retry.",
+        True,
+        "artifacts-delivery",
+    ),
+    _E(
+        "node-query-failed",
+        "Node query failed",
+        "Listing or inspecting images on the node (`ctr`) failed.",
+        "Check SSH/docker access to the node and that containerd runs; then retry.",
+        True,
+        "artifacts-delivery",
+    ),
+    _E(
+        "cancelled",
+        "Cancelled",
+        "The operation was cancelled (interrupt, stop request or cancelled execution).",
+        "Re-run the command when ready; recoverable executions can be resumed with `piceli release resume`.",
+        True,
+        "artifacts-delivery",
+    ),
+    _E(
+        "timed-out",
+        "Timed out",
+        "The operation did not finish within `--timeout`.",
+        "Retry with a larger `--timeout`; only missing layers are resent.",
+        True,
+        "artifacts-delivery",
+    ),
+    _E(
+        "verification-failed",
+        "Post-delivery verification failed",
+        "After the transfer, the node or registry did not report the approved image under the expected name.",
+        "Inspect the target (`crictl images` or the registry) and retry the delivery.",
+        True,
+        "artifacts-delivery",
+    ),
+    _E(
+        "forward-port-in-use",
+        "Local forward port in use",
+        "The local port for `kubectl port-forward` is already taken.",
+        "Free the port or pick another one in the `oci://127.0.0.1:PORT/…` target.",
+        True,
+        "artifacts-delivery",
+    ),
+    _E(
+        "forward-unavailable",
+        "Port-forward unavailable",
+        "`kubectl port-forward` to the registry did not become ready.",
+        "Check that the registry Deployment is ready and that you may `pods/portforward`; then retry.",
+        True,
+        "artifacts-delivery",
+    ),
+    _E(
+        "import-failed",
+        "Node import failed",
+        "`ctr images import` on the node exited with an error.",
+        "Check free disk space and containerd on the node; then retry.",
+        True,
+        "artifacts-delivery",
+    ),
+    _E(
+        "import-timed-out",
+        "Node import timed out",
+        "`ctr images import` did not finish within `--timeout`.",
+        "Retry with a larger `--timeout`, or prefer registry delivery for large images.",
+        True,
+        "artifacts-delivery",
+    ),
+    _E(
+        "import-cancelled",
+        "Node import cancelled",
+        "The node import was interrupted.",
+        "Re-run the delivery.",
+        True,
+        "artifacts-delivery",
+    ),
+    _E(
+        "import-output-limit",
+        "Node import output too large",
+        "`ctr images import` wrote more output than allowed.",
+        "Check the node's containerd; report the problem if it persists.",
+        False,
+        "artifacts-delivery",
+    ),
+    # --------------------------------------------------- artifacts-registry
+    _E(
+        "registry-unreachable",
+        "Registry unreachable",
+        "The registry could not be contacted (DNS, TCP or TLS failure).",
+        "Check the address, network and TLS settings (`--ca-file`), then retry.",
+        True,
+        "artifacts-registry",
+    ),
+    _E(
+        "registry-unauthorized",
+        "Registry authentication failed",
+        "The registry answered 401: credentials are missing or wrong.",
+        "Pass `--credentials FILE` with valid credentials.",
+        False,
+        "artifacts-registry",
+    ),
+    _E(
+        "registry-forbidden",
+        "Registry access forbidden",
+        "The registry answered 403: the credentials may not push to this repository.",
+        "Use credentials with push rights on the repository.",
+        False,
+        "artifacts-registry",
+    ),
+    _E(
+        "registry-not-oci-v2",
+        "Not an OCI distribution registry",
+        "The endpoint does not implement the OCI distribution `/v2/` API.",
+        "Point `--to` at a registry (host, port and scheme).",
+        False,
+        "artifacts-registry",
+    ),
+    _E(
+        "registry-error",
+        "Registry error",
+        "The registry answered with an unexpected HTTP status.",
+        "Check the registry's health and logs, then retry.",
+        True,
+        "artifacts-registry",
+    ),
+    _E(
+        "registry-response-too-large",
+        "Registry response too large",
+        "A registry response exceeded Piceli's size bound.",
+        "Check that `--to` points at a real registry.",
+        False,
+        "artifacts-registry",
+    ),
+    _E(
+        "plain-http-refused",
+        "Plain HTTP refused",
+        "The registry tried to move the transfer to plain HTTP on a non-loopback host.",
+        "Use TLS on the registry.",
+        False,
+        "artifacts-registry",
+    ),
+    _E(
+        "cross-origin-location-refused",
+        "Cross-origin redirect refused",
+        "The registry redirected an upload to another origin.",
+        "Configure the registry to accept uploads on its own address.",
+        False,
+        "artifacts-registry",
+    ),
+    _E(
+        "invalid-token-realm",
+        "Invalid token realm",
+        "The registry's bearer-token challenge names an unusable realm.",
+        "Check the registry's authentication configuration.",
+        False,
+        "artifacts-registry",
+    ),
+    _E(
+        "upload-rejected",
+        "Upload rejected",
+        "The registry refused a blob upload.",
+        "Check the registry's storage and quota, then retry.",
+        True,
+        "artifacts-registry",
+    ),
+    _E(
+        "blob-digest-mismatch",
+        "Uploaded blob digest mismatch",
+        "The registry stored a blob whose digest differs from what was sent.",
+        "Retry; if it persists, the registry or a proxy is altering content.",
+        True,
+        "artifacts-registry",
+    ),
+    _E(
+        "blob-source-truncated",
+        "Blob source truncated",
+        "A layer ended before its declared size while it was uploaded.",
+        "Make sure nothing changes the image during delivery, then retry.",
+        True,
+        "artifacts-registry",
+    ),
+    _E(
+        "manifest-not-found",
+        "Manifest not found",
+        "The registry has no manifest for the expected digest after the push.",
+        "Retry the delivery; check that the registry keeps pushed manifests.",
+        True,
+        "artifacts-registry",
+    ),
+    _E(
+        "manifest-rejected",
+        "Manifest rejected",
+        "The registry refused the image manifest.",
+        "Check that the registry accepts OCI or Docker v2 manifests of this type.",
+        False,
+        "artifacts-registry",
+    ),
+    _E(
+        "registry-digest-mismatch",
+        "Registry manifest digest mismatch",
+        "The digest the registry reports for the pushed manifest differs from the one computed locally.",
+        "Retry; if it persists, the registry is rewriting manifests and cannot be used.",
+        False,
+        "artifacts-registry",
+    ),
+    # ------------------------------------------------------------ build-spec
+    _E(
+        "spec-unreadable",
+        "Build spec unreadable",
+        "`--spec` could not be read.",
+        "Check the path and its permissions.",
+        False,
+        "build-spec",
+    ),
+    _E(
+        "invalid-spec",
+        "Invalid build spec",
+        "The build spec (or a build context in it) is invalid: unknown keys, bad "
+        "patterns, budgets or paths.",
+        "Run `piceli artifacts build-spec preview --spec build.toml` and fix the spec; see docs/containerized_builds.md.",
+        False,
+        "build-spec",
+    ),
+    _E(
+        "invalid-inputs",
+        "Invalid inputs spec or lock",
+        "The `inputs.toml` or inputs lock referenced by the build could not be read or verified.",
+        "Run `piceli inputs verify --spec inputs.toml --lock inputs.lock` to see the problem.",
+        False,
+        "build-spec",
+    ),
+    _E(
+        "invalid-or-unavailable-build-input",
+        "Invalid or unavailable build input",
+        "A build input could not be read or validated (the detail is withheld because it could contain private paths).",
+        "Run `build-spec preview` with the same arguments and check every path it names.",
+        False,
+        "build-spec",
+    ),
+    _E(
+        "invalid-grant",
+        "Invalid build grant",
+        "The approval arguments (`--approve-builder`, `--approve-plan`, `--max-seconds`) are malformed.",
+        "Copy the builder digest and plan hash from `build-spec preview`; use a positive `--max-seconds`.",
+        False,
+        "build-spec",
+    ),
+    _E(
+        "invalid-tool",
+        "Invalid docker pin",
+        "Only one of `--docker` and `--docker-sha256` was given.",
+        "Pass both, or neither to use docker from PATH.",
+        False,
+        "build-spec",
+    ),
+    _E(
+        "invalid-receipt",
+        "Invalid build receipt",
+        "The file is not a complete `piceli.build-receipt.v1` receipt.",
+        "Re-run the build to produce a new receipt.",
+        False,
+        "build-spec",
+    ),
+    _E(
+        "builder-not-approved",
+        "Builder not approved",
+        "`--approve-builder` does not match the builder image digest in the spec.",
+        "Review the builder in `build-spec preview` and approve its exact digest.",
+        False,
+        "build-spec",
+    ),
+    _E(
+        "plan-not-approved",
+        "Build plan not approved",
+        "`--approve-plan` does not match the current build plan hash (the spec or inputs changed).",
+        "Run `build-spec preview` again and approve the new plan hash.",
+        False,
+        "build-spec",
+    ),
+    _E(
+        "network-not-granted",
+        "Network not granted",
+        "The spec declares network access but `--allow-network` was not given.",
+        "Add `--allow-network` if the build may use the network.",
+        False,
+        "build-spec",
+    ),
+    _E(
+        "grant-expired",
+        "Build grant expired",
+        "The build ran past `--max-seconds`.",
+        "Retry with a larger `--max-seconds`.",
+        True,
+        "build-spec",
+    ),
+    _E(
+        "docker-unavailable",
+        "Docker unavailable",
+        "The docker CLI, daemon, buildx or context is not usable.",
+        "Check `docker buildx version` and `docker context show`, then retry.",
+        True,
+        "build-spec",
+    ),
+    _E(
+        "build-failed",
+        "Build step failed",
+        "A docker build step exited with an error (exit 1; the failing steps are listed, never their output).",
+        "Re-run with `--log FILE` and read the step output there.",
+        False,
+        "build-spec",
+    ),
+    _E(
+        "build-timed-out",
+        "Build step timed out",
+        "A docker build step exceeded its time budget (exit 1).",
+        "Retry with a larger `--max-seconds`.",
+        True,
+        "build-spec",
+    ),
+    _E(
+        "source-drift",
+        "Source changed",
+        "A declared source differs from its lock, or changed during the build. "
+        "Drift is currently checked over the whole repository, not only the build context.",
+        "Commit or stash the changes and record a new lock with `piceli inputs record`.",
+        False,
+        "build-spec",
+    ),
+    _E(
+        "source-identity",
+        "Source identity unavailable",
+        "A declared source could not be identified with git (not a work tree, git failed).",
+        "Run `piceli inputs record --spec inputs.toml` to see which source fails.",
+        False,
+        "build-spec",
+    ),
+    _E(
+        "context-missing",
+        "Build context missing",
+        "A build context root is not a readable real directory.",
+        "Fix the context path in the spec.",
+        False,
+        "build-spec",
+    ),
+    _E(
+        "context-empty",
+        "Build context empty",
+        "A context's include patterns matched no files.",
+        "Fix the `include` patterns.",
+        False,
+        "build-spec",
+    ),
+    _E(
+        "context-symlink",
+        "Symbolic link in build context",
+        "A context include pattern matches a symbolic link.",
+        "Exclude the link or replace it with the real file.",
+        False,
+        "build-spec",
+    ),
+    _E(
+        "context-budget-exceeded",
+        "Build context over budget",
+        "A context has more files or bytes than its budget.",
+        "Narrow the `include` patterns or raise the context budget in the spec.",
+        False,
+        "build-spec",
+    ),
+    _E(
+        "context-changed",
+        "Build context changed",
+        "A context file (or the Dockerfile) changed between scanning and staging.",
+        "Stop editing the sources during the build, then retry.",
+        True,
+        "build-spec",
+    ),
+    _E(
+        "dockerfile-unpinned",
+        "Dockerfile not pinned",
+        "A Dockerfile uses an unpinned base image, `COPY --from`, remote `ADD` "
+        "or `RUN --mount` source, or does not build `FROM` the builder argument.",
+        "Pin every image by digest (`image@sha256:…`) and build `FROM` the "
+        "builder argument; see docs/containerized_builds.md.",
+        False,
+        "build-spec",
+    ),
+    _E(
+        "output-invalid",
+        "Build output invalid",
+        "The build produced a missing, undeclared, oversized or symlinked output, or the output directory is unusable.",
+        "Make the build produce exactly the declared outputs into a clean `--output-dir`.",
+        False,
+        "build-spec",
+    ),
+    _E(
+        "image-invalid",
+        "Built image invalid",
+        "The built image could not be inspected or has an invalid ID.",
+        "Check the build log (`--log`).",
+        False,
+        "build-spec",
+    ),
+    _E(
+        "image-mismatch",
+        "Built image mismatch",
+        "The loaded image differs from the build result or has another platform.",
+        "Check the declared platform and that nothing else loads images concurrently.",
+        False,
+        "build-spec",
+    ),
+    # ------------------------------------------------------------ kubernetes
+    _E(
+        "rbac-denied",
+        "Kubernetes access denied",
+        "The API server answered 401 or 403 for a request the plan or apply needs.",
+        "Grant the identity in the spec's kubeconfig the needed verbs in the namespace, then plan again.",
+        False,
+        "kubernetes",
+    ),
+    _E(
+        "not-found",
+        "Kubernetes object not found",
+        "The API server answered 404.",
+        _REPLAN,
+        False,
+        "kubernetes",
+    ),
+    _E(
+        "conflict",
+        "Kubernetes write conflict",
+        "The API server answered 409: the object changed since it was observed.",
+        _REPLAN,
+        False,
+        "kubernetes",
+    ),
+    _E(
+        "invalid-request",
+        "Kubernetes rejected the object",
+        "The API server answered 422: the manifest is invalid for this cluster.",
+        "Fix the composition (field names, API versions); admission dry-run in `plan` shows the object.",
+        False,
+        "kubernetes",
+    ),
+    _E(
+        "api-unavailable",
+        "Kubernetes API unavailable",
+        "The API server answered 429 or 5xx, or an API group could not be discovered.",
+        "Wait for the API server to recover, then retry.",
+        True,
+        "kubernetes",
+    ),
+    _E(
+        "transport-error",
+        "Kubernetes transport error",
+        "The connection to the API server failed.",
+        "Check network access to the cluster, then retry (a write may be ambiguous: use `release resume`).",
+        True,
+        "kubernetes",
+    ),
+    _E(
+        "deadline-exceeded",
+        "Deadline exceeded",
+        "A request or the whole execution ran past its time limit.",
+        "Retry; for an interrupted apply use `piceli release resume`, or raise `[execution] max_seconds`.",
+        True,
+        "kubernetes",
+    ),
+    _E(
+        "limit-exceeded",
+        "Discovery limit exceeded",
+        "Discovery found more objects or bytes than `[discovery]` allows.",
+        "Raise the `[discovery]` limits in the spec, then plan again.",
+        False,
+        "kubernetes",
+    ),
+    _E(
+        "invalid-page",
+        "Invalid discovery page",
+        "The API server returned an inconsistent list page.",
+        "Plan again; if it persists, report the API server version.",
+        True,
+        "kubernetes",
+    ),
+    _E(
+        "provider-error",
+        "Provider error",
+        "The Kubernetes provider failed in an unclassified way during discovery.",
+        "Plan again; if it persists, report it.",
+        True,
+        "kubernetes",
+    ),
+    _E(
+        "request-byte-limit",
+        "Request too large",
+        "An object is larger than Piceli's request bound.",
+        "Reduce the object's size (for example move data out of a ConfigMap).",
+        False,
+        "kubernetes",
+    ),
+    _E(
+        "response-byte-limit",
+        "Response too large",
+        "An API response exceeded Piceli's response bound.",
+        "Reduce the objects' size; if a write was in flight, use `piceli release resume`.",
+        False,
+        "kubernetes",
+    ),
+    _E(
+        "target-mismatch",
+        "Target mismatch",
+        "A request named a cluster or namespace other than the provider's configured target.",
+        "Check `[target]` in the spec; plan again.",
+        False,
+        "kubernetes",
+    ),
+    _E(
+        "server-target-identity-mismatch",
+        "Cluster identity mismatch",
+        "The cluster or namespace UID differs from the one pinned in the spec, or the namespace is being deleted.",
+        "Check that the kubeconfig and context point at the intended cluster; update `cluster_uid`/`namespace_uid` only if the cluster was rebuilt.",
+        False,
+        "kubernetes",
+    ),
+    _E(
+        "identity-mismatch",
+        "Object identity mismatch",
+        "The API server returned an object whose kind, name or namespace differs from the request.",
+        "Plan again; if it persists, report it.",
+        False,
+        "kubernetes",
+    ),
+    _E(
+        "scope-mismatch",
+        "Scope mismatch",
+        "A namespaced object was declared without the target namespace, or a cluster-scoped one with a namespace.",
+        "Fix the object's namespace in the composition.",
+        False,
+        "kubernetes",
+    ),
+    _E(
+        "undiscovered-api",
+        "API not discovered",
+        "A list request used an API resource that discovery did not return.",
+        "Check that the CRD or API group is installed; plan again.",
+        False,
+        "kubernetes",
+    ),
+    _E(
+        "invalid-force",
+        "Invalid force flag",
+        "A create was requested with force ownership, which is never allowed.",
+        "This is an internal contract violation; report it.",
+        False,
+        "kubernetes",
+    ),
+    _E(
+        "missing-precondition",
+        "Missing write precondition",
+        "An update was requested without the object's UID and resourceVersion.",
+        "This is an internal contract violation; report it.",
+        False,
+        "kubernetes",
+    ),
+    _E(
+        "invalid-write-response",
+        "Invalid write response",
+        "The API server's answer to a write did not confirm the requested object and ownership.",
+        _RESUME,
+        False,
+        "kubernetes",
+    ),
+    _E(
+        "takeover-conflict",
+        "Takeover conflict",
+        "Adopting an object by takeover kept conflicting with another field manager.",
+        "Stop the other writer (controller, script) or plan the adoption again.",
+        False,
+        "kubernetes",
+    ),
+    _E(
+        "not-retained",
+        "Object is not retained",
+        "A metadata-only adoption was requested for a kind that is not retained (only PVCs and Secrets are).",
+        _REPLAN,
+        False,
+        "kubernetes",
+    ),
+    # ------------------------------------------------------------- execution
+    _E(
+        "authorization-expired",
+        "Authorization expired",
+        "The approved plan's authorization expired before the execution finished.",
+        _REPLAN,
+        False,
+        "execution",
+    ),
+    _E(
+        "absence-precondition-failed",
+        "Object appeared",
+        "The plan creates an object that now exists (someone created it after planning).",
+        _REPLAN + " Add `--adopt Kind/name` if the release should take it over.",
+        False,
+        "execution",
+    ),
+    _E(
+        "uid-version-precondition-failed",
+        "Object changed since planning",
+        "The object's UID or resourceVersion differs from the planned one.",
+        _REPLAN,
+        False,
+        "execution",
+    ),
+    _E(
+        "field-owner-precondition-failed",
+        "Field owners changed",
+        "The set of field managers on the object changed since planning.",
+        _REPLAN,
+        False,
+        "execution",
+    ),
+    _E(
+        "generation-precondition-failed",
+        "Object generation changed",
+        "The object's spec changed since planning.",
+        _REPLAN,
+        False,
+        "execution",
+    ),
+    _E(
+        "resource-content-precondition-failed",
+        "Object content changed",
+        "The object's content changed since planning.",
+        _REPLAN,
+        False,
+        "execution",
+    ),
+    _E(
+        "ownership-precondition-failed",
+        "Ownership changed",
+        "The object is not owned by this release (or another owner claimed it) and the plan does not adopt it.",
+        _REPLAN + " Add `--adopt Kind/name` to take it over explicitly.",
+        False,
+        "execution",
+    ),
+    _E(
+        "retained-resource",
+        "Retained object not deleted",
+        "The plan would delete a retained object (PersistentVolumeClaim or Secret); Piceli never deletes retained data.",
+        "Delete it yourself after a backup if that is intended.",
+        False,
+        "execution",
+    ),
+    _E(
+        "retained-content-precondition-failed",
+        "Retained object content differs",
+        "A retained object's live content differs from the declared content, so it cannot be adopted metadata-only.",
+        "Make the declaration match the live object, then plan again.",
+        False,
+        "execution",
+    ),
+    _E(
+        "retained-adoption-precondition-failed",
+        "Not a retained object",
+        "A metadata-only adoption was planned for an object that is not retained.",
+        _REPLAN,
+        False,
+        "execution",
+    ),
+    _E(
+        "no-op-content-mismatch",
+        "No-op object drifted",
+        "An object planned as unchanged no longer contains the declared content.",
+        _REPLAN,
+        False,
+        "execution",
+    ),
+    _E(
+        "invalid-field-ownership-evidence",
+        "Invalid field-ownership evidence",
+        "The object's managedFields could not be read.",
+        "Plan again; if it persists, report the API server version.",
+        False,
+        "execution",
+    ),
+    _E(
+        "ambiguous-write-blocked",
+        "Ambiguous write blocked",
+        "A previous write's result is unknown and the live object does not prove it was ours.",
+        _RESUME,
+        False,
+        "execution",
+    ),
+    _E(
+        "ambiguous-content-blocked",
+        "Ambiguous write content differs",
+        "A previous write's result is unknown and the live content differs from the plan.",
+        _RESUME,
+        False,
+        "execution",
+    ),
+    _E(
+        "ambiguous-delete-blocked",
+        "Ambiguous delete blocked",
+        "A previous delete's result is unknown and the object still exists.",
+        _RESUME,
+        False,
+        "execution",
+    ),
+    _E(
+        "recreated-object",
+        "Object was recreated",
+        "The object has another UID than planned: someone deleted and recreated it.",
+        _REPLAN,
+        False,
+        "execution",
+    ),
+    _E(
+        "deleted-resource-reappeared",
+        "Deleted object reappeared",
+        "An object the execution deleted exists again.",
+        "Find the controller or script that recreates it, then plan again.",
+        False,
+        "execution",
+    ),
+    _E(
+        "applied-resource-drift",
+        "Applied object drifted",
+        "An object changed after Piceli applied it (another writer is active).",
+        "Stop the other writer, then plan again.",
+        False,
+        "execution",
+    ),
+    _E(
+        "operation-identity-mismatch",
+        "Operation identity mismatch",
+        "The object carries another execution's operation annotation.",
+        "Make sure only one apply runs at a time, then plan again.",
+        False,
+        "execution",
+    ),
+    _E(
+        "compensation-already-started",
+        "Compensation already started",
+        "The execution is being compensated (undone) and cannot continue forward.",
+        _REPLAN,
+        False,
+        "execution",
+    ),
+    _E(
+        "readiness-timeout",
+        "Readiness timeout",
+        "An applied object did not become ready within `[execution] readiness_seconds`.",
+        "Check the workload (`kubectl describe`, logs); fix it and plan again, or `piceli release rollback previous`.",
+        False,
+        "execution",
+    ),
+    _E(
+        "readiness-unsupported",
+        "Readiness unsupported",
+        "Piceli cannot evaluate readiness for this kind.",
+        "Report the kind; meanwhile verify it by hand.",
+        False,
+        "execution",
+    ),
+)
+
+
+def lookup(code: str) -> ErrorCode | None:
+    """The registry entry for ``code``, or ``None`` when it is unknown."""
+    return ERRORS.get(code)

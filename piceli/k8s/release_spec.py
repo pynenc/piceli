@@ -500,6 +500,13 @@ class ReleaseSpec:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any], base: Path) -> ReleaseSpec:
+        for table, content in value.items():
+            if isinstance(content, Mapping) and "images_from" in content:
+                raise ReleaseSpecError(
+                    f"invalid release spec: images_from is a top-level key but "
+                    f"was found inside [{table}]; move it above the first "
+                    "[table] of the spec"
+                )
         try:
             model = ReleaseSpecModel.model_validate(dict(value))
         except ValidationError as error:

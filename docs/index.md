@@ -140,7 +140,17 @@ operator_workflow
 :caption: Reference
 
 cli/index
+reference/cli
+reference/errors
 apidocs/index
+```
+
+```{toctree}
+:hidden:
+:maxdepth: 1
+:caption: Agents
+
+agents
 ```
 
 ```{toctree}

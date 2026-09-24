@@ -5,6 +5,7 @@ import typer
 from piceli.conf.config_k8s import ConfigK8s
 from piceli.conf.config_k8s_model import ConfigK8sModel
 from piceli.k8s.cli.context import ContextObject
+from piceli.k8s.cli.contract import register as register_contract_commands
 from piceli.k8s.cli.deploy import app as deploy_app
 from piceli.k8s.cli.inputs import app as inputs_app
 from piceli.k8s.cli.model import app as model_app
@@ -23,6 +24,7 @@ app.add_typer(model_app, name="model")
 app.add_typer(observe_app, name="observe")
 app.add_typer(operator_app, name="operator")
 app.add_typer(release_app, name="release")
+register_contract_commands(app)
 # app.add_typer(pods_app, name="pods")
 # app.add_typer(services_app, name="services")
 # app.add_typer(nodes_app, name="nodes")
