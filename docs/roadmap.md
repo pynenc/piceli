@@ -22,6 +22,7 @@ Priorities may change. Progress is tracked in
 | Field-level diff | 🟡 `deploy detail` (CLI engine) only |
 | Safe pruning of removed resources | 🟡 Recoverable engine only, opt-in |
 | Adopt or replace objects created by other tools (`release --adopt`, `--adopt-all-desired`, `--replace`) | 🟡 Preview |
+| Post-deploy checks (http, exec, metric, Python) with automatic rollback | 🟡 Preview |
 | Environments and overlays (Kustomize equivalent) | ❌ Not yet: plain Python functions for now |
 | Reusable, versioned packages (Helm equivalent) | ❌ Not yet |
 | Custom resources (CRDs) | 🟡 As raw manifests in the recoverable engine |
@@ -45,6 +46,7 @@ Every feature page starts with its maturity, and this table lists them all:
 | Object model: templates, `kubernetes` client models, YAML/JSON | {doc}`kubernetes_model/index` | stable |
 | Recoverable engine: discovery, plans, executor, journals (Python API) | {doc}`deployment_planning` | preview |
 | Releases from a spec (`piceli release`) | {doc}`release_cli` | preview |
+| Post-deploy checks and automatic rollback (`[[checks]]`, `piceli.checks`, `release check`) | {doc}`checks` | preview |
 | Source identity (`piceli inputs`) | {doc}`source_identity` | preview |
 | Containerized builds (`piceli artifacts build-spec`) | {doc}`containerized_builds` | preview |
 | Deterministic OCI builds (artifact API) | {doc}`artifact_delivery` | preview |
