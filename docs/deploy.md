@@ -199,9 +199,8 @@ receipts. The release records the whole image set as its source identity
 A run is `ready` only when the checks pass. With
 `rollback_on_failed_checks=True` a failed check re-applies the previous
 release; the rollback is journaled in the run and the result's state is
-`rolled-back`. Without `piceli.checks` installed, a pipeline that declares
-checks is refused at the checks stage with `pipeline-checks-unavailable`; the
-example only declares its check when the module is available.
+`rolled-back`. `Checks` is importable from `piceli` next to `Pipeline`
+(`from piceli import Checks`); see {doc}`checks` for every check type.
 
 ## Resume an interrupted run
 

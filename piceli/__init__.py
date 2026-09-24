@@ -49,6 +49,11 @@ _PIPELINE_EXPORTS = frozenset(
     }
 )
 
+# Post-deploy check declarations for ``Pipeline(checks=...)``.  Only the
+# builder is exported: ``piceli.checks.CheckContext`` differs from
+# ``piceli.pipeline.CheckContext``, so the runner API stays in its package.
+_CHECKS_EXPORTS = frozenset({"Checks"})
+
 if TYPE_CHECKING:
     from piceli.app import (  # noqa: F401
         Access,
@@ -74,6 +79,7 @@ if TYPE_CHECKING:
         Service,
         ServicePort,
     )
+    from piceli.checks import Checks  # noqa: F401
     from piceli.pipeline import (  # noqa: F401
         Build,
         NodeImport,
@@ -98,8 +104,12 @@ def __getattr__(name: str) -> Any:
         from piceli import pipeline
 
         return getattr(pipeline, name)
+    if name in _CHECKS_EXPORTS:
+        from piceli import checks
+
+        return getattr(checks, name)
     raise AttributeError(f"module 'piceli' has no attribute {name!r}")
 
 
 def __dir__() -> list[str]:
-    return sorted([*globals(), *_APP_EXPORTS, *_PIPELINE_EXPORTS])
+    return sorted([*globals(), *_APP_EXPORTS, *_PIPELINE_EXPORTS, *_CHECKS_EXPORTS])

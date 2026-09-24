@@ -444,3 +444,25 @@ def test_pipeline_import_is_side_effect_free() -> None:
         [sys.executable, "-c", code], capture_output=True, text=True, check=True
     )
     assert output.stdout.strip() == ""
+
+
+def test_top_level_exports_checks_next_to_pipeline() -> None:
+    import piceli
+    from piceli import Checks, Pipeline
+    from piceli import checks as checks_package
+    from piceli import pipeline as pipeline_package
+
+    assert Checks is checks_package.Checks
+    assert Pipeline is pipeline_package.Pipeline
+    assert {"Checks", "Pipeline", "App"} <= set(dir(piceli))
+    # The two CheckContext classes differ; neither is a top-level name.
+    assert not hasattr(piceli, "CheckContext")
+    code = (
+        "import sys; import piceli; "
+        "print(','.join(m for m in ('piceli.checks', 'kubernetes') "
+        "if m in sys.modules))"
+    )
+    output = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True
+    )
+    assert output.stdout.strip() == ""
