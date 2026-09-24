@@ -1,3 +1,4 @@
+import re
 from unittest import mock
 
 from typer.testing import CliRunner
@@ -49,4 +50,6 @@ def test_plan_with_validation_failure(k8s_objects: list[K8sObject]) -> None:
 def test_plan_requires_explicit_cluster_binding() -> None:
     result = runner.invoke(app, ["deploy", "plan"])
     assert result.exit_code != 0
-    assert "--cluster-id" in result.output
+    # CI forces rich terminal styling, which splits the option name into
+    # separately styled segments; compare the unstyled text.
+    assert "--cluster-id" in re.sub(r"\x1b\[[0-9;]*m", "", result.output)
