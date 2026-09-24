@@ -33,7 +33,7 @@ This Pod model is crucial for defining the structural and operational aspects of
 
 The Pod model is integral to several key Piceli deployments:
 
-- {replica_manager}`../deployable/replica_manager`: Utilized within `Deployment` and `StatefulSet` configurations to define the underlying Pod templates.
-- {job}`../deployable/job`: Employed in defining Job and CronJob specifications, ensuring consistency and functionality across scheduled and one-off tasks.
+- {doc}`replica_manager`: Utilized within `Deployment` and `StatefulSet` configurations to define the underlying Pod templates.
+- {doc}`../deployable/job`: Employed in defining Job and CronJob specifications, ensuring consistency and functionality across scheduled and one-off tasks.
 
 This Pod model is crucial for defining the structural and operational aspects of containers in Kubernetes through Piceli, ensuring deployments are consistent, secure, and aligned with best practices.

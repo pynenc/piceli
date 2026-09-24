@@ -1,5 +1,21 @@
 # Deployment planning and recoverable execution
 
+```{admonition} In short
+:class: tip
+
+1. **Discover**: `capture_discovery` reads the target namespace within strict limits
+   and produces an `ObservedSnapshot`.
+2. **Plan**: `build_plan(composition, snapshot, authorization)` is a pure,
+   deterministic function that returns ordered create/adopt/apply/no-op/delete actions.
+3. **Execute**: `PlanExecutor.run(...)` applies the plan through a
+   `KubernetesProvider`, writing every step to an `ExecutionJournal` so it can
+   be cancelled, resumed or compensated.
+4. **Wrap it**: `DeploymentSession` and `ReleaseWorkflow` combine the above into a
+   recoverable, named release.
+
+New to these terms? Start with the {doc}`overview`.
+```
+
 Piceli separates pure intent and preview from an explicitly constructed provider
 and authorized execution. Importing the planner, discovery contract or executor
 does not load kubeconfig, construct clients or contact infrastructure.
@@ -9,7 +25,7 @@ does not load kubeconfig, construct clients or contact infrastructure.
 The current contract is `piceli.discovery.v2`:
 
 - [Schema](schemas/piceli-discovery-v2.schema.json)
-- [Portable fixture](../../tests/fixtures/discovery-v2/complete.json)
+- [Portable fixture](https://github.com/pynenc/piceli/blob/main/tests/fixtures/discovery-v2/complete.json)
 - [SHA-256 manifest](schemas/piceli-discovery-v2.manifest.json)
 
 V1 remains historical; the runtime rejects its weaker authority format. V2
@@ -49,10 +65,9 @@ summaries omit secret values and their digests. Standard Kubernetes Secret
 references remain visible; sensitive inline values are redacted by the same
 implementation in planning and discovery.
 
-[The composition example](../../examples/local_cluster_composition.py) builds a
+[The composition example](https://github.com/pynenc/piceli/blob/main/examples/local_cluster_composition.py) builds a
 credential Secret followed by a worker Deployment. Its caller supplies an actual
-image and a private version reference. This is a composition example, not a
-published Infinite Haiku image or deployment specification. Acceptance executes
+image and a private version reference. Acceptance executes
 it only against the fake API and verifies dependency order.
 
 `piceli deploy plan --cluster-id ID` remains an offline preview CLI using empty
@@ -239,6 +254,7 @@ does not itself verify an image build/import or a live rollback.
 ```sh
 make local-test-env
 make test-local-executor
+# Maintainers only: needs a companion workspace with the telemetry consumer
 make test-local-tooling \
   IH_WORKSPACE=/absolute/path/to/ih_workspace \
   DOCKER=/absolute/path/to/docker \

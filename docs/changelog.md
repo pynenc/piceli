@@ -6,6 +6,43 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ## Unreleased
 
+- **Safety:** resource ownership is now an exact match on the owner annotation.
+  Previously, any owner id sharing the prefix before the first `-` was treated
+  as the same owner, so pruning could remove another owner's objects. To take
+  over objects from an earlier owner id, pass
+  `KubernetesProvider(..., inherited_owner_ids=("old-id",))` or adopt them
+  explicitly.
+- **Fixed:** `Deployment` templates are now found by the loader, and
+  `--module-path` / `PICELI__MODULE_PATH` now executes the module (before, it
+  always loaded nothing). `StatefulSet`, `HorizontalPodAutoscaler` and
+  `VerticalPodAutoscaler` manifests now carry `apiVersion`/`kind`. `Service`,
+  `PersistentVolume` and `PersistentVolumeClaim` return lists like every other
+  template. Workloads without `template_labels` default to `{"app": <name>}`.
+  The ineffective 15-character name limit was replaced by the real Kubernetes
+  rules.
+- **Fixed:** the CLI engine no longer silently skips kinds it doesn't know. They
+  are deployed last, with a warning.
+- **Security:** GKE service-account credentials are built in memory. No
+  `sa.json` file is written and `GOOGLE_APPLICATION_CREDENTIALS` is left
+  untouched.
+- **Security (local web UI):**
+  - loopback `Host` and same-origin checks;
+  - a token is required on every `/v1/*` request, GET included;
+  - the `viewer` role is read-only;
+  - Content-Security-Policy with a nonce, and no inline event handlers;
+  - a 1 MiB request limit;
+  - error bodies contain fixed error codes only.
+- **Changed:** the dashboard ships no application-specific shortcuts or topology.
+  Configure them with `--ui-config` / `PICELI__UI_CONFIG` (TOML).
+  `observe serve` gains `--namespace`.
+- **Fixed:** `piceli operator serve` no longer crashes on start, and handles an
+  occupied port and signals like `observe serve`.
+- Reworked the documentation: new landing page, overview and architecture guide
+  (mental model, the two execution engines, glossary), public roadmap, a real FAQ,
+  an open contributing guide, full CLI reference for `observe`, `operator` and
+  `artifacts`, and a warning-free Sphinx build. Examples no longer reference a
+  specific environment.
+
 - Added the read-only local operations lens: Python inventory API, JSON CLI,
   loopback REST endpoints, and owner-only non-secret port-forward preferences.
   It reconciles an explicit deployment-session archive with an explicit

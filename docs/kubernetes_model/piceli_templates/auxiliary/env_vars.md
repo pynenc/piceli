@@ -21,7 +21,7 @@ Environment variables are key for configuring containerized applications, allowi
 - `upsert_envvars(base_env: list, new_env: list)`: Merges two lists of environment variables, with `new_env` variables updating or adding to those in `base_env`.
 - `get_env_from_source(sources: list)`: Generates environment variables from sources like ConfigMaps or Secrets, enabling dynamic configuration based on cluster resources.
 
-These functionalities are integrated into the {container}`./container` module for defining container environments within pods, facilitating both fixed and dynamic configurations.
+These functionalities are integrated into the {doc}`container` module for defining container environments within pods, facilitating both fixed and dynamic configurations.
 
 ## Usage Example
 

@@ -54,8 +54,8 @@ Failures return fixed JSON and never echo paths, tool output, manifests or token
 Pass `OperationTelemetry(OtlpOptions(endpoint, token, ...))` to `PlanExecutor`.
 It emits bounded OTLP/HTTP-Protobuf spans and logs for plan, build, import, apply,
 resume, cancel and compensation operations. The mapping is
-`piceli.operation-otel.v1` over IH telemetry v3; it deliberately does not claim
-Rustvello task/attempt semantics. Journal states, including
+`piceli.operation-otel.v1`; it deliberately does not claim
+task/attempt semantics of a task runner such as Rustvello. Journal states, including
 `compensated-with-retention`, are preserved exactly.
 
 Admission and exporter work are bounded. `stats()` distinguishes attempted,
@@ -66,14 +66,14 @@ exception bodies, private version IDs and bearer tokens are not exported.
 
 The current pinned consumer profile is
 [`piceli-local-tooling-v2.json`](schemas/piceli-local-tooling-v2.json); v1 remains
-the immutable pre-LC-06-R record. Run the
+the immutable earlier record. Run the
 complete no-deployment acceptance command from the deployment planning guide.
 It uses a disposable loopback API, imports but never runs an owned format-test
-image, and verifies operation records across a real Poet restart.
+image, and verifies operation records across a restart of the telemetry consumer.
 
 ## Runnable Linux images
 
-LC-06-R adds an explicitly separate runnable profile. `BuildCommand` can export
+A separate *runnable* profile covers images that are executed. `BuildCommand` can export
 an exact, already-present base image with bounded process control;
 `DockerArchiveOciBuilder` validates that archive's pinned config identity and
 architecture, preserves every runtime layer, and adds a deterministic public
@@ -91,7 +91,8 @@ Receipts omit process output, Docker socket paths, command arguments and tokens.
 
 Consume [`piceli-runnable-image-v1.json`](schemas/piceli-runnable-image-v1.json)
 and run the source-bound acceptance on a Linux/arm64 Docker engine with the
-pinned base already present:
+pinned base already present (maintainers only; it needs the companion
+workspace):
 
 ```sh
 make test-runnable-image \
@@ -103,4 +104,4 @@ make test-runnable-image \
 The command never pulls, pushes or deploys. It proves exact base export, OCI
 inspection/import, successful readiness, missing-runtime failure, architecture
 rejection, bounded cancellation, cleanup, and operation traces/logs across a
-real Poet restart.
+restart of the telemetry consumer.

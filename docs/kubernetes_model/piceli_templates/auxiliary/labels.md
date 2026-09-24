@@ -19,17 +19,17 @@ Labels and annotations serve as additional information for Kubernetes objects, a
 
 Labels are utilized throughout Kubernetes objects defined in Piceli, enhancing their manageability and interoperability within Kubernetes and cloud environments.
 
-- {pod}`auxiliary/pod`
-- {replica_manager}`auxiliary/replica_manager`
-- {autoscaler}`deployable/autoscaler`
-- {configmap}`deployable/configmap`
-- {job}`deployable/job`
-- {role}`deployable/role`
-- {role_binding}`deployable/role_binding`
-- {secret}`deployable/secret`
-- {service}`deployable/service`
-- {service_account}`deployable/service_account`
-- {volume}`deployable/volume`
+- {doc}`pod`
+- {doc}`replica_manager`
+- {doc}`../deployable/autoscaler`
+- {doc}`../deployable/configmap`
+- {doc}`../deployable/job`
+- {doc}`../deployable/role`
+- {doc}`../deployable/role_binding`
+- {doc}`../deployable/secret`
+- {doc}`../deployable/service`
+- {doc}`../deployable/service_account`
+- {doc}`../deployable/volume`
 
 ### Example Usage
 

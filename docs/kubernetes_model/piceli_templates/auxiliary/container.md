@@ -4,7 +4,7 @@ Defines the configuration for a container within a Kubernetes pod, as managed by
 
 Containers are the basic executable units in a Kubernetes pod, encapsulating the application code, runtime environment, libraries, and their dependencies. The `Container` class in Piceli provides a declarative approach to defining these configurations.
 
-Utilized within the {pod}`./pod` class for defining container specifications within Kubernetes pods.
+Utilized within the {doc}`pod` class for defining container specifications within Kubernetes pods.
 
 ## Properties
 
@@ -24,7 +24,7 @@ Utilized within the {pod}`./pod` class for defining container specifications wit
 - `env_sources`: ConfigMaps or Secrets used as sources for environment variables.
 - `security_context_uid`: User ID to run the container under.
 
-This class is used in conjunction with the {pod}`./pod` class to define containers within pods, ensuring that each container is configured with the necessary resources, environment variables, and policies for its operation within the Kubernetes cluster.
+This class is used in conjunction with the {doc}`pod` class to define containers within pods, ensuring that each container is configured with the necessary resources, environment variables, and policies for its operation within the Kubernetes cluster.
 
 ### Example Usage
 

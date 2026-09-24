@@ -26,6 +26,3 @@ __all__ = [
     "DeploymentSession",
     "DeploymentSessionArchive",
 ]
-from piceli.k8s.ops.session import DeploymentSession, DeploymentSessionArchive
-
-__all__ = ("DeploymentSession", "DeploymentSessionArchive")

@@ -1,7 +1,7 @@
 """
 Provides utilities for specifying and validating cron schedules for Kubernetes `CronJob` objects in Piceli.
 
-This module includes a CronTab type for ensuring cron expressions are valid and utility functions for generating common cron scheduling patterns. It is particularly useful in conjunction with the {cronjob}`../deployable/cronjob` module for defining the timing of scheduled tasks within a Kubernetes cluster.
+This module includes a CronTab type for ensuring cron expressions are valid and utility functions for generating common cron scheduling patterns. It is particularly useful in conjunction with the `CronJob` template (`piceli.k8s.templates.deployable.cronjob`) for defining the timing of scheduled tasks within a Kubernetes cluster.
 
 Utility Functions:
 - `every_x_minutes(minutes: int) -> CronTab`: Generates a cron expression to run a job every X minutes.

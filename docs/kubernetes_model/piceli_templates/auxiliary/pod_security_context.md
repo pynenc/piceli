@@ -18,4 +18,4 @@ This function generates a Kubernetes `V1PodSecurityContext` object based on prov
 
 - An instance of `client.V1PodSecurityContext` configured with the specified security settings if `security_context_uid` is provided; otherwise, `None`.
 
-The `get_security_context` function is a crucial component used in defining Pod configurations within Piceli, ensuring that pods are deployed with necessary security measures in place. This function is specifically utilized in the ` {pod}``./pod ` module to apply security contexts to pods, contributing to the overall security of the Kubernetes environment managed by Piceli.
+The `get_security_context` function is a crucial component used in defining Pod configurations within Piceli, ensuring that pods are deployed with necessary security measures in place. This function is specifically utilized in the {doc}`pod` module to apply security contexts to pods, contributing to the overall security of the Kubernetes environment managed by Piceli.
