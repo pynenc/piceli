@@ -8,10 +8,9 @@ the errors, how to resume, and what never to print.
 :class: note
 
 The output contract below is new in 0.3.0 and, since 0.4.0, covers every
-`release`, `inputs`, `artifacts`, `observe` and `operator` command (marked
-`conforms` in {doc}`reference/cli`). Only `render` is still `partial`, and the
-legacy `model`/`deploy` commands are `legacy`. See the {doc}`roadmap` for
-every feature's status.
+command (marked `conforms` in {doc}`reference/cli`) except `render`,
+`release check` and `release diff`, which are still `partial`. See the
+{doc}`roadmap` for every feature's status.
 ```
 
 ## Start here
@@ -136,10 +135,6 @@ Ask before running these, and show the owner what will happen first.
 | `piceli artifacts import-local` | The local Docker image store | `--approve-digest <digest>` |
 | `piceli operator approve`, `piceli operator promote`, `piceli operator restore` | Operator state, catalog or files | The owner's go-ahead |
 | `piceli access`, `piceli observe serve`, `piceli operator serve`, `piceli observe forward-run`, `piceli observe forwards apply`, `piceli observe logs-run` | Long-running local processes and ports | The owner's go-ahead |
-
-The legacy `piceli deploy run` command (current kube context, delete and
-recreate, no approval) is no longer registered: `piceli deploy` is now the
-pipeline command, which plans first and needs an approval.
 
 Never add `--auto-approve` unless the owner has said that this run is an
 unattended CI job for this exact spec.

@@ -91,6 +91,14 @@ infrastructure lifecycle and Argo CD-style continuous delivery (see the
   `stop` work on every release. `piceli deploy` runs build, delivery and release
   as one resumable command.
 
+- **Checks, status and access**: `[[checks]]` in the spec run after every
+  apply (`piceli release check` reruns them), `piceli status` says whether the
+  app is up and how to reach it, and `piceli access` forwards its declared
+  ports to `127.0.0.1`.
+
+- **Import**: `piceli import live` and `piceli import yaml` generate a typed
+  app module from running objects or existing manifests.
+
 - **Extensive Documentation**: Get up and running quickly with detailed guides and examples in the Piceli documentation.
 
 ## Installation

@@ -11,8 +11,7 @@ changed.
 
 `piceli.pipeline` and `piceli deploy` are **preview**: tested end to end on
 `kind`, but names, options and JSON fields may still change in a minor
-release (always with a changelog entry). `piceli deploy` replaces the legacy
-`piceli deploy plan/detail/run` commands, which are no longer registered.
+release (always with a changelog entry).
 ```
 
 ## Prerequisites

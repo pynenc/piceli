@@ -114,7 +114,7 @@ previous` returns to the previous release.
 ```{tip}
 `piceli deploy` runs the whole pipeline (verify inputs, build, deliver, plan,
 apply) as one resumable command. See
-[Deploy in one command](https://docs.pynenc.org/projects/piceli/en/latest/deploy.html).
+{doc}`Deploy in one command <../deploy>`.
 ```
 
 ## Other ways to model resources

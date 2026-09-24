@@ -96,7 +96,7 @@ audience.
   `piceli deploy run/plan/detail`) is removed. Every change goes through live
   discovery, server-side apply, the journal and resume.
 - ✅ Delete-and-recreate only as an explicit per-object opt-in (`--replace`).
-- `piceli deploy`: build, delivery and release as one resumable command.
+- ✅ `piceli deploy`: build, delivery and release as one resumable command (preview; see {doc}`deploy`).
 - Field-level diff output in plans.
 - Support standard kubeconfig authentication (exec plugins for GKE, EKS and AKS).
 - Fix and fully test every template.

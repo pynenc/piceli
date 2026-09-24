@@ -9,14 +9,16 @@ through an explicit kubeconfig file and context. See the {doc}`../roadmap` for
 each feature's maturity.
 ```
 
-The `piceli` command (also available as `python -m piceli`) has five command groups, the `render`, `status` and `access` commands and two contract commands:
+The `piceli` command (also available as `python -m piceli`) has six command groups, the `render`, `deploy`, `status` and `access` commands and two contract commands:
 
 | Group | Purpose | Cluster access | Output |
 | --- | --- | --- | --- |
 | `render` | Print the manifests of a typed app or composition (preview). See {doc}`../typed_apps` | None | YAML or JSON |
-| `release` | Plan, apply, roll back, resume and stop releases from a `release.toml` spec; `release secret show` inspects secret values (owner, `--reveal`). See {doc}`../release_cli` and {doc}`../secrets` | Explicit kubeconfig file + context from the spec | JSON + summary on stderr |
+| `deploy` | Run the whole pipeline for a typed app: verify inputs, build, deliver, plan, apply and run checks, skipping unchanged stages. See {doc}`../deploy` | Explicit kubeconfig file + context from the target | JSON + summary on stderr |
+| `release` | Plan, apply, roll back, resume and stop releases from a `release.toml` spec; `release check` runs the spec's `[[checks]]` ({doc}`../checks`); `release secret show` inspects secret values (owner, `--reveal`). See {doc}`../release_cli` and {doc}`../secrets` | Explicit kubeconfig file + context from the spec | JSON + summary on stderr |
 | `observe` | Reconcile a session archive, logs, port forwards, local UI | Explicit `--kubeconfig/--context` | JSON |
 | `operator` | Inventory, releases, approvals, backups, local UI | Explicit `--kubeconfig` | JSON |
+| `import` | Generate a typed app module from live objects (`import live`) or manifest files (`import yaml`) (preview). See {doc}`../migrate_from_kubectl` | Explicit `--kubeconfig/--context` for `live` (reads only); none for `yaml` | Python module + JSON |
 | `artifacts` | Deterministic OCI builds, image delivery and explicit local import | None, or an explicit target for `deliver` | JSON |
 | `inputs` | Record and verify the git identity of build sources | None (local git only) | JSON |
 | `status` | Whether the app is up and how to reach it: release, image digests, health, URLs (preview). See {doc}`../access` | Explicit kubeconfig file + context from the target (reads only) | Text, or JSON with `--json` |
@@ -24,9 +26,8 @@ The `piceli` command (also available as `python -m piceli`) has five command gro
 | `explain` | Explain an error code: cause, fix, whether a retry can succeed | None | Text, or JSON with `--json` |
 | `help-json` | The whole command tree with options, side effects and approval rules | None | JSON |
 
-`piceli deploy`, the one-shot command that runs build, delivery and release
-together, ships in the same release; see
-[Deploy in one command](https://docs.pynenc.org/projects/piceli/en/latest/deploy.html).
+`piceli deploy` runs the whole pipeline (verify inputs, build, deliver, plan,
+apply, checks) as one resumable command; see {doc}`../deploy`.
 
 Every command, option and contract is listed in {doc}`../reference/cli`,
 generated from `piceli help-json`. Refusal codes are explained in
@@ -35,12 +36,12 @@ generated from `piceli help-json`. Refusal codes are explained in
 There are no global options: each command takes its own explicit options.
 
 ```{note}
-The `model list` and `deploy run/plan/detail` commands of 0.3.x and earlier,
+Upgrading from 0.3.x: the `model list` and `deploy run/plan/detail` commands
 and the global `--namespace`, `--module-name`, `--module-path`,
 `--folder-path` and `--sub-elements` options (`PICELI__*` environment
-variables, `[tool.piceli]` in `pyproject.toml`), were removed together with the
-delete-and-recreate engine. Use `piceli render` to see what a model contains
-and `piceli release` (or `piceli deploy`) to apply it.
+variables, `[tool.piceli]` in `pyproject.toml`) were removed in 0.4.0. Use
+`piceli render` to see what a model contains, `piceli import` to turn existing
+objects into a typed app, and `piceli release` or `piceli deploy` to apply it.
 ```
 
 ## Observe Command
