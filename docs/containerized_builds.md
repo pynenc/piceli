@@ -287,9 +287,10 @@ On stderr, `--progress` chooses what you see while the build runs:
 | `plain` | The step lines plus the raw build output as it arrives. |
 | `quiet` | Nothing until the result. |
 
-The machine-readable result is always the **last line**: the receipt JSON on
-stdout on success, or the `{"state", "reason", "steps"}` JSON on stderr on
-failure. Parse the last stderr line, not the whole stream.
+The machine-readable result is always the one JSON object on **stdout**: the
+receipt on success, or `{"state": "failed" | "rejected", "reason": "<code>",
+"message": "…", "steps": […]}` on failure. stderr is human text only (progress
+and a summary). Before 0.4.0 the failure object was the last stderr line.
 
 In Python, pass `log=Path(...)`, `progress=callable(str)` and
 `raw_output=callable(bytes)` to `BuildSpec.run`.
@@ -359,10 +360,11 @@ so you can inspect it.
 - `--max-seconds`: the grant lifetime.
 
 Exit codes: `0` success, `1` a build step or smoke check failed or timed out
-(stderr lists the steps, never their output), `2` rejected. The last stderr
-line is `{"state": "failed" | "rejected", "reason": "<code>"}` with a fixed
-code (each is explained in {doc}`reference/errors` and by
-`piceli explain <code>`). Paths are never echoed.
+(stderr lists the steps, never their output), `2` rejected. stdout is
+`{"state": "failed" | "rejected", "reason": "<code>", "message": "…"}` with a
+fixed code (each is explained in {doc}`reference/errors` and by
+`piceli explain <code>`); `message` is the code's title. Paths are never
+echoed.
 
 | Code | Exit | Cause | Fix |
 | --- | --- | --- | --- |
