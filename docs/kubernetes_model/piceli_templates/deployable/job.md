@@ -27,28 +27,28 @@ One of the key features of a Kubernetes Job is controlling the job's lifecycle, 
 from piceli.k8s import templates
 
 job = templates.Job(
-        name="test-job",
-        image_pull_secrets=["docker-registry-credentials"],
-        backoff_limit=1,
-        containers=[
-            templates.Container(
-                name="test-job",
-                command=["python", "--version"],
-                image="docker-image",
-                env={"K0": "V0"},
-                liveness_command=[
-                    "sh",
-                    "-c",
-                    "test $(expr $(date +%s) - $(cat /tmp/health_check)) -lt 60",
-                ],
-                resources=templates.Resources(
-                    cpu="100m", memory="250Mi", ephemeral_storage="11Mi"
-                ),
-            )
-        ],
-        template_labels={"pod_name": "test-job"},
-        labels={"job_name": "test-job"},
-    )
+    name="test-job",
+    image_pull_secrets=["docker-registry-credentials"],
+    backoff_limit=1,
+    containers=[
+        templates.Container(
+            name="test-job",
+            command=["python", "--version"],
+            image="docker-image",
+            env={"K0": "V0"},
+            liveness_command=[
+                "sh",
+                "-c",
+                "test $(expr $(date +%s) - $(cat /tmp/health_check)) -lt 60",
+            ],
+            resources=templates.Resources(
+                cpu="100m", memory="250Mi", ephemeral_storage="11Mi"
+            ),
+        )
+    ],
+    template_labels={"pod_name": "test-job"},
+    labels={"job_name": "test-job"},
+)
 ```
 
 In this example, a Job is defined to perform batch processing, with automatic cleanup of its pods 1 hour after the job finishes and a backoff limit of 3 retries.

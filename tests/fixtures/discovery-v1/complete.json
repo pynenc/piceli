@@ -1,0 +1,62 @@
+{
+  "captured_at": "2026-09-09T10:00:00Z",
+  "coverage": {
+    "api_resources": [
+      {
+        "plural": "deployments",
+        "resource_type": {"api_version": "apps/v1", "kind": "Deployment"},
+        "scope": "namespaced"
+      }
+    ],
+    "capture_id": "fixture-capture-1",
+    "completed": [{"api_version": "apps/v1", "kind": "Deployment"}],
+    "failures": [],
+    "policy_revision": "kubernetes-defaults-v1",
+    "provider_id": "fake-provider/v1",
+    "requested": [{"api_version": "apps/v1", "kind": "Deployment"}]
+  },
+  "defaulted_fields": [
+    {
+      "json_pointer": "/spec/revisionHistoryLimit",
+      "resource": {
+        "api_version": "apps/v1",
+        "kind": "Deployment",
+        "name": "worker",
+        "namespace": "app-test"
+      }
+    }
+  ],
+  "limits": {
+    "max_artifact_bytes": 10000000,
+    "max_pages": 256,
+    "max_resource_types": 64,
+    "max_resources": 10000,
+    "page_size": 100
+  },
+  "resources": [
+    {
+      "content_complete": true,
+      "identity": {
+        "api_version": "apps/v1",
+        "kind": "Deployment",
+        "name": "worker",
+        "namespace": "app-test"
+      },
+      "manifest": {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {
+          "name": "worker",
+          "namespace": "app-test",
+          "resourceVersion": "7",
+          "uid": "worker-uid"
+        },
+        "spec": {"replicas": 1}
+      },
+      "ownership": "managed",
+      "retained": false
+    }
+  ],
+  "schema_version": 1,
+  "target": {"cluster_id": "kind-local", "namespace": "app-test"}
+}

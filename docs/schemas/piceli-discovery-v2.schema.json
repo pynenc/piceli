@@ -1,0 +1,398 @@
+{
+  "$defs": {
+    "api_resource": {
+      "additionalProperties": false,
+      "properties": {
+        "plural": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "resource_type": {
+          "$ref": "#/$defs/resource_type"
+        },
+        "scope": {
+          "enum": [
+            "namespaced",
+            "cluster"
+          ]
+        }
+      },
+      "required": [
+        "resource_type",
+        "scope",
+        "plural"
+      ],
+      "type": "object"
+    },
+    "failure": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "rbac-denied",
+            "api-unavailable",
+            "limit-exceeded",
+            "invalid-page",
+            "provider-error",
+            "deadline-exceeded"
+          ]
+        },
+        "resource_type": {
+          "$ref": "#/$defs/resource_type"
+        }
+      },
+      "required": [
+        "resource_type",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "resource_identity": {
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "kind": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "namespace": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "api_version",
+        "kind",
+        "namespace",
+        "name"
+      ],
+      "type": "object"
+    },
+    "resource_type": {
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "kind": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "api_version",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "target": {
+      "additionalProperties": false,
+      "properties": {
+        "cluster_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "namespace": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "cluster_id",
+        "namespace"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://docs.piceli.pynenc.org/schemas/piceli-discovery-v2.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "captured_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "coverage": {
+      "additionalProperties": false,
+      "properties": {
+        "api_resources": {
+          "items": {
+            "$ref": "#/$defs/api_resource"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "capture_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "completed": {
+          "items": {
+            "$ref": "#/$defs/resource_type"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "failures": {
+          "items": {
+            "$ref": "#/$defs/failure"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "policy_revision": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "provider_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "requested": {
+          "items": {
+            "$ref": "#/$defs/resource_type"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "provider_id",
+        "capture_id",
+        "policy_revision",
+        "requested",
+        "completed",
+        "api_resources",
+        "failures"
+      ],
+      "type": "object"
+    },
+    "defaulted_fields": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "json_pointer": {
+            "pattern": "^/(?!apiVersion(?:/|$)|kind(?:/|$)|metadata(?:/|$)|data(?:/|$)|stringData(?:/|$)|status(?:/|$))(?:[^~]|~[01])*$",
+            "type": "string"
+          },
+          "resource": {
+            "$ref": "#/$defs/resource_identity"
+          }
+        },
+        "required": [
+          "resource",
+          "json_pointer"
+        ],
+        "type": "object"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "limits": {
+      "additionalProperties": false,
+      "properties": {
+        "call_seconds": {
+          "exclusiveMinimum": 0,
+          "maximum": 3600,
+          "type": "number"
+        },
+        "max_artifact_bytes": {
+          "maximum": 10000000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_pages": {
+          "maximum": 4096,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_resource_types": {
+          "maximum": 256,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_resources": {
+          "maximum": 100000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_seconds": {
+          "exclusiveMinimum": 0,
+          "maximum": 3600,
+          "type": "number"
+        },
+        "page_size": {
+          "maximum": 1000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "max_resource_types",
+        "page_size",
+        "max_pages",
+        "max_resources",
+        "max_artifact_bytes",
+        "max_seconds",
+        "call_seconds"
+      ],
+      "type": "object"
+    },
+    "provenance": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "source": {
+                "enum": [
+                  "loopback",
+                  "live"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "cluster_uid": {
+                "minLength": 1
+              },
+              "namespace_uid": {
+                "minLength": 1
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "cluster_uid": {
+          "maxLength": 4096,
+          "type": "string"
+        },
+        "endpoint_id": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        },
+        "namespace_uid": {
+          "maxLength": 4096,
+          "type": "string"
+        },
+        "source": {
+          "enum": [
+            "synthetic",
+            "loopback",
+            "live"
+          ]
+        }
+      },
+      "required": [
+        "source",
+        "endpoint_id",
+        "cluster_uid",
+        "namespace_uid"
+      ],
+      "type": "object"
+    },
+    "resources": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "content_complete": {
+            "type": "boolean"
+          },
+          "identity": {
+            "$ref": "#/$defs/resource_identity"
+          },
+          "manifest": {
+            "properties": {
+              "apiVersion": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "metadata": {
+                "properties": {
+                  "name": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "resourceVersion": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "uid": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "uid",
+                  "resourceVersion"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "apiVersion",
+              "kind",
+              "metadata"
+            ],
+            "type": "object"
+          },
+          "ownership": {
+            "enum": [
+              "managed",
+              "unmanaged"
+            ]
+          },
+          "retained": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "identity",
+          "manifest",
+          "ownership",
+          "retained",
+          "content_complete"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "schema_version": {
+      "const": 2,
+      "type": "integer"
+    },
+    "target": {
+      "$ref": "#/$defs/target"
+    }
+  },
+  "required": [
+    "schema_version",
+    "target",
+    "captured_at",
+    "limits",
+    "coverage",
+    "resources",
+    "defaulted_fields",
+    "provenance"
+  ],
+  "title": "Piceli bounded discovery artifact v2",
+  "type": "object"
+}

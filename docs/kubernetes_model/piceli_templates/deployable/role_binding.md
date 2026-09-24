@@ -25,7 +25,7 @@ role_binding = templates.RoleBinding(
     role_name="pod-reader",
     service_account_name="default",
     users=["user1@example.com"],
-    labels={"environment": "dev"}
+    labels={"environment": "dev"},
 )
 ```
 
@@ -54,7 +54,7 @@ cluster_role_binding = templates.ClusterRoleBinding(
     name="test-cluster-role-binding",
     role_name="cluster-admin",
     users=["admin@example.com"],
-    labels={"purpose": "admin-access"}
+    labels={"purpose": "admin-access"},
 )
 ```
 

@@ -1,11 +1,10 @@
 import base64
 import json
 import logging
-import os
-import tempfile
 import threading
+from collections.abc import Callable
 from functools import cached_property
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, Optional
 
 from kubernetes import client, config, watch
 
@@ -13,22 +12,60 @@ from piceli.k8s.config.kubeconfig import KubeConfig
 from piceli.k8s.templates.auxiliary.resource_request import ClusterResources
 from piceli.settings import GCE_SA_INFO
 
+if TYPE_CHECKING:
+    from google.oauth2 import service_account
+
 logger = logging.getLogger(__name__)
+
+GCP_SCOPES = (
+    "https://www.googleapis.com/auth/cloud-platform",
+    "https://www.googleapis.com/auth/userinfo.email",
+)
+
+
+def gke_credentials_factory(
+    sa_info: dict[str, Any],
+) -> Callable[[], "service_account.Credentials"]:
+    """Build refreshed GKE credentials in memory from service-account info.
+
+    Passed to KubeConfigLoader as ``get_google_credentials`` so the gcp
+    auth-provider never needs GOOGLE_APPLICATION_CREDENTIALS or a key file on
+    disk; the loader calls it again whenever the token expires.
+    """
+
+    try:
+        from google.auth.transport.requests import Request
+        from google.oauth2 import service_account
+    except ImportError as exc:  # pragma: no cover - depends on installed extras
+        raise ImportError(
+            "GKE service-account authentication needs the gcp extra: "
+            'pip install "piceli[gcp]"'
+        ) from exc
+
+    def get_credentials() -> "service_account.Credentials":
+        credentials = service_account.Credentials.from_service_account_info(
+            sa_info, scopes=list(GCP_SCOPES)
+        )
+        credentials.refresh(Request())
+        return credentials
+
+    return get_credentials
 
 
 class ClientManager:
     """Singleton to manage k8s client instances for different kubeconfigs"""
 
     _instance_lock = threading.Lock()
-    _clients: dict[Optional[KubeConfig], client.ApiClient] = {}
+    _instance: ClassVar[Optional["ClientManager"]] = None
+    _clients: dict[KubeConfig | None, client.ApiClient] = {}
 
     def __new__(cls) -> "ClientManager":
         with cls._instance_lock:
-            if not hasattr(cls, "_instance"):
+            if cls._instance is None:
                 cls._instance = super().__new__(cls)
         return cls._instance
 
-    def get_client(self, kubeconfig: Optional[KubeConfig] = None) -> client.ApiClient:
+    def get_client(self, kubeconfig: KubeConfig | None = None) -> client.ApiClient:
         if kubeconfig not in self._clients:
             # this it probably only work in GCP make this more generic when refactoring legacy libs
             if kubeconfig:
@@ -36,16 +73,13 @@ class ClientManager:
                 if not GCE_SA_INFO:
                     # TODO: if still necessary after refactoring, use cistell
                     raise ValueError("GCE_SA_INFO required for GKE kubeconfig")
-                credentials = json.loads(base64.b64decode(GCE_SA_INFO).decode("utf-8"))
-                with tempfile.TemporaryDirectory():
-                    with open(
-                        sa_json_name := "sa.json", "w", encoding="utf-8"
-                    ) as sa_file:
-                        json.dump(credentials, sa_file)
-                    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = sa_json_name
-                    configuration = client.Configuration()
-                    loader = config.kube_config.KubeConfigLoader(kubeconfig.as_dict)
-                    loader.load_and_set(configuration)
+                sa_info = json.loads(base64.b64decode(GCE_SA_INFO).decode("utf-8"))
+                configuration = client.Configuration()
+                loader = config.kube_config.KubeConfigLoader(
+                    kubeconfig.as_dict,
+                    get_google_credentials=gke_credentials_factory(sa_info),
+                )
+                loader.load_and_set(configuration)
                 self._clients[kubeconfig] = client.ApiClient(configuration)
             else:
                 try:
@@ -61,7 +95,7 @@ class ClientManager:
 class ClientContext:
     """Context for handling the api's for a specifc kubeconfig client"""
 
-    def __init__(self, kubeconfig: Optional[KubeConfig] = None):
+    def __init__(self, kubeconfig: KubeConfig | None = None):
         self.kubeconfig = kubeconfig
         self._api_cache: dict[str, Any] = {}
 
@@ -118,7 +152,7 @@ class ClientContext:
 def get_cluster_resources(
     ctx: ClientContext,
     Namespace: str,
-    label_selector: Optional[dict[str, str]] = None,
+    label_selector: dict[str, str] | None = None,
     get_pods: bool = True,
 ) -> "ClusterResources":
     """get the cluster resources"""
@@ -139,7 +173,7 @@ def get_cluster_resources(
 
 
 def get_cluster_pods(
-    ctx: ClientContext, Namespace: str, label_selector: Optional[dict[str, str]] = None
+    ctx: ClientContext, Namespace: str, label_selector: dict[str, str] | None = None
 ) -> list[client.V1Pod]:
     """get the cluster resources"""
     _label_selector = None

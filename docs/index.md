@@ -1,81 +1,155 @@
-# Welcome to Piceli's Documentation
+# Piceli Documentation
 
-**Piceli: An Infrastructure Management Framework for Kubernetes and Beyond.**
+**Kubernetes infrastructure as typed Python: model it, plan it, apply it safely, and observe it.**
 
-## Introduction
+Piceli lets you describe Kubernetes resources with Python (typed templates, the
+official `kubernetes` client models, or plain YAML/JSON), compare that desired state
+with a live cluster, and apply the difference in dependency order. It is a
+Python-native alternative to hand-maintained YAML, Kustomize overlays and Helm
+templates, and it has a recoverable execution engine with durable journals and
+explicit authorization.
 
-Piceli is an infrastructure management framework aimed at simplifying the orchestration and deployment across both Kubernetes environments and cloud providers. In its current state, it focuses on managing Kubernetes resources, with the goal to include comprehensive management of cloud infrastructure, such as creating and managing GKE clusters on GCP. Users can define their infrastructure using YAML, Piceli templates, or directly through Kubernetes objects from the official Kubernetes library. The Piceli CLI tool is designed to parse these definitions, generating an automatic deployment plan that accounts for dependencies and execution order.
+```{admonition} Project status: pre-alpha
+:class: warning
 
-It offers deployment management by assessing the state of existing objects to determine necessary actions, including supporting patches, replacements, and implementing rollbacks to maintain system stability and efficiency. While the current version focuses on Kubernetes, future developments aim to manage the entire cloud infrastructure stack, ensuring that the Kubernetes cluster itself, along with any dependent resources, are provisioned and managed seamlessly.
+Piceli is under active development and its APIs change between releases. Two
+execution paths exist today:
 
-```{toctree}
-:hidden:
-:maxdepth: 2
-:caption: Table of Contents
+- the **CLI path** (`piceli deploy detail/run`), which is simple and works with the
+  templates, but *replaces* existing objects (delete then create) instead of
+  patching them;
+- the **recoverable engine** (`DeploymentSession`, `PlanExecutor`), which uses
+  server-side apply, preconditions, journals and resume, but is currently a
+  Python API with no CLI command.
 
-overview
-getting_started/index
-kubernetes_model/index
-cli/index
-apidocs/index.rst
-contributing/index
-faq
-changelog
-license
+See {doc}`overview` for how the two relate and {doc}`roadmap` for where the
+project is going.
 ```
 
-## Key Features
+## Where to start
 
-- Comprehensive orchestration for Kubernetes and future cloud provider environments.
-- Designed to manage the entire infrastructure stack, including provisioning and management of cloud resources and Kubernetes clusters.
-- Intuitive deployment plans with automatic dependency resolution to ensure efficient and reliable deployments.
-- Deployment management that supports patches, replacements, and rollbacks for enhanced stability.
-- Detailed deployment plans that take into account the current state and nuances of the cluster configuration.
-- Future development will introduce configurable deployment strategies for granular control over infrastructure rollouts.
+::::{grid} 1 2 2 2
+:gutter: 3
 
-## Installation
+:::{grid-item-card} Getting started
+:link: getting_started/index
+:link-type: doc
 
-Piceli can be installed directly via pip:
+Install Piceli, define your first objects and preview a deployment.
+:::
 
-```bash
-pip install piceli
-```
+:::{grid-item-card} Overview and architecture
+:link: overview
+:link-type: doc
 
-For a detailed installation guide, including prerequisites and environment setup, see the {doc}`getting_started/index` section.
+The mental model (model → plan → execute → observe), the main building blocks,
+and a glossary.
+:::
 
-## Quick Start
+:::{grid-item-card} Kubernetes model
+:link: kubernetes_model/index
+:link-type: doc
 
-Here's a simple example to define a Kubernetes deployment using a Piceli template:
+Templates, `kubernetes` client objects, and YAML/JSON definitions.
+:::
+
+:::{grid-item-card} Recoverable deployments
+:link: deployment_planning
+:link-type: doc
+
+Discovery, pure plans, authorized execution, sessions, revisions and releases.
+:::
+
+:::{grid-item-card} Operations
+:link: operations_lens
+:link-type: doc
+
+A local web UI and JSON API for inventory, logs and port forwards.
+:::
+
+:::{grid-item-card} Roadmap
+:link: roadmap
+:link-type: doc
+
+Status and direction compared with Kustomize, Helm, OpenTofu/Terraform and Argo CD.
+:::
+::::
+
+## A first taste
 
 ```python
+# myapp/infra.py
 from piceli.k8s import templates
 
-job = templates.Job(
-    name="job0",
+settings = templates.ConfigMap(name="report-settings", data={"LOG_LEVEL": "info"})
+
+nightly_report = templates.CronJob(
+    name="nightly-report",
+    schedule=templates.crontab.daily_at_x(hour=2, minute=0),
     containers=[
         templates.Container(
-            name="c0", command=["python", "--version"], image="python:latest",
+            name="report",
+            image="ghcr.io/example/report:1.4.2",
+            command=["python", "-m", "report"],
         )
     ],
 )
 ```
 
-And deploy it with:
-
 ```bash
-PICELI__MODULE_NAME=path.to.templates piceli deploy run
+# List what Piceli loaded, then compare it with the cluster
+piceli --module-name myapp.infra model list
+piceli --module-name myapp.infra --namespace my-app deploy detail
 ```
 
-For a step-by-step guide to your first deployment, visit the {doc}`getting_started/index` section.
+## Part of the Pynenc ecosystem
 
-## Compatibility
+Piceli is developed alongside [Pynenc](https://docs.pynenc.org), a distributed task
+orchestration library, but it does not depend on it. It works with any Kubernetes
+workload.
 
-Piceli is designed with Kubernetes in mind but aims to extend its support to various cloud providers and infrastructure services.
+```{toctree}
+:hidden:
+:maxdepth: 2
+:caption: Learn
 
-## Contact or Support
+getting_started/index
+overview
+kubernetes_model/index
+```
 
-Need help or want to discuss Pynenc? Check out our [GitHub Issues](https://github.com/pynenc/piceli/issues) and [GitHub Discussions](https://github.com/pynenc/piceli/discussions).
+```{toctree}
+:hidden:
+:maxdepth: 2
+:caption: Guides
 
-## License
+deployment_planning
+release_cli
+source_identity
+containerized_builds
+artifact_delivery
+node_delivery
+operations_lens
+operator_workflow
+```
 
-Piceli is released under the MIT License. For more details, see the {doc}`license` section.
+```{toctree}
+:hidden:
+:maxdepth: 2
+:caption: Reference
+
+cli/index
+apidocs/index
+```
+
+```{toctree}
+:hidden:
+:maxdepth: 1
+:caption: Project
+
+roadmap
+faq
+contributing/index
+changelog
+license
+```

@@ -1,6 +1,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from kubernetes.client.exceptions import ApiException
 from typer.testing import CliRunner
 
 from piceli.k8s.cli import app
@@ -66,16 +67,29 @@ def test_run_command_success(
     deployment_executor_mock.status = ExecutionStatus.DONE
     deployment_executor_mock.deployed_nodes = []
     client_context_mock = MagicMock(spec=ClientContext)
+    not_found = ApiException(status=404, reason="Not Found")
+    not_found.body = '{"kind": "Status", "reason": "NotFound", "code": 404}'
+    client_context_mock.core_api.read_namespace.side_effect = not_found
 
-    with patch("piceli.k8s.cli.ContextObject", return_value=ctx_object), patch(
-        "piceli.k8s.ops.deploy.strategy_auto.StrategyAuto",
-        return_value=strategy_auto_mock,
-    ), patch(
-        "piceli.k8s.k8s_client.client.ClientContext", return_value=client_context_mock
-    ), patch(
-        "piceli.k8s.ops.deploy.deployment_executor.DeploymentExecutor",
-        return_value=deployment_executor_mock,
+    with (
+        patch("piceli.k8s.cli.ContextObject", return_value=ctx_object),
+        patch(
+            "piceli.k8s.ops.deploy.strategy_auto.StrategyAuto",
+            return_value=strategy_auto_mock,
+        ),
+        patch(
+            # run.py imports ClientContext directly, so patch the name it looks up
+            "piceli.k8s.cli.deploy.run.ClientContext",
+            return_value=client_context_mock,
+        ),
+        patch(
+            "piceli.k8s.ops.deploy.deployment_executor.DeploymentExecutor",
+            return_value=deployment_executor_mock,
+        ),
     ):
         result = runner.invoke(app, ["deploy", "run", "--create-namespace"])
         assert result.exit_code == 0
         assert "Deployment completed successfully" in result.stdout
+    client_context_mock.core_api.create_namespace.assert_called_once_with(
+        body={"metadata": {"name": "test-namespace"}}
+    )

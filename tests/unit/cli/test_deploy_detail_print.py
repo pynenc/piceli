@@ -1,4 +1,4 @@
-from typing import Generator
+from collections.abc import Generator
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -172,7 +172,9 @@ def test_print_differences(
     assert len(printed_table.rows) == 3, "Expected 3 rows of differences."
     # You can further assert on the contents of each row to ensure correctness
     for cell, diff_type in zip(
-        list(printed_table.columns[1].cells), ["Considered", "Ignored", "Defaults"]
+        list(printed_table.columns[1].cells),
+        ["Considered", "Ignored", "Defaults"],
+        strict=True,
     ):
         assert diff_type in cell, f"Expected difference type '{diff_type}' not found."
 
@@ -192,9 +194,11 @@ def test_print_compare_results_action_needed(
     mock_console: MagicMock,
     obj_compare_result_with_differences: detail.ObjCompareResult,
 ) -> None:
-    with patch("piceli.k8s.cli.deploy.detail.print_summary_of_changes"), patch(
-        "piceli.k8s.cli.deploy.detail.print_compared_specs"
-    ), patch("piceli.k8s.cli.deploy.detail.print_differences"):
+    with (
+        patch("piceli.k8s.cli.deploy.detail.print_summary_of_changes"),
+        patch("piceli.k8s.cli.deploy.detail.print_compared_specs"),
+        patch("piceli.k8s.cli.deploy.detail.print_differences"),
+    ):
         detail.print_compare_results(
             mock_console,
             [obj_compare_result_with_differences],
@@ -212,9 +216,11 @@ def test_print_compare_results_no_action_hidden(
     mock_console: MagicMock,
     obj_compare_result_no_action_needed: detail.ObjCompareResult,
 ) -> None:
-    with patch("piceli.k8s.cli.deploy.detail.print_summary_of_changes"), patch(
-        "piceli.k8s.cli.deploy.detail.print_compared_specs"
-    ), patch("piceli.k8s.cli.deploy.detail.print_differences"):
+    with (
+        patch("piceli.k8s.cli.deploy.detail.print_summary_of_changes"),
+        patch("piceli.k8s.cli.deploy.detail.print_compared_specs"),
+        patch("piceli.k8s.cli.deploy.detail.print_differences"),
+    ):
         detail.print_compare_results(
             mock_console,
             [obj_compare_result_no_action_needed],
@@ -231,9 +237,11 @@ def test_print_compare_results_no_action_shown(
     mock_console: MagicMock,
     obj_compare_result_no_action_needed: detail.ObjCompareResult,
 ) -> None:
-    with patch("piceli.k8s.cli.deploy.detail.print_summary_of_changes"), patch(
-        "piceli.k8s.cli.deploy.detail.print_compared_specs"
-    ), patch("piceli.k8s.cli.deploy.detail.print_differences"):
+    with (
+        patch("piceli.k8s.cli.deploy.detail.print_summary_of_changes"),
+        patch("piceli.k8s.cli.deploy.detail.print_compared_specs"),
+        patch("piceli.k8s.cli.deploy.detail.print_differences"),
+    ):
         detail.print_compare_results(
             mock_console,
             [obj_compare_result_no_action_needed],
@@ -244,4 +252,6 @@ def test_print_compare_results_no_action_shown(
         assert any(
             isinstance(arg[0][0], detail.Rule)
             for arg in mock_console.print.call_args_list
-        ), "Expected a title Rule for each Kubernetes object, even with no action needed."
+        ), (
+            "Expected a title Rule for each Kubernetes object, even with no action needed."
+        )

@@ -1,4 +1,8 @@
-from piceli.k8s.k8s_objects.base import K8sObject
+import logging
+
+import pytest
+
+from piceli.k8s.k8s_objects.base import K8sObject, OriginYAML
 from piceli.k8s.ops.deploy import strategy_auto
 
 
@@ -17,9 +21,9 @@ def test_classify_k8s_objects_by_deployment_level(resources: list[K8sObject]) ->
                 count_kind = sum(1 for obj in classified_objects if obj.kind == kind)
                 # Now, assert based on expected counts per kind in your test resources
                 expected_count = sum(1 for obj in resources if obj.kind == kind)
-                assert (
-                    count_kind == expected_count
-                ), f"Mismatch for {kind} at level {level}"
+                assert count_kind == expected_count, (
+                    f"Mismatch for {kind} at level {level}"
+                )
             else:
                 raise AssertionError(
                     f"No objects found at level {level}, expected {kind}"
@@ -48,3 +52,34 @@ def test_strategy_auto_build_graph(resources: list[K8sObject]) -> None:
     for node in graph.nodes.values():
         if node.kind != "Namespace":
             assert len(node.dependencies) > 0, f"{node.kind} should depend in others"
+
+
+def test_unknown_kinds_go_to_the_default_level_with_a_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    known = K8sObject(
+        {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "settings"}},
+        OriginYAML("unit.yaml"),
+    )
+    custom = K8sObject(
+        {
+            "apiVersion": "cert-manager.io/v1",
+            "kind": "Certificate",
+            "metadata": {"name": "tls"},
+        },
+        OriginYAML("unit.yaml"),
+    )
+    with caplog.at_level(logging.WARNING, logger=strategy_auto.__name__):
+        classified = strategy_auto.classify_k8s_objects_by_deployment_level(
+            [known, custom]
+        )
+
+    assert (
+        max(strategy_auto.DEPLOYMENT_LEVELS) == strategy_auto.DEFAULT_DEPLOYMENT_LEVEL
+    )
+    assert classified[strategy_auto.DEFAULT_DEPLOYMENT_LEVEL] == [custom]
+    assert sum(len(objects) for objects in classified.values()) == 2
+    assert "Certificate" in caplog.text
+
+    graph = strategy_auto.StrategyAuto().build_deployment_graph([known, custom])
+    assert len(graph.nodes) == 2

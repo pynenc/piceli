@@ -2,9 +2,10 @@ from kubernetes import client
 
 from piceli.k8s.constants import strategies
 from piceli.k8s.templates.auxiliary import replica_manager
+from piceli.k8s.templates.deployable import base
 
 
-class Deployment(replica_manager.ReplicaManager):
+class Deployment(replica_manager.ReplicaManager, base.Deployable):
     """
     Represents a Kubernetes Deployment object, extending ReplicaManager.
 
@@ -18,7 +19,7 @@ class Deployment(replica_manager.ReplicaManager):
     """
 
     def get_replica_manager(self) -> client.V1Deployment:
-        """gets the Job definition"""
+        """gets the Deployment definition"""
         pod_template = self.get_pod_spec()
         return client.V1Deployment(
             api_version="apps/v1",

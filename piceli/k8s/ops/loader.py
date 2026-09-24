@@ -1,14 +1,15 @@
+import hashlib
 import importlib
 import json
 import logging
 import os
 import pkgutil
 import sys
+from collections.abc import Iterable, Iterator
 from importlib import util as importlib_util
 from itertools import chain
 from pathlib import Path
 from types import ModuleType
-from typing import Iterable, Iterator
 
 import yaml
 from kubernetes import client
@@ -108,44 +109,70 @@ def find_modules_by_name(module_name: str, sub_elements: bool) -> Iterator[str]:
                 yield sub_module_name
 
 
+def _module_name_for_path(module_path: Path) -> str:
+    """
+    Builds a stable and unique module name for a python file loaded by path.
+
+    The name is derived from the resolved path so the same file always maps to the
+    same module (and different files with the same stem never collide).
+    """
+    resolved = module_path.resolve()
+    digest = hashlib.sha1(str(resolved).encode()).hexdigest()[:12]
+    stem = "".join(c if c.isalnum() else "_" for c in resolved.stem)
+    return f"piceli_path_{digest}.{stem}"
+
+
+def _load_module_from_file(module_path: Path) -> ModuleType | None:
+    """Executes a python file and returns the module (cached in sys.modules)"""
+    module_name = _module_name_for_path(module_path)
+    if module_name in sys.modules:
+        return sys.modules[module_name]
+    spec = importlib_util.spec_from_file_location(module_name, str(module_path))
+    if not spec or not spec.loader:
+        logger.warning(f"Cannot load python module from {module_path}")
+        return None
+    # allow sibling imports inside the user's module folder
+    if str(module_path.parent) not in sys.path:
+        sys.path.insert(0, str(module_path.parent))
+    module = importlib_util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(module_name, None)
+        raise
+    return module
+
+
 def load_modules_by_path(module_path: str, sub_elements: bool) -> Iterator[ModuleType]:
     """
-    Load Python modules or packages from a given file path. If the path is a directory,
-    it can optionally include submodules and packages within that directory.
+    Load (execute) Python modules or packages from a given file path.
+
+    If the path is a directory, all the ``.py`` files in it are loaded (recursively
+    when ``sub_elements`` is True). Non python files are ignored and each file is
+    loaded only once.
 
     Args:
         module_path (str): The path of the Python module or package to load.
         sub_elements (bool): Whether to include modules in subdirectories recursively.
 
     Returns:
-        Iterator[str]: An iterator over the names of modules that can be loaded.
+        Iterator[ModuleType]: An iterator over the loaded modules.
     """
     if not module_path:
         return
-    module_path = Path(module_path)
-    if module_path.is_dir():
-        if sub_elements:
-            # Include submodules and packages if sub_elements is True
-            for dirpath, _, files in os.walk(module_path):
-                for filename in files:
-                    yield from load_modules_by_path(
-                        os.path.join(dirpath, filename), sub_elements
-                    )
-        else:
-            for file in module_path.glob("*.py"):
-                yield from load_modules_by_path(str(file.resolve()), sub_elements)
-    elif module_path.is_file() and module_path.suffix == ".py":
-        dot_path = (
-            str(module_path.with_suffix(""))
-            .replace(os.sep, ".")
-            .replace(module_path.parent.as_posix(), "")
-            .strip(".")
-        )
-        spec = importlib_util.spec_from_file_location(dot_path, str(module_path))
-        if spec and spec.loader:
-            if str(module_path.parent) not in sys.path:
-                sys.path.insert(0, str(module_path.parent))
-            yield importlib_util.module_from_spec(spec)
+    path = Path(module_path)
+    if path.is_dir():
+        pattern = "**/*.py" if sub_elements else "*.py"
+        files = sorted({f.resolve() for f in path.glob(pattern) if f.is_file()})
+    elif path.is_file() and path.suffix == ".py":
+        files = [path.resolve()]
+    else:
+        logger.warning(f"module path {module_path} is not a python file or folder")
+        return
+    for file in files:
+        if module := _load_module_from_file(file):
+            yield module
 
 
 def load_files_from_folder(folder_path: str, sub_elements: bool) -> Iterator[str]:

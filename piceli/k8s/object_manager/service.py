@@ -1,5 +1,4 @@
 import logging
-from typing import Optional
 
 from piceli import settings
 from piceli.k8s.k8s_client.client import ClientContext
@@ -12,7 +11,7 @@ logger = logging.getLogger(__name__)
 class ServiceManager(base.ObjectManager):
     """Manager for Service objects."""
 
-    def wait(self, ctx: ClientContext, namespace: Optional[str] = None) -> None:
+    def wait(self, ctx: ClientContext, namespace: str | None = None) -> None:
         logger.info(f"Waiting for service {self.k8s_object}")
         # todo retry for urllib3.exceptions.ProtocolError
         for event in ctx.watch.stream(

@@ -1,5 +1,4 @@
 from abc import abstractmethod
-from typing import Optional
 
 from kubernetes import client
 from pydantic import BaseModel
@@ -41,7 +40,7 @@ def get_role(
     resource: str,
     resource_names: list[str],
     verbs: list[APIRequestVerb],
-    labels: Optional[Labels] = None,
+    labels: Labels | None = None,
 ) -> client.V1Role | client.V1ClusterRole:
     kind = "Role" if role_cls == client.V1Role else "ClusterRole"
     api_group = "" if api_group == "core" else api_group
@@ -74,7 +73,7 @@ class Role(K8sRole, base.Deployable):
     resource: str
     verbs: list[APIRequestVerb]
     resource_names: list[str] = []
-    labels: Optional[Labels] = None
+    labels: Labels | None = None
 
     def get(self) -> list[client.V1Role]:
         """gets the Job definition"""
@@ -93,7 +92,7 @@ class Role(K8sRole, base.Deployable):
     def from_deployable(
         cls,
         template: "base.Deployable",
-        auth_verbs: Optional[list[APIRequestVerb]] = None,
+        auth_verbs: list[APIRequestVerb] | None = None,
     ) -> list["Role"]:
         """Creates a Role from a deployable"""
         return get_template_auth_roles(template, auth_verbs)
@@ -113,7 +112,7 @@ class ClusterRole(K8sRole, base.Deployable):
     resource: str
     verbs: list[APIRequestVerb]
     resource_names: list[str] = []
-    labels: Optional[Labels] = None
+    labels: Labels | None = None
 
     def get(self) -> list[client.V1ClusterRole]:
         """gets the Job definition"""
@@ -131,7 +130,7 @@ class ClusterRole(K8sRole, base.Deployable):
 
 # Replace get_auth_role in legacy_lib
 def get_template_auth_roles(
-    template: base.Deployable, verbs: Optional[list[APIRequestVerb]] = None
+    template: base.Deployable, verbs: list[APIRequestVerb] | None = None
 ) -> list[Role]:
     """gets the role necessaries to authorize a service account on this the K8s object"""
     roles = []

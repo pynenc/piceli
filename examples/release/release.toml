@@ -1,0 +1,47 @@
+# Example `piceli release` spec. Relative paths resolve from this file.
+#
+#   piceli release plan  --spec examples/release/release.toml
+#   piceli release apply --spec examples/release/release.toml --approve <plan-hash>
+#   piceli release rollback previous --spec examples/release/release.toml
+#   piceli release status --spec examples/release/release.toml
+
+[target]
+kubeconfig = "release.kubeconfig"   # an explicit file; never ~/.kube/config
+context = "kind-release-demo"       # an explicit context; never current-context
+namespace = "release-demo"          # must already exist
+# cluster_uid = "<kube-system namespace UID>"   # pin the cluster (recommended)
+# namespace_uid = "<namespace UID>"
+# [target.nodes.primary]                        # optional node identity pins
+# name = "release-demo-control-plane"
+# uid = "<node UID>"
+
+[release]
+name = "web"                        # release names are web-<fingerprint>
+owner = "release-demo"              # piceli.io/owner of every managed object
+field_manager = "release-demo"
+composition = "composition.py:build"
+state_dir = ".piceli-release"       # catalog, journal, secret store, plans
+approval_window_seconds = 900
+
+[execution]
+max_seconds = 300
+readiness_seconds = 240
+
+# Images pinned by digest. Alternatively read them from a build receipt:
+# images_from = "build.receipt.json"   # revision = "piceli.build-receipt.v1"
+[images]
+web = "docker.io/library/nginx@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+[secrets.api-token]
+type = "random"
+bytes = 32
+
+[secrets.web-tls]
+type = "tls-self-signed"
+dns_names = ["web.release-demo.svc", "web"]
+days = 365
+openssl = "/usr/bin/openssl"
+
+[values]
+greeting = "hello from piceli"
+replicas = 1

@@ -21,7 +21,7 @@ Environment variables are key for configuring containerized applications, allowi
 - `upsert_envvars(base_env: list, new_env: list)`: Merges two lists of environment variables, with `new_env` variables updating or adding to those in `base_env`.
 - `get_env_from_source(sources: list)`: Generates environment variables from sources like ConfigMaps or Secrets, enabling dynamic configuration based on cluster resources.
 
-These functionalities are integrated into the {container}`./container` module for defining container environments within pods, facilitating both fixed and dynamic configurations.
+These functionalities are integrated into the {doc}`container` module for defining container environments within pods, facilitating both fixed and dynamic configurations.
 
 ## Usage Example
 
@@ -31,19 +31,18 @@ Defining a mix of static and dynamic environment variables for a container:
 from piceli.k8s import templates
 
 # Static environment variables
-env_vars_static = {
-    "LOG_LEVEL": "info",
-    "APP_MODE": "production"
-}
+env_vars_static = {"LOG_LEVEL": "info", "APP_MODE": "production"}
 
 # Dynamic environment variables from a ConfigMap
 config_map_name = "app-config"
-env_vars_from_config_map = templates.get_env_from_source([templates.configmap.ConfigMap(name=config_map_name)])
+env_vars_from_config_map = templates.get_env_from_source(
+    [templates.configmap.ConfigMap(name=config_map_name)]
+)
 
 # Combine static and dynamic environment variables
 env_vars = templates.upsert_envvars(
     base_env=templates.get_env_from_dict(env_vars_static),
-    new_env=env_vars_from_config_map
+    new_env=env_vars_from_config_map,
 )
 ```
 

@@ -95,7 +95,7 @@ class CompareResult:
 
     def _is_path_in_desired(self, path: Path) -> bool:
         """Check if the given path exists in the desired document."""
-        current = self.desired_spec
+        current: Any = self.desired_spec  # untyped JSON document
         for key in path:
             if isinstance(key, ListElemId) and isinstance(current, list):
                 for elem in current:

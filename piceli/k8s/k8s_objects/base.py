@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
 
 from piceli.k8s.config import kubeconfig
 from piceli.k8s.utils import utils_object
@@ -55,15 +54,15 @@ class OriginK8sLib(ObjectOrigin):
 class OriginCluster(ObjectOrigin):
     """The object was created from a cluster"""
 
-    ctx: Optional[kubeconfig.KubeConfig]
-    namespace: Optional[str]
+    ctx: kubeconfig.KubeConfig | None
+    namespace: str | None
 
 
 @dataclass(eq=True, frozen=True)
 class K8sObjectIdentifier:
     name: str
     kind: str
-    namespace: Optional[str] = None
+    namespace: str | None = None
 
     def __hash__(self) -> int:
         return hash((self.name, self.kind, self.namespace))
@@ -111,7 +110,7 @@ class K8sObject:
         return self.spec["kind"]
 
     @property
-    def namespace(self) -> Optional[str]:
+    def namespace(self) -> str | None:
         return self._namespace
 
     def __str__(self) -> str:

@@ -1,5 +1,3 @@
-from typing import Optional
-
 from kubernetes import client
 from pydantic import BaseModel
 
@@ -33,14 +31,14 @@ class Pod(BaseModel):
     name: names.Name
     containers: list[container_lib.Container] = []
     init_containers: list[container_lib.Container] = []
-    service_account: Optional[sa_lib.ServiceAccount] = None
-    automount_service_account_token: Optional[bool] = None
-    port: Optional[int] = None
+    service_account: sa_lib.ServiceAccount | None = None
+    automount_service_account_token: bool | None = None
+    port: int | None = None
     restart_policy: policies.RestartPolicy = policies.RestartPolicy.NEVER
-    security_context_uid: Optional[int] = None
-    template_labels: Optional[Labels] = None
+    security_context_uid: int | None = None
+    template_labels: Labels | None = None
     image_pull_secrets: list[str] = []
-    termination_grace_period_seconds: Optional[int] = None
+    termination_grace_period_seconds: int | None = None
 
     @property
     def container_map(self) -> dict[str, container_lib.Container]:
@@ -56,7 +54,7 @@ class Pod(BaseModel):
         containers = []
         init_containers = []
         _volume_claims: dict[str, client.V1Volume] = {}
-        env: Optional[client.V1EnvVar] = None
+        env: client.V1EnvVar | None = None
 
         def get_container_spec_and_update_volumes(
             container: container_lib.Container,

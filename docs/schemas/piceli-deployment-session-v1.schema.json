@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.piceli.pynenc.org/schemas/piceli-deployment-session-v1.schema.json",
+  "title": "Piceli DeploymentSession archive v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "session_id", "private_inputs", "composition", "revision", "bundle"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "session_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+    "private_inputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "reference"],
+        "properties": {
+          "name": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,127}$"},
+          "reference": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["store_id", "version"],
+            "properties": {
+              "store_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+              "version": {"type": "string", "pattern": "^[0-9a-f]{32}$"}
+            }
+          }
+        }
+      }
+    },
+    "composition": {"type": "array"},
+    "revision": {"type": "object"},
+    "bundle": {"type": "object"}
+  }
+}

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from typing import TYPE_CHECKING
 
 import typer
@@ -6,7 +8,13 @@ from rich.tree import Tree
 
 from piceli.k8s.cli import common
 from piceli.k8s.ops import loader
-from piceli.k8s.ops.deploy import strategy_auto
+from piceli.k8s.ops import plan as deployment_plan
+from piceli.k8s.ops.discovery import (
+    ApiResource,
+    DiscoveryCoverage,
+    ResourceScope,
+    ResourceType,
+)
 
 if TYPE_CHECKING:
     from piceli.k8s.cli.context import ContextObject
@@ -14,6 +22,11 @@ if TYPE_CHECKING:
 
 def plan(
     ctx: typer.Context,
+    cluster_id: str = typer.Option(
+        ...,
+        "--cluster-id",
+        help="Stable cluster identity to bind into this offline plan.",
+    ),
     validate: bool = typer.Option(
         False,
         "--validate",
@@ -28,38 +41,89 @@ def plan(
     """
     console = Console()
     common.print_command_name(console, "Deployment Plan")
-    ctx_obj: "ContextObject" = ctx.obj
+    ctx_obj: ContextObject = ctx.obj
     common.print_ctx_options(console, ctx_obj)
 
-    strategy = strategy_auto.StrategyAuto()
-    k8s_objects = loader.load_all(
-        module_name=ctx_obj.module_name,
-        module_path=ctx_obj.module_path,
-        folder_path=ctx_obj.folder_path,
-        sub_elements=ctx_obj.sub_elements,
+    k8s_objects = list(
+        loader.load_all(
+            module_name=ctx_obj.module_name,
+            module_path=ctx_obj.module_path,
+            folder_path=ctx_obj.folder_path,
+            sub_elements=ctx_obj.sub_elements,
+        )
     )
-    dep_graph = strategy.build_deployment_graph(k8s_objects)
+    try:
+        composition = deployment_plan.DeploymentComposition(
+            (deployment_plan.component_from_objects("model", k8s_objects),)
+        )
+        target = deployment_plan.PlanTarget(cluster_id, ctx_obj.namespace)
+        resource_types = tuple(
+            sorted(
+                {
+                    ResourceType(resource.ref.api_version, resource.ref.kind)
+                    for component in composition.components
+                    for resource in component.resources
+                }
+            )
+        )
+        api_resources = tuple(
+            ApiResource(
+                resource_type,
+                next(
+                    ResourceScope.CLUSTER
+                    if resource.ref.namespace == ""
+                    else ResourceScope.NAMESPACED
+                    for component in composition.components
+                    for resource in component.resources
+                    if resource.ref.api_version == resource_type.api_version
+                    and resource.ref.kind == resource_type.kind
+                ),
+                resource_type.kind.lower() + "s",
+            )
+            for resource_type in resource_types
+        )
+        coverage = DiscoveryCoverage(
+            "piceli-cli-explicit-empty",
+            "offline-preview",
+            "no-api-defaults",
+            resource_types,
+            resource_types,
+            api_resources,
+        )
+        snapshot = deployment_plan.ObservedSnapshot(target, coverage)
+        resolved_plan = deployment_plan.build_plan(
+            composition,
+            snapshot,
+            deployment_plan.PlanAuthorization(target),
+        )
+    except ValueError as error:
+        console.print(f"[bold red]Validation error: {error}[/]")
+        return
     deployment_plan_tree = Tree(
         "[bold green]Kubernetes Deployment Plan", guide_style="bold bright_blue"
     )
     if validate:
-        try:
-            console.print("[bold blue]Validating deployment graph...[/]")
-            dep_graph.validate()
-            console.print("[bold green]Validation successful![/]")
-        except ValueError as e:
-            console.print(f"[bold red]Validation error: {e}[/]")
-            return  # Stop further execution if validation fails
+        console.print("[bold blue]Validating deployment composition...[/]")
+        console.print("[bold green]Validation successful![/]")
 
-    # Traverse the deployment graph and create the structured output
-    for level_index, level in enumerate(dep_graph.traverse_graph()):
+    console.print(f"Plan hash: [bold cyan]{resolved_plan.plan_hash}[/]")
+    console.print(
+        f"Target: [bold cyan]{resolved_plan.target.cluster_id}[/] / "
+        f"[bold magenta]{resolved_plan.target.namespace}[/]"
+    )
+
+    actions = {action.resource.ref: action for action in resolved_plan.actions}
+    for level_index, level in enumerate(resolved_plan.levels):
         level_tree = deployment_plan_tree.add(
             f"[bold yellow]Step {level_index + 1}:", guide_style="bold bright_yellow"
         )
-        for node in level:
-            node_text = f"[dim]{node.kind} [bold cyan]{node.identifier.name}[/] in namespace [bold magenta]{node.identifier.namespace or 'default'}[/]"
-            if node.previous_object:
-                node_text += f" (after [cyan]{node.previous_object.identifier.name}[/])"
+        for resource in level:
+            action = actions[resource]
+            node_text = (
+                f"[bold]{action.operation.value}[/] [dim]{resource.kind} "
+                f"[bold cyan]{resource.name}[/] in namespace "
+                f"[bold magenta]{resource.namespace or '<cluster>'}[/]"
+            )
             level_tree.add(node_text)
 
     # Display the structured deployment plan

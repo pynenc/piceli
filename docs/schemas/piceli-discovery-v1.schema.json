@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.piceli.pynenc.org/schemas/piceli-discovery-v1.schema.json",
+  "title": "Piceli bounded discovery artifact v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "target", "captured_at", "limits", "coverage", "resources", "defaulted_fields"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "target": {"$ref": "#/$defs/target"},
+    "captured_at": {"type": "string", "minLength": 1},
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_resource_types", "page_size", "max_pages", "max_resources", "max_artifact_bytes"],
+      "properties": {
+        "max_resource_types": {"type": "integer", "minimum": 1},
+        "page_size": {"type": "integer", "minimum": 1},
+        "max_pages": {"type": "integer", "minimum": 1},
+        "max_resources": {"type": "integer", "minimum": 1},
+        "max_artifact_bytes": {"type": "integer", "minimum": 1}
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider_id", "capture_id", "policy_revision", "requested", "completed", "api_resources", "failures"],
+      "properties": {
+        "provider_id": {"type": "string", "minLength": 1},
+        "capture_id": {"type": "string", "minLength": 1},
+        "policy_revision": {"type": "string", "minLength": 1},
+        "requested": {"type": "array", "items": {"$ref": "#/$defs/resource_type"}, "uniqueItems": true},
+        "completed": {"type": "array", "items": {"$ref": "#/$defs/resource_type"}, "uniqueItems": true},
+        "api_resources": {"type": "array", "items": {"$ref": "#/$defs/api_resource"}, "uniqueItems": true},
+        "failures": {"type": "array", "items": {"$ref": "#/$defs/failure"}, "uniqueItems": true}
+      }
+    },
+    "resources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["identity", "manifest", "ownership", "retained", "content_complete"],
+        "properties": {
+          "identity": {"$ref": "#/$defs/resource_identity"},
+          "manifest": {"type": "object"},
+          "ownership": {"enum": ["managed", "unmanaged"]},
+          "retained": {"type": ["boolean", "null"]},
+          "content_complete": {"type": "boolean"}
+        }
+      }
+    },
+    "defaulted_fields": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["resource", "json_pointer"],
+        "properties": {
+          "resource": {"$ref": "#/$defs/resource_identity"},
+          "json_pointer": {"type": "string", "pattern": "^/"}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cluster_id", "namespace"],
+      "properties": {
+        "cluster_id": {"type": "string", "minLength": 1},
+        "namespace": {"type": "string", "minLength": 1}
+      }
+    },
+    "resource_type": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["api_version", "kind"],
+      "properties": {
+        "api_version": {"type": "string", "minLength": 1},
+        "kind": {"type": "string", "minLength": 1}
+      }
+    },
+    "resource_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["api_version", "kind", "namespace", "name"],
+      "properties": {
+        "api_version": {"type": "string", "minLength": 1},
+        "kind": {"type": "string", "minLength": 1},
+        "namespace": {"type": "string"},
+        "name": {"type": "string", "minLength": 1}
+      }
+    },
+    "api_resource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resource_type", "scope", "plural"],
+      "properties": {
+        "resource_type": {"$ref": "#/$defs/resource_type"},
+        "scope": {"enum": ["namespaced", "cluster"]},
+        "plural": {"type": "string", "minLength": 1}
+      }
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resource_type", "kind"],
+      "properties": {
+        "resource_type": {"$ref": "#/$defs/resource_type"},
+        "kind": {"enum": ["rbac-denied", "api-unavailable", "limit-exceeded", "invalid-page", "provider-error"]}
+      }
+    }
+  }
+}

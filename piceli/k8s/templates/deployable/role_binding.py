@@ -1,5 +1,3 @@
-from typing import Optional
-
 from kubernetes import client
 
 from piceli.k8s.templates.auxiliary import names
@@ -10,10 +8,10 @@ from piceli.k8s.templates.deployable import base
 def get_role_binding(
     role_binding_cls: type[client.V1RoleBinding | client.V1ClusterRoleBinding],
     name: names.Name,
-    service_account_name: Optional[str],
-    users: Optional[list[str]],
+    service_account_name: str | None,
+    users: list[str] | None,
     role_name: names.Name,
-    labels: Optional[Labels],
+    labels: Labels | None,
 ) -> client.V1RoleBinding | client.V1ClusterRoleBinding:
     """gets a service account"""
     kind = (
@@ -57,10 +55,10 @@ class RoleBinding(base.Deployable):
 
     name: names.Name
     role_name: str
-    service_account_name: Optional[str] = None
+    service_account_name: str | None = None
     users: list[str] = []
     resource_names: list[str] = []
-    labels: Optional[Labels] = None
+    labels: Labels | None = None
 
     def get(self) -> list[client.V1RoleBinding]:
         """gets the Job definition"""
@@ -88,9 +86,9 @@ class ClusterRoleBinding(base.Deployable):
 
     name: names.Name
     role_name: names.Name
-    service_account_name: Optional[str] = None
+    service_account_name: str | None = None
     users: list[str] = []
-    labels: Optional[Labels] = None
+    labels: Labels | None = None
 
     def get(self) -> list[client.V1ClusterRoleBinding]:
         """gets the Job definition"""

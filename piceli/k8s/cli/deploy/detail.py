@@ -169,13 +169,13 @@ def detail(
     ] = False,
 ) -> None:
     """
-    Analize the required changes to deploy the specified kubernetes object model
+    Analyze the required changes to deploy the specified kubernetes object model
 
     Note: The command options are shared among commands and should be specified at the root level.
     """
     console = Console()
     common.print_command_name(console, "Deployment Detailed Analysis")
-    ctx_obj: "ContextObject" = ctx.obj
+    ctx_obj: ContextObject = ctx.obj
     common.print_ctx_options(console, ctx_obj)
 
     k8s_objects = loader.load_all(
