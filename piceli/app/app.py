@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, ClassVar, Protocol
@@ -117,6 +118,9 @@ class App(BaseModel):
         default_factory=list
     )
     _edges: list[tuple[str, str]] = PrivateAttr(default_factory=list)
+    _overrides: list[tuple[str, str, dict[str, Any]]] = PrivateAttr(
+        default_factory=list
+    )
 
     def __init__(self, name: str, /, **data: Any) -> None:
         super().__init__(name=name, **data)
@@ -178,6 +182,7 @@ class App(BaseModel):
         resources: Resources | None = None,
         volumes: Mapping[str, Volume | Mount] | None = None,
         pull_policy: str | None = None,
+        container: str | None = None,
         sidecars: Sequence[Container] = (),
         init: Sequence[Container] = (),
         replicas: int = 1,
@@ -192,13 +197,14 @@ class App(BaseModel):
         """Declare a Deployment whose main container is named after it.
 
         Container arguments (``image`` … ``pull_policy``) describe the main
-        container (see :class:`~piceli.app.model.Container`); ``sidecars`` run
-        next to it and ``init`` containers run first. The remaining arguments
-        are :class:`~piceli.app.model.Deployment` fields.
+        container (see :class:`~piceli.app.model.Container`); ``container``
+        names it when it must not be named after the Deployment. ``sidecars``
+        run next to it and ``init`` containers run first. The remaining
+        arguments are :class:`~piceli.app.model.Deployment` fields.
         """
         main = Container.model_validate(
             {
-                "name": name,
+                "name": name if container is None else container,
                 "image": image,
                 "command": command,
                 "args": args,
@@ -287,6 +293,44 @@ class App(BaseModel):
                     "component": workload.component_name,
                 }
             )
+        )
+
+    def override(self, item: Declared, patch: Mapping[str, Any]) -> None:
+        """Set fields of ``item``'s rendered manifest that the typed model lacks.
+
+        The escape hatch for fields with no typed argument yet (a security
+        context, tolerations, an annotation, a list the model orders
+        differently). ``patch`` is merged into the manifest when the app is
+        rendered, after the typed fields, in call order:
+
+        * a mapping merges key by key, and ``None`` removes a key;
+        * a list of objects that all have a unique ``name`` (containers, env,
+          volumes, ports) merges item by item on ``name``; items with a new
+          name are appended;
+        * any other value, including any other list, replaces the rendered one.
+
+        ``piceli import`` writes one ``override`` per imported object that has
+        untyped fields, with a comment naming each field.
+
+        Invariants: the object's identity (``apiVersion``, ``kind``,
+        ``metadata.name``, ``metadata.namespace``) cannot be overridden, and a
+        Secret's ``data`` and ``stringData`` cannot be overridden (secret
+        values never appear in the model).
+
+        Example::
+
+            app.override(api, {"spec": {"template": {"spec": {
+                "securityContext": {"runAsNonRoot": True},
+            }}}})
+        """
+        if not any(existing is item for existing in self._objects):
+            raise ValueError(
+                f"override() takes an object declared on this app, got "
+                f"{type(item).__name__} {getattr(item, 'name', '?')!r}"
+            )
+        _check_override(item, patch)
+        self._overrides.append(
+            (_KINDS[type(item)], item.name, json.loads(json.dumps(dict(patch))))
         )
 
     def add(self, component: DeploymentComponent | ComponentSource) -> None:
@@ -408,29 +452,23 @@ class App(BaseModel):
         metadata: dict[str, Any] = {"name": item.name, "namespace": namespace}
         if labels:
             metadata["labels"] = dict(labels)
+        manifest: dict[str, Any]
         if isinstance(item, Config):
-            return ResourceIntent.from_manifest(
-                {
-                    "apiVersion": "v1",
-                    "kind": "ConfigMap",
-                    "metadata": metadata,
-                    "data": dict(item.data),
-                }
-            )
-        if isinstance(item, Secret):
-            intent = ResourceIntent.from_manifest(
-                {
-                    "apiVersion": "v1",
-                    "kind": "Secret",
-                    "metadata": metadata,
-                    "type": item.type,
-                    "data": dict.fromkeys(item.data, "<private>"),
-                }
-            )
-            for key, reference in item.data.items():
-                intent = intent.with_secret(_pointer(key), reference)
-            return intent
-        if isinstance(item, Deployment):
+            manifest = {
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": metadata,
+                "data": dict(item.data),
+            }
+        elif isinstance(item, Secret):
+            manifest = {
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "metadata": metadata,
+                "type": item.type,
+                "data": dict.fromkeys(item.data, "<private>"),
+            }
+        elif isinstance(item, Deployment):
             node_name = None
             if item.node is not None:
                 if item.node not in nodes:
@@ -440,10 +478,86 @@ class App(BaseModel):
                         f"{sorted(nodes)}"
                     )
                 node_name = nodes[item.node].name
-            return ResourceIntent.from_manifest(
-                item.manifest(namespace, labels, node_name)
-            )
-        return ResourceIntent.from_manifest(item.manifest(namespace, labels))
+            manifest = item.manifest(namespace, labels, node_name)
+        else:
+            manifest = item.manifest(namespace, labels)
+        kind = _KINDS[type(item)]
+        for target_kind, name, patch in self._overrides:
+            if (target_kind, name) == (kind, item.name):
+                manifest = merge_override(manifest, patch)
+        intent = ResourceIntent.from_manifest(manifest)
+        if isinstance(item, Secret):
+            for key, reference in item.data.items():
+                intent = intent.with_secret(_pointer(key), reference)
+        return intent
+
+
+_KINDS: dict[type, str] = {
+    Config: "ConfigMap",
+    Secret: "Secret",
+    Deployment: "Deployment",
+    Service: "Service",
+    NetworkPolicy: "NetworkPolicy",
+}
+
+
+def _check_override(item: Declared, patch: Mapping[str, Any]) -> None:
+    if not isinstance(patch, Mapping):
+        raise ValueError("an override patch must be a mapping")
+    json.dumps(dict(patch), allow_nan=False)  # plain JSON values only
+    for key in ("apiVersion", "kind"):
+        if key in patch:
+            raise ValueError(f"an override cannot change {key}")
+    metadata = patch.get("metadata")
+    if metadata is not None:
+        if not isinstance(metadata, Mapping):
+            raise ValueError("an override's metadata must be a mapping")
+        for key in ("name", "namespace"):
+            if key in metadata:
+                raise ValueError(f"an override cannot change metadata.{key}")
+    if isinstance(item, Secret) and ({"data", "stringData"} & set(patch)):
+        raise ValueError(
+            "an override cannot set Secret data; secret values come from "
+            "ctx.secret(...) in app.secret(...)"
+        )
+
+
+def _named_items(value: Any) -> list[str] | None:
+    """The item names when ``value`` is a list of uniquely named objects."""
+    if not isinstance(value, list):
+        return None
+    names = [item.get("name") if isinstance(item, dict) else None for item in value]
+    if any(not isinstance(name, str) for name in names) or len(set(names)) != len(
+        names
+    ):
+        return None
+    return names  # type: ignore[return-value]
+
+
+def merge_override(base: Any, patch: Any) -> Any:
+    """Merge an :meth:`App.override` patch into ``base`` (see its rules).
+
+    Pure: returns a new value and never changes ``base`` or ``patch``.
+    """
+    if isinstance(patch, Mapping):
+        result = dict(base) if isinstance(base, Mapping) else {}
+        for key, value in patch.items():
+            if value is None:
+                result.pop(key, None)
+            else:
+                result[key] = merge_override(result.get(key), value)
+        return result
+    if _named_items(base) is not None and _named_items(patch) is not None:
+        merged = [dict(item) for item in base]
+        index = {item["name"]: position for position, item in enumerate(merged)}
+        for item in patch:
+            position = index.get(item["name"])
+            if position is None:
+                merged.append(merge_override({}, item))
+            else:
+                merged[position] = merge_override(merged[position], item)
+        return merged
+    return json.loads(json.dumps(patch))
 
 
 def _component(value: Handle) -> str:
