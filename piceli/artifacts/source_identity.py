@@ -34,7 +34,7 @@ import shutil
 import stat
 import subprocess
 import tomllib
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -70,6 +70,19 @@ _GIT_REDIRECTS = (
 
 class SourceIdentityError(ValueError):
     """A source cannot be identified or violates its declared policy."""
+
+
+class UnknownSourceError(SourceIdentityError):
+    """A selection names a source the spec does not declare.
+
+    ``code`` is the fixed, machine-readable reason ``unknown-source``.
+    """
+
+    code = "unknown-source"
+
+    def __init__(self, name: str) -> None:
+        super().__init__(f"unknown source {name!r}")
+        self.name = name
 
 
 class SourceDriftError(SourceIdentityError):
@@ -173,6 +186,22 @@ class InputsSpec:
     def spec_sha256(self) -> str:
         """Digest of the normalised declaration (not of the file's bytes)."""
         return digest(canonical([item.to_dict() for item in self.sources]))
+
+    def select(self, only: Iterable[str] | None) -> tuple[SourceSpec, ...]:
+        """The declared sources named in ``only`` (all when ``None``).
+
+        Order follows the declaration; an unknown name raises
+        `UnknownSourceError`.
+        """
+        if only is None:
+            return self.sources
+        wanted = set(only)
+        known = {item.name for item in self.sources}
+        for name in sorted(wanted - known):
+            raise UnknownSourceError(name)
+        if not wanted:
+            raise SourceIdentityError("select at least one source")
+        return tuple(item for item in self.sources if item.name in wanted)
 
     def resolve(self, source: SourceSpec) -> Path:
         path = Path(source.path).expanduser()
@@ -317,6 +346,9 @@ class InputsVerification:
             "spec_sha256": self.actual.spec_sha256,
             "drifts": [item.to_dict() for item in self.drifts],
             "sources": [item.to_dict() for item in self.actual.sources],
+            **(
+                {"only": list(self.actual.only)} if self.actual.only is not None else {}
+            ),
         }
 
     def raise_for_drift(self, context: str = "sources changed") -> None:
@@ -330,9 +362,16 @@ class InputsLock:
 
     spec_sha256: str
     sources: tuple[SourceIdentity, ...]
+    only: tuple[str, ...] | None = None
+    """Set when the lock covers a selection (``--only``) of the declaration."""
 
     def __post_init__(self) -> None:
         validate_digest(self.spec_sha256)
+        if self.only is not None and (
+            not isinstance(self.only, tuple)
+            or tuple(item.name for item in self.sources) != self.only
+        ):
+            raise SourceIdentityError("a partial lock lists exactly its sources")
         if (
             not isinstance(self.sources, tuple)
             or not 0 < len(self.sources) <= MAX_SOURCES
@@ -356,6 +395,7 @@ class InputsLock:
             "dirty_policy": DIRTY_POLICY,
             "spec_sha256": self.spec_sha256,
             "sources": [item.to_dict() for item in self.sources],
+            **({"only": list(self.only)} if self.only is not None else {}),
         }
 
     def to_json(self) -> str:
@@ -367,10 +407,15 @@ class InputsLock:
             object_keys(
                 dict(value),
                 {"revision", "spec_sha256", "sources"},
-                frozenset({"identity_revision", "dirty_policy"}),
+                frozenset({"identity_revision", "dirty_policy", "only"}),
             )
         except ValueError:
             raise SourceIdentityError("invalid inputs lock fields") from None
+        only = value.get("only")
+        if only is not None and (
+            not isinstance(only, list) or not all(isinstance(i, str) for i in only)
+        ):
+            raise SourceIdentityError("inputs lock 'only' must list source names")
         if (
             value["revision"] != INPUTS_LOCK_REVISION
             or value.get("identity_revision", SOURCE_IDENTITY_REVISION)
@@ -383,6 +428,7 @@ class InputsLock:
         return cls(
             value["spec_sha256"],
             tuple(SourceIdentity.from_dict(item) for item in value["sources"]),
+            tuple(only) if only is not None else None,
         )
 
     @classmethod
@@ -616,24 +662,47 @@ def _capture(
 
 
 def record_inputs(
-    spec: InputsSpec, *, timeout: float = DEFAULT_GIT_TIMEOUT
+    spec: InputsSpec,
+    *,
+    timeout: float = DEFAULT_GIT_TIMEOUT,
+    only: Iterable[str] | None = None,
 ) -> InputsLock:
-    """Capture every declared source, enforcing ``allow_dirty`` and ``ref``."""
+    """Capture every declared source, enforcing ``allow_dirty`` and ``ref``.
+
+    ``only`` limits the capture to the named sources; the lock is still bound
+    to the digest of the whole declaration and records the selection.
+    """
+    selected = spec.select(only)
     return InputsLock(
         spec.spec_sha256,
-        tuple(_capture(spec, item, timeout, True) for item in spec.sources),
+        tuple(_capture(spec, item, timeout, True) for item in selected),
+        None if only is None else tuple(item.name for item in selected),
     )
 
 
-def compare_inputs(expected: InputsLock, actual: InputsLock) -> InputsVerification:
-    """Compare identities field by field; location and remote are not compared."""
+def compare_inputs(
+    expected: InputsLock,
+    actual: InputsLock,
+    *,
+    only: Iterable[str] | None = None,
+) -> InputsVerification:
+    """Compare identities field by field; location and remote are not compared.
+
+    With ``only``, just the named sources are compared on both sides; a named
+    source that one side lacks is reported with field ``present``.
+    """
+    wanted = None if only is None else set(only)
+
+    def chosen(lock: InputsLock) -> list[SourceIdentity]:
+        return [item for item in lock.sources if wanted is None or item.name in wanted]
+
     drifts: list[SourceDrift] = []
     if expected.spec_sha256 != actual.spec_sha256:
         drifts.append(
             SourceDrift("*", "spec_sha256", expected.spec_sha256, actual.spec_sha256)
         )
-    current = {item.name: item for item in actual.sources}
-    for before in expected.sources:
+    current = {item.name: item for item in chosen(actual)}
+    for before in chosen(expected):
         after = current.pop(before.name, None)
         if after is None:
             drifts.append(SourceDrift(before.name, "present", True, False))
@@ -650,18 +719,47 @@ def compare_inputs(expected: InputsLock, actual: InputsLock) -> InputsVerificati
 
 
 def verify_inputs(
-    spec: InputsSpec, lock: InputsLock, *, timeout: float = DEFAULT_GIT_TIMEOUT
+    spec: InputsSpec,
+    lock: InputsLock,
+    *,
+    timeout: float = DEFAULT_GIT_TIMEOUT,
+    only: Iterable[str] | None = None,
 ) -> InputsVerification:
     """Recapture the declared sources and compare them with a recorded lock.
 
     Policy (``allow_dirty``/``ref``) was enforced at record time and the lock is
     bound to the declaration digest, so a matching identity satisfies it too.
+    ``only`` limits the check to the named sources; without it, a partial lock
+    (recorded with ``only``) is checked for its own selection.
     """
+    selection = tuple(only) if only is not None else lock.only
+    selected = spec.select(selection)
+    names = tuple(item.name for item in selected)
     actual = InputsLock(
         spec.spec_sha256,
-        tuple(_capture(spec, item, timeout, False) for item in spec.sources),
+        tuple(_capture(spec, item, timeout, False) for item in selected),
+        None if selection is None else names,
     )
-    return compare_inputs(lock, actual)
+    return compare_inputs(lock, actual, only=None if selection is None else names)
+
+
+def open_sources(
+    spec: InputsSpec,
+    lock: InputsLock | None = None,
+    *,
+    timeout: float = DEFAULT_GIT_TIMEOUT,
+) -> InputsLock:
+    """The entry half of `pinned_sources`: record, or verify against ``lock``.
+
+    Every declared source must be covered: a partial lock (recorded with
+    ``only``) is drift for the sources it does not hold.
+    """
+    if lock is None:
+        return record_inputs(spec, timeout=timeout)
+    verify_inputs(
+        spec, lock, timeout=timeout, only=[item.name for item in spec.sources]
+    ).raise_for_drift("sources differ from the lock")
+    return lock
 
 
 @contextmanager
@@ -678,13 +776,7 @@ def pinned_sources(
     `SourceDriftError` if any checkout changed while the build ran. An error
     raised by the build itself propagates unchanged.
     """
-    if lock is None:
-        start = record_inputs(spec, timeout=timeout)
-    else:
-        verify_inputs(spec, lock, timeout=timeout).raise_for_drift(
-            "sources differ from the lock"
-        )
-        start = lock
+    start = open_sources(spec, lock, timeout=timeout)
     yield start
     verify_inputs(spec, start, timeout=timeout).raise_for_drift(
         "source changed during the build"

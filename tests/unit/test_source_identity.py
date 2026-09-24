@@ -22,7 +22,7 @@ from piceli.artifacts import (
     record_inputs,
     verify_inputs,
 )
-from piceli.artifacts.source_identity import redact_remote
+from piceli.artifacts.source_identity import UnknownSourceError, redact_remote
 from piceli.k8s.cli import app
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
@@ -348,3 +348,99 @@ def test_nested_repository_contributes_its_commit(tmp_path: Path) -> None:
     assert second.diff_sha256 != first.diff_sha256
     git(nested, "commit", "-q", "-am", "nested")
     assert identity(repo).diff_sha256 not in {first.diff_sha256, second.diff_sha256}
+
+
+TWO_SOURCES = (
+    '[[source]]\nname = "service-a"\npath = "service-a"\n'
+    '[[source]]\nname = "service-b"\npath = "service-b"\n'
+)
+
+
+def test_record_and_verify_only_selected_sources(tmp_path: Path) -> None:
+    make_repo(tmp_path, "service-a")
+    b = make_repo(tmp_path, "service-b")
+    spec = InputsSpec(
+        (SourceSpec("service-a", "service-a"), SourceSpec("service-b", "service-b")),
+        tmp_path,
+    )
+    full = record_inputs(spec)
+    partial = record_inputs(spec, only=["service-a"])
+    # Same declaration digest; the selection is recorded and round-trips.
+    assert partial.spec_sha256 == full.spec_sha256
+    assert partial.only == ("service-a",)
+    assert [item.name for item in partial.sources] == ["service-a"]
+    assert InputsLock.from_json(partial.to_json()) == partial
+    assert "only" not in full.to_dict()
+
+    (b / "README.md").write_text("elsewhere\n")
+    # The partial lock verifies its own selection; the full lock verifies
+    # the selected source only when asked to.
+    assert verify_inputs(spec, partial).ok
+    assert verify_inputs(spec, full, only=["service-a"]).ok
+    assert not verify_inputs(spec, full).ok
+    assert [d.name for d in verify_inputs(spec, full, only=["service-b"]).drifts] == [
+        "service-b",
+        "service-b",
+    ]
+    # A build needs every source: a partial lock is drift for the rest.
+    with pytest.raises(SourceDriftError):
+        with pinned_sources(spec, partial):
+            pass
+
+    with pytest.raises(UnknownSourceError) as error:
+        record_inputs(spec, only=["service-c"])
+    assert error.value.code == "unknown-source"
+    with pytest.raises(UnknownSourceError):
+        verify_inputs(spec, full, only=["service-c"])
+    with pytest.raises(SourceIdentityError):
+        InputsLock(full.spec_sha256, full.sources, ("service-b",))
+
+
+def test_cli_only(tmp_path: Path) -> None:
+    make_repo(tmp_path, "service-a")
+    b = make_repo(tmp_path, "service-b")
+    spec = write_spec(tmp_path, TWO_SOURCES)
+    lock = tmp_path / "inputs.lock.json"
+    runner = CliRunner()
+
+    recorded = runner.invoke(
+        app,
+        ["inputs", "record", "--spec", str(spec), "--out", str(lock)],
+    )
+    assert recorded.exit_code == 0, recorded.output
+    (b / "README.md").write_text("elsewhere\n")
+
+    only = runner.invoke(
+        app,
+        ["inputs", "verify", "--spec", str(spec), "--lock", str(lock)]
+        + ["--only", "service-a"],
+    )
+    assert only.exit_code == 0, only.output
+    payload = json.loads(only.stdout)
+    assert payload["only"] == ["service-a"]
+    assert [item["name"] for item in payload["sources"]] == ["service-a"]
+
+    everything = runner.invoke(
+        app, ["inputs", "verify", "--spec", str(spec), "--lock", str(lock)]
+    )
+    assert everything.exit_code == 1
+
+    partial = runner.invoke(
+        app,
+        ["inputs", "record", "--spec", str(spec), "--only", "service-a"]
+        + ["--only", "service-a"],
+    )
+    assert partial.exit_code == 0, partial.output
+    assert json.loads(partial.stdout)["only"] == ["service-a"]
+
+    unknown = runner.invoke(
+        app,
+        ["inputs", "verify", "--spec", str(spec), "--lock", str(lock)]
+        + ["--only", "nope"],
+    )
+    assert unknown.exit_code == 2
+    assert json.loads(unknown.stderr) == {
+        "state": "rejected",
+        "reason": "unknown-source",
+        "source": "nope",
+    }
