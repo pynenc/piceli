@@ -4,6 +4,39 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Unreleased
+
+- **Typed apps (preview):** `from piceli import App, ExistingClaim, …`
+  describes Deployments (sidecars, init containers, probes, resources,
+  memory/config/secret volumes, node pinning), Services, ConfigMaps, Secrets
+  and NetworkPolicies as typed Python that renders to release intents.
+  - `ExistingClaim` mounts a claim that the release never creates, changes or
+    deletes.
+  - Selectors derive only from the Deployment name.
+  - `piceli render` prints the manifests without a cluster.
+  - `examples/release` is now typed and renders identically.
+- **Secrets (preview):** new `tls-ca`, `template`, `import` (file, env, or a
+  live Secret; rotatable with `--rotate`) and `static` generators, and
+  `piceli release secret show NAME [--key] --reveal`. A refused
+  `release plan` no longer generates, imports or stores any secret version.
+- **Builds:**
+  - Drift is checked over the staged files and the spec. Whole-source identity
+    is kept as provenance (`sources_changed_during_build`), so edits to
+    unrelated files no longer reject a build.
+  - `--log` streams during the build, and `--progress steps|plain|quiet`
+    shows step progress.
+  - `tag = "{image_id:N}"` content tags.
+  - Optional per-image `smoke` checks run in an isolated container.
+  - `piceli inputs record|verify --only NAME`.
+- **Agent and contract foundations (preview):**
+  - a registry of error codes with `piceli explain <code> [--json]`;
+  - `piceli help-json` / `--help-json` (the CLI tree with side effects,
+    approval and retry metadata);
+  - generated `reference/errors` and `reference/cli` pages;
+  - `AGENTS.md`, `llms.txt` and `docs/agents.md`;
+  - maturity labels on every feature page;
+  - a clear error for a misplaced `images_from`.
+
 ## Version 0.2.0
 
 - `release.toml` images can point at a registry delivery receipt:

@@ -144,12 +144,6 @@ namespaced and in the target namespace.
 
 ### Secret generators
 
-```{toctree}
-:hidden:
-
-secrets
-```
-
 The how-to {doc}`secrets` covers every generator with examples, `secret
 show`, rotation and the error codes. In short:
 
