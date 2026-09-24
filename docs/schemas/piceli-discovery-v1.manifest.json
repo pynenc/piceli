@@ -2,7 +2,7 @@
   "contract": "piceli.discovery.v1",
   "fixture": {
     "path": "tests/fixtures/discovery-v1/complete.json",
-    "sha256": "ec161390c5874dd82c572f795879aee9e0b678468bcc5a1748f642c9b6699a4d"
+    "sha256": "74599b8125ae6edfd9559436e03ed789a8149a3044caa7a93b2954f748a988f8"
   },
   "schema": {
     "path": "docs/schemas/piceli-discovery-v1.schema.json",

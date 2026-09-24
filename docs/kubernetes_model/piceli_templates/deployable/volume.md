@@ -56,9 +56,7 @@ from piceli.k8s import templates
 
 # Create a volume mount for a ConfigMap
 volume_mount_config_map = templates.VolumeMountConfigMap(
-    mount_path="/app/config",
-    config_map=my_config_map,
-    default_mode=0o640
+    mount_path="/app/config", config_map=my_config_map, default_mode=0o640
 )
 
 # Define a service with a PVC volume mount
@@ -66,7 +64,7 @@ service_with_pvc = templates.Service(
     name="my-service",
     ports=[service_port],
     volumes=[volume_mount_pvc],
-    selector={"app": "myApp"}
+    selector={"app": "myApp"},
 )
 ```
 

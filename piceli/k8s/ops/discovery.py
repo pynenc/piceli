@@ -9,10 +9,11 @@ from __future__ import annotations
 import json
 import re
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import partial
-from typing import Any, Mapping, Protocol
+from typing import Any, Protocol
 
 from piceli.k8s.ops.bounds import (
     bounded_call,
@@ -53,10 +54,10 @@ def _reference_fields(path: tuple[str, ...]) -> frozenset[str]:
     roots = {
         "Pod": ("spec",),
         "CronJob": ("spec", "jobTemplate", "spec", "template", "spec"),
-        **{
-            kind: ("spec", "template", "spec")
-            for kind in ("Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job")
-        },
+        **dict.fromkeys(
+            ("Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job"),
+            ("spec", "template", "spec"),
+        ),
     }
     root = roots.get(path[0])
     if root is None or path[1 : 1 + len(root)] != root:
@@ -104,7 +105,7 @@ def _redact(value: Any, *, path: tuple[str, ...] = ()) -> tuple[Any, bool]:
             sensitive = True
         if sensitive:
             result[key] = (
-                {name: "<redacted>" for name in child}
+                dict.fromkeys(child, "<redacted>")
                 if isinstance(child, dict)
                 else "<redacted>"
             )
@@ -467,26 +468,21 @@ class DiscoveryProvider(Protocol):
     """Pure interface boundary implemented by a caller-owned provider adapter."""
 
     @property
-    def provider_id(self) -> str:
-        ...
+    def provider_id(self) -> str: ...
 
     def discover_api_resource(
         self, target: PlanTarget, resource_type: ResourceType
-    ) -> ApiResource | DiscoveryFailureKind:
-        ...
+    ) -> ApiResource | DiscoveryFailureKind: ...
 
-    def list_resources(self, request: ResourceListRequest) -> DiscoveryPage:
-        ...
+    def list_resources(self, request: ResourceListRequest) -> DiscoveryPage: ...
 
     def probe_server_side_apply(
         self, target: PlanTarget, resource: DiscoveredResource
-    ) -> ApplyProbeResult:
-        ...
+    ) -> ApplyProbeResult: ...
 
     def probe_readiness(
         self, target: PlanTarget, resource: ResourceIdentity
-    ) -> ReadinessProbeResult:
-        ...
+    ) -> ReadinessProbeResult: ...
 
 
 @dataclass(frozen=True)
@@ -722,7 +718,7 @@ class DiscoveryArtifact:
         )
         # Count private input as well as the public redacted encoding.
         private = self.to_dict()
-        for item, resource in zip(private["resources"], resources):
+        for item, resource in zip(private["resources"], resources, strict=True):
             item["manifest"] = resource.manifest
         if len(_canonical_json(private).encode()) > self.limits.max_artifact_bytes:
             raise ValueError("discovery artifact exceeds byte limit")
@@ -768,7 +764,7 @@ class DiscoveryArtifact:
         it is never suitable for reports, logs, receipts, or interchange.
         """
         value = self.to_dict()
-        for encoded, resource in zip(value["resources"], self.resources):
+        for encoded, resource in zip(value["resources"], self.resources, strict=True):
             encoded["manifest"] = resource.manifest
             encoded["content_complete"] = resource.content_complete
         result = _canonical_json(value)

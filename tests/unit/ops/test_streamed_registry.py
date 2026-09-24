@@ -4,8 +4,6 @@ import io
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
-import pytest
 
 from piceli.artifacts.registry import RegistryEndpoint, StreamedOciRegistryClient
 
@@ -86,8 +84,15 @@ def test_streamed_oci_client_upload_and_check() -> None:
         assert client.has_blob("test", digest) is True
 
         # Push manifest
-        manifest_data = json.dumps({"schemaVersion": 2, "config": {"digest": digest}}).encode()
-        m_digest = client.push_manifest("test", "latest", manifest_data, "application/vnd.oci.image.manifest.v1+json")
+        manifest_data = json.dumps(
+            {"schemaVersion": 2, "config": {"digest": digest}}
+        ).encode()
+        m_digest = client.push_manifest(
+            "test",
+            "latest",
+            manifest_data,
+            "application/vnd.oci.image.manifest.v1+json",
+        )
         assert m_digest.startswith("sha256:")
         assert "latest" in FakeOciRegistryHandler.manifests
     finally:

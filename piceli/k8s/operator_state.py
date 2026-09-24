@@ -10,18 +10,16 @@ import fcntl
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import secrets
-import shutil
 import socket
 import tarfile
 import tempfile
 import time
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Protocol
-
 
 _NAME = re.compile(r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?")
 _TOKEN_CHARS = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
@@ -34,7 +32,7 @@ class ConcurrentWriterError(RuntimeError):
 @dataclass(frozen=True)
 class StandingPolicy:
     """Explicit authorization scope for autonomous or assisted operations.
-    
+
     Standing policies authorize ONLY their explicit scope. Scope expansion requires a new grant.
     """
 
@@ -64,19 +62,25 @@ class StandingPolicy:
             return False
         if namespace is not None and self.allowed_namespaces:
             if not any(
-                allowed == "*" or allowed == namespace or (allowed.endswith("*") and namespace.startswith(allowed[:-1]))
+                allowed == "*"
+                or allowed == namespace
+                or (allowed.endswith("*") and namespace.startswith(allowed[:-1]))
                 for allowed in self.allowed_namespaces
             ):
                 return False
         if branch is not None and self.allowed_branches:
             if not any(
-                allowed == "*" or allowed == branch or (allowed.endswith("*") and branch.startswith(allowed[:-1]))
+                allowed == "*"
+                or allowed == branch
+                or (allowed.endswith("*") and branch.startswith(allowed[:-1]))
                 for allowed in self.allowed_branches
             ):
                 return False
         if registry is not None and self.allowed_registries:
             if not any(
-                allowed == "*" or allowed == registry or (allowed.endswith("*") and registry.startswith(allowed[:-1]))
+                allowed == "*"
+                or allowed == registry
+                or (allowed.endswith("*") and registry.startswith(allowed[:-1]))
                 for allowed in self.allowed_registries
             ):
                 return False
@@ -194,9 +198,7 @@ class FileStateStore:
     """File-backed operator state store with atomic replacement, locking, and backup."""
 
     def __init__(self, base_dir: Path | None = None) -> None:
-        self.base_dir = (
-            base_dir or Path.home() / ".config" / "piceli"
-        ).resolve()
+        self.base_dir = (base_dir or Path.home() / ".config" / "piceli").resolve()
         self.lock = InstanceLock(self.base_dir / ".instance.lock")
 
     def ensure_directories(self) -> None:
@@ -225,9 +227,7 @@ class FileStateStore:
         """Atomically save JSON state with owner-only (0o600) permissions."""
         self.ensure_directories()
         path = self._file_path(key)
-        descriptor, temporary = tempfile.mkstemp(
-            prefix=f".{key}-", dir=self.base_dir
-        )
+        descriptor, temporary = tempfile.mkstemp(prefix=f".{key}-", dir=self.base_dir)
         try:
             os.fchmod(descriptor, 0o600)
             with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
@@ -263,7 +263,11 @@ class FileStateStore:
             with tarfile.open(temporary, "w:gz") as tar:
                 if self.base_dir.exists():
                     for entry in sorted(self.base_dir.iterdir()):
-                        if entry.is_file() and entry.suffix == ".json" and not entry.name.startswith("."):
+                        if (
+                            entry.is_file()
+                            and entry.suffix == ".json"
+                            and not entry.name.startswith(".")
+                        ):
                             tar.add(entry, arcname=entry.name)
             os.replace(temporary, target_archive)
         finally:
@@ -274,20 +278,33 @@ class FileStateStore:
                     pass
         return target_archive
 
-    def restore_backup(self, backup_archive: Path, destination: Path | None = None) -> None:
+    def restore_backup(
+        self, backup_archive: Path, destination: Path | None = None
+    ) -> None:
         """Restore state from backup archive into empty or owned directory."""
         dest = (destination or self.base_dir).resolve()
         if dest.exists() and any(dest.iterdir()):
-            non_state = [p for p in dest.iterdir() if p.suffix != ".json" and not p.name.startswith(".")]
+            non_state = [
+                p
+                for p in dest.iterdir()
+                if p.suffix != ".json" and not p.name.startswith(".")
+            ]
             if non_state:
-                raise ValueError(f"destination {dest} contains non-state files; aborting restore")
+                raise ValueError(
+                    f"destination {dest} contains non-state files; aborting restore"
+                )
 
         dest.mkdir(mode=0o700, parents=True, exist_ok=True)
         os.chmod(dest, 0o700)
 
         with tarfile.open(backup_archive, "r:gz") as tar:
             for member in tar.getmembers():
-                if not member.isfile() or "/" in member.name or ".." in member.name or not member.name.endswith(".json"):
+                if (
+                    not member.isfile()
+                    or "/" in member.name
+                    or ".." in member.name
+                    or not member.name.endswith(".json")
+                ):
                     raise ValueError(f"unsafe member in state archive: {member.name}")
                 target_file = dest / member.name
                 f = tar.extractfile(member)

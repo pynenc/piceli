@@ -11,12 +11,12 @@ import hashlib
 import json
 import re
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any
 
 from piceli.k8s.ops.executor import ActionGrant, ExecutionAuthorization
 from piceli.k8s.ops.plan import DeploymentPlan, ObservedSnapshot
-
 
 REVISION_SCHEMA_VERSION = 1
 

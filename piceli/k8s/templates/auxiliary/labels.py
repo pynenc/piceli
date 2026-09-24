@@ -1,7 +1,7 @@
 import re
+from typing import Annotated
 
 from pydantic import AfterValidator
-from typing_extensions import Annotated
 
 CLUSTER_LABELS: set[str] = {"team", "component", "state"}
 

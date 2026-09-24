@@ -8,13 +8,13 @@ import json
 import os
 import re
 import sqlite3
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from piceli.k8s.ops.bounds import positive, strict_json
 from piceli.k8s.ops.secret_versions import private_database
-
 
 _MIGRATABLE_ACTION_STATES = frozenset({"pending", "failed", "applied", "ready"})
 _MIGRATABLE_EXECUTION_STATES = frozenset({"pending", "failed", "ready"})

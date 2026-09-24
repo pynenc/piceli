@@ -1,5 +1,3 @@
-from typing import Optional
-
 from piceli.k8s.k8s_client.client import ClientContext
 from piceli.k8s.object_manager import base
 from piceli.k8s.utils import utils_wait
@@ -8,7 +6,7 @@ from piceli.k8s.utils import utils_wait
 class StatefulSetManager(base.ObjectManager):
     """Manager for statefulset objects."""
 
-    def wait(self, ctx: ClientContext, namespace: Optional[str] = None) -> None:
+    def wait(self, ctx: ClientContext, namespace: str | None = None) -> None:
         """waits until the deployment is available"""
         utils_wait.wait(
             ctx=ctx,

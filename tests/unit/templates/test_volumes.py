@@ -14,7 +14,7 @@ def test_persistent_volume() -> None:
         disk_name="disk-name",
         labels={"component": "test"},
     )
-    per_vol_dict = client.ApiClient().sanitize_for_serialization(per_vol.get())
+    per_vol_dict = client.ApiClient().sanitize_for_serialization(per_vol.get()[0])
     assert per_vol_dict == yaml_utils.get_yaml_dict("persistent_volume.yml")
 
 
@@ -25,7 +25,7 @@ def test_persistent_volume_claim() -> None:
         storage="100Gi",
         labels={"component": "test"},
     )
-    vol_claim_dict = client.ApiClient().sanitize_for_serialization(vol_claim.get())
+    vol_claim_dict = client.ApiClient().sanitize_for_serialization(vol_claim.get()[0])
     assert vol_claim_dict == yaml_utils.get_yaml_dict("persistent_volume_claim.yml")
 
 

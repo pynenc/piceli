@@ -1,15 +1,16 @@
 """Explicit local Docker import of a validated OCI artifact, without tags or push."""
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import io
 import json
-from pathlib import Path
 import stat
 import tarfile
 import tempfile
 import threading
 import time
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from piceli.artifacts.oci import (
@@ -90,7 +91,7 @@ class DockerLocalImporter:
                 archive.addfile(info, io.BytesIO(raw))
                 for desc, name in [
                     (manifest["config"], config_name),
-                    *zip(manifest["layers"], layer_names),
+                    *zip(manifest["layers"], layer_names, strict=False),
                 ]:
                     archive.add(blob_path(layout, desc), arcname=name, recursive=False)
             checked = (

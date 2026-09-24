@@ -1,5 +1,3 @@
-from typing import Optional
-
 from kubernetes import client
 
 from piceli.k8s.templates.auxiliary import names
@@ -22,7 +20,7 @@ class ConfigMap(base.Deployable):
 
     name: names.Name
     data: dict[str, str]
-    labels: Optional[Labels] = None
+    labels: Labels | None = None
     # API: ClassVar[str] = "core"
     # API_FUNC: ClassVar[str] = "config_map"
 

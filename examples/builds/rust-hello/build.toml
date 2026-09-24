@@ -1,0 +1,58 @@
+# Build a small Rust HTTP service for linux/arm64 in a pinned builder image.
+#
+#   piceli artifacts build-spec preview --spec build.toml
+#   piceli artifacts build-spec run --spec build.toml \
+#       --approve-builder sha256:8fa55b2f3ddf97471ab6a767bfa3f37e6bad0986ba823e75fea57e2a2a5c3073 \
+#       --out ../../../dist/rust-hello/receipt.json
+revision = "piceli.build-spec.v1"
+name = "rust-hello"
+inputs = "inputs.toml"
+
+[builder]
+image = "docker.io/library/rust:1.97.0-bookworm"
+digest = "sha256:8fa55b2f3ddf97471ab6a767bfa3f37e6bad0986ba823e75fea57e2a2a5c3073"
+
+[build]
+platforms = ["linux/arm64"]
+workdir = "/work"
+command = ["cargo", "build", "--release", "--locked", "--offline"]
+network = "none"
+source_date_epoch = 0
+timeout_seconds = 1800
+env = { CARGO_TERM_COLOR = "never", CARGO_INCREMENTAL = "0" }
+
+# Only these files are staged and sent to BuildKit (a few KiB), never the
+# checkout around them.
+[context.app]
+source = "piceli"
+path = "examples/builds/rust-hello"
+include = ["Cargo.toml", "Cargo.lock", "src/**/*.rs"]
+max_files = 64
+max_bytes = 1048576
+
+# Dependency caches are BuildKit cache mounts, not build contexts.
+[cache.cargo-registry]
+target = "/usr/local/cargo/registry"
+id = "cargo-registry"
+sharing = "shared"
+
+[cache.cargo-git]
+target = "/usr/local/cargo/git"
+id = "cargo-git"
+sharing = "shared"
+
+[cache.target]
+target = "/work/target"
+
+[[output.file]]
+from = "target/release/rust-hello"
+to = "bin/rust-hello"
+
+[[output.image]]
+name = "rust-hello"
+repository = "piceli-examples/rust-hello"
+tag = "dev"
+base = { image = "docker.io/library/debian:bookworm-slim", digest = "sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171" }
+files = { "bin/rust-hello" = "/usr/local/bin/rust-hello" }
+user = "65532:65532"
+entrypoint = ["/usr/local/bin/rust-hello"]

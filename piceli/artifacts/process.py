@@ -1,15 +1,16 @@
 """Pinned tools, explicit code-execution authority and bounded process groups."""
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import hashlib
 import os
-from pathlib import Path
 import selectors
 import signal
 import subprocess
 import threading
 import time
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from piceli.artifacts.plan import SourcePin, canonical, digest, validate_digest

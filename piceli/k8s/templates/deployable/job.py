@@ -1,5 +1,3 @@
-from typing import Optional
-
 from kubernetes import client
 from pydantic import NonNegativeInt, model_validator
 
@@ -22,15 +20,15 @@ class Job(pod.Pod, base.Deployable):
     compliant with Kubernetes' best practices and restrictions, particularly regarding
     the restart policy, which cannot be set to 'Always' for jobs.
 
-    ```{node}
+    ```{note}
         The restart policy is implicitly handled to align with Kubernetes' requirements,
         defaulting to 'Never' unless explicitly set to 'OnFailure' within the pod template.
     ```
     """
 
-    cleanup_after_seconds: Optional[NonNegativeInt] = None
-    backoff_limit: Optional[NonNegativeInt] = None
-    labels: Optional[Labels] = None
+    cleanup_after_seconds: NonNegativeInt | None = None
+    backoff_limit: NonNegativeInt | None = None
+    labels: Labels | None = None
 
     @model_validator(mode="before")
     def check_restart_policy(cls, values: dict) -> dict:

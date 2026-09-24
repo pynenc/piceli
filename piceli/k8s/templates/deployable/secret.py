@@ -1,6 +1,5 @@
 import base64
 import json
-from typing import Optional
 
 from kubernetes import client
 
@@ -23,9 +22,9 @@ class Secret(base.Deployable):
 
     name: names.Name
     secret_type: secret_type.SecretType
-    string_data: Optional[dict[str, str]] = None
-    data: Optional[dict[str, str]] = None
-    labels: Optional[Labels] = None
+    string_data: dict[str, str] | None = None
+    data: dict[str, str] | None = None
+    labels: Labels | None = None
     # API: ClassVar[str] = "core"
     # API_FUNC: ClassVar[str] = "secret"
 

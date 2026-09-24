@@ -34,21 +34,32 @@
 
 ---
 
-**Documentation**: <a href="https://docs.piceli.org" target="_blank">https://docs.piceli.pynenc.org</a>
+**Documentation**: <a href="https://docs.pynenc.org/projects/piceli/" target="_blank">https://docs.pynenc.org/projects/piceli</a>
 
 **Source Code**: <a href="https://github.com/pynenc/piceli" target="_blank">https://github.com/pynenc/piceli</a>
 
 ---
 
-Piceli simplifies Kubernetes object management and deployment, streamlining the process of configuring and applying Kubernetes resources. With Piceli, developers can define Kubernetes objects using Python, manage configurations efficiently, and deploy them to clusters with ease.
+Piceli manages Kubernetes infrastructure as typed Python. Define resources with
+Piceli templates, the official `kubernetes` client models or plain YAML/JSON. Compare
+them with a live cluster, and apply the changes in dependency order with a durable,
+resumable execution journal. The goal is a Python-native replacement for
+hand-maintained YAML, Kustomize and Helm, later growing into Terraform-style
+infrastructure lifecycle and Argo CD-style continuous delivery (see the
+[roadmap](https://docs.pynenc.org/projects/piceli/en/latest/roadmap.html)).
+
+> **Status: pre-alpha.** APIs change between releases. `piceli deploy run` currently
+> replaces (deletes and recreates) existing objects; the server-side-apply engine
+> (`DeploymentSession`) is available from Python. See the
+> [overview](https://docs.pynenc.org/projects/piceli/en/latest/overview.html).
 
 ## Key Features
 
 - **Recoverable Execution API**: Pure target-bound plans, validated discovery,
   private secret versions and journaled apply/readiness/cancel/resume/compensation.
   See the [execution guide](docs/deployment_planning.md). Run
-  `make local-test-env` and `make test-local-executor` for local API acceptance;
-  this does not qualify or contact a live cluster.
+  `make test-acceptance` for the fault-injected API acceptance suite;
+  this does not contact a live cluster.
 
 - **Modern Streamed Container Pipeline & Micro-Images**: Decouple monolithic
   runtimes into specialized 20-30MB micro-images sharing cached base layers.
@@ -117,25 +128,25 @@ or Kubernetes RBAC with a dashboard.
 ```bash
 # Reconcile one recorded deployment with its selected cluster. Output is JSON.
 piceli observe status \
-  --archive /secure/session.archive.json \
-  --kubeconfig ~/.kube/k-lab.yaml --context k-lab
+  --archive ./session.archive.json \
+  --kubeconfig ~/.kube/config --context my-cluster
 
 # Save a non-secret user preference and run the resulting loopback forward.
-piceli observe forward-save --user jose --name kabuki \
-  --namespace infinite-haiku-p2 --target service/ih-v18-kabuki \
-  --local-port 18080 --remote-port 3000
-piceli observe forward-run --user jose --name kabuki \
-  --kubeconfig ~/.kube/k-lab.yaml --context k-lab
+piceli observe forward-save --user "$USER" --name api \
+  --namespace my-app --target service/api \
+  --local-port 18080 --remote-port 8080
+piceli observe forward-run --user "$USER" --name api \
+  --kubeconfig ~/.kube/config --context my-cluster
 
 # Inspect one workload's current or previous bounded log tail.
-piceli observe logs-run --namespace infinite-haiku-p2 \
-  --target deployment/ih-v18-kabuki --tail 200 \
-  --kubeconfig ~/.kube/k-lab.yaml --context k-lab
+piceli observe logs-run --namespace my-app \
+  --target deployment/api --tail 200 \
+  --kubeconfig ~/.kube/config --context my-cluster
 
 # Local browser UI plus JSON API. Passing --user restores only that user's
 # saved, loopback-only forwards and supervises processes Piceli starts itself.
-piceli observe serve --archive /secure/session.archive.json \
-  --kubeconfig ~/.kube/k-lab.yaml --context k-lab --user jose --port 9876
+piceli observe serve --archive ./session.archive.json \
+  --kubeconfig ~/.kube/config --context my-cluster --user "$USER" --port 9876
 ```
 
 Open `http://127.0.0.1:9876/` to inspect the session, live resources and saved
@@ -146,7 +157,7 @@ adopt or delete an object.
 
 ## Modern Container Pipeline & Micro-Image Delivery
 
-For high-performance systems and multi-tier architectures (such as Infinite Haiku),
+For multi-tier architectures,
 Piceli supports modular micro-image delivery instead of monolithic archives:
 
 1. **Modular OCI Images**: Decompose services (frontend, gateway, workers, datastores)
@@ -180,20 +191,14 @@ Objects from the official kubernetes library:
 ```python
 from kubernetes import client
 
+
 def create_service_example(name, labels, ports, selector):
     # Define the Kubernetes Service
     service = client.V1Service(
         api_version="v1",
         kind="Service",
-        metadata=client.V1ObjectMeta(
-            name=name,
-            labels=labels
-        ),
-        spec=client.V1ServiceSpec(
-            ports=ports,
-            type="ClusterIP",
-            selector=selector
-        )
+        metadata=client.V1ObjectMeta(name=name, labels=labels),
+        spec=client.V1ServiceSpec(ports=ports, type="ClusterIP", selector=selector),
     )
     return service
 ```

@@ -46,13 +46,15 @@ def obj_compare_result(k8s_object: K8sObject) -> detail.ObjCompareResult:
 def test_detail_with_changes(
     k8s_object: K8sObject, obj_compare_result: detail.ObjCompareResult
 ) -> None:
-    with mock.patch(
-        "piceli.k8s.ops.loader.load_all", return_value=[k8s_object]
-    ), mock.patch(
-        "piceli.k8s.object_manager.factory.ManagerFactory.get_manager"
-    ) as mock_get_manager, mock.patch(
-        "piceli.k8s.ops.compare.object_comparer.determine_update_action",
-        side_effect=lambda x, y: obj_compare_result.compared_result,
+    with (
+        mock.patch("piceli.k8s.ops.loader.load_all", return_value=[k8s_object]),
+        mock.patch(
+            "piceli.k8s.object_manager.factory.ManagerFactory.get_manager"
+        ) as mock_get_manager,
+        mock.patch(
+            "piceli.k8s.ops.compare.object_comparer.determine_update_action",
+            side_effect=lambda x, y: obj_compare_result.compared_result,
+        ),
     ):
         mock_get_manager.return_value = obj_compare_result.desired_obj
 
@@ -78,14 +80,16 @@ def test_detail_with_no_changes(k8s_object: K8sObject) -> None:
         compared_result=compare_result_no_changes,
     )
 
-    with mock.patch(
-        "piceli.k8s.ops.loader.load_all", return_value=[k8s_object]
-    ), mock.patch(
-        "piceli.k8s.object_manager.factory.ManagerFactory.get_manager",
-        return_value=obj_compare_result_no_changes.desired_obj,
-    ), mock.patch(
-        "piceli.k8s.ops.compare.object_comparer.determine_update_action",
-        return_value=compare_result_no_changes,
+    with (
+        mock.patch("piceli.k8s.ops.loader.load_all", return_value=[k8s_object]),
+        mock.patch(
+            "piceli.k8s.object_manager.factory.ManagerFactory.get_manager",
+            return_value=obj_compare_result_no_changes.desired_obj,
+        ),
+        mock.patch(
+            "piceli.k8s.ops.compare.object_comparer.determine_update_action",
+            return_value=compare_result_no_changes,
+        ),
     ):
         # check no changes: shows no action needed and differences
         result = runner.invoke(app, ["deploy", "detail"])
@@ -100,11 +104,12 @@ def test_detail_with_no_changes(k8s_object: K8sObject) -> None:
 
 
 def test_detail_with_error(k8s_object: K8sObject) -> None:
-    with mock.patch(
-        "piceli.k8s.ops.loader.load_all", return_value=[k8s_object]
-    ), mock.patch(
-        "piceli.k8s.object_manager.factory.ManagerFactory.get_manager"
-    ) as mock_get_manager:
+    with (
+        mock.patch("piceli.k8s.ops.loader.load_all", return_value=[k8s_object]),
+        mock.patch(
+            "piceli.k8s.object_manager.factory.ManagerFactory.get_manager"
+        ) as mock_get_manager,
+    ):
         mock_get_manager.side_effect = Exception("cannot get manager")
 
         result = runner.invoke(app, ["deploy", "detail"])

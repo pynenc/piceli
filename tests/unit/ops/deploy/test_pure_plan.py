@@ -26,14 +26,14 @@ from piceli.k8s.ops.plan import (
     build_plan,
 )
 
-TARGET = PlanTarget("kind-local", "ih-test")
+TARGET = PlanTarget("kind-local", "app-test")
 
 
 def manifest(kind: str, name: str, **spec: object) -> dict:
     return {
         "apiVersion": "v1",
         "kind": kind,
-        "metadata": {"name": name, "namespace": "ih-test"},
+        "metadata": {"name": name, "namespace": "app-test"},
         "spec": spec,
     }
 
@@ -172,7 +172,7 @@ def test_target_binding_rejects_wrong_cluster_and_namespace() -> None:
         build_plan(
             composition([]),
             snapshot,
-            PlanAuthorization(PlanTarget("production", "ih-test")),
+            PlanAuthorization(PlanTarget("production", "app-test")),
         )
     wrong_namespace = manifest("Deployment", "worker", replicas=1)
     wrong_namespace["metadata"]["namespace"] = "other"
@@ -332,10 +332,10 @@ def test_builtin_and_custom_resource_scope_are_explicit() -> None:
     namespace = {
         "apiVersion": "v1",
         "kind": "Namespace",
-        "metadata": {"name": "ih-test"},
+        "metadata": {"name": "app-test"},
     }
     custom = {
-        "apiVersion": "infra.ih/v1",
+        "apiVersion": "infra.example/v1",
         "kind": "ClusterMachine",
         "metadata": {"name": "node-a", "namespace": "wrong"},
     }
@@ -350,7 +350,7 @@ def test_namespace_and_pvc_retention_cannot_be_disabled() -> None:
     namespace = {
         "apiVersion": "v1",
         "kind": "Namespace",
-        "metadata": {"name": "ih-test", "uid": "ns", "resourceVersion": "1"},
+        "metadata": {"name": "app-test", "uid": "ns", "resourceVersion": "1"},
     }
     pvc = manifest("PersistentVolumeClaim", "data")
     with pytest.raises(ValueError, match="retention protection cannot be disabled"):
@@ -385,7 +385,7 @@ def test_artifacts_redact_secrets_credentials_and_environment_values() -> None:
     secret = {
         "apiVersion": "v1",
         "kind": "Secret",
-        "metadata": {"name": "credentials", "namespace": "ih-test"},
+        "metadata": {"name": "credentials", "namespace": "app-test"},
         "stringData": {"opaque": "also-private"},
     }
     rendered = str(plan_for([deployment, secret]).summary())
@@ -400,7 +400,7 @@ def test_secret_values_do_not_create_a_low_entropy_digest_or_plan_hash_oracle() 
         return {
             "apiVersion": "v1",
             "kind": "Secret",
-            "metadata": {"name": "credentials", "namespace": "ih-test"},
+            "metadata": {"name": "credentials", "namespace": "app-test"},
             "stringData": {"password": value},
         }
 
@@ -415,7 +415,7 @@ def test_secret_values_do_not_create_a_low_entropy_digest_or_plan_hash_oracle() 
 
 def test_component_dependencies_become_resource_dependencies() -> None:
     storage = DeploymentComponent(
-        "storage", (ResourceIntent.from_manifest(manifest("Service", "poet")),)
+        "storage", (ResourceIntent.from_manifest(manifest("Service", "api")),)
     )
     workers = DeploymentComponent(
         "workers",
@@ -457,4 +457,4 @@ def test_component_dependencies_become_resource_dependencies() -> None:
     worker_action = next(
         action for action in plan.actions if action.resource.ref.name == "rustvello"
     )
-    assert [dependency.name for dependency in worker_action.dependencies] == ["poet"]
+    assert [dependency.name for dependency in worker_action.dependencies] == ["api"]

@@ -31,11 +31,12 @@ def test_plan_with_validation_success(
 
 
 def test_plan_with_validation_failure(k8s_objects: list[K8sObject]) -> None:
-    with mock.patch(
-        "piceli.k8s.ops.loader.load_all", return_value=k8s_objects
-    ), mock.patch(
-        "piceli.k8s.ops.plan.DeploymentComposition",
-        side_effect=ValueError("Mock validation failure"),
+    with (
+        mock.patch("piceli.k8s.ops.loader.load_all", return_value=k8s_objects),
+        mock.patch(
+            "piceli.k8s.ops.plan.DeploymentComposition",
+            side_effect=ValueError("Mock validation failure"),
+        ),
     ):
         result = runner.invoke(
             app, ["deploy", "plan", "--cluster-id", "kind-local", "--validate"]
@@ -48,4 +49,4 @@ def test_plan_with_validation_failure(k8s_objects: list[K8sObject]) -> None:
 def test_plan_requires_explicit_cluster_binding() -> None:
     result = runner.invoke(app, ["deploy", "plan"])
     assert result.exit_code != 0
-    assert "--cluster-id" in result.stdout
+    assert "--cluster-id" in result.output

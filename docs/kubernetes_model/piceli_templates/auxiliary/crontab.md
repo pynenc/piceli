@@ -11,7 +11,7 @@ Cron expressions are a powerful way to specify the timing and frequency of actio
 
 ## Usage
 
-The module is utilized in defining the `schedule` attribute for Kubernetes `CronJob` objects, as seen in the {cronjob}`../deployable/cronjob` module. It ensures that schedules are correctly formatted and valid according to cron syntax.
+The module is utilized in defining the `schedule` attribute for Kubernetes `CronJob` objects, as seen in the {doc}`../deployable/cronjob` module. It ensures that schedules are correctly formatted and valid according to cron syntax.
 
 ### Examples
 

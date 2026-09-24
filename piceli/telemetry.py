@@ -1,19 +1,21 @@
 """Bounded OTLP operation spans/logs; no credentials, manifests or exception bodies.
 
 Optional dependencies load only when an exporter is explicitly constructed.
-Projection is piceli.operation-otel.v1 over IH's generic telemetry v3, not the
+Projection is piceli.operation-otel.v1 over generic OpenTelemetry spans/logs, not the
 Rustvello task-attempt mapping. Transport identity supplies tenancy.
 """
+
 from __future__ import annotations
 
-from contextlib import contextmanager
-from dataclasses import dataclass, field
 import ipaddress
-from queue import Empty, Full, Queue
 import secrets
 import threading
 import time
-from typing import Any, Iterator
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from queue import Empty, Full, Queue
+from typing import Any
 from urllib.parse import urlsplit
 
 from piceli.bounds import bounded_call, positive, seconds, text
@@ -134,16 +136,9 @@ class OperationTelemetry(NoopTelemetry):
         self._close_deadline = float("inf")
         self._accepted = self._processed = self._dropped = self._after_shutdown = 0
         self._signals = {
-            signal: {
-                key: 0
-                for key in (
-                    "attempted",
-                    "acknowledged",
-                    "rejected",
-                    "unknown",
-                    "not_sent",
-                )
-            }
+            signal: dict.fromkeys(
+                ("attempted", "acknowledged", "rejected", "unknown", "not_sent"), 0
+            )
             for signal in ("traces", "logs")
         }
         self._thread = threading.Thread(
@@ -273,10 +268,23 @@ class OperationTelemetry(NoopTelemetry):
         return self.stats() | {"drained": not self._thread.is_alive()}
 
     def _wire(self, record: _Record) -> list[tuple[str, bytes]]:
+        from opentelemetry.proto.collector.logs.v1.logs_service_pb2 import (
+            ExportLogsServiceRequest,
+        )
+        from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
+            ExportTraceServiceRequest,
+        )
         from opentelemetry.proto.common.v1.common_pb2 import (
             AnyValue,
-            KeyValue,
             InstrumentationScope,
+            KeyValue,
+        )
+        from opentelemetry.proto.logs.v1.logs_pb2 import (
+            SEVERITY_NUMBER_ERROR,
+            SEVERITY_NUMBER_INFO,
+            LogRecord,
+            ResourceLogs,
+            ScopeLogs,
         )
         from opentelemetry.proto.resource.v1.resource_pb2 import Resource
         from opentelemetry.proto.trace.v1.trace_pb2 import (
@@ -284,19 +292,6 @@ class OperationTelemetry(NoopTelemetry):
             ScopeSpans,
             Span,
             Status,
-        )
-        from opentelemetry.proto.logs.v1.logs_pb2 import (
-            ResourceLogs,
-            ScopeLogs,
-            LogRecord,
-            SEVERITY_NUMBER_ERROR,
-            SEVERITY_NUMBER_INFO,
-        )
-        from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
-            ExportTraceServiceRequest,
-        )
-        from opentelemetry.proto.collector.logs.v1.logs_service_pb2 import (
-            ExportLogsServiceRequest,
         )
 
         def attr(key: str, value: str | int) -> Any:
@@ -387,13 +382,13 @@ class OperationTelemetry(NoopTelemetry):
         return result
 
     def _post(self, signal: str, body: bytes, deadline: float) -> str:
-        from urllib3 import PoolManager, Timeout
-        from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
-            ExportTraceServiceResponse,
-        )
         from opentelemetry.proto.collector.logs.v1.logs_service_pb2 import (
             ExportLogsServiceResponse,
         )
+        from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
+            ExportTraceServiceResponse,
+        )
+        from urllib3 import PoolManager, Timeout
 
         def send() -> str:
             response = None

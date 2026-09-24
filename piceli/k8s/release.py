@@ -13,27 +13,30 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import tempfile
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from collections.abc import Mapping
 from typing import Any, TextIO
 
 from piceli.k8s.ops.execution_journal import ExecutionJournal
 from piceli.k8s.ops.executor import PlanExecutor
-from piceli.k8s.ops.plan import ObservedSnapshot, PlanAuthorization
+from piceli.k8s.ops.plan import ObservedSnapshot, PlanAuthorization, build_plan
+from piceli.k8s.ops.revision import DeploymentRevision, ExecutionBundle
 from piceli.k8s.ops.secret_versions import SecretVersionStore
 from piceli.k8s.ops.session import (
     AuthorizationFactory,
     CompositionFactory,
     DeploymentSession,
     DeploymentSessionArchive,
+    composition_from_archive,
 )
-
 
 RELEASE_CATALOG_SCHEMA_VERSION = 1
 _SHA256 = re.compile(r"sha256:[0-9a-f]{64}")
 _GIT = re.compile(r"[0-9a-f]{40}")
+_DEFAULT_SOURCE_BYTES = 16 * 1024 * 1024
 
 
 def _canonical(value: Any) -> str:
@@ -87,6 +90,61 @@ class ReleaseSource:
             }.items()
             if value is not None
         }
+
+
+def source_closure(
+    root: Path,
+    *,
+    artifact_digest: str | None = None,
+    artifact_archive_sha256: str | None = None,
+    max_bytes: int = _DEFAULT_SOURCE_BYTES,
+) -> ReleaseSource:
+    """Pin one private Git checkout, including staged and untracked content."""
+    root = root.resolve()
+
+    def git(*arguments: str) -> bytes:
+        return subprocess.check_output(
+            ["git", "-C", str(root), *arguments], stderr=subprocess.DEVNULL
+        )
+
+    commit = git("rev-parse", "HEAD").decode().strip()
+    if not _GIT.fullmatch(commit):
+        raise ValueError("source checkout has no immutable Git commit")
+    diff = git("diff", "--binary", "HEAD", "--")
+    untracked = tuple(
+        sorted(
+            path.decode()
+            for path in git("ls-files", "--others", "--exclude-standard", "-z").split(
+                b"\0"
+            )
+            if path
+        )
+    )
+    if not diff and not untracked:
+        return ReleaseSource(
+            "git",
+            commit,
+            artifact_digest=artifact_digest,
+            artifact_archive_sha256=artifact_archive_sha256,
+        )
+    material = bytearray(commit.encode() + b"\0" + diff)
+    for relative in untracked:
+        path = root / relative
+        if not path.is_file() or path.is_symlink():
+            raise ValueError("dirty source closure contains a non-regular file")
+        material.extend(relative.encode() + b"\0" + path.read_bytes() + b"\0")
+        if len(material) > max_bytes:
+            raise ValueError("dirty source closure exceeds its byte budget")
+    if len(material) > max_bytes:
+        raise ValueError("dirty source closure exceeds its byte budget")
+    identity = "sha256:" + hashlib.sha256(material).hexdigest()
+    return ReleaseSource(
+        "dirty",
+        identity,
+        dirty_closure_sha256=identity,
+        artifact_digest=artifact_digest,
+        artifact_archive_sha256=artifact_archive_sha256,
+    )
 
 
 @dataclass(frozen=True)
@@ -338,7 +396,34 @@ class ReleaseWorkflow:
 
     def preview(self, name: str | None = None) -> dict[str, Any]:
         """Provider-free preview of a catalogued immutable release."""
-        return self.reopen(name).preview()
+        record = self.catalog.get(name) if name is not None else self.catalog.selected()
+        if record.namespace != self.namespace:
+            raise ValueError("release record namespace differs from target")
+        return record.archive.preview()
+
+    def inspect(self, name: str | None = None) -> dict[str, Any]:
+        """Return public release provenance and its exact session report."""
+        record = self.catalog.get(name) if name is not None else self.catalog.selected()
+        if record.namespace != self.namespace:
+            raise ValueError("release record namespace differs from target")
+        return {
+            "release_id": record.release_id,
+            "name": record.name,
+            "source": record.source.to_dict(),
+            "namespace": record.namespace,
+            "ttl_seconds": record.ttl_seconds,
+            "retained_pvc_policy": record.retained_pvc_policy,
+            "session": record.archive.report(),
+        }
+
+    def select(self, name: str) -> dict[str, Any]:
+        """Select an existing immutable release without executing provider writes."""
+        record = self.catalog.get(name)
+        if record.namespace != self.namespace:
+            raise ValueError("release record namespace differs from target")
+        composition_from_archive(record.archive)
+        self.catalog.select(name)
+        return self.inspect(name)
 
     def apply(self, executor: PlanExecutor, name: str | None = None) -> dict[str, Any]:
         """Apply exactly the selected release through the supplied executor."""
@@ -350,7 +435,73 @@ class ReleaseWorkflow:
 
     def stop(self, executor: PlanExecutor, name: str | None = None) -> dict[str, Any]:
         """Stop only the owner-bound execution selected by this catalog record."""
-        return self.reopen(name).stop(executor)
+        record = self.catalog.get(name) if name is not None else self.catalog.selected()
+        value = record.archive.to_dict()
+        authorization = value["revision"]["authorization"]
+        target = value["revision"]["desired_state"]["target"]
+        if target != executor.provider.target.__dict__:
+            raise ValueError("release record namespace differs from target")
+        if authorization["owner_id"] != executor.provider.owner_id:
+            raise ValueError("deployment session owner mismatch")
+        if (
+            executor.journal.path != self.journal.path
+            or executor.secrets.store_id != self.secrets.store_id
+        ):
+            raise ValueError("deployment session executor/private store mismatch")
+        return executor.cancel(value["bundle"]["execution_id"])
+
+    def rollback(
+        self,
+        executor: PlanExecutor,
+        name: str,
+        *,
+        execution_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Reapply a prior archive against current evidence as a new execution."""
+        record = self.catalog.get(name)
+        if record.namespace != self.namespace:
+            raise ValueError("release record namespace differs from target")
+        if (
+            executor.provider.target != self.snapshot.target
+            or executor.journal.path != self.journal.path
+            or executor.secrets.store_id != self.secrets.store_id
+        ):
+            raise ValueError("rollback executor/session boundary mismatch")
+        for input_name, reference in record.archive.inputs().items():
+            if (
+                self.secrets.session_reference(
+                    self.snapshot.target, record.archive.session_id, input_name
+                )
+                != reference
+            ):
+                raise ValueError("rollback private reference/store mismatch")
+        composition = composition_from_archive(record.archive)
+        expected = set(record.archive.inputs().values())
+        actual = {
+            binding.reference
+            for component in composition.components
+            for resource in component.resources
+            for binding in resource.secret_bindings
+        }
+        if actual != expected:
+            raise ValueError("rollback composition/private input mismatch")
+        plan = build_plan(composition, self.snapshot, self.plan_authorization)
+        authorization = self.authorization_factory(plan, self.snapshot)
+        revision = DeploymentRevision.create(plan, self.snapshot, authorization)
+        bundle = ExecutionBundle.create(revision, execution_id=execution_id)
+        result = executor.run_bundle(bundle)
+        if result.get("state") != "ready":
+            return result | {
+                "rollback_target": name,
+                "rollback_execution_id": bundle.execution_id,
+                "selected": False,
+            }
+        self.catalog.select(name)
+        return result | {
+            "rollback_target": name,
+            "rollback_execution_id": bundle.execution_id,
+            "selected": True,
+        }
 
 
 def load_release_input(value: str | bytes | Mapping[str, Any]) -> dict[str, Any]:

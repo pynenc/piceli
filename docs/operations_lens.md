@@ -1,52 +1,229 @@
-# Local Operations Lens & Operator Server
+# Operations Lens
 
-Piceli's operations lens is a lightweight local companion to durable deployment sessions and cluster operations. It answers essential operational questions safely: *what does this release declare it owns, what does the selected cluster currently show, and how does an operator reach an approved service?*
+The operations lens answers three questions about a deployment:
 
-## Deployment Model: Where is it Deployed?
+- *What does this release declare?*
+- *What is actually running in the cluster?*
+- *How do I reach a service safely from my machine?*
 
-**Piceli Observe is a laptop-local operator control plane server, NOT an in-cluster Pod.**
+It works from a {doc}`deployment session archive <deployment_planning>` and an
+explicitly selected kubeconfig. It is available as a Python API, as JSON CLI
+commands, and as a small local web UI with a REST API.
 
-- **Host Environment**: Runs directly on the developer or operator's workstation (`127.0.0.1:9876`) or inside a CI/CD runner execution context.
-- **Cluster Connection**: Uses the caller's authorized local `kubeconfig` (e.g., `target/k-lab-p2/kubeconfig`) to query the Kubernetes API.
-- **Port Forwarding Architecture**: Spawns and supervises local `kubectl port-forward` child processes that bind exclusively to loopback (`127.0.0.1`). It never discovers, adopts, or kills untracked background processes.
-- **Security Boundary**: Cluster credentials, tokens, and private keys never leave the operator's machine. Untrusted code running in cluster pods has zero access to the operations server or deployment credentials.
+```{admonition} Early preview
+:class: note
 
-## One-Click Forwarding Shortcuts
+The operations lens is under active development. Its REST API and UI may change
+between releases.
+```
 
-The operations lens includes built-in quick shortcuts for core services:
+## Where it runs
 
-| Shortcut ID | Service Target | Local Port | Remote Port | Target URL |
-| :--- | :--- | :--- | :--- | :--- |
-| **`kabuki`** | `service/ih-kabuki` | `3000` | `3000` | `http://127.0.0.1:3000` |
-| **`monitor`** | `service/ih-rustvello-monitor` | `18084` | `18084` | `http://127.0.0.1:18084` |
-| **`poet`** | `service/ih-target-poet` | `18086` | `18080` | `http://127.0.0.1:18086` |
-| **`shibuya`** | `service/ih-shibuya` | `18083` | `18083` | `http://127.0.0.1:18083` |
+The lens runs **on the operator's own machine**, not inside the cluster.
 
-Operators can click **Start Forward** in the UI to immediately bridge network access, and click the direct link (`Open ↗`) to launch the web interface in their browser.
+- It serves on loopback only (`127.0.0.1`); binding to another address is refused.
+- It uses the kubeconfig and context you pass explicitly and never falls back to
+  ambient credentials.
+- Port forwards are `kubectl port-forward` processes it starts and supervises
+  itself. They bind to loopback, and it never adopts or kills processes it did
+  not start.
+- Cluster credentials never leave your machine, and workloads in the cluster
+  cannot reach the lens.
 
-## Agent and Human Ergonomics
-
-### For AI Agents
-- **Semantic HTML & Data Test IDs**: All interactive buttons, cards, table rows, and metrics carry explicit `data-testid` attributes (e.g. `data-testid="shortcut-card-kabuki"`, `data-testid="btn-start-kabuki"`, `data-testid="link-open-kabuki"`, `data-testid="tbl-forwards"`).
-- **Structured REST API**:
-  - `GET /v1/shortcuts`: Current status and live URLs for all shortcuts.
-  - `POST /v1/forwards/quick`: Start or stop a shortcut by ID.
-  - `POST /v1/forwards/add`: Register and start a custom loopback forward.
-  - `POST /v1/forwards/delete`: Stop and remove a saved forward.
-  - `GET /v1/status`: Machine-readable desired vs live inventory.
-  - `GET /v1/releases`: Catalogued releases, active version, and OCI digests.
-
-### For Humans
-- **Dark Mode Ergonomics**: Sleek interface with live pulse status indicators (pulsing green dot for running services).
-- **Toast Notifications**: Non-blocking toast feedback for all actions (e.g. starting a port forward, promoting a release, running GC) without jarring browser `alert()` dialogs.
-- **Auto-Refresh Controls**: Live 3-second polling with an instant pause toggle.
-
-## Starting the Control Plane
+## Reconcile a session with the cluster
 
 ```bash
-# Serve live cluster operator lens:
-piceli operator serve --kubeconfig target/k-lab-p2/kubeconfig --namespace infinite-haiku-p2 --port 9876
-
-# Or via observe CLI:
-piceli observe serve --kubeconfig target/k-lab-p2/kubeconfig --user default --port 9876
+piceli observe status \
+  --archive ./session.archive.json \
+  --kubeconfig ~/.kube/config --context my-cluster
 ```
+
+The JSON report classifies every object:
+
+| Classification | Meaning |
+| --- | --- |
+| Declared | Part of the session archive and present in the cluster. |
+| Missing | Declared by the archive but not found in the cluster. |
+| Undeclared | Present in the namespace but not part of the archive. This is information only; Piceli never adopts or deletes such objects automatically. |
+| Unknown | Could not be inspected (for example a transient API error). Never treated as absent. |
+
+## Logs
+
+```bash
+# Print the exact kubectl argv without running it
+piceli observe logs-command --namespace my-app --target deployment/api --tail 200 \
+  --kubeconfig ~/.kube/config --context my-cluster
+
+# Run it in the foreground
+piceli observe logs-run --namespace my-app --target deployment/api --tail 200 \
+  --kubeconfig ~/.kube/config --context my-cluster
+```
+
+## Saved port forwards
+
+Forward preferences are stored per local user as non-secret JSON with owner-only
+permissions.
+
+```bash
+piceli observe forward-save --user "$USER" --name api \
+  --namespace my-app --target service/api \
+  --local-port 18080 --remote-port 8080
+
+piceli observe forward-list --user "$USER"
+piceli observe forward-run  --user "$USER" --name api \
+  --kubeconfig ~/.kube/config --context my-cluster
+```
+
+## Web UI and REST API
+
+```bash
+piceli observe serve --archive ./session.archive.json \
+  --kubeconfig ~/.kube/config --context my-cluster \
+  --user "$USER" --port 9876 --ui-config ./piceli-ui.toml
+```
+
+Open `http://127.0.0.1:9876/`. With `--user`, the server restores that user's
+saved forwards and supervises the processes it starts. `--namespace` defaults to
+the archive's namespace when the archive has exactly one. The page refreshes every
+few seconds.
+
+The same data is available as JSON:
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /healthz` | Liveness |
+| `GET /v1/status` | Declared vs. live inventory |
+| `GET /v1/forwards`, `GET /v1/preferences` | Saved and running forwards, with connection health |
+| `GET /v1/shortcuts` | Configured shortcuts, with connection health |
+| `GET /v1/pods`, `GET /v1/logs` | Pods and bounded log tails |
+| `POST /v1/forwards/start`, `/stop`, `/add`, `/delete` | Manage forwards |
+
+Every `/v1/*` request, `GET` included, needs either the per-process token
+embedded in the page (`X-Piceli-Local-Token` header) or a bearer token for a user
+in the operator user store. Bearer users with the `viewer` role are read-only. The
+server only answers requests whose `Host` is `127.0.0.1`, `localhost` or `[::1]`
+on its own port, and it rejects cross-origin requests. This protects against DNS
+rebinding. Responses carry a strict Content-Security-Policy. Error bodies contain
+fixed error codes only; details go to the server log.
+
+Interactive elements carry stable `data-testid` attributes, so the UI can be
+driven by browser automation and AI agents.
+
+## Dashboard configuration
+
+Without configuration the dashboard shows no shortcuts and groups live workloads
+by their `app.kubernetes.io/component` label (falling back to `app`). To add
+one-click shortcuts, topology tiers and header badges, pass a TOML file with
+`--ui-config` (or set `PICELI__UI_CONFIG`) on `observe serve` or `operator serve`:
+
+```toml
+topology_subtitle = "My application tiers"
+
+[[shortcuts]]
+id = "web"
+label = "Web UI"
+target = "service/web"      # service/<name> or pod/<name>
+local_port = 3000
+remote_port = 3000
+path = "/login"             # optional: path opened by the "Open" link
+
+[[tiers]]
+name = "Application"
+components = ["web", { name = "worker", role = "Task worker" }]
+
+[inventory]
+# extra labels that mark live objects as managed by this application
+managed_labels = { "app.kubernetes.io/part-of" = "my-app" }
+revision_label = "my-app/revision"
+```
+
+A shortcut uses its own `namespace` if set, otherwise the namespace being served.
+Unknown keys are rejected, so typos fail fast. A complete example lives in
+[`examples/ui-config.toml`](https://github.com/pynenc/piceli/blob/main/examples/ui-config.toml).
+
+## Access profiles and connection health
+
+A running `kubectl port-forward` process is not proof that its connection
+works: when the upstream pod goes away, the process can stay alive while it
+resets every connection. The supervisor therefore probes each forward it owns
+and restarts one whose probe keeps failing.
+
+An access profile is the same TOML file as `--ui-config`. Each shortcut may add
+a health probe and a restart policy:
+
+```toml
+[[shortcuts]]
+id = "api"
+label = "HTTP API"
+target = "service/api"
+namespace = "my-app"        # optional; otherwise --namespace
+local_port = 18080
+remote_port = 8000
+required = true             # false: skip it when the local port is taken
+
+  [shortcuts.health]
+  type = "http"             # "tcp" (default) or "http"
+  path = "/healthz"
+  expect_status = [200, 399]
+  interval = 5.0            # seconds between probes
+  timeout = 2.0
+  failure_threshold = 3     # consecutive failures before a restart
+  startup_grace = 3.0       # failures right after a (re)start don't count
+
+  [shortcuts.restart]
+  backoff_initial = 1.0     # doubles per consecutive restart ...
+  backoff_max = 30.0        # ... up to this cap
+  max_restarts = 10         # then the forward is marked failed
+```
+
+- A `tcp` probe connects to the loopback port and watches the connection for a
+  moment (`settle`, 0.3 s by default). A forward whose upstream is gone accepts
+  the connection and then closes or resets it, which counts as a failure.
+- An `http` probe sends `GET path` and expects a status within `expect_status`.
+  The older `health_path = "/x"` key still works: it is an HTTP probe that
+  accepts any status below 500. Use either `health_path` or `[shortcuts.health]`,
+  not both.
+- `max_restarts` counts consecutive restarts without a healthy probe in between.
+  After that the forward stays stopped with state `failed` until you start it
+  again.
+- Probes only contact `127.0.0.1`. They never send credentials.
+
+Start and supervise every declared forward in the foreground:
+
+```bash
+piceli observe forwards apply --profile ./access.toml \
+  --kubeconfig ~/.kube/config --context my-cluster --namespace my-app
+```
+
+Before it starts anything, `apply` runs a port-conflict preflight. If another
+process already serves a required shortcut's local port, it prints the
+conflicts and exits with code 2 without starting any forward. An optional
+shortcut (`required = false`) on an occupied port is listed as `external` and
+skipped. While running, it prints one JSON line per status change and stops
+every forward it owns on Ctrl-C, `SIGTERM` or `SIGHUP`. Use `--only ID`
+(repeatable) to supervise a subset.
+
+To check the declared endpoints once and print JSON, run
+`piceli observe forwards status --profile ./access.toml`. It probes loopback
+only and exits with code 1 if a required forward is unhealthy.
+
+To get the dashboard with the same forwards, pass the profile as `--ui-config`
+and add `--start-shortcuts` to `observe serve`.
+
+Each forward's status (`/v1/forwards`, `/v1/shortcuts`, and the dashboard) has
+these fields:
+
+| Field | Meaning |
+| --- | --- |
+| `state` | Process state: `starting`, `running`, `degraded`, `backoff`, `failed` or `stopped` |
+| `health` | Connection health: `healthy`, `unhealthy`, `starting`, `restarting`, `conflict`, `failed` or `stopped` |
+| `restarts` | Restarts since the forward was added |
+| `consecutive_failures` | Probe failures since the last healthy probe |
+| `last_error`, `last_probe_at` | Last failure reason and last probe time (UTC) |
+| `probe` | The effective probe settings |
+
+A local port that another process already serves is reported as `conflict`.
+The supervisor never kills that process and never spawns a forward on the port.
+
+The broader operator features (releases, promotion, backups) are described in
+{doc}`operator_workflow`.

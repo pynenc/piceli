@@ -10,25 +10,24 @@ from __future__ import annotations
 
 import re
 import time
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
 from typing import Any
 
 from piceli.k8s.observe import (
+    _COMMON_TYPES,
     InventoryReader,
     ObservationRef,
     ObservedObject,
-    _COMMON_TYPES,
     archive_resources,
 )
-from piceli.k8s.ops.discovery import ResourceIdentity
 from piceli.k8s.ops.session import DeploymentSessionArchive
-from piceli.k8s.release import ReleaseCatalog, ReleaseRecord
-
+from piceli.k8s.release import ReleaseCatalog
 
 _SECRET_REDACT_PATTERNS = [
-    re.compile(r"(?i)((?:password|token|secret|key|authorization|bearer)\s*[:=]\s*)([^\s,;]+)"),
+    re.compile(
+        r"(?i)((?:password|token|secret|key|authorization|bearer)\s*[:=]\s*)([^\s,;]+)"
+    ),
 ]
 
 
@@ -38,7 +37,7 @@ class ManagedResource:
 
     ref: ObservationRef
     classification: str  # 'managed', 'unmanaged', 'unknown'
-    state: str           # 'present', 'missing', 'unknown'
+    state: str  # 'present', 'missing', 'unknown'
     release_name: str | None = None
     session_id: str | None = None
     observed: ObservedObject | None = None
@@ -143,8 +142,16 @@ def build_operator_report(
     catalog: ReleaseCatalog | None = None,
     session_archive: DeploymentSessionArchive | None = None,
     include_common_types: bool = True,
+    managed_labels: Mapping[str, str] | None = None,
+    revision_label: str | None = None,
 ) -> OperatorReport:
-    """Construct a classified operator report distinguishing managed, unmanaged, and unknown objects."""
+    """Construct a classified operator report distinguishing managed, unmanaged, and unknown objects.
+
+    Live objects outside the archive count as managed when labelled
+    ``piceli.io/managed=true`` or when they match every ``managed_labels``
+    selector supplied by the consumer.  ``revision_label`` names the label that
+    carries a release name when no catalog release is active.
+    """
     declared_refs: set[ObservationRef] = set()
     session_id: str | None = None
     if session_archive is not None:
@@ -161,16 +168,17 @@ def build_operator_report(
             active_rec = None
 
         for rec in catalog.records():
-            releases_summary.append({
-                "name": rec.name,
-                "namespace": rec.namespace,
-                "session_id": rec.archive.session_id,
-                "kind": rec.source.kind,
-                "identity": rec.source.identity,
-                "artifact_digest": rec.source.artifact_digest,
-                "is_active": (rec.name == active_release_name),
-                
-            })
+            releases_summary.append(
+                {
+                    "name": rec.name,
+                    "namespace": rec.namespace,
+                    "session_id": rec.archive.session_id,
+                    "kind": rec.source.kind,
+                    "identity": rec.source.identity,
+                    "artifact_digest": rec.source.artifact_digest,
+                    "is_active": (rec.name == active_release_name),
+                }
+            )
             if session_archive is None and rec.name == active_release_name:
                 session_id = rec.archive.session_id
                 declared_refs = set(archive_resources(rec.archive))
@@ -234,9 +242,10 @@ def build_operator_report(
             if item.ref in declared_refs:
                 continue
             item_labels = dict(getattr(item, "labels", ()))
-            is_managed = (
-                item_labels.get("piceli.io/managed") == "true"
-                or item_labels.get("app.kubernetes.io/name") == "infinite-haiku"
+            is_managed = item_labels.get("piceli.io/managed") == "true" or (
+                managed_labels is not None
+                and bool(managed_labels)
+                and all(item_labels.get(k) == v for k, v in managed_labels.items())
             )
             if is_managed:
                 managed.append(
@@ -245,7 +254,10 @@ def build_operator_report(
                         classification="managed",
                         state="present",
                         session_id=session_id,
-                        release_name=active_release_name or item_labels.get("ih.revision"),
+                        release_name=active_release_name
+                        or (
+                            item_labels.get(revision_label) if revision_label else None
+                        ),
                         observed=item,
                     )
                 )

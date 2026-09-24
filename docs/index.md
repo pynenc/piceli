@@ -1,48 +1,155 @@
 # Piceli Documentation
 
-**Piceli: Reusable Programmable Infrastructure, Delivery, and Cluster Operations for Kubernetes.**
+**Kubernetes infrastructure as typed Python: model it, plan it, apply it safely, and observe it.**
 
-## Introduction
+Piceli lets you describe Kubernetes resources with Python (typed templates, the
+official `kubernetes` client models, or plain YAML/JSON), compare that desired state
+with a live cluster, and apply the difference in dependency order. It is a
+Python-native alternative to hand-maintained YAML, Kustomize overlays and Helm
+templates, and it has a recoverable execution engine with durable journals and
+explicit authorization.
 
-Piceli is an owner-operated infrastructure delivery and cluster operations framework. It provides declarative deployment planning, dependency-ordered execution graphs, streamed OCI artifact delivery, safe reference-counted garbage collection, and a laptop-local operations control plane without requiring external database services or public registries.
+```{admonition} Project status: pre-alpha
+:class: warning
 
-Users define infrastructure using Python composition, Piceli templates, or native Kubernetes manifests. Piceli reconciles desired intent against live cluster discovery, generating an explicit preflight deployment plan that accounts for dependencies, immutable execution journals, and safe pruning.
+Piceli is under active development and its APIs change between releases. Two
+execution paths exist today:
+
+- the **CLI path** (`piceli deploy detail/run`), which is simple and works with the
+  templates, but *replaces* existing objects (delete then create) instead of
+  patching them;
+- the **recoverable engine** (`DeploymentSession`, `PlanExecutor`), which uses
+  server-side apply, preconditions, journals and resume, but is currently a
+  Python API with no CLI command.
+
+See {doc}`overview` for how the two relate and {doc}`roadmap` for where the
+project is going.
+```
+
+## Where to start
+
+::::{grid} 1 2 2 2
+:gutter: 3
+
+:::{grid-item-card} Getting started
+:link: getting_started/index
+:link-type: doc
+
+Install Piceli, define your first objects and preview a deployment.
+:::
+
+:::{grid-item-card} Overview and architecture
+:link: overview
+:link-type: doc
+
+The mental model (model → plan → execute → observe), the main building blocks,
+and a glossary.
+:::
+
+:::{grid-item-card} Kubernetes model
+:link: kubernetes_model/index
+:link-type: doc
+
+Templates, `kubernetes` client objects, and YAML/JSON definitions.
+:::
+
+:::{grid-item-card} Recoverable deployments
+:link: deployment_planning
+:link-type: doc
+
+Discovery, pure plans, authorized execution, sessions, revisions and releases.
+:::
+
+:::{grid-item-card} Operations
+:link: operations_lens
+:link-type: doc
+
+A local web UI and JSON API for inventory, logs and port forwards.
+:::
+
+:::{grid-item-card} Roadmap
+:link: roadmap
+:link-type: doc
+
+Status and direction compared with Kustomize, Helm, OpenTofu/Terraform and Argo CD.
+:::
+::::
+
+## A first taste
+
+```python
+# myapp/infra.py
+from piceli.k8s import templates
+
+settings = templates.ConfigMap(name="report-settings", data={"LOG_LEVEL": "info"})
+
+nightly_report = templates.CronJob(
+    name="nightly-report",
+    schedule=templates.crontab.daily_at_x(hour=2, minute=0),
+    containers=[
+        templates.Container(
+            name="report",
+            image="ghcr.io/example/report:1.4.2",
+            command=["python", "-m", "report"],
+        )
+    ],
+)
+```
+
+```bash
+# List what Piceli loaded, then compare it with the cluster
+piceli --module-name myapp.infra model list
+piceli --module-name myapp.infra --namespace my-app deploy detail
+```
+
+## Part of the Pynenc ecosystem
+
+Piceli is developed alongside [Pynenc](https://docs.pynenc.org), a distributed task
+orchestration library, but it does not depend on it. It works with any Kubernetes
+workload.
 
 ```{toctree}
 :hidden:
 :maxdepth: 2
-:caption: Table of Contents
+:caption: Learn
 
+getting_started/index
 overview
+kubernetes_model/index
+```
+
+```{toctree}
+:hidden:
+:maxdepth: 2
+:caption: Guides
+
 deployment_planning
+release_cli
+source_identity
+containerized_builds
 artifact_delivery
+node_delivery
 operations_lens
 operator_workflow
-getting_started/index
-kubernetes_model/index
+```
+
+```{toctree}
+:hidden:
+:maxdepth: 2
+:caption: Reference
+
 cli/index
+apidocs/index
+```
+
+```{toctree}
+:hidden:
+:maxdepth: 1
+:caption: Project
+
+roadmap
+faq
+contributing/index
 changelog
 license
 ```
-
-## Core Architecture
-
-- **Declarative Planning & Discovery Contract (v2)**: Preflight discovery with scope/API coverage validation, topological DAG execution order, and immutable journals.
-- **Owner-Operated Delivery & Safe GC**: Direct OCI blob/manifest streaming to in-cluster or node-local registries without public pushes; reference-counted GC ensuring unknown inventory never deletes.
-- **Laptop-Local Operations Control Plane**: `piceli operator serve` and `piceli observe serve` run locally on loopback (`http://127.0.0.1:9876`), bridging cluster services via supervised loopback port forwards with 1-click shortcuts (Kabuki, Task Monitor, Poet, Shibuya).
-- **Git & PR Automation with Untrusted PR Isolation**: Opt-in branch watching, zero rebuild digest promotion, dependency-safe rollouts, and strict security isolation ensuring untrusted PR code never accesses deployment credentials.
-- **Single-Instance Atomic Persistence**: Default file-backed state store (`0o600` / `0o700`) with exclusive `fcntl.flock` locking and compressed `.tar.gz` backup/restore.
-
-## Operator Quick Start
-
-Start the local operator web interface and REST control plane:
-
-```bash
-piceli operator serve --kubeconfig target/k-lab-p2/kubeconfig --namespace infinite-haiku-p2 --port 9876
-```
-
-Open `http://127.0.0.1:9876` in your browser to inspect cluster inventory, manage releases, view bounded logs, and toggle one-click port forwards directly to Kabuki Studio and the Rustvello/Pynenc Task Monitor.
-
-## License
-
-Piceli is released under the MIT License. For details, see {doc}`license`.

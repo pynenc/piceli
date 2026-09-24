@@ -1,4 +1,4 @@
-"""OCI Distribution v2 client for in-cluster (ih-registry:5000) and local streamed delivery.
+"""OCI Distribution v2 client for in-cluster (registry.example:5000) and local streamed delivery.
 
 Eliminates mandatory public registry pushes and disk-heavy intermediate tars by streaming
 OCI layers directly to owner-operated registries or containerd workers.
@@ -7,25 +7,22 @@ OCI layers directly to owner-operated registries or containerd workers.
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Mapping
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, BinaryIO
+from typing import BinaryIO
 
 from piceli.artifacts.plan import validate_digest
-
 
 _DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
 
 
 @dataclass(frozen=True)
 class RegistryEndpoint:
-    """Connection specification for an owner-operated OCI registry (e.g. ih-registry:5000)."""
+    """Connection specification for an owner-operated OCI registry (e.g. registry.example:5000)."""
 
     host: str
     port: int = 5000
@@ -81,7 +78,9 @@ class StreamedOciRegistryClient:
                 return False
             raise
 
-    def push_blob_stream(self, repository: str, stream: BinaryIO, expected_digest: str) -> str:
+    def push_blob_stream(
+        self, repository: str, stream: BinaryIO, expected_digest: str
+    ) -> str:
         """Stream a blob to the registry using monolithic or single-request PUT upload."""
         validate_digest(expected_digest)
 
@@ -115,7 +114,9 @@ class StreamedOciRegistryClient:
         )
         with urllib.request.urlopen(put_req, timeout=30) as resp:
             if resp.status not in {201, 202, 200}:
-                raise RuntimeError(f"failed to complete blob upload: status {resp.status}")
+                raise RuntimeError(
+                    f"failed to complete blob upload: status {resp.status}"
+                )
 
         return expected_digest
 

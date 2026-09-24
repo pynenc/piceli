@@ -1,13 +1,14 @@
 """Offline artifact and authorized process tests, without an infrastructure client."""
-from dataclasses import asdict, replace
+
 import hashlib
 import json
-from pathlib import Path
 import subprocess
 import sys
 import tarfile
 import threading
 import time
+from dataclasses import asdict, replace
+from pathlib import Path
 
 import pytest
 
@@ -120,7 +121,7 @@ def test_private_and_traversal_paths_rejected(path):
 def test_pin_drift_cancellation_symlinks_and_no_partial_artifacts(tmp_path):
     plan = plan_at(tmp_path)
     (tmp_path / "app").write_text("changed")
-    with pytest.raises(ValueError, match="pin|byte"):
+    with pytest.raises(ValueError, match=r"pin|byte"):
         OciBuilder().build(plan, tmp_path, tmp_path / "changed")
     assert not (tmp_path / "changed").exists()
     assert not list(tmp_path.glob(".piceli-oci-*"))
@@ -178,7 +179,7 @@ def docker_archive(tmp_path: Path) -> tuple[Path, str]:
     (staging / config_name).write_bytes(
         (layout / "blobs/sha256" / receipt.config_digest[7:]).read_bytes()
     )
-    for digest_value, name in zip(receipt.layers, layer_names):
+    for digest_value, name in zip(receipt.layers, layer_names, strict=True):
         destination = staging / name
         destination.parent.mkdir()
         destination.write_bytes(

@@ -1,0 +1,8 @@
+# The example's source is the directory of this file inside the Piceli
+# checkout. `allow_dirty` lets you edit the example; the receipt still records
+# the exact uncommitted state as `diff_sha256`.
+[[source]]
+name = "piceli"
+path = "../../.."
+subpath = "examples/builds/rust-hello"
+allow_dirty = true

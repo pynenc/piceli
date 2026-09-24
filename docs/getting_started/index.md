@@ -10,9 +10,19 @@ Start by installing Piceli using pip with the following command:
 pip install piceli
 ```
 
-This command installs Piceli along with all necessary dependencies, preparing you to orchestrate your infrastructure seamlessly.
+Or add it to a project managed with [uv](https://docs.astral.sh/uv/):
 
-Refer to the `Installation` section within the Piceli Documentation for advanced installation options and detailed guidance.
+```bash
+uv add piceli
+```
+
+To work from a source checkout, see {doc}`../contributing/index`.
+
+```{note}
+The PyPI release can lag behind the documentation while the project is pre-alpha.
+If an API described here is missing, install from the `main` branch:
+`pip install git+https://github.com/pynenc/piceli.git`.
+```
 
 ## Quick Start
 
@@ -29,7 +39,9 @@ Piceli supports defining Kubernetes objects using Piceli templates, the official
        name="job0",
        containers=[
            templates.Container(
-               name="c0", command=["python", "--version"], image="python:latest",
+               name="c0",
+               command=["python", "--version"],
+               image="python:latest",
            )
        ],
    )
@@ -50,11 +62,13 @@ Piceli supports defining Kubernetes objects using Piceli templates, the official
            template=client.V1PodTemplateSpec(
                metadata=client.V1ObjectMeta(name="job0"),
                spec=client.V1PodSpec(
-                   containers=[client.V1Container(
-                       name="c0",
-                       image="python:latest",
-                       command=["python", "--version"],
-                   )],
+                   containers=[
+                       client.V1Container(
+                           name="c0",
+                           image="python:latest",
+                           command=["python", "--version"],
+                       )
+                   ],
                ),
            ),
        ),
@@ -102,6 +116,13 @@ If you're using Piceli as part of another Python project, you can define your co
 
 Here are some CLI commands for common Piceli operations:
 
+```{warning}
+`deploy run` uses the CLI engine, which **deletes and recreates** objects that
+already exist. Always review `deploy detail` first, and use a disposable namespace
+while evaluating Piceli. See {doc}`../overview` for the difference between the CLI
+engine and the recoverable engine.
+```
+
 - **Deploying a Namespace**:
 
   ```bash
@@ -120,4 +141,9 @@ Here are some CLI commands for common Piceli operations:
   PICELI__FOLDER_PATH=/path/to/your/definitions PICELI__NAMESPACE=test-run python -m piceli deploy detail -hna
   ```
 
-This setup guide introduces the foundational steps to get started with Piceli. For comprehensive tutorials and advanced configurations, refer to the detailed documentation.
+## Next steps
+
+- {doc}`../overview` covers the mental model, the two execution engines and a glossary.
+- {doc}`../kubernetes_model/piceli_templates/index` lists every template and its options.
+- {doc}`../deployment_planning` covers durable, resumable deployments from Python.
+- {doc}`../cli/index` is the full command reference.

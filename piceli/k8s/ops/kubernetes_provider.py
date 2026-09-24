@@ -65,11 +65,19 @@ class KubernetesProvider:
         namespace_uid: str,
         request_seconds: float = 5,
         max_response_bytes: int = 1_000_000,
+        inherited_owner_ids: tuple[str, ...] = (),
     ) -> None:
         self.client = api_client
         self.target = target
         self.field_manager = text(field_manager, "field manager")
         self.owner_id = text(owner_id, "owner")
+        # Explicit, opt-in predecessor owners (e.g. a previous release's owner
+        # id) whose objects this provider may treat as managed. Exact ids only.
+        if isinstance(inherited_owner_ids, str):
+            raise ValueError("inherited owner ids must be a tuple of ids")
+        self.inherited_owner_ids = frozenset(
+            text(value, "inherited owner") for value in inherited_owner_ids
+        )
         self.request_seconds = seconds(request_seconds, "request", 60)
         self.max_response_bytes = positive(
             max_response_bytes, "response bytes", 10_000_000
@@ -325,18 +333,12 @@ class KubernetesProvider:
         return root + "/" + api.plural + ("/" + quote(name, safe="") if name else "")
 
     def _is_managed(self, manifest: dict[str, Any]) -> bool:
-        ann = manifest.get("metadata", {}).get("annotations", {})
+        """Ownership is an exact owner-id match, never inferred from id shape."""
+        ann = manifest.get("metadata", {}).get("annotations") or {}
         owner = ann.get(OWNER_ANNOTATION)
-        if not owner or not self.owner_id:
+        if not isinstance(owner, str) or not owner:
             return False
-        if owner == self.owner_id:
-            return True
-        # Allow release/version variations belonging to the same app deployment root (e.g. ih-v18 vs ih-r05)
-        base_current = self.owner_id.split("-", 1)[0]
-        base_observed = owner.split("-", 1)[0]
-        if base_current and base_current == base_observed:
-            return True
-        return False
+        return owner == self.owner_id or owner in self.inherited_owner_ids
 
     def _resource(
         self, manifest: dict[str, Any], api: ApiResource

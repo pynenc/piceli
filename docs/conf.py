@@ -4,14 +4,14 @@ import os
 import sys
 from typing import Any
 
-sys.path.insert(0, os.path.abspath("../../piceli"))  # Adjust the path as needed
+sys.path.insert(0, os.path.abspath(".."))
 
 DISTRIBUTION_METADATA = importlib.metadata.metadata("Piceli")
 # -- Project information -----------------------------------------------------
-author = DISTRIBUTION_METADATA["Author"]
+author = "Jose Diaz"
 project = DISTRIBUTION_METADATA["Name"]
 version = DISTRIBUTION_METADATA["Version"]
-current_year = datetime.datetime.now().year
+current_year = datetime.datetime.now(datetime.UTC).year
 project = "piceli"
 copyright = f"{current_year}, {author}"
 release = version
@@ -37,18 +37,23 @@ extlinks = {
 }
 
 templates_path = ["_templates"]
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "schemas"]
 
 # -- Options for intersphinx -------------------------------------------------
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
-    "redis": ("https://redis-py.readthedocs.io/en/stable/", None),
+    "pynenc": ("https://docs.pynenc.org/en/latest/", None),
 }
 # intersphinx_mapping = {"python": ("https://docs.python.org/3", None)}
 
 # -- Autodoc settings ---------------------------------------------------
 autodoc2_render_plugin = "myst"
 autodoc2_packages = [{"path": "../piceli"}]
+# Regex constants render as MyST link syntax and break the -W build.
+# Builtins such as `type`/`bytes` in annotations collide with same-named model
+# fields (e.g. HealthProbe.type); these ambiguity warnings are not doc errors.
+suppress_warnings = ["ref.python"]
+autodoc2_hidden_regexes = [r"piceli\.k8s\.templates\.auxiliary\.names\..*_REGEX"]
 # autodoc2_hidden_objects = ["dunder", "private", "inherited"]
 
 # autodoc2_replace_annotations = [

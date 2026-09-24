@@ -13,23 +13,25 @@ import re
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import MappingProxyType
 from typing import Any
 
-from piceli.k8s.ops.execution_journal import ExecutionJournal
 from piceli.k8s.ops.bounds import timestamp
+from piceli.k8s.ops.execution_journal import ExecutionJournal
 from piceli.k8s.ops.executor import ExecutionAuthorization, PlanExecutor
 from piceli.k8s.ops.plan import (
+    DeploymentComponent,
     DeploymentComposition,
     DeploymentPlan,
     ObservedSnapshot,
     PlanAuthorization,
+    ResourceIntent,
+    ResourceRef,
     build_plan,
 )
 from piceli.k8s.ops.revision import DeploymentRevision, ExecutionBundle
 from piceli.k8s.ops.secret_versions import SecretVersionRef, SecretVersionStore
-
 
 DEPLOYMENT_SESSION_SCHEMA_VERSION = 1
 CompositionFactory = Callable[[Mapping[str, SecretVersionRef]], DeploymentComposition]
@@ -77,6 +79,60 @@ def _composition_references(
         for resource in component.resources
         for binding in resource.secret_bindings
     }
+
+
+def composition_from_archive(
+    archive: DeploymentSessionArchive,
+) -> DeploymentComposition:
+    """Reconstruct the exact redacted composition stored in a session archive."""
+    components = []
+    for raw_component in archive.to_dict()["composition"]:
+        if (
+            not isinstance(raw_component, dict)
+            or set(raw_component) != {"name", "dependencies", "resources"}
+            or not isinstance(raw_component["name"], str)
+            or not isinstance(raw_component["dependencies"], list)
+            or not isinstance(raw_component["resources"], list)
+        ):
+            raise ValueError("deployment session composition is invalid")
+        resources = []
+        for raw_resource in raw_component["resources"]:
+            if not isinstance(raw_resource, dict) or set(raw_resource) != {
+                "resource",
+                "manifest",
+                "dependencies",
+                "private_bindings",
+            }:
+                raise ValueError("deployment session resource is invalid")
+            dependencies = tuple(
+                ResourceRef(**item) for item in raw_resource["dependencies"]
+            )
+            resource = ResourceIntent.from_manifest(
+                raw_resource["manifest"], dependencies
+            )
+            if resource.ref != ResourceRef(**raw_resource["resource"]):
+                raise ValueError("deployment session resource identity changed")
+            for binding in raw_resource["private_bindings"]:
+                if not isinstance(binding, dict) or set(binding) != {
+                    "pointer",
+                    "reference",
+                }:
+                    raise ValueError("deployment session private binding is invalid")
+                resource = resource.with_secret(
+                    binding["pointer"], SecretVersionRef(**binding["reference"])
+                )
+            resources.append(resource)
+        components.append(
+            DeploymentComponent(
+                raw_component["name"],
+                tuple(resources),
+                tuple(raw_component["dependencies"]),
+            )
+        )
+    composition = DeploymentComposition(tuple(components))
+    if _composition_material(composition) != archive.to_dict()["composition"]:
+        raise ValueError("deployment session composition changed during recovery")
+    return composition
 
 
 @dataclass(frozen=True)
@@ -159,6 +215,27 @@ class DeploymentSessionArchive:
                 raise ValueError("deployment session private inputs are invalid")
             result[item["name"]] = SecretVersionRef(**item["reference"])
         return result
+
+    def report(self) -> dict[str, Any]:
+        """Return stable public identity without exposing opaque input references."""
+        value = self.to_dict()
+        bundle = value["bundle"]
+        revision = value["revision"]
+        desired = revision["desired_state"]
+        return {
+            "schema_version": value["schema_version"],
+            "session_id": value["session_id"],
+            "execution_id": bundle["execution_id"],
+            "revision_id": revision["revision_id"],
+            "action_count": len(bundle["action_ids"]),
+            "private_input_count": len(value["private_inputs"]),
+            "target": desired["target"],
+        }
+
+    def preview(self) -> dict[str, Any]:
+        """Return the archived redacted plan without renewing write authority."""
+        composition_from_archive(self)
+        return self.report() | {"plan": self.to_dict()["revision"]["desired_state"]}
 
 
 @dataclass(frozen=True)
@@ -307,9 +384,7 @@ class DeploymentSession:
             raise ValueError("deployment session composition/private input mismatch")
         plan = build_plan(composition, snapshot, plan_authorization)
         authorization = authorization_factory(plan, snapshot)
-        if timestamp(authorization.expires_at, allow_future=True) <= datetime.now(
-            timezone.utc
-        ):
+        if timestamp(authorization.expires_at, allow_future=True) <= datetime.now(UTC):
             raise ValueError("deployment session authorization expired")
         revision = DeploymentRevision.create(plan, snapshot, authorization)
         if existing is None:
@@ -367,18 +442,12 @@ class DeploymentSession:
             raise ValueError("deployment session journal state is ambiguous")
         if len(record["actions"]) != len(self.bundle.action_ids) or any(
             row["operation_id"] != operation_id
-            for row, operation_id in zip(record["actions"], self.bundle.action_ids)
+            for row, operation_id in zip(
+                record["actions"], self.bundle.action_ids, strict=True
+            )
         ):
             raise ValueError("deployment session journal action identity changed")
 
     def report(self) -> dict[str, Any]:
         """Human/API safe report: no secret values, hashes or opaque references."""
-        return {
-            "schema_version": DEPLOYMENT_SESSION_SCHEMA_VERSION,
-            "session_id": self.archive.session_id,
-            "execution_id": self.bundle.execution_id,
-            "revision_id": self.revision.revision_id,
-            "action_count": len(self.bundle.action_ids),
-            "private_input_count": len(self.archive.inputs()),
-            "target": self.revision.plan.target.__dict__,
-        }
+        return self.archive.report()

@@ -7,21 +7,20 @@ isolated dry-run previews or lints. Deploying or promoting a PR requires an expl
 
 from __future__ import annotations
 
-import copy
 import re
 import time
-from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass, field
-from pathlib import Path
-from typing import Any, Callable
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
+from typing import Any
 
 from piceli.k8s.operator_state import FileStateStore, StandingPolicy
-from piceli.k8s.ops.discovery import ResourceType
 from piceli.k8s.ops.executor import PlanExecutor
-from piceli.k8s.ops.plan import ObservedSnapshot, PlanAuthorization
 from piceli.k8s.ops.session import DeploymentSession
-from piceli.k8s.release import ReleaseCatalog, ReleaseRecord, ReleaseSource, ReleaseWorkflow
-
+from piceli.k8s.release import (
+    ReleaseCatalog,
+    ReleaseRecord,
+    ReleaseWorkflow,
+)
 
 _REF_NAME = re.compile(r"^[a-zA-Z0-9_./-]+$")
 
@@ -94,7 +93,11 @@ class ApprovalStore:
     def record_approval(self, approval: PRApproval) -> None:
         approvals = self.load_approvals()
         # Deduplicate
-        approvals = [a for a in approvals if not (a.pr_id == approval.pr_id and a.commit_hash == approval.commit_hash)]
+        approvals = [
+            a
+            for a in approvals
+            if not (a.pr_id == approval.pr_id and a.commit_hash == approval.commit_hash)
+        ]
         approvals.append(approval)
         data = {
             "schema_version": 1,
@@ -114,7 +117,11 @@ class ApprovalStore:
 
     def is_approved(self, pr_id: int, commit_hash: str, target_namespace: str) -> bool:
         for a in self.load_approvals():
-            if a.pr_id == pr_id and a.commit_hash == commit_hash and a.target_namespace == target_namespace:
+            if (
+                a.pr_id == pr_id
+                and a.commit_hash == commit_hash
+                and a.target_namespace == target_namespace
+            ):
                 return True
         return False
 
@@ -194,7 +201,9 @@ def promote_release(
     return promoted_record
 
 
-def preview_release(workflow: ReleaseWorkflow, name: str | None = None) -> dict[str, Any]:
+def preview_release(
+    workflow: ReleaseWorkflow, name: str | None = None
+) -> dict[str, Any]:
     """Provider-free preview of a release without mutating state or passing credentials."""
     return workflow.preview(name)
 
@@ -205,7 +214,7 @@ def dependency_safe_partial_release(
     name: str | None = None,
 ) -> DeploymentSession:
     """Verify dependency closure before executing a partial component rollout.
-    
+
     If components in components_to_deploy depend on other components not present
     in the session or target snapshot, raises DependencyUnsatisfiedError.
     """
@@ -215,7 +224,9 @@ def dependency_safe_partial_release(
 
     for comp_name in components_to_deploy:
         if comp_name not in all_components:
-            raise DependencyUnsatisfiedError(f"requested component '{comp_name}' not in composition")
+            raise DependencyUnsatisfiedError(
+                f"requested component '{comp_name}' not in composition"
+            )
         comp = all_components[comp_name]
         deps = comp.get("dependencies", [])
         for dep in deps:
@@ -223,7 +234,9 @@ def dependency_safe_partial_release(
                 # Check if dependency exists in snapshot
                 present = False
                 if hasattr(workflow, "snapshot") and workflow.snapshot is not None:
-                    present = any(r.intent.ref.name == dep for r in workflow.snapshot.resources)
+                    present = any(
+                        r.intent.ref.name == dep for r in workflow.snapshot.resources
+                    )
                 if not present:
                     raise DependencyUnsatisfiedError(
                         f"component '{comp_name}' requires '{dep}' which is not scheduled or present"
@@ -242,7 +255,7 @@ def health_aware_rollback(
     migration_compatible_fn: Callable[[str, str], bool] | None = None,
 ) -> dict[str, Any]:
     """Roll back to a prior catalogued release with health checks and migration safety.
-    
+
     Rollback digests are strictly protected from GC.
     """
     target_record = workflow.catalog.get(target_release_name)

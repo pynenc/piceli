@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+
 import pytest
 
 from piceli.k8s.ops.discovery import ResourceType
@@ -15,8 +16,8 @@ from piceli.k8s.ops.plan import (
     PlanAuthorization,
     ResourceIntent,
 )
-from piceli.k8s.ops.session import DeploymentSession
 from piceli.k8s.ops.secret_versions import SecretVersionStore
+from piceli.k8s.ops.session import DeploymentSession
 from tests.acceptance.fake_api import TARGET, manifest
 from tests.acceptance.test_local_executor import discover, executor, mutations
 

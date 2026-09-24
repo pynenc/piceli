@@ -2,7 +2,7 @@ name: Smokeshow
 
 on:
   workflow_run:
-    workflows: [CombinedTests]
+    workflows: [CI]
     types: [completed]
 
 permissions:
@@ -10,21 +10,19 @@ permissions:
 
 jobs:
   smokeshow:
-    # if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/setup-python@v4
-        with:
-          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v6
 
-      - run: pip install smokeshow
+      - run: uv tool install smokeshow
 
       - name: Download coverage artifact
-        uses: dawidd6/action-download-artifact@v3
+        uses: dawidd6/action-download-artifact@v6
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          workflow: combined_tests.yml
+          workflow: ci.yml
           commit: ${{ github.event.workflow_run.head_sha }}
           name: coverage-html
           path: coverage-html

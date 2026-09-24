@@ -1,12 +1,11 @@
-from typing import Optional, Sequence
+from collections.abc import Sequence
 
 from kubernetes import client
 
 from piceli.k8s.templates.auxiliary import names
 from piceli.k8s.templates.auxiliary.labels import Labels
-from piceli.k8s.templates.deployable import base
+from piceli.k8s.templates.deployable import base, role_binding
 from piceli.k8s.templates.deployable import role as role_lib
-from piceli.k8s.templates.deployable import role_binding
 
 
 class ServiceAccount(base.Deployable):
@@ -26,8 +25,8 @@ class ServiceAccount(base.Deployable):
 
     name: names.Name
     roles: Sequence[role_lib.K8sRole]
-    annotations: Optional[dict[str, str]] = None
-    labels: Optional[Labels] = None
+    annotations: dict[str, str] | None = None
+    labels: Labels | None = None
 
     def get(
         self,

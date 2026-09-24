@@ -133,9 +133,9 @@ def test_traverse_graph_parallel_nodes(object_managers: list[ObjectManager]) -> 
     # Check that there are two levels
     assert len(levels) == 2, "There should be two levels based on the dependencies"
     # Check that the first level contains both obj1 and obj2 since they can be deployed in parallel
-    assert (
-        len(levels[0]) == 2
-    ), "The first level should contain two nodes that can be deployed in parallel"
+    assert len(levels[0]) == 2, (
+        "The first level should contain two nodes that can be deployed in parallel"
+    )
     assert nodes[0] in levels[0], "obj1 should be in the first level"
     assert nodes[1] in levels[0], "obj2 should be in the first level"
     # Check that the second level contains obj3, which depends on both obj1 and obj2

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ from piceli.k8s.release import (
     ReleaseRecord,
     ReleaseSource,
     load_release_input,
+    source_closure,
 )
 
 
@@ -36,7 +38,7 @@ def archive() -> DeploymentSessionArchive:
 def record(name: str = "branch-a") -> ReleaseRecord:
     return ReleaseRecord(
         name=name,
-        namespace="ih-preview-branch-a",
+        namespace="app-preview-branch-a",
         source=ReleaseSource(
             "dirty",
             "sha256:" + "1" * 64,
@@ -58,7 +60,7 @@ def test_catalog_is_atomic_selectable_and_immutable(tmp_path: Path) -> None:
         catalog.add(
             ReleaseRecord(
                 name="branch-a",
-                namespace="ih-preview-branch-a",
+                namespace="app-preview-branch-a",
                 source=ReleaseSource(
                     "oci", "sha256:" + "3" * 64, artifact_digest="sha256:" + "3" * 64
                 ),
@@ -68,11 +70,44 @@ def test_catalog_is_atomic_selectable_and_immutable(tmp_path: Path) -> None:
         )
 
 
+def test_source_closure_distinguishes_clean_git_and_private_dirty_content(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "source"
+    root.mkdir()
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True)
+
+    git("init", "-q")
+    git("config", "user.email", "piceli@example.invalid")
+    git("config", "user.name", "Piceli Test")
+    tracked = root / "deployment.py"
+    tracked.write_text("VERSION = 1\n")
+    git("add", "deployment.py")
+    git("commit", "-qm", "initial")
+
+    clean = source_closure(root)
+    assert clean.kind == "git"
+    assert len(clean.identity) == 40
+
+    tracked.write_text("VERSION = 2\n")
+    private = root / "private.py"
+    private.write_text("LOCAL = True\n")
+    dirty = source_closure(root)
+    assert dirty.kind == "dirty"
+    assert dirty.identity == dirty.dirty_closure_sha256
+    assert dirty.identity == source_closure(root).identity
+
+    private.write_text("LOCAL = False\n")
+    assert source_closure(root).identity != dirty.identity
+
+
 def test_retained_pvcs_cannot_be_expiry_cleanup() -> None:
     with pytest.raises(ValueError, match="retained PVC"):
         ReleaseRecord(
             name="bad",
-            namespace="ih-preview-bad",
+            namespace="app-preview-bad",
             source=record().source,
             archive=archive(),
             ttl_seconds=1,

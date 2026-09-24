@@ -32,7 +32,7 @@ from piceli.k8s.ops.discovery import (
 )
 from piceli.k8s.ops.plan import ObservedSnapshot
 
-TARGET = PlanTarget("kind-local", "ih-test")
+TARGET = PlanTarget("kind-local", "app-test")
 DEPLOYMENT = ResourceType("apps/v1", "Deployment")
 
 
@@ -42,7 +42,7 @@ def deployment(name: str, *, uid: str, version: str) -> dict:
         "kind": "Deployment",
         "metadata": {
             "name": name,
-            "namespace": "ih-test",
+            "namespace": "app-test",
             "uid": uid,
             "resourceVersion": version,
         },
@@ -180,7 +180,7 @@ def test_public_artifact_round_trip_is_secret_safe_and_not_authoritative() -> No
             "kind": "Secret",
             "metadata": {
                 "name": "credentials",
-                "namespace": "ih-test",
+                "namespace": "app-test",
                 "uid": "secret-uid",
                 "resourceVersion": "2",
             },

@@ -1,5 +1,6 @@
 import time
-from typing import TYPE_CHECKING, Generator
+from collections.abc import Generator
+from typing import TYPE_CHECKING
 
 import pytest
 from kubernetes.client.exceptions import ApiException
@@ -46,7 +47,7 @@ def test_namespace(
     try:
         ctx.core_api.delete_namespace(name=namespace_name, body={})
     except ApiException as e:
-        print(f"Failed to delete namespace {namespace_name}: {str(e)}")
+        print(f"Failed to delete namespace {namespace_name}: {e!s}")
 
 
 def test_deployment_and_update(

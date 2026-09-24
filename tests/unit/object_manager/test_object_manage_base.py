@@ -1,4 +1,4 @@
-from typing import Generator, Optional
+from collections.abc import Generator
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -233,7 +233,7 @@ def test_api_methods(
     ],
 )
 def test_resolve_namespace(
-    inbound_ns: Optional[str], object_ns: Optional[str], expected_ns: str
+    inbound_ns: str | None, object_ns: str | None, expected_ns: str
 ) -> None:
     spec: dict = {"apiVersion": "batch/v1", "kind": "CronJob"}
     spec["metadata"] = {"name": "object"}

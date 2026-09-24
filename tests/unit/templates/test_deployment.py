@@ -77,7 +77,7 @@ def test_deployment_service() -> None:
     """test deployment template service spec"""
     service = DEPLOYMENT.get_service()
     assert isinstance(service, templates.Service)
-    service_dict = client.ApiClient().sanitize_for_serialization(service.get())
+    service_dict = client.ApiClient().sanitize_for_serialization(service.get()[0])
     assert service_dict == yaml_utils.get_yaml_dict("deployment_service.yml")
 
 

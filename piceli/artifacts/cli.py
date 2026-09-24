@@ -1,14 +1,28 @@
 """Thin JSON CLI over artifact library calls. Preview does not instantiate clients."""
+
 from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sys
 import time
+from pathlib import Path
 
 from piceli.artifacts import BuildPlan, OciBuilder, SourcePin, inspect_oci
+from piceli.artifacts.build_spec import (
+    add_build_spec_commands,
+    run_build_spec_command,
+)
+from piceli.artifacts.delivery import (
+    ArchiveSource,
+    DeliveryGrant,
+    DockerImageSource,
+    NodeDelivery,
+    append_journal,
+    write_receipt,
+)
 from piceli.artifacts.local_import import DockerLocalImporter, LocalImportGrant
+from piceli.artifacts.node_transport import NodeTarget
 from piceli.artifacts.process import (
     BuildCommand,
     ExecutionGrant,
@@ -47,7 +61,26 @@ def main(arguments: list[str] | None = None) -> int:
             cmd.add_argument("--allow-code-execution", action="store_true")
             cmd.add_argument("--allow-network", action="store_true")
             cmd.add_argument("--timeout", type=float, default=60)
+    cmd = sub.add_parser("deliver")
+    source = cmd.add_mutually_exclusive_group(required=True)
+    source.add_argument("--image")
+    source.add_argument("--archive", type=Path)
+    cmd.add_argument("--to", required=True)
+    cmd.add_argument("--approve-digest", required=True)
+    cmd.add_argument("--ref")
+    cmd.add_argument("--docker", type=Path)
+    cmd.add_argument("--docker-sha256")
+    cmd.add_argument("--docker-socket", type=Path)
+    cmd.add_argument("--ssh", type=Path)
+    cmd.add_argument("--ssh-sha256")
+    cmd.add_argument("--ssh-agent-socket", type=Path)
+    cmd.add_argument("--timeout", type=float, default=600)
+    cmd.add_argument("--receipt", type=Path)
+    cmd.add_argument("--journal", type=Path)
+    add_build_spec_commands(sub)
     args = parser.parse_args(arguments)
+    if args.command == "build-spec":
+        return run_build_spec_command(args)
     try:
         if args.command == "pin":
             result = SourcePin.capture(
@@ -62,6 +95,8 @@ def main(arguments: list[str] | None = None) -> int:
             )
         elif args.command == "inspect":
             result = inspect_oci(args.layout).summary()
+        elif args.command == "deliver":
+            result = _deliver(args)
         elif args.command == "import-local":
             importer = DockerLocalImporter(
                 ToolPin(args.docker, args.docker_sha256), args.socket
@@ -101,6 +136,30 @@ def main(arguments: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+
+
+def _deliver(args: argparse.Namespace) -> dict[str, object]:
+    target = NodeTarget.parse(args.to)
+    delivery = NodeDelivery(
+        docker=ToolPin(args.docker, args.docker_sha256) if args.docker else None,
+        docker_socket=args.docker_socket,
+        ssh=ToolPin(args.ssh, args.ssh_sha256) if args.ssh else None,
+        ssh_agent_socket=args.ssh_agent_socket,
+    )
+    receipt = delivery.deliver(
+        DockerImageSource(args.image)
+        if args.image
+        else ArchiveSource(args.archive.absolute()),
+        target,
+        DeliveryGrant(args.approve_digest, args.to, time.time() + args.timeout),
+        reference=args.ref,
+        limits=ProcessLimits(args.timeout),
+    )
+    if args.receipt is not None:
+        write_receipt(args.receipt, receipt)
+    if args.journal is not None:
+        append_journal(args.journal, receipt)
+    return receipt
 
 
 if __name__ == "__main__":

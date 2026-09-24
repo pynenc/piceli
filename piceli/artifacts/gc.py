@@ -8,10 +8,8 @@ Invariants:
 
 from __future__ import annotations
 
-import re
 import time
-from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from typing import Any
 
 from piceli.artifacts.plan import validate_digest
@@ -125,7 +123,7 @@ class SafeGarbageCollector:
         self, inventory: ImageSpaceInventory, now: float | None = None
     ) -> tuple[list[ImageSpaceEntry], list[ImageSpaceEntry]]:
         """Classify images into (prunable, retained) without applying deletions.
-        
+
         Raises UnsafeGCError if the inventory scan was incomplete or encountered errors.
         """
         if not inventory.scan_complete or inventory.errors:

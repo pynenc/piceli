@@ -168,3 +168,6 @@ sa.json
 
 # Local acceptance reports and private fake-API fixture storage
 /target/
+
+# Sphinx autodoc2 output (regenerated on every build)
+docs/apidocs/

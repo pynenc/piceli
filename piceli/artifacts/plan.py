@@ -1,13 +1,14 @@
 """Immutable, JSON-readable build inputs. Planning never imports repository code."""
+
 from __future__ import annotations
 
 import hashlib
 import json
 import os
-from dataclasses import asdict, dataclass
-from pathlib import Path, PurePosixPath
 import re
 import stat
+from dataclasses import asdict, dataclass
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from piceli.k8s.ops.bounds import object_keys, positive, text

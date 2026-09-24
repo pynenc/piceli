@@ -1,9 +1,8 @@
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Annotated
 
 from kubernetes import client
 from pydantic import BaseModel, Field
-from typing_extensions import Annotated
 
 from piceli.k8s.templates.auxiliary import names, quantity
 from piceli.k8s.templates.auxiliary.labels import Labels
@@ -21,7 +20,7 @@ class Volume(ABC, BaseModel):
 
     name: names.Name
     storage: quantity.Quantity
-    labels: Optional[Labels] = None
+    labels: Labels | None = None
 
     # @abstractmethod
     # def get_current_volume(self) -> Optional[Any]:
@@ -72,8 +71,8 @@ class PersistentVolume(base.Deployable, Volume):
     # API: ClassVar[str] = "core"
     # API_FUNC: ClassVar[str] = "persistent_volume"
 
-    def get(self) -> client.V1PersistentVolume:
-        return client.V1PersistentVolume(
+    def get(self) -> list[client.V1PersistentVolume]:
+        obj = client.V1PersistentVolume(
             api_version="v1",
             kind="PersistentVolume",
             metadata=client.V1ObjectMeta(name=self.name, labels=self.labels),
@@ -86,6 +85,7 @@ class PersistentVolume(base.Deployable, Volume):
                 ),
             ),
         )
+        return [obj]
 
     # def get_current_volume(self, k8s: k8s_client.Kubernetes) -> Optional[client.V1PersistentVolume]:
     #     """gets the volume existing in the cluster if any"""
@@ -154,8 +154,8 @@ class PersistentVolumeClaim(Volume, base.Deployable):
     # API: ClassVar[str] = "core"
     # API_FUNC: ClassVar[str] = "persistent_volume_claim"
 
-    def get(self) -> client.V1PersistentVolumeClaim:
-        return client.V1PersistentVolumeClaim(
+    def get(self) -> list[client.V1PersistentVolumeClaim]:
+        obj = client.V1PersistentVolumeClaim(
             api_version="v1",
             kind="PersistentVolumeClaim",
             metadata=client.V1ObjectMeta(name=self.name, labels=self.labels),
@@ -166,6 +166,7 @@ class PersistentVolumeClaim(Volume, base.Deployable):
                 ),
             ),
         )
+        return [obj]
 
     # def get_current_volume(self, k8s: k8s_client.Kubernetes) -> Optional[Any]:
     #     """gets the list of existing volumes"""
@@ -213,7 +214,7 @@ class PersistentVolumeClaimTemplate(BaseModel):
 
     name: names.Name
     storage: quantity.Quantity
-    labels: Optional[Labels] = None
+    labels: Labels | None = None
 
     def get_template(self) -> client.V1PersistentVolumeClaim:
         """get a volume claim template for stateful sets"""
@@ -252,7 +253,7 @@ class VolumeMountPVC(VolumeMount):
     """
 
     pvc: PersistentVolumeClaim
-    sub_path: Optional[SubPath] = None
+    sub_path: SubPath | None = None
 
 
 class VolumeMountPVCTemplate(VolumeMount):
@@ -264,7 +265,7 @@ class VolumeMountPVCTemplate(VolumeMount):
     """
 
     pvc_template: PersistentVolumeClaimTemplate
-    sub_path: Optional[SubPath] = None
+    sub_path: SubPath | None = None
 
 
 DefaultMode = Annotated[int, Field(ge=0, le=511)]

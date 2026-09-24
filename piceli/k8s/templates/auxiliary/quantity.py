@@ -1,6 +1,7 @@
+from typing import Annotated
+
 from kubernetes.utils.quantity import parse_quantity
 from pydantic import AfterValidator
-from typing_extensions import Annotated
 
 
 def check_quantity(v: str) -> str:

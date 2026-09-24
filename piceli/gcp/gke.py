@@ -1,8 +1,9 @@
 import datetime
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from google.api_core import exceptions
 from google.cloud import container_v1  # type: ignore
@@ -166,7 +167,8 @@ def wait(
             break
         if time.time() > timeout:
             logger.error(
-                msg := f"After {timeout_secs} secs, still waiting for {msg}: {status_str(status)}"
+                msg
+                := f"After {timeout_secs} secs, still waiting for {msg}: {status_str(status)}"
             )
             raise TimeoutError(msg)
         elapsed = datetime.timedelta(seconds=time.time() - start)

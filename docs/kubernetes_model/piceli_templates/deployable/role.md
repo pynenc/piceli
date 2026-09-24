@@ -35,14 +35,18 @@ from piceli.k8s import templates
 # Define a namespace-scoped Role
 role = templates.Role(
     name="pod-reader",
-    permissions=[{"apiGroups": [""], "resources": ["pods"], "verbs": ["get", "watch", "list"]}],
-    namespace="default"
+    permissions=[
+        {"apiGroups": [""], "resources": ["pods"], "verbs": ["get", "watch", "list"]}
+    ],
+    namespace="default",
 )
 
 # Define a cluster-wide ClusterRole
 cluster_role = templates.ClusterRole(
     name="node-watcher",
-    permissions=[{"apiGroups": [""], "resources": ["nodes"], "verbs": ["get", "watch", "list"]}]
+    permissions=[
+        {"apiGroups": [""], "resources": ["nodes"], "verbs": ["get", "watch", "list"]}
+    ],
 )
 
 # Define a read only Role for another deployable template
@@ -57,9 +61,8 @@ CRONJOB = templates.CronJob(
 )
 # It will create a role with read only permissions to access the cronjob
 roles = templates.Role.from_deployable(
-        CRONJOB, constants.APIRequestVerb.get_read_only()
-    )
-
+    CRONJOB, constants.APIRequestVerb.get_read_only()
+)
 ```
 
 These examples demonstrate defining a Role that allows reading pods within the default namespace and a ClusterRole that permits watching nodes cluster-wide.

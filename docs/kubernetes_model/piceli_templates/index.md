@@ -28,14 +28,14 @@ deployable/volume
 - **Autoscaler**: Automatically scale your applications based on metrics. {doc}`./deployable/autoscaler`
 - **ConfigMap**: Manage application configurations and settings. {doc}`./deployable/configmap`
 - **CronJob**: Schedule jobs to run at specific times or intervals. {doc}`./deployable/cronjob`
-- **Deployment**: Manage stateless applications deployed across your cluster. {doc}`./deployable/deployment` (based in {replica_manager}`./auxiliary/replica_manager`)
+- **Deployment**: Manage stateless applications deployed across your cluster. {doc}`./deployable/deployment` (based in {doc}`./auxiliary/replica_manager`)
 - **Job**: Execute short-lived or batch jobs within your cluster. {doc}`./deployable/job`
 - **Role and ClusterRole**: Define permissions for accessing Kubernetes resources. {doc}`./deployable/role`
 - **RoleBinding** and **ClusterRoleBinding**: Associate roles with specific users or groups. {doc}`./deployable/role_binding`
 - **Secret**: Securely store and manage sensitive information. {doc}`./deployable/secret`
 - **Service**: Define how to access applications running within your cluster. {doc}`./deployable/service`
 - **ServiceAccount**: Provide an identity for processes running within your cluster. {doc}`./deployable/service_account`
-- **StatefulSet**: Manage stateful applications and their storage requirements. {doc}`./deployable/stateful_set` (based in {replica_manager}`./auxiliary/replica_manager`)
+- **StatefulSet**: Manage stateful applications and their storage requirements. {doc}`./deployable/stateful_set` (based in {doc}`./auxiliary/replica_manager`)
 - **Volume**: Manage persistent storage for your applications. {doc}`./deployable/volume`
 
 ## Auxiliary Objects

@@ -1,0 +1,12 @@
+[package]
+name = "rust-hello"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# No dependencies: the example builds with `--offline` under `network = "none"`.
+[dependencies]
+
+[profile.release]
+codegen-units = 1
+strip = true

@@ -1,5 +1,3 @@
-from typing import Optional
-
 from kubernetes import client
 from pydantic import Field, PositiveInt
 
@@ -49,10 +47,11 @@ class HorizontalPodAutoscaler(base.Deployable):
     min_replicas: PositiveInt
     max_replicas: PositiveInt
     target_cpu_utilization_percentage: int = Field(ge=1, le=100)
-    labels: Optional[Labels] = None
+    labels: Labels | None = None
 
     def get(self) -> list[client.V2HorizontalPodAutoscaler]:
         obj = client.V2HorizontalPodAutoscaler(
+            api_version="autoscaling/v2",
             kind="HorizontalPodAutoscaler",
             metadata=client.V1ObjectMeta(name=self.name, labels=self.labels),
             spec=client.V2HorizontalPodAutoscalerSpec(
@@ -120,7 +119,7 @@ class VerticalPodAutoscaler(base.Deployable):
     name: names.Name
     target_kind: str
     target_name: str
-    container_name: Optional[str]
+    container_name: str | None
     min_allowed: resource_request.Resources
     max_allowed: resource_request.Resources
     control_cpu: bool
@@ -129,6 +128,7 @@ class VerticalPodAutoscaler(base.Deployable):
     def get(self) -> list[dict]:
         """Creates the K8s VPA spec"""
         spec: dict = {
+            "apiVersion": "autoscaling.k8s.io/v1",
             "kind": "VerticalPodAutoscaler",
             "metadata": {"name": self.name},
             "spec": {

@@ -417,7 +417,7 @@ class ObservedSnapshot:
     incomplete_content: tuple[ResourceRef, ...] = ()
     snapshot_hash: str = field(init=False)
     captured_at: str | None = None
-    provenance: DiscoveryProvenance = DiscoveryProvenance()
+    provenance: DiscoveryProvenance = field(default_factory=DiscoveryProvenance)
     discovery: DiscoveryArtifact | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:

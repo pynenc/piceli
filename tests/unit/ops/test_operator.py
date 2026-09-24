@@ -1,14 +1,11 @@
 """Unit tests for Piceli operator core: classification, inventory, logs, and buffers."""
 
 import time
-from pathlib import Path
-import pytest
 
 from piceli.k8s.observe import ObservationRef, ObservedObject
 from piceli.k8s.operator import (
     BoundedInventoryBuffer,
     InventoryEvent,
-    ManagedResource,
     build_operator_report,
     redact_log_content,
 )
@@ -23,8 +20,11 @@ class FakeInventoryReader:
 
     def list(self, api_version: str, kind: str, namespace: str) -> list[ObservedObject]:
         return [
-            obj for ref, obj in self.objects.items()
-            if ref.api_version == api_version and ref.kind == kind and ref.namespace == namespace
+            obj
+            for ref, obj in self.objects.items()
+            if ref.api_version == api_version
+            and ref.kind == kind
+            and ref.namespace == namespace
         ]
 
 
@@ -33,16 +33,21 @@ def test_operator_report_distinguishes_managed_and_unmanaged() -> None:
     ref_unmanaged = ObservationRef("apps/v1", "Deployment", "my-ns", "legacy-app")
 
     obs_managed = ObservedObject(ref=ref_managed, phase="Running", images=("app:v1",))
-    obs_unmanaged = ObservedObject(ref=ref_unmanaged, phase="Running", images=("legacy:v2",))
+    obs_unmanaged = ObservedObject(
+        ref=ref_unmanaged, phase="Running", images=("legacy:v2",)
+    )
 
-    reader = FakeInventoryReader({
-        ref_managed: obs_managed,
-        ref_unmanaged: obs_unmanaged,
-    })
+    reader = FakeInventoryReader(
+        {
+            ref_managed: obs_managed,
+            ref_unmanaged: obs_unmanaged,
+        }
+    )
 
     # Dummy session archive declaring only ref_managed
     class DummyArchive:
         session_id = "s" * 32
+
         def to_dict(self) -> dict[str, object]:
             return {
                 "composition": [
@@ -61,7 +66,9 @@ def test_operator_report_distinguishes_managed_and_unmanaged() -> None:
                 ]
             }
 
-    report = build_operator_report(reader, "my-ns", session_archive=DummyArchive(), include_common_types=False)
+    report = build_operator_report(
+        reader, "my-ns", session_archive=DummyArchive(), include_common_types=False
+    )
 
     assert len(report.managed) == 1
     assert report.managed[0].ref == ref_managed

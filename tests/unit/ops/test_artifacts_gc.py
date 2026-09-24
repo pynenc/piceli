@@ -1,6 +1,7 @@
 """Unit tests for Piceli owner-operated artifact storage and safe GC."""
 
 import time
+
 import pytest
 
 from piceli.artifacts.gc import (
@@ -25,7 +26,9 @@ def test_incomplete_inventory_blocks_garbage_collection() -> None:
     )
     gc = SafeGarbageCollector(retention_ttl_seconds=1000)
 
-    with pytest.raises(UnsafeGCError, match="unknown or incomplete image inventory forbids deletion"):
+    with pytest.raises(
+        UnsafeGCError, match="unknown or incomplete image inventory forbids deletion"
+    ):
         gc.run_gc(inventory)
 
 

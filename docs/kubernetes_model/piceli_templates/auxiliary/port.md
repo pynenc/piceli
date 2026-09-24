@@ -17,4 +17,4 @@ This model facilitates the clear and concise definition of networking configurat
 
 The Port configuration is an integral part of defining container communication within Piceli, especially in the context of how containers are accessed and communicate within the cluster:
 
-- {container}`./container`: Ports defined using the `Port` class are utilized to specify how each container within a pod can be accessed, both from other components within the Kubernetes cluster and from external sources. This ensures that applications deployed using Piceli are networked correctly, with clear and manageable service exposure.
+- {doc}`container`: Ports defined using the `Port` class are utilized to specify how each container within a pod can be accessed, both from other components within the Kubernetes cluster and from external sources. This ensures that applications deployed using Piceli are networked correctly, with clear and manageable service exposure.

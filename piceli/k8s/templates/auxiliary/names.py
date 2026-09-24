@@ -1,5 +1,6 @@
+from typing import Annotated
+
 from pydantic import Field
-from typing_extensions import Annotated
 
 # Kubernetes spec for identifiers
 # https://github.com/kubernetes/design-proposals-archive/blob/main/architecture/identifiers.md

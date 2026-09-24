@@ -21,7 +21,7 @@ def list(ctx: typer.Context) -> None:
     Note: The command options are shared among commands and should be specified at the root level.
     The model listed in this command will be the same as those used in other commands, such as deploy.
     """
-    ctx_obj: "ContextObject" = ctx.obj
+    ctx_obj: ContextObject = ctx.obj
 
     # Setting up Rich console and table
     console = Console()

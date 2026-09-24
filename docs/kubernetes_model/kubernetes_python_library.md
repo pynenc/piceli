@@ -13,20 +13,14 @@ Below is an example of how to define a Service using the Kubernetes Python clien
 ```python
 from kubernetes import client
 
+
 def create_service_example(name, labels, ports, selector):
     # Define the Kubernetes Service
     service = client.V1Service(
         api_version="v1",
         kind="Service",
-        metadata=client.V1ObjectMeta(
-            name=name,
-            labels=labels
-        ),
-        spec=client.V1ServiceSpec(
-            ports=ports,
-            type="ClusterIP",
-            selector=selector
-        )
+        metadata=client.V1ObjectMeta(name=name, labels=labels),
+        spec=client.V1ServiceSpec(ports=ports, type="ClusterIP", selector=selector),
     )
     return service
 ```

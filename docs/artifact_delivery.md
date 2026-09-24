@@ -1,5 +1,8 @@
 # Artifact delivery and operation telemetry
 
+For registry-free delivery of an image straight to cluster nodes, see
+{doc}`node_delivery`.
+
 Piceli's artifact API separates immutable planning from any tool, daemon,
 network or Kubernetes client. Importing `piceli.artifacts` is side-effect free.
 No API in this profile pushes an image or deploys a workload implicitly.
@@ -54,8 +57,8 @@ Failures return fixed JSON and never echo paths, tool output, manifests or token
 Pass `OperationTelemetry(OtlpOptions(endpoint, token, ...))` to `PlanExecutor`.
 It emits bounded OTLP/HTTP-Protobuf spans and logs for plan, build, import, apply,
 resume, cancel and compensation operations. The mapping is
-`piceli.operation-otel.v1` over IH telemetry v3; it deliberately does not claim
-Rustvello task/attempt semantics. Journal states, including
+`piceli.operation-otel.v1`; it deliberately does not claim
+task/attempt semantics of a task runner such as Rustvello. Journal states, including
 `compensated-with-retention`, are preserved exactly.
 
 Admission and exporter work are bounded. `stats()` distinguishes attempted,
@@ -64,16 +67,15 @@ post-shutdown rejection. `flush(timeout)` and `shutdown(timeout)` return within
 their caller budget and never report an undrained queue as lossless. Payloads,
 exception bodies, private version IDs and bearer tokens are not exported.
 
-The current pinned consumer profile is
-[`piceli-local-tooling-v2.json`](schemas/piceli-local-tooling-v2.json); v1 remains
-the immutable pre-LC-06-R record. Run the
-complete no-deployment acceptance command from the deployment planning guide.
-It uses a disposable loopback API, imports but never runs an owned format-test
-image, and verifies operation records across a real Poet restart.
+Consumers can pin the exact Piceli sources, schemas and tool versions they
+integrate against and verify them with their own end-to-end acceptance. A
+typical no-deployment check uses a disposable loopback API, imports but never
+runs an owned format-test image, and verifies operation records across a restart
+of the telemetry consumer.
 
 ## Runnable Linux images
 
-LC-06-R adds an explicitly separate runnable profile. `BuildCommand` can export
+A separate *runnable* profile covers images that are executed. `BuildCommand` can export
 an exact, already-present base image with bounded process control;
 `DockerArchiveOciBuilder` validates that archive's pinned config identity and
 architecture, preserves every runtime layer, and adds a deterministic public
@@ -89,18 +91,8 @@ root filesystem, no Linux capabilities, a finite deadline/output budget and
 owned-container cleanup after normal exit, failure, timeout or cancellation.
 Receipts omit process output, Docker socket paths, command arguments and tokens.
 
-Consume [`piceli-runnable-image-v1.json`](schemas/piceli-runnable-image-v1.json)
-and run the source-bound acceptance on a Linux/arm64 Docker engine with the
-pinned base already present:
-
-```sh
-make test-runnable-image \
-  IH_WORKSPACE=/absolute/path/to/ih_workspace \
-  DOCKER=/absolute/path/to/docker \
-  DOCKER_SOCKET=/absolute/path/to/docker.sock
-```
-
-The command never pulls, pushes or deploys. It proves exact base export, OCI
-inspection/import, successful readiness, missing-runtime failure, architecture
-rejection, bounded cancellation, cleanup, and operation traces/logs across a
-real Poet restart.
+A source-bound acceptance for this profile runs on a Linux/arm64 Docker engine
+with the pinned base already present. It never pulls, pushes or deploys, and
+covers exact base export, OCI inspection/import, successful readiness,
+missing-runtime failure, architecture rejection, bounded cancellation, cleanup,
+and operation traces/logs across a restart of the telemetry consumer.

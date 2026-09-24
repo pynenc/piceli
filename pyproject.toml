@@ -1,153 +1,147 @@
-[tool.poetry]
+[project]
 name = "piceli"
 version = "0.0.5"
-description = "Infrastructure for python"
-authors = ["Jose Diaz"]
-license = "MIT License"
+description = "Kubernetes infrastructure as typed Python: model, plan, apply and observe"
+authors = [{ name = "Jose Diaz" }]
+license = "MIT"
+license-files = ["LICENSE"]
 readme = "README.md"
-homepage = "https://www.pynenc.org"
-documentation = "https://docs.piceli.pynenc.org"
-repository = "https://github.com/pynenc/piceli"
+requires-python = ">=3.12"
+keywords = ["kubernetes", "infrastructure-as-code", "deployment", "gitops", "devops"]
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python :: 3.11",
+    "Intended Audience :: System Administrators",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Environment :: Console",
-    "Topic :: Software Development :: Libraries :: Python Modules",
-    "Topic :: System :: Distributed Computing",
+    "Topic :: System :: Systems Administration",
+    "Topic :: Software Development :: Build Tools",
+    "Typing :: Typed",
 ]
-include = ["piceli/py.typed"]
+dependencies = [
+    "kubernetes>=29.0.0",
+    "pydantic>=2.6",
+    "pyyaml>=6.0.1",
+    "typer>=0.12",
+    "rich>=13.7",
+    "tenacity>=8.2.3",
+    "cron-validator>=1.0.8",
+    "cistell>=0.0.4",
+]
 
+[project.optional-dependencies]
+gcp = [
+    "google-auth>=2.27",
+    "google-api-core>=2.17",
+    "google-cloud-container>=2.40",
+]
+telemetry = [
+    "opentelemetry-api>=1.41.1",
+    "opentelemetry-proto>=1.27.0",
+]
 
-[tool.poetry.scripts]
-piceli = 'piceli.__main__:main'
+[project.urls]
+Homepage = "https://pynenc.org"
+Documentation = "https://docs.pynenc.org/projects/piceli/"
+Repository = "https://github.com/pynenc/piceli"
+Changelog = "https://docs.pynenc.org/projects/piceli/en/latest/changelog.html"
+Issues = "https://github.com/pynenc/piceli/issues"
 
+[project.scripts]
+piceli = "piceli.__main__:main"
 
-[tool.poetry.dependencies]
-python = ">=3.11.6,<4.0"
-textual = "^0.49.0"
-kubernetes = "^29.0.0"
-tenacity = "^8.2.3"
-cron-validator = "^1.0.8"
-pydantic = "^2.6.1"
-typer = { extras = ["all"], version = "^0.9.0" }
-cistell = "^0.0.4"
-opentelemetry-api = { version = "==1.41.1", optional = true }
-# Generated OTLP protobuf messages; pinned to remain compatible with Piceli's
-# existing protobuf runtime constraints.
-opentelemetry-proto = { version = "==1.27.0", optional = true }
+[dependency-groups]
+test = [
+    "pytest>=8.3",
+    "pytest-timeout>=2.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "jsonschema>=4.23",
+]
+lint = [
+    "ruff>=0.14",
+    "mypy>=1.11",
+    "types-pyyaml>=6.0.12",
+    "pre-commit>=4.0",
+]
+docs = [
+    "sphinx>=8.0,<10",
+    "myst-parser>=4.0",
+    "furo>=2024",
+    "sphinx-copybutton>=0.5.2",
+    "sphinx-design>=0.6.0",
+    "sphinx-inline-tabs>=2023.4.21",
+    "sphinx-autodoc2>=0.5.0",
+]
+dev = [
+    { include-group = "test" },
+    { include-group = "lint" },
+]
 
-[tool.poetry.extras]
-telemetry = ["opentelemetry-api", "opentelemetry-proto"]
-
-[tool.poetry.group.gcp]
-optional = false
-
-[tool.poetry.group.gcp.dependencies]
-google-auth = "^2.27.0"
-google-cloud = "^0.34.0"
-google-api-core = "^2.17.0"
-google-cloud-container = "^2.40.0"
-
-
-[tool.poetry.group.dev.dependencies]
-black = "23.11.0"
-pytest = ">=7.3.1,<8.0.0"
-coverage = { version = ">=7.2.6,<8.0", extras = ["toml"] }
-mypy = "1.7.0"
-pre-commit = "^3.5.0"
-pytest-timeout = "^2.2.0"
-types-pyyaml = "^6.0.12.12"
-pytest-asyncio = "^0.23.5"
-
-
-[tool.poetry.group.docs]
-optional = true
-
-[tool.poetry.group.docs.dependencies]
-sphinx = "^7.0"
-myst-parser = "^2"
-furo = "^2023"
-sphinx-copybutton = "^0.5.2"
-sphinx-design = "^0.5.0"
-sphinx-inline-tabs = "^2023.4.21"
-sphinx-autodoc2 = "^0.5.0"
+[tool.uv]
+default-groups = ["dev"]
 
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
 
+[tool.hatch.build.targets.wheel]
+packages = ["piceli"]
 
-[tool.isort]
-profile = "black"
-skip = ["legacy_libs"]
+[tool.hatch.build.targets.sdist]
+exclude = ["/target", "/docs/apidocs", "/.github"]
 
-[tool.black]
-exclude = '''
-/(
-    \.mypy_cache
-    | \.env
-    | \.venv
-)/
-'''
-
-line-length = 88
-target-version = ['py311']
-required-version = '23.11.0'
 [tool.ruff]
-select = [
-    "E", # pycodestyle errors
-    "W", # pycodestyle warnings
-    "F", # pyflakes
-    # "I",  # isort # using isort for now
-    "C",  # flake8-comprehensions
-    "B",  # flake8-bugbear
-    "UP", # pyupgrade
-]
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "C4", "B", "UP", "SIM", "RUF"]
 ignore = [
-    "E501", # line too long, handled by black
-    # "B008",  # do not perform function calls in argument defaults
-    "C901", # too complex
-    # "W191", # indentation contains tabs
+    "E501",   # line length is handled by the formatter
+    "C901",   # complexity is reviewed by humans, not gated
+    # Style-only simplifications: not worth churning working code for.
+    "SIM102", "SIM105", "SIM117", "RUF005", "RUF015", "RUF059",
+    "RUF012", # pydantic/dataclass class attributes are intentional
+    "UP047",  # PEP 695 generics: adopt gradually
 ]
-exclude = ["legacy_libs/"]
 
 [tool.mypy]
 files = ["piceli"]
+python_version = "3.12"
 warn_unused_configs = true
 ignore_missing_imports = true
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
-exclude = '(venv|env|legacy_libs)'
 show_error_codes = true
 pretty = true
 allow_redefinition = true
 no_implicit_optional = true
 strict_equality = true
 
-[tool.pytest]
-log_cli = true
-
 [tool.pytest.ini_options]
+testpaths = ["tests/unit", "tests/acceptance"]
+log_cli = true
+timeout = 30
+markers = [
+    "integration: needs a real disposable cluster (kind) via kubeconfig",
+    "maintainer: needs the private companion workspace; skipped by default",
+]
 filterwarnings = [
     "ignore:Running in a secondary thread. Signal handling will be skipped.:UserWarning",
     "ignore::pytest.PytestUnhandledThreadExceptionWarning",
 ]
-timeout = 30 # delete namespace on minikube integration tests can take a while
 
 [tool.coverage.run]
-omit = [
-    "tests/*",       # Exclude all files in the tests directory
-    "legacy_libs/*", # Exclude all files in the legacy_libs directory
-]
-relative_files = true # to combine coverage data from multiple processes
+source = ["piceli"]
+relative_files = true
 
 [tool.coverage.report]
 exclude_lines = [
     "pragma: no cover",
     "if (typing\\.)?TYPE_CHECKING:",
-    "^\\s*\\.\\.\\.\\s*$",           # ... ellipsis
+    "^\\s*\\.\\.\\.\\s*$",
     "if __name__ == .__main__.:",
 ]

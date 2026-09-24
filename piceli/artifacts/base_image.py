@@ -1,14 +1,15 @@
 """Bounded offline composition of a pinned Docker base archive into OCI."""
+
 from __future__ import annotations
 
 import io
 import json
 import os
-from pathlib import Path, PurePosixPath
 import shutil
 import tarfile
 import tempfile
 import threading
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from piceli.artifacts.oci import (
