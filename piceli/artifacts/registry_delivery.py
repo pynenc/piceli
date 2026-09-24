@@ -67,7 +67,7 @@ from piceli.artifacts.registry import (
 SCHEMA = "piceli.registry-delivery.v1"
 FORWARD_NAME = "piceli-registry-delivery"
 _NAME = re.compile(r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?")
-_FORWARD_TARGET = re.compile(r"(?:service|pod)/[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?")
+_FORWARD_TARGET = re.compile(r"(?:service|pod|deployment)/[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?")
 _CONTEXT = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.@:/-]{0,252}")
 _QUERY = ProcessLimits(60, 4 * 1024 * 1024)
 
@@ -123,7 +123,7 @@ class RegistryForward:
         if not isinstance(self.target, str) or not _FORWARD_TARGET.fullmatch(
             self.target
         ):
-            raise ValueError("forward target must be service/NAME or pod/NAME")
+            raise ValueError("forward target must be service/NAME, deployment/NAME or pod/NAME")
         if (
             isinstance(self.remote_port, bool)
             or not isinstance(self.remote_port, int)
