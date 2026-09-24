@@ -798,18 +798,174 @@ def test_docker_image_source_is_saved_by_id(registry, tmp_path):
     assert not any("save" in argv for argv in docker.calls)
 
 
-def test_cli_rejects_mixed_options(tmp_path, capsys):
+def reason(capsys) -> str:
+    return json.loads(capsys.readouterr().err.strip().splitlines()[-1])["reason"]
+
+
+def test_cli_rejections_are_specific_fixed_codes(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("PATH", str(tmp_path / "empty-bin"))
     path = write_archive(tmp_path, docker_archive([layer(b"a")]))
-    base = ["deliver", "--archive", str(path), "--approve-digest", "sha256:" + "1" * 64]
-    assert cli.main([*base, "--to", "oci://127.0.0.1:5/a", "--ref", "a:1"]) == 2
-    assert cli.main([*base, "--to", "oci://127.0.0.1:5/a", "--namespace", "x"]) == 2
-    assert (
-        cli.main(
-            [*base, "--to", "docker://n?runtime=containerd", "--node-registry", "a:1"]
-        )
-        == 2
+    digest = sha(config_for([layer(b"a")]))
+    base = ["deliver", "--archive", str(path), "--approve-digest", digest]
+    oci = "oci://127.0.0.1:5/a"
+    cases = [
+        ([*base, "--to", oci, "--ref", "a:1"], "node-options-on-registry-target"),
+        ([*base, "--to", oci, "--namespace", "x"], "forward-options-without-forward"),
+        (
+            [*base, "--to", "docker://n?runtime=containerd", "--node-registry", "a"],
+            "registry-options-on-node-target",
+        ),
+        (
+            [*base, "--to", "oci://registry.example/a?tls=false"],
+            "plain-http-not-loopback",
+        ),
+        ([*base, "--to", "oci://127.0.0.1:5/A"], "invalid-target"),
+        ([*base, "--to", "ftp://node"], "invalid-target"),
+        (
+            [*base[:4], "sha256:nope", "--to", oci],
+            "invalid-approved-digest",
+        ),
+        (
+            [*base, "--to", oci, "--via-forward", "service/r"],
+            "forward-options-incomplete",
+        ),
+        (
+            [
+                *base,
+                "--to",
+                oci,
+                "--via-forward",
+                "service/r",
+                "--namespace",
+                "r",
+                "--kubeconfig",
+                str(tmp_path / "kc"),
+            ],
+            "kubectl-tool-required",
+        ),
+        (
+            ["deliver", "--image", "app:1", "--approve-digest", digest, "--to", oci],
+            "docker-tool-required",
+        ),
+        (
+            [*base, "--to", "ssh://node-1?runtime=k3s-containerd"],
+            "ssh-tool-required",
+        ),
+        (
+            [*base, "--to", oci, "--credentials", str(tmp_path / "missing.json")],
+            "invalid-credentials-file",
+        ),
+    ]
+    for argv, code in cases:
+        assert cli.main(argv) == 2, code
+        assert reason(capsys) == code
+    creds = tmp_path / "creds.json"
+    creds.write_text(json.dumps({"token": "t0ken"}))
+    creds.chmod(0o644)
+    assert cli.main([*base, "--to", oci, "--credentials", str(creds)]) == 2
+    assert reason(capsys) == "credentials-file-not-private"
+    # A forward whose kubectl is found on PATH still needs the node registry.
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "kubectl").write_text("#!/bin/sh\n")
+    (bin_dir / "kubectl").chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir))
+    forward = [
+        "--via-forward",
+        "service/r",
+        "--namespace",
+        "r",
+        "--kubeconfig",
+        str(tmp_path / "kc"),
+    ]
+    assert cli.main([*base, "--to", oci, *forward]) == 2
+    assert reason(capsys) == "node-registry-required"
+    assert cli.main([*base, "--to", "oci://registry.example/a", *forward]) == 2
+    assert reason(capsys) == "forward-target-not-loopback"
+    wrong = ["--kubectl-sha256", "sha256:" + "0" * 64]
+    assert cli.main([*base, "--to", oci, *forward, *wrong]) == 2
+    assert reason(capsys) == "tool-pin-mismatch"
+
+
+FAKE_DOCKER = """#!{python}
+import sys
+args = sys.argv[1:]
+if args[:2] == ["context", "inspect"]:
+    print("unix:///fake/run/docker.sock")
+    raise SystemExit(0)
+assert args[:2] == ["--host", "unix:///fake/run/docker.sock"], args
+args = args[2:]
+if args[:2] == ["image", "inspect"]:
+    print("{image_id}")
+elif args[:1] == ["info"]:
+    print("[]")
+elif args[:2] == ["image", "save"] and args[2] == "{image_id}":
+    with open("{archive}", "rb") as stream:
+        sys.stdout.buffer.write(stream.read())
+else:
+    raise SystemExit(3)
+"""
+
+
+def test_cli_discovers_and_pins_docker_from_path(
+    registry, tmp_path, capsys, monkeypatch
+):
+    layers = [layer(b"discovered")]
+    image_id = sha(config_for(layers))
+    archive = write_archive(tmp_path, docker_archive(layers))
+    real = tmp_path / "real" / "docker"
+    real.parent.mkdir()
+    real.write_text(
+        FAKE_DOCKER.format(python=sys.executable, image_id=image_id, archive=archive)
     )
-    assert "invalid" in capsys.readouterr().err
+    real.chmod(0o755)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "docker").symlink_to(real)  # like Docker Desktop's PATH entry
+    monkeypatch.setenv("PATH", str(bin_dir))
+    monkeypatch.delenv("DOCKER_HOST", raising=False)
+    url = f"oci://127.0.0.1:{registry.port}/team/app:1"
+    argv = ["deliver", "--image", "example/app:1", "--approve-digest", image_id]
+    assert cli.main([*argv, "--to", url]) == 0, capsys.readouterr().err
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["result"] == "pushed"
+    assert receipt["tools"] == {"docker": ToolPin.capture(real).sha256}
+    assert str(tmp_path) not in json.dumps(receipt)
+    # DOCKER_HOST wins over the context, and only unix sockets are accepted.
+    monkeypatch.setenv("DOCKER_HOST", "tcp://127.0.0.1:2375")
+    assert cli.main([*argv, "--to", url]) == 2
+    assert reason(capsys) == "docker-socket-required"
+    # An explicit pin that does not match is refused before anything runs.
+    wrong = ["--docker-sha256", "sha256:" + "0" * 64, "--to", url]
+    monkeypatch.delenv("DOCKER_HOST")
+    assert cli.main([*argv, *wrong]) == 2
+    assert reason(capsys) == "tool-pin-mismatch"
+
+
+def test_discovery_helpers(tmp_path, monkeypatch):
+    from piceli.artifacts.delivery_inputs import (
+        DeliveryInputError,
+        discover_docker_socket,
+        discover_tool,
+    )
+
+    tool = tmp_path / "tool"
+    tool.write_text("#!/bin/sh\n")
+    tool.chmod(0o755)
+    link = tmp_path / "link"
+    link.symlink_to(tool)
+    pin = discover_tool("docker", link)
+    assert pin.path == tool.resolve() and pin == ToolPin.capture(tool)
+    monkeypatch.setenv("PATH", str(tmp_path / "nowhere"))
+    with pytest.raises(DeliveryInputError) as error:
+        discover_tool("docker")
+    assert error.value.code == "docker-tool-required"
+    monkeypatch.setenv("DOCKER_HOST", "unix:///var/run/other.sock")
+    assert discover_docker_socket(pin) == Path("/var/run/other.sock")
+    assert discover_docker_socket(pin, Path("/x.sock")) == Path("/x.sock")
+    monkeypatch.setenv("DOCKER_HOST", "ssh://host")
+    with pytest.raises(DeliveryInputError, match="unix"):
+        discover_docker_socket(pin)
 
 
 def test_scan_reports_plan_for_gzip_and_uncompressed_layers():

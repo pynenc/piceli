@@ -42,6 +42,7 @@ if TYPE_CHECKING:  # networking modules load only when a client connects
     import http.client
     import ssl
 
+from piceli.artifacts.delivery_inputs import DeliveryInputError
 from piceli.artifacts.plan import validate_digest
 
 _DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
@@ -149,14 +150,17 @@ class RegistryCredentials:
     def load(cls, path: Path) -> RegistryCredentials:
         """Read a regular, private (no group/other access) JSON credentials file."""
         if not isinstance(path, Path) or not path.is_absolute():
-            raise ValueError("credentials path must be explicit and absolute")
+            raise DeliveryInputError("invalid-credentials-file")
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
         try:
             info = os.fstat(fd)
             if not stat.S_ISREG(info.st_mode) or info.st_size > 65536:
-                raise ValueError("credentials must be a small regular file")
+                raise DeliveryInputError("invalid-credentials-file")
             if info.st_mode & 0o077:
-                raise ValueError("credentials file must not be group/world readable")
+                raise DeliveryInputError(
+                    "credentials-file-not-private",
+                    "credentials file must not be group/world readable",
+                )
             with os.fdopen(os.dup(fd), "rb") as stream:
                 body = stream.read(65537)
         finally:
@@ -164,13 +168,13 @@ class RegistryCredentials:
         try:
             value = json.loads(body)
         except ValueError:
-            raise ValueError("invalid credentials file") from None
+            raise DeliveryInputError("invalid-credentials-file") from None
         if not isinstance(value, dict) or set(value) - {
             "username",
             "password",
             "token",
         }:
-            raise ValueError("invalid credentials file")
+            raise DeliveryInputError("invalid-credentials-file")
         return cls(value.get("username"), value.get("password"), value.get("token"))
 
 
@@ -200,7 +204,10 @@ class RegistryEndpoint:
         if not isinstance(self.use_tls, bool):
             raise ValueError("invalid registry TLS flag")
         if not self.use_tls and not is_loopback(self.host):
-            raise ValueError("plain HTTP is only allowed for a loopback registry")
+            raise DeliveryInputError(
+                "plain-http-not-loopback",
+                "plain HTTP is only allowed for a loopback registry",
+            )
         if self.auth_token is not None and self.credentials is not None:
             raise ValueError("give either an auth token or credentials")
         if self.ca_file is not None and (
@@ -725,7 +732,10 @@ class RegistryTarget:
         if not isinstance(self.tls, bool):
             raise ValueError("invalid registry TLS flag")
         if not self.tls and not is_loopback(self.host):
-            raise ValueError("plain HTTP is only allowed for a loopback registry")
+            raise DeliveryInputError(
+                "plain-http-not-loopback",
+                "plain HTTP is only allowed for a loopback registry",
+            )
 
     @classmethod
     def parse(cls, url: str) -> RegistryTarget:

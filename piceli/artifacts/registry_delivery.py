@@ -43,6 +43,7 @@ from piceli.artifacts.delivery import (
     _now,
     _RegularFile,
 )
+from piceli.artifacts.delivery_inputs import DeliveryInputError, verify_tools
 from piceli.artifacts.image_manifest import (
     BlobRef,
     PushPlan,
@@ -67,7 +68,9 @@ from piceli.artifacts.registry import (
 SCHEMA = "piceli.registry-delivery.v1"
 FORWARD_NAME = "piceli-registry-delivery"
 _NAME = re.compile(r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?")
-_FORWARD_TARGET = re.compile(r"(?:service|pod|deployment)/[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?")
+_FORWARD_TARGET = re.compile(
+    r"(?:service|pod|deployment)/[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?"
+)
 _CONTEXT = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.@:/-]{0,252}")
 _QUERY = ProcessLimits(60, 4 * 1024 * 1024)
 
@@ -82,7 +85,7 @@ class _Failure(Exception):
 def node_registry_address(value: str) -> str:
     """Validate ``host[:port]`` as the registry address nodes pull from."""
     if not isinstance(value, str) or len(value) > 260 or not value.isprintable():
-        raise ValueError("invalid node registry")
+        raise DeliveryInputError("invalid-node-registry")
     parts = urlsplit("//" + value)
     if (
         not parts.hostname
@@ -91,11 +94,13 @@ def node_registry_address(value: str) -> str:
         or parts.fragment
         or parts.username is not None
     ):
-        raise ValueError("node registry must be host[:port]")
+        raise DeliveryInputError(
+            "invalid-node-registry", "node registry must be host[:port]"
+        )
     try:
         port = parts.port
     except ValueError as error:
-        raise ValueError("invalid node registry port") from error
+        raise DeliveryInputError("invalid-node-registry") from error
     validate_host(parts.hostname)
     return host_port(parts.hostname, port)
 
@@ -119,25 +124,33 @@ class RegistryForward:
 
     def __post_init__(self) -> None:
         if not isinstance(self.namespace, str) or not _NAME.fullmatch(self.namespace):
-            raise ValueError("invalid forward namespace")
+            raise DeliveryInputError("invalid-forward", "invalid forward namespace")
         if not isinstance(self.target, str) or not _FORWARD_TARGET.fullmatch(
             self.target
         ):
-            raise ValueError("forward target must be service/NAME, deployment/NAME or pod/NAME")
+            raise DeliveryInputError(
+                "invalid-forward",
+                "forward target must be service/NAME, deployment/NAME or pod/NAME",
+            )
         if (
             isinstance(self.remote_port, bool)
             or not isinstance(self.remote_port, int)
             or not 0 < self.remote_port < 65536
         ):
-            raise ValueError("invalid forward remote port")
+            raise DeliveryInputError("invalid-forward", "invalid forward remote port")
         if not isinstance(self.kubeconfig, Path) or not self.kubeconfig.is_absolute():
-            raise ValueError("an explicit absolute kubeconfig path is required")
+            raise DeliveryInputError(
+                "forward-options-incomplete",
+                "an explicit absolute kubeconfig path is required",
+            )
         if self.context is not None and (
             not isinstance(self.context, str) or not _CONTEXT.fullmatch(self.context)
         ):
-            raise ValueError("invalid kube context")
+            raise DeliveryInputError("invalid-forward", "invalid kube context")
         if not 0 < self.startup_seconds <= 300:
-            raise ValueError("invalid forward startup timeout")
+            raise DeliveryInputError(
+                "invalid-forward", "invalid forward startup timeout"
+            )
 
     def public(self, local_port: int) -> dict[str, Any]:
         """Receipt view: never the kubeconfig path."""
@@ -221,13 +234,15 @@ class RegistryDelivery:
 
     def __post_init__(self) -> None:
         if self.docker_socket is not None and not self.docker_socket.is_absolute():
-            raise ValueError("explicit absolute Docker socket required")
+            raise DeliveryInputError(
+                "docker-socket-required", "explicit absolute Docker socket required"
+            )
         if self.ca_file is not None and not self.ca_file.is_absolute():
-            raise ValueError("explicit absolute CA file required")
+            raise DeliveryInputError("invalid-ca-file")
 
     def _docker(self, *arguments: str) -> list[str]:
         if self.docker is None or self.docker_socket is None:
-            raise ValueError("a pinned docker tool and socket are required")
+            raise DeliveryInputError("docker-tool-required")
         return [
             str(self.docker.path),
             "--host",
@@ -265,7 +280,10 @@ class RegistryDelivery:
         if node_registry is not None:
             return node_registry_address(node_registry)
         if self.forward is not None:
-            raise ValueError("a forwarded push needs an explicit node registry")
+            raise DeliveryInputError(
+                "node-registry-required",
+                "a forwarded push needs an explicit node registry",
+            )
         return target.registry
 
     # delivery -----------------------------------------------------------------
@@ -291,21 +309,25 @@ class RegistryDelivery:
             or RegistryTarget.parse(grant.target).identity != target.identity
             or grant.expires_at <= time.time()
         ):
-            raise ValueError("exact unexpired delivery grant required")
+            raise DeliveryInputError(
+                "grant-mismatch", "exact unexpired delivery grant required"
+            )
         if self.forward is not None and (
             not is_loopback(target.host) or target.port is None
         ):
-            raise ValueError("a forwarded push needs a loopback target with a port")
+            raise DeliveryInputError(
+                "forward-target-not-loopback",
+                "a forwarded push needs a loopback target with a port",
+            )
         pull_host = self._node_registry(target, node_registry)
         tools: dict[str, ToolPin] = {}
         if isinstance(source, DockerImageSource):
             if self.docker is None or self.docker_socket is None:
-                raise ValueError("a pinned docker tool and socket are required")
+                raise DeliveryInputError("docker-tool-required")
             tools["docker"] = self.docker
         if self.forward is not None:
             tools["kubectl"] = self.forward.kubectl
-        for tool in tools.values():
-            tool.verify()
+        verify_tools(tools)
         limits = limits or ProcessLimits(600, 1_048_576)
         started_at, started = _now(), time.monotonic()
         deadline = min(grant.expires_at, time.time() + limits.max_seconds)
@@ -355,8 +377,7 @@ class RegistryDelivery:
                 state="rejected" if failure.result == "rejected" else "failed",
             )
         finally:
-            for tool in tools.values():
-                tool.verify()
+            verify_tools(tools)
         receipt["finished_at"] = _now()
         receipt["seconds"] = round(time.monotonic() - started, 3)
         return receipt

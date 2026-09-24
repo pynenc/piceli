@@ -37,6 +37,7 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO
 
+from piceli.artifacts.delivery_inputs import DeliveryInputError, verify_tools
 from piceli.artifacts.node_transport import (
     NodeTarget,
     Runner,
@@ -500,12 +501,17 @@ class NodeDelivery:
 
     def __post_init__(self) -> None:
         if self.docker_socket is not None and not self.docker_socket.is_absolute():
-            raise ValueError("explicit absolute Docker socket required")
+            raise DeliveryInputError(
+                "docker-socket-required", "explicit absolute Docker socket required"
+            )
         if (
             self.ssh_agent_socket is not None
             and not self.ssh_agent_socket.is_absolute()
         ):
-            raise ValueError("explicit absolute ssh agent socket required")
+            raise DeliveryInputError(
+                "invalid-ssh-agent-socket",
+                "explicit absolute ssh agent socket required",
+            )
 
     def _transport(self, target: NodeTarget) -> Transport:
         return Transport(target, self.docker, self.docker_socket, self.ssh)
@@ -517,7 +523,7 @@ class NodeDelivery:
 
     def _docker(self, *arguments: str) -> list[str]:
         if self.docker is None or self.docker_socket is None:
-            raise ValueError("a pinned docker tool and socket are required")
+            raise DeliveryInputError("docker-tool-required")
         return [
             str(self.docker.path),
             "--host",
@@ -635,22 +641,26 @@ class NodeDelivery:
             NodeTarget.parse(grant.target).identity != target.identity
             or grant.expires_at <= time.time()
         ):
-            raise ValueError("exact unexpired delivery grant required")
+            raise DeliveryInputError(
+                "grant-mismatch", "exact unexpired delivery grant required"
+            )
         self._transport(target)  # validates that the transport's tool is pinned
         tools: dict[str, ToolPin] = {}
         if target.transport == "ssh" and self.ssh is not None:
             tools["ssh"] = self.ssh
         if target.transport == "docker" or isinstance(source, DockerImageSource):
             if self.docker is None or self.docker_socket is None:
-                raise ValueError("a pinned docker tool and socket are required")
+                raise DeliveryInputError("docker-tool-required")
             tools["docker"] = self.docker
         name = normalize_reference(reference) if reference is not None else None
         if isinstance(source, DockerImageSource) and name is None:
             if source.is_id:
-                raise ValueError("an image ID source needs an explicit reference")
+                raise DeliveryInputError(
+                    "reference-required",
+                    "an image ID source needs an explicit reference",
+                )
             name = normalize_reference(source.reference)
-        for tool in tools.values():
-            tool.verify()
+        verify_tools(tools)
         limits = limits or ProcessLimits(600, 1_048_576)
         started_at, started = _now(), time.monotonic()
         receipt: dict[str, Any] = {
@@ -684,8 +694,7 @@ class NodeDelivery:
                 state="rejected" if failure.result == "rejected" else "failed",
             )
         finally:
-            for tool in tools.values():
-                tool.verify()
+            verify_tools(tools)
         receipt["finished_at"] = _now()
         receipt["seconds"] = round(time.monotonic() - started, 3)
         return receipt

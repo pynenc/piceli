@@ -6,7 +6,9 @@ import argparse
 import json
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import TypeVar
 
 from piceli.artifacts import BuildPlan, OciBuilder, SourcePin, inspect_oci
 from piceli.artifacts.build_spec import (
@@ -19,10 +21,17 @@ from piceli.artifacts.delivery import (
     DockerImageSource,
     NodeDelivery,
     append_journal,
+    normalize_reference,
     write_receipt,
+)
+from piceli.artifacts.delivery_inputs import (
+    DeliveryInputError,
+    discover_docker_socket,
+    discover_tool,
 )
 from piceli.artifacts.local_import import DockerLocalImporter, LocalImportGrant
 from piceli.artifacts.node_transport import NodeTarget
+from piceli.artifacts.plan import validate_digest
 from piceli.artifacts.process import (
     BuildCommand,
     ExecutionGrant,
@@ -140,14 +149,15 @@ def main(arguments: list[str] | None = None) -> int:
                 )
         print(json.dumps(result, sort_keys=True))
         return 0 if result.get("state", "succeeded") == "succeeded" else 1
-    except (ValueError, KeyError, TypeError, OSError, InterruptedError):
-        # Do not echo private paths, process output, manifests or attacker-controlled errors.
-        print(
-            json.dumps(
-                {"state": "rejected", "reason": "invalid-or-unavailable-artifact-input"}
-            ),
-            file=sys.stderr,
+    except (ValueError, KeyError, TypeError, OSError, InterruptedError) as error:
+        # Only fixed codes: never private paths, process output, manifests or
+        # attacker-controlled errors.
+        reason = (
+            error.code
+            if isinstance(error, DeliveryInputError)
+            else "invalid-or-unavailable-artifact-input"
         )
+        print(json.dumps({"state": "rejected", "reason": reason}), file=sys.stderr)
         return 2
 
 
@@ -163,19 +173,48 @@ _REGISTRY_ONLY = (
     "kubectl_sha256",
 )
 _NODE_ONLY = ("ref", "ssh", "ssh_sha256", "ssh_agent_socket")
+_FORWARD_OPTIONS = ("namespace", "kubeconfig", "context", "kubectl", "kubectl_sha256")
+T = TypeVar("T")
+
+
+def _input(code: str, make: Callable[[], T]) -> T:
+    """Run one input step; any failure becomes the fixed rejection ``code``."""
+    try:
+        return make()
+    except DeliveryInputError:
+        raise
+    except (ValueError, KeyError, TypeError, OSError) as error:
+        raise DeliveryInputError(code) from error
+
+
+def _docker(args: argparse.Namespace) -> tuple[ToolPin, Path]:
+    """The pinned docker CLI (explicit or from PATH) and its unix socket."""
+    tool = discover_tool("docker", args.docker, args.docker_sha256)
+    socket = discover_docker_socket(
+        tool, args.docker_socket.absolute() if args.docker_socket else None
+    )
+    return tool, socket
 
 
 def _deliver(args: argparse.Namespace) -> dict[str, object]:
-    source = (
-        DockerImageSource(args.image)
-        if args.image
-        else ArchiveSource(args.archive.absolute())
+    _input("invalid-approved-digest", lambda: validate_digest(args.approve_digest))
+    limits = _input("invalid-timeout", lambda: ProcessLimits(args.timeout))
+    source: DockerImageSource | ArchiveSource = _input(
+        "invalid-source",
+        lambda: (
+            DockerImageSource(args.image)
+            if args.image
+            else ArchiveSource(args.archive.absolute())
+        ),
     )
-    grant = DeliveryGrant(args.approve_digest, args.to, time.time() + args.timeout)
+    grant = _input(
+        "invalid-target",
+        lambda: DeliveryGrant(args.approve_digest, args.to, time.time() + args.timeout),
+    )
     if args.to.startswith("oci://"):
-        receipt = _deliver_registry(args, source, grant)
+        receipt = _deliver_registry(args, source, grant, limits)
     else:
-        receipt = _deliver_node(args, source, grant)
+        receipt = _deliver_node(args, source, grant, limits)
     if args.receipt is not None:
         write_receipt(args.receipt, receipt)
     if args.journal is not None:
@@ -187,41 +226,55 @@ def _deliver_registry(
     args: argparse.Namespace,
     source: DockerImageSource | ArchiveSource,
     grant: DeliveryGrant,
+    limits: ProcessLimits,
 ) -> dict[str, object]:
     if any(getattr(args, name) is not None for name in _NODE_ONLY):
-        raise ValueError("node-import options do not apply to a registry target")
-    forward_options = ("namespace", "kubeconfig", "context", "kubectl")
+        raise DeliveryInputError("node-options-on-registry-target")
+    target = _input("invalid-target", lambda: RegistryTarget.parse(args.to))
     forward = None
     if args.via_forward is not None:
-        if args.kubectl is None or args.kubeconfig is None or args.namespace is None:
-            raise ValueError("--via-forward needs --namespace, --kubeconfig, --kubectl")
-        forward = RegistryForward(
-            namespace=args.namespace,
-            target=args.via_forward,
-            remote_port=args.forward_remote_port,
-            kubeconfig=args.kubeconfig.absolute(),
-            kubectl=ToolPin(args.kubectl, args.kubectl_sha256),
-            context=args.context,
+        if args.kubeconfig is None or args.namespace is None:
+            raise DeliveryInputError("forward-options-incomplete")
+        kubectl = discover_tool("kubectl", args.kubectl, args.kubectl_sha256)
+        forward = _input(
+            "invalid-forward",
+            lambda: RegistryForward(
+                namespace=args.namespace,
+                target=args.via_forward,
+                remote_port=args.forward_remote_port,
+                kubeconfig=args.kubeconfig.absolute(),
+                kubectl=kubectl,
+                context=args.context,
+            ),
         )
-    elif any(getattr(args, name) is not None for name in forward_options):
-        raise ValueError("forward options need --via-forward")
-    delivery = RegistryDelivery(
-        docker=ToolPin(args.docker, args.docker_sha256) if args.docker else None,
-        docker_socket=args.docker_socket,
-        credentials=(
-            RegistryCredentials.load(args.credentials.absolute())
-            if args.credentials is not None
-            else None
-        ),
-        ca_file=args.ca_file.absolute() if args.ca_file is not None else None,
-        forward=forward,
+    elif any(getattr(args, name) is not None for name in _FORWARD_OPTIONS):
+        raise DeliveryInputError("forward-options-without-forward")
+    docker, socket = (
+        _docker(args) if isinstance(source, DockerImageSource) else (None, None)
     )
-    return delivery.deliver(
-        source,
-        RegistryTarget.parse(args.to),
-        grant,
-        node_registry=args.node_registry,
-        limits=ProcessLimits(args.timeout),
+    credentials = (
+        _input(
+            "invalid-credentials-file",
+            lambda: RegistryCredentials.load(args.credentials.absolute()),
+        )
+        if args.credentials is not None
+        else None
+    )
+    delivery = _input(
+        "invalid-delivery-input",
+        lambda: RegistryDelivery(
+            docker=docker,
+            docker_socket=socket,
+            credentials=credentials,
+            ca_file=args.ca_file.absolute() if args.ca_file is not None else None,
+            forward=forward,
+        ),
+    )
+    return _input(
+        "invalid-delivery-input",
+        lambda: delivery.deliver(
+            source, target, grant, node_registry=args.node_registry, limits=limits
+        ),
     )
 
 
@@ -229,22 +282,37 @@ def _deliver_node(
     args: argparse.Namespace,
     source: DockerImageSource | ArchiveSource,
     grant: DeliveryGrant,
+    limits: ProcessLimits,
 ) -> dict[str, object]:
     if any(getattr(args, name) is not None for name in _REGISTRY_ONLY):
-        raise ValueError("registry options do not apply to a node target")
-    target = NodeTarget.parse(args.to)
-    delivery = NodeDelivery(
-        docker=ToolPin(args.docker, args.docker_sha256) if args.docker else None,
-        docker_socket=args.docker_socket,
-        ssh=ToolPin(args.ssh, args.ssh_sha256) if args.ssh else None,
-        ssh_agent_socket=args.ssh_agent_socket,
+        raise DeliveryInputError("registry-options-on-node-target")
+    target = _input("invalid-target", lambda: NodeTarget.parse(args.to))
+    if args.ref is not None:
+        _input("invalid-reference", lambda: normalize_reference(args.ref))
+    docker, socket = (
+        _docker(args)
+        if isinstance(source, DockerImageSource) or target.transport == "docker"
+        else (None, None)
     )
-    return delivery.deliver(
-        source,
-        target,
-        grant,
-        reference=args.ref,
-        limits=ProcessLimits(args.timeout),
+    ssh = (
+        discover_tool("ssh", args.ssh, args.ssh_sha256)
+        if target.transport == "ssh"
+        else None
+    )
+    delivery = _input(
+        "invalid-delivery-input",
+        lambda: NodeDelivery(
+            docker=docker,
+            docker_socket=socket,
+            ssh=ssh,
+            ssh_agent_socket=args.ssh_agent_socket,
+        ),
+    )
+    return _input(
+        "invalid-delivery-input",
+        lambda: delivery.deliver(
+            source, target, grant, reference=args.ref, limits=limits
+        ),
     )
 
 

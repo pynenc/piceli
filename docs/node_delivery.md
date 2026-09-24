@@ -40,18 +40,35 @@ list, so the config digest also fixes the content of every layer.
 ## Registry delivery (default)
 
 ```sh
-DOCKER=$(realpath "$(command -v docker)")
 python -m piceli artifacts deliver \
   --image example/app:1.4.2 \
   --to oci://registry.example:5000/team/app:1.4.2 \
   --approve-digest sha256:<config digest> \
-  --docker "$DOCKER" --docker-sha256 "sha256:$(shasum -a 256 "$DOCKER" | cut -d' ' -f1)" \
-  --docker-socket /var/run/docker.sock \
   --credentials ~/.config/piceli/registry.json \
   --receipt delivery-receipt.json --journal deliveries.jsonl
 ```
 
 The receipt's `pull_ref` is what a workload should reference.
+
+### Tools and pins
+
+Every external tool is pinned by SHA-256, and the pins are recorded in the
+receipt's `tools` (`docker`, `kubectl`, `ssh`). You do not have to pin them
+by hand:
+
+- **docker** (needed for `--image`, and for `docker://` node targets) and
+  **kubectl** (needed for `--via-forward`) are found on `PATH`, like
+  `build-spec` does. **ssh** is found the same way for `ssh://` targets.
+- The path is resolved to the real file (symbolic links followed, so Docker
+  Desktop's or Nix's links pin the actual binary), its SHA-256 is computed,
+  and the pin is checked again after the delivery.
+- `--docker PATH`, `--kubectl PATH`, `--ssh PATH` choose a different binary.
+  `--docker-sha256`, `--kubectl-sha256`, `--ssh-sha256` require a known
+  digest: a different binary is refused with `tool-pin-mismatch`.
+- The Docker socket is `--docker-socket` when given, otherwise the unix
+  socket in `DOCKER_HOST`, otherwise the endpoint of the current Docker
+  context (`docker context inspect`). Only `unix://` endpoints are used; a
+  TCP or SSH endpoint is refused with `docker-socket-required`.
 
 ### Target
 
@@ -73,15 +90,12 @@ Piceli starts a supervised `kubectl port-forward` for the duration of the
 push and stops it afterwards, whatever the outcome:
 
 ```sh
-KUBECTL=$(realpath "$(command -v kubectl)")
 python -m piceli artifacts deliver \
   --image sha256:<image ID> \
   --to oci://127.0.0.1:15000/team/app:1.4.2 \
   --approve-digest sha256:<config digest> \
-  --docker … --docker-sha256 … --docker-socket … \
   --via-forward service/registry --namespace registry --forward-remote-port 5000 \
   --kubeconfig /abs/path/cluster.kubeconfig --context my-cluster \
-  --kubectl "$KUBECTL" --kubectl-sha256 "sha256:$(shasum -a 256 "$KUBECTL" | cut -d' ' -f1)" \
   --node-registry 127.0.0.1:5000
 ```
 
@@ -90,8 +104,8 @@ python -m piceli artifacts deliver \
   on the Service or Pod (`service/NAME` or `pod/NAME`).
 - The forward listens on `127.0.0.1` only. kubectl always gets the explicit
   `--kubeconfig` (and `--context` when given); the default kubeconfig and
-  current context are never used. kubectl is pinned by SHA-256 like the
-  other tools.
+  current context are never used. kubectl is found and pinned like the
+  other tools (see Tools and pins).
 - The forward runs under the same `ForwardSupervisor` as `piceli observe`:
   it is health-checked with `GET /v2/` (any status below 500 counts, so an
   auth challenge is healthy) and restarted if the probe keeps failing. If
@@ -250,9 +264,51 @@ Other fields:
 - `pull_ref` is `<node_registry>/<repository>@<manifest digest>`.
 
 Receipts never contain local paths (archive, kubeconfig, credentials file),
-credentials, tool output or archive contents. Exit codes are the same as for
-node import: 0 for `pushed` or `already-present`, 1 for `rejected` or
-`failed`, 2 for invalid input.
+credentials, tool output or archive contents.
+
+### Exit codes and input rejections
+
+| Exit | Meaning |
+| --- | --- |
+| 0 | `pushed`, `imported` or `already-present` |
+| 1 | `rejected` or `failed`: a receipt is printed (and written), see `reason` |
+| 2 | Invalid or unavailable input: nothing ran and no receipt is written |
+
+For exit code 2 the CLI prints one line to stderr,
+`{"state": "rejected", "reason": "<code>"}`. The code is fixed text; paths,
+credentials and tool output are never echoed.
+
+| Code | Meaning |
+| --- | --- |
+| `invalid-approved-digest` | `--approve-digest` is not `sha256:<64 hex>` |
+| `invalid-timeout` | `--timeout` is not a number of seconds in (0, 3600] |
+| `invalid-source` | `--image` or `--archive` is malformed |
+| `invalid-target` | `--to` does not parse (`oci://`, `ssh://` or `docker://`) |
+| `plain-http-not-loopback` | plain HTTP asked for a registry that is not loopback |
+| `invalid-reference` | `--ref` is not a valid tagged name |
+| `reference-required` | node import of an image ID without `--ref` |
+| `node-options-on-registry-target` | `--ref`/`--ssh*` given with an `oci://` target |
+| `registry-options-on-node-target` | registry or forward options given with a node target |
+| `forward-options-incomplete` | `--via-forward` without `--namespace` and `--kubeconfig` |
+| `forward-options-without-forward` | forward options given without `--via-forward` |
+| `invalid-forward` | bad forward target, namespace, context or port |
+| `forward-target-not-loopback` | a forwarded push whose `--to` is not a loopback host with a port |
+| `node-registry-required` | a forwarded push without `--node-registry` |
+| `invalid-node-registry` | `--node-registry` is not `host[:port]` |
+| `docker-tool-required` | docker is needed but not on `PATH` (or not usable) |
+| `docker-socket-required` | no usable unix Docker socket (explicit, `DOCKER_HOST` or context) |
+| `kubectl-tool-required` | `--via-forward` but kubectl is not on `PATH` (or not usable) |
+| `ssh-tool-required` | `ssh://` target but ssh is not on `PATH` (or not usable) |
+| `tool-pin-mismatch` | a tool differs from its `--*-sha256` pin, or changed during the run |
+| `invalid-credentials-file` | `--credentials` is missing, not a regular file, or not valid JSON |
+| `credentials-file-not-private` | `--credentials` has group or world permissions |
+| `invalid-ca-file` | `--ca-file` is unusable |
+| `invalid-ssh-agent-socket` | `--ssh-agent-socket` is not an absolute path |
+| `grant-mismatch` | (API) the grant names another target or has expired |
+| `invalid-delivery-input` | any other invalid input |
+
+In the Python API these are `piceli.artifacts.delivery_inputs.DeliveryInputError`
+(a `ValueError`) with the code in `.code`.
 
 ### Python API
 
@@ -383,21 +439,21 @@ An `oci://` target is registry delivery (above), not a node target.
 ### CLI
 
 ```sh
-DOCKER=$(realpath "$(command -v docker)")
 python -m piceli artifacts deliver \
   --image example/app:1.4.2 \
   --to 'ssh://ops@node-1.example?runtime=k3s-containerd' \
   --approve-digest sha256:<config digest> \
-  --docker "$DOCKER" --docker-sha256 "sha256:$(shasum -a 256 "$DOCKER" | cut -d' ' -f1)" \
-  --docker-socket /var/run/docker.sock \
-  --ssh /usr/bin/ssh --ssh-sha256 "sha256:$(shasum -a 256 /usr/bin/ssh | cut -d' ' -f1)" \
   --ssh-agent-socket "$SSH_AUTH_SOCK" \
   --receipt delivery-receipt.json --journal deliveries.jsonl
 ```
 
 - Use `--archive image.tar` instead of `--image` for a `docker save` or OCI
   image-layout tar. The archive must contain exactly one image.
-- An archive delivered over ssh needs no Docker pins.
+- docker and ssh are found on `PATH` and pinned automatically, exactly as for
+  registry delivery (see Tools and pins); `--docker`, `--ssh` and the
+  `--*-sha256` flags override. An archive delivered over ssh needs no docker.
+- The ssh agent socket is never picked up implicitly: pass
+  `--ssh-agent-socket` to forward it.
 - Add `--ref registry.test/app:1.4.2` to set the name on the node. It is
   required when `--image` is an image ID, or when the archive has no tag or
   more than one.
@@ -406,13 +462,8 @@ python -m piceli artifacts deliver \
 - `--receipt` writes the receipt atomically as a mode-0600 file. `--journal`
   appends it as one JSON line.
 
-Exit codes:
-
-| Code | Meaning |
-| --- | --- |
-| 0 | `imported` or `already-present` |
-| 1 | `rejected` or `failed` (see `reason`) |
-| 2 | Invalid input. A fixed error is printed; paths and tool output are never echoed. |
+Exit codes and input rejection codes are the same as for registry delivery
+(see Exit codes and input rejections above).
 
 ### Python API
 
@@ -517,7 +568,7 @@ docker pull busybox:1.36
 ID=$(docker image inspect --format '{{.Id}}' busybox:1.36)   # classic store
 python -m piceli artifacts deliver --image busybox:1.36 \
   --to 'docker://delivery-demo-control-plane?runtime=containerd' \
-  --approve-digest "$ID" --docker … --docker-sha256 … --docker-socket …
+  --approve-digest "$ID"
 docker exec delivery-demo-control-plane ctr -n k8s.io images ls | grep busybox
 docker exec delivery-demo-control-plane crictl images | grep busybox  # IMAGE ID = config digest
 kind delete cluster --name delivery-demo --kubeconfig /tmp/delivery-demo.kubeconfig
