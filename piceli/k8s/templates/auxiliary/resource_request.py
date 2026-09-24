@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional, Union, overload
+from typing import Union, overload
 
 from kubernetes import client
 from kubernetes.utils.quantity import parse_quantity
@@ -19,9 +19,9 @@ class Resources:
     The class supports creating `Resources` objects from dictionaries, converting between string and numerical representations, and performing arithmetic operations on resource quantities. These capabilities are essential for managing resource allocations in Kubernetes deployments.
     """
 
-    memory: Optional[str] = None
-    cpu: Optional[str] = None
-    ephemeral_storage: Optional[str] = None
+    memory: str | None = None
+    cpu: str | None = None
+    ephemeral_storage: str | None = None
 
     @classmethod
     def from_dict(cls, resources: dict[str, str]) -> "Resources":
@@ -67,7 +67,7 @@ class Resources:
             if k in ["memory", "cpu", "ephemeral_storage"]
         }
 
-    def to_quantity_dict(self) -> dict[str, Optional[float]]:
+    def to_quantity_dict(self) -> dict[str, float | None]:
         """creates a dict from a Resources object containing the quantity in k"""
         return {
             k.replace("_", "-"): float(parse_quantity(v)) if v else None
@@ -257,7 +257,7 @@ class ContainerResourcesData:
     used_resources: Resources
 
     @property
-    def max_usage(self) -> Optional[float]:
+    def max_usage(self) -> float | None:
         """returns the max usage of the pod max(used_cpu/requested_cpu, used_memory/requested_memory)"""
         if (
             self.used_resources == Resources()
@@ -293,15 +293,15 @@ class ResourcesData:
 
     pod_name: str
     labels: dict[str, str]
-    node_name: Optional[str]
-    pod_status: Optional[str]
-    pod_status_reason: Optional[str]
-    pod_status_message: Optional[str]
-    last_update: Optional[datetime]
+    node_name: str | None
+    pod_status: str | None
+    pod_status_reason: str | None
+    pod_status_message: str | None
+    last_update: datetime | None
     containers: dict[str, ContainerResourcesData] = field(default_factory=dict)
 
     @property
-    def max_usage(self) -> Optional[float]:
+    def max_usage(self) -> float | None:
         """returns the max usage of the pod max(used_cpu/requested_cpu, used_memory/requested_memory)"""
         max_usage = 0.0
         for container in self.containers.values():

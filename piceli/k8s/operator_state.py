@@ -10,18 +10,16 @@ import fcntl
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import secrets
-import shutil
 import socket
 import tarfile
 import tempfile
 import time
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Protocol
-
 
 _NAME = re.compile(r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?")
 _TOKEN_CHARS = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
@@ -34,7 +32,7 @@ class ConcurrentWriterError(RuntimeError):
 @dataclass(frozen=True)
 class StandingPolicy:
     """Explicit authorization scope for autonomous or assisted operations.
-    
+
     Standing policies authorize ONLY their explicit scope. Scope expansion requires a new grant.
     """
 

@@ -1,7 +1,7 @@
 import logging
 from abc import abstractmethod
 from multiprocessing.pool import ApplyResult
-from typing import Any, Optional
+from typing import Any
 
 from kubernetes.utils.quantity import parse_quantity
 
@@ -30,7 +30,7 @@ class VolumeManager(base.ObjectManager):
     def apply(
         self,
         ctx: ClientContext,
-        namespace: Optional[str] = None,
+        namespace: str | None = None,
         async_req: bool = False,
         dry_run: DryRun = DryRun.OFF,
     ) -> Any | ApplyResult:
@@ -67,7 +67,7 @@ class VolumeManager(base.ObjectManager):
     def delete(
         self,
         ctx: ClientContext,
-        namespace: Optional[str] = None,
+        namespace: str | None = None,
         async_req: bool = False,
         dry_run: DryRun = DryRun.OFF,
     ) -> Any | ApplyResult:
@@ -82,7 +82,7 @@ class VolumeManager(base.ObjectManager):
     def wait_phases(self) -> list[phases.Phase]:
         """Get the phases to wait for."""
 
-    def wait(self, ctx: ClientContext, namespace: Optional[str] = None) -> None:
+    def wait(self, ctx: ClientContext, namespace: str | None = None) -> None:
         args = (self._resolve_namespace(namespace),) if self.namespaced else ()
         utils_wait.wait(
             ctx=ctx,

@@ -13,12 +13,12 @@ import re
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import MappingProxyType
 from typing import Any
 
-from piceli.k8s.ops.execution_journal import ExecutionJournal
 from piceli.k8s.ops.bounds import timestamp
+from piceli.k8s.ops.execution_journal import ExecutionJournal
 from piceli.k8s.ops.executor import ExecutionAuthorization, PlanExecutor
 from piceli.k8s.ops.plan import (
     DeploymentComponent,
@@ -32,7 +32,6 @@ from piceli.k8s.ops.plan import (
 )
 from piceli.k8s.ops.revision import DeploymentRevision, ExecutionBundle
 from piceli.k8s.ops.secret_versions import SecretVersionRef, SecretVersionStore
-
 
 DEPLOYMENT_SESSION_SCHEMA_VERSION = 1
 CompositionFactory = Callable[[Mapping[str, SecretVersionRef]], DeploymentComposition]
@@ -386,7 +385,7 @@ class DeploymentSession:
         plan = build_plan(composition, snapshot, plan_authorization)
         authorization = authorization_factory(plan, snapshot)
         if timestamp(authorization.expires_at, allow_future=True) <= datetime.now(
-            timezone.utc
+            UTC
         ):
             raise ValueError("deployment session authorization expired")
         revision = DeploymentRevision.create(plan, snapshot, authorization)
@@ -445,7 +444,7 @@ class DeploymentSession:
             raise ValueError("deployment session journal state is ambiguous")
         if len(record["actions"]) != len(self.bundle.action_ids) or any(
             row["operation_id"] != operation_id
-            for row, operation_id in zip(record["actions"], self.bundle.action_ids)
+            for row, operation_id in zip(record["actions"], self.bundle.action_ids, strict=True)
         ):
             raise ValueError("deployment session journal action identity changed")
 

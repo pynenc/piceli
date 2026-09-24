@@ -1,21 +1,21 @@
 """Bounded real HTTP export, with actual deployment executor hooks."""
-from contextlib import contextmanager
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import threading
 import time
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
+from opentelemetry.proto.collector.logs.v1.logs_service_pb2 import (
+    ExportLogsServiceRequest,
+)
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
     ExportTraceServiceRequest,
     ExportTraceServiceResponse,
 )
-from opentelemetry.proto.collector.logs.v1.logs_service_pb2 import (
-    ExportLogsServiceRequest,
-)
 
 from piceli.telemetry import OperationTelemetry, OtlpOptions
-from tests.acceptance.test_local_executor import executor, prepare, mutations
 from tests.acceptance.fake_api import manifest
+from tests.acceptance.test_local_executor import executor, mutations, prepare
 
 
 @contextmanager
@@ -56,9 +56,8 @@ def test_success_parenting_and_fixed_secret_safe_fields():
         with emitter.operation("plan", "outer"):
             with emitter.operation("build", "inner"):
                 pass
-        with pytest.raises(ValueError):
-            with emitter.operation("apply", "failed"):
-                raise ValueError(secret)
+        with pytest.raises(ValueError), emitter.operation("apply", "failed"):
+            raise ValueError(secret)
         assert emitter.flush(2)
         stats = emitter.shutdown(2)
         assert stats["drained"] and stats["pending"] == 0

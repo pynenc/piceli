@@ -1,4 +1,4 @@
-from typing import Iterator, Optional
+from collections.abc import Iterator
 
 from kubernetes import client
 from pydantic import BaseModel
@@ -31,21 +31,19 @@ class Container(BaseModel):
 
     name: names.Name
     image: str
-    command: Optional[list[str]] = None
-    args: Optional[list[str]] = None
-    image_pull_policy: Optional[policies.ImagePullPolicy] = None
-    ports: Optional[list[port.Port]] = None
-    env: Optional[
-        dict[str, str | env_vars.ValueFromField | env_vars.ValueFromResourceField]
-    ] = None
-    volumes: Optional[list[volume.VolumeMount]] = None
-    liveness_pre_stop_command: Optional[list[str]] = None
-    liveness_post_start_command: Optional[list[str]] = None
-    readiness_command: Optional[list[str]] = None
-    liveness_command: Optional[list[str]] = None
-    resources: Optional[resource_request.Resources] = None
+    command: list[str] | None = None
+    args: list[str] | None = None
+    image_pull_policy: policies.ImagePullPolicy | None = None
+    ports: list[port.Port] | None = None
+    env: dict[str, str | env_vars.ValueFromField | env_vars.ValueFromResourceField] | None = None
+    volumes: list[volume.VolumeMount] | None = None
+    liveness_pre_stop_command: list[str] | None = None
+    liveness_post_start_command: list[str] | None = None
+    readiness_command: list[str] | None = None
+    liveness_command: list[str] | None = None
+    resources: resource_request.Resources | None = None
     env_sources: list[configmap.ConfigMap | secret.Secret] = []
-    security_context_uid: Optional[int] = None
+    security_context_uid: int | None = None
 
     @property
     def ports_dict(self) -> dict[str, int]:

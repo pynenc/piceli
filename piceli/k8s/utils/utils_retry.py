@@ -1,5 +1,6 @@
+from collections.abc import Callable
 from functools import wraps
-from typing import Any, Callable, Type
+from typing import Any
 
 import tenacity
 
@@ -8,7 +9,7 @@ class RetryException(Exception):
     """Exception to raise when retrying."""
 
 
-def retry_for_exception(exception: Type[Exception]) -> Callable:
+def retry_for_exception(exception: type[Exception]) -> Callable:
     """Decorator to automatically retry a function if a specific exception is raised."""
 
     def decorator(func: Callable) -> Callable:

@@ -8,7 +8,6 @@ from typer.testing import CliRunner
 from piceli.k8s.cli.operator import app
 from piceli.k8s.observe_server import LocalObserveServer
 
-
 runner = CliRunner()
 
 

@@ -35,7 +35,7 @@ def run(
     """Deploy Kubernetes Object Model to the current cluster."""
     console = Console()
     common.print_command_name(console, "Running Deployment")
-    ctx_obj: "ContextObject" = ctx.obj
+    ctx_obj: ContextObject = ctx.obj
     strategy = strategy_auto.StrategyAuto()
     k8s_objects = loader.load_all(
         module_name=ctx_obj.module_name,
@@ -123,7 +123,7 @@ async def run_deployment(
             )
         except Exception as e:
             console.print(
-                Panel(f"[bold red]Deployment failed:[/] {str(e)}", expand=False)
+                Panel(f"[bold red]Deployment failed:[/] {e!s}", expand=False)
             )
             raise
         else:

@@ -1,4 +1,4 @@
-from typing import Callable
+from collections.abc import Callable
 
 import pytest
 from pydantic import BaseModel, ValidationError
@@ -57,4 +57,4 @@ class TestCronTab:
 )
 def test_crontab_helper_methods(method: Callable, args: tuple, expected: str) -> None:
     cron = method(*args)
-    assert str(cron) == expected, f"Expected {expected}, got {str(cron)}"
+    assert str(cron) == expected, f"Expected {expected}, got {cron!s}"

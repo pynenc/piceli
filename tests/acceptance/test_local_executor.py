@@ -8,7 +8,7 @@ import subprocess
 import sys
 import time
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -49,7 +49,7 @@ def discover(provider, kinds=None, **limits):
         provider,
         DiscoveryRequest(TARGET, tuple(kinds), DiscoveryLimits(**limits)),
         capture_id="acceptance-capture",
-        captured_at=datetime.now(timezone.utc).isoformat(),
+        captured_at=datetime.now(UTC).isoformat(),
         policy_revision="no-default-masking/v2",
     )
 
@@ -83,7 +83,7 @@ def prepare(provider, desired, *, adopt=(), prune=False, kinds=None):
         provider.field_manager,
         provider.owner_id,
         tuple(ActionGrant.for_action(action) for action in plan.actions),
-        (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat(),
+        (datetime.now(UTC) + timedelta(minutes=10)).isoformat(),
         cluster_resources=tuple(
             action.resource.ref
             for action in plan.actions
@@ -173,7 +173,7 @@ def test_example_composition_is_pure_and_runs_in_dependency_order(local_api, tmp
         provider.field_manager,
         provider.owner_id,
         tuple(ActionGrant.for_action(action) for action in plan.actions),
-        (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat(),
+        (datetime.now(UTC) + timedelta(minutes=10)).isoformat(),
     )
     assert run.run("example", plan, snapshot, grant)["state"] == "ready"
     assert [request["body"]["kind"] for request in mutations(api)] == [
@@ -784,7 +784,7 @@ def test_execution_authorization_is_exact_and_fail_closed(local_api, tmp_path, c
             grant = replace(
                 grant,
                 expires_at=(
-                    datetime.now(timezone.utc) - timedelta(seconds=1)
+                    datetime.now(UTC) - timedelta(seconds=1)
                 ).isoformat(),
             )
         elif change == "endpoint":

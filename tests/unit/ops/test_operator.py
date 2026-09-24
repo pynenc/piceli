@@ -1,14 +1,11 @@
 """Unit tests for Piceli operator core: classification, inventory, logs, and buffers."""
 
 import time
-from pathlib import Path
-import pytest
 
 from piceli.k8s.observe import ObservationRef, ObservedObject
 from piceli.k8s.operator import (
     BoundedInventoryBuffer,
     InventoryEvent,
-    ManagedResource,
     build_operator_report,
     redact_log_content,
 )

@@ -157,7 +157,7 @@ def test_get_env_from_dict(input_data: dict, expected_output: list) -> None:
     assert len(result) == len(
         expected_output
     ), "The number of environment variables does not match expected"
-    for env_var, expected_var in zip(result, expected_output):
+    for env_var, expected_var in zip(result, expected_output, strict=True):
         assert (
             env_var.name == expected_var.name
         ), f"Name mismatch: {env_var.name} != {expected_var.name}"

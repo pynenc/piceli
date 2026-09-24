@@ -1,5 +1,6 @@
 from collections import defaultdict
-from typing import Any, Callable, NamedTuple
+from collections.abc import Callable
+from typing import Any, NamedTuple
 
 from kubernetes import client
 

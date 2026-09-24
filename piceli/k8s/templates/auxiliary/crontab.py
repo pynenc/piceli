@@ -12,9 +12,10 @@ Utility Functions:
 
 The `CronTab` type represents an annotated string that has been validated as a correct cron expression, ensuring the scheduling pattern is valid according to cron syntax.
 """
+from typing import Annotated
+
 from cron_validator import CronValidator
 from pydantic import AfterValidator
-from typing_extensions import Annotated
 
 
 def check_crontab(v: str) -> str:

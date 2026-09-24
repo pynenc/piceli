@@ -1,9 +1,10 @@
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import cached_property
 from multiprocessing.pool import ApplyResult
-from typing import Any, Callable, Optional
+from typing import Any
 
 from kubernetes import client
 from kubernetes.client.exceptions import ApiException
@@ -40,12 +41,12 @@ class ObjectManager:
     def namespaced(self) -> bool:
         return utils_api.is_namespaced(self.api_methods)
 
-    def _resolve_namespace(self, namespace: Optional[str]) -> str:
+    def _resolve_namespace(self, namespace: str | None) -> str:
         return namespace or self.k8s_object.namespace or Namespace.DEFAULT.value
 
     def _prepare_args(
         self,
-        namespace: Optional[str] = None,
+        namespace: str | None = None,
         with_name: bool = False,
         with_spec: bool = True,
     ) -> tuple:
@@ -71,7 +72,7 @@ class ObjectManager:
         except ApiException as ex:
             raise api_exceptions.ApiOperationException.from_api_exception(ex) from ex
 
-    def read(self, ctx: ClientContext, namespace: Optional[str] = None) -> K8sObject:
+    def read(self, ctx: ClientContext, namespace: str | None = None) -> K8sObject:
         """reads the k8s object from the cluster, exception if not exists"""
         args = self._prepare_args(with_name=True, with_spec=False, namespace=namespace)
         spec = self._invoke_api(ctx, "read", *args)
@@ -83,10 +84,10 @@ class ObjectManager:
     def patch(
         self,
         ctx: ClientContext,
-        namespace: Optional[str] = None,
+        namespace: str | None = None,
         async_req: bool = False,
         dry_run: DryRun = DryRun.OFF,
-        patch_doc: Optional[dict] = None,
+        patch_doc: dict | None = None,
     ) -> Any | ApplyResult:
         """patch the existing k8s object"""
         args = self._prepare_args(namespace, with_name=True, with_spec=False)
@@ -99,7 +100,7 @@ class ObjectManager:
     def create(
         self,
         ctx: ClientContext,
-        namespace: Optional[str] = None,
+        namespace: str | None = None,
         async_req: bool = False,
         dry_run: DryRun = DryRun.OFF,
     ) -> Any | ApplyResult:
@@ -122,7 +123,7 @@ class ObjectManager:
     def delete(
         self,
         ctx: ClientContext,
-        namespace: Optional[str] = None,
+        namespace: str | None = None,
         async_req: bool = False,
         dry_run: DryRun = DryRun.OFF,
     ) -> Any | ApplyResult:
@@ -141,7 +142,7 @@ class ObjectManager:
     def apply(
         self,
         ctx: ClientContext,
-        namespace: Optional[str] = None,
+        namespace: str | None = None,
         async_req: bool = False,
         dry_run: DryRun = DryRun.OFF,
     ) -> Any | ApplyResult:
@@ -160,7 +161,7 @@ class ObjectManager:
     def replace(
         self,
         ctx: ClientContext,
-        namespace: Optional[str] = None,
+        namespace: str | None = None,
         async_req: bool = False,
         dry_run: DryRun = DryRun.OFF,
     ) -> Any | ApplyResult:
@@ -183,7 +184,7 @@ class ObjectManager:
             time.sleep(1)
         return self.create(ctx, namespace, async_req, dry_run)
 
-    def wait(self, ctx: ClientContext, namespace: Optional[str] = None) -> None:
+    def wait(self, ctx: ClientContext, namespace: str | None = None) -> None:
         """waits until the k8s object exists"""
         args = (self._resolve_namespace(namespace),) if self.namespaced else ()
         utils_wait.wait(

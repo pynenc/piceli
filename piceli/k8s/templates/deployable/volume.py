@@ -1,9 +1,8 @@
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Annotated
 
 from kubernetes import client
 from pydantic import BaseModel, Field
-from typing_extensions import Annotated
 
 from piceli.k8s.templates.auxiliary import names, quantity
 from piceli.k8s.templates.auxiliary.labels import Labels
@@ -21,7 +20,7 @@ class Volume(ABC, BaseModel):
 
     name: names.Name
     storage: quantity.Quantity
-    labels: Optional[Labels] = None
+    labels: Labels | None = None
 
     # @abstractmethod
     # def get_current_volume(self) -> Optional[Any]:
@@ -215,7 +214,7 @@ class PersistentVolumeClaimTemplate(BaseModel):
 
     name: names.Name
     storage: quantity.Quantity
-    labels: Optional[Labels] = None
+    labels: Labels | None = None
 
     def get_template(self) -> client.V1PersistentVolumeClaim:
         """get a volume claim template for stateful sets"""
@@ -254,7 +253,7 @@ class VolumeMountPVC(VolumeMount):
     """
 
     pvc: PersistentVolumeClaim
-    sub_path: Optional[SubPath] = None
+    sub_path: SubPath | None = None
 
 
 class VolumeMountPVCTemplate(VolumeMount):
@@ -266,7 +265,7 @@ class VolumeMountPVCTemplate(VolumeMount):
     """
 
     pvc_template: PersistentVolumeClaimTemplate
-    sub_path: Optional[SubPath] = None
+    sub_path: SubPath | None = None
 
 
 DefaultMode = Annotated[int, Field(ge=0, le=511)]

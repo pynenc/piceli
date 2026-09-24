@@ -10,13 +10,13 @@ from urllib.request import Request, urlopen
 import pytest
 
 from piceli.k8s.observe import (
+    ForwardSupervisor,
     InventoryReader,
     InventoryReport,
     ObservationRef,
     ObservedObject,
     PortForward,
     PreferenceStore,
-    ForwardSupervisor,
     UserPreferences,
     archive_resources,
     kubectl_logs_command,

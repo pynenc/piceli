@@ -8,10 +8,11 @@ private placeholders, and copies verified receipts into a separate journal.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Mapping, NoReturn
+from typing import Any, NoReturn
 
 from piceli.k8s.ops.bounds import object_keys, strict_json, timestamp
 from piceli.k8s.ops.discovery import (
@@ -40,7 +41,6 @@ from piceli.k8s.ops.secret_versions import (
     pointer_parts,
     replace_pointer,
 )
-
 
 LEGACY_EXECUTION_ARCHIVE_SCHEMA_VERSION = 1
 _REDACTED_VALUE = "<redacted>"
@@ -448,7 +448,7 @@ def _parse_authorization(value: Any) -> ExecutionAuthorization:
             value["max_evidence_age_seconds"],
         )
         if timestamp(authorization.expires_at, allow_future=True) <= datetime.now(
-            timezone.utc
+            UTC
         ) or _authorization_archive(authorization) != dict(value):
             _fail("authorization")
         return authorization

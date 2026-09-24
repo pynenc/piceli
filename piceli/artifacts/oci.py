@@ -1,17 +1,17 @@
 """Deterministic offline OCI image-layout production and bounded inspection."""
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
 import hashlib
 import io
 import os
-from pathlib import Path, PurePosixPath
 import posixpath
 import shutil
 import stat
 import tarfile
 import tempfile
 import threading
+from dataclasses import asdict, dataclass
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from piceli.artifacts.plan import (

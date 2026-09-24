@@ -1,7 +1,7 @@
-from typing import Optional
+
+from typing import Annotated
 
 from pydantic import BaseModel, Field
-from typing_extensions import Annotated
 
 from piceli.k8s.templates.auxiliary import names
 
@@ -22,4 +22,4 @@ class Port(BaseModel):
 
     name: names.Name
     port: _Port
-    target_port: Optional[_Port] = None
+    target_port: _Port | None = None

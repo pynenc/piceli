@@ -7,7 +7,6 @@ from typer.testing import CliRunner
 
 from piceli.k8s.cli.observe import app
 
-
 runner = CliRunner()
 
 

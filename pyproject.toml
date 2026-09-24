@@ -99,7 +99,14 @@ line-length = 88
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "C4", "B", "UP", "SIM", "RUF"]
-ignore = ["E501", "C901"]
+ignore = [
+    "E501",   # line length is handled by the formatter
+    "C901",   # complexity is reviewed by humans, not gated
+    # Style-only simplifications: not worth churning working code for.
+    "SIM102", "SIM105", "SIM117", "RUF005", "RUF015", "RUF059",
+    "RUF012", # pydantic/dataclass class attributes are intentional
+    "UP047",  # PEP 695 generics: adopt gradually
+]
 
 [tool.mypy]
 files = ["piceli"]

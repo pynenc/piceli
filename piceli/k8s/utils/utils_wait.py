@@ -1,6 +1,7 @@
 import logging
+from collections.abc import Callable, Iterator
 from enum import StrEnum, auto
-from typing import Any, Callable, Iterator, Optional
+from typing import Any
 
 from kubernetes import client
 from urllib3.exceptions import HTTPError
@@ -42,10 +43,10 @@ def wait(
     list_func: Callable,
     args: tuple,
     obj_name: str,
-    condition: Optional[wait_conditions.WaitCondition] = None,
-    phases: Optional[list[phases.Phase]] = None,
+    condition: wait_conditions.WaitCondition | None = None,
+    phases: list[phases.Phase] | None = None,
     check_readiness: bool = False,
-    label_selector: Optional[str] = None,
+    label_selector: str | None = None,
     check_replicas: bool = False,
 ) -> WaitResult:
     """Simplified wait function."""
@@ -75,12 +76,12 @@ def wait(
 
 def process_event(
     event: Any,
-    condition: Optional[wait_conditions.WaitCondition],
+    condition: wait_conditions.WaitCondition | None,
     phases: set[str],
     check_readiness: bool,
     check_replicas: bool,
     obj_name: str,
-) -> Optional[WaitResult]:
+) -> WaitResult | None:
     """Process individual watch events."""
 
     if "type" in event and event["type"] == "ADDED":
@@ -130,7 +131,7 @@ def readiness_met(status: Any) -> bool:
     return any(container_status.ready for container_status in container_statuses)
 
 
-def check_replica_status(status: Any) -> Optional[WaitResult]:
+def check_replica_status(status: Any) -> WaitResult | None:
     """Check the status of replicas."""
     if isinstance(status, (client.V1ReplicaSetStatus, client.V1StatefulSetStatus)):
         if status.replicas == status.available_replicas:

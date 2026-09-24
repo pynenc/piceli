@@ -1,9 +1,8 @@
 import os
-from typing import Optional
 
 
 def get_configmap_data_from_files(
-    filepaths: list[str], mappings: Optional[dict[str, str]] = None
+    filepaths: list[str], mappings: dict[str, str] | None = None
 ) -> dict[str, str]:
     """
     loads the filepath into a string and returns a dict [filename:filecontents]

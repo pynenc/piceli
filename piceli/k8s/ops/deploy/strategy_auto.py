@@ -1,6 +1,6 @@
 import logging
 from collections import defaultdict
-from typing import Iterable
+from collections.abc import Iterable
 
 from piceli.k8s.k8s_objects.base import K8sObject, K8sObjectIdentifier
 from piceli.k8s.object_manager.factory import ManagerFactory

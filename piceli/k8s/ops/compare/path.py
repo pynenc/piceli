@@ -1,7 +1,8 @@
 from abc import ABC, abstractmethod
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from functools import lru_cache
-from typing import ClassVar, Iterable, Iterator, Union, overload
+from functools import cache
+from typing import ClassVar, Union, overload
 
 
 class PathElem(ABC):
@@ -71,9 +72,7 @@ class Wildcard(PathElem):
         return self._wildcard
 
     def __eq__(self, other: object) -> bool:
-        if isinstance(other, PathElem):
-            return True
-        return False
+        return isinstance(other, PathElem)
 
     def __hash__(self) -> int:
         return hash(self._wildcard)
@@ -153,7 +152,7 @@ class Path:
 
 
 def wildcard_contains(seq1: list[PathElem], seq2: list[PathElem]) -> bool:
-    @lru_cache(maxsize=None)
+    @cache
     def match_helper(index1: int, index2: int) -> bool:
         if index1 == len(seq1):
             return True
@@ -181,7 +180,7 @@ def wildcard_contains(seq1: list[PathElem], seq2: list[PathElem]) -> bool:
 
 
 def match_sequences(seq1: list[PathElem], seq2: list[PathElem]) -> bool:
-    @lru_cache(maxsize=None)
+    @cache
     def match_helper(index1: int, index2: int) -> bool:
         # End of both sequences reached, successful match
         if index1 == len(seq1) and index2 == len(seq2):

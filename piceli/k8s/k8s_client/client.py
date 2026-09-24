@@ -2,8 +2,9 @@ import base64
 import json
 import logging
 import threading
+from collections.abc import Callable
 from functools import cached_property
-from typing import Any, Callable, ClassVar, Optional
+from typing import Any, ClassVar, Optional
 
 from google.auth.transport.requests import Request
 from google.oauth2 import service_account
@@ -46,7 +47,7 @@ class ClientManager:
 
     _instance_lock = threading.Lock()
     _instance: ClassVar[Optional["ClientManager"]] = None
-    _clients: dict[Optional[KubeConfig], client.ApiClient] = {}
+    _clients: dict[KubeConfig | None, client.ApiClient] = {}
 
     def __new__(cls) -> "ClientManager":
         with cls._instance_lock:
@@ -54,7 +55,7 @@ class ClientManager:
                 cls._instance = super().__new__(cls)
         return cls._instance
 
-    def get_client(self, kubeconfig: Optional[KubeConfig] = None) -> client.ApiClient:
+    def get_client(self, kubeconfig: KubeConfig | None = None) -> client.ApiClient:
         if kubeconfig not in self._clients:
             # this it probably only work in GCP make this more generic when refactoring legacy libs
             if kubeconfig:
@@ -84,7 +85,7 @@ class ClientManager:
 class ClientContext:
     """Context for handling the api's for a specifc kubeconfig client"""
 
-    def __init__(self, kubeconfig: Optional[KubeConfig] = None):
+    def __init__(self, kubeconfig: KubeConfig | None = None):
         self.kubeconfig = kubeconfig
         self._api_cache: dict[str, Any] = {}
 
@@ -141,7 +142,7 @@ class ClientContext:
 def get_cluster_resources(
     ctx: ClientContext,
     Namespace: str,
-    label_selector: Optional[dict[str, str]] = None,
+    label_selector: dict[str, str] | None = None,
     get_pods: bool = True,
 ) -> "ClusterResources":
     """get the cluster resources"""
@@ -162,7 +163,7 @@ def get_cluster_resources(
 
 
 def get_cluster_pods(
-    ctx: ClientContext, Namespace: str, label_selector: Optional[dict[str, str]] = None
+    ctx: ClientContext, Namespace: str, label_selector: dict[str, str] | None = None
 ) -> list[client.V1Pod]:
     """get the cluster resources"""
     _label_selector = None

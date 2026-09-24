@@ -5,16 +5,16 @@ from __future__ import annotations
 import errno
 import json
 import signal
-from pathlib import Path
 from collections.abc import Callable
+from pathlib import Path
 from types import FrameType
-from typing import Annotated, Optional
+from typing import Annotated
 
 import typer
 
 from piceli.k8s.observe import (
-    KubernetesDynamicInventoryReader,
     ForwardSupervisor,
+    KubernetesDynamicInventoryReader,
     PortForward,
     PreferenceStore,
     UserPreferences,
@@ -28,8 +28,8 @@ from piceli.k8s.observe_server import LocalObserveServer
 from piceli.k8s.ops.session import DeploymentSessionArchive
 from piceli.k8s.ui_config import UI_CONFIG_ENV, load_ui_config
 
-MaybeString = Optional[str]  # noqa: UP007 - Typer 0.9 cannot inspect ``str | None``.
-MaybePath = Optional[Path]  # noqa: UP007 - Typer 0.9 cannot inspect ``Path | None``.
+MaybeString = str | None
+MaybePath = Path | None
 
 app = typer.Typer(
     help="Inspect a deployed Piceli session and local access preferences."

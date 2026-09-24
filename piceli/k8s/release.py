@@ -15,15 +15,14 @@ import os
 import re
 import subprocess
 import tempfile
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from collections.abc import Mapping
 from typing import Any, TextIO
 
 from piceli.k8s.ops.execution_journal import ExecutionJournal
 from piceli.k8s.ops.executor import PlanExecutor
-from piceli.k8s.ops.plan import ObservedSnapshot, PlanAuthorization
-from piceli.k8s.ops.plan import build_plan
+from piceli.k8s.ops.plan import ObservedSnapshot, PlanAuthorization, build_plan
 from piceli.k8s.ops.revision import DeploymentRevision, ExecutionBundle
 from piceli.k8s.ops.secret_versions import SecretVersionStore
 from piceli.k8s.ops.session import (
@@ -33,7 +32,6 @@ from piceli.k8s.ops.session import (
     DeploymentSessionArchive,
     composition_from_archive,
 )
-
 
 RELEASE_CATALOG_SCHEMA_VERSION = 1
 _SHA256 = re.compile(r"sha256:[0-9a-f]{64}")

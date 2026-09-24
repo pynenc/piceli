@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any
 
 import typer
 
@@ -34,12 +34,11 @@ from piceli.k8s.ops.session import DeploymentSessionArchive
 from piceli.k8s.release import ReleaseCatalog
 from piceli.k8s.ui_config import UI_CONFIG_ENV, load_ui_config
 
-
 app = typer.Typer(help="Piceli Operator commands for reactive delivery, inventory, and artifacts.")
 
 
-MaybePath = Optional[Path]
-MaybeString = Optional[str]
+MaybePath = Path | None
+MaybeString = str | None
 
 
 def _archive(path: Path) -> DeploymentSessionArchive:

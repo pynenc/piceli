@@ -74,9 +74,9 @@ def test_unknown_kinds_go_to_the_default_level_with_a_warning(
             [known, custom]
         )
 
-    assert strategy_auto.DEFAULT_DEPLOYMENT_LEVEL == max(
+    assert max(
         strategy_auto.DEPLOYMENT_LEVELS
-    )
+    ) == strategy_auto.DEFAULT_DEPLOYMENT_LEVEL
     assert classified[strategy_auto.DEFAULT_DEPLOYMENT_LEVEL] == [custom]
     assert sum(len(objects) for objects in classified.values()) == 2
     assert "Certificate" in caplog.text

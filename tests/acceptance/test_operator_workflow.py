@@ -13,25 +13,28 @@ Proves:
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import threading
 import time
+from pathlib import Path
 from urllib.request import Request, urlopen
 
 import pytest
 from typer.testing import CliRunner
 
-from piceli.artifacts.gc import ImageSpaceEntry, ImageSpaceInventory, SafeGarbageCollector, UnsafeGCError
+from piceli.artifacts.gc import (
+    ImageSpaceEntry,
+    ImageSpaceInventory,
+    SafeGarbageCollector,
+    UnsafeGCError,
+)
 from piceli.k8s.automation import (
     ApprovalStore,
-    PRApproval,
     dependency_safe_partial_release,
     health_aware_rollback,
     promote_release,
 )
 from piceli.k8s.cli import app as cli_app
 from piceli.k8s.observe import (
-    ForwardSupervisor,
     ObservationRef,
     ObservedObject,
     PortForward,
@@ -40,8 +43,6 @@ from piceli.k8s.observe import (
 )
 from piceli.k8s.observe_server import LocalObserveServer
 from piceli.k8s.operator import (
-    BoundedInventoryBuffer,
-    InventoryEvent,
     build_operator_report,
     redact_log_content,
 )
@@ -49,12 +50,16 @@ from piceli.k8s.operator_state import (
     ConcurrentWriterError,
     FileStateStore,
     InstanceLock,
-    StandingPolicy,
     UserStore,
 )
-from piceli.k8s.ops.discovery import DiscoveryArtifact, ResourceType
+from piceli.k8s.ops.discovery import ResourceType
 from piceli.k8s.ops.plan import ObservedSnapshot, PlanAuthorization
-from piceli.k8s.release import ReleaseCatalog, ReleaseRecord, ReleaseSource, ReleaseWorkflow
+from piceli.k8s.release import (
+    ReleaseCatalog,
+    ReleaseRecord,
+    ReleaseSource,
+    ReleaseWorkflow,
+)
 from tests.acceptance.fake_api import manifest
 from tests.acceptance.test_deployment_session import _authorization, _composition
 from tests.acceptance.test_local_executor import discover, executor

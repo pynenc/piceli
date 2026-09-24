@@ -1,8 +1,9 @@
 import datetime
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from google.api_core import exceptions
 from google.cloud import container_v1  # type: ignore

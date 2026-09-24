@@ -1,11 +1,12 @@
 """Example: Git commit and direct OCI digest delivery paths without public registry mandate."""
 
+import json
 from pathlib import Path
+
 from piceli.k8s.automation import promote_release
 from piceli.k8s.operator_state import StandingPolicy
 from piceli.k8s.ops.session import DeploymentSessionArchive
 from piceli.k8s.release import ReleaseCatalog, ReleaseRecord, ReleaseSource
-import json
 
 
 def run_pipeline(state_dir: Path) -> None:

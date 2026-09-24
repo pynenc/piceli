@@ -13,8 +13,8 @@ from piceli.k8s.ops.plan import (
     ResourceIntent,
 )
 from piceli.k8s.release import ReleaseCatalog, ReleaseSource, ReleaseWorkflow
-from tests.acceptance.test_deployment_session import _authorization, _composition
 from tests.acceptance.fake_api import manifest
+from tests.acceptance.test_deployment_session import _authorization, _composition
 from tests.acceptance.test_local_executor import discover, executor
 
 

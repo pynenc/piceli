@@ -3,8 +3,8 @@ Every deployable template must produce complete manifests (apiVersion, kind,
 metadata.name) and must be discoverable by the module loader.
 """
 
+from collections.abc import Callable
 from types import ModuleType
-from typing import Callable
 
 import pytest
 

@@ -9,15 +9,15 @@ import pytest
 
 from piceli.k8s.ops.discovery import (
     ApiResource,
+    DiscoveredResource,
     DiscoveryCoverage,
-    Ownership,
     EvidenceSource,
+    Ownership,
     PlanTarget,
-    ResourceListRequest,
     ResourceIdentity,
+    ResourceListRequest,
     ResourceScope,
     ResourceType,
-    DiscoveredResource,
 )
 from piceli.k8s.ops.kubernetes_provider import KubernetesProvider
 from piceli.k8s.ops.plan import (
@@ -28,7 +28,6 @@ from piceli.k8s.ops.plan import (
     PlanOperation,
     build_plan,
 )
-
 
 TARGET = PlanTarget("cluster-uid", "app-test")
 CONFIG_MAP = ResourceType("v1", "ConfigMap")

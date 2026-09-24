@@ -1,14 +1,13 @@
 """Unit tests for Piceli Operator state store, concurrency locking, and backup."""
 
 from pathlib import Path
+
 import pytest
 
 from piceli.k8s.operator_state import (
     ConcurrentWriterError,
     FileStateStore,
     InstanceLock,
-    OperatorUser,
-    PolicyStore,
     StandingPolicy,
     UserStore,
 )

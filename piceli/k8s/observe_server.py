@@ -8,38 +8,36 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-from pathlib import Path
 import re
 import secrets
 import subprocess
 import time
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
-from piceli.artifacts.gc import ImageSpaceEntry, ImageSpaceInventory, SafeGarbageCollector
+from piceli.artifacts.gc import (
+    ImageSpaceInventory,
+    SafeGarbageCollector,
+)
 from piceli.k8s.automation import (
-    ApprovalStore,
-    GitBranchWatcher,
-    PRApproval,
-    dependency_safe_partial_release,
-    health_aware_rollback,
     promote_release,
 )
 from piceli.k8s.observe import (
     ForwardSupervisor,
-    InventoryReport,
     PortForward,
     PreferenceStore,
-    kubectl_logs_command,
 )
-from piceli.k8s.operator import OperatorReport, redact_log_content
-from piceli.k8s.operator_state import FileStateStore, OperatorUser, PolicyStore, UserStore
+from piceli.k8s.operator_state import (
+    FileStateStore,
+    OperatorUser,
+    PolicyStore,
+    UserStore,
+)
 from piceli.k8s.release import ReleaseCatalog, ReleaseWorkflow
 from piceli.k8s.ui_config import UiConfig
-
 
 _LOG = logging.getLogger(__name__)
 
@@ -1655,7 +1653,7 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
             raise _RequestError(400, "invalid-json-payload")
         return payload
 
-    def do_GET(self) -> None:  # noqa: N802
+    def do_GET(self) -> None:
         if not self._check_origin():
             return
         if self.path == "/":
@@ -1872,7 +1870,7 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
         all_lines.sort(key=lambda x: x.get("ts", ""))
         self._json(200, {"lines": all_lines})
 
-    def do_POST(self) -> None:  # noqa: N802
+    def do_POST(self) -> None:
         if not self._check_origin():
             return
         principal = self._principal()

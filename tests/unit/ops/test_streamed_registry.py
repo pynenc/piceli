@@ -4,8 +4,6 @@ import io
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
-import pytest
 
 from piceli.artifacts.registry import RegistryEndpoint, StreamedOciRegistryClient
 

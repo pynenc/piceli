@@ -8,9 +8,10 @@ import socket
 import threading
 import time
 import uuid
+from collections.abc import Iterator
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Iterator
+from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from kubernetes.client import ApiClient, Configuration

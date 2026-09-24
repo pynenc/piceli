@@ -1,4 +1,4 @@
-from typing import Generator
+from collections.abc import Generator
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -172,7 +172,8 @@ def test_print_differences(
     assert len(printed_table.rows) == 3, "Expected 3 rows of differences."
     # You can further assert on the contents of each row to ensure correctness
     for cell, diff_type in zip(
-        list(printed_table.columns[1].cells), ["Considered", "Ignored", "Defaults"]
+        list(printed_table.columns[1].cells), ["Considered", "Ignored", "Defaults"],
+        strict=True,
     ):
         assert diff_type in cell, f"Expected difference type '{diff_type}' not found."
 

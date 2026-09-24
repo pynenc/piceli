@@ -1,4 +1,3 @@
-from typing import Optional
 
 from kubernetes import client
 from pydantic import Field, PositiveInt
@@ -49,7 +48,7 @@ class HorizontalPodAutoscaler(base.Deployable):
     min_replicas: PositiveInt
     max_replicas: PositiveInt
     target_cpu_utilization_percentage: int = Field(ge=1, le=100)
-    labels: Optional[Labels] = None
+    labels: Labels | None = None
 
     def get(self) -> list[client.V2HorizontalPodAutoscaler]:
         obj = client.V2HorizontalPodAutoscaler(
@@ -121,7 +120,7 @@ class VerticalPodAutoscaler(base.Deployable):
     name: names.Name
     target_kind: str
     target_name: str
-    container_name: Optional[str]
+    container_name: str | None
     min_allowed: resource_request.Resources
     max_allowed: resource_request.Resources
     control_cpu: bool

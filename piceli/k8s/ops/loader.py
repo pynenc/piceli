@@ -5,11 +5,11 @@ import logging
 import os
 import pkgutil
 import sys
+from collections.abc import Iterable, Iterator
 from importlib import util as importlib_util
 from itertools import chain
 from pathlib import Path
 from types import ModuleType
-from typing import Iterable, Iterator
 
 import yaml
 from kubernetes import client

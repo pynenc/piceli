@@ -2,15 +2,13 @@
 
 import json
 from pathlib import Path
+
 import pytest
 
 from piceli.k8s.automation import (
     ApprovalStore,
-    DependencyUnsatisfiedError,
-    GitRefState,
     PRApproval,
     RollbackHealthError,
-    dependency_safe_partial_release,
     health_aware_rollback,
     promote_release,
 )

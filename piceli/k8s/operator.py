@@ -10,22 +10,19 @@ from __future__ import annotations
 
 import re
 import time
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
 from typing import Any
 
 from piceli.k8s.observe import (
+    _COMMON_TYPES,
     InventoryReader,
     ObservationRef,
     ObservedObject,
-    _COMMON_TYPES,
     archive_resources,
 )
-from piceli.k8s.ops.discovery import ResourceIdentity
 from piceli.k8s.ops.session import DeploymentSessionArchive
-from piceli.k8s.release import ReleaseCatalog, ReleaseRecord
-
+from piceli.k8s.release import ReleaseCatalog
 
 _SECRET_REDACT_PATTERNS = [
     re.compile(r"(?i)((?:password|token|secret|key|authorization|bearer)\s*[:=]\s*)([^\s,;]+)"),
@@ -177,7 +174,7 @@ def build_operator_report(
                 "identity": rec.source.identity,
                 "artifact_digest": rec.source.artifact_digest,
                 "is_active": (rec.name == active_release_name),
-                
+
             })
             if session_archive is None and rec.name == active_release_name:
                 session_id = rec.archive.session_id

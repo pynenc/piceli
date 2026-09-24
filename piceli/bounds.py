@@ -7,9 +7,10 @@ import math
 import re
 import threading
 import time
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from queue import Empty, Queue
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 
 T = TypeVar("T")
 _CALL_SLOTS = threading.BoundedSemaphore(4)
@@ -50,7 +51,7 @@ def timestamp(value: Any, *, allow_future: bool = False) -> datetime:
     ):
         raise ValueError("timestamp must be RFC3339 with timezone")
     result = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    if not allow_future and result > datetime.now(timezone.utc):
+    if not allow_future and result > datetime.now(UTC):
         raise ValueError("timestamp cannot be in the future")
     return result
 

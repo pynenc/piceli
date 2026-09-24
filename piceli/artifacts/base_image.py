@@ -4,11 +4,11 @@ from __future__ import annotations
 import io
 import json
 import os
-from pathlib import Path, PurePosixPath
 import shutil
 import tarfile
 import tempfile
 import threading
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from piceli.artifacts.oci import (

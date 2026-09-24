@@ -5,12 +5,12 @@ from __future__ import annotations
 import json
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Callable
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
 
 from piceli.k8s.ops.bounds import positive, seconds, text, timestamp
-from piceli.telemetry import NoopTelemetry
 from piceli.k8s.ops.discovery import (
     RETAINED_KINDS,
     DiscoveredResource,
@@ -46,6 +46,7 @@ from piceli.k8s.ops.secret_versions import (
     SecretVersionStore,
     replace_pointer,
 )
+from piceli.telemetry import NoopTelemetry
 
 if TYPE_CHECKING:
     from piceli.k8s.ops.revision import ExecutionBundle
@@ -197,7 +198,7 @@ def _reject_inline_secrets(intent: ResourceIntent) -> None:
             for key in raw:
                 check(raw[key], public[key])
         elif isinstance(raw, list) and isinstance(public, list):
-            for left, right in zip(raw, public):
+            for left, right in zip(raw, public, strict=False):
                 check(left, right)
         elif raw != public and raw != PRIVATE_VALUE:
             raise ValueError(
@@ -264,7 +265,7 @@ class PlanExecutor:
         if len(plan.actions) > self.limits.max_actions:
             raise ValueError("plan exceeds action budget")
         if timestamp(authorization.expires_at, allow_future=True) <= datetime.now(
-            timezone.utc
+            UTC
         ):
             raise ValueError("execution authorization expired")
         if authorization.target != plan.target or plan.target != self.provider.target:
@@ -300,7 +301,7 @@ class PlanExecutor:
         if ObservedSnapshot.from_discovery(artifact) != snapshot:
             raise ValueError("snapshot does not match discovery evidence")
         if (
-            datetime.now(timezone.utc) - timestamp(artifact.captured_at)
+            datetime.now(UTC) - timestamp(artifact.captured_at)
         ).total_seconds() > authorization.max_evidence_age_seconds:
             raise ValueError("discovery evidence expired")
         plan.validate_for(snapshot)
@@ -393,7 +394,7 @@ class PlanExecutor:
         if time.monotonic() >= deadline:
             raise ProviderError("deadline-exceeded")
         if timestamp(authorization.expires_at, allow_future=True) <= datetime.now(
-            timezone.utc
+            UTC
         ):
             raise ProviderError("authorization-expired")
         self.provider.verify_target(deadline=deadline)
@@ -722,7 +723,7 @@ class PlanExecutor:
             try:
                 deferred = self._first_consumer_refs(plan)
                 deferred_rows: list[tuple[dict[str, Any], PlanAction]] = []
-                for row, action in zip(self.journal.actions(execution), plan.actions):
+                for row, action in zip(self.journal.actions(execution), plan.actions, strict=False):
                     self._guard(execution, authorization, deadline)
                     if row["state"] in {"compensated", "compensating"}:
                         raise ProviderError("compensation-already-started")
@@ -939,7 +940,7 @@ class PlanExecutor:
                     plan.target, artifact.coverage.requested, artifact.limits
                 ),
                 capture_id=uuid.uuid4().hex,
-                captured_at=datetime.now(timezone.utc).isoformat(),
+                captured_at=datetime.now(UTC).isoformat(),
                 policy_revision=artifact.coverage.policy_revision,
                 deadline=deadline,
             )
@@ -952,7 +953,7 @@ class PlanExecutor:
             if any(row["state"] == "intent" for row in rows):
                 raise ValueError("reconcile ambiguous operations before compensation")
             eligible = []
-            for row, action in reversed(list(zip(rows, plan.actions))):
+            for row, action in reversed(list(zip(rows, plan.actions, strict=False))):
                 ref = action.resource.ref
                 if row["state"] in {
                     "pending",
@@ -992,7 +993,7 @@ class PlanExecutor:
             for row, action, current in eligible:
                 if time.monotonic() >= deadline or timestamp(
                     authorization.expires_at, allow_future=True
-                ) <= datetime.now(timezone.utc):
+                ) <= datetime.now(UTC):
                     raise ValueError("compensation deadline or authorization expired")
                 payload = row["payload"]
                 if row["state"] == "compensating":

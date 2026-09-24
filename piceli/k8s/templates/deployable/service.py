@@ -1,4 +1,3 @@
-from typing import Optional
 
 from kubernetes import client
 from pydantic import BaseModel
@@ -45,7 +44,7 @@ class Service(base.Deployable):
     name: names.Name
     ports: list[ServicePort]
     selector: dict
-    labels: Optional[Labels] = None
+    labels: Labels | None = None
 
     def get(self) -> list[client.V1Service]:
         ports = [p.get() for p in self.ports]

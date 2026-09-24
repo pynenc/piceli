@@ -1,11 +1,11 @@
 """Example: Atomic file state store, exclusive concurrency locking, and encrypted backup."""
 
 from pathlib import Path
+
 from piceli.k8s.operator_state import (
     ConcurrentWriterError,
     FileStateStore,
     InstanceLock,
-    StandingPolicy,
     UserStore,
 )
 

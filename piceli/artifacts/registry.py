@@ -7,18 +7,15 @@ OCI layers directly to owner-operated registries or containerd workers.
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Mapping
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, BinaryIO
+from typing import BinaryIO
 
 from piceli.artifacts.plan import validate_digest
-
 
 _DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
 

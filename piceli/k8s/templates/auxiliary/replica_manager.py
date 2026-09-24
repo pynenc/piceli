@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from functools import cached_property
-from typing import ClassVar, Optional
+from typing import ClassVar
 
 from kubernetes import client
 from pydantic import BaseModel, model_validator
@@ -74,9 +74,9 @@ class ReplicaManager(ABC, pod.Pod):
     restart_policy: policies.RestartPolicy = policies.RestartPolicy.ALWAYS
     replicas: int = 1
     create_service: bool = False
-    hpa: Optional[HPA] = None
-    vpa: Optional[VPA] = None
-    labels: Optional[Labels] = None
+    hpa: HPA | None = None
+    vpa: VPA | None = None
+    labels: Labels | None = None
     # API: ClassVar[str] = "apps"
     KIND: ClassVar[str] = ""
 
@@ -145,13 +145,13 @@ class ReplicaManager(ABC, pod.Pod):
         replica_manager = self.get_replica_manager()
         return replica_manager.kind
 
-    def get_hpa(self) -> Optional[autoscaler.HorizontalPodAutoscaler]:
+    def get_hpa(self) -> autoscaler.HorizontalPodAutoscaler | None:
         """Gets the HPA related to this Deployment"""
         if self.hpa:
             return self.hpa.get_hpa(self.name, self.target_kind)
         return None
 
-    def get_vpa(self) -> Optional[autoscaler.VerticalPodAutoscaler]:
+    def get_vpa(self) -> autoscaler.VerticalPodAutoscaler | None:
         """Gets the VPA related to this Deployment"""
         if self.vpa:
             return self.vpa.get_vpa(self.name, self.target_kind)

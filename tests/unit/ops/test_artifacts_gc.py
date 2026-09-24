@@ -1,6 +1,7 @@
 """Unit tests for Piceli owner-operated artifact storage and safe GC."""
 
 import time
+
 import pytest
 
 from piceli.artifacts.gc import (

@@ -8,8 +8,8 @@ that archive.  It never applies, adopts, deletes, or resolves Secret values.
 
 from __future__ import annotations
 
-import json
 import http.client
+import json
 import os
 import re
 import signal
@@ -26,7 +26,6 @@ from typing import Any, Protocol
 from piceli.k8s.ops.discovery import ResourceIdentity
 from piceli.k8s.ops.session import DeploymentSessionArchive
 from piceli.k8s.ui_config import UiShortcut
-
 
 _NAME = re.compile(r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?")
 _FORWARD_TARGET = re.compile(r"(?:service|pod)/[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?")

@@ -1,11 +1,10 @@
-from typing import Optional
 
 from kubernetes import client
 
 
 def get_security_context(
-    security_context_uid: Optional[int],
-) -> Optional[client.V1PodSecurityContext]:
+    security_context_uid: int | None,
+) -> client.V1PodSecurityContext | None:
     """
     Generates a Kubernetes V1PodSecurityContext object with security settings for a pod.
 
