@@ -937,16 +937,12 @@ class ReleaseRunner:
     def _source(self, images: Mapping[str, ImageRef]) -> ReleaseSource:
         if len(images) == 1:
             identity = next(iter(images.values())).identity
-        else:
-            identity = (
-                "sha256:"
-                + hashlib.sha256(
-                    _canonical(
-                        {name: image.identity for name, image in images.items()}
-                    ).encode()
-                ).hexdigest()
-            )
-        return ReleaseSource("oci", identity, artifact_digest=identity)
+            return ReleaseSource("oci", identity, artifact_digest=identity)
+        # Several images: record the whole set (name -> digest); the identity
+        # is the digest of that canonical map.
+        return ReleaseSource.image_set(
+            {name: image.identity for name, image in images.items()}
+        )
 
     # ------------------------------------------------------------ discovery
     def _discover(

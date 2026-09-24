@@ -170,6 +170,12 @@ Image sources:
 | `{ receipt = "…" }` or `images_from`: `piceli.registry-delivery.v1` | its `pull_ref` (`<node registry>/<repo>@<manifest digest>`) | the manifest digest |
 | `{ receipt = "…" }` or `images_from`: `piceli.node-delivery.v1` | its node `image.reference`, which must be a content tag | the config digest |
 
+The release records its images as its source identity: with one image,
+`{"kind": "oci", "identity": <digest>}`; with several, the whole set,
+`{"kind": "oci-set", "images": {<name>: <digest>, …}, "identity": <digest of
+that map>}` (in `release status` and the catalog). The Python API builds the
+same with `ReleaseSource.image_set({...})` for `ReleaseWorkflow.create`.
+
 A build receipt (`revision = "piceli.build-receipt.v1"`, from
 `piceli artifacts build-spec run`) lists `outputs.images.<name>` with
 `image_id` (the config digest with Docker's classic store), `digest` (the

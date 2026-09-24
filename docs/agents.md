@@ -57,8 +57,8 @@ interruption is harmless.
 | `3` | Approval required; nothing was executed | Show the plan to the owner and wait. |
 
 Commands whose contract is `conforms` in {doc}`reference/cli` follow these rules
-exactly (including `explain`, `help-json`, `status` and `access`). For a
-refused release plan, see [If `plan` refuses](release_cli.md#if-plan-refuses)
+exactly (including `explain`, `help-json`, `status`, `access` and `deploy`). For
+a refused release plan, see [If `plan` refuses](release_cli.md#if-plan-refuses)
 for the next step.
 
 ### Contract changes in 0.4.0
@@ -105,11 +105,14 @@ noted.
 - `piceli observe forwards status`: probes the declared loopback ports once
   (never the cluster); exit `1` with `"reason": "forward-unhealthy"` when a
   required forward is down.
-- `piceli model list`, `piceli deploy plan`: read local model files only.
 - `piceli import live` (reads the cluster through an explicit `--kubeconfig`
   and `--context`) and `piceli import yaml` (reads local files): generate a
   typed module; `--out` writes that one file and refuses to overwrite it
   without `--force`. Secret values are never read into the output.
+- `piceli deploy MODULE:ATTR --plan`: plans every stage (reads sources,
+  the local image store, the registry or node, and the cluster), writes only
+  the pipeline's `state_dir`, and prints the combined hash. It never builds,
+  pushes or applies.
 - `piceli artifacts build`: assembles an OCI layout in `--output` without
   running any code.
 - `piceli observe forward-save`, `piceli operator backup`: write a local
@@ -121,6 +124,7 @@ Ask before running these, and show the owner what will happen first.
 
 | Command | Changes | Approve with |
 | --- | --- | --- |
+| `piceli deploy` | Builds images, pushes them to a registry or node, applies a release | `--approve <combined hash>` from `piceli deploy MODULE:ATTR --plan`, after the owner reviewed that plan; `--resume` continues an approved run |
 | `piceli release apply` | The cluster | `--approve <plan hash>` from `release plan`, after the owner reviewed that plan |
 | `piceli release rollback` | The cluster | `--approve <plan hash>` from `release rollback <target>` without `--approve` |
 | `piceli release resume` | The cluster (continues an approved execution) | The owner's go-ahead to continue |
@@ -132,6 +136,10 @@ Ask before running these, and show the owner what will happen first.
 | `piceli artifacts import-local` | The local Docker image store | `--approve-digest <digest>` |
 | `piceli operator approve`, `piceli operator promote`, `piceli operator restore` | Operator state, catalog or files | The owner's go-ahead |
 | `piceli access`, `piceli observe serve`, `piceli operator serve`, `piceli observe forward-run`, `piceli observe forwards apply`, `piceli observe logs-run` | Long-running local processes and ports | The owner's go-ahead |
+
+The legacy `piceli deploy run` command (current kube context, delete and
+recreate, no approval) is no longer registered: `piceli deploy` is now the
+pipeline command, which plans first and needs an approval.
 
 Never add `--auto-approve` unless the owner has said that this run is an
 unattended CI job for this exact spec.
@@ -156,6 +164,21 @@ unattended CI job for this exact spec.
    approval) only when no automatic rollback succeeded. Never add
    `--skip-checks` unless the owner asked for it (see {doc}`checks`).
 
+### Deploying a pipeline
+
+1. Run `piceli deploy MODULE:ATTR --plan --json`. The last line is the result
+   with `combined_hash` and every stage's plan.
+2. Show the owner the stderr summary: which builds run, which images are
+   delivered, the release's `create`/`apply`/`delete` lines and the checks.
+3. After the owner approves **that combined hash**, run
+   `piceli deploy MODULE:ATTR --approve <hash> --json`. Each stdout line is
+   one stage event; the last one is the result.
+4. Exit `0` means the release is ready and its checks passed. Exit `1`
+   means a stage ran but did not succeed (`reason` names it; with
+   `rollback_on_failed_checks` the result's `checks.rollback` says what was
+   restored). Exit `2` with `pipeline-plan-changed` means something changed
+   since the plan: plan and ask again.
+
 ## When something fails
 
 1. Read `reason` from the JSON.
@@ -174,6 +197,10 @@ unattended CI job for this exact spec.
   `piceli release resume --spec release.toml`. Resume reuses the approved
   grant and operation ids; do not plan and apply a new release instead.
   Re-applies and rollbacks are not resumable: plan them again.
+- **`piceli deploy` was interrupted** (or failed at a stage you then fixed):
+  run `piceli deploy MODULE:ATTR --resume`. It continues the approved run at
+  the first unfinished stage and reuses the finished stages' receipts; an
+  interrupted apply is resumed with the same grant.
 - **`artifacts deliver` was interrupted**: run it again with the same
   arguments. Registry pushes are content addressed and send only missing
   layers.

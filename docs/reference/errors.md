@@ -71,6 +71,8 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`deadline-exceeded`](#error-deadline-exceeded) | kubernetes | yes |
 | [`deleted-resource-reappeared`](#error-deleted-resource-reappeared) | execution | no |
 | [`delivery-not-succeeded`](#error-delivery-not-succeeded) | images | no |
+| [`deploy-flags-conflict`](#error-deploy-flags-conflict) | cli | no |
+| [`deploy-stage-unknown`](#error-deploy-stage-unknown) | cli | no |
 | [`digest-mismatch`](#error-digest-mismatch) | artifacts-delivery | no |
 | [`discovery-incomplete`](#error-discovery-incomplete) | release | yes |
 | [`docker-socket-required`](#error-docker-socket-required) | artifacts-input | no |
@@ -193,6 +195,22 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`operator-state-unavailable`](#error-operator-state-unavailable) | observe | no |
 | [`output-invalid`](#error-output-invalid) | build-spec | no |
 | [`ownership-precondition-failed`](#error-ownership-precondition-failed) | execution | no |
+| [`pipeline-apply-not-ready`](#error-pipeline-apply-not-ready) | pipeline | yes |
+| [`pipeline-checks-failed`](#error-pipeline-checks-failed) | pipeline | no |
+| [`pipeline-checks-unavailable`](#error-pipeline-checks-unavailable) | pipeline | no |
+| [`pipeline-delivery-failed`](#error-pipeline-delivery-failed) | pipeline | yes |
+| [`pipeline-image-not-pinned`](#error-pipeline-image-not-pinned) | pipeline | no |
+| [`pipeline-image-unknown`](#error-pipeline-image-unknown) | pipeline | no |
+| [`pipeline-invalid`](#error-pipeline-invalid) | pipeline | no |
+| [`pipeline-load-failed`](#error-pipeline-load-failed) | pipeline | no |
+| [`pipeline-locked`](#error-pipeline-locked) | pipeline | yes |
+| [`pipeline-not-found`](#error-pipeline-not-found) | pipeline | no |
+| [`pipeline-nothing-to-resume`](#error-pipeline-nothing-to-resume) | pipeline | no |
+| [`pipeline-plan-changed`](#error-pipeline-plan-changed) | pipeline | no |
+| [`pipeline-registry-not-ready`](#error-pipeline-registry-not-ready) | pipeline | yes |
+| [`pipeline-release-refused`](#error-pipeline-release-refused) | pipeline | no |
+| [`pipeline-resume-changed`](#error-pipeline-resume-changed) | pipeline | no |
+| [`pipeline-stage-error`](#error-pipeline-stage-error) | pipeline | yes |
 | [`plain-http-not-loopback`](#error-plain-http-not-loopback) | artifacts-input | no |
 | [`plain-http-refused`](#error-plain-http-refused) | artifacts-registry | no |
 | [`plan-blocked`](#error-plan-blocked) | release | no |
@@ -296,6 +314,22 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`verification-failed`](#error-verification-failed) | artifacts-delivery | yes |
 
 ## Command-line contract (any command)
+
+(error-deploy-flags-conflict)=
+### `deploy-flags-conflict`
+
+**Conflicting deploy flags.** `piceli deploy` got flags that cannot be combined (`--resume` with planning flags, `--approve` with `--plan` or `--auto-approve`, or `--plan` with `--auto-approve`).
+
+- **Fix:** Use `--plan`, then `--approve HASH`; or `--auto-approve` alone; or `--resume` alone.
+- **Retry-safe:** no
+
+(error-deploy-stage-unknown)=
+### `deploy-stage-unknown`
+
+**Unknown stage.** `--until` names a stage that does not exist.
+
+- **Fix:** Use one of inputs, build, deliver, plan, apply or checks.
+- **Retry-safe:** no
 
 (error-invalid-or-unavailable-artifact-input)=
 ### `invalid-or-unavailable-artifact-input`
@@ -2576,3 +2610,134 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Pass an explicit `--kubeconfig` file and `--context` with static credentials, and an existing `--namespace`.
 - **Retry-safe:** no
+
+
+## Deploying a pipeline from source (`piceli deploy`)
+
+(error-pipeline-apply-not-ready)=
+### `pipeline-apply-not-ready`
+
+**Release not ready.** The release was applied but did not become ready in time; the result has the execution's `failure_category`.
+
+- **Fix:** Fix the workload (image, probe, resources) and continue with `piceli deploy MODULE:ATTR --resume`, or deploy the previous source.
+- **Retry-safe:** yes
+
+(error-pipeline-checks-failed)=
+### `pipeline-checks-failed`
+
+**Post-deploy checks failed.** The release was applied but at least one check failed, so the run is not ready. With `rollback_on_failed_checks` the previous release was re-applied (see `checks.rollback` in the result).
+
+- **Fix:** Read the check results in the result JSON, fix the application and deploy again.
+- **Retry-safe:** no
+
+(error-pipeline-checks-unavailable)=
+### `pipeline-checks-unavailable`
+
+**Checks runner unavailable.** The pipeline declares checks but `piceli.checks` is not available in this installation.
+
+- **Fix:** Install a Piceli version that ships `piceli.checks`, or remove `checks=` from the Pipeline.
+- **Retry-safe:** no
+
+(error-pipeline-delivery-failed)=
+### `pipeline-delivery-failed`
+
+**Image delivery failed.** Delivering a built image did not succeed and its receipt carries no more specific code.
+
+- **Fix:** Check the registry or node, then continue with `piceli deploy MODULE:ATTR --resume`.
+- **Retry-safe:** yes
+
+(error-pipeline-image-not-pinned)=
+### `pipeline-image-not-pinned`
+
+**Image not pinned.** A workload uses an image that is neither a build handle nor pinned by digest, so the release could reference a tag that moves.
+
+- **Fix:** Pin it as `repository@sha256:<digest>` (for example from `docker buildx imagetools inspect`), or build it with the pipeline.
+- **Retry-safe:** no
+
+(error-pipeline-image-unknown)=
+### `pipeline-image-unknown`
+
+**Build image unknown.** The app uses a build image handle (`build["name"]`) that no build of the pipeline produces.
+
+- **Fix:** Use one of the build's `[[output.image]]` names, or add the build that produces it to `build=`.
+- **Retry-safe:** no
+
+(error-pipeline-invalid)=
+### `pipeline-invalid`
+
+**Pipeline declaration invalid.** The Pipeline, Target, Build, delivery strategy or secrets are inconsistent (for example a build without `deliver=`, an unknown node alias or a multi-platform build).
+
+- **Fix:** Fix the declaration as the message on stderr describes; `piceli deploy … --plan` checks it again without executing anything.
+- **Retry-safe:** no
+
+(error-pipeline-load-failed)=
+### `pipeline-load-failed`
+
+**Pipeline module failed to import.** Importing the pipeline's module raised an exception (the message on stderr names it).
+
+- **Fix:** Fix the module until `python path/to/app.py` imports cleanly, then run the command again.
+- **Retry-safe:** no
+
+(error-pipeline-locked)=
+### `pipeline-locked`
+
+**Pipeline state directory in use.** Another `piceli deploy` run holds the lock of this pipeline's state directory.
+
+- **Fix:** Wait for the other run to finish, then run the command again.
+- **Retry-safe:** yes
+
+(error-pipeline-not-found)=
+### `pipeline-not-found`
+
+**Pipeline not found.** The `MODULE:ATTR` given to `piceli deploy` does not name a file or module, or its attribute is not a `Pipeline`.
+
+- **Fix:** Pass `path/to/app.py:pipeline` or `package.module:pipeline` naming a `piceli.Pipeline` object.
+- **Retry-safe:** no
+
+(error-pipeline-nothing-to-resume)=
+### `pipeline-nothing-to-resume`
+
+**Nothing to resume.** `--resume` found no interrupted or failed run in the pipeline's state directory (the latest run finished, stopped at `--until`, or none exists).
+
+- **Fix:** Run `piceli deploy MODULE:ATTR --plan` and approve a new run; unchanged stages are skipped.
+- **Retry-safe:** no
+
+(error-pipeline-plan-changed)=
+### `pipeline-plan-changed`
+
+**Combined plan changed.** The hash passed to `--approve` is not the combined hash of the current plan: a source, image, cluster object or the pipeline changed since it was planned.
+
+- **Fix:** Run `piceli deploy MODULE:ATTR --plan` again, review it and approve the new combined hash.
+- **Retry-safe:** no
+
+(error-pipeline-registry-not-ready)=
+### `pipeline-registry-not-ready`
+
+**Node-loopback registry not ready.** The registry release of `NodeLoopbackRegistry` was applied but did not become ready (image pull, volume or node problem).
+
+- **Fix:** Inspect the registry pod with a read-only tool, fix it, then run `piceli deploy MODULE:ATTR --resume`.
+- **Retry-safe:** yes
+
+(error-pipeline-release-refused)=
+### `pipeline-release-refused`
+
+**Release refused.** The release engine refused the plan or apply stage (for example an unmanaged object that needs adoption); stderr has the reason and the blocking objects.
+
+- **Fix:** Apply the suggestion on stderr (for example `adopt=["Kind/name"]` or `replace=[…]` on the Pipeline), then plan again.
+- **Retry-safe:** no
+
+(error-pipeline-resume-changed)=
+### `pipeline-resume-changed`
+
+**Pipeline changed since the run was approved.** `--resume` would re-run a stage whose inputs no longer match the approved run (a build's staged files, the release, or the app's target or owner).
+
+- **Fix:** Plan and approve a new run: `piceli deploy MODULE:ATTR --plan`.
+- **Retry-safe:** no
+
+(error-pipeline-stage-error)=
+### `pipeline-stage-error`
+
+**Stage failed unexpectedly.** A stage raised an unexpected local error (a file or tool could not be used); stderr has the error type.
+
+- **Fix:** Fix the local problem, then continue with `piceli deploy MODULE:ATTR --resume`.
+- **Retry-safe:** yes

@@ -593,6 +593,32 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             notes=_EXPLICIT_CONTEXT,
             long_running=True,
         ),
+        # ------------------------------------------------ P5 pipeline
+        "deploy": _C(
+            "Deploy a pipeline from source: inputs, build, deliver, plan, apply, checks.",
+            reads=(
+                "pipeline module",
+                "build specs and sources",
+                "docker",
+                "kubeconfig",
+                "state_dir",
+            ),
+            writes=(
+                "state_dir (run journal, receipts, release catalog, secret store)",
+                "local Docker image store",
+                "registry or node image store",
+            ),
+            cluster="writes",
+            approval_required=True,
+            safe_to_retry=True,
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2, 3),
+            notes="--plan never changes the cluster, a registry or a node; "
+            "--approve HASH executes exactly the combined plan; --resume continues "
+            "the latest interrupted run without a new approval. Unchanged stages "
+            "are skipped.",
+        ),
     }
 )
 

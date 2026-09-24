@@ -171,3 +171,7 @@ sa.json
 
 # Sphinx autodoc2 output (regenerated on every build)
 docs/apidocs/
+
+# Local state of `piceli deploy` and example kubeconfigs
+.piceli-deploy/
+examples/**/*.kubeconfig

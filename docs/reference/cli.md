@@ -33,6 +33,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli artifacts pin`](#cli-artifacts-pin) | Pin one public source file by digest. | none | no |
 | [`piceli artifacts preview`](#cli-artifacts-preview) | Preview a deterministic OCI build plan (no tools run). | none | no |
 | [`piceli artifacts preview-command`](#cli-artifacts-preview-command) | Preview a pinned external build command. | none | no |
+| [`piceli deploy`](#cli-deploy) | Deploy a pipeline: inputs → build → deliver → plan → apply → checks. | writes | yes |
 | [`piceli explain`](#cli-explain) | Explain an error code: cause, fix and whether a retry can succeed. | none | no |
 | [`piceli help-json`](#cli-help-json) | Print the whole CLI tree (commands, options, contracts) as JSON. | none | no |
 | [`piceli import live`](#cli-import-live) | Generate a typed module from the objects of a live namespace (read-only). | reads | no |
@@ -334,6 +335,33 @@ Preview a pinned external build command.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
+
+(cli-deploy)=
+### `piceli deploy`
+
+Deploy a pipeline: inputs → build → deliver → plan → apply → checks.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `TARGET` | text | required |  |
+| `--plan` | boolean | `False` | Plan every stage and print the combined hash; execute nothing |
+| `--until` | text | `checks` | Stop after this stage: inputs, build, deliver, plan, apply or checks |
+| `--resume` | boolean | `False` | Continue the latest interrupted or failed run at its failed stage |
+| `--approve` | text |  | Combined hash to execute (from --plan) |
+| `--auto-approve` | boolean | `False` | Plan and execute without confirmation (CI) |
+| `--reapply` | boolean | `False` | Apply even when the release is unchanged and already deployed |
+| `--json` | boolean | `False` | Stream one JSON event per stage change on stdout |
+
+**Contract**
+
+- **Reads:** pipeline module, build specs and sources, docker, kubeconfig, state_dir
+- **Writes:** state_dir (run journal, receipts, release catalog, secret store), local Docker image store, registry or node image store
+- **Cluster:** writes
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** --plan never changes the cluster, a registry or a node; --approve HASH executes exactly the combined plan; --resume continues the latest interrupted run without a new approval. Unchanged stages are skipped.
 
 (cli-explain)=
 ### `piceli explain`

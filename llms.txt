@@ -14,6 +14,7 @@ Rules for agents: run `piceli help-json` for every command's options, side effec
 
 - [Overview and architecture](https://docs.pynenc.org/projects/piceli/en/latest/overview.html): model, plan, execute, observe; the engine; glossary
 - [Getting started](https://docs.pynenc.org/projects/piceli/en/latest/getting_started/index.html): install, describe a typed app, render it and release it
+- [Deploy an app from source](https://docs.pynenc.org/projects/piceli/en/latest/deploy.html): `piceli deploy MODULE:ATTR`, one journaled run of build, deliver, plan, apply and checks; `--plan`, `--approve`, `--resume`
 - [Releases from a spec](https://docs.pynenc.org/projects/piceli/en/latest/release_cli.html): `piceli release` plan, apply, adopt, roll back, resume; "If plan refuses"
 - [Check a release and roll back automatically](https://docs.pynenc.org/projects/piceli/en/latest/checks.html): `[[checks]]` (http, exec, metric, Python), `rollback_on_failed_checks`, `piceli release check`
 - [How plans decide what changes](https://docs.pynenc.org/projects/piceli/en/latest/plans_and_diffs.html): no-op vs apply from server dry runs, field-level diffs, `piceli release diff`

@@ -18,6 +18,7 @@ Priorities may change. Progress is tracked in
 | Typed templates for common workloads | 🟡 Core kinds only; no Ingress/Gateway, NetworkPolicy, DaemonSet, PDB, Namespace or cluster-scoped RBAC yet |
 | Dependency-ordered plan and apply | ✅ Available |
 | Image handoff by digest (build → deliver → release, immutable references only) | 🟡 Preview |
+| One command from source to a verified release (`piceli deploy`) | 🟡 Preview: journaled, resumable, skips unchanged stages |
 | Server-side apply with preconditions, journal and resume | ✅ The only engine: `piceli release` and the Python API |
 | Field-level diff and true no-op plans | 🟡 Preview: `release plan`/`release diff` (server dry runs) |
 | Safe pruning of removed resources | 🟡 Opt-in (`prune = true`) |
@@ -49,6 +50,7 @@ Every feature page starts with its maturity, and this table lists them all:
 | CLI overview | {doc}`cli/index` | preview |
 | Typed apps (`piceli.App`, `piceli render`) | {doc}`typed_apps` | preview |
 | Engine: discovery, plans, executor, journals (Python API) | {doc}`deployment_planning` | preview |
+| Deploy from source (`piceli deploy`, `piceli.pipeline`) | {doc}`deploy` | preview |
 | Releases from a spec (`piceli release`) | {doc}`release_cli` | preview |
 | Post-deploy checks and automatic rollback (`[[checks]]`, `piceli.checks`, `release check`) | {doc}`checks` | preview |
 | Field-level diffs and no-op detection (`release plan`, `release diff`) | {doc}`plans_and_diffs` | preview |
