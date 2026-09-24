@@ -91,7 +91,7 @@ release (always with a changelog entry).
      deliver  rust-hello: pending-build
      plan     after delivery (the release plan needs the image digests)
      apply    pending
-     checks   0 check(s) (rollback on failure)
+     checks   1 check(s) (rollback on failure)
    combined hash: fab781d97321848dc074bd293a208e1057bb5cdf3b79afc12d906b7c83e6ec25
    approve with: piceli deploy examples/shop/app.py:pipeline --approve fab781d9…
    ```

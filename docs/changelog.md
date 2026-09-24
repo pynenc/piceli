@@ -64,6 +64,16 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   `cargo clean --release --package rust-hello` before `cargo build`, keeping
   dependencies cached and builds reproducible. {doc}`containerized_builds`
   documents the pitfall.
+- **Fixed:** `operator status`, `observe` and release plan observation no
+  longer fail on RBAC objects whose names contain `:` (such as
+  `system:controller:*` in `kube-system`). RBAC names are validated as
+  Kubernetes path segments, and live objects Piceli cannot model are skipped
+  with a scan warning instead of crashing.
+- **Fixed:** `exec` checks failed TLS verification (`check-exec-unavailable`)
+  with clients built from an explicit kubeconfig; they now use the client's
+  own verified TLS context and credentials.
+- `Checks` is exported from the top-level package
+  (`from piceli import Checks, Pipeline`).
 - Help text shows `[[…]]` TOML names literally instead of dropping them as
   terminal markup.
 - Two flaky tests fixed (git identity under redirected `GIT_DIR`, process
