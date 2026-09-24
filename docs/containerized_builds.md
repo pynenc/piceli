@@ -47,8 +47,10 @@ digest = "sha256:8fa55b2f..."
 [build]
 platforms = ["linux/arm64"]        # one or more linux/<arch>
 workdir = "/work"
-command = ["cargo", "build", "--release", "--locked", "--offline"]
-# commands = [["cargo", "fetch"], ["cargo", "build", "--release"]]
+commands = [                       # or one `command = [...]`
+    ["cargo", "clean", "--release", "--locked", "--offline", "--package", "rust-hello"],
+    ["cargo", "build", "--release", "--locked", "--offline"],
+]
 network = "none"                   # "none" (default) or "default"
 source_date_epoch = 0              # default 0
 timeout_seconds = 1800             # per docker invocation, at most 3600
@@ -183,6 +185,16 @@ between builds and are never uploaded. Do not ship `~/.cargo` as a context.
 An offline build (`network = "none"`) needs its dependencies already in the
 cache. Either run once with `network = "default"` and `--allow-network`, or
 vendor the dependencies into the context.
+
+**Cached build outputs and fixed mtimes.** Staged files carry the
+`source_date_epoch` modification time, so every source file looks older than
+anything a previous build left in a cached `target/`. Tools that decide
+freshness by mtime, such as Cargo, then skip recompiling after a source edit
+and ship the stale artifact. When you cache a build-output directory, clean
+your own packages before building and keep only the dependencies cached. The
+`rust-hello` example runs `cargo clean --release --package rust-hello` before
+`cargo build`. Caching only the registry, or not caching `target/` at all,
+also works.
 
 ## Running
 

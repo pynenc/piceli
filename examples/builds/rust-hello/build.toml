@@ -15,7 +15,14 @@ digest = "sha256:8fa55b2f3ddf97471ab6a767bfa3f37e6bad0986ba823e75fea57e2a2a5c307
 [build]
 platforms = ["linux/arm64"]
 workdir = "/work"
-command = ["cargo", "build", "--release", "--locked", "--offline"]
+# Staged sources carry the fixed `source_date_epoch` mtime, so cargo's
+# mtime-based freshness check would take a cached `target/` artifact of this
+# crate as up to date after a source edit. Clean only this crate first:
+# dependencies stay cached, and every source change produces a new binary.
+commands = [
+    ["cargo", "clean", "--release", "--locked", "--offline", "--package", "rust-hello"],
+    ["cargo", "build", "--release", "--locked", "--offline"],
+]
 network = "none"
 source_date_epoch = 0
 timeout_seconds = 1800
@@ -41,6 +48,8 @@ target = "/usr/local/cargo/git"
 id = "cargo-git"
 sharing = "shared"
 
+# Compiled dependencies are reused across builds; this crate's own artifacts
+# are removed by the `cargo clean --package` step above.
 [cache.target]
 target = "/work/target"
 
