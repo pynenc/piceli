@@ -24,6 +24,8 @@ Rules for agents: run `piceli help-json` for every command's options, side effec
 - [Image delivery](https://docs.pynenc.org/projects/piceli/en/latest/node_delivery.html): `piceli artifacts deliver` to a registry (default) or a node
 - [Node-local registry](https://docs.pynenc.org/projects/piceli/en/latest/node_local_registry.html): a registry one node pulls from without configuration
 - [Reach your services from your laptop](https://docs.pynenc.org/projects/piceli/en/latest/access.html): declare `app.access.forward`, then `piceli status` (is it up, which URLs) and `piceli access` (supervised port forwards, port-conflict owners)
+- [From kubectl scripts to Piceli](https://docs.pynenc.org/projects/piceli/en/latest/migrate_from_kubectl.html): `piceli import live|yaml` generates a typed module from existing objects; adopt it with `--adopt-all-desired`
+- [Test against a fake Kubernetes API](https://docs.pynenc.org/projects/piceli/en/latest/testing.html): `piceli.testing` for consumers' own tests, no cluster needed
 - [Operations lens](https://docs.pynenc.org/projects/piceli/en/latest/operations_lens.html): `piceli observe`, local UI, logs and port forwards
 - [Roadmap and feature status](https://docs.pynenc.org/projects/piceli/en/latest/roadmap.html): maturity of every feature
 

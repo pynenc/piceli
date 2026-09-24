@@ -23,6 +23,8 @@ Priorities may change. Progress is tracked in
 | Safe pruning of removed resources | 🟡 Opt-in (`prune = true`) |
 | Adopt or replace objects created by other tools (`release --adopt`, `--adopt-all-desired`, `--replace`) | 🟡 Preview |
 | Post-deploy checks (http, exec, metric, Python) with automatic rollback | 🟡 Preview |
+| Import a live namespace or manifest files as a typed app module (`piceli import live`, `piceli import yaml`) | 🟡 Preview |
+| Public fake Kubernetes API for consumers' tests (`piceli.testing`) | 🟡 Preview |
 | Environments and overlays (Kustomize equivalent) | ❌ Not yet: plain Python functions for now |
 | Reusable, versioned packages (Helm equivalent) | ❌ Not yet |
 | Custom resources (CRDs) | 🟡 As raw manifests in a composition |
@@ -59,6 +61,8 @@ Every feature page starts with its maturity, and this table lists them all:
 | Access and status from the model (`app.access.forward`, `piceli access`, `piceli status`) | {doc}`access` | preview |
 | Operations lens (`piceli observe`) | {doc}`operations_lens` | preview |
 | CLI contract: `piceli explain`, `piceli help-json`, error codes | {doc}`agents` | preview |
+| Import and migration kit (`piceli import live`, `piceli import yaml`, `App.override`) | {doc}`migrate_from_kubectl` | preview |
+| Test double: fake Kubernetes API (`piceli.testing`) | {doc}`testing` | preview |
 | Operator workflow (`piceli operator`) | {doc}`operator_workflow` | experimental |
 
 ## How Piceli compares

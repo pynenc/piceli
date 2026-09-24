@@ -812,6 +812,9 @@ The output of `piceli release` changed to follow the CLI contract
 
 ## Migrating from a custom deploy script
 
+To start from what is already running, `piceli import live` generates the
+typed module for you; see {doc}`migrate_from_kubectl`. By hand:
+
 1. Move the manifest-building code into a pure `build(ctx)` function. Replace
    hard-coded images with `ctx.image(...)` and inline secret values with
    `ResourceIntent.with_secret(pointer, ctx.secret(name))`.

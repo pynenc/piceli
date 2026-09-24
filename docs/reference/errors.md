@@ -112,8 +112,16 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`image-mismatch`](#error-image-mismatch) | build-spec | no |
 | [`image-not-immutable`](#error-image-not-immutable) | images | no |
 | [`import-cancelled`](#error-import-cancelled) | artifacts-delivery | yes |
+| [`import-discovery-failed`](#error-import-discovery-failed) | import | yes |
 | [`import-failed`](#error-import-failed) | artifacts-delivery | yes |
+| [`import-manifests-invalid`](#error-import-manifests-invalid) | import | no |
+| [`import-name-invalid`](#error-import-name-invalid) | import | no |
+| [`import-nothing-selected`](#error-import-nothing-selected) | import | no |
 | [`import-output-limit`](#error-import-output-limit) | artifacts-delivery | no |
+| [`import-output-refused`](#error-import-output-refused) | import | no |
+| [`import-roundtrip-mismatch`](#error-import-roundtrip-mismatch) | import | no |
+| [`import-select-invalid`](#error-import-select-invalid) | import | no |
+| [`import-target-invalid`](#error-import-target-invalid) | import | no |
 | [`import-timed-out`](#error-import-timed-out) | artifacts-delivery | yes |
 | [`inputs-io-error`](#error-inputs-io-error) | inputs | yes |
 | [`inputs-lock-invalid`](#error-inputs-lock-invalid) | inputs | no |
@@ -2500,4 +2508,71 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Cluster target refused.** The kubeconfig or context is not acceptable (missing or ambiguous context, unsupported user fields, proxy, insecure TLS, non-https server, invalid certificate data) or the cluster's observed identity differs from the expected one. The message names the cause; nothing was changed.
 
 - **Fix:** Fix the kubeconfig, the named context (`[target]` or `--context`) or the expected UIDs as the message says, then run the command again.
+- **Retry-safe:** no
+
+
+## Migration kit (`piceli import live`, `piceli import yaml`)
+
+(error-import-discovery-failed)=
+### `import-discovery-failed`
+
+**Cluster read failed during import.** Listing one of the imported kinds failed (the category, such as `rbac-denied` or `api-unavailable`, is shown on stderr). Nothing was written.
+
+- **Fix:** Grant `list` on ConfigMaps, Secrets, Services, PersistentVolumeClaims, Deployments and NetworkPolicies in the namespace, or retry when the API server is reachable.
+- **Retry-safe:** yes
+
+(error-import-manifests-invalid)=
+### `import-manifests-invalid`
+
+**Manifest directory invalid.** `piceli import yaml` found no directory, a file that is not YAML or JSON, a document without `apiVersion`, `kind` and `metadata.name`, an object declared twice, or objects in more than one namespace.
+
+- **Fix:** Fix the file named on stderr, or pass `--namespace` to choose the namespace.
+- **Retry-safe:** no
+
+(error-import-name-invalid)=
+### `import-name-invalid`
+
+**Invalid app name.** The app name (`--name`, or the namespace by default) is not a DNS label.
+
+- **Fix:** Pass `--name` with lowercase letters, digits and `-` (at most 63 characters).
+- **Retry-safe:** no
+
+(error-import-nothing-selected)=
+### `import-nothing-selected`
+
+**Nothing to import.** The namespace or directory holds no importable object, or no object matches `--select`.
+
+- **Fix:** Check the namespace or directory and the selectors (kinds are case-sensitive: `Deployment/api`).
+- **Retry-safe:** no
+
+(error-import-output-refused)=
+### `import-output-refused`
+
+**Import output refused.** The `--out` file already exists, or its directory does not exist.
+
+- **Fix:** Pass `--force` to overwrite the file, or choose another path.
+- **Retry-safe:** no
+
+(error-import-roundtrip-mismatch)=
+### `import-roundtrip-mismatch`
+
+**Generated module does not reproduce the objects.** The generated module did not render back to every imported field. This is a bug in the importer; nothing was written.
+
+- **Fix:** Report it with the object kinds involved; meanwhile import the other objects with `--select`.
+- **Retry-safe:** no
+
+(error-import-select-invalid)=
+### `import-select-invalid`
+
+**Invalid import selector.** A `--select` value is neither `Kind/name` (for example `Deployment/api`) nor `label=value`.
+
+- **Fix:** Fix the selector; repeat `--select` to import several objects.
+- **Retry-safe:** no
+
+(error-import-target-invalid)=
+### `import-target-invalid`
+
+**Import target refused.** The kubeconfig, context or namespace cannot be used: the file is missing or invalid, the context is unknown or uses exec/auth-provider credentials, the server is not https, or the namespace does not exist.
+
+- **Fix:** Pass an explicit `--kubeconfig` file and `--context` with static credentials, and an existing `--namespace`.
 - **Retry-safe:** no

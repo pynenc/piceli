@@ -43,6 +43,7 @@ AREAS: Mapping[str, str] = MappingProxyType(
         "checks": "Post-deploy checks and automatic rollback (`[[checks]]`, `piceli.checks`)",
         "access": "Access and status from the model (`piceli access`, `piceli status`)",
         "target": "Release target credentials (`[target]`, kubeconfig exec plugins)",
+        "import": "Migration kit (`piceli import live`, `piceli import yaml`)",
     }
 )
 
@@ -2302,6 +2303,71 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "Run the plugin by hand and check its output format; upgrade the plugin if it is outdated.",
         False,
         "target",
+    ),
+    # --- P9 import/testing ---
+    _E(
+        "import-select-invalid",
+        "Invalid import selector",
+        "A `--select` value is neither `Kind/name` (for example `Deployment/api`) nor `label=value`.",
+        "Fix the selector; repeat `--select` to import several objects.",
+        False,
+        "import",
+    ),
+    _E(
+        "import-nothing-selected",
+        "Nothing to import",
+        "The namespace or directory holds no importable object, or no object matches `--select`.",
+        "Check the namespace or directory and the selectors (kinds are case-sensitive: `Deployment/api`).",
+        False,
+        "import",
+    ),
+    _E(
+        "import-name-invalid",
+        "Invalid app name",
+        "The app name (`--name`, or the namespace by default) is not a DNS label.",
+        "Pass `--name` with lowercase letters, digits and `-` (at most 63 characters).",
+        False,
+        "import",
+    ),
+    _E(
+        "import-target-invalid",
+        "Import target refused",
+        "The kubeconfig, context or namespace cannot be used: the file is missing or invalid, the context is unknown or uses exec/auth-provider credentials, the server is not https, or the namespace does not exist.",
+        "Pass an explicit `--kubeconfig` file and `--context` with static credentials, and an existing `--namespace`.",
+        False,
+        "import",
+    ),
+    _E(
+        "import-discovery-failed",
+        "Cluster read failed during import",
+        "Listing one of the imported kinds failed (the category, such as `rbac-denied` or `api-unavailable`, is shown on stderr). Nothing was written.",
+        "Grant `list` on ConfigMaps, Secrets, Services, PersistentVolumeClaims, Deployments and NetworkPolicies in the namespace, or retry when the API server is reachable.",
+        True,
+        "import",
+    ),
+    _E(
+        "import-manifests-invalid",
+        "Manifest directory invalid",
+        "`piceli import yaml` found no directory, a file that is not YAML or JSON, a document without `apiVersion`, `kind` and `metadata.name`, an object declared twice, or objects in more than one namespace.",
+        "Fix the file named on stderr, or pass `--namespace` to choose the namespace.",
+        False,
+        "import",
+    ),
+    _E(
+        "import-roundtrip-mismatch",
+        "Generated module does not reproduce the objects",
+        "The generated module did not render back to every imported field. This is a bug in the importer; nothing was written.",
+        "Report it with the object kinds involved; meanwhile import the other objects with `--select`.",
+        False,
+        "import",
+    ),
+    _E(
+        "import-output-refused",
+        "Import output refused",
+        "The `--out` file already exists, or its directory does not exist.",
+        "Pass `--force` to overwrite the file, or choose another path.",
+        False,
+        "import",
     ),
 )
 
