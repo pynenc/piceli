@@ -5,6 +5,10 @@
 #   piceli release rollback previous --spec examples/release/release.toml
 #   piceli release status --spec examples/release/release.toml
 
+# Top-level keys must come before the first [table]. Optional: read images
+# from a build receipt (revision = "piceli.build-receipt.v1"):
+# images_from = "build.receipt.json"
+
 [target]
 kubeconfig = "release.kubeconfig"   # an explicit file; never ~/.kube/config
 context = "kind-release-demo"       # an explicit context; never current-context
@@ -32,8 +36,8 @@ approval_window_seconds = 900
 max_seconds = 300
 readiness_seconds = 240
 
-# Images pinned by digest. Alternatively read them from a build receipt:
-# images_from = "build.receipt.json"   # revision = "piceli.build-receipt.v1"
+# Images pinned by digest. To read them from a build receipt instead, set the
+# top-level `images_from` key at the top of this file (see above [target]).
 [images]
 web = "docker.io/library/nginx@sha256:0000000000000000000000000000000000000000000000000000000000000000"
 
