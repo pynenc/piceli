@@ -1,6 +1,7 @@
 # Piceli Command Line Interface (CLI) Guide
 
-The `piceli` command (also available as `python -m piceli`) has seven command groups:
+The `piceli` command (also available as `python -m piceli`) has seven command groups
+and the `render` command:
 
 | Group | Purpose | Cluster access | Output |
 | --- | --- | --- | --- |
@@ -10,6 +11,7 @@ The `piceli` command (also available as `python -m piceli`) has seven command gr
 | `operator` | Inventory, releases, approvals, backups, local UI | Explicit `--kubeconfig` | JSON |
 | `artifacts` | Deterministic OCI builds and explicit local import | None (local tools only) | JSON |
 | `inputs` | Record and verify the git identity of build sources | None (local git only) | JSON |
+| `render` | Print the manifests of a typed app or composition (preview). See {doc}`../typed_apps` | None | YAML or JSON |
 | `release` | Plan, apply, roll back, resume and stop releases from a `release.toml` spec (recoverable engine). See {doc}`../release_cli` | Explicit kubeconfig file + context from the spec | JSON + summary on stderr |
 
 The global options below (`--namespace`, `--module-*`, `--folder-path`) apply to
