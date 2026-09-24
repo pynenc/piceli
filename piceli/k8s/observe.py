@@ -25,6 +25,7 @@ from typing import Any, Protocol
 
 from piceli.k8s.ops.discovery import ResourceIdentity
 from piceli.k8s.ops.session import DeploymentSessionArchive
+from piceli.k8s.ui_config import UiShortcut
 
 
 _NAME = re.compile(r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?")
@@ -467,53 +468,6 @@ class PreferenceStore:
         self.save(preferences)
 
 
-KNOWN_SHORTCUTS: dict[str, dict[str, Any]] = {
-    "kabuki": {
-        "label": "Kabuki Web UI",
-        "description": "Infinite Haiku Studio & Web Interface",
-        "target": "service/ih-kabuki",
-        "local_port": 3000,
-        "remote_port": 3000,
-        "default_namespace": "infinite-haiku-p2",
-        "health_path": "/",
-    },
-    "monitor": {
-        "label": "Rustvello / Pynenc Monitor",
-        "description": "Distributed Task & Execution Monitor",
-        "target": "service/ih-rustvello-monitor",
-        "local_port": 18084,
-        "remote_port": 18084,
-        "default_namespace": "infinite-haiku-p2",
-        "health_path": "/",
-    },
-    "poet": {
-        "label": "Poet Telemetry API",
-        "description": "Infinite Haiku Graph & Observation Store",
-        "target": "service/ih-target-poet",
-        "local_port": 18086,
-        "remote_port": 18080,
-        "default_namespace": "infinite-haiku-p2",
-        "health_path": "/healthz",
-    },
-    "shibuya": {
-        "label": "Shibuya Signaling API",
-        "description": "Realtime Signaling & Offload Coordinator",
-        "target": "service/ih-shibuya",
-        "local_port": 18083,
-        "remote_port": 18083,
-        "default_namespace": "infinite-haiku-p2",
-    },
-    "shibuya-ws": {
-        "label": "Shibuya WebSocket (Kabuki)",
-        "description": "Browser WebSocket Signaling Gateway for Kabuki",
-        "target": "service/ih-shibuya",
-        "local_port": 18082,
-        "remote_port": 18083,
-        "default_namespace": "infinite-haiku-p2",
-    },
-}
-
-
 @dataclass(frozen=True)
 class ForwardStatus:
     """Public runtime state for one locally owned loopback port forward."""
@@ -562,12 +516,16 @@ class ForwardSupervisor:
         kubeconfig: Path,
         context: str | None = None,
         kubectl: str = "kubectl",
+        shortcuts: Iterable[UiShortcut] = (),
+        namespace: str | None = None,
     ) -> None:
         self._preferences = preferences
         self._user = user
         self._kubeconfig = kubeconfig
         self._context = context
         self._kubectl = kubectl
+        self._shortcuts = {shortcut.id: shortcut for shortcut in shortcuts}
+        self._namespace = namespace
         self._forwards: dict[str, _ManagedForward] = {}
         self._lock = threading.RLock()
         self._stopped = threading.Event()
@@ -663,47 +621,47 @@ class ForwardSupervisor:
             return tuple(result)
 
     def start(self, name: str) -> None:
-        """Start one saved forward now; unknown names are rejected unless known shortcut."""
+        """Start one saved forward now; unknown names are rejected unless a configured shortcut."""
         with self._lock:
             if name not in self._forwards:
-                if name in KNOWN_SHORTCUTS:
-                    sc = KNOWN_SHORTCUTS[name]
-                    fwd = PortForward(
-                        name=name,
-                        namespace=sc["default_namespace"],
-                        target=sc["target"],
-                        local_port=sc["local_port"],
-                        remote_port=sc["remote_port"],
-                        health_path=sc.get("health_path"),
-                    )
-                    self._forwards[name] = _ManagedForward(fwd)
-                else:
+                if name not in self._shortcuts:
                     raise ValueError(f"unknown saved port forward: {name}")
+                self._forwards[name] = _ManagedForward(self._shortcut_forward(name))
             managed = self._forwards[name]
             managed.next_start = 0.0
             managed.error = None
             self._start_locked(managed)
 
     def quick_start(self, shortcut_id: str, namespace: str | None = None) -> None:
-        """Start a shortcut by id, automatically registering if absent."""
+        """Start a configured shortcut by id, automatically registering if absent."""
         with self._lock:
             if shortcut_id not in self._forwards:
-                if shortcut_id not in KNOWN_SHORTCUTS:
+                if shortcut_id not in self._shortcuts:
                     raise ValueError(f"unknown shortcut: {shortcut_id}")
-                sc = KNOWN_SHORTCUTS[shortcut_id]
-                fwd = PortForward(
-                    name=shortcut_id,
-                    namespace=namespace or sc["default_namespace"],
-                    target=sc["target"],
-                    local_port=sc["local_port"],
-                    remote_port=sc["remote_port"],
-                    health_path=sc.get("health_path"),
+                self._forwards[shortcut_id] = _ManagedForward(
+                    self._shortcut_forward(shortcut_id, namespace)
                 )
-                self._forwards[shortcut_id] = _ManagedForward(fwd)
             managed = self._forwards[shortcut_id]
             managed.next_start = 0.0
             managed.error = None
             self._start_locked(managed)
+
+    def _shortcut_namespace(self, shortcut_id: str, namespace: str | None) -> str:
+        """A shortcut's pinned namespace wins, then the caller's, then the supervisor's."""
+        return self._shortcuts[shortcut_id].namespace or namespace or self._namespace or ""
+
+    def _shortcut_forward(
+        self, shortcut_id: str, namespace: str | None = None
+    ) -> PortForward:
+        shortcut = self._shortcuts[shortcut_id]
+        return PortForward(
+            name=shortcut_id,
+            namespace=self._shortcut_namespace(shortcut_id, namespace),
+            target=shortcut.target,
+            local_port=shortcut.local_port,
+            remote_port=shortcut.remote_port,
+            health_path=shortcut.health_path,
+        )
 
     def add_or_update(self, forward: PortForward, persist: bool = True) -> None:
         """Add or update a forward preference and optionally persist it."""
@@ -755,15 +713,15 @@ class ForwardSupervisor:
                 pass
 
     def shortcuts_status(self, namespace: str | None = None) -> list[dict[str, Any]]:
-        """Return current status of all known quick shortcuts."""
+        """Return current status of all configured quick shortcuts."""
         with self._lock:
             results = []
-            for sc_id, sc in KNOWN_SHORTCUTS.items():
+            for sc_id, sc in self._shortcuts.items():
                 managed = self._forwards.get(sc_id)
                 ns = (
                     managed.forward.namespace
                     if managed
-                    else (namespace or sc["default_namespace"])
+                    else self._shortcut_namespace(sc_id, namespace)
                 )
                 state = "stopped"
                 pid = None
@@ -788,18 +746,18 @@ class ForwardSupervisor:
                 results.append(
                     {
                         "id": sc_id,
-                        "label": sc["label"],
-                        "description": sc["description"],
-                        "target": sc["target"],
-                        "local_port": sc["local_port"],
-                        "remote_port": sc["remote_port"],
+                        "label": sc.label,
+                        "description": sc.description,
+                        "target": sc.target,
+                        "local_port": sc.local_port,
+                        "remote_port": sc.remote_port,
                         "namespace": ns,
                         "state": state,
                         "pid": pid,
                         "restarts": restarts,
                         "error": error,
                         "reachable": state == "running",
-                        "url": f"http://127.0.0.1:{sc['local_port']}",
+                        "url": sc.url,
                     }
                 )
             return results

@@ -24,6 +24,7 @@ from piceli.k8s.observe import (
     run_port_forward,
 )
 from piceli.k8s.observe_server import LocalObserveServer
+from piceli.k8s.ui_config import UiConfig
 
 
 class Archive:
@@ -253,7 +254,12 @@ def test_local_rest_server_exposes_only_read_only_loopback_data(tmp_path: Path) 
     thread = threading.Thread(target=server.handle_request)
     thread.start()
     try:
-        with urlopen(f"http://127.0.0.1:{server.server_port}/v1/status") as response:
+        with urlopen(
+            Request(
+                f"http://127.0.0.1:{server.server_port}/v1/status",
+                headers={"X-Piceli-Local-Token": server.local_token},
+            )
+        ) as response:
             assert json.loads(response.read())["session_id"] == "a" * 32
     finally:
         thread.join(timeout=1)
@@ -297,7 +303,10 @@ def test_local_rest_server_exposes_only_read_only_loopback_data(tmp_path: Path) 
     scoped_thread.start()
     try:
         with urlopen(
-            f"http://127.0.0.1:{scoped_server.server_port}/v1/preferences"
+            Request(
+                f"http://127.0.0.1:{scoped_server.server_port}/v1/preferences",
+                headers={"X-Piceli-Local-Token": scoped_server.local_token},
+            )
         ) as response:
             assert json.loads(response.read()) == {
                 "users": [
@@ -325,32 +334,71 @@ def test_local_rest_server_exposes_only_read_only_loopback_data(tmp_path: Path) 
         )
 
 
-def test_forward_supervisor_shortcuts_and_dynamic_management(tmp_path: Path) -> None:
+@pytest.fixture
+def ui_config() -> UiConfig:
+    return UiConfig.model_validate(
+        {
+            "shortcuts": [
+                {
+                    "id": "web",
+                    "label": "Web UI",
+                    "target": "service/web",
+                    "local_port": 3000,
+                    "remote_port": 3000,
+                    "path": "/login",
+                },
+                {
+                    "id": "metrics",
+                    "label": "Metrics",
+                    "target": "service/metrics",
+                    "namespace": "monitoring",
+                    "local_port": 18084,
+                    "remote_port": 9090,
+                },
+            ]
+        }
+    )
+
+
+def test_forward_supervisor_has_no_shortcuts_without_config(tmp_path: Path) -> None:
+    supervisor = ForwardSupervisor(
+        preferences=PreferenceStore(tmp_path / "observe.json"),
+        user="tester",
+        kubeconfig=tmp_path / "kubeconfig",
+    )
+    assert supervisor.shortcuts_status(namespace="test-ns") == []
+    with pytest.raises(ValueError, match="unknown shortcut"):
+        supervisor.quick_start("web", namespace="test-ns")
+
+
+def test_forward_supervisor_shortcuts_and_dynamic_management(
+    tmp_path: Path, ui_config: UiConfig
+) -> None:
     store = PreferenceStore(tmp_path / "observe.json")
     supervisor = ForwardSupervisor(
         preferences=store,
         user="tester",
         kubeconfig=tmp_path / "kubeconfig",
         kubectl="definitely-not-kubectl",
+        shortcuts=ui_config.shortcuts,
+        namespace="served-ns",
     )
     supervisor.restore()
     try:
         # Check shortcuts status
-        scs = supervisor.shortcuts_status(namespace="test-ns")
-        assert len(scs) == 5
-        ids = {s["id"] for s in scs}
-        assert "kabuki" in ids
-        assert "monitor" in ids
-        assert "poet" in ids
-        assert "shibuya" in ids
-        assert "shibuya-ws" in ids
+        scs = {s["id"]: s for s in supervisor.shortcuts_status(namespace="test-ns")}
+        assert set(scs) == {"web", "metrics"}
+        assert scs["web"]["namespace"] == "test-ns"
+        assert scs["web"]["url"] == "http://127.0.0.1:3000/login"
+        assert scs["metrics"]["namespace"] == "monitoring"
+        assert supervisor.shortcuts_status()[0]["namespace"] == "served-ns"
 
-        # Quick start known shortcut
-        supervisor.quick_start("kabuki", namespace="test-ns")
-        kabuki_status = [s for s in supervisor.statuses() if s.name == "kabuki"][0]
-        assert kabuki_status.local_port == 3000
-        assert kabuki_status.target == "service/ih-kabuki"
-        assert kabuki_status.namespace == "test-ns"
+        # Quick start configured shortcut
+        supervisor.quick_start("web", namespace="test-ns")
+        web_status = [s for s in supervisor.statuses() if s.name == "web"][0]
+        assert web_status.local_port == 3000
+        assert web_status.target == "service/web"
+        assert web_status.namespace == "test-ns"
 
         # Add custom forward
         custom = PortForward("custom-fwd", "test-ns", "service/custom", 9090, 8080)

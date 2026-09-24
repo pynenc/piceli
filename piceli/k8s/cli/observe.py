@@ -6,6 +6,7 @@ import errno
 import json
 import signal
 from pathlib import Path
+from collections.abc import Callable
 from types import FrameType
 from typing import Annotated, Optional
 
@@ -17,6 +18,7 @@ from piceli.k8s.observe import (
     PortForward,
     PreferenceStore,
     UserPreferences,
+    archive_resources,
     kubectl_logs_command,
     observe_session,
     run_logs,
@@ -24,6 +26,7 @@ from piceli.k8s.observe import (
 )
 from piceli.k8s.observe_server import LocalObserveServer
 from piceli.k8s.ops.session import DeploymentSessionArchive
+from piceli.k8s.ui_config import UI_CONFIG_ENV, load_ui_config
 
 MaybeString = Optional[str]  # noqa: UP007 - Typer 0.9 cannot inspect ``str | None``.
 MaybePath = Optional[Path]  # noqa: UP007 - Typer 0.9 cannot inspect ``Path | None``.
@@ -35,6 +38,57 @@ app = typer.Typer(
 
 def _archive(path: Path) -> DeploymentSessionArchive:
     return DeploymentSessionArchive.from_json(path.read_text())
+
+
+UI_CONFIG_HELP = (
+    "TOML file with dashboard shortcuts, topology tiers, and badges "
+    f"(also ${UI_CONFIG_ENV})"
+)
+
+
+def bind_local_server(
+    factory: Callable[[], LocalObserveServer],
+    port: int,
+    supervisor: ForwardSupervisor | None,
+) -> LocalObserveServer:
+    """Create the loopback server, turning an occupied port into a CLI error."""
+    try:
+        return factory()
+    except OSError as error:
+        if supervisor:
+            supervisor.close()
+        if error.errno == errno.EADDRINUSE:
+            raise typer.BadParameter(
+                f"local port {port} is already in use; choose another port or "
+                "stop the process that owns it",
+                param_hint="--port",
+            ) from None
+        raise
+
+
+def serve_until_interrupted(
+    server: LocalObserveServer, supervisor: ForwardSupervisor | None
+) -> None:
+    """Serve until SIGINT/SIGTERM/SIGHUP, then stop owned forwards."""
+
+    def stop_server(_signal: int, _frame: FrameType | None) -> None:
+        """Turn terminal shutdown into normal owned-forward cleanup."""
+        raise KeyboardInterrupt
+
+    previous_handlers = {
+        signal_number: signal.signal(signal_number, stop_server)
+        for signal_number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+    }
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        for signal_number, handler in previous_handlers.items():
+            signal.signal(signal_number, handler)
+        server.server_close()
+        if supervisor:
+            supervisor.close()
 
 
 @app.command("status")
@@ -207,54 +261,53 @@ def serve(
     archive: Annotated[Path, typer.Option(exists=True, readable=True)],
     kubeconfig: Annotated[Path, typer.Option(exists=True, readable=True)],
     context: Annotated[MaybeString, typer.Option()] = None,
+    namespace: Annotated[
+        MaybeString,
+        typer.Option(help="Namespace for shortcuts and pods (default: the archive's)"),
+    ] = None,
     preferences: Annotated[MaybePath, typer.Option()] = None,
     user: Annotated[
         MaybeString, typer.Option(help="Restore this user's saved forwards")
     ] = None,
     port: Annotated[int, typer.Option(min=1, max=65535)] = 9876,
+    ui_config: Annotated[
+        MaybePath,
+        typer.Option(exists=True, readable=True, envvar=UI_CONFIG_ENV, help=UI_CONFIG_HELP),
+    ] = None,
 ) -> None:
     """Open the local operations dashboard and optionally restore saved forwards."""
+    config = load_ui_config(ui_config)
     session_archive = _archive(archive)
+    if namespace is None:
+        archive_namespaces = {
+            ref.namespace for ref in archive_resources(session_archive) if ref.namespace
+        }
+        namespace = archive_namespaces.pop() if len(archive_namespaces) == 1 else ""
     reader = KubernetesDynamicInventoryReader(kubeconfig=kubeconfig, context=context)
     store = PreferenceStore(preferences)
     supervisor = None
     if user:
         supervisor = ForwardSupervisor(
-            preferences=store, user=user, kubeconfig=kubeconfig, context=context
+            preferences=store,
+            user=user,
+            kubeconfig=kubeconfig,
+            context=context,
+            shortcuts=config.shortcuts,
+            namespace=namespace or None,
         )
         supervisor.restore()
-    try:
-        server = LocalObserveServer(
+    server = bind_local_server(
+        lambda: LocalObserveServer(
             ("127.0.0.1", port),
             lambda: observe_session(session_archive, reader),
             store,
             supervisor,
             user,
-        )
-    except OSError as error:
-        if supervisor:
-            supervisor.close()
-        if error.errno == errno.EADDRINUSE:
-            raise typer.BadParameter(
-                f"local port {port} is already in use; choose another port or "
-                "stop the process that owns it",
-                param_hint="--port",
-            ) from None
-        raise
+            namespace=namespace,
+            ui_config=config,
+        ),
+        port,
+        supervisor,
+    )
     typer.echo(json.dumps({"address": f"http://127.0.0.1:{port}", "local_only": True}))
-
-    def stop_server(_signal: int, _frame: FrameType | None) -> None:
-        """Turn terminal shutdown into normal owned-forward cleanup."""
-        raise KeyboardInterrupt
-
-    previous_handlers = {
-        signal_number: signal.signal(signal_number, stop_server)
-        for signal_number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
-    }
-    try:
-        server.serve_forever()
-    finally:
-        for signal_number, handler in previous_handlers.items():
-            signal.signal(signal_number, handler)
-        if supervisor:
-            supervisor.close()
+    serve_until_interrupted(server, supervisor)

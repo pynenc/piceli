@@ -100,6 +100,8 @@ def test_serve_reports_an_occupied_port_without_a_traceback(tmp_path: Path) -> N
                 str(archive),
                 "--kubeconfig",
                 str(kubeconfig),
+                "--namespace",
+                "demo",
                 "--port",
                 "9876",
             ],

@@ -6,30 +6,33 @@ Enforces identical authorization and operations across Library, CLI, versioned R
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
-import time
 from typing import Annotated, Any, Optional
 
 import typer
 
-from piceli.artifacts.gc import SafeGarbageCollector
 from piceli.k8s.automation import (
     ApprovalStore,
     PRApproval,
-    health_aware_rollback,
     promote_release,
+)
+from piceli.k8s.cli.observe import (
+    UI_CONFIG_HELP,
+    bind_local_server,
+    serve_until_interrupted,
 )
 from piceli.k8s.observe import (
     ForwardSupervisor,
     KubernetesDynamicInventoryReader,
     PreferenceStore,
-    observe_session,
 )
 from piceli.k8s.observe_server import LocalObserveServer
 from piceli.k8s.operator import build_operator_report
-from piceli.k8s.operator_state import FileStateStore, PolicyStore, UserStore
+from piceli.k8s.operator_state import FileStateStore
 from piceli.k8s.ops.session import DeploymentSessionArchive
-from piceli.k8s.release import ReleaseCatalog, ReleaseWorkflow
+from piceli.k8s.release import ReleaseCatalog
+from piceli.k8s.ui_config import UI_CONFIG_ENV, load_ui_config
 
 
 app = typer.Typer(help="Piceli Operator commands for reactive delivery, inventory, and artifacts.")
@@ -143,8 +146,13 @@ def serve(
     state_dir: Annotated[MaybePath, typer.Option()] = None,
     user: Annotated[MaybeString, typer.Option()] = None,
     port: Annotated[int, typer.Option(min=1, max=65535)] = 9876,
+    ui_config: Annotated[
+        MaybePath,
+        typer.Option(exists=True, readable=True, envvar=UI_CONFIG_ENV, help=UI_CONFIG_HELP),
+    ] = None,
 ) -> None:
     """Launch the Piceli Operator dashboard and unified REST API."""
+    config = load_ui_config(ui_config)
     reader = KubernetesDynamicInventoryReader(kubeconfig=kubeconfig, context=context)
     cat = ReleaseCatalog(catalog) if catalog else None
     arch = _archive(archive) if archive else None
@@ -153,7 +161,12 @@ def serve(
 
     effective_user = user or os.environ.get("USER") or "operator"
     supervisor = ForwardSupervisor(
-        preferences=pref_store, user=effective_user, kubeconfig=kubeconfig, context=context
+        preferences=pref_store,
+        user=effective_user,
+        kubeconfig=kubeconfig,
+        context=context,
+        shortcuts=config.shortcuts,
+        namespace=namespace,
     )
     supervisor.restore()
 
@@ -163,24 +176,27 @@ def serve(
             namespace,
             catalog=cat,
             session_archive=arch,
+            managed_labels=config.inventory.managed_labels,
+            revision_label=config.inventory.revision_label,
         )
 
-    server = LocalObserveServer(
-        ("127.0.0.1", port),
-        report_fn,
-        pref_store,
-        supervisor=supervisor,
-        user=effective_user,
-        catalog=cat,
-        state_store=file_state,
-        namespace=namespace,
-        kubeconfig=kubeconfig,
-        context=context,
+    server = bind_local_server(
+        lambda: LocalObserveServer(
+            ("127.0.0.1", port),
+            report_fn,
+            pref_store,
+            supervisor=supervisor,
+            user=effective_user,
+            catalog=cat,
+            state_store=file_state,
+            namespace=namespace,
+            kubeconfig=kubeconfig,
+            context=context,
+            ui_config=config,
+        ),
+        port,
+        supervisor,
     )
 
     typer.echo(json.dumps({"address": f"http://127.0.0.1:{port}", "operator": True}))
-    try:
-        server.serve_forever()
-    finally:
-        if supervisor:
-            supervisor.close()
+    serve_until_interrupted(server, supervisor)

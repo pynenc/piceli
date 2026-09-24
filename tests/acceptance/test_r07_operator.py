@@ -285,6 +285,7 @@ def test_r07_full_acceptance_gate(local_api, tmp_path: Path) -> None:
     server_thread.start()
 
     base_url = f"http://127.0.0.1:{server.server_port}"
+    token_headers = {"X-Piceli-Local-Token": server.local_token}
     try:
         # Test GET / (UI)
         with urlopen(f"{base_url}/") as res:
@@ -294,7 +295,7 @@ def test_r07_full_acceptance_gate(local_api, tmp_path: Path) -> None:
             assert "Overview &amp; Inventory" in html or "Overview & Inventory" in html
 
         # Test GET /v1/status (Classification equivalence)
-        with urlopen(f"{base_url}/v1/status") as res:
+        with urlopen(Request(f"{base_url}/v1/status", headers=token_headers)) as res:
             status_json = json.loads(res.read())
             assert status_json["namespace"] == provider.target.namespace
             assert status_json["active_release"] == "release-v1"
@@ -305,20 +306,20 @@ def test_r07_full_acceptance_gate(local_api, tmp_path: Path) -> None:
             assert "unmanaged-config" in unmanaged_names
 
         # Test GET /v1/releases
-        with urlopen(f"{base_url}/v1/releases") as res:
+        with urlopen(Request(f"{base_url}/v1/releases", headers=token_headers)) as res:
             releases_json = json.loads(res.read())
             rel_names = [r["name"] for r in releases_json["releases"]]
             assert "release-v1" in rel_names
             assert "production-stable" in rel_names
 
         # Test GET /v1/artifacts
-        with urlopen(f"{base_url}/v1/artifacts") as res:
+        with urlopen(Request(f"{base_url}/v1/artifacts", headers=token_headers)) as res:
             art_json = json.loads(res.read())
             assert art_json["protected_bytes"] == 25_000_000
             assert art_json["reclaimable_bytes"] == 20_000_000
 
         # Test GET /v1/logs
-        with urlopen(f"{base_url}/v1/logs?target=deployment/web-app") as res:
+        with urlopen(Request(f"{base_url}/v1/logs?target=deployment/web-app", headers=token_headers)) as res:
             logs_json = json.loads(res.read())
             assert "[REDACTED]" in logs_json["lines"][0]
             assert auth_token not in logs_json["lines"][0]

@@ -7,6 +7,7 @@ Single-instance state store and file-based backup ensure reliability without dis
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -30,14 +31,25 @@ from piceli.k8s.automation import (
 from piceli.k8s.observe import (
     ForwardSupervisor,
     InventoryReport,
-    KNOWN_SHORTCUTS,
     PortForward,
     PreferenceStore,
     kubectl_logs_command,
 )
 from piceli.k8s.operator import OperatorReport, redact_log_content
-from piceli.k8s.operator_state import FileStateStore, PolicyStore, UserStore
+from piceli.k8s.operator_state import FileStateStore, OperatorUser, PolicyStore, UserStore
 from piceli.k8s.release import ReleaseCatalog, ReleaseWorkflow
+from piceli.k8s.ui_config import UiConfig
+
+
+_LOG = logging.getLogger(__name__)
+
+MAX_BODY_BYTES = 1024 * 1024
+MAX_LOG_TAIL = 2000
+# Roles allowed to call mutating (POST) endpoints with a bearer token. The
+# per-process local token belongs to the user who started the server and is
+# treated as admin.
+MUTATING_ROLES = frozenset({"admin", "operator"})
+_LOCAL_PRINCIPAL = "local"
 
 
 _PAGE_HTML = """<!doctype html>
@@ -504,6 +516,9 @@ _PAGE_HTML = """<!doctype html>
       font-size: 12px;
       min-width: 0;
     }
+    .pod-choice:hover {
+      border-color: var(--pod-color, var(--border));
+    }
     .pod-choice span:nth-child(3) {
       overflow: hidden;
       text-overflow: ellipsis;
@@ -601,23 +616,21 @@ _PAGE_HTML = """<!doctype html>
       <span class="brand-tag">Piceli Observe R07</span>
     </div>
     <div class="header-actions">
-      <div class="status-pill" data-testid="badge-auth" style="border-color: rgba(34, 197, 94, 0.4); background: rgba(34, 197, 94, 0.08); color: #86efac;">
-        <span>🔑 <strong>Kabuki:</strong> ihadmin / admin</span>
-      </div>
+      <div id="hdr-badges" style="display: contents;"></div>
       <div class="status-pill" id="hdr-ns" data-testid="badge-namespace">Namespace: loading...</div>
-      <button class="btn btn-sec" id="btn-toggle-refresh" data-testid="btn-autorefresh-toggle" onclick="toggleAutoRefresh()">Auto-Refresh: ON (3s)</button>
-      <button class="btn btn-sec" data-testid="btn-refresh" onclick="loadAll()">↻ Refresh</button>
+      <button class="btn btn-sec" id="btn-toggle-refresh" data-testid="btn-autorefresh-toggle" data-action="toggleAutoRefresh">Auto-Refresh: ON (3s)</button>
+      <button class="btn btn-sec" data-testid="btn-refresh" data-action="refresh">↻ Refresh</button>
     </div>
   </header>
 
   <nav>
-    <button class="active" data-testid="nav-inventory" onclick="switchTab('inventory', this)">Overview & Inventory</button>
-    <button data-testid="nav-forwards" onclick="switchTab('forwards', this)">Port Forwards & Shortcuts</button>
-    <button data-testid="nav-releases" onclick="switchTab('releases', this)">Releases & History</button>
-    <button data-testid="nav-automation" onclick="switchTab('automation', this)">Git & PR Automation</button>
-    <button data-testid="nav-artifacts" onclick="switchTab('artifacts', this)">Artifacts & Safe GC</button>
-    <button data-testid="nav-logs" onclick="switchTab('logs', this)">Workload Logs</button>
-    <button data-testid="nav-state" onclick="switchTab('state', this)">State & Backup</button>
+    <button class="active" data-testid="nav-inventory" data-action="tab" data-tab="inventory">Overview & Inventory</button>
+    <button data-testid="nav-forwards" data-action="tab" data-tab="forwards">Port Forwards & Shortcuts</button>
+    <button data-testid="nav-releases" data-action="tab" data-tab="releases">Releases & History</button>
+    <button data-testid="nav-automation" data-action="tab" data-tab="automation">Git & PR Automation</button>
+    <button data-testid="nav-artifacts" data-action="tab" data-tab="artifacts">Artifacts & Safe GC</button>
+    <button data-testid="nav-logs" data-action="tab" data-tab="logs">Workload Logs</button>
+    <button data-testid="nav-state" data-action="tab" data-tab="state">State & Backup</button>
   </nav>
 
   <main>
@@ -670,7 +683,7 @@ _PAGE_HTML = """<!doctype html>
       <div class="section-box" data-testid="section-system-topology">
         <h2>
           <span>🏛️ System Topology & Component Architecture</span>
-          <span style="font-size: 11px; font-weight: normal; color: var(--muted);">Infinite Haiku Canonical Event-Driven & Telemetry Architecture</span>
+          <span id="topology-subtitle" style="font-size: 11px; font-weight: normal; color: var(--muted);"></span>
         </h2>
         <div class="topology-grid" id="topology-container" data-testid="topology-grid">
           <div style="color: var(--muted); font-size: 12px;">Loading topology...</div>
@@ -712,7 +725,7 @@ _PAGE_HTML = """<!doctype html>
 
       <div class="section-box">
         <h2>Add Custom Port Forward</h2>
-        <form class="form-inline" id="form-add-forward" data-testid="form-add-forward" onsubmit="event.preventDefault(); addCustomForward();">
+        <form class="form-inline" id="form-add-forward" data-testid="form-add-forward">
           <input type="text" id="add-fwd-name" data-testid="input-fwd-name" placeholder="Name (e.g. debug-api)" required style="width: 140px;">
           <input type="text" id="add-fwd-target" data-testid="input-fwd-target" placeholder="Target (service/name or pod/name)" required style="width: 220px;">
           <input type="number" id="add-fwd-local" data-testid="input-fwd-local-port" placeholder="Local Port" required style="width: 110px;">
@@ -733,7 +746,7 @@ _PAGE_HTML = """<!doctype html>
         <div class="form-inline">
           <input type="text" id="promo-source" data-testid="input-promo-source" placeholder="Source Release (e.g. branch-a)">
           <input type="text" id="promo-target" data-testid="input-promo-target" placeholder="Target Tag (e.g. production)">
-          <button class="btn" data-testid="btn-promote-release" onclick="promoteRelease()">Promote Digest (No Rebuild)</button>
+          <button class="btn" data-testid="btn-promote-release" data-action="promote">Promote Digest (No Rebuild)</button>
         </div>
         <table>
           <thead>
@@ -787,7 +800,7 @@ _PAGE_HTML = """<!doctype html>
         <h2>Cluster Image Space & Safe GC</h2>
         <div class="form-inline">
           <label><input type="checkbox" id="gc-dryrun" data-testid="chk-gc-dryrun" checked> Dry Run</label>
-          <button class="btn btn-danger" data-testid="btn-run-gc" onclick="runGC()">Run Safe GC</button>
+          <button class="btn btn-danger" data-testid="btn-run-gc" data-action="gc">Run Safe GC</button>
         </div>
         <div id="gc-receipt" style="margin-bottom: 12px;"></div>
         <table>
@@ -808,18 +821,18 @@ _PAGE_HTML = """<!doctype html>
             <div style="color: var(--muted); font-size: 12px;">Loading pods...</div>
           </div>
           <div style="display: flex; gap: 8px; align-items: center; flex-shrink: 0;">
-            <button class="btn btn-sec" data-testid="btn-select-all" onclick="toggleAllPods(true)" style="font-size: 11px; padding: 4px 10px;">Select All</button>
-            <button class="btn btn-sec" data-testid="btn-deselect-all" onclick="toggleAllPods(false)" style="font-size: 11px; padding: 4px 10px;">Deselect All</button>
+            <button class="btn btn-sec" data-testid="btn-select-all" data-action="selectPods" data-state="true" style="font-size: 11px; padding: 4px 10px;">Select All</button>
+            <button class="btn btn-sec" data-testid="btn-deselect-all" data-action="selectPods" data-state="false" style="font-size: 11px; padding: 4px 10px;">Deselect All</button>
             <select id="log-tail-multi" data-testid="select-log-tail" style="padding: 5px 8px; background: var(--card); border: 1px solid var(--border); color: var(--text); border-radius: 6px; font-size: 12px;">
               <option value="50">50 lines</option>
               <option value="100" selected>100 lines</option>
               <option value="250">250 lines</option>
               <option value="500">500 lines</option>
             </select>
-            <button class="btn" data-testid="btn-fetch-multi-logs" onclick="fetchMultiLogs()">Fetch Logs</button>
-            <button class="btn btn-sec" id="btn-live-toggle" data-testid="btn-live-toggle" onclick="toggleLiveStream()">&#9654; Live</button>
-            <button class="btn btn-sec" data-testid="btn-log-smaller" onclick="setLogSize(-1)">A-</button>
-            <button class="btn btn-sec" data-testid="btn-log-larger" onclick="setLogSize(1)">A+</button>
+            <button class="btn" data-testid="btn-fetch-multi-logs" data-action="fetchLogs">Fetch Logs</button>
+            <button class="btn btn-sec" id="btn-live-toggle" data-testid="btn-live-toggle" data-action="live">&#9654; Live</button>
+            <button class="btn btn-sec" data-testid="btn-log-smaller" data-action="logSize" data-delta="-1">A-</button>
+            <button class="btn btn-sec" data-testid="btn-log-larger" data-action="logSize" data-delta="1">A+</button>
           </div>
         </div>
         <div style="margin-top: 8px;">
@@ -834,7 +847,7 @@ _PAGE_HTML = """<!doctype html>
       <div class="section-box">
         <h2>State Store & Single-Instance Safety</h2>
         <p style="color: var(--muted);">State is persisted atomically to volume storage with <code>0o600</code> permissions and <code>fcntl.flock</code> locking.</p>
-        <button class="btn" data-testid="btn-create-backup" onclick="createBackup()">Create Backup Archive (.tar.gz)</button>
+        <button class="btn" data-testid="btn-create-backup" data-action="backup">Create Backup Archive (.tar.gz)</button>
         <div id="backup-status" style="margin-top: 14px;"></div>
       </div>
     </div>
@@ -842,105 +855,64 @@ _PAGE_HTML = """<!doctype html>
 
   <div id="toasts" class="toast-container"></div>
 
-  <script>
-    const COMPONENT_TIERS = [
-      {
-        id: "core",
-        title: "Core Telemetry & Datastore Engine",
-        badge: "Storage & Ingestion",
-        badgeClass: "tier-badge-core",
-        components: [
-          {
-            name: "ih-target-poet",
-            role: "Target Poet Ingestion & Store",
-            desc: "Native telemetry datastore, OTLP ingestion, and temporal multi-view graph engine.",
-            ports: "18080 (HTTP) / 18443 (TLS)",
-            shortcutId: "poet",
-            url: "http://127.0.0.1:18086"
-          },
-          {
-            name: "ih-observer-poet",
-            role: "Observer Poet Analytics",
-            desc: "Read-only replica for historical analytics and long-term telemetry retention.",
-            ports: "18081",
-            shortcutId: null,
-            url: null
-          }
-        ]
-      },
-      {
-        id: "task",
-        title: "Distributed Task & Coordination Tier",
-        badge: "Shibuya & Rustvello",
-        badgeClass: "tier-badge-task",
-        components: [
-          {
-            name: "ih-redis",
-            role: "State & Queue Store",
-            desc: "Redis 7 persistent backing store for Shibuya domain state and Rustvello task distribution.",
-            ports: "6379 (Plain) / 6380 (TLS)",
-            shortcutId: null,
-            url: null
-          },
-          {
-            name: "ih-shibuya",
-            role: "Domain Task Coordinator",
-            desc: "Domain orchestrator and event hub for offloading compute tasks to Rustvello.",
-            ports: "18083",
-            shortcutId: "shibuya",
-            url: "http://127.0.0.1:18083"
-          },
-          {
-            name: "ih-worker",
-            role: "Rustvello Task Worker",
-            desc: "High-performance worker pulling and executing offloaded generation tasks.",
-            ports: "Internal Worker",
-            shortcutId: null,
-            url: null
-          }
-        ]
-      },
-      {
-        id: "app",
-        title: "Application & Presentation Tier",
-        badge: "Kabuki & Monitor",
-        badgeClass: "tier-badge-app",
-        components: [
-          {
-            name: "ih-kabuki",
-            role: "Leptos SSR Web UI & Studio",
-            desc: "Browser user interface, pilot bridge, and interactive session manager.",
-            ports: "3000",
-            shortcutId: "kabuki",
-            url: "http://127.0.0.1:3000/login"
-          },
-          {
-            name: "ih-rustvello-monitor",
-            role: "Task Telemetry Dashboard",
-            desc: "Realtime observability interface for task worker queues and execution progress.",
-            ports: "18084",
-            shortcutId: "monitor",
-            url: "http://127.0.0.1:18084"
-          }
-        ]
-      },
-      {
-        id: "sensors",
-        title: "Autonomous Sensors & Muses",
-        badge: "Telemetry Harvester",
-        badgeClass: "tier-badge-sensor",
-        components: [
-          {
-            name: "ih-observer-muse",
-            role: "Cross-Node Telemetry Sensor",
-            desc: "Autonomous agent harvesting host and service metrics between target and observer.",
-            ports: "Autonomous Sensor",
-            shortcutId: null,
-            url: null
-          }
-        ]
-      }
-    ];
+  <script nonce="__PICELI_NONCE__">
+    const WORKLOAD_KINDS = new Set(['Deployment', 'StatefulSet', 'DaemonSet', 'Job', 'CronJob']);
+
+    // Configured tiers win; otherwise group live workloads by the
+    // app.kubernetes.io/component label (falling back to app).
+    function topologyTiers(status) {
+      if ((UI.tiers || []).length) return UI.tiers;
+      const groups = new Map();
+      (status.managed || []).forEach(r => {
+        if (!WORKLOAD_KINDS.has(r.ref?.kind)) return;
+        const labels = r.observed?.labels || {};
+        const group = labels['app.kubernetes.io/component'] || labels['app'] || 'ungrouped';
+        if (!groups.has(group)) groups.set(group, []);
+        groups.get(group).push({ name: r.ref.name, role: r.ref.kind, description: '', ports: '', shortcut: null });
+      });
+      return Array.from(groups.entries()).sort((a, b) => a[0].localeCompare(b[0])).map(([name, components]) => ({
+        id: name.toLowerCase().replace(/[^a-z0-9]+/g, '-'), name, badge: '', components
+      }));
+    }
+
+    function renderStaticConfig() {
+      document.getElementById('topology-subtitle').textContent =
+        UI.topology_subtitle || ((UI.tiers || []).length ? '' : 'Grouped by app.kubernetes.io/component label');
+      document.getElementById('hdr-badges').innerHTML = (UI.badges || []).map(b => `
+        <div class="status-pill" data-testid="badge-config" style="border-color: rgba(34, 197, 94, 0.4); background: rgba(34, 197, 94, 0.08); color: #86efac;">
+          <span><strong>${esc(b.label)}:</strong> ${esc(b.text)}</span>
+        </div>`).join('');
+    }
+
+    const ACTIONS = {
+      toggleAutoRefresh: () => toggleAutoRefresh(),
+      refresh: () => loadAll(),
+      tab: el => switchTab(el.dataset.tab, el),
+      promote: () => promoteRelease(),
+      gc: () => runGC(),
+      selectPods: el => toggleAllPods(el.dataset.state === 'true'),
+      fetchLogs: () => fetchMultiLogs(),
+      live: () => toggleLiveStream(),
+      logSize: el => setLogSize(parseInt(el.dataset.delta, 10) || 0),
+      backup: () => createBackup(),
+      shortcut: el => actQuickShortcut(el.dataset.id, el.dataset.op),
+      logsFor: el => viewLogsFor(el.dataset.target),
+      rollback: el => rollbackRelease(el.dataset.name),
+      forward: el => actForward(el.dataset.name, el.dataset.op),
+      deleteForward: el => deleteForward(el.dataset.name),
+    };
+
+    // One delegated listener replaces inline handlers so the CSP needs no 'unsafe-inline' for scripts.
+    document.addEventListener('click', ev => {
+      const el = ev.target.closest('[data-action]');
+      if (!el || !Object.prototype.hasOwnProperty.call(ACTIONS, el.dataset.action)) return;
+      ev.preventDefault();
+      ACTIONS[el.dataset.action](el);
+    });
+    document.getElementById('form-add-forward').addEventListener('submit', ev => {
+      ev.preventDefault();
+      addCustomForward();
+    });
 
     function viewLogsFor(target) {
       const podName = target.replace(/^(deployment|pod)\\//, '');
@@ -952,11 +924,16 @@ _PAGE_HTML = """<!doctype html>
     }
 
     const token = __PICELI_TOKEN__;
+    const PAGE = __PICELI_PAGE__;
+    const UI = PAGE.ui || {};
     let autoRefreshActive = true;
     let autoRefreshTimer = null;
-    let currentNamespace = '';
+    let currentNamespace = PAGE.namespace || '';
 
-    const esc = v => String(v ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    // HTML-escape for text and quoted attribute contexts. User-controlled values are
+    // never placed inside inline JS; actions read them back from data-* attributes.
+    const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const TIER_BADGES = ['tier-badge-core', 'tier-badge-task', 'tier-badge-app', 'tier-badge-sensor'];
     const POD_COLORS = ['#38bdf8','#22c55e','#eab308','#a855f7','#ef4444','#f97316','#06b6d4','#ec4899','#14b8a6','#6366f1'];
     const LOG_SIZES = ['small', 'normal', 'large'];
 
@@ -1037,8 +1014,8 @@ _PAGE_HTML = """<!doctype html>
           req('/v1/shortcuts'),
         ]);
 
-        currentNamespace = status.namespace || 'infinite-haiku-p2';
-        document.getElementById('hdr-ns').textContent = 'Namespace: ' + currentNamespace;
+        currentNamespace = status.namespace || PAGE.namespace || '';
+        document.getElementById('hdr-ns').textContent = 'Namespace: ' + (currentNamespace || '(unset)');
         const addNsInput = document.getElementById('add-fwd-ns');
         if (addNsInput && !addNsInput.value) addNsInput.value = currentNamespace;
 
@@ -1111,10 +1088,10 @@ _PAGE_HTML = """<!doctype html>
               </div>
               <div class="qc-actions">
                 ${isRunning ? `
-                  <button class="btn btn-danger" data-testid="btn-stop-${esc(sc.id)}" onclick="actQuickShortcut('${esc(sc.id)}', 'stop')">Stop</button>
+                  <button class="btn btn-danger" data-testid="btn-stop-${esc(sc.id)}" data-action="shortcut" data-id="${esc(sc.id)}" data-op="stop">Stop</button>
                   <a href="${esc(sc.url)}" target="_blank" data-testid="link-open-${esc(sc.id)}" class="btn btn-open">Open ↗</a>
                 ` : `
-                  <button class="btn" data-testid="btn-start-${esc(sc.id)}" onclick="actQuickShortcut('${esc(sc.id)}', 'start')">▶ Start Forward</button>
+                  <button class="btn" data-testid="btn-start-${esc(sc.id)}" data-action="shortcut" data-id="${esc(sc.id)}" data-op="start">▶ Start Forward</button>
                   <a href="${esc(sc.url)}" target="_blank" data-testid="link-open-${esc(sc.id)}" class="btn btn-disabled">Open ↗</a>
                 `}
               </div>
@@ -1127,18 +1104,19 @@ _PAGE_HTML = """<!doctype html>
         const managedMap = new Map();
         (status.managed || []).forEach(m => managedMap.set(m.ref.name, m));
 
-        const topologyHtml = COMPONENT_TIERS.map(tier => `
+        const topologyHtml = topologyTiers(status).map((tier, index) => `
           <div class="tier-group" data-testid="tier-group-${esc(tier.id)}">
             <div class="tier-header">
-              <div class="tier-title">${esc(tier.title)}</div>
-              <span class="tier-badge ${esc(tier.badgeClass)}">${esc(tier.badge)}</span>
+              <div class="tier-title">${esc(tier.name)}</div>
+              ${tier.badge ? `<span class="tier-badge ${TIER_BADGES[index % TIER_BADGES.length]}">${esc(tier.badge)}</span>` : ''}
             </div>
             ${tier.components.map(comp => {
               const res = managedMap.get(comp.name);
               const isPresent = res && res.state === 'present';
               const phase = res?.observed?.phase || (isPresent ? 'Running' : 'Not Deployed');
               const images = (res?.observed?.images || []).join(', ') || 'canonical';
-              const shortcut = shortcuts.find(s => s.id === comp.shortcutId);
+              const shortcut = comp.shortcut ? shortcuts.find(s => s.id === comp.shortcut) : null;
+              const compUrl = shortcut ? shortcut.url : '';
               const fwdRunning = shortcut && shortcut.state === 'running';
 
               return `
@@ -1149,27 +1127,27 @@ _PAGE_HTML = """<!doctype html>
                       <span class="pulse-dot ${isPresent ? 'pulse-running' : 'pulse-stopped'}"></span>${esc(phase)}
                     </span>
                   </div>
-                  <div class="comp-desc">${esc(comp.desc)}</div>
+                  <div class="comp-desc">${esc(comp.description)}</div>
                   <div class="comp-meta">
-                    <span class="comp-tag">Role: <strong>${esc(comp.role)}</strong></span>
-                    <span class="comp-tag">Port: <code>${esc(comp.ports)}</code></span>
+                    ${comp.role ? `<span class="comp-tag">Role: <strong>${esc(comp.role)}</strong></span>` : ''}
+                    ${comp.ports ? `<span class="comp-tag">Port: <code>${esc(comp.ports)}</code></span>` : ''}
                   </div>
                   <div class="comp-actions">
-                    ${comp.shortcutId ? (fwdRunning ? `
-                      <button class="btn btn-danger" style="padding: 3px 8px; font-size: 11px;" onclick="actQuickShortcut('${esc(comp.shortcutId)}', 'stop')">■ Stop</button>
-                      <a href="${esc(comp.url)}" target="_blank" class="btn btn-open" style="padding: 3px 8px; font-size: 11px;">Open ↗</a>
+                    ${shortcut ? (fwdRunning ? `
+                      <button class="btn btn-danger" style="padding: 3px 8px; font-size: 11px;" data-action="shortcut" data-id="${esc(comp.shortcut)}" data-op="stop">■ Stop</button>
+                      <a href="${esc(compUrl)}" target="_blank" class="btn btn-open" style="padding: 3px 8px; font-size: 11px;">Open ↗</a>
                     ` : `
-                      <button class="btn" style="padding: 3px 8px; font-size: 11px;" onclick="actQuickShortcut('${esc(comp.shortcutId)}', 'start')">▶ Forward</button>
-                      <a href="${esc(comp.url)}" target="_blank" class="btn btn-disabled" style="padding: 3px 8px; font-size: 11px;">Open ↗</a>
+                      <button class="btn" style="padding: 3px 8px; font-size: 11px;" data-action="shortcut" data-id="${esc(comp.shortcut)}" data-op="start">▶ Forward</button>
+                      <a href="${esc(compUrl)}" target="_blank" class="btn btn-disabled" style="padding: 3px 8px; font-size: 11px;">Open ↗</a>
                     `) : ''}
-                    <button class="btn btn-sec" style="padding: 3px 8px; font-size: 11px;" onclick="viewLogsFor('deployment/${esc(comp.name)}')">Logs ↗</button>
+                    <button class="btn btn-sec" style="padding: 3px 8px; font-size: 11px;" data-action="logsFor" data-target="deployment/${esc(comp.name)}">Logs ↗</button>
                   </div>
                 </div>
               `;
             }).join('')}
           </div>
         `).join('');
-        document.getElementById('topology-container').innerHTML = topologyHtml;
+        document.getElementById('topology-container').innerHTML = topologyHtml || '<div style="color: var(--muted); font-size: 12px;">No workloads to group</div>';
 
         // Managed table
         document.getElementById('tbl-managed').innerHTML = (status.managed || []).map(r => `
@@ -1200,7 +1178,7 @@ _PAGE_HTML = """<!doctype html>
             <td><code>${esc(rel.artifact_digest ? rel.artifact_digest.slice(0, 24) + '...' : '-')}</code></td>
             <td>${rel.is_active ? '<span class="badge badge-present">Active</span>' : '<span class="badge badge-stopped">Historical</span>'}</td>
             <td>
-              <button class="btn btn-sec" onclick="rollbackRelease('${esc(rel.name)}')">Rollback</button>
+              <button class="btn btn-sec" data-action="rollback" data-name="${esc(rel.name)}">Rollback</button>
             </td>
           </tr>
         `).join('') || '<tr><td colspan="6" style="color:var(--muted);">No releases catalogued</td></tr>';
@@ -1223,11 +1201,11 @@ _PAGE_HTML = """<!doctype html>
               <td><span class="badge badge-${esc(f.state)}">${esc(f.state)}${f.pid ? ' (' + f.pid + ')' : ''}</span></td>
               <td>
                 ${isRunning ? `
-                  <button class="btn btn-danger" data-testid="btn-stop-fwd-${esc(f.name)}" onclick="actForward('${esc(f.name)}','stop')">Stop</button>
+                  <button class="btn btn-danger" data-testid="btn-stop-fwd-${esc(f.name)}" data-action="forward" data-name="${esc(f.name)}" data-op="stop">Stop</button>
                 ` : `
-                  <button class="btn" data-testid="btn-start-fwd-${esc(f.name)}" onclick="actForward('${esc(f.name)}','start')">Start</button>
+                  <button class="btn" data-testid="btn-start-fwd-${esc(f.name)}" data-action="forward" data-name="${esc(f.name)}" data-op="start">Start</button>
                 `}
-                <button class="btn btn-sec" data-testid="btn-del-fwd-${esc(f.name)}" onclick="deleteForward('${esc(f.name)}')">✕</button>
+                <button class="btn btn-sec" data-testid="btn-del-fwd-${esc(f.name)}" data-action="deleteForward" data-name="${esc(f.name)}">✕</button>
               </td>
             </tr>
           `;
@@ -1381,7 +1359,7 @@ _PAGE_HTML = """<!doctype html>
         container.innerHTML = pods.map((p, i) => {
           const color = colorForName(p.name);
           const phaseClass = p.phase === 'Running' ? 'badge-present' : 'badge-unknown';
-          return `<label class="pod-choice" data-testid="pod-chk-${esc(p.name)}" onmouseenter="this.style.borderColor='${color}'" onmouseleave="this.style.borderColor='var(--border)'">`+
+          return `<label class="pod-choice" data-testid="pod-chk-${esc(p.name)}" style="--pod-color: ${color};">`+
             `<input type="checkbox" class="pod-checkbox" value="${esc(p.name)}" data-color="${color}" checked style="accent-color: ${color};">`+
             `<span style="width: 8px; height: 8px; border-radius: 50%; background: ${color}; display: inline-block;"></span>`+
             `<span>${esc(p.name)}</span>`+
@@ -1470,6 +1448,7 @@ _PAGE_HTML = """<!doctype html>
       }, 3000);
     }
 
+    renderStaticConfig();
     loadAll();
     loadPods();
     startRefreshLoop();
@@ -1499,6 +1478,7 @@ class LocalObserveServer(ThreadingHTTPServer):
         kubeconfig: Path | None = None,
         kubectl: str = "kubectl",
         context: str | None = None,
+        ui_config: UiConfig | None = None,
     ) -> None:
         if address[0] not in {"127.0.0.1", "::1"}:
             raise ValueError("Piceli observe server must bind to loopback")
@@ -1515,8 +1495,58 @@ class LocalObserveServer(ThreadingHTTPServer):
         self.kubeconfig = kubeconfig
         self.kubectl = kubectl
         self.context = context
+        self.ui_config = ui_config or UiConfig()
         self.local_token = secrets.token_urlsafe(24)
         super().__init__(address, LocalObserveHandler)
+
+    def allowed_hosts(self) -> frozenset[str]:
+        """Host header values that name this loopback listener (DNS-rebinding defence)."""
+        port = self.server_address[1]
+        return frozenset(
+            {f"127.0.0.1:{port}", f"localhost:{port}", f"[::1]:{port}"}
+        )
+
+    def allowed_origins(self) -> frozenset[str]:
+        return frozenset(f"http://{host}" for host in self.allowed_hosts())
+
+
+def _script_json(value: object) -> str:
+    """Serialize JSON that is safe to embed inside an inline <script> element."""
+    return (
+        json.dumps(value, sort_keys=True)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+    )
+
+
+def _csp(nonce: str | None = None) -> str:
+    """Content-Security-Policy for the dashboard page (nonce) or API responses (none).
+
+    Scripts run only with the per-response nonce; all handlers are attached by
+    delegation, so no inline event attributes are needed.  Styles still allow
+    'unsafe-inline' because the page uses many style="" attributes; style
+    injection cannot execute script under this policy.
+    """
+    if nonce is None:
+        return "default-src 'none'; frame-ancestors 'none'"
+    return (
+        "default-src 'none'; "
+        f"script-src 'nonce-{nonce}'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "connect-src 'self'; "
+        "img-src 'self' data:; "
+        "base-uri 'none'; "
+        "form-action 'none'; "
+        "frame-ancestors 'none'"
+    )
+
+
+class _RequestError(Exception):
+    def __init__(self, status: int, code: str) -> None:
+        super().__init__(code)
+        self.status = status
+        self.code = code
 
 
 class LocalObserveHandler(BaseHTTPRequestHandler):
@@ -1527,55 +1557,126 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
     def log_message(self, _format: str, *_args: object) -> None:
         """Keep user preferences, tokens, and secret paths out of terminal logs."""
 
+    def _security_headers(self, nonce: str | None = None) -> None:
+        self.send_header("Content-Security-Policy", _csp(nonce))
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Cache-Control", "no-store")
+
     def _json(self, status: int, value: object) -> None:
         body = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        self._security_headers()
         self.end_headers()
         self.wfile.write(body)
 
+    def _error(self, status: int, code: str, error: BaseException | None = None) -> None:
+        """Return a fixed error code; keep exception detail in the server log only."""
+        if error is not None:
+            _LOG.warning(
+                "piceli observe %s %s failed: %s",
+                self.command,
+                urlparse(self.path).path,
+                code,
+                exc_info=error,
+            )
+        self._json(status, {"error": code})
+
     def _html(self) -> None:
-        body = _PAGE_HTML.replace(
-            "__PICELI_TOKEN__", json.dumps(self.server.local_token)
-        ).encode()
+        nonce = secrets.token_urlsafe(16)
+        page = {
+            "namespace": self.server.namespace,
+            "ui": self.server.ui_config.public_dict(),
+        }
+        body = (
+            _PAGE_HTML.replace("__PICELI_TOKEN__", _script_json(self.server.local_token))
+            .replace("__PICELI_PAGE__", _script_json(page))
+            .replace("__PICELI_NONCE__", nonce)
+            .encode()
+        )
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        self._security_headers(nonce)
         self.end_headers()
         self.wfile.write(body)
 
-    def _check_auth(self) -> bool:
-        """Verify token via X-Piceli-Local-Token or Bearer user store."""
+    def _check_origin(self) -> bool:
+        """Reject foreign Host (DNS rebinding) and, when present, foreign Origin headers."""
+        host = (self.headers.get("Host") or "").strip().lower()
+        if host not in self.server.allowed_hosts():
+            self._error(403, "forbidden-host")
+            return False
+        origin = self.headers.get("Origin")
+        if origin is not None and origin.strip().lower() not in self.server.allowed_origins():
+            self._error(403, "forbidden-origin")
+            return False
+        return True
+
+    def _principal(self) -> str | OperatorUser | None:
+        """Return the local principal, an authenticated bearer user, or ``None``."""
         token_hdr = self.headers.get("X-Piceli-Local-Token")
-        if token_hdr and secrets.compare_digest(token_hdr, self.server.local_token):
-            return True
+        if token_hdr and secrets.compare_digest(
+            token_hdr.encode(), self.server.local_token.encode()
+        ):
+            return _LOCAL_PRINCIPAL
         auth_hdr = self.headers.get("Authorization")
         if auth_hdr and auth_hdr.startswith("Bearer ") and self.server.state_store:
             token = auth_hdr.split(" ", 1)[1]
             user = UserStore(self.server.state_store).authenticate(token)
             if user:
-                return True
-        return False
+                return user
+        return None
+
+    def _check_auth(self) -> bool:
+        """Verify token via X-Piceli-Local-Token or Bearer user store."""
+        return self._principal() is not None
+
+    def _read_json_body(self) -> dict[str, Any]:
+        raw_length = self.headers.get("Content-Length", "0") or "0"
+        try:
+            length = int(raw_length)
+        except ValueError:
+            raise _RequestError(400, "invalid-content-length") from None
+        if length < 0:
+            raise _RequestError(400, "invalid-content-length")
+        if length > MAX_BODY_BYTES:
+            raise _RequestError(413, "payload-too-large")
+        if length == 0:
+            return {}
+        try:
+            payload = json.loads(self.rfile.read(length))
+        except Exception:
+            raise _RequestError(400, "invalid-json-payload") from None
+        if not isinstance(payload, dict):
+            raise _RequestError(400, "invalid-json-payload")
+        return payload
 
     def do_GET(self) -> None:  # noqa: N802
+        if not self._check_origin():
+            return
         if self.path == "/":
             self._html()
             return
         if self.path == "/favicon.ico":
             self.send_response(204)
+            self._security_headers()
             self.end_headers()
             return
         if self.path == "/healthz":
             self._json(200, {"ok": True})
             return
+        if not self._check_auth():
+            self._error(401, "unauthorized")
+            return
         if self.path == "/v1/status":
             try:
                 self._json(200, self.server.report().to_dict())
             except Exception as error:
-                self._json(503, {"error": type(error).__name__})
+                self._error(503, "status-unavailable", error)
             return
         if self.path == "/v1/preferences":
             users = self.server.preferences.load()
@@ -1661,7 +1762,7 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
                     lines = self.server.log_reader_fn()
                     self._json(200, {"lines": lines})
                 except Exception as e:
-                    self._json(500, {"error": str(e)})
+                    self._error(500, "log-read-failed", e)
             else:
                 self._json(200, {"lines": ["Log reader adapter not attached."]})
             return
@@ -1699,7 +1800,7 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
                     })
             self._json(200, {"pods": pods})
         except Exception as e:
-            self._json(500, {"error": str(e)})
+            self._error(500, "pod-list-failed", e)
 
     def _handle_logs_multi(self) -> None:
         """Fetch and merge logs from multiple pods."""
@@ -1709,7 +1810,15 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         params = parse_qs(parsed.query)
         pod_names = [p.strip() for p in params.get("pods", [""])[0].split(",") if p.strip()]
-        tail = min(int(params.get("tail", ["100"])[0]), 2000)
+        try:
+            tail = int(params.get("tail", ["100"])[0])
+        except ValueError:
+            self._json(400, {"error": "invalid-tail"})
+            return
+        if tail < 1:
+            self._json(400, {"error": "invalid-tail"})
+            return
+        tail = min(tail, MAX_LOG_TAIL)
         if not pod_names:
             self._json(400, {"error": "no pods specified"})
             return
@@ -1764,15 +1873,20 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
         self._json(200, {"lines": all_lines})
 
     def do_POST(self) -> None:  # noqa: N802
-        if not self._check_auth():
-            self._json(403, {"error": "unauthorized"})
+        if not self._check_origin():
+            return
+        principal = self._principal()
+        if principal is None:
+            self._error(401, "unauthorized")
+            return
+        if isinstance(principal, OperatorUser) and principal.role not in MUTATING_ROLES:
+            self._error(403, "forbidden-role")
             return
 
         try:
-            length = int(self.headers.get("Content-Length", "0"))
-            payload = json.loads(self.rfile.read(length)) if length > 0 else {}
-        except Exception:
-            self._json(400, {"error": "invalid-json-payload"})
+            payload = self._read_json_body()
+        except _RequestError as error:
+            self._json(error.status, {"error": error.code})
             return
 
         if self.path in {"/v1/forwards/start", "/v1/forwards/stop"}:
@@ -1790,7 +1904,7 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
                     self.server.supervisor.stop(name)
                 self._json(200, {"ok": True})
             except Exception as e:
-                self._json(400, {"error": str(e)})
+                self._error(400, "forward-action-failed", e)
             return
 
         if self.path == "/v1/forwards/quick":
@@ -1811,7 +1925,7 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
                 shortcuts = self.server.supervisor.shortcuts_status(self.server.namespace)
                 self._json(200, {"ok": True, "shortcut": shortcut, "shortcuts": shortcuts})
             except Exception as e:
-                self._json(400, {"error": str(e)})
+                self._error(400, "shortcut-action-failed", e)
             return
 
         if self.path == "/v1/forwards/add":
@@ -1819,8 +1933,11 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
                 self._json(409, {"error": "forward-supervision-disabled"})
                 return
             try:
-                name = payload.get("name")
-                target = payload.get("target")
+                name = str(payload.get("name") or "")
+                target = str(payload.get("target") or "")
+                if not name or not target:
+                    self._json(400, {"error": "name-and-target-required"})
+                    return
                 local_port = int(payload.get("local_port", 0))
                 remote_port = int(payload.get("remote_port", 0))
                 ns = payload.get("namespace") or self.server.namespace
@@ -1837,7 +1954,7 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
                     self.server.supervisor.start(name)
                 self._json(200, {"ok": True, "forward": fwd.__dict__})
             except Exception as e:
-                self._json(400, {"error": str(e)})
+                self._error(400, "forward-add-failed", e)
             return
 
         if self.path == "/v1/forwards/delete":
@@ -1852,7 +1969,7 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
                 self.server.supervisor.remove(name, persist=True)
                 self._json(200, {"ok": True})
             except Exception as e:
-                self._json(400, {"error": str(e)})
+                self._error(400, "forward-delete-failed", e)
             return
 
         if self.path == "/v1/releases/promote":
@@ -1868,7 +1985,7 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
                 rec = promote_release(self.server.catalog, src, tgt)
                 self._json(200, {"ok": True, "promoted": rec.name, "artifact_digest": rec.source.artifact_digest})
             except Exception as e:
-                self._json(400, {"error": str(e)})
+                self._error(400, "promote-failed", e)
             return
 
         if self.path == "/v1/releases/rollback":
@@ -1883,7 +2000,7 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
                 self.server.workflow.catalog.select(tgt)
                 self._json(200, {"ok": True, "rolled_back_to": tgt})
             except Exception as e:
-                self._json(400, {"error": str(e)})
+                self._error(400, "rollback-failed", e)
             return
 
         if self.path == "/v1/artifacts/gc":
@@ -1898,7 +2015,7 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
                 receipt = gc.run_gc(inv, dry_run=dry_run)
                 self._json(200, receipt.to_dict())
             except Exception as e:
-                self._json(400, {"error": str(e)})
+                self._error(400, "gc-failed", e)
             return
 
         if self.path == "/v1/backup/create":
@@ -1910,7 +2027,7 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
                 res = self.server.state_store.create_backup(dest)
                 self._json(200, {"ok": True, "backup_path": str(res)})
             except Exception as e:
-                self._json(500, {"error": str(e)})
+                self._error(500, "backup-failed", e)
             return
 
         self._json(404, {"error": "not-found"})
