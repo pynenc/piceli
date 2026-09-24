@@ -237,6 +237,19 @@ def test_example_spec_parses_and_previews() -> None:
     assert preview["builder"]["digest"].startswith("sha256:")
 
 
+def test_example_rebuilds_its_crate_despite_the_target_cache() -> None:
+    # Staged sources carry the fixed epoch mtime, so a cached `target/` would
+    # look fresh to cargo after a source edit. The example cleans its own
+    # crate (not the dependencies) before building, inside the cached step.
+    spec = BuildSpec.from_toml(EXAMPLE / "build.toml")
+    assert any(cache.target == "/work/target" for cache in spec.caches)
+    [text] = spec.plan().dockerfiles.values()
+    [run] = [line for line in text.splitlines() if line.startswith("RUN ")]
+    assert "target=/work/target" in run
+    clean = run.index("cargo clean --release --locked --offline --package rust-hello")
+    assert clean < run.index("cargo build --release")
+
+
 def test_preview_is_pure(tmp_path: Path) -> None:
     spec = make_spec(tmp_path)
     before = sorted(str(path) for path in tmp_path.rglob("*"))
@@ -1298,3 +1311,36 @@ def test_rust_hello_example_is_reproducible(tmp_path: Path) -> None:
     with pytest.raises(BuildSpecError) as error:
         failing.run(BuildGrant(spec.builder.digest, time.time() + 1800), tmp_path / "c")
     assert error.value.code == "smoke-failed"
+
+
+@pytest.mark.skipif(
+    os.environ.get("PICELI_DOCKER_TESTS") != "1",
+    reason="set PICELI_DOCKER_TESTS=1 to run real docker buildx builds",
+)
+@pytest.mark.timeout(1800)
+def test_rust_hello_source_change_produces_a_new_binary(tmp_path: Path) -> None:
+    # A copy of the example without inputs.toml: the edit stays in tmp_path.
+    app = tmp_path / "app"
+    shutil.copytree(EXAMPLE, app, ignore=shutil.ignore_patterns("target"))
+    doc = tomllib.loads((app / "build.toml").read_text())
+    del doc["inputs"]
+    doc["context"]["app"] = {
+        key: value
+        for key, value in doc["context"]["app"].items()
+        if key not in {"source", "path"}
+    } | {"path": "."}
+    del doc["output"]["image"]
+
+    def build(out: str) -> bytes:
+        spec = BuildSpec.from_dict(doc, app)
+        spec.run(BuildGrant(spec.builder.digest, time.time() + 1800), tmp_path / out)
+        return (tmp_path / out / "bin/rust-hello").read_bytes()
+
+    first = build("a")
+    main = app / "src/main.rs"
+    main.write_text(
+        main.read_text().replace("hello from rust-hello", "edited rust-hello")
+    )
+    second = build("b")
+    assert second != first
+    assert b"edited rust-hello" in second and b"hello from rust-hello" not in second
