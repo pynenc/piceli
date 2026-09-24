@@ -11,6 +11,7 @@ from piceli.k8s.cli.model import app as model_app
 from piceli.k8s.cli.observe import app as observe_app
 from piceli.k8s.cli.operator import app as operator_app
 from piceli.k8s.cli.release import app as release_app
+from piceli.k8s.cli.render import render
 
 # from piceli.k8s.cli.pods import app as pods_app
 # from piceli.k8s.cli.services import app as services_app
@@ -23,6 +24,7 @@ app.add_typer(model_app, name="model")
 app.add_typer(observe_app, name="observe")
 app.add_typer(operator_app, name="operator")
 app.add_typer(release_app, name="release")
+app.command("render")(render)
 # app.add_typer(pods_app, name="pods")
 # app.add_typer(services_app, name="services")
 # app.add_typer(nodes_app, name="nodes")
