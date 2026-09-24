@@ -24,6 +24,9 @@ Selection policy (``piceli.build-context.v1``):
 * Staged files get mode 0644 or 0755 (executable bit kept) and a fixed
   modification time, so equal content gives an equal context.
 
+`verify_staged` re-hashes a manifest's files at their origin after a build, so
+drift is judged over exactly what was staged.
+
 Importing this module runs nothing.
 """
 
@@ -426,3 +429,25 @@ def stage_context(
         if directory == destination or destination in directory.parents:
             os.utime(directory, (mtime, mtime))
     return manifest
+
+
+def verify_staged(root: Path, manifest: ContextManifest) -> None:
+    """Re-hash every staged file at its origin; raise ``context-changed`` on a
+    difference.
+
+    This is the drift check for what a build consumed: only the manifest's
+    files count. Other files below ``root`` (or elsewhere in the same
+    checkout) may change freely; a new file that would now match the include
+    patterns was not staged, so it is not drift either.
+    """
+    for item in manifest.files:
+        fd = _open_relative(root, item.path)
+        try:
+            sha, size = _hash_regular(fd)
+            executable = bool(os.fstat(fd).st_mode & 0o111)
+        finally:
+            os.close(fd)
+        if (sha, size, executable) != (item.sha256, item.size, item.executable):
+            raise BuildContextError(
+                "context-changed", "a staged context file changed during the build"
+            )
