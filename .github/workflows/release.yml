@@ -1,8 +1,9 @@
 name: Release
 
-# PyPI releases come only from main: after CI succeeds on a push to main, a
-# version bump in pyproject.toml creates the tag, publishes to PyPI and
-# publishes the release notes. Commits without a version bump publish nothing.
+# PyPI releases come only from main. After CI succeeds on a push to main (or
+# when run manually), the version in pyproject.toml is released if its tag
+# `v<version>` does not exist yet: the tag is created, the package is published
+# to PyPI and the release notes are published. Otherwise nothing is published.
 # Pull requests publish pre-releases to TestPyPI from ci.yml.
 # Publishing uses PyPI trusted publishing (OIDC) through the `pypi` environment.
 on:
@@ -10,35 +11,44 @@ on:
     workflows: [CI]
     types: [completed]
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   check-version:
-    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (github.event.workflow_run.conclusion == 'success'
+          && github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     outputs:
-      tag: ${{ steps.check-version.outputs.tag }}
+      tag: ${{ steps.tag.outputs.tag }}
+      sha: ${{ steps.tag.outputs.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
-          fetch-depth: 2
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - uses: astral-sh/setup-uv@v6
-
-      - name: Detect and tag new version
-        id: check-version
-        uses: salsify/action-detect-and-tag-new-version@v2.0.3
-        with:
-          # The action also reads the parent commit's version, which may predate
-          # PEP 621 (Poetry layout), so read pyproject.toml directly.
-          version-command: >-
-            uv run --no-project --python 3.12 python -c "import tomllib;
-            d = tomllib.load(open('pyproject.toml', 'rb'));
-            print(d.get('project', {}).get('version') or d['tool']['poetry']['version'])"
+      - name: Tag the version if it is not released yet
+        id: tag
+        run: |
+          version=$(uv run --no-project --python 3.12 python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          tag="v${version}"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null; then
+            echo "${tag} already exists; nothing to release."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${tag}" -m "Released version ${version}"
+          git push origin "refs/tags/${tag}"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "Tagged ${tag}"
 
   publish-pypi:
     needs: check-version
@@ -51,7 +61,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ needs.check-version.outputs.sha }}
       - uses: astral-sh/setup-uv@v6
       - run: uv build
       - run: uv publish --trusted-publishing always
