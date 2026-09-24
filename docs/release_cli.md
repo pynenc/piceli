@@ -51,6 +51,7 @@ readiness_seconds = 240
 
 [images]                            # pinned by digest
 web = "docker.io/library/nginx@sha256:…"
+# api = { receipt = "api.delivery.json" }  # a piceli.registry-delivery.v1 receipt
 # images_from = "build.receipt.json"   # a piceli.build-receipt.v1 receipt
 
 [secrets.api-token]
@@ -79,6 +80,25 @@ With `images_from`, images come from `outputs.images.<name>` of a build
 receipt whose `revision` is `piceli.build-receipt.v1`; each entry has
 `image_id`, `digest` (may be null), `platform` and `ref`. The release records
 the registry digest, or the image ID when no digest exists.
+
+To release an image pushed with `piceli artifacts deliver --to oci://…`, point
+the image at its delivery receipt: `api = { receipt = "api.delivery.json" }`.
+The receipt's `pull_ref` (the node-side registry address pinned to the
+manifest digest) becomes the image reference, and the manifest digest becomes
+the release identity. Only receipts with result `pushed` or
+`already-present` are accepted. Add `digest = "sha256:…"` to pin the expected
+manifest digest. This chains build → delivery → release without copying
+digests by hand:
+
+```bash
+piceli artifacts build-spec run --spec build.toml --approve-builder sha256:… --out build.receipt.json
+piceli artifacts deliver --image <image_id> --approve-digest <image_id> \
+  --to oci://127.0.0.1:15000/app/api:r1 --node-registry 127.0.0.1:5000 \
+  --via-forward deployment/registry --namespace my-app --kubeconfig kc --context ctx \
+  --kubectl /usr/local/bin/kubectl --kubectl-sha256 sha256:… \
+  --receipt api.delivery.json
+piceli release plan --spec release.toml
+```
 
 ### The composition function
 

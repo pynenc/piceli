@@ -247,3 +247,60 @@ def test_tls_generator_requires_the_pinned_tool(tmp_path):
     spec = TlsSelfSignedSpec(type="tls-self-signed", dns_names=("a",), openssl=fake)
     with pytest.raises(ReleaseSpecError, match="pin"):
         generate("tls", spec)
+
+
+def _delivery(path: Path, **overrides) -> None:
+    document = {
+        "schema": "piceli.registry-delivery.v1",
+        "result": "pushed",
+        "image": {"manifest_digest": DIGEST, "config_digest": OTHER},
+        "pull_ref": f"127.0.0.1:5000/demo/web@{DIGEST}",
+    }
+    document.update(overrides)
+    path.write_text(json.dumps(document))
+
+
+def test_delivery_receipt_supplies_the_pull_reference(tmp_path):
+    _delivery(tmp_path / "web.delivery.json")
+    spec = ReleaseSpec.from_dict(
+        base(images={"web": {"receipt": "web.delivery.json"}}), tmp_path
+    )
+    web = spec.images()["web"]
+    assert web.reference == f"127.0.0.1:5000/demo/web@{DIGEST}"
+    assert web.identity == DIGEST  # the registry manifest digest
+    assert web.image_id == OTHER  # the approved config digest
+
+    pinned = ReleaseSpec.from_dict(
+        base(images={"web": {"receipt": "web.delivery.json", "digest": OTHER}}),
+        tmp_path,
+    )
+    with pytest.raises(ReleaseSpecError, match="pinned digest"):
+        pinned.images()
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"schema": "piceli.node-delivery.v1"},
+        {"result": "rejected"},
+        {"pull_ref": "127.0.0.1:5000/demo/web:latest"},
+        {"pull_ref": f"127.0.0.1:5000/demo/web@{OTHER}"},
+        {"image": {"manifest_digest": "latest", "config_digest": OTHER}},
+    ],
+)
+def test_invalid_delivery_receipts(tmp_path, overrides):
+    _delivery(tmp_path / "web.delivery.json", **overrides)
+    spec = ReleaseSpec.from_dict(
+        base(images={"web": {"receipt": "web.delivery.json"}}), tmp_path
+    )
+    with pytest.raises(ReleaseSpecError):
+        spec.images()
+
+
+def test_image_spec_requires_one_source(tmp_path):
+    with pytest.raises(ValueError):
+        ReleaseSpec.from_dict(base(images={"web": {"ref": "a/b"}}), tmp_path)
+    with pytest.raises(ValueError):
+        ReleaseSpec.from_dict(
+            base(images={"web": {"receipt": "r.json", "ref": "a/b"}}), tmp_path
+        )

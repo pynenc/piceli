@@ -6,6 +6,11 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ## Unreleased
 
+- `release.toml` images can point at a registry delivery receipt:
+  `web = { receipt = "web.delivery.json" }` releases the receipt's
+  digest-pinned `pull_ref`. This chains build → delivery → release without
+  copying digests by hand.
+
 - Adopt existing objects by ownership transfer. `piceli release --adopt
   Kind/name` (or `[release] adopt = [...]`, or
   `PlanAuthorization.adopt_resources`) adopts objects in one of two ways:
