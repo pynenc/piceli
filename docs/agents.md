@@ -62,6 +62,8 @@ These never change a cluster, registry or node. Some write local files, as
 noted.
 
 - `piceli explain`, `piceli help-json`
+- `piceli render`: imports the model module and reads the spec; never contacts
+  a cluster or reads secret values.
 - `piceli release plan` and `piceli release preview`: read the cluster, store
   a pending plan and secret candidates in the spec's `state_dir`, and print the
   plan hash. They never write to the cluster.
@@ -74,7 +76,6 @@ noted.
   explicit `--kubeconfig`.
 - `piceli observe forward-list`, `piceli observe forward-command`,
   `piceli observe logs-command`: print what would run, start nothing.
-- `piceli model list`, `piceli deploy plan`: read local model files only.
 - `piceli artifacts build`: assembles an OCI layout in `--output` without
   running any code.
 - `piceli observe forward-save`, `piceli operator backup`: write a local
@@ -96,10 +97,6 @@ Ask before running these, and show the owner what will happen first.
 | `piceli artifacts import-local` | The local Docker image store | `--approve-digest <digest>` |
 | `piceli operator approve`, `piceli operator promote`, `piceli operator restore` | Operator state, catalog or files | The owner's go-ahead |
 | `piceli observe serve`, `piceli operator serve`, `piceli observe forward-run`, `piceli observe forwards apply`, `piceli observe logs-run` | Long-running local processes and ports | The owner's go-ahead |
-
-Never run `piceli deploy run` from an agent: it uses the current kube context
-and deletes and recreates objects without a plan to approve. Use
-`piceli release` instead.
 
 Never add `--auto-approve` unless the owner has said that this run is an
 unattended CI job for this exact spec.

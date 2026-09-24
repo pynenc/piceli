@@ -49,8 +49,7 @@ These are enforced by tests or review. Do not weaken them.
    inputs.
 2. **Never an ambient kube context.** Library code and new commands take an
    explicit kubeconfig file and context; they never fall back to
-   `~/.kube/config`, `KUBECONFIG` or `current-context`. (The legacy
-   `model`/`deploy` commands are the only exception and are being replaced.)
+   `~/.kube/config`, `KUBECONFIG` or `current-context`.
 3. **Plan before apply.** Anything that changes a cluster, registry, node or
    runs code first produces a plan (or preview) with a hash or digest, and
    executes only with an explicit approval of that exact hash.
