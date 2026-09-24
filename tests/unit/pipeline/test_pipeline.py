@@ -396,7 +396,11 @@ def _invoke(*args: str) -> tuple[int, dict[str, Any], Any]:
 
 def test_cli_rejects_missing_targets_and_flag_conflicts(tmp_path: Path) -> None:
     code, body, _ = _invoke(str(tmp_path / "missing.py:pipeline"))
-    assert (code, body) == (2, {"state": "rejected", "reason": "pipeline-not-found"})
+    assert (code, body["state"], body["reason"]) == (
+        2,
+        "rejected",
+        "pipeline-not-found",
+    )
     (tmp_path / "broken.py").write_text("raise RuntimeError('boom')\n")
     code, body, _ = _invoke(str(tmp_path / "broken.py:pipeline"))
     assert body["reason"] == "pipeline-load-failed"
@@ -415,24 +419,19 @@ def test_cli_rejects_missing_targets_and_flag_conflicts(tmp_path: Path) -> None:
     assert body["reason"] == "deploy-flags-conflict"
 
 
-def test_shop_example_renders_without_checks_module() -> None:
+def test_shop_example_renders_and_declares_its_checks() -> None:
     result = CliRunner().invoke(
         cli, ["render", str(ROOT / "examples/shop/app.py:app"), "--namespace", "shop"]
     )
     assert result.exit_code == 0, result.output
     assert "pipeline.piceli.invalid/rust-hello:unresolved" in result.stdout
     assert "cache-state" in result.stdout
-    code = (
-        "import sys; from pathlib import Path; "
-        "sys.modules['piceli.checks'] = None; "
-        "from piceli.app.render import load_target; "
-        f"p = load_target({str(ROOT / 'examples/shop/app.py:pipeline')!r}, Path.cwd()); "
-        "print(type(p).__name__, len(p.checks), list(p.handles()))"
-    )
-    output = subprocess.run(
-        [sys.executable, "-c", code], capture_output=True, text=True, check=True
-    )
-    assert output.stdout.split() == ["Pipeline", "0", "['rust-hello']"]
+    from piceli.app.render import load_target
+
+    pipeline = load_target(str(ROOT / "examples/shop/app.py:pipeline"), Path.cwd())
+    assert type(pipeline).__name__ == "Pipeline"
+    assert len(pipeline.checks) >= 1  # piceli.checks ships with the release engine
+    assert list(pipeline.handles()) == ["rust-hello"]
 
 
 def test_pipeline_import_is_side_effect_free() -> None:

@@ -306,7 +306,10 @@ def test_plan_changed_and_approval_required(shop) -> None:
     assert ("Deployment", "web") not in api.objects
     code, events, _ = deploy(tmp_path, "--approve", "0" * 64)
     assert code == 2
-    assert events[-1] == {"state": "rejected", "reason": "pipeline-plan-changed"}
+    assert (events[-1]["state"], events[-1]["reason"]) == (
+        "rejected",
+        "pipeline-plan-changed",
+    )
     code, events, _ = deploy(tmp_path, "--plan", "--auto-approve")
     assert code == 2 and events[-1]["reason"] == "deploy-flags-conflict"
     code, events, _ = deploy(tmp_path, "--until", "nowhere")

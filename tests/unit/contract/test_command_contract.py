@@ -94,6 +94,10 @@ CASES: dict[str, tuple[Argv, str]] = {
         ),
         "import-target-invalid",
     ),
+    "deploy": (
+        lambda p: ["deploy", str(p / "missing.py") + ":pipeline"],
+        "pipeline-not-found",
+    ),
     "inputs record": (
         lambda p: ["inputs", "record", "--spec", str(p / "junk")],
         "invalid-inputs-spec",
