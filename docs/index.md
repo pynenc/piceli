@@ -124,6 +124,7 @@ containerized_builds
 artifact_delivery
 node_delivery
 node_local_registry
+access
 operations_lens
 operator_workflow
 ```

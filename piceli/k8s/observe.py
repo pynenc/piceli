@@ -27,6 +27,7 @@ from typing import Any, Protocol
 
 from piceli.k8s.ops.discovery import ResourceIdentity
 from piceli.k8s.ops.session import DeploymentSessionArchive
+from piceli.k8s.port_owner import PortOwner, port_owner
 from piceli.k8s.ui_config import HealthProbe, RestartPolicy, UiShortcut, legacy_health
 
 _NAME = re.compile(r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?")
@@ -582,6 +583,8 @@ class ForwardStatus:
     last_probe_at: str | None = None
     consecutive_failures: int = 0
     probe: dict[str, Any] | None = None
+    #: The process holding the local port on a ``conflict`` (pid, command).
+    owner: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if self.state not in _FORWARD_STATES:
@@ -610,6 +613,7 @@ class _ManagedForward:
     next_probe: float = 0.0
     given_up: bool = False
     stopped: bool = False
+    owner: PortOwner | None = None
 
     def reset(self) -> None:
         """Clear failure bookkeeping before an explicit (re)start."""
@@ -618,6 +622,7 @@ class _ManagedForward:
         self.attempts = 0
         self.given_up = False
         self.stopped = False
+        self.owner = None
 
 
 class ForwardSupervisor:
@@ -630,8 +635,11 @@ class ForwardSupervisor:
     fails ``failure_threshold`` consecutive times, with exponential backoff and
     a bounded number of consecutive restarts
     (:class:`~piceli.k8s.ui_config.RestartPolicy`). A local port that is
-    already served by another process is reported as a ``conflict`` and never
-    spawns a process.
+    already served by another process is reported as a ``conflict`` with the
+    owning process (pid and command) and never spawns a process. A conflict
+    is final until the forward is started again explicitly: the supervisor
+    never waits for a declared port to become free and silently takes it back
+    from whoever holds it (for example another dashboard or ``piceli access``).
     """
 
     def __init__(
@@ -737,6 +745,7 @@ class ForwardSupervisor:
             last_probe_at=_iso(managed.last_probe_at),
             consecutive_failures=managed.consecutive_failures,
             probe=managed.probe.public_dict(),
+            owner=managed.owner.to_dict() if managed.owner is not None else None,
         )
 
     def statuses(self) -> tuple[ForwardStatus, ...]:
@@ -870,6 +879,7 @@ class ForwardSupervisor:
                         "probe": status.probe,
                         "required": sc.required,
                         "url": sc.url,
+                        "owner": status.owner,
                     }
                 )
             return results
@@ -1012,13 +1022,22 @@ class ForwardSupervisor:
         if managed.process is not None and managed.process.poll() is None:
             return
         if not self._port_available(managed.forward.local_port):
-            # An ambient loopback listener is not ours to inspect, adopt, or
-            # terminate. Leave it alone, spawn nothing, and make the conflict
-            # visible while periodically re-checking in case its owner stops.
+            # An ambient loopback listener is not ours to adopt or terminate.
+            # Leave it alone, spawn nothing, name its owner, and stop trying:
+            # re-checking until the port frees up would silently take a
+            # declared port back from whoever owns it now (another dashboard,
+            # or ``piceli access`` restarting its forward). Only an explicit
+            # start retries.
+            owner = self._owner(managed.forward.local_port)
+            reason = _OCCUPIED
+            if owner is not None:
+                reason = f"{_OCCUPIED}: {owner.describe()}"
+            managed.owner = owner
             managed.health = "conflict"
-            managed.error = _OCCUPIED
-            managed.last_error = _OCCUPIED
-            managed.next_start = time.monotonic() + 1.0
+            managed.error = reason
+            managed.last_error = reason
+            managed.given_up = True
+            managed.next_start = float("inf")
             return
         command = managed.forward.command(
             kubectl=self._kubectl, kubeconfig=self._kubeconfig, context=self._context
@@ -1050,6 +1069,7 @@ class ForwardSupervisor:
         managed.process = None
         managed.next_start = float("inf")
         managed.stopped = True
+        managed.given_up = False
         managed.health = "stopped"
         if process is not None and process.poll() is None:
             self._stop_process(process)
@@ -1080,6 +1100,11 @@ class ForwardSupervisor:
         """Return whether a loopback port can be safely owned by this supervisor."""
         return not local_port_in_use(port)
 
+    @staticmethod
+    def _owner(port: int) -> PortOwner | None:
+        """The local process holding ``port``, when it can be determined."""
+        return port_owner(port)
+
 
 @dataclass(frozen=True)
 class AccessPlan:
@@ -1102,12 +1127,14 @@ def preflight_shortcuts(
     *,
     namespace: str | None = None,
     in_use: Callable[[int], bool] = local_port_in_use,
+    owner: Callable[[int], PortOwner | None] = port_owner,
 ) -> AccessPlan:
     """Check that every declared forward can be owned before starting any.
 
     A required shortcut whose local port is already served by another process,
     or that has no namespace, is an error. An optional (``required = false``)
     shortcut on an occupied port is reported as ``external`` and not started.
+    A conflict names the owning process (pid and command) when it can be found.
     """
     start: list[str] = []
     external: list[str] = []
@@ -1126,9 +1153,11 @@ def preflight_shortcuts(
             continue
         if in_use(shortcut.local_port):
             if shortcut.required:
+                holder = owner(shortcut.local_port)
+                by = f" ({holder.describe()})" if holder is not None else ""
                 errors.append(
                     f"{shortcut.id}: local port {shortcut.local_port} is already in "
-                    "use by another process; stop it or change local_port"
+                    f"use by another process{by}; stop it or change local_port"
                 )
             else:
                 external.append(shortcut.id)

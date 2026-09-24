@@ -57,8 +57,9 @@ interruption is harmless.
 | `3` | Approval required; nothing was executed | Show the plan to the owner and wait. |
 
 Commands whose contract is `conforms` in {doc}`reference/cli` follow these rules
-exactly. For a refused release plan, see
-[If `plan` refuses](release_cli.md#if-plan-refuses) for the next step.
+exactly (including `explain`, `help-json`, `status` and `access`). For a
+refused release plan, see [If `plan` refuses](release_cli.md#if-plan-refuses)
+for the next step.
 
 ### Contract changes in 0.4.0
 
@@ -89,6 +90,10 @@ noted.
   (`dryRun=All`); prints what `plan` would change, field by field. Writes no
   local state.
 - `piceli release status`: reads local state only.
+- `piceli status TARGET --json`: reads the release state, the cluster through
+  the target's explicit kubeconfig, and probes the declared forwards on
+  `127.0.0.1`. It says whether the app is up (`state`) and how to reach it
+  (`access.forwards[].url`); exit `1` means not up. See {doc}`access`.
 - `piceli inputs record` and `piceli inputs verify`: read git; `record --out`
   writes the lock file.
 - `piceli artifacts preview`, `piceli artifacts inspect`, `piceli artifacts pin`,
@@ -121,7 +126,7 @@ Ask before running these, and show the owner what will happen first.
 | `piceli artifacts execute-command` | Runs a pinned tool | `--approve-plan <hash>` |
 | `piceli artifacts import-local` | The local Docker image store | `--approve-digest <digest>` |
 | `piceli operator approve`, `piceli operator promote`, `piceli operator restore` | Operator state, catalog or files | The owner's go-ahead |
-| `piceli observe serve`, `piceli operator serve`, `piceli observe forward-run`, `piceli observe forwards apply`, `piceli observe logs-run` | Long-running local processes and ports | The owner's go-ahead |
+| `piceli access`, `piceli observe serve`, `piceli operator serve`, `piceli observe forward-run`, `piceli observe forwards apply`, `piceli observe logs-run` | Long-running local processes and ports | The owner's go-ahead |
 
 Never add `--auto-approve` unless the owner has said that this run is an
 unattended CI job for this exact spec.

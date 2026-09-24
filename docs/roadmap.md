@@ -55,6 +55,7 @@ Every feature page starts with its maturity, and this table lists them all:
 | Deterministic OCI builds (artifact API) | {doc}`artifact_delivery` | preview |
 | Image delivery (`piceli artifacts deliver`) | {doc}`node_delivery` | preview |
 | Node-local registry template | {doc}`node_local_registry` | preview |
+| Access and status from the model (`app.access.forward`, `piceli access`, `piceli status`) | {doc}`access` | preview |
 | Operations lens (`piceli observe`) | {doc}`operations_lens` | preview |
 | CLI contract: `piceli explain`, `piceli help-json`, error codes | {doc}`agents` | preview |
 | Operator workflow (`piceli operator`) | {doc}`operator_workflow` | experimental |

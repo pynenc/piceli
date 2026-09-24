@@ -175,6 +175,14 @@ string as a Secret value is a validation error. Put public values in
 release` verifies the node against the cluster. `piceli render` uses the name
 declared in the spec.
 
+### Access is declared, never rendered
+
+`app.service(web, port=3000, access=app.access.forward(local=18080,
+path="/login"))` declares how to reach the Service from a laptop. It adds
+nothing to the manifests; `piceli status` and `piceli access` use it (see
+{doc}`access`). For them to see it, the composition function returns the App
+itself, as `examples/typed_app/app.py` does; a release renders a returned App.
+
 ## Reusing templates
 
 `app.add(...)` includes a component built elsewhere: a `DeploymentComponent`,

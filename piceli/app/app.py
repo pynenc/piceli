@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
+from piceli.app.access import Access, Forward
 from piceli.app.model import (
     Config,
     Container,
@@ -33,6 +34,7 @@ from piceli.k8s.ops.plan import (
 
 if TYPE_CHECKING:
     from piceli.k8s.ops.secret_versions import SecretVersionRef
+    from piceli.k8s.ui_config import UiShortcut
 
 _NAMESPACE = re.compile(r"[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?")
 
@@ -107,6 +109,8 @@ class App(BaseModel):
 
     #: Probe factories: ``app.probe.http(...)``, ``.tcp(...)``, ``.exec(...)``.
     probe: ClassVar[type[Probe]] = Probe
+    #: Access factories: ``app.access.forward(local=..., path=..., health=...)``.
+    access: ClassVar[type[Access]] = Access
 
     name: Name
     owner: str | None = Field(default=None, min_length=1, max_length=253)
@@ -140,8 +144,50 @@ class App(BaseModel):
         for existing in self._objects:
             if type(existing) is type(item) and existing.name == item.name:
                 raise ValueError(f"{kind} {item.name!r} is already declared")
+        forward = _forward(item)
+        if forward is not None:
+            ident = forward.name or item.name
+            for other in self._objects:
+                declared = _forward(other)
+                if declared is None:
+                    continue
+                if (declared.name or other.name) == ident:
+                    raise ValueError(f"access forward {ident!r} is already declared")
+                if declared.local == forward.local:
+                    raise ValueError(
+                        f"access forward {ident!r}: local port {forward.local} is "
+                        f"already used by {declared.name or other.name!r}"
+                    )
         self._objects.append(item)
         return item
+
+    def shortcuts(self, namespace: str | None = None) -> tuple[UiShortcut, ...]:
+        """The declared access forwards as access-profile entries.
+
+        These are the same :class:`~piceli.k8s.ui_config.UiShortcut` objects an
+        ``--ui-config`` TOML file declares, so ``piceli access``, the forward
+        supervisor and the dashboard consume them unchanged. Pure: no cluster.
+
+        :param namespace: Pinned on every entry (``None`` leaves it to the caller).
+        """
+        result = []
+        for item in self._objects:
+            if isinstance(item, Service) and item.access is not None:
+                result.append(
+                    item.access.shortcut(
+                        item.name, f"service/{item.name}", item.access_port(), namespace
+                    )
+                )
+            elif isinstance(item, Deployment) and item.access is not None:
+                result.append(
+                    item.access.shortcut(
+                        item.name,
+                        f"deployment/{item.name}",
+                        item.access_port(),
+                        namespace,
+                    )
+                )
+        return tuple(result)
 
     def config(
         self, name: str, data: Mapping[str, str], *, component: str | None = None
@@ -188,13 +234,15 @@ class App(BaseModel):
         selector: Mapping[str, str] | None = None,
         labels: Mapping[str, str] | None = None,
         component: str | None = None,
+        access: Forward | None = None,
     ) -> Deployment:
         """Declare a Deployment whose main container is named after it.
 
         Container arguments (``image`` … ``pull_policy``) describe the main
         container (see :class:`~piceli.app.model.Container`); ``sidecars`` run
         next to it and ``init`` containers run first. The remaining arguments
-        are :class:`~piceli.app.model.Deployment` fields.
+        are :class:`~piceli.app.model.Deployment` fields; ``access`` declares a
+        loopback forward to the pods (prefer a Service's ``access``).
         """
         main = Container.model_validate(
             {
@@ -227,6 +275,7 @@ class App(BaseModel):
                     "selector": dict(selector) if selector is not None else None,
                     "labels": dict(labels or {}),
                     "component": component,
+                    "access": access,
                 }
             )
         )
@@ -240,12 +289,15 @@ class App(BaseModel):
         ports: Sequence[ServicePort] | None = None,
         name: str | None = None,
         type: str | None = None,
+        access: Forward | None = None,
     ) -> Service:
         """Declare a Service that selects ``workload``'s pods.
 
         Pass one ``port`` (and optionally ``target_port``) or several named
         :class:`~piceli.app.model.ServicePort` objects. The Service is named
-        after the workload unless ``name`` is given.
+        after the workload unless ``name`` is given. ``access`` declares how
+        to reach it from a laptop (``app.access.forward(local=...)``); it adds
+        nothing to the manifest.
         """
         if (port is None) == (ports is None):
             raise ValueError("pass either port= or ports=")
@@ -261,6 +313,7 @@ class App(BaseModel):
                     "ports": tuple(ports),
                     "type": type,
                     "component": workload.component_name,
+                    "access": access,
                 }
             )
         )
@@ -444,6 +497,12 @@ class App(BaseModel):
                 item.manifest(namespace, labels, node_name)
             )
         return ResourceIntent.from_manifest(item.manifest(namespace, labels))
+
+
+def _forward(item: Declared) -> Forward | None:
+    if isinstance(item, Service | Deployment):
+        return item.access
+    return None
 
 
 def _component(value: Handle) -> str:

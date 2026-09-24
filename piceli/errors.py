@@ -41,6 +41,7 @@ AREAS: Mapping[str, str] = MappingProxyType(
         "release": "Release commands (`piceli release plan|apply|rollback|resume|stop|status`)",
         "observe": "Operations commands (`piceli observe …`, `piceli operator …`)",
         "checks": "Post-deploy checks and automatic rollback (`[[checks]]`, `piceli.checks`)",
+        "access": "Access and status from the model (`piceli access`, `piceli status`)",
     }
 )
 
@@ -1390,6 +1391,105 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "Add the build receipt that produced the image, or use `[images.<name>] receipt = …`.",
         False,
         "images",
+    ),
+    # --- P7 access/status ---
+    _E(
+        "access-target-invalid",
+        "Access target invalid",
+        "TARGET is neither a readable release.toml whose composition yields an App "
+        "or composition, nor `module:attr` of an object with `.app` (a piceli App) "
+        "and `.target` (explicit kubeconfig, context and namespace).",
+        "Pass `path/to/release.toml`, or `module:attr` of a pipeline object; the "
+        "message says which part is missing.",
+        False,
+        "access",
+    ),
+    _E(
+        "access-none-declared",
+        "No access declared",
+        "The app declares no forward, so there is nothing to supervise. A "
+        "composition function that returns `app.composition(ctx)` hides the "
+        "App's declarations.",
+        "Add `access=app.access.forward(local=PORT)` to a Service, and return the "
+        "App itself from the composition function.",
+        False,
+        "access",
+    ),
+    _E(
+        "access-unknown-forward",
+        "Unknown forward",
+        "`--only` names a forward id the app does not declare.",
+        "Use an id from `piceli status TARGET --json` (`access.forwards[].id`); "
+        "it defaults to the Service name.",
+        False,
+        "access",
+    ),
+    _E(
+        "access-port-conflict",
+        "Declared local port already in use",
+        "A required forward's local port is already held by another process "
+        "(often an older `piceli access`, dashboard or `kubectl port-forward`). "
+        "Piceli never takes a port over; the rejection lists each port's owner "
+        "pid and command when it can be found.",
+        "Stop the listed process (or the dashboard that supervises it), or change "
+        "`local=` in the model, then run the command again.",
+        False,
+        "access",
+    ),
+    _E(
+        "access-kubectl-missing",
+        "kubectl required",
+        "`piceli access` runs `kubectl port-forward` and no kubectl was found or "
+        "it is not executable.",
+        "Install kubectl or pass `--kubectl PATH`.",
+        False,
+        "access",
+    ),
+    _E(
+        "access-forwards-failed",
+        "Every forward failed",
+        "All supervised forwards gave up: the restart budget was spent, or a "
+        "port was taken by another process while supervising.",
+        "Run `piceli status TARGET` to see whether the workloads are ready and "
+        "who holds each port, fix it, then run `piceli access` again.",
+        True,
+        "access",
+    ),
+    _E(
+        "status-cluster-unreadable",
+        "Cluster unreadable",
+        "Reading a workload failed (network, authentication, RBAC or timeout). "
+        "The detail is withheld because it could contain credentials.",
+        "Check that the target's kubeconfig context reaches the cluster and may "
+        "read Deployments and Pods in the namespace, then retry.",
+        True,
+        "access",
+    ),
+    _E(
+        "access-kubeconfig-invalid",
+        "Kubeconfig unusable",
+        "The target's kubeconfig or context cannot be loaded (missing file or "
+        "context, exec/auth-provider credentials, insecure or proxied transport).",
+        "Point the target at a kubeconfig file with a static-credential context; "
+        "Piceli never falls back to the current context.",
+        False,
+        "access",
+    ),
+    _E(
+        "status-release-unreadable",
+        "Release state unreadable",
+        "The release state directory (catalog, journal or history) could not be read.",
+        "Check `[release] state_dir` and run `piceli release status --spec release.toml`.",
+        False,
+        "access",
+    ),
+    _E(
+        "status-checks-unreadable",
+        "Checks result unreadable",
+        "The target's `last_checks()` hook raised.",
+        "Run the checks again; the rest of the status is still valid.",
+        True,
+        "access",
     ),
     # --- D0b retrofit ---
     _E(

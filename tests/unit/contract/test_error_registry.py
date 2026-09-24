@@ -26,6 +26,7 @@ FIRST_ARGUMENT = {
     "ImageHandoffError",
     "CheckError",
     "CheckSpecError",
+    "AccessTargetError",
     "reject",
     "fail",
     "rejection",
@@ -88,6 +89,10 @@ DYNAMIC = {
     "inputs-lock-invalid",
     "source-capture-failed",
     "inputs-io-error",
+    # k8s/access.py: codes recorded in `piceli status` fields ("error", "errors")
+    "status-cluster-unreadable",
+    "status-release-unreadable",
+    "status-checks-unreadable",
 }
 # Registered for the CLI contract itself (piceli/cli_contract.py users).
 CONTRACT = {"unknown-error-code"}
