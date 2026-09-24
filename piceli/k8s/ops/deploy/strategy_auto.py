@@ -1,3 +1,4 @@
+import logging
 from collections import defaultdict
 from typing import Iterable
 
@@ -9,6 +10,8 @@ from piceli.k8s.ops.deploy.deployment_graph import (
     ObjectNode,
 )
 from piceli.k8s.ops.deploy.strategy_base import DeploymentStrategy
+
+logger = logging.getLogger(__name__)
 
 DEPLOYMENT_LEVELS = {
     0: ["Namespace"],
@@ -38,6 +41,10 @@ KIND_TO_DEPLOYMENT_LEVEL = {
     kind: level for level, kinds in DEPLOYMENT_LEVELS.items() for kind in kinds
 }
 
+# Unknown kinds (typically custom resources) go last: every known kind they may
+# depend on (CRDs, RBAC, config, workloads, services) is then already applied.
+DEFAULT_DEPLOYMENT_LEVEL = max(DEPLOYMENT_LEVELS)
+
 
 def classify_k8s_objects_by_deployment_level(
     k8s_objects: Iterable[K8sObject],
@@ -47,12 +54,16 @@ def classify_k8s_objects_by_deployment_level(
     """
     classified_objects: dict[int, list[K8sObject]] = defaultdict(list)
     for k8s_object in k8s_objects:
-        # Look up the deployment level directly using the kind-to-level mapping
-        level = KIND_TO_DEPLOYMENT_LEVEL.get(
-            k8s_object.kind, -1
-        )  # Use -1 or other default if kind is not found
-        if level != -1:  # If level is found
-            classified_objects[level].append(k8s_object)
+        level = KIND_TO_DEPLOYMENT_LEVEL.get(k8s_object.kind)
+        if level is None:
+            level = DEFAULT_DEPLOYMENT_LEVEL
+            logger.warning(
+                "Unknown kind %r for %r; deploying it at default level %d",
+                k8s_object.kind,
+                k8s_object.name,
+                level,
+            )
+        classified_objects[level].append(k8s_object)
     return classified_objects
 
 

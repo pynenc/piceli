@@ -57,7 +57,7 @@ class Service(base.Deployable):
                 ports=ports, type="ClusterIP", selector=self.selector
             ),
         )
-        return obj
+        return [obj]
 
     # def wait(self, k8s: k8s_client.Kubernetes) -> None:
     #     log.info("Waiting for service %s", self.name)

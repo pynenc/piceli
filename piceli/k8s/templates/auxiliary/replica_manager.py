@@ -3,7 +3,7 @@ from functools import cached_property
 from typing import ClassVar, Optional
 
 from kubernetes import client
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from piceli.k8s.constants import policies
 from piceli.k8s.templates.auxiliary import pod, resource_request
@@ -80,13 +80,36 @@ class ReplicaManager(ABC, pod.Pod):
     # API: ClassVar[str] = "apps"
     KIND: ClassVar[str] = ""
 
-    def __post_init__(self) -> None:
-        if len(self.name) > 15:
-            # deployment name can be longer
-            # but we use same name for the service ports name, that is limited to 15
-            raise ValueError(f"Deployment name:'{self.name}' too long (max 15 chars)")
-        # if not self.KIND:
-        #     raise ValueError("KIND must be specified")
+    @model_validator(mode="after")
+    def check_service_name(self) -> "ReplicaManager":
+        """
+        Validates the name when a Service is generated with the same name.
+
+        ``name`` is already constrained to a DNS-1123 label (max 63 chars), which is
+        valid for Deployments/StatefulSets. A Service name must additionally be a
+        DNS-1035 label (it must start with a lowercase letter).
+        Note: the 15-char limit (IANA_SVC_NAME) only applies to *port* names,
+        which come from the container ports, not from this name.
+        """
+        if self.create_service and not self.name[:1].isalpha():
+            raise ValueError(
+                f"Name '{self.name}' must start with a letter when create_service=True "
+                "(Service names must be DNS-1035 labels)"
+            )
+        return self
+
+    def get_pod_spec(self) -> client.V1PodTemplateSpec:
+        """
+        Gets the pod template, ensuring it has labels.
+
+        Deployments/StatefulSets require a non-empty ``spec.selector.matchLabels``
+        (and the generated Service needs a selector), so when no ``template_labels``
+        are specified a default ``app: <name>`` label is used.
+        """
+        pod_template = super().get_pod_spec()
+        if not pod_template.metadata.labels:
+            pod_template.metadata.labels = {"app": self.name}
+        return pod_template
 
     @property
     def ports(self) -> list[client.V1ServicePort]:
@@ -146,7 +169,7 @@ class ReplicaManager(ABC, pod.Pod):
         """gets the Job definition"""
         objects = [self.get_replica_manager()]
         if self.create_service:
-            objects.append(self.get_service().get())
+            objects.extend(self.get_service().get())
         if hpa := self.get_hpa():
             objects.extend(hpa.get())
         if vpa := self.get_vpa():

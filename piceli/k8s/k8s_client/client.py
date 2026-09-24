@@ -1,12 +1,12 @@
 import base64
 import json
 import logging
-import os
-import tempfile
 import threading
 from functools import cached_property
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
+from google.auth.transport.requests import Request
+from google.oauth2 import service_account
 from kubernetes import client, config, watch
 
 from piceli.k8s.config.kubeconfig import KubeConfig
@@ -14,6 +14,31 @@ from piceli.k8s.templates.auxiliary.resource_request import ClusterResources
 from piceli.settings import GCE_SA_INFO
 
 logger = logging.getLogger(__name__)
+
+GCP_SCOPES = (
+    "https://www.googleapis.com/auth/cloud-platform",
+    "https://www.googleapis.com/auth/userinfo.email",
+)
+
+
+def gke_credentials_factory(
+    sa_info: dict[str, Any],
+) -> Callable[[], service_account.Credentials]:
+    """Build refreshed GKE credentials in memory from service-account info.
+
+    Passed to KubeConfigLoader as ``get_google_credentials`` so the gcp
+    auth-provider never needs GOOGLE_APPLICATION_CREDENTIALS or a key file on
+    disk; the loader calls it again whenever the token expires.
+    """
+
+    def get_credentials() -> service_account.Credentials:
+        credentials = service_account.Credentials.from_service_account_info(
+            sa_info, scopes=list(GCP_SCOPES)
+        )
+        credentials.refresh(Request())
+        return credentials
+
+    return get_credentials
 
 
 class ClientManager:
@@ -36,16 +61,13 @@ class ClientManager:
                 if not GCE_SA_INFO:
                     # TODO: if still necessary after refactoring, use cistell
                     raise ValueError("GCE_SA_INFO required for GKE kubeconfig")
-                credentials = json.loads(base64.b64decode(GCE_SA_INFO).decode("utf-8"))
-                with tempfile.TemporaryDirectory():
-                    with open(
-                        sa_json_name := "sa.json", "w", encoding="utf-8"
-                    ) as sa_file:
-                        json.dump(credentials, sa_file)
-                    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = sa_json_name
-                    configuration = client.Configuration()
-                    loader = config.kube_config.KubeConfigLoader(kubeconfig.as_dict)
-                    loader.load_and_set(configuration)
+                sa_info = json.loads(base64.b64decode(GCE_SA_INFO).decode("utf-8"))
+                configuration = client.Configuration()
+                loader = config.kube_config.KubeConfigLoader(
+                    kubeconfig.as_dict,
+                    get_google_credentials=gke_credentials_factory(sa_info),
+                )
+                loader.load_and_set(configuration)
                 self._clients[kubeconfig] = client.ApiClient(configuration)
             else:
                 try:

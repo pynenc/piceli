@@ -72,8 +72,8 @@ class PersistentVolume(base.Deployable, Volume):
     # API: ClassVar[str] = "core"
     # API_FUNC: ClassVar[str] = "persistent_volume"
 
-    def get(self) -> client.V1PersistentVolume:
-        return client.V1PersistentVolume(
+    def get(self) -> list[client.V1PersistentVolume]:
+        obj = client.V1PersistentVolume(
             api_version="v1",
             kind="PersistentVolume",
             metadata=client.V1ObjectMeta(name=self.name, labels=self.labels),
@@ -86,6 +86,7 @@ class PersistentVolume(base.Deployable, Volume):
                 ),
             ),
         )
+        return [obj]
 
     # def get_current_volume(self, k8s: k8s_client.Kubernetes) -> Optional[client.V1PersistentVolume]:
     #     """gets the volume existing in the cluster if any"""
@@ -154,8 +155,8 @@ class PersistentVolumeClaim(Volume, base.Deployable):
     # API: ClassVar[str] = "core"
     # API_FUNC: ClassVar[str] = "persistent_volume_claim"
 
-    def get(self) -> client.V1PersistentVolumeClaim:
-        return client.V1PersistentVolumeClaim(
+    def get(self) -> list[client.V1PersistentVolumeClaim]:
+        obj = client.V1PersistentVolumeClaim(
             api_version="v1",
             kind="PersistentVolumeClaim",
             metadata=client.V1ObjectMeta(name=self.name, labels=self.labels),
@@ -166,6 +167,7 @@ class PersistentVolumeClaim(Volume, base.Deployable):
                 ),
             ),
         )
+        return [obj]
 
     # def get_current_volume(self, k8s: k8s_client.Kubernetes) -> Optional[Any]:
     #     """gets the list of existing volumes"""

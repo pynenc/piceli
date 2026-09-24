@@ -1,4 +1,4 @@
-"""OCI Distribution v2 client for in-cluster (ih-registry:5000) and local streamed delivery.
+"""OCI Distribution v2 client for in-cluster (registry.example:5000) and local streamed delivery.
 
 Eliminates mandatory public registry pushes and disk-heavy intermediate tars by streaming
 OCI layers directly to owner-operated registries or containerd workers.
@@ -25,7 +25,7 @@ _DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
 
 @dataclass(frozen=True)
 class RegistryEndpoint:
-    """Connection specification for an owner-operated OCI registry (e.g. ih-registry:5000)."""
+    """Connection specification for an owner-operated OCI registry (e.g. registry.example:5000)."""
 
     host: str
     port: int = 5000

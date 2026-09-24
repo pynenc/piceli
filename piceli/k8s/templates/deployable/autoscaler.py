@@ -53,6 +53,7 @@ class HorizontalPodAutoscaler(base.Deployable):
 
     def get(self) -> list[client.V2HorizontalPodAutoscaler]:
         obj = client.V2HorizontalPodAutoscaler(
+            api_version="autoscaling/v2",
             kind="HorizontalPodAutoscaler",
             metadata=client.V1ObjectMeta(name=self.name, labels=self.labels),
             spec=client.V2HorizontalPodAutoscalerSpec(
@@ -129,6 +130,7 @@ class VerticalPodAutoscaler(base.Deployable):
     def get(self) -> list[dict]:
         """Creates the K8s VPA spec"""
         spec: dict = {
+            "apiVersion": "autoscaling.k8s.io/v1",
             "kind": "VerticalPodAutoscaler",
             "metadata": {"name": self.name},
             "spec": {

@@ -23,7 +23,7 @@ class StatefulSet(replica_manager.ReplicaManager, base.Deployable):
     replicas: int = 2
 
     def get_replica_manager(self) -> client.V1StatefulSet:
-        """gets the Job definition"""
+        """gets the StatefulSet definition"""
         pvc_templates = []
         for container in self.containers:
             for volume in container.volumes or []:
@@ -31,6 +31,8 @@ class StatefulSet(replica_manager.ReplicaManager, base.Deployable):
                     pvc_templates.append(volume.pvc_template.get_template())
         pod_template = self.get_pod_spec()
         return client.V1StatefulSet(
+            api_version="apps/v1",
+            kind="StatefulSet",
             metadata=client.V1ObjectMeta(name=self.name, labels=self.labels),
             spec=client.V1StatefulSetSpec(
                 replicas=self.replicas,
