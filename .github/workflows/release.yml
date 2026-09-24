@@ -1,9 +1,10 @@
 name: Release
 
-# Runs only after CI succeeded on main. A version bump in pyproject.toml creates
-# the tag and publishes to PyPI; any other commit publishes a dev build to TestPyPI.
-# Publishing uses PyPI trusted publishing (OIDC): configure the `pypi` and
-# `testpypi` environments and the trusted publisher on (Test)PyPI; no API tokens.
+# PyPI releases come only from main: after CI succeeds on a push to main, a
+# version bump in pyproject.toml creates the tag, publishes to PyPI and
+# publishes the release notes. Commits without a version bump publish nothing.
+# Pull requests publish pre-releases to TestPyPI from ci.yml.
+# Publishing uses PyPI trusted publishing (OIDC) through the `pypi` environment.
 on:
   workflow_run:
     workflows: [CI]
@@ -14,7 +15,7 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  check-version:
     if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
     runs-on: ubuntu-latest
     permissions:
@@ -34,51 +35,24 @@ jobs:
         with:
           version-command: uv version --short
 
-      - name: Use a unique dev version for TestPyPI
-        if: steps.check-version.outputs.tag == ''
-        run: |
-          base=$(uv version --short)
-          uv version --no-sync "${base}.dev$(date +%s)"
-
-      - run: uv build
-      - uses: actions/upload-artifact@v4
-        with:
-          name: dist
-          path: dist/
-
   publish-pypi:
-    needs: build
-    if: needs.build.outputs.tag != ''
+    needs: check-version
+    if: needs.check-version.outputs.tag != ''
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
+      contents: read
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
         with:
-          name: dist
-          path: dist/
+          ref: ${{ github.event.workflow_run.head_sha }}
       - uses: astral-sh/setup-uv@v6
+      - run: uv build
       - run: uv publish --trusted-publishing always
 
-  publish-testpypi:
-    needs: build
-    if: needs.build.outputs.tag == ''
-    runs-on: ubuntu-latest
-    environment: testpypi
-    permissions:
-      id-token: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: dist/
-      - uses: astral-sh/setup-uv@v6
-      - run: uv publish --trusted-publishing always --publish-url https://test.pypi.org/legacy/
-
   release-notes:
-    needs: [build, publish-pypi]
-    if: needs.build.outputs.tag != ''
+    needs: [check-version, publish-pypi]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -87,6 +61,6 @@ jobs:
       - uses: release-drafter/release-drafter@v6
         with:
           publish: true
-          tag: ${{ needs.build.outputs.tag }}
+          tag: ${{ needs.check-version.outputs.tag }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

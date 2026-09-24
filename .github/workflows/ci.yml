@@ -127,6 +127,54 @@ jobs:
       - run: uv sync --all-extras --group docs --python 3.12
       - run: uv run sphinx-build -W --keep-going -b html docs docs/_build/html
 
+  publish-testpypi:
+    # Every pull request from this repository publishes a pre-release to TestPyPI
+    # once the checks pass (PyPI releases come only from main, see release.yml).
+    # Fork PRs cannot use trusted publishing, so they are skipped.
+    if: >-
+      github.event_name == 'pull_request'
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && github.actor != 'dependabot[bot]'
+    needs: [lint, test, package, docs]
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Set the PR pre-release version
+        # PEP 440: {version}rc{pr}.dev{run}, e.g. 0.0.5rc12.dev3
+        run: |
+          version="$(uv version --short)rc${PR_NUMBER}.dev${GITHUB_RUN_NUMBER}"
+          uv version "$version"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+      - run: uv build
+      - name: Publish to TestPyPI
+        run: >-
+          uv publish --trusted-publishing always
+          --publish-url https://test.pypi.org/legacy/
+          --check-url https://test.pypi.org/simple/
+      - name: Comment the install command on the PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: [
+                `📦 \`piceli ${process.env.VERSION}\` published to TestPyPI:`,
+                "```bash",
+                `pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ "piceli==${process.env.VERSION}"`,
+                "```",
+              ].join("\n"),
+            });
+
   coverage:
     needs: [test, integration]
     runs-on: ubuntu-latest
