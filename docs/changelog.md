@@ -58,6 +58,14 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   `--context`, build their clients through the same checks as `release`
   (a refused target is `target-refused`) and keep static client certificates
   in memory instead of temporary files.
+- **Fixed:** the `rust-hello` build example could ship a stale binary after
+  a source edit: staged sources carry the fixed `source_date_epoch` mtime, so
+  Cargo treated the cached `target/` artifact as fresh. The example now runs
+  `cargo clean --release --package rust-hello` before `cargo build`, keeping
+  dependencies cached and builds reproducible. {doc}`containerized_builds`
+  documents the pitfall.
+- Help text shows `[[…]]` TOML names literally instead of dropping them as
+  terminal markup.
 - Two flaky tests fixed (git identity under redirected `GIT_DIR`, process
   limit timing).
 
