@@ -42,6 +42,7 @@ from piceli.k8s.ops.plan import (
     ResourcePrecondition,
     ResourceRef,
     adoption_for,
+    dry_run_confirms,
     field_manager_entries,
     manifest_contains,
     metadata_changes,
@@ -591,9 +592,15 @@ class PlanExecutor:
             or current.manifest["metadata"].get("ownerReferences")
         ):
             raise ProviderError("replace-precondition-failed")
-        if action.operation is PlanOperation.NOOP and not _contains(
-            ResourceIntent.from_manifest(current.manifest).manifest,
-            self._manifest(action.resource),
+        if (
+            action.operation is PlanOperation.NOOP
+            and not _contains(
+                ResourceIntent.from_manifest(current.manifest).manifest,
+                self._manifest(action.resource),
+            )
+            # A no-op planned from the server's dry run: declared values may
+            # be stored in canonical form (``cpu: 0.5`` as ``500m``).
+            and not dry_run_confirms(snapshot, action.resource, current.manifest)
         ):
             raise ProviderError("no-op-content-mismatch")
 

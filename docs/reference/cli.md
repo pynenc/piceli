@@ -54,6 +54,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli operator status`](#cli-operator-status) | Print classified operator inventory: managed, unmanaged, unknown, and releases. | reads | no |
 | [`piceli release apply`](#cli-release-apply) | Execute an approved plan (``--approve HASH``), or plan and confirm. | writes | yes |
 | [`piceli release check`](#cli-release-check) | Run the spec's [[checks]] now against a release; changes nothing. | reads | no |
+| [`piceli release diff`](#cli-release-diff) | Show what `plan` would change, field by field (read-only, nothing stored). | reads | no |
 | [`piceli release plan`](#cli-release-plan) | Capture live discovery and persist an approvable plan (prints its hash). | reads | no |
 | [`piceli release preview`](#cli-release-preview) | Alias of `plan`. | reads | no |
 | [`piceli release resume`](#cli-release-resume) | Resume an interrupted apply of a created release (same grant and ids). | writes | no |
@@ -810,6 +811,30 @@ Run the spec's [[checks]] now against a release; changes nothing.
 - **Output contract:** partial
 - **Notes:** Writes no state and never rolls back. Checks open temporary loopback port forwards, may exec declared commands in pods and run declared Python check functions.
 
+(cli-release-diff)=
+### `piceli release diff`
+
+Show what `plan` would change, field by field (read-only, nothing stored).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--spec` | path | required | release.toml describing the release |
+| `--adopt` | text (repeatable) |  | Authorize adopting this existing object, as Kind/name or apiVersion/Kind/name (repeatable; adds to [release] adopt) |
+| `--replace` | text (repeatable) |  | Authorize deleting this existing unmanaged object and creating it from the release, after writing a restorable backup (repeatable; adds to [release] replace; never retained or managed objects) |
+| `--adopt-all-desired` | boolean | `False` | Authorize adopting every existing unmanaged object the composition declares (each is listed in the plan and bound to its hash) |
+| `--exit-code` | boolean | `False` | Exit 1 when the release would change something |
+
+**Contract**
+
+- **Reads:** release.toml, composition, state_dir, kubeconfig
+- **Writes:** nothing (read-only)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** partial
+- **Notes:** Read-only: stores no plan and no local state. Sends only reads and dryRun=All requests (server dry runs of the writes). Exit 1 with --exit-code when something would change.
+
 (cli-release-plan)=
 ### `piceli release plan`
 
@@ -833,7 +858,7 @@ Capture live discovery and persist an approvable plan (prints its hash).
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** Never changes the cluster. Prints the plan hash to approve.
+- **Notes:** Never changes the cluster: reads plus dryRun=All requests (server dry runs of the writes). Prints the plan hash to approve.
 
 (cli-release-preview)=
 ### `piceli release preview`

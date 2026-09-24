@@ -20,6 +20,7 @@ from piceli.k8s.ops.discovery import (
     Ownership,
     PlanTarget,
     ResourceScope,
+    ServerDryRun,
     public_manifest,
 )
 from piceli.k8s.ops.secret_versions import (
@@ -103,6 +104,11 @@ def _normalized_manifest(manifest: Mapping[str, Any]) -> dict[str, Any]:
             if not annotations:
                 metadata.pop("annotations", None)
     return normalized
+
+
+def normalized_manifest(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    """Object content without status, runtime metadata and execution annotations."""
+    return _normalized_manifest(manifest)
 
 
 def _digest(value: Any) -> str:
@@ -595,6 +601,9 @@ class ObservedSnapshot:
     captured_at: str | None = None
     provenance: DiscoveryProvenance = field(default_factory=DiscoveryProvenance)
     discovery: DiscoveryArtifact | None = field(default=None, repr=False, compare=False)
+    # Server-side dry runs of the desired writes (see ServerDryRun). Evidence
+    # like the resources: bound into the snapshot hash when present.
+    server_dry_runs: tuple[ServerDryRun, ...] = field(default=(), repr=False)
 
     def __post_init__(self) -> None:
         resources = tuple(sorted(self.resources, key=lambda item: item.intent.ref))
@@ -603,6 +612,17 @@ class ObservedSnapshot:
         for resource in resources:
             _validate_target_ref(self.target, resource.intent.ref)
         object.__setattr__(self, "resources", resources)
+        dry_runs = tuple(sorted(self.server_dry_runs))
+        versions = {
+            ResourceRef(**item.intent.ref.__dict__): item.precondition.resource_version
+            for item in resources
+        }
+        if len({item.resource for item in dry_runs}) != len(dry_runs) or any(
+            versions.get(ResourceRef(**item.resource.__dict__)) != item.resource_version
+            for item in dry_runs
+        ):
+            raise ValueError("server dry runs must match observed resources")
+        object.__setattr__(self, "server_dry_runs", dry_runs)
         object.__setattr__(
             self, "defaulted_fields", tuple(sorted(set(self.defaulted_fields)))
         )
@@ -638,7 +658,29 @@ class ObservedSnapshot:
             ],
             "incomplete_content": [item.__dict__ for item in incomplete_content],
         }
+        if dry_runs:
+            # Only when present, so snapshots without evidence keep their hash.
+            material["server_dry_runs"] = [
+                {
+                    "resource": item.resource.__dict__,
+                    "desired_digest": item.desired_digest,
+                    "resource_version": item.resource_version,
+                    "artifact_digest": _digest(public_manifest(item.manifest)[0]),
+                }
+                for item in dry_runs
+            ]
         object.__setattr__(self, "snapshot_hash", _digest(material))
+
+    def server_dry_run(self, ref: ResourceRef) -> ServerDryRun | None:
+        """The server dry run captured for ``ref``, if any."""
+        return next(
+            (
+                item
+                for item in self.server_dry_runs
+                if ResourceRef(**item.resource.__dict__) == ref
+            ),
+            None,
+        )
 
     @classmethod
     def from_discovery(cls, artifact: DiscoveryArtifact) -> ObservedSnapshot:
@@ -692,6 +734,7 @@ class ObservedSnapshot:
             captured_at=artifact.captured_at,
             provenance=artifact.provenance,
             discovery=artifact,
+            server_dry_runs=artifact.server_dry_runs,
         )
 
 
@@ -1034,6 +1077,56 @@ def _equivalent(
     return left == right
 
 
+def usable_dry_run(
+    desired: ResourceIntent, evidence: ServerDryRun | None
+) -> ServerDryRun | None:
+    """``evidence`` when it was captured for exactly this desired manifest."""
+    if (
+        evidence is None
+        or desired.secret_bindings
+        or evidence.desired_digest != desired.digest
+        or "<redacted>" in evidence.manifest_json
+    ):
+        return None
+    return evidence
+
+
+def server_equivalent(
+    desired: ResourceIntent,
+    current: ObservedResource,
+    evidence: ServerDryRun | None,
+) -> bool:
+    """The executor's write of ``desired`` would leave ``current`` unchanged.
+
+    ``evidence`` is the API server's dry run of that exact write against the
+    observed resourceVersion, so it includes server defaults, canonical
+    values and allocated fields; it is compared with the live object, with
+    status, runtime metadata and Piceli's execution annotations excluded.
+    Without usable evidence the answer is ``False``: a no-op is never guessed.
+    """
+    usable = usable_dry_run(desired, evidence)
+    return (
+        usable is not None
+        and usable.resource_version == current.precondition.resource_version
+        and _normalized_manifest(usable.manifest) == current.intent.manifest
+    )
+
+
+def dry_run_confirms(
+    snapshot: ObservedSnapshot, desired: ResourceIntent, live: Mapping[str, Any]
+) -> bool:
+    """The planned dry run of ``desired`` matches ``live`` (a re-read object).
+
+    The executor uses it for a no-op planned from server evidence whose
+    declared values the server canonicalizes (``cpu: 0.5`` is stored as
+    ``500m``), where a literal containment check would fail.
+    """
+    usable = usable_dry_run(desired, snapshot.server_dry_run(desired.ref))
+    return usable is not None and _normalized_manifest(
+        usable.manifest
+    ) == _normalized_manifest(live)
+
+
 def _propagation_deletes_protected(
     resource: ObservedResource, snapshot: ObservedSnapshot
 ) -> bool:
@@ -1365,6 +1458,8 @@ def build_plan(
                     raise ValueError(f"resource requires explicit adoption: {ref}")
                 elif _equivalent(
                     desired[ref], current.intent, snapshot.defaulted_fields
+                ) or server_equivalent(
+                    desired[ref], current, snapshot.server_dry_run(ref)
                 ):
                     operation = PlanOperation.NOOP
                 else:

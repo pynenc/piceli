@@ -69,6 +69,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`docker-tool-required`](#error-docker-tool-required) | artifacts-input | no |
 | [`docker-unavailable`](#error-docker-unavailable) | build-spec | yes |
 | [`dockerfile-unpinned`](#error-dockerfile-unpinned) | build-spec | no |
+| [`dry-run-limit-exceeded`](#error-dry-run-limit-exceeded) | kubernetes | no |
 | [`execution-not-ready`](#error-execution-not-ready) | release | no |
 | [`execution-not-started`](#error-execution-not-started) | release | no |
 | [`execution-other-owner`](#error-execution-other-owner) | release | no |
@@ -107,6 +108,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`invalid-composition`](#error-invalid-composition) | release | no |
 | [`invalid-credentials-file`](#error-invalid-credentials-file) | artifacts-input | no |
 | [`invalid-delivery-input`](#error-invalid-delivery-input) | artifacts-input | no |
+| [`invalid-dry-run-response`](#error-invalid-dry-run-response) | kubernetes | yes |
 | [`invalid-field-ownership-evidence`](#error-invalid-field-ownership-evidence) | execution | no |
 | [`invalid-force`](#error-invalid-force) | kubernetes | no |
 | [`invalid-forward`](#error-invalid-forward) | artifacts-input | no |
@@ -1033,6 +1035,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Retry; for an interrupted apply use `piceli release resume`, or raise `[execution] max_seconds`.
 - **Retry-safe:** yes
 
+(error-dry-run-limit-exceeded)=
+### `dry-run-limit-exceeded`
+
+**Too many dry runs.** The plan has more changed-candidate objects than the per-plan limit of server dry runs (256); the rest are compared literally.
+
+- **Fix:** Nothing to fix for correctness; objects past the limit may be listed as `apply` although unchanged. Split the release to get exact no-ops.
+- **Retry-safe:** no
+
 (error-identity-mismatch)=
 ### `identity-mismatch`
 
@@ -1040,6 +1050,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Plan again; if it persists, report it.
 - **Retry-safe:** no
+
+(error-invalid-dry-run-response)=
+### `invalid-dry-run-response`
+
+**Invalid dry-run response.** The API server's answer to a server-side dry run did not describe the requested object. The object gets no dry-run evidence and is compared literally.
+
+- **Fix:** Nothing to fix for the plan (it may list the object as `apply`); if it persists, report the API server version.
+- **Retry-safe:** yes
 
 (error-invalid-force)=
 ### `invalid-force`

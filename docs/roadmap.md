@@ -19,7 +19,7 @@ Priorities may change. Progress is tracked in
 | Dependency-ordered plan and apply | ✅ Available |
 | Image handoff by digest (build → deliver → release, immutable references only) | 🟡 Preview |
 | Server-side apply with preconditions, journal and resume | ✅ The only engine: `piceli release` and the Python API |
-| Field-level diff | ❌ Not yet: plans show the action per object |
+| Field-level diff and true no-op plans | 🟡 Preview: `release plan`/`release diff` (server dry runs) |
 | Safe pruning of removed resources | 🟡 Opt-in (`prune = true`) |
 | Adopt or replace objects created by other tools (`release --adopt`, `--adopt-all-desired`, `--replace`) | 🟡 Preview |
 | Post-deploy checks (http, exec, metric, Python) with automatic rollback | 🟡 Preview |
@@ -49,6 +49,7 @@ Every feature page starts with its maturity, and this table lists them all:
 | Engine: discovery, plans, executor, journals (Python API) | {doc}`deployment_planning` | preview |
 | Releases from a spec (`piceli release`) | {doc}`release_cli` | preview |
 | Post-deploy checks and automatic rollback (`[[checks]]`, `piceli.checks`, `release check`) | {doc}`checks` | preview |
+| Field-level diffs and no-op detection (`release plan`, `release diff`) | {doc}`plans_and_diffs` | preview |
 | Source identity (`piceli inputs`) | {doc}`source_identity` | preview |
 | Containerized builds (`piceli artifacts build-spec`) | {doc}`containerized_builds` | preview |
 | Deterministic OCI builds (artifact API) | {doc}`artifact_delivery` | preview |

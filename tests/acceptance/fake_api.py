@@ -27,6 +27,7 @@ TYPES = {
     "persistentvolumes": ("v1", "PersistentVolume", False),
     "namespaces": ("v1", "Namespace", False),
     "deployments": ("apps/v1", "Deployment", True),
+    "services": ("v1", "Service", True),
     "widgets": ("example.test/v1", "Widget", False),
 }
 
@@ -206,9 +207,98 @@ def _prune(manifest: dict[str, Any], removed: set[Path], kept: set[Path]) -> Non
             _remove_path(manifest, path)
 
 
+# --- Server defaulting (opt-in: ``FakeAPI.server_defaults = True``) ----------
+#
+# What a real API server adds to every stored object, so that a live object
+# differs from the manifest that created it: defaulted fields, canonical
+# quantities (``cpu: 0.5`` is stored as ``500m``), allocated values kept across
+# updates (a Service's clusterIP) and controller bookkeeping (a Deployment's
+# revision annotation, a claim's protection finalizer). Applied to every write,
+# dry runs included, like the real admission chain.
+
+_POD_DEFAULTS = {
+    "restartPolicy": "Always",
+    "dnsPolicy": "ClusterFirst",
+    "schedulerName": "default-scheduler",
+    "securityContext": {},
+    "terminationGracePeriodSeconds": 30,
+}
+_CONTAINER_DEFAULTS = {
+    "imagePullPolicy": "IfNotPresent",
+    "terminationMessagePath": "/dev/termination-log",
+    "terminationMessagePolicy": "File",
+}
+
+
+def _cpu(value: Any) -> Any:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return value
+    return (
+        f"{round(number * 1000)}m" if number < 1 or not number.is_integer() else value
+    )
+
+
+def apply_server_defaults(body: dict[str, Any], current: dict[str, Any] | None) -> None:
+    kind = body.get("kind")
+    if kind not in {"Deployment", "PersistentVolumeClaim", "Service"}:
+        return
+    spec = body.setdefault("spec", {})
+    metadata = body["metadata"]
+    if kind == "Deployment":
+        spec.setdefault(
+            "strategy",
+            {
+                "type": "RollingUpdate",
+                "rollingUpdate": {"maxSurge": "25%", "maxUnavailable": "25%"},
+            },
+        )
+        spec.setdefault("revisionHistoryLimit", 10)
+        spec.setdefault("progressDeadlineSeconds", 600)
+        template = spec.setdefault("template", {})
+        template.setdefault("metadata", {}).setdefault("creationTimestamp", None)
+        pod = template.setdefault("spec", {})
+        for key, value in _POD_DEFAULTS.items():
+            pod.setdefault(key, copy.deepcopy(value))
+        for container in pod.get("containers", []):
+            for key, value in _CONTAINER_DEFAULTS.items():
+                container.setdefault(key, value)
+            for section in container.get("resources", {}).values():
+                if isinstance(section, dict) and "cpu" in section:
+                    section["cpu"] = _cpu(section["cpu"])
+        annotations = metadata.setdefault("annotations", {})
+        annotations.setdefault(
+            "deployment.kubernetes.io/revision",
+            (current or {})
+            .get("metadata", {})
+            .get("annotations", {})
+            .get("deployment.kubernetes.io/revision", "1"),
+        )
+    elif kind == "PersistentVolumeClaim":
+        spec.setdefault("volumeMode", "Filesystem")
+        spec.setdefault("storageClassName", "standard")
+        finalizers = metadata.setdefault("finalizers", [])
+        if "kubernetes.io/pvc-protection" not in finalizers:
+            finalizers.append("kubernetes.io/pvc-protection")
+    elif kind == "Service":
+        previous = (current or {}).get("spec", {})
+        address = spec.get("clusterIP") or previous.get("clusterIP") or "10.96.0.10"
+        spec.update({"clusterIP": address, "clusterIPs": [address]})
+        spec.setdefault("type", "ClusterIP")
+        spec.setdefault("sessionAffinity", "None")
+        spec.setdefault("ipFamilies", ["IPv4"])
+        spec.setdefault("ipFamilyPolicy", "SingleStack")
+        spec.setdefault("internalTrafficPolicy", "Cluster")
+        for port in spec.get("ports", []):
+            port.setdefault("protocol", "TCP")
+            port.setdefault("targetPort", port.get("port"))
+
+
 class FakeAPI:
     def __init__(self) -> None:
         self.field_ownership = False
+        self.server_defaults = False
         self.objects: dict[tuple[str, str], dict[str, Any]] = {}
         self.requests: list[dict[str, Any]] = []
         self.faults: list[dict[str, Any]] = []
@@ -561,6 +651,8 @@ class FakeAPI:
             if merge_patch:
                 body = _merge_patch(current, body)
                 metadata = body["metadata"]
+        if self.server_defaults:
+            apply_server_defaults(body, current)
         if self.field_ownership and method == "POST":
             metadata["managedFields"] = [
                 {
@@ -606,6 +698,8 @@ class FakeAPI:
     def _commit(
         self, query: dict[str, Any], kind: str, name: str, body: Any, status: int
     ) -> tuple[int, Any]:
+        if self.server_defaults:
+            apply_server_defaults(body, self.objects.get((kind, name)))
         self._readiness(body)
         if query.get("dryRun") != ["All"]:
             self.version += 1

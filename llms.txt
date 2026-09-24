@@ -16,6 +16,7 @@ Rules for agents: run `piceli help-json` for every command's options, side effec
 - [Getting started](https://docs.pynenc.org/projects/piceli/en/latest/getting_started/index.html): install, describe a typed app, render it and release it
 - [Releases from a spec](https://docs.pynenc.org/projects/piceli/en/latest/release_cli.html): `piceli release` plan, apply, adopt, roll back, resume; "If plan refuses"
 - [Check a release and roll back automatically](https://docs.pynenc.org/projects/piceli/en/latest/checks.html): `[[checks]]` (http, exec, metric, Python), `rollback_on_failed_checks`, `piceli release check`
+- [How plans decide what changes](https://docs.pynenc.org/projects/piceli/en/latest/plans_and_diffs.html): no-op vs apply from server dry runs, field-level diffs, `piceli release diff`
 - [Deployment planning](https://docs.pynenc.org/projects/piceli/en/latest/deployment_planning.html): discovery, pure plans, authorized execution and journals (Python API)
 - [Containerized builds](https://docs.pynenc.org/projects/piceli/en/latest/containerized_builds.html): `build.toml`, pinned builders, build receipts
 - [Source identity](https://docs.pynenc.org/projects/piceli/en/latest/source_identity.html): `piceli inputs record/verify` and source drift

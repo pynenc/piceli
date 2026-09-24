@@ -85,6 +85,9 @@ noted.
 - `piceli release plan` and `piceli release preview`: read the cluster, store
   a pending plan and secret candidates in the spec's `state_dir`, and print the
   plan hash. They never write to the cluster.
+- `piceli release diff`: reads the cluster and sends only server-side dry runs
+  (`dryRun=All`); prints what `plan` would change, field by field. Writes no
+  local state.
 - `piceli release status`: reads local state only.
 - `piceli inputs record` and `piceli inputs verify`: read git; `record --out`
   writes the lock file.
@@ -127,8 +130,10 @@ unattended CI job for this exact spec.
 
 1. Run `piceli release plan --spec release.toml`. Keep the JSON from stdout.
 2. Show the owner the summary from stderr: every `create`, `adopt`, `delete`
-   and `drift` line, and the adoption notes (a takeover removes fields other
-   clients wrote).
+   and `drift` line, the changed fields under each `apply` (all of them are in
+   `diffs` in the JSON), and the adoption notes (a takeover removes fields
+   other clients wrote). A plan whose `summary` has only `no-op` changes
+   nothing.
 3. Wait for the owner to approve **that plan hash**. A plan expires after
    `approval_window_seconds`; if it did, plan again and ask again.
 4. Run `piceli release apply --spec release.toml --approve <hash>`.

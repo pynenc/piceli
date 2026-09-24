@@ -33,6 +33,7 @@ import json
 import os
 import re
 import tempfile
+import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -59,6 +60,7 @@ from piceli.k8s.ops.discovery import (
     ResourceType,
     capture_discovery,
 )
+from piceli.k8s.ops.dry_run import capture_server_dry_runs
 from piceli.k8s.ops.execution_journal import ExecutionJournal
 from piceli.k8s.ops.executor import (
     ActionGrant,
@@ -67,6 +69,7 @@ from piceli.k8s.ops.executor import (
     PlanExecutor,
 )
 from piceli.k8s.ops.kubernetes_provider import ProviderError
+from piceli.k8s.ops.field_diff import plan_diffs
 from piceli.k8s.ops.plan import (
     DeploymentComposition,
     DeploymentPlan,
@@ -632,6 +635,10 @@ class PlanResult:
     authorized: dict[str, Any] = field(default_factory=dict)
     # The post-deploy checks apply will run, and the rollback policy.
     checks: dict[str, Any] = field(default_factory=dict)
+    # Field-level diffs of the changed objects (evidence, not in the hash)
+    # and the objects the server dry run could not cover.
+    diffs: list[dict[str, Any]] = field(default_factory=list)
+    dry_run_unavailable: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def plan_hash(self) -> str:
@@ -661,6 +668,8 @@ class PlanResult:
             "adopt_not_needed": self.adopt_not_needed,
             "authorized": self.authorized,
             "checks": self.checks,
+            "diffs": self.diffs,
+            "dry_run_unavailable": self.dry_run_unavailable,
             **({"plan": self.plan} if full else {}),
         }
 
@@ -967,6 +976,21 @@ class ReleaseRunner:
             )
         return artifact
 
+    def _dry_runs(
+        self,
+        binding: ProviderBinding,
+        composition: DeploymentComposition,
+        artifact: DiscoveryArtifact,
+    ) -> tuple[DiscoveryArtifact, list[dict[str, Any]]]:
+        """Attach server dry runs of the desired writes (never persisted)."""
+        artifact, unavailable = capture_server_dry_runs(
+            binding.provider,
+            artifact,
+            composition,
+            deadline=time.monotonic() + self.spec.model.discovery.max_seconds,
+        )
+        return artifact, [item.to_dict() for item in unavailable]
+
     # -------------------------------------------------------------- secrets
     def _private_inputs(
         self,
@@ -1119,6 +1143,76 @@ class ReleaseRunner:
         finally:
             binding.close()
 
+    def diff(
+        self,
+        *,
+        adopt: Sequence[str] = (),
+        replace: Sequence[str] = (),
+        adopt_all_desired: bool = False,
+    ) -> dict[str, Any]:
+        """What ``plan`` would change, as field diffs; read-only.
+
+        Captures discovery and the server dry runs like ``plan`` but builds
+        the plan in memory only: no plan, release, secret or discovery file is
+        written, and the cluster receives only reads and ``dryRun=All``
+        requests. Secret-bound values are never compared.
+        """
+        spec = self.spec.model
+        for entry in adopt:
+            parse_adopt_entry(entry)
+        for entry in replace:
+            parse_adopt_entry(entry, what="replace")
+        requested = _Ownership(
+            tuple(dict.fromkeys((*spec.release.adopt, *adopt))),
+            tuple(dict.fromkeys((*spec.release.replace, *replace))),
+            adopt_all_desired,
+        )
+        settings = spec.release
+        images = self.spec.images()
+        function = self.spec.load_composition()
+        binding = self.provider_factory(self.spec)
+        try:
+            catalog = ReleaseCatalog(self.spec.catalog_path)
+            self._check_target(catalog, binding.target)
+            factory = self._factory(function, images, self._nodes(binding))
+            composition, _ = self._preview_composition(factory)
+            kinds = self._kinds(composition)
+            if settings.prune:
+                for record in catalog.records():
+                    kinds |= self._kinds(composition_from_archive(record.archive))
+            artifact, unavailable = self._dry_runs(
+                binding, composition, self._discover(binding, kinds)
+            )
+            snapshot = ObservedSnapshot.from_discovery(artifact)
+            inherited = list(settings.inherited_owners)
+            resolved = requested.resolve(
+                composition, snapshot, inherited, settings.field_manager
+            )
+            plan = build_plan(
+                composition,
+                snapshot,
+                _plan_authorization(
+                    binding.target,
+                    prune=settings.prune,
+                    adopt=resolved.adopt,
+                    inherited=inherited,
+                    field_manager=settings.field_manager,
+                    replace=resolved.replace,
+                ),
+            )
+        finally:
+            binding.close()
+        summary = plan.summary()
+        counts = _summary(summary)
+        return {
+            "release": settings.name,
+            "summary": counts,
+            "changes": any(operation != "no-op" for operation in counts),
+            "actions": _compact_actions(summary),
+            "diffs": plan_diffs(plan, snapshot),
+            "dry_run_unavailable": unavailable,
+        }
+
     def resolve_rollback_target(
         self, target: str, catalog: ReleaseCatalog | None = None
     ) -> str:
@@ -1161,7 +1255,9 @@ class ReleaseRunner:
         if settings.prune:
             for record in catalog.records():
                 kinds |= self._kinds(composition_from_archive(record.archive))
-        artifact = self._discover(binding, kinds)
+        artifact, unavailable = self._dry_runs(
+            binding, composition, self._discover(binding, kinds)
+        )
         snapshot = ObservedSnapshot.from_discovery(artifact)
         inherited = list(settings.inherited_owners)
         resolved = requested.resolve(
@@ -1196,7 +1292,8 @@ class ReleaseRunner:
 
         # Validate the plan and its grant with the placeholder composition
         # first: a refused plan must not generate, import or store any secret.
-        grant(build_plan(composition, snapshot, plan_authorization), snapshot)
+        preview = build_plan(composition, snapshot, plan_authorization)
+        grant(preview, snapshot)
         secrets = self._private_inputs(catalog, store, binding, rotate)
         origin = secrets.origin
         placeholders = self._placeholders()
@@ -1293,6 +1390,10 @@ class ReleaseRunner:
             resolved.adopt_not_needed,
             requested.report(resolved),
             self._checks_policy(),
+            # The placeholder composition differs from the stored one only
+            # in secret references, which diffs never compare.
+            plan_diffs(preview, snapshot),
+            unavailable,
         )
         self._persist_plan(result, prune=settings.prune)
         return result
@@ -1312,7 +1413,9 @@ class ReleaseRunner:
         if settings.prune:
             for other in catalog.records():
                 kinds |= self._kinds(composition_from_archive(other.archive))
-        artifact = self._discover(binding, kinds)
+        artifact, unavailable = self._dry_runs(
+            binding, composition, self._discover(binding, kinds)
+        )
         snapshot = ObservedSnapshot.from_discovery(artifact)
         inherited = list(settings.inherited_owners)
         resolved = requested.resolve(
@@ -1348,6 +1451,8 @@ class ReleaseRunner:
             resolved.adopt_not_needed,
             requested.report(resolved),
             self._checks_policy(),
+            plan_diffs(plan, snapshot),
+            unavailable,
         )
         self._persist_plan(
             result,

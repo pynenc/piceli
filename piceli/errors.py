@@ -1326,6 +1326,23 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         False,
         "kubernetes",
     ),
+    # --- WP3.4 diff ---
+    _E(
+        "invalid-dry-run-response",
+        "Invalid dry-run response",
+        "The API server's answer to a server-side dry run did not describe the requested object. The object gets no dry-run evidence and is compared literally.",
+        "Nothing to fix for the plan (it may list the object as `apply`); if it persists, report the API server version.",
+        True,
+        "kubernetes",
+    ),
+    _E(
+        "dry-run-limit-exceeded",
+        "Too many dry runs",
+        "The plan has more changed-candidate objects than the per-plan limit of server dry runs (256); the rest are compared literally.",
+        "Nothing to fix for correctness; objects past the limit may be listed as `apply` although unchanged. Split the release to get exact no-ops.",
+        False,
+        "kubernetes",
+    ),
     _E(
         "image-not-immutable",
         "Image reference is not immutable",

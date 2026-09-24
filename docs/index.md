@@ -117,6 +117,7 @@ typed_apps
 deployment_planning
 release_cli
 checks
+plans_and_diffs
 secrets
 source_identity
 containerized_builds
