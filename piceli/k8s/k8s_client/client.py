@@ -3,7 +3,7 @@ import json
 import logging
 import threading
 from functools import cached_property
-from typing import Any, Callable, Optional
+from typing import Any, Callable, ClassVar, Optional
 
 from google.auth.transport.requests import Request
 from google.oauth2 import service_account
@@ -45,11 +45,12 @@ class ClientManager:
     """Singleton to manage k8s client instances for different kubeconfigs"""
 
     _instance_lock = threading.Lock()
+    _instance: ClassVar[Optional["ClientManager"]] = None
     _clients: dict[Optional[KubeConfig], client.ApiClient] = {}
 
     def __new__(cls) -> "ClientManager":
         with cls._instance_lock:
-            if not hasattr(cls, "_instance"):
+            if cls._instance is None:
                 cls._instance = super().__new__(cls)
         return cls._instance
 
