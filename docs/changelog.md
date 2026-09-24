@@ -4,7 +4,7 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
-## Unreleased
+## Version 0.3.0
 
 - **Safety fix:** the dry-run admission check before a delete really deleted
   the object, because the API server ignores a `dryRun` query parameter when a
