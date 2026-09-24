@@ -16,8 +16,11 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   `PlanAuthorization.adopt_resources`) adopts objects in one of two ways:
   - retained objects (PVC, Secret, Namespace, PV) with an owner-annotation-only
     write; their spec and data are never touched;
-  - other objects with an explicitly authorized forced server-side apply that
-    removes the displaced field managers.
+  - other objects with an explicitly authorized takeover. Field ownership of
+    every client manager (for example `kubectl-create`, `kubectl-set`) is
+    transferred to Piceli and the manifest is applied without force, so fields
+    the release does not declare are removed. Subresource and control-plane
+    managers are kept, and `force=true` is only used for the admission dry run.
 
   Plans show the adoption mode and the displaced managers, and report field
   drift. Inherited owners are now part of the execution grant.

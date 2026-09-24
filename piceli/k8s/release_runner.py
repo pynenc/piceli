@@ -67,6 +67,7 @@ from piceli.k8s.ops.plan import (
     ResourceRef,
     build_plan,
     field_drift,
+    transferable_managers,
 )
 from piceli.k8s.ops.provider_factory import ProviderBinding, build_provider
 from piceli.k8s.ops.secret_versions import (
@@ -171,12 +172,14 @@ def _plan_authorization(
     prune: bool,
     adopt: Sequence[Mapping[str, str]] = (),
     inherited: Sequence[str] = (),
+    field_manager: str,
 ) -> PlanAuthorization:
     return PlanAuthorization(
         target,
         tuple(ResourceRef(**item) for item in adopt),
         prune,
         tuple(inherited),
+        field_manager,
     )
 
 
@@ -185,13 +188,17 @@ def resolve_adoptions(
     composition: DeploymentComposition,
     snapshot: ObservedSnapshot,
     inherited: Sequence[str],
+    field_manager: str,
 ) -> tuple[list[dict[str, str]], list[str]]:
     """Map ``Kind/name`` entries to declared resources that need adoption.
 
     An entry must name a resource the composition declares (a typo is an
-    error, never a silent no-op). Entries whose object is absent or already
-    managed need no adoption and are returned separately for the report, so a
-    standing ``[release] adopt`` list keeps working after the first release.
+    error, never a silent no-op). Entries whose object is absent, or already
+    managed with nothing to reclaim, need no adoption and are returned
+    separately for the report, so a standing ``[release] adopt`` list keeps
+    working after the first release. A managed, non-retained object that
+    other clients have written to since (transferable foreign field managers)
+    is taken over again, which reclaims those fields.
     """
     declared = [
         resource.ref
@@ -220,6 +227,12 @@ def resolve_adoptions(
         if current is not None and (
             current.ownership is Ownership.UNMANAGED
             or (current.retained and current.owner in set(inherited))
+            or (
+                not current.retained
+                and transferable_managers(
+                    current.field_managers, exclude=(field_manager,)
+                )
+            )
         ):
             adopt.add(ref)
         else:
@@ -238,6 +251,21 @@ def resolve_adoptions(
             "Kind/name (repeatable) or [release] adopt, or delete them"
         )
     return [ref.__dict__ for ref in sorted(adopt)], sorted(not_needed)
+
+
+def _drift(
+    composition: DeploymentComposition,
+    snapshot: ObservedSnapshot,
+    field_manager: str,
+    adopt: Sequence[Mapping[str, str]],
+) -> list[dict[str, Any]]:
+    """Drift of objects this plan does not already take over."""
+    adopted = [dict(item) for item in adopt]
+    return [
+        item
+        for item in field_drift(composition, snapshot, field_manager)
+        if item["resource"] not in adopted
+    ]
 
 
 def _summary(plan: Mapping[str, Any]) -> dict[str, int]:
@@ -301,8 +329,8 @@ def _adopted(
                         for key in (
                             "mode",
                             "previous_owner",
-                            "displaced_managers",
-                            "removed_managers",
+                            "transferred_managers",
+                            "completed_transfer",
                         )
                         if key in adoption
                     },
@@ -787,7 +815,7 @@ class ReleaseRunner:
         snapshot = ObservedSnapshot.from_discovery(artifact)
         inherited = list(settings.inherited_owners)
         adopt, not_needed = resolve_adoptions(
-            requested, composition, snapshot, inherited
+            requested, composition, snapshot, inherited, settings.field_manager
         )
         values, origin = self._private_inputs(catalog, store, binding.target, rotate)
         window = settings.approval_window_seconds
@@ -818,6 +846,7 @@ class ReleaseRunner:
                 prune=settings.prune,
                 adopt=adopt,
                 inherited=inherited,
+                field_manager=settings.field_manager,
             ),
             grant,
             journal,
@@ -870,7 +899,7 @@ class ReleaseRunner:
             {n: i.to_dict() for n, i in images.items()},
             origin,
             expires_at,
-            field_drift(composition, snapshot, settings.field_manager),
+            _drift(composition, snapshot, settings.field_manager, adopt),
             not_needed,
         )
         self._persist_plan(result, prune=settings.prune)
@@ -895,13 +924,17 @@ class ReleaseRunner:
         snapshot = ObservedSnapshot.from_discovery(artifact)
         inherited = list(settings.inherited_owners)
         adopt, not_needed = resolve_adoptions(
-            requested, composition, snapshot, inherited
+            requested, composition, snapshot, inherited, settings.field_manager
         )
         plan = build_plan(
             composition,
             snapshot,
             _plan_authorization(
-                binding.target, prune=settings.prune, adopt=adopt, inherited=inherited
+                binding.target,
+                prune=settings.prune,
+                adopt=adopt,
+                inherited=inherited,
+                field_manager=settings.field_manager,
             ),
         )
         expires_at = (
@@ -917,7 +950,7 @@ class ReleaseRunner:
             sidecar.get("images", {}),
             {},
             expires_at,
-            field_drift(composition, snapshot, settings.field_manager),
+            _drift(composition, snapshot, settings.field_manager, adopt),
             not_needed,
         )
         self._persist_plan(
@@ -1038,6 +1071,7 @@ class ReleaseRunner:
                 prune=prune,
                 adopt=sidecar.get("adopt", ()),
                 inherited=sidecar.get("inherited_owners", ()),
+                field_manager=archived["field_manager"],
             ),
             grant,
             journal,
@@ -1093,6 +1127,7 @@ class ReleaseRunner:
                         prune=bool(pending["prune"]),
                         adopt=pending.get("adopt", ()),
                         inherited=pending.get("inherited_owners", ()),
+                        field_manager=self.spec.model.release.field_manager,
                     )
                     composition = composition_from_archive(record.archive)
                     if (

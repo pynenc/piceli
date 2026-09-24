@@ -1,7 +1,7 @@
 """Acceptance: adoption by ownership transfer (metadata-only and takeover).
 
 The fake API runs with its field-ownership model enabled, so server-side apply
-conflicts, ``force=true`` and ``managedFields`` replacement behave like a real
+conflicts, pruning and ``managedFields`` replacement behave like a real
 API server for the paths exercised here.
 """
 
@@ -208,7 +208,7 @@ def test_unowned_pvc_adoption_changes_only_metadata_annotations(
     assert action.summary()["adoption"] == {
         "mode": "metadata-only",
         "previous_owner": None,
-        "displaced_managers": [],
+        "transferred_managers": [],
     }
 
     run = executor(provider, tmp_path)
@@ -361,7 +361,7 @@ def test_rollback_of_a_retained_adoption_leaves_the_volume_untouched(
     assert api.objects[("PersistentVolumeClaim", "data")] == adopted
 
 
-def test_retained_kinds_are_never_force_applied(api_url, provider, tmp_path):
+def test_retained_kinds_are_never_taken_over(api_url, provider, tmp_path):
     api, _ = api_url
     live_pvc(api)
     intent = ResourceIntent.from_manifest(pvc())
@@ -377,59 +377,211 @@ def test_retained_kinds_are_never_force_applied(api_url, provider, tmp_path):
     current = provider.get(snapshot.discovery.resources[0].identity)
     with pytest.raises(ProviderError, match="retained-resource"):
         provider.take_over(
-            current, current.manifest, displaced_managers=("kubectl-client-side-apply",)
+            current,
+            current.manifest,
+            transferred_managers=("kubectl-client-side-apply",),
         )
+    with pytest.raises(ProviderError, match="retained-resource"):
+        provider.converge_takeover(current, current.manifest, transferred_managers=())
     assert mutations(api) == [] and forced(api) == []
 
 
 # --------------------------------------------------------------- workloads
 
+CONTROLLER_ENTRIES = [
+    # Deployment controller bookkeeping on the main resource: kept.
+    (
+        "kube-controller-manager",
+        "Update",
+        {"metadata": {"annotations": {"deployment.kubernetes.io/revision": "3"}}},
+    ),
+]
 
-def test_deployment_takeover_displaces_kubectl_managers(api_url, provider, tmp_path):
+
+def kubectl_created(api, *, replicas_scale=None):
+    """`kubectl create deployment web --image=busybox` then `kubectl set image`."""
+    value = manifest("Deployment", "worker")
+    value["metadata"]["labels"] = {"app": "worker"}
+    value["metadata"]["annotations"] = {"deployment.kubernetes.io/revision": "3"}
+    value["spec"]["template"]["spec"]["containers"] = [
+        {
+            "name": "busybox",
+            "image": "busybox:1.36.1",
+            "command": ["sleep", "infinity"],
+        }
+    ]
+    created = copy.deepcopy(value)
+    created["metadata"].pop("annotations")
+    created["spec"]["template"]["spec"]["containers"][0]["image"] = None
+    created["spec"]["template"]["spec"]["containers"][0].pop("image")
+    set_image = {
+        "spec": {
+            "template": {
+                "spec": {"containers": [{"name": "busybox", "image": "busybox:1.36.1"}]}
+            }
+        }
+    }
+    stored = api.put(
+        value,
+        managers=[
+            ("kubectl-create", "Update", created),
+            ("kubectl-set", "Update", set_image),
+            *CONTROLLER_ENTRIES,
+        ],
+    )
+    entries = api.objects[("Deployment", "worker")]["metadata"]["managedFields"]
+    entries.append(
+        {
+            "manager": "kube-controller-manager",
+            "operation": "Update",
+            "apiVersion": "apps/v1",
+            "fieldsType": "FieldsV1",
+            "subresource": "status",
+            "fieldsV1": {"f:status": {"f:replicas": {}}},
+        }
+    )
+    if replicas_scale is not None:
+        api.objects[("Deployment", "worker")]["spec"]["replicas"] = replicas_scale
+        entries.append(
+            {
+                "manager": "autoscaler",
+                "operation": "Update",
+                "apiVersion": "apps/v1",
+                "fieldsType": "FieldsV1",
+                "subresource": "scale",
+                "fieldsV1": {"f:spec": {"f:replicas": {}}},
+            }
+        )
+    return stored
+
+
+def containers(api):
+    live = api.objects[("Deployment", "worker")]
+    return [item["name"] for item in live["spec"]["template"]["spec"]["containers"]]
+
+
+def test_takeover_transfers_every_client_manager_and_removes_undeclared_fields(
+    api_url, provider, tmp_path
+):
     api, _ = api_url
     kubectl_deployment(api)
     intent = desired_deployment()
     plan, snapshot, authorization = prepare(provider, [intent], adopt=(intent.ref,))
     action = plan.actions[0]
-    # kubectl-rollout only owns the restart annotation, which is not desired.
+    # Every client manager is transferred, not only those owning declared fields.
     assert action.adoption == Adoption(
-        AdoptionMode.TAKEOVER, None, ("kubectl-client-side-apply", "kubectl-set")
+        AdoptionMode.TAKEOVER,
+        None,
+        ("kubectl-client-side-apply", "kubectl-rollout", "kubectl-set"),
     )
+    assert action.summary()["adoption"]["removes_undeclared_fields"] is True
 
     run = executor(provider, tmp_path)
     assert run.run("takeover", plan, snapshot, authorization)["state"] == "ready"
 
-    apply, cleanup = mutations(api)
-    assert apply["content_type"] == "application/apply-patch+yaml"
-    assert apply["query"]["force"] == ["true"]
-    assert apply["body"]["metadata"]["uid"] == action.precondition.uid
-    assert cleanup["content_type"] == "application/merge-patch+json"
-    assert set(cleanup["body"]["metadata"]) == {
+    transfer, apply = mutations(api)
+    assert transfer["content_type"] == "application/merge-patch+json"
+    assert set(transfer["body"]["metadata"]) == {
         "uid",
         "resourceVersion",
         "managedFields",
     }
+    assert [e["manager"] for e in transfer["body"]["metadata"]["managedFields"]] == [
+        MANAGER
+    ]
+    assert apply["content_type"] == "application/apply-patch+yaml"
+    assert apply["query"]["force"] == ["false"]
     live = api.objects[("Deployment", "worker")]
-    container = live["spec"]["template"]["spec"]["containers"][0]
-    assert container["image"] == "example.invalid/worker:new"
-    assert live["metadata"]["annotations"]["piceli.io/owner"] == provider.owner_id
-    owners = api.managers("Deployment", "worker")
-    assert set(owners) == {f"{MANAGER}/Apply", "kubectl-rollout/Update"}
-    desired_paths = {
-        path
-        for path in owners[f"{MANAGER}/Apply"]
-        if path[0] == "f:spec" and RESTARTED not in path[-1]
+    assert live["spec"]["template"]["spec"]["containers"] == [
+        {"name": "worker", "image": "example.invalid/worker:new"}
+    ]
+    # Undeclared client-written fields are gone, including the kubectl
+    # client-side-apply record and the rollout restart annotation.
+    assert not live["spec"]["template"]["metadata"].get("annotations")
+    assert set(live["metadata"]["annotations"]) == {
+        "piceli.io/owner",
+        "piceli.io/operation",
     }
-    assert desired_paths and not desired_paths & owners["kubectl-rollout/Update"]
+    assert set(api.managers("Deployment", "worker")) == {f"{MANAGER}/Apply"}
     [payload] = payloads(run, "takeover")
     assert payload["adoption"] == {
         "mode": "takeover",
         "previous_owner": None,
-        "displaced_managers": ["kubectl-client-side-apply", "kubectl-set"],
-        "removed_managers": ["kubectl-client-side-apply", "kubectl-set"],
+        "transferred_managers": [
+            "kubectl-client-side-apply",
+            "kubectl-rollout",
+            "kubectl-set",
+        ],
+        "completed_transfer": [
+            "kubectl-client-side-apply",
+            "kubectl-rollout",
+            "kubectl-set",
+        ],
     }
-    assert len(forced(api)) == 2  # dry-run admission check + the takeover itself
-    assert all(r["query"].get("dryRun") == ["All"] for r in forced(api)[:1])
+    # The one forced request is the dry-run admission check.
+    assert [r["query"].get("dryRun") for r in forced(api)] == [["All"]]
+
+
+def test_takeover_with_another_container_name_leaves_only_declared_containers(
+    api_url, provider, tmp_path
+):
+    api, _ = api_url
+    kubectl_created(api)
+    value = manifest("Deployment", "worker")
+    value["metadata"]["labels"] = {"app": "worker"}
+    value["spec"]["template"]["spec"]["containers"] = [
+        {"name": "web", "image": "example.invalid/web:1"}
+    ]
+    intent = ResourceIntent.from_manifest(value)
+    plan, snapshot, authorization = prepare(provider, [intent], adopt=(intent.ref,))
+    # kubectl-set only owns the busybox image (not declared); it is still listed.
+    assert plan.actions[0].adoption.transferred_managers == (
+        "kubectl-create",
+        "kubectl-set",
+    )
+    run = executor(provider, tmp_path)
+    assert run.run("rename", plan, snapshot, authorization)["state"] == "ready"
+    assert containers(api) == ["web"]
+    owners = api.managers("Deployment", "worker")
+    assert set(owners) == {f"{MANAGER}/Apply", "kube-controller-manager/Update"}
+    live = api.objects[("Deployment", "worker")]
+    # Controller bookkeeping and status entries are kept.
+    assert live["metadata"]["annotations"]["deployment.kubernetes.io/revision"] == "3"
+    assert any(
+        entry.get("subresource") == "status"
+        for entry in live["metadata"]["managedFields"]
+    )
+
+
+def test_autoscaler_scale_entry_is_kept_and_a_real_conflict_surfaces(
+    api_url, provider, tmp_path
+):
+    api, _ = api_url
+    kubectl_created(api, replicas_scale=1)
+    value = manifest("Deployment", "worker")
+    value["metadata"]["labels"] = {"app": "worker"}
+    intent = ResourceIntent.from_manifest(value)
+    plan, snapshot, authorization = prepare(provider, [intent], adopt=(intent.ref,))
+    assert "autoscaler" not in plan.actions[0].adoption.transferred_managers
+    run = executor(provider, tmp_path)
+    assert run.run("scaled", plan, snapshot, authorization)["state"] == "ready"
+    live = api.objects[("Deployment", "worker")]
+    assert any(
+        entry["manager"] == "autoscaler" and entry.get("subresource") == "scale"
+        for entry in live["metadata"]["managedFields"]
+    )
+
+    # The autoscaler owns replicas=4; the release declares 1: a real conflict,
+    # reported instead of forced.
+    api.objects.pop(("Deployment", "worker"))
+    kubectl_created(api, replicas_scale=4)
+    plan, snapshot, authorization = prepare(provider, [intent], adopt=(intent.ref,))
+    report = executor(provider, tmp_path / "second").run(
+        "conflict", plan, snapshot, authorization
+    )
+    assert report["failure_category"] == "conflict"
+    assert api.objects[("Deployment", "worker")]["spec"]["replicas"] == 4
+    assert all(r["query"].get("dryRun") == ["All"] for r in forced(api))
 
 
 def test_later_kubectl_edit_shows_as_drift(api_url, provider, tmp_path):
@@ -472,6 +624,55 @@ def test_later_kubectl_edit_shows_as_drift(api_url, provider, tmp_path):
     assert plan.actions[0].operation is PlanOperation.APPLY
 
 
+def test_adopting_a_managed_object_again_reclaims_foreign_fields(
+    api_url, provider, tmp_path
+):
+    """Recovery: a managed object that clients wrote to converges again."""
+    api, _ = api_url
+    kubectl_created(api)
+    live = api.objects[("Deployment", "worker")]
+    live["metadata"]["annotations"]["piceli.io/owner"] = provider.owner_id
+    live["spec"]["template"]["spec"]["containers"].append(
+        {"name": "web", "image": "example.invalid/web:1"}
+    )
+    live["metadata"]["managedFields"].append(
+        {
+            "manager": MANAGER,
+            "operation": "Apply",
+            "apiVersion": "apps/v1",
+            "fieldsType": "FieldsV1",
+            "fieldsV1": {
+                "f:spec": {
+                    "f:template": {
+                        "f:spec": {
+                            "f:containers": {
+                                'k:{"name":"web"}': {"f:name": {}, "f:image": {}}
+                            }
+                        }
+                    }
+                }
+            },
+        }
+    )
+    value = manifest("Deployment", "worker")
+    value["metadata"]["labels"] = {"app": "worker"}
+    value["spec"]["template"]["spec"]["containers"] = [
+        {"name": "web", "image": "example.invalid/web:1"}
+    ]
+    intent = ResourceIntent.from_manifest(value)
+    plan, snapshot, authorization = prepare(provider, [intent], adopt=(intent.ref,))
+    [action] = plan.actions
+    assert action.operation is PlanOperation.ADOPT
+    assert action.adoption.previous_owner == provider.owner_id
+    run = executor(provider, tmp_path)
+    assert run.run("reclaim", plan, snapshot, authorization)["state"] == "ready"
+    assert containers(api) == ["web"]
+    assert f"{MANAGER}/Apply" in api.managers("Deployment", "worker")
+    assert not {"kubectl-create/Update", "kubectl-set/Update"} & set(
+        api.managers("Deployment", "worker")
+    )
+
+
 def test_update_meeting_a_foreign_manager_still_conflicts(api_url, provider, tmp_path):
     api, _ = api_url
     kubectl_deployment(api)
@@ -485,7 +686,6 @@ def test_update_meeting_a_foreign_manager_still_conflicts(api_url, provider, tmp
     assert report["state"] == "failed"
     assert report["failure_category"] == "conflict"
     assert forced(api) == []
-    assert all(r["query"].get("force") != ["true"] for r in api.requests)
 
 
 def test_unauthorized_adoption_is_refused_before_any_write(api_url, provider, tmp_path):
@@ -503,7 +703,7 @@ def test_unauthorized_adoption_is_refused_before_any_write(api_url, provider, tm
     )
     with pytest.raises(ValueError, match="action/private-version scope"):
         run.run("no-grant", plan, snapshot, apply_grant)
-    # A plan that under-reports the managers it would displace.
+    # A plan that under-reports the managers it would transfer.
     narrowed = replace(
         plan,
         actions=(
@@ -539,13 +739,13 @@ def test_managers_changed_since_planning_block_the_takeover(
     assert mutations(api) == [] and forced(api) == []
 
 
-def test_takeover_cleanup_retries_a_concurrent_write(api_url, provider, tmp_path):
+def test_takeover_retries_a_concurrent_write(api_url, provider, tmp_path):
     api, _ = api_url
     kubectl_deployment(api)
     intent = desired_deployment()
     plan, snapshot, authorization = prepare(provider, [intent], adopt=(intent.ref,))
-    # Let the forced apply through and make the managedFields cleanup meet a
-    # concurrent write (a 409 on its resourceVersion precondition) once.
+    # The managedFields transfer meets a concurrent write (a 409 on its
+    # resourceVersion precondition) once.
     original = api.route
 
     def route(request):
@@ -553,32 +753,38 @@ def test_takeover_cleanup_retries_a_concurrent_write(api_url, provider, tmp_path
             route, "failed", False
         ):
             route.failed = True  # type: ignore[attr-defined]
+            api.version += 1
+            api.objects[("Deployment", "worker")]["metadata"]["resourceVersion"] = str(
+                api.version
+            )
             return 409, {}
         return original(request)
 
     api.route = route  # type: ignore[method-assign]
     run = executor(provider, tmp_path)
     assert run.run("retry", plan, snapshot, authorization)["state"] == "ready"
-    assert set(api.managers("Deployment", "worker")) == {
-        f"{MANAGER}/Apply",
-        "kubectl-rollout/Update",
-    }
+    assert set(api.managers("Deployment", "worker")) == {f"{MANAGER}/Apply"}
 
 
-def test_interrupted_takeover_cleanup_is_finished_on_resume(
-    api_url, provider, tmp_path
-):
+def test_interrupted_takeover_is_converged_on_resume(api_url, provider, tmp_path):
     api, _ = api_url
-    kubectl_deployment(api)
-    intent = desired_deployment()
+    kubectl_created(api)
+    value = manifest("Deployment", "worker")
+    value["metadata"]["labels"] = {"app": "worker"}
+    value["spec"]["template"]["spec"]["containers"] = [
+        {"name": "web", "image": "example.invalid/web:1"}
+    ]
+    intent = ResourceIntent.from_manifest(value)
     plan, snapshot, authorization = prepare(provider, [intent], adopt=(intent.ref,))
     original = api.route
-    calls = {"cleanup": 0}
+    calls = {"apply": 0}
 
     def route(request):
-        if request["content_type"] == "application/merge-patch+json":
-            calls["cleanup"] += 1
-            if calls["cleanup"] == 1:
+        if request["content_type"] == "application/apply-patch+yaml" and request[
+            "query"
+        ].get("dryRun") != ["All"]:
+            calls["apply"] += 1
+            if calls["apply"] == 1:
                 return 500, {}
         return original(request)
 
@@ -587,40 +793,45 @@ def test_interrupted_takeover_cleanup_is_finished_on_resume(
     first = run.run("resume-me", plan, snapshot, authorization)
     assert first["state"] == "blocked"
     assert run.journal.actions("resume-me")[0]["state"] == "intent"
-    assert "kubectl-set/Update" in api.managers("Deployment", "worker")
+    assert containers(api) == ["busybox"]  # transferred, not yet applied
     second = run.run("resume-me", plan, snapshot, authorization, resume=True)
     assert second["state"] == "ready"
-    assert set(api.managers("Deployment", "worker")) == {
-        f"{MANAGER}/Apply",
-        "kubectl-rollout/Update",
-    }
-    assert payloads(run, "resume-me")[0]["adoption"]["removed_managers"] == [
-        "kubectl-client-side-apply",
+    assert containers(api) == ["web"]
+    assert payloads(run, "resume-me")[0]["adoption"]["completed_transfer"] == [
+        "kubectl-create",
         "kubectl-set",
     ]
-    assert len([r for r in forced(api) if r["query"].get("dryRun") != ["All"]]) == 1
 
 
 def test_compensating_a_takeover_restores_the_previous_spec(
     api_url, provider, tmp_path
 ):
     api, _ = api_url
-    kubectl_deployment(api)
-    intent = desired_deployment()
+    kubectl_created(api)
+    value = manifest("Deployment", "worker")
+    value["metadata"]["labels"] = {"app": "worker"}
+    value["spec"]["template"]["spec"]["containers"] = [
+        {"name": "web", "image": "example.invalid/web:1"}
+    ]
+    intent = ResourceIntent.from_manifest(value)
     plan, snapshot, authorization = prepare(provider, [intent], adopt=(intent.ref,))
     run = executor(provider, tmp_path)
     assert run.run("undo", plan, snapshot, authorization)["state"] == "ready"
+    assert containers(api) == ["web"]
     result = run.compensate("undo", plan, snapshot, authorization)
     assert result["state"] == "compensated-with-retention"
     live = api.objects[("Deployment", "worker")]
-    template = live["spec"]["template"]
-    assert template["spec"]["containers"][0]["image"] == "example.invalid/worker:old"
-    assert template["metadata"]["annotations"] == {RESTARTED: "2026-09-24"}
+    assert live["spec"]["template"]["spec"]["containers"] == [
+        {
+            "name": "busybox",
+            "image": "busybox:1.36.1",
+            "command": ["sleep", "infinity"],
+        }
+    ]
     # Ownership stays with Piceli; the undo itself is not forced.
     assert live["metadata"]["annotations"]["piceli.io/owner"] == provider.owner_id
-    undo = mutations(api)[-1]
-    assert undo["query"]["force"] == ["false"]
-    assert len([r for r in forced(api) if r["query"].get("dryRun") != ["All"]]) == 1
+    assert mutations(api)[-1]["query"]["force"] == ["false"]
+    assert all(r["query"].get("dryRun") == ["All"] for r in forced(api))
 
 
 def test_planned_takeover_detail_is_bound_into_the_plan_hash(api_url, provider):
@@ -643,15 +854,13 @@ def test_planned_takeover_detail_is_bound_into_the_plan_hash(api_url, provider):
 def test_provider_takeover_guards_fail_closed(api_url, provider):
     api, _ = api_url
     kubectl_deployment(api)
-    api.put(manifest("ConfigMap", "mine"), owned=True)
     deployment = provider.get(
         ResourceIdentity("apps/v1", "Deployment", TARGET.namespace, "worker")
     )
-    mine = provider.get(ResourceIdentity("v1", "ConfigMap", TARGET.namespace, "mine"))
     body = deployment.manifest
     body["metadata"].pop("managedFields")
     with pytest.raises(ProviderError, match="ownership-precondition-failed"):
-        provider.take_over(deployment, body, displaced_managers=())  # no owner claim
+        provider.take_over(deployment, body, transferred_managers=())  # no claim
     body["metadata"]["annotations"] = {
         "piceli.io/owner": provider.owner_id,
         "piceli.io/operation": "a" * 32,
@@ -659,9 +868,12 @@ def test_provider_takeover_guards_fail_closed(api_url, provider):
     stale = copy.deepcopy(body)
     stale["metadata"]["resourceVersion"] = "0"
     with pytest.raises(ProviderError, match="uid-version-precondition-failed"):
-        provider.take_over(deployment, stale, displaced_managers=())
-    with pytest.raises(ProviderError, match="ownership-precondition-failed"):
-        provider.take_over(mine, mine.manifest, displaced_managers=())
+        provider.take_over(deployment, stale, transferred_managers=())
+    # A transferable manager that the plan did not list stops the takeover.
+    with pytest.raises(ProviderError, match="field-owner-precondition-failed"):
+        provider.converge_takeover(
+            deployment, body, transferred_managers=("kubectl-set",)
+        )
     with pytest.raises(ProviderError, match="not-retained"):
         provider.adopt_metadata(deployment, operation_id="a" * 32)
     with pytest.raises(ProviderError, match="invalid-force"):

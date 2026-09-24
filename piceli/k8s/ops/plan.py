@@ -201,7 +201,7 @@ def field_manager_entries(manifest: Mapping[str, Any]) -> tuple[FieldManagerEntr
 
 def _key_matches(item: Any, key: Mapping[str, Any]) -> bool:
     # A key field the desired item omits (e.g. a defaulted port protocol) is a
-    # wildcard: over-reporting an owner only widens the reviewed displacement.
+    # wildcard: over-reporting an owner only widens the reported drift.
     return isinstance(item, Mapping) and all(
         name not in item or item[name] == value for name, value in key.items()
     )
@@ -237,6 +237,61 @@ def _fields_overlap(fields: Mapping[str, Any], value: Any) -> bool:
             if _fields_overlap(child, item):
                 return True
     return False
+
+
+# Field managers of the Kubernetes control plane. Their entries are never
+# transferred by a takeover: they record controller bookkeeping (a
+# Deployment's revision annotation, a claim's binding) that a manifest does
+# not declare and that the controller keeps writing.
+CONTROL_PLANE_MANAGERS = frozenset(
+    {
+        "kube-apiserver",
+        "kube-controller-manager",
+        "kube-scheduler",
+        "kubelet",
+        "cloud-controller-manager",
+    }
+)
+
+
+def is_control_plane_manager(manager: str) -> bool:
+    """Control-plane or controller manager, by name (see docs for the rule)."""
+    return (
+        manager in CONTROL_PLANE_MANAGERS
+        or manager.startswith("k3s")
+        or manager.endswith(("-controller", "-controller-manager"))
+    )
+
+
+def is_transferable(entry: FieldManagerEntry) -> bool:
+    """A takeover transfers main-resource entries written by clients.
+
+    Kept: any subresource entry (``status``, ``scale`` written by an
+    autoscaler, ...) and control-plane/controller managers. Everything else —
+    ``kubectl-client-side-apply``, ``kubectl-create``, ``kubectl-set``,
+    ``kubectl-edit``, ``kubectl-rollout``, other tools' Apply or Update
+    entries — is transferred.
+    """
+    return (
+        not entry.subresource
+        and entry.operation in {"Apply", "Update"}
+        and not is_control_plane_manager(entry.manager)
+    )
+
+
+def transferable_managers(
+    entries: Iterable[FieldManagerEntry], *, exclude: Iterable[str] = ()
+) -> tuple[str, ...]:
+    excluded = set(exclude)
+    return tuple(
+        sorted(
+            {
+                entry.manager
+                for entry in entries
+                if is_transferable(entry) and entry.manager not in excluded
+            }
+        )
+    )
 
 
 def overlapping_managers(
@@ -652,9 +707,15 @@ class PlanAuthorization:
       ``PersistentVolumeClaim``, ``Secret`` or ``piceli.io/retained: "true"``)
       are adopted **metadata-only**: only the owner annotation is written, and
       only when the desired manifest is contained in the live object;
-    * every other object is adopted by a **takeover**: one forced server-side
-      apply, after which the field managers it displaced are removed from
-      ``managedFields``.
+    * every other object is adopted by a **takeover**: the fields of every
+      transferable field manager (see :func:`transferable_managers`) move to
+      this field manager, then the desired manifest is applied without force,
+      so fields the manifest does not declare are removed. A takeover may also
+      be requested for an object this owner already manages, to reclaim fields
+      that other clients (e.g. ``kubectl``) wrote since.
+
+    ``field_manager`` is the executing field manager; it is never listed as a
+    transferred manager.
 
     ``inherited_owner_ids`` are earlier owner ids whose retained objects may be
     re-stamped by an explicit adoption. They do not change ownership
@@ -665,11 +726,16 @@ class PlanAuthorization:
     adopt_resources: tuple[ResourceRef, ...] = ()
     prune_managed: bool = False
     inherited_owner_ids: tuple[str, ...] = ()
+    field_manager: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
             self, "adopt_resources", tuple(sorted(set(self.adopt_resources)))
         )
+        if self.field_manager is not None and (
+            not isinstance(self.field_manager, str) or not self.field_manager
+        ):
+            raise ValueError("field manager must be a non-empty string")
         if isinstance(self.inherited_owner_ids, str) or any(
             not isinstance(item, str) or not item for item in self.inherited_owner_ids
         ):
@@ -696,31 +762,37 @@ class AdoptionMode(StrEnum):
 class Adoption:
     """How an ADOPT action moves ownership; part of the plan hash.
 
-    ``displaced_managers`` are the field managers that own at least one field
-    the desired manifest sets. A takeover forces those fields and then removes
-    these managers' ``managedFields`` entries; a metadata-only adoption never
-    displaces anyone.
+    ``transferred_managers`` are every transferable field manager of the live
+    object (not only those owning declared fields). A takeover moves all of
+    their fields to this field manager and then applies the desired manifest,
+    which removes every transferred field the manifest does not declare. A
+    metadata-only adoption never transfers anything.
     """
 
     mode: AdoptionMode
     previous_owner: str | None = None
-    displaced_managers: tuple[str, ...] = ()
+    transferred_managers: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.mode, AdoptionMode):
             raise ValueError("invalid adoption mode")
         object.__setattr__(
-            self, "displaced_managers", tuple(sorted(set(self.displaced_managers)))
+            self,
+            "transferred_managers",
+            tuple(sorted(set(self.transferred_managers))),
         )
-        if self.mode is AdoptionMode.METADATA_ONLY and self.displaced_managers:
-            raise ValueError("metadata-only adoption cannot displace field managers")
+        if self.mode is AdoptionMode.METADATA_ONLY and self.transferred_managers:
+            raise ValueError("metadata-only adoption cannot transfer field managers")
 
     def summary(self) -> dict[str, Any]:
-        return {
+        value: dict[str, Any] = {
             "mode": self.mode.value,
             "previous_owner": self.previous_owner,
-            "displaced_managers": list(self.displaced_managers),
+            "transferred_managers": list(self.transferred_managers),
         }
+        if self.mode is AdoptionMode.TAKEOVER:
+            value["removes_undeclared_fields"] = True
+        return value
 
 
 @dataclass(frozen=True)
@@ -940,11 +1012,15 @@ def _deletion_depth(
 
 
 def _adoptable(resource: ObservedResource, authorization: PlanAuthorization) -> bool:
-    """Unmanaged objects, or retained objects of an explicitly inherited owner."""
-    return resource.ownership is Ownership.UNMANAGED or (
-        resource.retained
-        and resource.owner is not None
-        and resource.owner in authorization.inherited_owner_ids
+    """Unmanaged objects, managed non-retained objects (a takeover reclaims
+    foreign fields), or retained objects of an explicitly inherited owner."""
+    return (
+        resource.ownership is Ownership.UNMANAGED
+        or not resource.retained
+        or (
+            resource.owner is not None
+            and resource.owner in authorization.inherited_owner_ids
+        )
     )
 
 
@@ -956,7 +1032,11 @@ def _without_pointers(
     return manifest
 
 
-def adoption_for(desired: ResourceIntent, current: ObservedResource) -> Adoption:
+def adoption_for(
+    desired: ResourceIntent,
+    current: ObservedResource,
+    field_manager: str | None = None,
+) -> Adoption:
     """Choose the adoption mode from the live object; refuse unsafe ones."""
     if current.retained:
         # Private values are compared by the executor after resolution; the
@@ -974,7 +1054,10 @@ def adoption_for(desired: ResourceIntent, current: ObservedResource) -> Adoption
     return Adoption(
         AdoptionMode.TAKEOVER,
         current.owner,
-        overlapping_managers(current.field_managers, desired.manifest),
+        transferable_managers(
+            current.field_managers,
+            exclude=() if field_manager is None else (field_manager,),
+        ),
     )
 
 
@@ -1084,7 +1167,9 @@ def build_plan(
                 adoption = None
                 if ref in authorization.adopt_resources:
                     operation = PlanOperation.ADOPT
-                    adoption = adoption_for(desired[ref], current)
+                    adoption = adoption_for(
+                        desired[ref], current, authorization.field_manager
+                    )
                 elif current.ownership is Ownership.UNMANAGED:
                     raise ValueError(f"resource requires explicit adoption: {ref}")
                 elif _equivalent(

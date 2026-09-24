@@ -34,8 +34,10 @@ from piceli.k8s.ops.plan import (
     build_plan,
     field_drift,
     field_manager_entries,
+    is_control_plane_manager,
     manifest_contains,
     overlapping_managers,
+    transferable_managers,
 )
 from piceli.k8s.ops.revision import DeploymentRevision, ExecutionBundle
 
@@ -85,10 +87,10 @@ def claim(storage: str = "1Gi", **extra: object) -> dict:
     }
 
 
-def entry(manager: str, fields: dict, **extra: str) -> dict:
+def entry(manager: str, fields: dict, operation: str = "Update", **extra: str) -> dict:
     return {
         "manager": manager,
-        "operation": "Update",
+        "operation": operation,
         "apiVersion": "v1",
         "fieldsType": "FieldsV1",
         "fieldsV1": fields,
@@ -245,7 +247,7 @@ def test_manifest_containment_allows_defaults_inside_list_items() -> None:
     assert not manifest_contains(extra, deployment())
 
 
-def test_takeover_plan_lists_displaced_managers_and_binds_them() -> None:
+def test_takeover_plan_lists_transferred_managers_and_binds_them() -> None:
     current = observed(
         deployment("web:old"),
         managers=[
@@ -300,7 +302,7 @@ def test_retained_adoption_is_metadata_only_and_requires_containment() -> None:
     assert action.adoption == Adoption(AdoptionMode.METADATA_ONLY, None)
     with pytest.raises(ValueError, match="already contains the desired manifest"):
         plan([claim("2Gi")], snapshot(current), adopt_resources=(ref(claim()),))
-    with pytest.raises(ValueError, match="cannot displace"):
+    with pytest.raises(ValueError, match="cannot transfer"):
         Adoption(AdoptionMode.METADATA_ONLY, None, ("kubectl",))
 
 
@@ -315,15 +317,67 @@ def test_inherited_owner_retained_objects_are_adoptable_only_when_listed() -> No
         inherited_owner_ids=("old-owner",),
     ).actions
     assert action.adoption == Adoption(AdoptionMode.METADATA_ONLY, "old-owner")
-    # A managed workload of an inherited owner is not a takeover candidate.
-    workload = observed(deployment(), owner="old-owner", ownership=Ownership.MANAGED)
+    # A managed retained object of an unlisted owner is not adoptable.
+    other = observed(claim(), owner="stranger", ownership=Ownership.MANAGED)
     with pytest.raises(ValueError, match="adoption authorization does not match"):
         plan(
-            [deployment()],
-            snapshot(workload),
-            adopt_resources=(ref(deployment()),),
+            [claim()],
+            snapshot(other),
+            adopt_resources=(ref(claim()),),
             inherited_owner_ids=("old-owner",),
         )
+
+
+def test_managed_workloads_can_be_taken_over_again_to_reclaim_fields() -> None:
+    workload = observed(
+        deployment(),
+        owner="owner",
+        ownership=Ownership.MANAGED,
+        managers=[
+            entry("piceli", {"f:spec": {"f:replicas": {}}}),
+            entry("kubectl-edit", CONTAINER_IMAGE),
+        ],
+    )
+    [action] = plan(
+        [deployment()],
+        snapshot(workload),
+        adopt_resources=(ref(deployment()),),
+        field_manager="piceli",
+    ).actions
+    assert action.adoption == Adoption(
+        AdoptionMode.TAKEOVER, "owner", ("kubectl-edit",)
+    )
+
+
+def test_transfer_rule_keeps_subresources_and_control_plane_managers() -> None:
+    entries = field_manager_entries(
+        {
+            "metadata": {
+                "managedFields": [
+                    entry("kubectl-create", {"f:spec": {}}),
+                    entry("kubectl-client-side-apply", {"f:spec": {}}),
+                    entry("helm", {"f:spec": {}}, operation="Apply"),
+                    entry("kube-controller-manager", {"f:metadata": {}}),
+                    entry("kube-scheduler", {"f:metadata": {}}),
+                    entry("k3s", {"f:metadata": {}}),
+                    entry("vpa-controller", {"f:spec": {}}),
+                    entry("cert-manager-controller-manager", {"f:spec": {}}),
+                    entry("hpa", {"f:spec": {"f:replicas": {}}}, subresource="scale"),
+                    entry("kubectl", {"f:status": {}}, subresource="status"),
+                    entry("piceli", {"f:spec": {}}),
+                ]
+            }
+        }
+    )
+    assert transferable_managers(entries, exclude=("piceli",)) == (
+        "helm",
+        "kubectl-client-side-apply",
+        "kubectl-create",
+    )
+    assert is_control_plane_manager("kube-apiserver")
+    assert not is_control_plane_manager("kubectl-edit")
+    with pytest.raises(ValueError, match="field manager"):
+        PlanAuthorization(TARGET, field_manager="")
 
 
 def test_plan_authorization_validates_inherited_owner_ids() -> None:

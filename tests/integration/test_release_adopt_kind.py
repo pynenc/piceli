@@ -242,7 +242,9 @@ def test_adopt_kubectl_objects_then_drift_and_rollback(namespace, tmp_path):
     assert code == 0, planned
     modes = {item["name"]: item["adoption"] for item in planned["actions"]}
     assert modes["web"]["mode"] == "takeover"
-    assert "kubectl-set" in modes["web"]["displaced_managers"]
+    assert {"kubectl-client-side-apply", "kubectl-set", "kubectl-rollout"} <= set(
+        modes["web"]["transferred_managers"]
+    )
     assert modes["web-data"]["mode"] == modes["web-token"]["mode"] == "metadata-only"
 
     code, applied = _cli(spec, "apply", "--approve", planned["plan_hash"])
@@ -250,8 +252,15 @@ def test_adopt_kubectl_objects_then_drift_and_rollback(namespace, tmp_path):
     first = applied["release"]
 
     managers = _managers(namespace, "deployment", "web")
-    assert "kubectl-set" not in managers
-    assert "kubectl-client-side-apply" not in managers
+    assert not [name for name in managers if name.startswith("kubectl")]
+    live = json.loads(
+        kubectl("get", "deploy", "web", "-o", "json", namespace=namespace)
+    )
+    # Undeclared client-written fields are removed by the takeover.
+    assert "kubectl.kubernetes.io/last-applied-configuration" not in live[
+        "metadata"
+    ].get("annotations", {})
+    assert not live["spec"]["template"]["metadata"].get("annotations")
     owned = json.dumps(managers["adopt-e2e"]["fieldsV1"])
     assert "f:image" in owned and "f:selector" in owned
     pvc_after = json.loads(

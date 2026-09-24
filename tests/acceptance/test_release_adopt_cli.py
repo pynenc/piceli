@@ -100,17 +100,20 @@ def test_cli_adoption_is_planned_bound_and_applied(release_env):
         "settings": {
             "mode": "takeover",
             "previous_owner": None,
-            "displaced_managers": ["kubectl-client-side-apply"],
+            "transferred_managers": ["kubectl-client-side-apply"],
+            "removes_undeclared_fields": True,
         },
         "worker": {
             "mode": "takeover",
             "previous_owner": None,
-            "displaced_managers": ["kubectl-client-side-apply", "kubectl-set"],
+            "transferred_managers": ["kubectl-client-side-apply", "kubectl-set"],
+            "removes_undeclared_fields": True,
         },
     }
     assert (
-        "adopt Deployment/worker  [takeover: forced apply; displaces field managers: "
-        "kubectl-client-side-apply, kubectl-set; previous owner: none]"
+        "adopt Deployment/worker  [takeover: transfers field managers: "
+        "kubectl-client-side-apply, kubectl-set; fields they own that the release "
+        "does not declare will be REMOVED; previous owner: none]"
     ) in result.stderr
     assert mutations(api) == []
 
@@ -129,19 +132,17 @@ def test_cli_adoption_is_planned_bound_and_applied(release_env):
     assert code == 0, result.output
     assert applied["execution"]["state"] == "ready"
     adopted = {item["name"]: item for item in applied["adopted"]}
-    assert adopted["worker"]["removed_managers"] == [
+    assert adopted["worker"]["completed_transfer"] == [
         "kubectl-client-side-apply",
         "kubectl-set",
     ]
-    assert "adopted Deployment/worker (takeover; removed field managers" in (
+    assert "adopted Deployment/worker (takeover; transferred field managers" in (
         result.stderr
     )
     assert _image(api) == f"registry.example/app/api@{DIGEST_1}"
     assert set(api.managers("Deployment", "worker")) == {f"{MANAGER}/Apply"}
-    assert {request["path"].rsplit("/", 1)[-1] for request in forced(api)} == {
-        "worker",
-        "settings",
-    }
+    # Nothing forced is ever persisted.
+    assert forced(api) == []
 
 
 def test_standing_adopt_list_is_reported_once_objects_are_managed(release_env):

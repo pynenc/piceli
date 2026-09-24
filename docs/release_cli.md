@@ -203,13 +203,15 @@ Objects that already exist in the namespace without this release's
 time, with the list of objects to adopt. Authorize each one with
 `--adopt Kind/name` (or `apiVersion/Kind/name`; repeatable) on `plan`,
 `apply` or `rollback`, or list them in `[release] adopt`. An entry must name
-a resource the composition declares; entries for objects that are absent or
-already managed are reported as `adopt_not_needed` and ignored, so a standing
-list keeps working after the first release. Adoption flags are planning
+a resource the composition declares; entries for objects that are absent, or
+already managed with nothing to reclaim, are reported as `adopt_not_needed`
+and ignored, so a standing list keeps working after the first release. An
+entry for a managed object that other clients have written to since (for
+example with `kubectl edit`) takes it over again, which reclaims those fields. Adoption flags are planning
 flags: `apply --approve HASH` runs exactly the approved plan and refuses them.
 
 The plan shows how each object is adopted, and the mode, previous owner and
-displaced field managers are part of the plan hash you approve:
+transferred field managers are part of the plan hash you approve:
 
 ```console
 $ piceli release plan --spec release.toml \
@@ -217,12 +219,12 @@ $ piceli release plan --spec release.toml \
 release web-06c982ec7fe9 (create, apply): 3 adopt
     adopt Secret/web-token  [metadata-only: owner annotation only; previous owner: none]
     adopt PersistentVolumeClaim/web-data  [metadata-only: owner annotation only; previous owner: none]
-    adopt Deployment/web  [takeover: forced apply; displaces field managers: kubectl-client-side-apply, kubectl-set; previous owner: none]
+    adopt Deployment/web  [takeover: transfers field managers: kubectl-client-side-apply, kubectl-rollout, kubectl-set; fields they own that the release does not declare will be REMOVED; previous owner: none]
 plan hash: b9b282dd…c67a07 (valid until 2026-09-24T19:26:34+00:00)
 $ piceli release apply --spec release.toml --approve b9b282dd…c67a07
   adopted Secret/web-token (metadata-only)
   adopted PersistentVolumeClaim/web-data (metadata-only)
-  adopted Deployment/web (takeover; removed field managers: kubectl-client-side-apply, kubectl-set)
+  adopted Deployment/web (takeover; transferred field managers: kubectl-client-side-apply, kubectl-rollout, kubectl-set)
 apply web-06c982ec7fe9: ready
 ```
 
@@ -234,26 +236,41 @@ apply web-06c982ec7fe9: ready
   `data` to adopt it and keep its value. A different declared value is refused
   before any write. A retained object of an `inherited_owners` id can be
   adopted the same way; its owner annotation is re-stamped.
-* **Everything else** is adopted by a **takeover**: one server-side apply with
-  `force=true` (the only forced write Piceli sends), then the displaced
-  managers' `managedFields` entries are removed. Afterwards Piceli's field
-  manager is the only owner of the fields the composition declares, so a
-  later `kubectl set image` shows up as drift in the next plan:
+* **Everything else** is adopted by a **takeover**, which makes the
+  composition the object's full desired state. Every field written by a
+  client (`kubectl-client-side-apply`, `kubectl-create`, `kubectl-set`,
+  `kubectl-edit`, `kubectl-rollout`, other tools) is transferred to Piceli's
+  field manager, then the manifest is applied without force. **Fields those
+  clients wrote that the composition does not declare are removed**: a
+  container with another name, a `restartedAt` annotation, extra labels and
+  the `kubectl.kubernetes.io/last-applied-configuration` annotation (so a
+  later client-side `kubectl apply` cannot bring old fields back). Fields
+  defaulted by the API server come back with their defaults. Kept as they
+  are: subresource entries (`status`, and `scale` written by an autoscaler)
+  and control-plane managers (`kube-controller-manager`, `kube-scheduler`,
+  `kube-apiserver`, `kubelet`, `cloud-controller-manager`, names starting
+  with `k3s` or ending in `-controller`/`-controller-manager`). A value
+  that a kept manager owns and the composition sets differently (for
+  example `replicas` under an autoscaler) fails as a conflict instead of
+  being forced.
+
+  Afterwards a later `kubectl set image` shows up as drift in the next plan:
 
   ```console
     drift   Deployment/web: desired fields also managed by kubectl-set
   ```
 
-  Managers of undeclared fields (such as `kubectl rollout restart`'s
-  `restartedAt` annotation) are left alone. Ordinary creates and updates
-  never force.
+  Ordinary creates and updates never force. The only request Piceli sends
+  with `force=true` is a takeover's `dryRun=All` admission check, which
+  persists nothing.
 
 The `apply` JSON lists `adopted` objects with `mode`, `previous_owner`,
-`displaced_managers` and `removed_managers`; the journal records the same.
+`transferred_managers` and `completed_transfer`; the journal records the same.
 Rolling back to an earlier release re-applies its archived composition as
 usual; adopted retained objects and their data are never touched by a
-rollback. If the managedFields cleanup of a takeover is interrupted, the apply
-ends `blocked` and `resume` finishes it.
+rollback. If a takeover is interrupted, the apply ends `blocked` and `resume`
+converges it. A takeover that was approved with a different transfer list
+(for example by an older Piceli) cannot be resumed; plan again with `--adopt`.
 
 ## Rollback
 
@@ -285,8 +302,8 @@ did not become ready, the last ready release itself.
   kube-system UID, and a later run against another cluster is refused.
 * Objects are owned by exact `owner` match. Objects created by other tools are
   unmanaged; planning them fails until they are adopted explicitly
-  (`--adopt` / `[release] adopt`). Only an approved takeover adoption sends a
-  forced server-side apply; retained objects are adopted by an owner-annotation
+  (`--adopt` / `[release] adopt`). A takeover transfers field ownership and
+  applies without force; retained objects are adopted by an owner-annotation
   change only.
 * Plans, discovery evidence and secrets stay in the private state directory
   (owner-only). Reports and the catalog contain opaque references only.

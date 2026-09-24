@@ -397,7 +397,16 @@ class PlanExecutor:
         if adoption is None:
             # Restored pre-adoption-mode plans keep the old, never-forced path.
             return
-        if adoption != adoption_for(action.resource, current):
+        expected = adoption_for(action.resource, current, self.provider.field_manager)
+        if (
+            adoption.mode,
+            adoption.previous_owner,
+            set(adoption.transferred_managers) - {self.provider.field_manager},
+        ) != (
+            expected.mode,
+            expected.previous_owner,
+            set(expected.transferred_managers),
+        ):
             raise ValueError("adoption details do not match discovery evidence")
         if adoption.mode is AdoptionMode.METADATA_ONLY:
             if not current.retained:
@@ -413,12 +422,8 @@ class PlanExecutor:
                     f"desired manifest: {action.resource.ref}"
                 )
             return
-        if (
-            current.retained
-            or action.resource.ref.kind in RETAINED_KINDS
-            or current.ownership is not Ownership.UNMANAGED
-        ):
-            raise ValueError("takeover adoption requires an unmanaged workload")
+        if current.retained or action.resource.ref.kind in RETAINED_KINDS:
+            raise ValueError("takeover adoption requires a non-retained object")
 
     def _binding(
         self, plan: DeploymentPlan, authorization: ExecutionAuthorization
@@ -621,6 +626,41 @@ class PlanExecutor:
             if not error.ambiguous:
                 self.journal.record(execution, row["ordinal"], "failed", payload)
             raise
+
+    def _resume_takeover(
+        self,
+        row: dict[str, Any],
+        action: PlanAction,
+        adoption: dict[str, Any],
+        deadline: float,
+    ) -> tuple[DiscoveredResource, tuple[str, ...]]:
+        current = self.provider.get(_identity(action.resource.ref), deadline=deadline)
+        if current is None:
+            raise ProviderError("ambiguous-write-blocked", ambiguous=True)
+        if current.manifest["metadata"]["uid"] != action.precondition.uid:
+            raise ProviderError("recreated-object", ambiguous=True)
+        annotations = current.manifest["metadata"].get("annotations", {})
+        owner = annotations.get(OWNER_ANNOTATION)
+        if owner is not None and owner not in self._owners | {
+            action.adoption.previous_owner if action.adoption else None
+        }:
+            # Someone else claimed the object in between.
+            raise ProviderError("ownership-precondition-failed", ambiguous=True)
+        manifest = self._manifest(action.resource)
+        metadata = manifest["metadata"]
+        metadata.setdefault("annotations", {}).update(
+            {
+                OWNER_ANNOTATION: self.provider.owner_id,
+                OPERATION_ANNOTATION: row["operation_id"],
+            }
+        )
+        metadata["uid"] = current.manifest["metadata"]["uid"]
+        return self.provider.converge_takeover(
+            current,
+            manifest,
+            transferred_managers=tuple(adoption["transferred_managers"]),
+            deadline=deadline,
+        )
 
     def _reconcile(
         self, row: dict[str, Any], action: PlanAction, deadline: float
@@ -962,12 +1002,13 @@ class PlanExecutor:
                                     payload["adoption"] = {
                                         "mode": AdoptionMode.TAKEOVER.value,
                                         "previous_owner": action.adoption.previous_owner,
-                                        "displaced_managers": _displaced(
+                                        "transferred_managers": _transferred(
                                             action, self.provider.field_manager
                                         ),
                                     }
-                                # Admission/field conflicts are surfaced without force
-                                # ownership, except for an authorized takeover.
+                                # Admission/field conflicts are surfaced without force;
+                                # a takeover's admission check is the one forced
+                                # dry run (see KubernetesProvider.take_over).
                                 if same_owner_update:
                                     assert current is not None
                                     self.provider.update_owned(
@@ -981,8 +1022,8 @@ class PlanExecutor:
                                     self.provider.take_over(
                                         current,
                                         manifest,
-                                        displaced_managers=tuple(
-                                            payload["adoption"]["displaced_managers"]
+                                        transferred_managers=tuple(
+                                            payload["adoption"]["transferred_managers"]
                                         ),
                                         dry_run=True,
                                         deadline=deadline,
@@ -1014,16 +1055,16 @@ class PlanExecutor:
                                 elif takeover:
                                     assert manifest is not None
                                     assert current is not None
-                                    result, removed = self.provider.take_over(
+                                    result, moved = self.provider.take_over(
                                         current,
                                         manifest,
-                                        displaced_managers=tuple(
-                                            payload["adoption"]["displaced_managers"]
+                                        transferred_managers=tuple(
+                                            payload["adoption"]["transferred_managers"]
                                         ),
                                         deadline=deadline,
                                     )
-                                    payload["adoption"]["removed_managers"] = list(
-                                        removed
+                                    payload["adoption"]["completed_transfer"] = list(
+                                        moved
                                     )
                                 else:
                                     assert manifest is not None
@@ -1057,31 +1098,26 @@ class PlanExecutor:
                                 raise
                         row = self.journal.actions(execution)[row["ordinal"]]
                     elif row["state"] == "intent":
-                        result, retained_reconciled = self._reconcile(
-                            row, action, deadline
-                        )
                         base = dict(row["payload"])
                         adoption = base.get("adoption")
-                        if (
-                            result is not None
-                            and isinstance(adoption, dict)
-                            and adoption.get("mode") == AdoptionMode.TAKEOVER.value
-                        ):
-                            # The forced apply landed; finish (or confirm) the
-                            # managedFields cleanup it is always followed by.
-                            result, removed = self.provider.remove_field_managers(
-                                result,
-                                tuple(adoption["displaced_managers"]),
-                                operation_id=row["operation_id"],
-                                expected=self._manifest_intent(action),
-                                deadline=deadline,
+                        if _is_takeover(row):
+                            # The takeover is idempotent: converge again from
+                            # whatever step was interrupted.
+                            assert isinstance(adoption, dict)
+                            result, moved = self._resume_takeover(
+                                row, action, adoption, deadline
                             )
+                            retained_reconciled = False
                             base["adoption"] = adoption | {
-                                "removed_managers": sorted(
-                                    set(adoption.get("removed_managers", ()))
-                                    | set(removed)
+                                "completed_transfer": sorted(
+                                    set(adoption.get("completed_transfer", ()))
+                                    | set(moved)
                                 )
                             }
+                        else:
+                            result, retained_reconciled = self._reconcile(
+                                row, action, deadline
+                            )
                         payload = (
                             base
                             if result is None
@@ -1154,7 +1190,7 @@ class PlanExecutor:
 
         A takeover adoption is reversed like an update: its pre-adoption
         content is re-applied, while ownership stays with this owner (the
-        displaced field managers are not restored). Metadata-only adoptions of
+        transferred field managers are not restored). Metadata-only adoptions of
         retained objects are never reversed, so volumes and their data are
         untouched.
         """
@@ -1344,10 +1380,10 @@ def _mode(action: PlanAction) -> AdoptionMode | None:
     )
 
 
-def _displaced(action: PlanAction, field_manager: str) -> list[str]:
-    """Planned displaced managers; the executor's own manager is never removed."""
+def _transferred(action: PlanAction, field_manager: str) -> list[str]:
+    """Planned transferred managers other than the executor's own."""
     assert action.adoption is not None
-    return sorted(set(action.adoption.displaced_managers) - {field_manager})
+    return sorted(set(action.adoption.transferred_managers) - {field_manager})
 
 
 def _restore_manifest(before: DiscoveredResource) -> dict[str, Any]:

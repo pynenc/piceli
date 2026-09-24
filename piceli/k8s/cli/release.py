@@ -124,10 +124,11 @@ def _adoption_note(adoption: dict[str, Any] | None) -> str:
         return ""
     owner = adoption.get("previous_owner") or "none"
     if adoption["mode"] == "takeover":
-        displaced = ", ".join(adoption["displaced_managers"]) or "none"
+        moved = ", ".join(adoption["transferred_managers"]) or "none"
         return (
-            f"  [takeover: forced apply; displaces field managers: {displaced}; "
-            f"previous owner: {owner}]"
+            f"  [takeover: transfers field managers: {moved}; fields they own "
+            f"that the release does not declare will be REMOVED; previous owner: "
+            f"{owner}]"
         )
     return f"  [metadata-only: owner annotation only; previous owner: {owner}]"
 
@@ -144,10 +145,10 @@ def _confirm(result: Any) -> bool:
 def _finish(outcome: dict[str, Any]) -> None:
     _emit(outcome)
     for item in outcome.get("adopted", ()):
-        removed = item.get("removed_managers")
+        moved = item.get("completed_transfer")
         _say(
             f"  adopted {item['kind']}/{item['name']} ({item['mode']}"
-            + (f"; removed field managers: {', '.join(removed)}" if removed else "")
+            + (f"; transferred field managers: {', '.join(moved)}" if moved else "")
             + ")"
         )
     execution = outcome["execution"]

@@ -183,6 +183,27 @@ def _remove_path(manifest: dict[str, Any], path: Path) -> None:
     kind, _, name = path[-1].partition(":")
     if kind == "f" and isinstance(parent, dict):
         parent.pop(name, None)
+    elif kind == "k" and isinstance(parent, list):
+        key = json.loads(name)
+        parent[:] = [
+            item for item in parent if not all(item.get(k) == v for k, v in key.items())
+        ]
+
+
+def _prune(manifest: dict[str, Any], removed: set[Path], kept: set[Path]) -> None:
+    """SSA pruning: drop fields nobody owns any more; whole list items too."""
+    items = {
+        path[: index + 1]
+        for path in removed
+        for index, segment in enumerate(path)
+        if segment.startswith("k:")
+    }
+    for item in sorted(items, key=len):
+        if not any(path[: len(item)] == item for path in kept):
+            _remove_path(manifest, item)
+    for path in removed:
+        if value_at(manifest, path) is not _MISSING:
+            _remove_path(manifest, path)
 
 
 class FakeAPI:
@@ -679,8 +700,11 @@ class FakeAPI:
                         if e is not own and e.get("subresource") != "status"
                     )
                 )
-                for path in paths_of(own["fieldsV1"]) - applied - others:
-                    _remove_path(result, path)
+                _prune(
+                    result,
+                    paths_of(own["fieldsV1"]) - applied - others,
+                    applied | others,
+                )
             else:
                 own = {
                     "manager": manager,

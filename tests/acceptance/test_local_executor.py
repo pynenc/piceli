@@ -387,13 +387,14 @@ def test_exact_adoption_is_required_and_ssa_uses_uid_version_manager(
         prepare(provider, [intent])
     plan, snapshot, grant = prepare(provider, [intent], adopt=(intent.ref,))
     assert run.run("adopt", plan, snapshot, grant)["state"] == "ready"
-    request = mutations(api)[0]
+    transfer, request = mutations(api)
+    assert transfer["content_type"] == "application/merge-patch+json"
     assert request["method"] == "PATCH"
     assert request["body"]["metadata"]["uid"] == "unmanaged"
-    # An authorized takeover is the only write sent with force=true.
+    # A takeover transfers field ownership and then applies without force.
     assert request["query"] == {
         "fieldManager": [provider.field_manager],
-        "force": ["true"],
+        "force": ["false"],
     }
     assert api.objects[("ConfigMap", "settings")]["data"] == {"mode": "two"}
     writes = len(mutations(api))
