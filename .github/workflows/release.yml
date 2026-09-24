@@ -33,7 +33,12 @@ jobs:
         id: check-version
         uses: salsify/action-detect-and-tag-new-version@v2.0.3
         with:
-          version-command: uv version --short
+          # The action also reads the parent commit's version, which may predate
+          # PEP 621 (Poetry layout), so read pyproject.toml directly.
+          version-command: >-
+            uv run --no-project --python 3.12 python -c "import tomllib;
+            d = tomllib.load(open('pyproject.toml', 'rb'));
+            print(d.get('project', {}).get('version') or d['tool']['poetry']['version'])"
 
   publish-pypi:
     needs: check-version

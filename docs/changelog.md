@@ -4,7 +4,7 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
-## Unreleased
+## Version 0.1.0
 
 - `piceli release {plan,preview,apply,rollback,resume,stop,status} --spec release.toml`
   is the first CLI on the recoverable engine. The typed release spec takes an
