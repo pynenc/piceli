@@ -140,6 +140,11 @@ _LEGACY_MODEL = ("model modules/folders",)
 COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
     {
         # ----------------------------------------------------- contract
+        "render": _C(
+            "Print the manifests of a typed app or composition (YAML or JSON).",
+            reads=("module/app file", "release.toml (optional)", "local receipts"),
+            notes="Never contacts a cluster; secret values are placeholders.",
+        ),
         "explain": _C(
             "Print the registry entry for an error code.",
             contract="conforms",
@@ -199,6 +204,11 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             cluster="reads",
             safe_to_retry=True,
             notes="Checks the cluster identity; records the cancellation locally.",
+        ),
+        "release secret show": _C(
+            "Show a generated secret's metadata, or its value with --reveal.",
+            reads=("release.toml", "state_dir (secret store)"),
+            notes="Owner only. Never contacts the cluster; values print only with --reveal or a terminal confirmation.",
         ),
         "release status": _C(
             "Show catalogued releases, executions and history.",

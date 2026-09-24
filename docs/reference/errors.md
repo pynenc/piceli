@@ -78,6 +78,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`invalid-receipt`](#error-invalid-receipt) | build-spec | no |
 | [`invalid-reference`](#error-invalid-reference) | artifacts-input | no |
 | [`invalid-request`](#error-invalid-request) | kubernetes | no |
+| [`invalid-secret-data`](#error-invalid-secret-data) | secrets | no |
 | [`invalid-source`](#error-invalid-source) | artifacts-input | no |
 | [`invalid-spec`](#error-invalid-spec) | build-spec | no |
 | [`invalid-ssh-agent-socket`](#error-invalid-ssh-agent-socket) | artifacts-input | no |
@@ -118,6 +119,8 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`registry-response-too-large`](#error-registry-response-too-large) | artifacts-registry | no |
 | [`registry-unauthorized`](#error-registry-unauthorized) | artifacts-registry | no |
 | [`registry-unreachable`](#error-registry-unreachable) | artifacts-registry | yes |
+| [`render-model-invalid`](#error-render-model-invalid) | render | no |
+| [`render-target-invalid`](#error-render-target-invalid) | render | no |
 | [`request-byte-limit`](#error-request-byte-limit) | kubernetes | no |
 | [`resource-content-precondition-failed`](#error-resource-content-precondition-failed) | execution | no |
 | [`response-byte-limit`](#error-response-byte-limit) | kubernetes | no |
@@ -125,11 +128,25 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`retained-content-precondition-failed`](#error-retained-content-precondition-failed) | execution | no |
 | [`retained-resource`](#error-retained-resource) | execution | no |
 | [`scope-mismatch`](#error-scope-mismatch) | kubernetes | no |
+| [`secret-dependency-cycle`](#error-secret-dependency-cycle) | secrets | no |
+| [`secret-generator-failed`](#error-secret-generator-failed) | secrets | yes |
+| [`secret-import-unavailable`](#error-secret-import-unavailable) | secrets | yes |
+| [`secret-key-missing`](#error-secret-key-missing) | secrets | no |
+| [`secret-key-required`](#error-secret-key-required) | secrets | no |
+| [`secret-not-found`](#error-secret-not-found) | secrets | no |
+| [`secret-not-text`](#error-secret-not-text) | secrets | no |
+| [`secret-reveal-required`](#error-secret-reveal-required) | secrets | no |
+| [`secret-rotation-refused`](#error-secret-rotation-refused) | secrets | no |
+| [`secret-template-invalid`](#error-secret-template-invalid) | secrets | no |
+| [`secret-unknown-reference`](#error-secret-unknown-reference) | secrets | no |
 | [`server-target-identity-mismatch`](#error-server-target-identity-mismatch) | kubernetes | no |
+| [`smoke-failed`](#error-smoke-failed) | build-spec | no |
+| [`smoke-timed-out`](#error-smoke-timed-out) | build-spec | no |
 | [`source-changed`](#error-source-changed) | artifacts-delivery | yes |
 | [`source-drift`](#error-source-drift) | build-spec | no |
 | [`source-identity`](#error-source-identity) | build-spec | no |
 | [`source-unavailable`](#error-source-unavailable) | artifacts-delivery | yes |
+| [`spec-changed`](#error-spec-changed) | build-spec | yes |
 | [`spec-unreadable`](#error-spec-unreadable) | build-spec | no |
 | [`ssh-tool-required`](#error-ssh-tool-required) | artifacts-input | no |
 | [`takeover-conflict`](#error-takeover-conflict) | kubernetes | no |
@@ -140,6 +157,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`uid-version-precondition-failed`](#error-uid-version-precondition-failed) | execution | no |
 | [`undiscovered-api`](#error-undiscovered-api) | kubernetes | no |
 | [`unknown-error-code`](#error-unknown-error-code) | cli | no |
+| [`unknown-source`](#error-unknown-source) | inputs | no |
 | [`upload-rejected`](#error-upload-rejected) | artifacts-registry | yes |
 | [`verification-failed`](#error-verification-failed) | artifacts-delivery | yes |
 
@@ -797,6 +815,22 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Run `build-spec preview` again and approve the new plan hash.
 - **Retry-safe:** no
 
+(error-smoke-failed)=
+### `smoke-failed`
+
+**Smoke check failed.** An image's smoke command exited with an unexpected code; no receipt was written.
+
+- **Fix:** Inspect the build log (`--log`), fix the image or the smoke declaration, rebuild.
+- **Retry-safe:** no
+
+(error-smoke-timed-out)=
+### `smoke-timed-out`
+
+**Smoke check timed out.** An image's smoke command exceeded timeout_seconds; the container was removed.
+
+- **Fix:** Fix the image or raise timeout_seconds (max 600), rebuild.
+- **Retry-safe:** no
+
 (error-source-drift)=
 ### `source-drift`
 
@@ -812,6 +846,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Run `piceli inputs record --spec inputs.toml` to see which source fails.
 - **Retry-safe:** no
+
+(error-spec-changed)=
+### `spec-changed`
+
+**Build spec changed during the build.** build.toml's normalized declaration changed while the build ran.
+
+- **Fix:** Stop editing the spec during a build, then run it again.
+- **Retry-safe:** yes
 
 (error-spec-unreadable)=
 ### `spec-unreadable`
@@ -1177,4 +1219,133 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Object changed since planning.** The object's UID or resourceVersion differs from the planned one.
 
 - **Fix:** Run `piceli release plan` again and approve the new plan hash.
+- **Retry-safe:** no
+
+
+## Source identities (`piceli inputs record|verify`)
+
+(error-unknown-source)=
+### `unknown-source`
+
+**Unknown source name.** `--only NAME` named a source that inputs.toml does not declare.
+
+- **Fix:** Use a name declared as [[source]] name in inputs.toml.
+- **Retry-safe:** no
+
+
+## Release secret generators and `piceli release secret show`
+
+(error-invalid-secret-data)=
+### `invalid-secret-data`
+
+**Invalid Secret data.** A live Secret's data could not be decoded (not base64, or not UTF-8 where text is required).
+
+- **Fix:** Fix the live Secret, or import from a file or environment variable instead.
+- **Retry-safe:** no
+
+(error-secret-dependency-cycle)=
+### `secret-dependency-cycle`
+
+**Secret dependency cycle.** Templates reference each other in a loop.
+
+- **Fix:** Break the loop shown in the message.
+- **Retry-safe:** no
+
+(error-secret-generator-failed)=
+### `secret-generator-failed`
+
+**Secret generator failed.** openssl failed, timed out, or did not match its openssl_sha256 pin.
+
+- **Fix:** Fix the openssl path or pin, then plan again.
+- **Retry-safe:** yes
+
+(error-secret-import-unavailable)=
+### `secret-import-unavailable`
+
+**Secret import unavailable.** The import source (file, env var, Secret or key) is missing, empty or unreadable, or the read was refused.
+
+- **Fix:** Provide or fix the source, or grant get on the Secret; retry.
+- **Retry-safe:** yes
+
+(error-secret-key-missing)=
+### `secret-key-missing`
+
+**Secret key missing.** An imported live Secret does not contain the requested key.
+
+- **Fix:** Check the Secret's keys or fix `secret = { name, key }` in the spec.
+- **Retry-safe:** no
+
+(error-secret-key-required)=
+### `secret-key-required`
+
+**Secret key required.** The generator has several outputs and no --key was given.
+
+- **Fix:** Add --key with one of the listed outputs.
+- **Retry-safe:** no
+
+(error-secret-not-found)=
+### `secret-not-found`
+
+**Secret not found.** Unknown secret, key or release, or no release has been recorded yet.
+
+- **Fix:** Check the name; the message lists what exists.
+- **Retry-safe:** no
+
+(error-secret-not-text)=
+### `secret-not-text`
+
+**Secret value is not text.** A raw value or template input is not valid UTF-8.
+
+- **Fix:** Use base64 encoding for binary values.
+- **Retry-safe:** no
+
+(error-secret-reveal-required)=
+### `secret-reveal-required`
+
+**Reveal not confirmed.** A secret value was requested without --reveal or a terminal confirmation.
+
+- **Fix:** Add --reveal (owner only), or use --json for metadata only.
+- **Retry-safe:** no
+
+(error-secret-rotation-refused)=
+### `secret-rotation-refused`
+
+**Secret rotation refused.** --rotate named a template or static generator.
+
+- **Fix:** Rotate the values the template uses, or edit the spec.
+- **Retry-safe:** no
+
+(error-secret-template-invalid)=
+### `secret-template-invalid`
+
+**Invalid secret template.** A template has a stray brace or a malformed placeholder.
+
+- **Fix:** Use {{ and }} for literal braces and {output} for values.
+- **Retry-safe:** no
+
+(error-secret-unknown-reference)=
+### `secret-unknown-reference`
+
+**Unknown template reference.** A template placeholder names an output that no generator exposes.
+
+- **Fix:** Use a listed output, e.g. {ca.ca.crt}; internal keys cannot be used.
+- **Retry-safe:** no
+
+
+## Typed apps and `piceli render`
+
+(error-render-model-invalid)=
+### `render-model-invalid`
+
+**Typed model invalid.** The typed model failed validation while rendering (for example a selector conflict or an ExistingClaim collision).
+
+- **Fix:** Fix the model as the message describes; `piceli render` shows the result without a cluster.
+- **Retry-safe:** no
+
+(error-render-target-invalid)=
+### `render-target-invalid`
+
+**Render target invalid.** The module:attr target cannot be imported or is not an App, composition or composition function.
+
+- **Fix:** Point at `module:attr` or `file.py:attr` of an App, DeploymentComposition or build(ctx) function.
 - **Retry-safe:** no

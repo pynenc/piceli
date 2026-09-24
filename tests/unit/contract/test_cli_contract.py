@@ -101,7 +101,16 @@ def test_help_json_covers_every_command_with_a_contract() -> None:
         assert contract["contract"] in {"conforms", "partial", "legacy"}
         assert set(contract["exit_codes"]) <= {str(c) for c in EXIT_CODES}
         for param in leaf["params"]:
-            assert param["type"] in {"text", "integer", "float", "boolean", "path"}
+            assert param["type"] in {
+                "text",
+                "integer",
+                "float",
+                "boolean",
+                "path",
+                "choice",
+            }
+            if param["type"] == "choice":
+                assert param.get("choices"), param
 
 
 def test_help_json_describes_options() -> None:

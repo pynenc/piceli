@@ -49,7 +49,7 @@ These apply to `model` and `deploy` (the legacy CLI engine).
 | [`piceli deploy run`](#cli-deploy-run) | Deploy Kubernetes Object Model to the current cluster. | ambient-writes | no |
 | [`piceli explain`](#cli-explain) | Explain an error code: cause, fix and whether a retry can succeed. | none | no |
 | [`piceli help-json`](#cli-help-json) | Print the whole CLI tree (commands, options, contracts) as JSON. | none | no |
-| [`piceli inputs record`](#cli-inputs-record) | Capture each declared source and write an inputs lock. | none | no |
+| [`piceli inputs record`](#cli-inputs-record) | Capture each declared source (or the ``--only`` ones) and write a lock. | none | no |
 | [`piceli inputs verify`](#cli-inputs-verify) | Recapture the sources and compare them with the lock (exit 1 on drift). | none | no |
 | [`piceli model list`](#cli-model-list) | Lists Kubernetes objects based on the command options. | none | no |
 | [`piceli observe forward-command`](#cli-observe-forward-command) | Print a JSON argv array for one explicit loopback-only port forward. | none | no |
@@ -73,8 +73,10 @@ These apply to `model` and `deploy` (the legacy CLI engine).
 | [`piceli release preview`](#cli-release-preview) | Alias of `plan`. | reads | no |
 | [`piceli release resume`](#cli-release-resume) | Resume an interrupted apply of a created release (same grant and ids). | writes | no |
 | [`piceli release rollback`](#cli-release-rollback) | Re-plan and re-apply an earlier release against current cluster state. | writes | yes |
+| [`piceli release secret show`](#cli-release-secret-show) | Show a secret's metadata, and its value with --reveal (never logged). | none | no |
 | [`piceli release status`](#cli-release-status) | Show catalogued releases, their executions and history (no cluster access). | none | no |
 | [`piceli release stop`](#cli-release-stop) | Cancel the latest execution of a release (exact owner only). | reads | no |
+| [`piceli render`](#cli-render) | Print the manifests of a typed app or composition. Never contacts a cluster. | none | no |
 
 (cli-artifacts-build)=
 ### `piceli artifacts build`
@@ -135,6 +137,7 @@ Run an approved containerized build and write a receipt.
 | `--docker` | path |  |  |
 | `--docker-sha256` | text |  |  |
 | `--log` | path |  |  |
+| `--progress` | text | `steps` | stderr during the build: one line per step (default), plus the raw build output (plain), or nothing (quiet) |
 | `--max-seconds` | float | `7200.0` |  |
 
 **Contract**
@@ -415,13 +418,14 @@ No options.
 (cli-inputs-record)=
 ### `piceli inputs record`
 
-Capture each declared source and write an inputs lock.
+Capture each declared source (or the ``--only`` ones) and write a lock.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--spec` | path | required | inputs.toml declaring the sources |
 | `--out` | path |  | Write the lock here (default: stdout only) |
 | `--timeout` | float | `30.0` | Seconds allowed for each git call |
+| `--only` | text (repeatable) |  | Limit to this declared source (repeatable); same spec as the build |
 
 **Contract**
 
@@ -444,6 +448,7 @@ Recapture the sources and compare them with the lock (exit 1 on drift).
 | `--spec` | path | required | inputs.toml declaring the sources |
 | `--lock` | path | required | Lock written by `inputs record` |
 | `--timeout` | float | `30.0` | Seconds allowed for each git call |
+| `--only` | text (repeatable) |  | Limit to this declared source (repeatable); same spec as the build |
 
 **Contract**
 
@@ -961,6 +966,31 @@ Re-plan and re-apply an earlier release against current cluster state.
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** partial
 
+(cli-release-secret-show)=
+### `piceli release secret show`
+
+Show a secret's metadata, and its value with --reveal (never logged).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `NAME` | text | required |  |
+| `--spec` | path | required | release.toml describing the release |
+| `--key` | text |  | One output, e.g. crt, key, ca.crt, cache.crt |
+| `--release` | text |  | Release name (default: the latest execution) |
+| `--reveal` | boolean | `False` | Print the value (otherwise asks on a terminal) |
+| `--json` | boolean | `False` | Print JSON: metadata only unless --reveal |
+
+**Contract**
+
+- **Reads:** release.toml, state_dir (secret store)
+- **Writes:** nothing (read-only)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** partial
+- **Notes:** Owner only. Never contacts the cluster; values print only with --reveal or a terminal confirmation.
+
 (cli-release-status)=
 ### `piceli release status`
 
@@ -1000,3 +1030,26 @@ Cancel the latest execution of a release (exact owner only).
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** partial
 - **Notes:** Checks the cluster identity; records the cancellation locally.
+
+(cli-render)=
+### `piceli render`
+
+Print the manifests of a typed app or composition. Never contacts a cluster.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `TARGET` | text |  |  |
+| `--spec` | path |  | release.toml providing the namespace, images, secret inputs (as placeholders), [values] and declared nodes |
+| `--namespace` | text |  | Namespace to render into (default: the spec's, else 'default') |
+| `--format` | choice | `yaml` | Output format |
+
+**Contract**
+
+- **Reads:** module/app file, release.toml (optional), local receipts
+- **Writes:** nothing (read-only)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** partial
+- **Notes:** Never contacts a cluster; secret values are placeholders.

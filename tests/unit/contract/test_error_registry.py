@@ -22,6 +22,8 @@ FIRST_ARGUMENT = {
     "ProviderError",
     "RegistryError",
     "_input",
+    "SecretError",
+    "reject",
 }
 # ``_Failure(result, reason)`` in the delivery modules.
 SECOND_ARGUMENT = {"_Failure"}
@@ -52,6 +54,9 @@ DYNAMIC = {
     "build-failed",
     "build-timed-out",
     "docker-unavailable",
+    # build_spec: smoke check outcome ("smoke-failed" if finished else ...)
+    "smoke-failed",
+    "smoke-timed-out",
     # artifacts/cli.py fallback for unclassified input errors
     "invalid-or-unavailable-artifact-input",
 }
