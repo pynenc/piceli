@@ -200,7 +200,9 @@ class UiShortcut(_Model):
     @classmethod
     def _valid_target(cls, value: str) -> str:
         if not _TARGET.fullmatch(value):
-            raise ValueError("shortcut target must be service/NAME, deployment/NAME or pod/NAME")
+            raise ValueError(
+                "shortcut target must be service/NAME, deployment/NAME or pod/NAME"
+            )
         return value
 
     @field_validator("namespace")
