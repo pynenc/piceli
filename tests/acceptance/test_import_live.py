@@ -263,9 +263,8 @@ def test_imported_namespace_is_all_no_op_after_adoption(tmp_path: Path) -> None:
             ("ConfigMap", "settings"): "no-op",
             ("Deployment", "cache"): "no-op",
             ("NetworkPolicy", "cache-ingress"): "no-op",
-            # the server-allocated cluster IP is still compared (a server
-            # default), and secret values are never compared in public
-            ("Service", "cache"): "apply",
+            ("Service", "cache"): "no-op",  # server dry run absorbs the cluster IP
+            # secret values are never compared in public plans
             ("Secret", "cache-auth"): "apply",
         }
         code, _, output = _release(

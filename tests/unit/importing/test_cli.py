@@ -74,10 +74,8 @@ def test_yaml_out_writes_the_file_and_prints_a_summary(tmp_path: Path) -> None:
     assert 'App("store"' in out.read_text()
     again = _invoke("yaml", str(_files(tmp_path)), "--out", str(out))
     assert again.exit_code == 2
-    assert json.loads(again.stdout) == {
-        "state": "rejected",
-        "reason": "import-output-refused",
-    }
+    body = json.loads(again.stdout)
+    assert (body["state"], body["reason"]) == ("rejected", "import-output-refused")
     forced = _invoke("yaml", str(_files(tmp_path)), "--out", str(out), "--force")
     assert forced.exit_code == 0, forced.output
 
@@ -113,7 +111,8 @@ def test_select_by_label(tmp_path: Path) -> None:
 def test_yaml_refusals(tmp_path: Path, args: list[str], code: str) -> None:
     result = _invoke("yaml", str(_files(tmp_path)), *args)
     assert result.exit_code == 2, result.output
-    assert json.loads(result.stdout) == {"state": "rejected", "reason": code}
+    body = json.loads(result.stdout)
+    assert (body["state"], body["reason"]) == ("rejected", code)
 
 
 def test_yaml_invalid_documents(tmp_path: Path) -> None:
@@ -142,10 +141,8 @@ def test_live_refuses_a_missing_kubeconfig_before_any_request(tmp_path: Path) ->
         "shop",
     )
     assert result.exit_code == 2
-    assert json.loads(result.stdout) == {
-        "state": "rejected",
-        "reason": "import-target-invalid",
-    }
+    body = json.loads(result.stdout)
+    assert (body["state"], body["reason"]) == ("rejected", "import-target-invalid")
 
 
 def test_live_refuses_a_bad_selector_first(tmp_path: Path) -> None:

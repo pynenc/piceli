@@ -83,6 +83,17 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["access", str(p / "missing-release.toml")],
         "access-target-invalid",
     ),
+    "import yaml": (
+        lambda p: ["import", "yaml", str(p / "no-such-dir")],
+        "import-manifests-invalid",
+    ),
+    "import live": (
+        lambda p: (
+            ["import", "live", "--kubeconfig", str(p / "missing-kubeconfig")]
+            + ["--context", "test", "--namespace", "shop"]
+        ),
+        "import-target-invalid",
+    ),
     "inputs record": (
         lambda p: ["inputs", "record", "--spec", str(p / "junk")],
         "invalid-inputs-spec",
