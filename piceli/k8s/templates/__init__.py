@@ -23,6 +23,11 @@ from piceli.k8s.templates.deployable.configmap import ConfigMap
 from piceli.k8s.templates.deployable.cronjob import CronJob
 from piceli.k8s.templates.deployable.deployment import Deployment
 from piceli.k8s.templates.deployable.job import Job
+from piceli.k8s.templates.deployable.node_local_registry import (
+    NodeLocalRegistry,
+    NodeLocalRegistryGarbageCollection,
+    pull_reference,
+)
 from piceli.k8s.templates.deployable.role import Role
 from piceli.k8s.templates.deployable.role_binding import RoleBinding
 from piceli.k8s.templates.deployable.secret import Secret
@@ -59,6 +64,8 @@ __all__ = [
     "Job",
     "Labels",
     "Name",
+    "NodeLocalRegistry",
+    "NodeLocalRegistryGarbageCollection",
     "PersistentVolume",
     "PersistentVolumeClaim",
     "PersistentVolumeClaimTemplate",
@@ -84,4 +91,5 @@ __all__ = [
     "crontab",
     "env_vars",
     "pod_security_context",
+    "pull_reference",
 ]

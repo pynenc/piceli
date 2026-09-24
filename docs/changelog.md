@@ -6,6 +6,15 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ## Unreleased
 
+- `templates.NodeLocalRegistry` is a digest-pinned OCI registry bound to the
+  node loopback, so the node pulls from it without any registry configuration
+  and it is not exposed on the network. It has:
+  - retained storage, delete support and loopback probes;
+  - a garbage-collection Job that is safe to run in stopped or read-only mode;
+  - a `pull_reference()` helper, and a `component()` for `piceli release`
+    compositions.
+
+  See {doc}`node_local_registry`.
 - `piceli artifacts deliver --to oci://host[:port]/repo[:tag]` is now the
   default delivery mode:
   - it pushes an image approved by config digest and uploads only the missing

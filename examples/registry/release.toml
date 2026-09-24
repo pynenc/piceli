@@ -1,0 +1,32 @@
+# `piceli release` spec for a node-local registry plus a workload that pulls
+# from it. See docs/node_local_registry.md.
+#
+#   piceli release plan  --spec examples/registry/release.toml
+#   piceli release apply --spec examples/registry/release.toml --approve <plan-hash>
+
+[target]
+kubeconfig = "registry.kubeconfig"  # an explicit file; never ~/.kube/config
+context = "kind-registry-demo"      # an explicit context; never current-context
+namespace = "registry-demo"         # must already exist
+[target.nodes.primary]              # the node that runs the registry and pulls from it
+name = "registry-demo-control-plane"
+
+[release]
+name = "registry-demo"
+owner = "registry-demo"
+field_manager = "registry-demo"
+composition = "composition.py:build"
+state_dir = ".piceli-release"
+
+[images]
+# distribution/distribution 3.1.1, multi-arch index digest
+registry = "docker.io/library/registry:3.1.1@sha256:325b4b29b041e82803abeb703e201655e4e23ab83264ec1a7c9ddb0a5b14a6e0"
+# the manifest digest returned by the push into the node-local registry
+[images.app]
+digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+[values]
+app_repository = "demo/app"
+app_replicas = 1
+registry_port = 5000
+registry_storage = "10Gi"
