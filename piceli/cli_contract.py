@@ -160,13 +160,27 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             reads=_RELEASE_READS,
             writes=("state_dir (pending plan, secret candidates)", "--out file"),
             cluster="reads",
-            notes="Never changes the cluster. Prints the plan hash to approve.",
+            notes=(
+                "Never changes the cluster: reads plus dryRun=All requests "
+                "(server dry runs of the writes). Prints the plan hash to approve."
+            ),
         ),
         "release preview": _C(
             "Alias of `release plan`.",
             reads=_RELEASE_READS,
             writes=("state_dir (pending plan, secret candidates)", "--out file"),
             cluster="reads",
+        ),
+        "release diff": _C(
+            "Show what `release plan` would change, field by field.",
+            reads=_RELEASE_READS,
+            cluster="reads",
+            exit_codes=(0, 1, 2),
+            notes=(
+                "Read-only: stores no plan and no local state. Sends only reads "
+                "and dryRun=All requests (server dry runs of the writes). "
+                "Exit 1 with --exit-code when something would change."
+            ),
         ),
         "release apply": _C(
             "Execute an approved plan (--approve HASH).",

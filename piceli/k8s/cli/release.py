@@ -128,10 +128,43 @@ def _refuse(error: BaseException) -> None:
     raise typer.Exit(EXIT_REFUSED)
 
 
+#: Field changes printed per object in the human plan summary.
+MAX_CHANGE_LINES = 12
+
+
+def _say_changes(diff: dict[str, Any] | None, limit: int | None) -> None:
+    from piceli.k8s.ops.field_diff import describe_change
+
+    if diff is None:
+        return
+    changes = diff["changes"]
+    shown = changes if limit is None else changes[:limit]
+    for change in shown:
+        _say(f"            {describe_change(change)}")
+    if len(changes) > len(shown):
+        _say(
+            f"            ... {len(changes) - len(shown)} more "
+            "(`piceli release diff` prints them all)"
+        )
+    if diff["not_compared"]:
+        _say(
+            "            secret-bound values not compared: "
+            + ", ".join(diff["not_compared"])
+        )
+
+
+def _diff_index(report: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
+    return {
+        (item["resource"]["kind"], item["resource"]["name"]): item
+        for item in report.get("diffs", ())
+    }
+
+
 def _describe_plan(result: Any, spec: Path, command: str) -> None:
     counts = ", ".join(f"{n} {op}" for op, n in result.counts.items()) or "no actions"
     _say(f"release {result.release} ({result.mode}, {result.intent}): {counts}")
     report = result.to_dict()
+    diffs = _diff_index(report)
     for action in report["actions"]:
         if action["operation"] != "no-op":
             _say(
@@ -139,6 +172,7 @@ def _describe_plan(result: Any, spec: Path, command: str) -> None:
                 + _adoption_note(action.get("adoption"))
                 + _write_note(action)
             )
+            _say_changes(diffs.get((action["kind"], action["name"])), MAX_CHANGE_LINES)
     for item in report["drift"]:
         resource = item["resource"]
         _say(
@@ -308,6 +342,48 @@ def plan(
 
 
 app.command("preview", help="Alias of `plan`.")(plan)
+
+
+@app.command("diff")
+def diff(
+    spec: SpecOption,
+    adopt: AdoptOption = None,
+    replace: ReplaceOption = None,
+    adopt_all_desired: AdoptAllOption = False,
+    exit_code: Annotated[
+        bool,
+        typer.Option(
+            "--exit-code", help="Exit 1 when the release would change something"
+        ),
+    ] = False,
+) -> None:
+    """Show what `plan` would change, field by field (read-only, nothing stored)."""
+    try:
+        value = _runner(spec).diff(
+            adopt=adopt or (),
+            replace=replace or (),
+            adopt_all_desired=adopt_all_desired,
+        )
+    except _refusals() as error:
+        _refuse(error)
+        return
+    diffs = _diff_index(value)
+    for action in value["actions"]:
+        if action["operation"] == "no-op":
+            continue
+        item = diffs.get((action["kind"], action["name"]))
+        _say(f"{action['operation']} {action['kind']}/{action['name']}")
+        if item is None:
+            continue
+        if item["unified"]:
+            _say(item["unified"].rstrip("\n"))
+        if item["not_compared"]:
+            _say("secret-bound values not compared: " + ", ".join(item["not_compared"]))
+    counts = ", ".join(f"{n} {op}" for op, n in value["summary"].items())
+    _say(f"release {value['release']}: {counts or 'no actions'}")
+    _emit({"state": "diffed", **value})
+    if exit_code and value["changes"]:
+        raise typer.Exit(EXIT_NOT_READY)
 
 
 @app.command("apply")

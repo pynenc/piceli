@@ -26,8 +26,9 @@ FIRST_ARGUMENT = {
     "ImageHandoffError",
     "reject",
 }
-# ``_Failure(result, reason)`` in the delivery modules.
-SECOND_ARGUMENT = {"_Failure"}
+# ``_Failure(result, reason)`` in the delivery modules and
+# ``DryRunUnavailable(resource, reason)`` in ``k8s/ops/dry_run.py``.
+SECOND_ARGUMENT = {"_Failure", "DryRunUnavailable"}
 
 # Codes built at runtime, which a literal scan cannot see. Keep this list next
 # to the code that builds them.
