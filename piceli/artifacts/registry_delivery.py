@@ -143,9 +143,12 @@ class RegistryForward:
                 "forward-options-incomplete",
                 "an explicit absolute kubeconfig path is required",
             )
-        if self.context is not None and (
-            not isinstance(self.context, str) or not _CONTEXT.fullmatch(self.context)
-        ):
+        if not self.context:
+            # kubectl would otherwise fall back to the file's current-context.
+            raise DeliveryInputError(
+                "forward-options-incomplete", "an explicit kube context is required"
+            )
+        if not isinstance(self.context, str) or not _CONTEXT.fullmatch(self.context):
             raise DeliveryInputError("invalid-forward", "invalid kube context")
         if not 0 < self.startup_seconds <= 300:
             raise DeliveryInputError(

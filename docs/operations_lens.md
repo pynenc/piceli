@@ -23,7 +23,18 @@ The lens runs **on the operator's own machine**, not inside the cluster.
 
 - It serves on loopback only (`127.0.0.1`); binding to another address is refused.
 - It uses the kubeconfig and context you pass explicitly and never falls back to
-  ambient credentials.
+  ambient credentials. `--context` is **required** on every command that takes
+  `--kubeconfig`: the file's `current-context` is never used, neither by the
+  lens nor by the `kubectl` processes it starts (they always get `--context`).
+- The kubeconfig goes through the same checks as `piceli release`: proxies,
+  `insecure-skip-tls-verify`, non-https servers and legacy `auth-provider`
+  users are refused (`target-refused`, `auth-provider-refused`). A context
+  whose user runs an exec credential plugin (GKE, EKS, AKS, OIDC) needs
+  `--allow-exec`, optionally with `--exec-sha256 sha256:…`; see
+  {doc}`managed_clusters`. For commands that run `kubectl` (`forward-run`,
+  `logs-run`, `forwards apply`, the UI's pods and logs) the plugin is resolved
+  and pinned first, but `kubectl` runs it with your environment.
+- Refusals print `{"state": "refused", "reason": …, "code": …}` and exit `2`.
 - Port forwards are `kubectl port-forward` processes it starts and supervises
   itself. They bind to loopback, and it never adopts or kills processes it did
   not start.

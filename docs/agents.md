@@ -191,5 +191,14 @@ unattended CI job for this exact spec.
 Piceli's release, observe, operator and artifact commands use only the
 kubeconfig file and context they are given (in the spec or with
 `--kubeconfig`/`--context`). They never read `~/.kube/config`, `KUBECONFIG` or
-the current context. Do not change the kubeconfig or context an owner has set
-in a spec.
+the current context: `--context` is required wherever `--kubeconfig` is
+accepted (`observe`, `operator`, `artifacts deliver --via-forward`), and a
+missing context is a usage error (exit `2`), never a fallback to the file's
+`current-context`. Do not change the kubeconfig or context an owner has set
+in a spec, and do not pick a context yourself: ask the owner which one to use.
+
+Never add or change `allow_exec`, `exec_sha256` or `exec_pass_env` in a spec,
+or pass `--allow-exec`/`--exec-sha256`, yourself: allowing an exec credential plugin runs a program with the owner's
+cloud login ({doc}`managed_clusters`). On `exec-auth-not-allowed`,
+`exec-pin-mismatch` or `auth-provider-refused`, report the code and wait for
+the owner. `exec-plugin-failed` usually means the owner must log in again.

@@ -343,6 +343,7 @@ def test_supervisor_reports_conflict_without_spawning(
     port = listener.getsockname()[1]
     supervisor = ForwardSupervisor(
         kubeconfig=tmp_path / "kubeconfig",
+        context="lab",
         kubectl=str(fake_kubectl),
         shortcuts=[_shortcut("web", port)],
         namespace="demo",
@@ -388,6 +389,7 @@ def test_killed_upstream_restarts_forward_within_one_probe_interval(
     )
     supervisor = ForwardSupervisor(
         kubeconfig=tmp_path / "kubeconfig",
+        context="lab",
         kubectl=str(fake_kubectl),
         shortcuts=[shortcut],
         namespace="demo",
@@ -442,6 +444,7 @@ def test_restarts_are_bounded(tmp_path: Path) -> None:
     )
     supervisor = ForwardSupervisor(
         kubeconfig=tmp_path / "kubeconfig",
+        context="lab",
         kubectl=str(exits),
         shortcuts=[shortcut],
         namespace="demo",
@@ -473,6 +476,7 @@ def test_rest_status_exposes_health(
         preferences=PreferenceStore(tmp_path / "observe.json"),
         user="tester",
         kubeconfig=tmp_path / "kubeconfig",
+        context="lab",
         kubectl=str(fake_kubectl),
         shortcuts=[shortcut],
         namespace="demo",
@@ -541,7 +545,9 @@ def test_cli_apply_refuses_an_occupied_required_port(tmp_path: Path) -> None:
         f"local_port = {port}\nremote_port = 80\n"
     )
     kubeconfig = tmp_path / "kubeconfig"
-    kubeconfig.write_text("{}")
+    kubeconfig.write_text(
+        "apiVersion: v1\nkind: Config\nclusters:\n- name: c\n  cluster: {server: 'https://127.0.0.1:6443'}\nusers:\n- name: u\n  user: {token: t}\ncontexts:\n- name: lab\n  context: {cluster: c, user: u}\n"
+    )
     try:
         result = CliRunner().invoke(
             app,
@@ -552,6 +558,8 @@ def test_cli_apply_refuses_an_occupied_required_port(tmp_path: Path) -> None:
                 str(profile),
                 "--kubeconfig",
                 str(kubeconfig),
+                "--context",
+                "lab",
                 "--namespace",
                 "demo",
                 "--kubectl",
@@ -623,7 +631,9 @@ def test_cli_apply_supervises_until_interrupted(
         )
     )
     kubeconfig = tmp_path / "kubeconfig"
-    kubeconfig.write_text("{}")
+    kubeconfig.write_text(
+        "apiVersion: v1\nkind: Config\nclusters:\n- name: c\n  cluster: {server: 'https://127.0.0.1:6443'}\nusers:\n- name: u\n  user: {token: t}\ncontexts:\n- name: lab\n  context: {cluster: c, user: u}\n"
+    )
     process = subprocess.Popen(
         [
             sys.executable,
@@ -636,6 +646,8 @@ def test_cli_apply_supervises_until_interrupted(
             str(profile),
             "--kubeconfig",
             str(kubeconfig),
+            "--context",
+            "lab",
             "--namespace",
             "demo",
             "--kubectl",

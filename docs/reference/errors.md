@@ -31,6 +31,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`api-unavailable`](#error-api-unavailable) | kubernetes | yes |
 | [`applied-resource-drift`](#error-applied-resource-drift) | execution | no |
 | [`approve-with-planning-flags`](#error-approve-with-planning-flags) | release | no |
+| [`auth-provider-refused`](#error-auth-provider-refused) | target | no |
 | [`authorization-expired`](#error-authorization-expired) | execution | no |
 | [`backup-refused`](#error-backup-refused) | observe | no |
 | [`blob-digest-mismatch`](#error-blob-digest-mismatch) | artifacts-registry | yes |
@@ -77,6 +78,15 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`docker-unavailable`](#error-docker-unavailable) | build-spec | yes |
 | [`dockerfile-unpinned`](#error-dockerfile-unpinned) | build-spec | no |
 | [`dry-run-limit-exceeded`](#error-dry-run-limit-exceeded) | kubernetes | no |
+| [`exec-auth-not-allowed`](#error-exec-auth-not-allowed) | target | no |
+| [`exec-command-not-found`](#error-exec-command-not-found) | target | no |
+| [`exec-command-unsafe`](#error-exec-command-unsafe) | target | no |
+| [`exec-config-invalid`](#error-exec-config-invalid) | target | no |
+| [`exec-credential-invalid`](#error-exec-credential-invalid) | target | no |
+| [`exec-interactive-required`](#error-exec-interactive-required) | target | no |
+| [`exec-pin-mismatch`](#error-exec-pin-mismatch) | target | no |
+| [`exec-plugin-failed`](#error-exec-plugin-failed) | target | no |
+| [`exec-plugin-timed-out`](#error-exec-plugin-timed-out) | target | yes |
 | [`execution-not-ready`](#error-execution-not-ready) | release | no |
 | [`execution-not-started`](#error-execution-not-started) | release | no |
 | [`execution-other-owner`](#error-execution-other-owner) | release | no |
@@ -262,6 +272,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`stored-release-mismatch`](#error-stored-release-mismatch) | release | no |
 | [`takeover-conflict`](#error-takeover-conflict) | kubernetes | no |
 | [`target-mismatch`](#error-target-mismatch) | kubernetes | no |
+| [`target-refused`](#error-target-refused) | target | no |
 | [`timed-out`](#error-timed-out) | artifacts-delivery | yes |
 | [`tool-pin-mismatch`](#error-tool-pin-mismatch) | artifacts-input | no |
 | [`transport-error`](#error-transport-error) | kubernetes | yes |
@@ -324,9 +335,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-forward-options-incomplete)=
 ### `forward-options-incomplete`
 
-**Port-forward options incomplete.** `--via-forward` needs an explicit `--kubeconfig` (absolute) and `--namespace`.
+**Port-forward options incomplete.** `--via-forward` needs an explicit `--kubeconfig` (absolute), `--context` and `--namespace`.
 
-- **Fix:** Add `--kubeconfig PATH --namespace NAME`; Piceli never uses an ambient kube context.
+- **Fix:** Add `--kubeconfig PATH --context NAME --namespace NAME`; Piceli never uses an ambient kube context or the file's current-context.
 - **Retry-safe:** no
 
 (error-forward-options-without-forward)=
@@ -2398,4 +2409,95 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Release state unreadable.** The release state directory (catalog, journal or history) could not be read.
 
 - **Fix:** Check `[release] state_dir` and run `piceli release status --spec release.toml`.
+- **Retry-safe:** no
+
+
+## Release target credentials (`[target]`, kubeconfig exec plugins)
+
+(error-auth-provider-refused)=
+### `auth-provider-refused`
+
+**Legacy auth-provider refused.** The target context's kubeconfig user uses a legacy `auth-provider` (gcp, oidc, azure). Piceli never runs these.
+
+- **Fix:** Regenerate the kubeconfig for the provider's exec plugin (`gke-gcloud-auth-plugin`, `kubelogin convert-kubeconfig`, an OIDC exec plugin) and set `allow_exec = true`.
+- **Retry-safe:** no
+
+(error-exec-auth-not-allowed)=
+### `exec-auth-not-allowed`
+
+**Exec credential plugin not allowed.** The target context's kubeconfig user runs an exec credential plugin (for example gke-gcloud-auth-plugin, aws or kubelogin) and `[target]` does not set `allow_exec = true`. The plugin was not run.
+
+- **Fix:** Review the kubeconfig user's `exec` command, then add `allow_exec = true` (and ideally `exec_sha256`) to `[target]`; see docs/managed_clusters.md.
+- **Retry-safe:** no
+
+(error-exec-command-not-found)=
+### `exec-command-not-found`
+
+**Exec command not found.** The exec plugin command is not in `PATH` (a bare name) or does not exist (a path, resolved from the kubeconfig's directory).
+
+- **Fix:** Install the plugin, or put its directory on `PATH`, then run the command again.
+- **Retry-safe:** no
+
+(error-exec-command-unsafe)=
+### `exec-command-unsafe`
+
+**Exec command unsafe.** The resolved exec command is not a regular executable file, exceeds 256 MB, or is writable by its group or other users.
+
+- **Fix:** Install the plugin somewhere only its owner can write (`chmod go-w <file>`), then run the command again.
+- **Retry-safe:** no
+
+(error-exec-config-invalid)=
+### `exec-config-invalid`
+
+**Exec configuration invalid.** The kubeconfig `exec` block is malformed (missing command, apiVersion other than client.authentication.k8s.io/v1 or v1beta1, bad args/env), its cluster CA data is not base64, or `exec_sha256` is set for a user without an exec plugin.
+
+- **Fix:** Fix the kubeconfig user or the `[target]` exec keys (regenerate the kubeconfig with the provider's CLI when in doubt).
+- **Retry-safe:** no
+
+(error-exec-credential-invalid)=
+### `exec-credential-invalid`
+
+**Exec credential invalid.** The plugin's output is not a valid ExecCredential of the configured apiVersion: not JSON, over 1 MB, no token or client certificate, invalid PEM, or an expiry in the past.
+
+- **Fix:** Run the plugin by hand and check its output format; upgrade the plugin if it is outdated.
+- **Retry-safe:** no
+
+(error-exec-interactive-required)=
+### `exec-interactive-required`
+
+**Exec plugin needs a terminal.** The kubeconfig exec block sets `interactiveMode: Always`; Piceli runs plugins without a terminal.
+
+- **Fix:** Log in with the plugin's own command first (for example `kubelogin get-token` or `gcloud auth login`) and use `interactiveMode: IfAvailable` or `Never`.
+- **Retry-safe:** no
+
+(error-exec-pin-mismatch)=
+### `exec-pin-mismatch`
+
+**Exec command pin mismatch.** The resolved exec command's sha256 differs from `exec_sha256` in `[target]`, or the file changed after Piceli pinned it during this run.
+
+- **Fix:** Check that the plugin upgrade is expected, then set `exec_sha256` to the digest named in the message (`shasum -a 256 <resolved path>`).
+- **Retry-safe:** no
+
+(error-exec-plugin-failed)=
+### `exec-plugin-failed`
+
+**Exec plugin failed.** The exec credential plugin could not start or exited with a non-zero status; its own message is on stderr.
+
+- **Fix:** Follow the plugin's message (usually: log in again, for example `gcloud auth login`, `aws sso login`, `az login`), then run the command again.
+- **Retry-safe:** no
+
+(error-exec-plugin-timed-out)=
+### `exec-plugin-timed-out`
+
+**Exec plugin timed out.** The exec credential plugin did not finish within `exec_timeout_seconds` and was stopped.
+
+- **Fix:** Run the command again; if it persists, check the plugin's network access or raise `exec_timeout_seconds`.
+- **Retry-safe:** yes
+
+(error-target-refused)=
+### `target-refused`
+
+**Cluster target refused.** The kubeconfig or context is not acceptable (missing or ambiguous context, unsupported user fields, proxy, insecure TLS, non-https server, invalid certificate data) or the cluster's observed identity differs from the expected one. The message names the cause; nothing was changed.
+
+- **Fix:** Fix the kubeconfig, the named context (`[target]` or `--context`) or the expected UIDs as the message says, then run the command again.
 - **Retry-safe:** no

@@ -298,7 +298,7 @@ Before 0.4.0 the rejection was printed on stderr, without `message`.
 | `reference-required` | node import of an image ID without `--ref` |
 | `node-options-on-registry-target` | `--ref`/`--ssh*` given with an `oci://` target |
 | `registry-options-on-node-target` | registry or forward options given with a node target |
-| `forward-options-incomplete` | `--via-forward` without `--namespace` and `--kubeconfig` |
+| `forward-options-incomplete` | `--via-forward` without `--namespace`, `--kubeconfig` and `--context` |
 | `forward-options-without-forward` | forward options given without `--via-forward` |
 | `invalid-forward` | bad forward target, namespace, context or port |
 | `forward-target-not-loopback` | a forwarded push whose `--to` is not a loopback host with a port |

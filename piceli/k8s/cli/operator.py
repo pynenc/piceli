@@ -23,6 +23,12 @@ from piceli.k8s.automation import (
     PRApproval,
     promote_release,
 )
+from piceli.k8s.cli.cluster_access import (
+    AllowExecOption,
+    ContextOption,
+    ExecSha256Option,
+    exec_policy,
+)
 from piceli.k8s.cli.observe import (
     UI_CONFIG_HELP,
     _archive,
@@ -39,6 +45,7 @@ from piceli.k8s.observe import (
 from piceli.k8s.observe_server import LocalObserveServer
 from piceli.k8s.operator import build_operator_report
 from piceli.k8s.operator_state import ConcurrentWriterError, FileStateStore
+from piceli.k8s.ops.exec_credentials import ExecPolicy
 from piceli.k8s.release import ReleaseCatalog
 from piceli.k8s.ui_config import UI_CONFIG_ENV
 
@@ -51,9 +58,13 @@ MaybePath = Path | None
 MaybeString = str | None
 
 
-def _reader(kubeconfig: Path, context: str | None) -> KubernetesDynamicInventoryReader:
+def _reader(
+    kubeconfig: Path, context: str, policy: ExecPolicy | None = None
+) -> KubernetesDynamicInventoryReader:
     with rejecting((Exception, "kubeconfig-rejected")):
-        return KubernetesDynamicInventoryReader(kubeconfig=kubeconfig, context=context)
+        return KubernetesDynamicInventoryReader(
+            kubeconfig=kubeconfig, context=context, exec_policy=policy
+        )
 
 
 def _catalog(path: Path) -> ReleaseCatalog:
@@ -73,14 +84,17 @@ def _state(path: Path) -> FileStateStore:
 @app.command("status")
 def status(
     kubeconfig: Annotated[Path, typer.Option(exists=True, readable=True)],
+    context: ContextOption,
     namespace: Annotated[str, typer.Option()] = "default",
-    context: Annotated[MaybeString, typer.Option()] = None,
     archive: Annotated[MaybePath, typer.Option(exists=True, readable=True)] = None,
     catalog: Annotated[MaybePath, typer.Option(exists=True, readable=True)] = None,
     include_common_types: Annotated[bool, typer.Option()] = True,
+    allow_exec: AllowExecOption = False,
+    exec_sha256: ExecSha256Option = None,
 ) -> None:
     """Print classified operator inventory: managed, unmanaged, unknown, and releases."""
-    reader = _reader(kubeconfig, context)
+    policy = exec_policy(allow_exec, exec_sha256)
+    reader = _reader(kubeconfig, context, policy)
     cat = _catalog(catalog) if catalog else None
     arch = _archive(archive) if archive else None
 
@@ -186,8 +200,8 @@ def restore(
 @app.command("serve")
 def serve(
     kubeconfig: Annotated[Path, typer.Option(exists=True, readable=True)],
+    context: ContextOption,
     namespace: Annotated[str, typer.Option()] = "default",
-    context: Annotated[MaybeString, typer.Option()] = None,
     archive: Annotated[MaybePath, typer.Option(exists=True, readable=True)] = None,
     catalog: Annotated[MaybePath, typer.Option(exists=True, readable=True)] = None,
     preferences: Annotated[MaybePath, typer.Option()] = None,
@@ -207,6 +221,8 @@ def serve(
             "become the dashboard shortcuts (--ui-config entries win by id)"
         ),
     ] = None,
+    allow_exec: AllowExecOption = False,
+    exec_sha256: ExecSha256Option = None,
 ) -> None:
     """Launch the Piceli Operator dashboard and unified REST API."""
     config = _profile(ui_config)
@@ -215,7 +231,8 @@ def serve(
         from piceli.k8s.cli.access import _resolve
 
         config = access_ui_config(config, _resolve(access))
-    reader = _reader(kubeconfig, context)
+    policy = exec_policy(allow_exec, exec_sha256)
+    reader = _reader(kubeconfig, context, policy)
     cat = _catalog(catalog) if catalog else None
     arch = _archive(archive) if archive else None
     pref_store = PreferenceStore(preferences)

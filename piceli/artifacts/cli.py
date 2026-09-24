@@ -277,7 +277,7 @@ def _deliver_registry(
     target = _input("invalid-target", lambda: RegistryTarget.parse(args.to))
     forward = None
     if args.via_forward is not None:
-        if args.kubeconfig is None or args.namespace is None:
+        if args.kubeconfig is None or args.namespace is None or not args.context:
             raise DeliveryInputError("forward-options-incomplete")
         kubectl = discover_tool("kubectl", args.kubectl, args.kubectl_sha256)
         forward = _input(

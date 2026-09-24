@@ -9,10 +9,14 @@ stays explicit:
 * the cluster is identified by the ``kube-system`` Namespace UID and the
   target Namespace UID, read from the server and optionally compared with
   expected values;
-* credentials must be static (client certificate or bearer token). Exec
-  plugins and auth providers need token refresh, which
-  :class:`KubernetesProvider` rejects, so they are refused with a clear error
-  instead of being silently loaded.
+* credentials are static (client certificate or bearer token) or, only
+  with an explicit :class:`~piceli.k8s.ops.exec_credentials.ExecPolicy`
+  (``allow_exec``), an exec credential plugin that is pinned, run with a
+  minimal environment and refreshed by a Piceli-owned hook (see
+  :mod:`piceli.k8s.ops.exec_credentials`). Legacy ``auth-provider`` users
+  (``gcp``, ``oidc``, ``azure``) are always refused: their exec replacements
+  (``gke-gcloud-auth-plugin``, ``kubelogin``) cover the same clusters;
+* proxies, ``insecure-skip-tls-verify`` and non-https servers are refused.
 
 Importing this module has no side effects; the Kubernetes SDK is imported
 lazily when a client is built.
@@ -21,6 +25,7 @@ lazily when a client is built.
 from __future__ import annotations
 
 import ipaddress
+import logging
 import re
 import stat
 from collections.abc import Mapping
@@ -30,8 +35,36 @@ from typing import Any, Literal
 from urllib.parse import urlsplit
 
 from piceli.k8s.ops.discovery import EvidenceSource, PlanTarget
+from piceli.k8s.ops.exec_credentials import (
+    ClusterInfo,
+    ExecAuthError,
+    ExecCredentialSource,
+    ExecPlugin,
+    ExecPolicy,
+    ProviderFactoryError,
+    TlsMaterialError,
+    resolve_plugin,
+    tls_context,
+)
 from piceli.k8s.ops.kubernetes_provider import KubernetesProvider
 
+__all__ = [
+    "ClusterIdentity",
+    "ExecAuthError",
+    "ExecPolicy",
+    "KubeconfigTarget",
+    "NodeExpectation",
+    "ProviderBinding",
+    "ProviderFactoryError",
+    "api_client_from_kubeconfig",
+    "build_provider",
+    "credential_plugin",
+    "read_cluster_identity",
+    "verify_kubeconfig_context",
+]
+
+logger = logging.getLogger(__name__)
+_NO_EXEC = ExecPolicy()
 Transport = Literal["https", "loopback-http"]
 _UID = re.compile(r"[0-9A-Za-z-]{1,128}")
 _NAME = re.compile(r"[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?")
@@ -45,20 +78,6 @@ _STATIC_USER_KEYS = frozenset(
         "token",
     }
 )
-
-
-class ProviderFactoryError(ValueError):
-    """The kubeconfig, context or observed cluster identity is not acceptable.
-
-    ``code`` is the registered error code the CLI prints (``piceli explain``).
-    """
-
-    code = "kubeconfig-rejected"
-
-    def __init__(self, message: str, *, code: str | None = None) -> None:
-        super().__init__(message)
-        if code is not None:
-            self.code = code
 
 
 @dataclass(frozen=True)
@@ -87,8 +106,13 @@ class KubeconfigTarget:
     transport: Transport = "https"
     request_seconds: float = 10.0
     nodes: Mapping[str, NodeExpectation] = field(default_factory=dict)
+    allow_exec: bool = False
+    exec_sha256: str | None = None
+    exec_pass_env: tuple[str, ...] = ()
+    exec_timeout_seconds: float = 60.0
 
     def __post_init__(self) -> None:
+        self.exec_policy  # noqa: B018 (validates the exec fields)
         if not self.context:
             raise ProviderFactoryError("an explicit kubeconfig context is required")
         PlanTarget("placeholder", self.namespace)  # namespace syntax
@@ -99,6 +123,19 @@ class KubeconfigTarget:
             raise ProviderFactoryError("transport must be https or loopback-http")
         if not 0 < self.request_seconds <= 60:
             raise ProviderFactoryError("request_seconds must be in (0, 60]")
+
+    @property
+    def exec_policy(self) -> ExecPolicy:
+        """The explicit authority to run this context's exec plugin, if any."""
+        try:
+            return ExecPolicy(
+                self.allow_exec,
+                self.exec_sha256,
+                tuple(self.exec_pass_env),
+                self.exec_timeout_seconds,
+            )
+        except ValueError as error:
+            raise ProviderFactoryError(str(error)) from None
 
 
 @dataclass(frozen=True)
@@ -120,6 +157,8 @@ class ProviderBinding:
     provider: KubernetesProvider
     identity: ClusterIdentity
     target: PlanTarget
+    #: The pinned exec plugin (path, sha256, apiVersion) when one authenticates.
+    credential_plugin: Mapping[str, str] | None = None
 
     def close(self) -> None:
         close = getattr(self.provider.client, "close", None)
@@ -164,17 +203,44 @@ def _named(document: Mapping[str, Any], section: str, name: str) -> dict[str, An
     return value
 
 
-def _check_entries(document: Mapping[str, Any], context: str, transport: str) -> None:
+@dataclass(frozen=True)
+class _Entries:
+    cluster: dict[str, Any]
+    user: dict[str, Any]
+
+
+def _check_entries(
+    document: Mapping[str, Any],
+    context: str,
+    transport: str,
+    policy: ExecPolicy = _NO_EXEC,
+) -> _Entries:
     """Refuse credentials and transports the provider cannot use safely."""
     ctx = _named(document, "contexts", context)
     cluster = _named(document, "clusters", str(ctx.get("cluster", "")))
     user = _named(document, "users", str(ctx.get("user", "")))
-    if "exec" in user or "auth-provider" in user:
-        raise ProviderFactoryError(
-            "exec/auth-provider credentials need token refresh, which is not "
-            "supported yet; use a static client certificate or token context"
+    if "auth-provider" in user:
+        raise ExecAuthError(
+            "auth-provider-refused",
+            "legacy auth-provider credentials are not supported; use the "
+            "provider's exec plugin (gke-gcloud-auth-plugin, kubelogin) with "
+            "allow_exec = true",
         )
-    unsupported = set(user) - _STATIC_USER_KEYS
+    if "exec" in user:
+        if not policy.allow:
+            raise ExecAuthError(
+                "exec-auth-not-allowed",
+                "the context's user runs an exec credential plugin; review it "
+                "and set allow_exec = true in [target] to permit it",
+            )
+        unsupported = set(user) - {"exec"}
+    else:
+        if policy.sha256 is not None:
+            raise ExecAuthError(
+                "exec-config-invalid",
+                "exec_sha256 is set but the context's user has no exec plugin",
+            )
+        unsupported = set(user) - _STATIC_USER_KEYS
     if unsupported:
         raise ProviderFactoryError(
             f"unsupported kubeconfig user fields: {sorted(unsupported)}"
@@ -195,47 +261,211 @@ def _check_entries(document: Mapping[str, Any], context: str, transport: str) ->
             raise ProviderFactoryError(
                 "loopback-http is only for a literal loopback http:// test API"
             )
+    return _Entries(cluster, user)
 
 
 def api_client_from_kubeconfig(
-    kubeconfig: Path, context: str, *, transport: Transport = "https"
+    kubeconfig: Path,
+    context: str,
+    *,
+    transport: Transport = "https",
+    exec_policy: ExecPolicy | None = None,
 ) -> Any:
     """Return an ``ApiClient`` for exactly ``context`` in ``kubeconfig``.
 
     Never reads ``KUBECONFIG``, the default kubeconfig or in-cluster files, and
     never falls back to the file's ``current-context``. ``transport`` is
-    ``https`` or, for a literal loopback test API, ``loopback-http``.
+    ``https`` or, for a literal loopback test API, ``loopback-http``. An exec
+    plugin runs only when ``exec_policy`` allows it.
     """
-    return _client(kubeconfig, context, transport)
+    return _client(kubeconfig, context, transport, exec_policy or _NO_EXEC)
 
 
-def _client(kubeconfig: Path, context: str, transport: str) -> Any:
-    from kubernetes.client import ApiClient, Configuration
-    from kubernetes.config.config_exception import ConfigException
-    from kubernetes.config.kube_config import KubeConfigLoader
+def verify_kubeconfig_context(
+    kubeconfig: Path, context: str, *, exec_policy: ExecPolicy | None = None
+) -> dict[str, str] | None:
+    """Check ``context`` in ``kubeconfig`` without contacting the cluster.
 
+    Applies every refusal of :func:`api_client_from_kubeconfig` (explicit
+    context, no auth-provider, no proxy or insecure TLS, https, exec only with
+    ``exec_policy``) and, for an exec user, resolves and pins the plugin
+    without running it. Use it before handing the kubeconfig to ``kubectl``.
+    Returns the pinned plugin summary for an exec user, else ``None``.
+    """
+    policy = exec_policy or _NO_EXEC
+    path, entries = _entries_for(kubeconfig, context, "https", policy)
+    if "exec" in entries.user:
+        plugin = resolve_plugin(
+            entries.user["exec"], kubeconfig_dir=path.resolve().parent, policy=policy
+        )
+        return plugin.summary()
+    return None
+
+
+def _entries_for(
+    kubeconfig: Path, context: str, transport: str, policy: ExecPolicy
+) -> tuple[Path, _Entries]:
     if not context:
         raise ProviderFactoryError("an explicit kubeconfig context is required")
     path = Path(kubeconfig).expanduser()
-    document = _read_kubeconfig(path)
-    _check_entries(document, context, transport)
+    return path, _check_entries(_read_kubeconfig(path), context, transport, policy)
+
+
+def _client(
+    kubeconfig: Path,
+    context: str,
+    transport: str,
+    policy: ExecPolicy = _NO_EXEC,
+) -> Any:
+    path, entries = _entries_for(kubeconfig, context, transport, policy)
+    if "exec" in entries.user:
+        return _exec_client(path, entries, policy)
+    return _static_client(path, entries)
+
+
+def _ca(cluster: Mapping[str, Any], base: Path) -> tuple[str | None, Path | None]:
+    """The cluster CA as in-memory PEM text, or the file the kubeconfig names."""
+    import base64
+    import binascii
+
+    if cluster.get("certificate-authority-data"):
+        try:
+            data = base64.b64decode(
+                str(cluster["certificate-authority-data"]), validate=True
+            ).decode("ascii")
+        except (binascii.Error, UnicodeDecodeError, ValueError):
+            raise ProviderFactoryError(
+                "certificate-authority-data is not base64 PEM"
+            ) from None
+        return data, None
+    if cluster.get("certificate-authority"):
+        path = base / str(cluster["certificate-authority"])
+        if not path.is_file():
+            raise ProviderFactoryError("certificate-authority file not found")
+        return None, path
+    return None, None
+
+
+def _configuration(cluster: Mapping[str, Any]) -> Any:
+    from kubernetes.client import Configuration
+
     configuration = Configuration()
-    try:
-        loader = KubeConfigLoader(
-            config_dict=document,
-            active_context=context,
-            config_base_path=str(path.resolve().parent),
-        )
-        loader.load_and_set(configuration)
-    except ConfigException as error:
-        raise ProviderFactoryError(f"kubeconfig context rejected: {error}") from None
-    # The SDK installs a refresh hook for every token, including static ones.
-    # Exec/auth-provider users were refused above, so the hook could only
-    # re-read the same static token; dropping it keeps credentials explicit.
-    configuration.refresh_api_key_hook = None
+    configuration.host = str(cluster.get("server", "")).rstrip("/")
+    configuration.verify_ssl = True
     configuration.proxy = None
     configuration.retries = 0
-    return ApiClient(configuration)
+    configuration.refresh_api_key_hook = None
+    if cluster.get("tls-server-name"):
+        configuration.tls_server_name = str(cluster["tls-server-name"])
+    return configuration
+
+
+def _pem_data(user: Mapping[str, Any], key: str) -> bytes | None:
+    import base64
+    import binascii
+
+    value = user.get(key)
+    if not value:
+        return None
+    try:
+        return base64.b64decode(str(value), validate=True)
+    except (binascii.Error, ValueError):
+        raise ProviderFactoryError(f"kubeconfig {key} is not base64") from None
+
+
+def _static_client(path: Path, entries: _Entries) -> Any:
+    """An ``ApiClient`` for a static token or client certificate.
+
+    The SDK's kubeconfig loader is bypassed: it writes certificate data to
+    temporary files. Here ``*-data`` fields go to OpenSSL through pipes, the
+    CA is read in memory, and files the kubeconfig names are used in place.
+    No refresh hook is installed (a static token cannot be refreshed).
+    """
+    from kubernetes.client import ApiClient
+
+    base = path.resolve().parent
+    user = entries.user
+    configuration = _configuration(entries.cluster)
+    token = user.get("token")
+    if token is not None:
+        if not isinstance(token, str) or not token or "\n" in token:
+            raise ProviderFactoryError("kubeconfig token is invalid")
+        configuration.api_key["BearerToken"] = "Bearer " + token
+    cert = _pem_data(user, "client-certificate-data")
+    key = _pem_data(user, "client-key-data")
+    cert_file = key_file = None
+    if cert is None and user.get("client-certificate"):
+        cert_file = base / str(user["client-certificate"])
+    if key is None and user.get("client-key"):
+        key_file = base / str(user["client-key"])
+    ca_data, ca_file = _ca(entries.cluster, base)
+    try:
+        context = tls_context(
+            ca_data,
+            ca_file,
+            cert=cert,
+            key=key,
+            cert_file=cert_file,
+            key_file=key_file,
+        )
+    except TlsMaterialError as error:
+        raise ProviderFactoryError(str(error)) from None
+    client = ApiClient(configuration)
+    client.rest_client.pool_manager = _direct_pool(context, configuration)
+    return client
+
+
+def _direct_pool(context: Any, configuration: Any) -> Any:
+    import urllib3
+
+    return urllib3.PoolManager(
+        num_pools=4,
+        maxsize=4,
+        retries=False,
+        ssl_context=context,
+        **(
+            {"server_hostname": configuration.tls_server_name}
+            if configuration.tls_server_name
+            else {}
+        ),
+    )
+
+
+def _exec_client(path: Path, entries: _Entries, policy: ExecPolicy) -> Any:
+    """An ``ApiClient`` whose credential comes from a pinned exec plugin.
+
+    The SDK's own exec loader is bypassed: it inherits the whole environment
+    and writes client certificates to temporary files. The cluster's CA is
+    read in memory as well.
+    """
+    from kubernetes.client import ApiClient
+
+    base = path.resolve().parent
+    plugin: ExecPlugin = resolve_plugin(
+        entries.user["exec"], kubeconfig_dir=base, policy=policy
+    )
+    cluster = entries.cluster
+    ca_data, ca_file = _ca(cluster, base)
+    configuration = _configuration(cluster)
+    client = ApiClient(configuration)
+    try:
+        ExecCredentialSource.attach(
+            client,
+            plugin,
+            policy,
+            cluster=ClusterInfo(
+                configuration.host,
+                cluster.get("certificate-authority-data") or None,
+                configuration.tls_server_name or None,
+            ),
+            ca_data=ca_data,
+            ca_file=ca_file,
+        )
+    except BaseException:
+        client.close()
+        raise
+    logger.info("exec credential plugin %s (%s)", plugin.command, plugin.sha256)
+    return client
 
 
 def _read_uid(api_client: Any, kind: str, name: str, timeout: float) -> str | None:
@@ -330,7 +560,9 @@ def build_provider(
 
     ``api_client`` may be injected (tests); it is still identity-checked.
     """
-    client = api_client or _client(target.kubeconfig, target.context, target.transport)
+    client = api_client or _client(
+        target.kubeconfig, target.context, target.transport, target.exec_policy
+    )
     try:
         identity = read_cluster_identity(client, target)
         plan_target = identity.plan_target(target.namespace)
@@ -350,4 +582,13 @@ def build_provider(
     except BaseException:
         client.close()
         raise
-    return ProviderBinding(provider, identity, plan_target)
+    return ProviderBinding(provider, identity, plan_target, credential_plugin(client))
+
+
+def credential_plugin(api_client: Any) -> dict[str, str] | None:
+    """The pinned exec plugin behind ``api_client`` (path, sha256), if any."""
+    hook = getattr(api_client.configuration, "refresh_api_key_hook", None)
+    source = getattr(hook, "__self__", None)
+    if isinstance(source, ExecCredentialSource):
+        return source.plugin.summary()
+    return None

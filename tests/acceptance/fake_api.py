@@ -494,6 +494,7 @@ class FakeAPI:
                     "query": query,
                     "body": body,
                     "content_type": self.headers.get("Content-Type"),
+                    "authorization": self.headers.get("Authorization"),
                 }
                 with api.lock:
                     api.requests.append(request)

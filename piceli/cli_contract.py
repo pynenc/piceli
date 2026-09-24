@@ -222,6 +222,11 @@ class CommandContract:
 
 
 _C = CommandContract
+_EXPLICIT_CONTEXT = (
+    "`--context` is required (current-context is never used, also not by the "
+    "kubectl processes it starts); exec credential plugins need `--allow-exec` "
+    "(optionally `--exec-sha256`)."
+)
 _RELEASE_READS = ("release.toml", "composition", "state_dir", "kubeconfig")
 _RELEASE_EXIT = (0, 1, 2, 3)
 
@@ -455,6 +460,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             contract="conforms",
             reads=("session archive", "kubeconfig"),
             cluster="reads",
+            notes=_EXPLICIT_CONTEXT,
         ),
         "observe forward-save": _C(
             "Save one port-forward preference.",
@@ -471,6 +477,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "Print the kubectl argv for one saved forward.",
             contract="conforms",
             reads=("preferences file",),
+            notes="`--context` is required; the argv always carries it.",
         ),
         "observe forward-run": _C(
             "Run one saved port forward until interrupted.",
@@ -478,11 +485,13 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             reads=("preferences file", "kubeconfig"),
             cluster="reads",
             long_running=True,
-            notes="After the checks, output and exit status are kubectl's own.",
+            notes=_EXPLICIT_CONTEXT
+            + " After the checks, output and exit status are kubectl's own.",
         ),
         "observe logs-command": _C(
             "Print the kubectl argv for a bounded log request.",
             contract="conforms",
+            notes="`--context` is required; the argv always carries it.",
         ),
         "observe logs-run": _C(
             "Run a bounded log request in the foreground.",
@@ -490,7 +499,8 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             reads=("kubeconfig",),
             cluster="reads",
             long_running=True,
-            notes="After the checks, output and exit status are kubectl's own.",
+            notes=_EXPLICIT_CONTEXT
+            + " After the checks, output and exit status are kubectl's own.",
         ),
         "observe serve": _C(
             "Serve the local operations UI and JSON API on loopback.",
@@ -498,6 +508,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             reads=("session archive", "kubeconfig", "preferences file"),
             writes=("preferences file",),
             cluster="reads",
+            notes=_EXPLICIT_CONTEXT,
             long_running=True,
         ),
         "observe forwards apply": _C(
@@ -505,6 +516,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             contract="conforms",
             reads=("access profile", "kubeconfig"),
             cluster="reads",
+            notes=_EXPLICIT_CONTEXT,
             long_running=True,
             exit_codes=(0, 2),
         ),
@@ -520,6 +532,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             contract="conforms",
             reads=("kubeconfig", "archive", "catalog"),
             cluster="reads",
+            notes=_EXPLICIT_CONTEXT,
         ),
         "operator promote": _C(
             "Promote a built digest to a new catalog entry.",
@@ -553,6 +566,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             reads=("kubeconfig", "catalog", "archive", "preferences file"),
             writes=("preferences file", "state_dir"),
             cluster="reads",
+            notes=_EXPLICIT_CONTEXT,
             long_running=True,
         ),
     }

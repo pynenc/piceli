@@ -118,6 +118,7 @@ deployment_planning
 release_cli
 checks
 plans_and_diffs
+managed_clusters
 secrets
 source_identity
 containerized_builds

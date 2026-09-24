@@ -68,8 +68,8 @@ from piceli.k8s.ops.executor import (
     ExecutionLimits,
     PlanExecutor,
 )
-from piceli.k8s.ops.kubernetes_provider import ProviderError
 from piceli.k8s.ops.field_diff import plan_diffs
+from piceli.k8s.ops.kubernetes_provider import ProviderError
 from piceli.k8s.ops.plan import (
     DeploymentComposition,
     DeploymentPlan,

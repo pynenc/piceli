@@ -20,6 +20,13 @@ from typing import Annotated
 import typer
 
 from piceli.cli_contract import EXIT_FAILED, reject, rejecting, say
+from piceli.k8s.cli.cluster_access import (
+    AllowExecOption,
+    ContextOption,
+    ExecSha256Option,
+    exec_policy,
+    verify_kubectl_target,
+)
 from piceli.k8s.observe import (
     AccessPlan,
     ForwardSupervisor,
@@ -36,6 +43,7 @@ from piceli.k8s.observe import (
     run_port_forward,
 )
 from piceli.k8s.observe_server import LocalObserveServer
+from piceli.k8s.ops.exec_credentials import ExecPolicy
 from piceli.k8s.ops.session import DeploymentSessionArchive
 from piceli.k8s.ui_config import (
     UI_CONFIG_ENV,
@@ -61,10 +69,14 @@ def _archive(path: Path) -> DeploymentSessionArchive:
         return DeploymentSessionArchive.from_json(path.read_text())
 
 
-def _reader(kubeconfig: Path, context: str | None) -> KubernetesDynamicInventoryReader:
+def _reader(
+    kubeconfig: Path, context: str, policy: ExecPolicy | None = None
+) -> KubernetesDynamicInventoryReader:
     """The inventory reader; an unusable kubeconfig or context is a rejection."""
     with rejecting((Exception, "kubeconfig-rejected")):
-        return KubernetesDynamicInventoryReader(kubeconfig=kubeconfig, context=context)
+        return KubernetesDynamicInventoryReader(
+            kubeconfig=kubeconfig, context=context, exec_policy=policy
+        )
 
 
 def _profile(path: Path | None, *, access: bool = False) -> UiConfig:
@@ -158,13 +170,15 @@ def interrupts_as_keyboard_interrupt() -> Iterator[None]:
 def status(
     archive: Annotated[Path, typer.Option(exists=True, readable=True)],
     kubeconfig: Annotated[Path, typer.Option(exists=True, readable=True)],
-    context: Annotated[MaybeString, typer.Option()] = None,
+    context: ContextOption,
     include_common_types: Annotated[bool, typer.Option()] = True,
+    allow_exec: AllowExecOption = False,
+    exec_sha256: ExecSha256Option = None,
 ) -> None:
     """Print declared resources, live state, and objects absent from the archive."""
     report = observe_session(
         _archive(archive),
-        _reader(kubeconfig, context),
+        _reader(kubeconfig, context, exec_policy(allow_exec, exec_sha256)),
         include_common_types=include_common_types,
     )
     typer.echo(json.dumps(report.to_dict(), sort_keys=True))
@@ -218,7 +232,7 @@ def forward_command(
     user: Annotated[str, typer.Option()],
     name: Annotated[str, typer.Option()],
     kubeconfig: Annotated[Path, typer.Option(exists=True, readable=True)],
-    context: Annotated[MaybeString, typer.Option()] = None,
+    context: ContextOption,
     kubectl: Annotated[str, typer.Option()] = "kubectl",
     preferences: Annotated[MaybePath, typer.Option()] = None,
 ) -> None:
@@ -236,11 +250,14 @@ def forward_run(
     user: Annotated[str, typer.Option()],
     name: Annotated[str, typer.Option()],
     kubeconfig: Annotated[Path, typer.Option(exists=True, readable=True)],
-    context: Annotated[MaybeString, typer.Option()] = None,
+    context: ContextOption,
     kubectl: Annotated[str, typer.Option()] = "kubectl",
     preferences: Annotated[MaybePath, typer.Option()] = None,
+    allow_exec: AllowExecOption = False,
+    exec_sha256: ExecSha256Option = None,
 ) -> None:
     """Run one saved loopback-only port forward until the caller interrupts it."""
+    verify_kubectl_target(kubeconfig, context, allow_exec, exec_sha256)
     forward = _saved(preferences, user, name)
     with rejecting((ValueError, "invalid-forward-preference")):
         command = forward.command(
@@ -256,7 +273,7 @@ def logs_command(
         str, typer.Option(help="pod/NAME, deployment/NAME, or another workload")
     ],
     kubeconfig: Annotated[Path, typer.Option(exists=True, readable=True)],
-    context: Annotated[MaybeString, typer.Option()] = None,
+    context: ContextOption,
     tail: Annotated[int, typer.Option(min=1, max=10_000)] = 200,
     container: Annotated[MaybeString, typer.Option()] = None,
     previous: Annotated[bool, typer.Option()] = False,
@@ -284,13 +301,16 @@ def logs_run(
         str, typer.Option(help="pod/NAME, deployment/NAME, or another workload")
     ],
     kubeconfig: Annotated[Path, typer.Option(exists=True, readable=True)],
-    context: Annotated[MaybeString, typer.Option()] = None,
+    context: ContextOption,
     tail: Annotated[int, typer.Option(min=1, max=10_000)] = 200,
     container: Annotated[MaybeString, typer.Option()] = None,
     previous: Annotated[bool, typer.Option()] = False,
     kubectl: Annotated[str, typer.Option()] = "kubectl",
+    allow_exec: AllowExecOption = False,
+    exec_sha256: ExecSha256Option = None,
 ) -> None:
     """Run a bounded workload-log request in the caller's foreground terminal."""
+    verify_kubectl_target(kubeconfig, context, allow_exec, exec_sha256)
     with rejecting((ValueError, "invalid-log-request")):
         command = kubectl_logs_command(
             kubectl=kubectl,
@@ -309,7 +329,7 @@ def logs_run(
 def serve(
     archive: Annotated[Path, typer.Option(exists=True, readable=True)],
     kubeconfig: Annotated[Path, typer.Option(exists=True, readable=True)],
-    context: Annotated[MaybeString, typer.Option()] = None,
+    context: ContextOption,
     namespace: Annotated[
         MaybeString,
         typer.Option(help="Namespace for shortcuts and pods (default: the archive's)"),
@@ -332,6 +352,8 @@ def serve(
             "(port-conflict preflight first)"
         ),
     ] = False,
+    allow_exec: AllowExecOption = False,
+    exec_sha256: ExecSha256Option = None,
 ) -> None:
     """Open the local operations dashboard and optionally restore saved forwards."""
     config = _profile(ui_config)
@@ -341,7 +363,7 @@ def serve(
             ref.namespace for ref in archive_resources(session_archive) if ref.namespace
         }
         namespace = archive_namespaces.pop() if len(archive_namespaces) == 1 else ""
-    reader = _reader(kubeconfig, context)
+    reader = _reader(kubeconfig, context, exec_policy(allow_exec, exec_sha256))
     store = PreferenceStore(preferences)
     plan_ids: tuple[str, ...] = ()
     if start_shortcuts:
@@ -422,7 +444,7 @@ def forwards_apply(
         ),
     ],
     kubeconfig: Annotated[Path, typer.Option(exists=True, readable=True)],
-    context: Annotated[MaybeString, typer.Option()] = None,
+    context: ContextOption,
     namespace: Annotated[
         MaybeString, typer.Option(help="Namespace for shortcuts that pin none")
     ] = None,
@@ -433,6 +455,8 @@ def forwards_apply(
     poll: Annotated[
         float, typer.Option(min=0.1, max=60, help="Status report cadence (seconds)")
     ] = 1.0,
+    allow_exec: AllowExecOption = False,
+    exec_sha256: ExecSha256Option = None,
 ) -> None:
     """Start every declared forward and supervise it in the foreground.
 
@@ -441,6 +465,7 @@ def forwards_apply(
     SIGHUP.  Exits 2 without starting anything when the port-conflict
     preflight fails.
     """
+    verify_kubectl_target(kubeconfig, context, allow_exec, exec_sha256)
     config = _selected(_profile(profile, access=True), only)
     plan = _preflight_or_exit(config, namespace)
     plan_ids = plan.start

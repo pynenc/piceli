@@ -53,6 +53,8 @@ namespace = "release-demo"          # must exist
 cluster_uid = "…"                   # optional: expected kube-system Namespace UID
 namespace_uid = "…"                 # optional: expected namespace UID
 # transport = "loopback-http"       # only for a literal loopback test API
+# allow_exec = true                 # GKE/EKS/AKS exec plugins, see "Target and credentials"
+# exec_sha256 = "sha256:…"          # optional pin of the resolved plugin file
 [target.nodes.primary]              # optional node pins, exposed as ctx.nodes
 name = "node-a"
 uid = "…"
@@ -102,6 +104,32 @@ expect = 200
 Unknown keys are rejected everywhere except `[values]`. Relative paths
 resolve from the spec's directory. A complete example lives in
 `examples/release/`.
+
+### Target and credentials
+
+`[target]` names exactly one namespace of one cluster: an explicit kubeconfig
+file (`KUBECONFIG`, `~/.kube/config` and in-cluster files are never read), an
+explicit context (never `current-context`) and a namespace that must exist.
+`cluster_uid` and `namespace_uid` pin the kube-system and namespace UIDs, and
+`[target.nodes.<alias>]` pins nodes.
+
+Credentials may be a client certificate or a bearer token. Managed clusters
+(GKE, EKS, AKS, OIDC) use an **exec credential plugin** instead; Piceli runs
+it only with `allow_exec = true`, pins the resolved file (`exec_sha256`),
+passes it a minimal environment (`PATH`, `HOME`, `exec_pass_env` and the
+kubeconfig's `env`) and refreshes expiring credentials itself. See
+{doc}`managed_clusters` for the security model, the `exec_*` keys and the
+`exec-*` error codes. Legacy `auth-provider` users, proxies,
+`insecure-skip-tls-verify` and basic auth are always refused.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `kubeconfig`, `context`, `namespace` | required | The explicit target. |
+| `cluster_uid`, `namespace_uid` | none | Expected identities. |
+| `transport` | `https` | `loopback-http` only for a literal loopback test API. |
+| `request_seconds` | `10` | Limit for one API request, in (0, 60]. |
+| `allow_exec` | `false` | Run the context's exec plugin (preview). |
+| `exec_sha256`, `exec_pass_env`, `exec_timeout_seconds` | none, `[]`, `60` | Plugin pin, extra variables, run limit. |
 
 ### Images
 
@@ -650,6 +678,7 @@ Other refusals:
 | `invalid-release-spec` | Fix the key named in `message`. `images_from` is a top-level key (before the first `[table]`), not part of `[images]`. |
 | `invalid-composition` | Fix the composition function (it must return a `DeploymentComposition` in the target namespace and bind every declared secret input). |
 | `kubeconfig-rejected`, `namespace-not-found`, `server-target-identity-mismatch`, `rbac-denied`, … | Run `piceli explain <code>`, or see {doc}`reference/errors`. |
+| `target-refused`, a code starting with `exec-`, or `auth-provider-refused` | The kubeconfig/context was refused, or the target's exec credential plugin was not allowed, not pinned, or failed. See "If it fails" in {doc}`managed_clusters`. |
 
 `apply --approve HASH` refuses a hash that is unknown, expired or already
 applied (`plan-not-found`, `plan-expired`): run `plan` again and approve the
@@ -761,9 +790,11 @@ The output of `piceli release` changed to follow the CLI contract
 
 ## Safety model
 
-* The kubeconfig and context are explicit. Exec plugins and auth providers
-  are refused (token refresh is not supported yet), as are proxies,
-  `insecure-skip-tls-verify` and basic auth. `https` requires verified TLS.
+* The kubeconfig and context are explicit. Exec plugins run only with
+  `allow_exec = true`, pinned and with a minimal environment, and Piceli
+  refreshes their credentials itself ({doc}`managed_clusters`). Legacy auth
+  providers, proxies, `insecure-skip-tls-verify` and basic auth are refused.
+  `https` requires verified TLS.
 * A state directory serves one cluster and namespace: releases record the
   kube-system UID, and a later run against another cluster is refused.
 * Objects are owned by exact `owner` match. Objects created by other tools are
