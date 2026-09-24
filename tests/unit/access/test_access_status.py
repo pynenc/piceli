@@ -647,10 +647,9 @@ def test_cli_status_with_an_unusable_kubeconfig(tmp_path: Path) -> None:
 def test_cli_status_rejects_an_invalid_target(tmp_path: Path) -> None:
     result = runner.invoke(app, ["status", str(tmp_path / "missing.toml"), "--json"])
     assert result.exit_code == 2
-    assert json.loads(result.stdout) == {
-        "state": "rejected",
-        "reason": "access-target-invalid",
-    }
+    body = json.loads(result.stdout)
+    assert (body["state"], body["reason"]) == ("rejected", "access-target-invalid")
+    assert body["message"]
 
 
 # ---------------------------------------------------------------- CLI access
@@ -665,11 +664,9 @@ def test_cli_access_rejections(tmp_path: Path, fake_kubectl: Path) -> None:
     kubectl = ("--kubectl", str(fake_kubectl))
     result = _access(str(spec), "--only", "nope", *kubectl)
     assert result.exit_code == 2
-    assert json.loads(result.stdout) == {
-        "state": "rejected",
-        "reason": "access-unknown-forward",
-        "unknown": ["nope"],
-    }
+    body = json.loads(result.stdout)
+    assert (body["state"], body["reason"]) == ("rejected", "access-unknown-forward")
+    assert body["unknown"] == ["nope"] and body["message"]
     result = _access(str(spec), "--kubectl", str(tmp_path / "no-kubectl"))
     assert json.loads(result.stdout)["reason"] == "access-kubectl-missing"
     (tmp_path / "hidden").mkdir()

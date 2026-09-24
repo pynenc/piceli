@@ -75,6 +75,14 @@ CASES: dict[str, tuple[Argv, str]] = {
             "secret show",
         )
     },
+    "status": (
+        lambda p: ["status", str(p / "missing-release.toml")],
+        "access-target-invalid",
+    ),
+    "access": (
+        lambda p: ["access", str(p / "missing-release.toml")],
+        "access-target-invalid",
+    ),
     "inputs record": (
         lambda p: ["inputs", "record", "--spec", str(p / "junk")],
         "invalid-inputs-spec",
