@@ -1,0 +1,25 @@
+# Step 1: the node-local registry (see docs/release_cli.md, "Two images").
+#
+#   piceli release apply --spec examples/two-images/registry.toml --auto-approve
+
+[target]
+kubeconfig = "two-images.kubeconfig" # an explicit file; never ~/.kube/config
+context = "kind-two-images"          # an explicit context; never current-context
+namespace = "two-images"             # must already exist
+[target.nodes.primary]               # the node that runs the registry
+name = "two-images-control-plane"
+
+[release]
+name = "registry"
+owner = "two-images-registry"
+field_manager = "two-images-registry"
+composition = "registry.py:build"
+state_dir = ".piceli-registry"
+
+[images]
+# distribution/distribution 3.1.1, multi-arch index digest
+registry = "docker.io/library/registry:3.1.1@sha256:325b4b29b041e82803abeb703e201655e4e23ab83264ec1a7c9ddb0a5b14a6e0"
+
+[values]
+registry_port = 5000
+registry_storage = "1Gi"

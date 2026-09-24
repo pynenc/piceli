@@ -17,6 +17,7 @@ Priorities may change. Progress is tracked in
 | Typed apps (`App`, `piceli render`) that render to release intents | 🟡 Preview: Deployments, Services, ConfigMaps, Secrets, NetworkPolicies |
 | Typed templates for common workloads | 🟡 Core kinds only; no Ingress/Gateway, NetworkPolicy, DaemonSet, PDB, Namespace or cluster-scoped RBAC yet |
 | Dependency-ordered plan and apply | ✅ Available |
+| Image handoff by digest (build → deliver → release, immutable references only) | 🟡 Preview |
 | Server-side apply with preconditions, journal and resume | 🟡 Python API only; not yet used by the CLI |
 | Field-level diff | 🟡 `deploy detail` (CLI engine) only |
 | Safe pruning of removed resources | 🟡 Recoverable engine only, opt-in |

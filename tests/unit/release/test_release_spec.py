@@ -10,6 +10,7 @@ import pytest
 
 from piceli.k8s.release_secrets import config_digest, generate, input_names
 from piceli.k8s.release_spec import (
+    ImageHandoffError,
     RandomSecretSpec,
     ReleaseSpec,
     ReleaseSpecError,
@@ -132,10 +133,14 @@ def test_build_receipt_contract(tmp_path):
     assert images["api"].identity == DIGEST
     assert images["api"].reference == f"registry.test/app/api@{DIGEST}"
     assert images["api"].platform == "linux/arm64"
-    # Without a registry digest the local image ID is the identity and the
-    # tag is the reference (for runtimes that received the image directly).
+    # Without a registry digest the local image ID is the identity, and the
+    # movable tag is never used as the reference.
     assert images["local"].identity == OTHER
-    assert images["local"].reference == "app/local:r1"
+    assert not images["local"].immutable
+    with pytest.raises(ImageHandoffError, match="image-not-immutable") as refused:
+        _ = images["local"].reference
+    assert refused.value.code == "image-not-immutable"
+    assert "--ref app/local:sha256-bbbbbbbbbbbb" in str(refused.value)
 
     spec = ReleaseSpec.from_dict(
         base(images_from="build.receipt.json", images={}), tmp_path

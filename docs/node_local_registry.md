@@ -79,6 +79,10 @@ release that installs the registry and a workload that pulls from it. Release
 with `app_replicas = 0` first, push the image, then release with
 `app_replicas = 1`.
 
+`examples/two-images/` keeps the registry in its own release and releases two
+workloads from `piceli artifacts deliver --via-forward deployment/registry`
+receipts; see {doc}`release_cli` (Images, "Two images, one change").
+
 ## Push and pull
 
 ```console

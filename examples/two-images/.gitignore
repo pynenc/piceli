@@ -1,0 +1,4 @@
+# written by the steps in release.toml
+*.delivery.json
+*.kubeconfig
+.piceli-*/
