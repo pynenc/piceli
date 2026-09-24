@@ -88,7 +88,11 @@ def _refusals() -> tuple[type[BaseException], ...]:
 
 
 def _refuse(error: BaseException) -> None:
-    _emit({"state": "refused", "reason": str(error) or type(error).__name__})
+    refusal = {"state": "refused", "reason": str(error) or type(error).__name__}
+    code = getattr(error, "code", None)
+    if isinstance(code, str):
+        refusal["code"] = code  # a fixed word, e.g. image-not-immutable
+    _emit(refusal)
     _say(f"refused: {error}")
     raise typer.Exit(EXIT_REFUSED)
 
