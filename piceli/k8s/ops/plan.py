@@ -152,6 +152,169 @@ def _has_json_pointer(value: dict[str, Any], pointer: str) -> bool:
     return bool(parts)
 
 
+_OWNER_ANNOTATION = "piceli.io/owner"
+
+
+@dataclass(frozen=True, order=True)
+class FieldManagerEntry:
+    """One ``metadata.managedFields`` entry, as the API server reported it."""
+
+    manager: str
+    operation: str
+    subresource: str
+    fields_json: str = field(repr=False)
+
+    @property
+    def fields(self) -> dict[str, Any]:
+        value = json.loads(self.fields_json)
+        return value if isinstance(value, dict) else {}
+
+
+def field_manager_entries(manifest: Mapping[str, Any]) -> tuple[FieldManagerEntry, ...]:
+    """Parse ``managedFields`` strictly; malformed ownership evidence is refused."""
+    metadata = manifest.get("metadata")
+    entries = metadata.get("managedFields") if isinstance(metadata, Mapping) else None
+    if entries is None:
+        return ()
+    if not isinstance(entries, list):
+        raise ValueError("invalid field ownership evidence")
+    result = []
+    for entry in entries:
+        if (
+            not isinstance(entry, Mapping)
+            or not isinstance(entry.get("manager", ""), str)
+            or not isinstance(entry.get("operation", ""), str)
+            or not isinstance(entry.get("subresource", ""), str)
+            or not isinstance(entry.get("fieldsV1", {}), Mapping)
+        ):
+            raise ValueError("invalid field ownership evidence")
+        result.append(
+            FieldManagerEntry(
+                str(entry.get("manager", "")),
+                str(entry.get("operation", "")),
+                str(entry.get("subresource", "")),
+                _canonical_json(entry.get("fieldsV1", {})),
+            )
+        )
+    return tuple(sorted(result))
+
+
+def _key_matches(item: Any, key: Mapping[str, Any]) -> bool:
+    # A key field the desired item omits (e.g. a defaulted port protocol) is a
+    # wildcard: over-reporting an owner only widens the reported drift.
+    return isinstance(item, Mapping) and all(
+        name not in item or item[name] == value for name, value in key.items()
+    )
+
+
+def _fields_overlap(fields: Mapping[str, Any], value: Any) -> bool:
+    """Whether a FieldsV1 set owns any field that ``value`` explicitly sets."""
+    for raw_key, child in fields.items():
+        if raw_key == ".":
+            continue
+        prefix, _, name = raw_key.partition(":")
+        children: list[Any] = []
+        if prefix == "f" and isinstance(value, Mapping) and name in value:
+            children = [value[name]]
+        elif prefix == "k" and isinstance(value, list):
+            try:
+                key = json.loads(name)
+            except ValueError:
+                continue
+            if isinstance(key, Mapping):
+                children = [item for item in value if _key_matches(item, key)]
+        elif prefix == "v" and isinstance(value, list):
+            try:
+                member = json.loads(name)
+            except ValueError:
+                continue
+            children = [member] if member in value else []
+        elif prefix == "i" and isinstance(value, list) and name.isdigit():
+            children = [value[int(name)]] if int(name) < len(value) else []
+        for item in children:
+            if not isinstance(child, Mapping) or not child:
+                return True
+            if _fields_overlap(child, item):
+                return True
+    return False
+
+
+# Field managers of the Kubernetes control plane. Their entries are never
+# transferred by a takeover: they record controller bookkeeping (a
+# Deployment's revision annotation, a claim's binding) that a manifest does
+# not declare and that the controller keeps writing.
+CONTROL_PLANE_MANAGERS = frozenset(
+    {
+        "kube-apiserver",
+        "kube-controller-manager",
+        "kube-scheduler",
+        "kubelet",
+        "cloud-controller-manager",
+    }
+)
+
+
+def is_control_plane_manager(manager: str) -> bool:
+    """Control-plane or controller manager, by name (see docs for the rule)."""
+    return (
+        manager in CONTROL_PLANE_MANAGERS
+        or manager.startswith("k3s")
+        or manager.endswith(("-controller", "-controller-manager"))
+    )
+
+
+def is_transferable(entry: FieldManagerEntry) -> bool:
+    """A takeover transfers main-resource entries written by clients.
+
+    Kept: any subresource entry (``status``, ``scale`` written by an
+    autoscaler, ...) and control-plane/controller managers. Everything else —
+    ``kubectl-client-side-apply``, ``kubectl-create``, ``kubectl-set``,
+    ``kubectl-edit``, ``kubectl-rollout``, other tools' Apply or Update
+    entries — is transferred.
+    """
+    return (
+        not entry.subresource
+        and entry.operation in {"Apply", "Update"}
+        and not is_control_plane_manager(entry.manager)
+    )
+
+
+def transferable_managers(
+    entries: Iterable[FieldManagerEntry], *, exclude: Iterable[str] = ()
+) -> tuple[str, ...]:
+    excluded = set(exclude)
+    return tuple(
+        sorted(
+            {
+                entry.manager
+                for entry in entries
+                if is_transferable(entry) and entry.manager not in excluded
+            }
+        )
+    )
+
+
+def overlapping_managers(
+    entries: Iterable[FieldManagerEntry],
+    desired: Mapping[str, Any],
+    *,
+    exclude: Iterable[str] = (),
+) -> tuple[str, ...]:
+    """Managers (status subresource excluded) owning any explicitly desired field."""
+    excluded = set(exclude)
+    return tuple(
+        sorted(
+            {
+                entry.manager
+                for entry in entries
+                if entry.subresource != "status"
+                and entry.manager not in excluded
+                and _fields_overlap(entry.fields, desired)
+            }
+        )
+    )
+
+
 @dataclass(frozen=True, order=True)
 class ResourceRef:
     api_version: str
@@ -335,6 +498,12 @@ class ObservedResource:
     ownership: Ownership
     retained: bool
     owner_uids: tuple[str, ...] = ()
+    # Live ownership evidence used for adoption and drift reports. It is
+    # derived from the same discovery manifest, so it is deliberately left out
+    # of the snapshot hash (existing archives keep their identity); plans bind
+    # what they derive from it into the plan hash instead.
+    owner: str | None = None
+    field_managers: tuple[FieldManagerEntry, ...] = ()
 
     def __post_init__(self) -> None:
         annotations = self.intent.manifest.get("metadata", {}).get("annotations", {})
@@ -388,6 +557,11 @@ class ObservedResource:
             )
         )
         intent = ResourceIntent.from_manifest(manifest, scope=scope)
+        owner = (
+            annotations.get(_OWNER_ANNOTATION)
+            if isinstance(annotations, Mapping)
+            else None
+        )
         retained_value = intent.ref.kind in _RETAINED_KINDS or retained_annotation
         if retained is False and retained_value:
             raise ValueError(
@@ -399,6 +573,8 @@ class ObservedResource:
             ownership,
             retained_value if retained is None else retained,
             owner_uids,
+            owner if isinstance(owner, str) and owner else None,
+            field_manager_entries(manifest),
         )
 
 
@@ -521,13 +697,51 @@ class ObservedSnapshot:
 
 @dataclass(frozen=True)
 class PlanAuthorization:
+    """What a plan may propose beyond managing its own objects.
+
+    ``adopt_resources`` names existing objects the plan may take over. The
+    plan chooses how, from the observed object, and records it in the action
+    (and so in the plan hash):
+
+    * retained objects (``Namespace``, ``PersistentVolume``,
+      ``PersistentVolumeClaim``, ``Secret`` or ``piceli.io/retained: "true"``)
+      are adopted **metadata-only**: only the owner annotation is written, and
+      only when the desired manifest is contained in the live object;
+    * every other object is adopted by a **takeover**: the fields of every
+      transferable field manager (see :func:`transferable_managers`) move to
+      this field manager, then the desired manifest is applied without force,
+      so fields the manifest does not declare are removed. A takeover may also
+      be requested for an object this owner already manages, to reclaim fields
+      that other clients (e.g. ``kubectl``) wrote since.
+
+    ``field_manager`` is the executing field manager; it is never listed as a
+    transferred manager.
+
+    ``inherited_owner_ids`` are earlier owner ids whose retained objects may be
+    re-stamped by an explicit adoption. They do not change ownership
+    classification, which the provider performs during discovery.
+    """
+
     target: PlanTarget
     adopt_resources: tuple[ResourceRef, ...] = ()
     prune_managed: bool = False
+    inherited_owner_ids: tuple[str, ...] = ()
+    field_manager: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
             self, "adopt_resources", tuple(sorted(set(self.adopt_resources)))
+        )
+        if self.field_manager is not None and (
+            not isinstance(self.field_manager, str) or not self.field_manager
+        ):
+            raise ValueError("field manager must be a non-empty string")
+        if isinstance(self.inherited_owner_ids, str) or any(
+            not isinstance(item, str) or not item for item in self.inherited_owner_ids
+        ):
+            raise ValueError("inherited owner ids must be a tuple of ids")
+        object.__setattr__(
+            self, "inherited_owner_ids", tuple(sorted(set(self.inherited_owner_ids)))
         )
 
 
@@ -539,15 +753,64 @@ class PlanOperation(StrEnum):
     DELETE = "delete"
 
 
+class AdoptionMode(StrEnum):
+    METADATA_ONLY = "metadata-only"
+    TAKEOVER = "takeover"
+
+
+@dataclass(frozen=True)
+class Adoption:
+    """How an ADOPT action moves ownership; part of the plan hash.
+
+    ``transferred_managers`` are every transferable field manager of the live
+    object (not only those owning declared fields). A takeover moves all of
+    their fields to this field manager and then applies the desired manifest,
+    which removes every transferred field the manifest does not declare. A
+    metadata-only adoption never transfers anything.
+    """
+
+    mode: AdoptionMode
+    previous_owner: str | None = None
+    transferred_managers: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.mode, AdoptionMode):
+            raise ValueError("invalid adoption mode")
+        object.__setattr__(
+            self,
+            "transferred_managers",
+            tuple(sorted(set(self.transferred_managers))),
+        )
+        if self.mode is AdoptionMode.METADATA_ONLY and self.transferred_managers:
+            raise ValueError("metadata-only adoption cannot transfer field managers")
+
+    def summary(self) -> dict[str, Any]:
+        value: dict[str, Any] = {
+            "mode": self.mode.value,
+            "previous_owner": self.previous_owner,
+            "transferred_managers": list(self.transferred_managers),
+        }
+        if self.mode is AdoptionMode.TAKEOVER:
+            value["removes_undeclared_fields"] = True
+        return value
+
+
 @dataclass(frozen=True)
 class PlanAction:
     operation: PlanOperation
     resource: ResourceIntent
     dependencies: tuple[ResourceRef, ...]
     precondition: ResourcePrecondition
+    # Set for every ADOPT built by ``build_plan``. ``None`` only for actions
+    # restored from older plans; those never force field ownership.
+    adoption: Adoption | None = None
+
+    def __post_init__(self) -> None:
+        if self.adoption is not None and self.operation is not PlanOperation.ADOPT:
+            raise ValueError("only adopt actions carry adoption details")
 
     def summary(self) -> dict[str, Any]:
-        return {
+        value = {
             "operation": self.operation.value,
             "resource": self.resource.ref.__dict__,
             "artifact_digest": self.resource.artifact_digest,
@@ -555,6 +818,9 @@ class PlanAction:
             "precondition": self.precondition.__dict__,
             "manifest": self.resource.redacted_manifest(),
         }
+        if self.adoption is not None:
+            value["adoption"] = self.adoption.summary()
+        return value
 
 
 @dataclass(frozen=True)
@@ -745,6 +1011,110 @@ def _deletion_depth(
     )
 
 
+def _adoptable(resource: ObservedResource, authorization: PlanAuthorization) -> bool:
+    """Unmanaged objects, managed non-retained objects (a takeover reclaims
+    foreign fields), or retained objects of an explicitly inherited owner."""
+    return (
+        resource.ownership is Ownership.UNMANAGED
+        or not resource.retained
+        or (
+            resource.owner is not None
+            and resource.owner in authorization.inherited_owner_ids
+        )
+    )
+
+
+def _without_pointers(
+    manifest: dict[str, Any], pointers: Iterable[str]
+) -> dict[str, Any]:
+    for pointer in pointers:
+        _remove_json_pointer(manifest, pointer)
+    return manifest
+
+
+def adoption_for(
+    desired: ResourceIntent,
+    current: ObservedResource,
+    field_manager: str | None = None,
+) -> Adoption:
+    """Choose the adoption mode from the live object; refuse unsafe ones."""
+    if current.retained:
+        # Private values are compared by the executor after resolution; the
+        # public plan never reveals whether a secret value matches.
+        expected = _without_pointers(
+            desired.manifest,
+            (binding.json_pointer for binding in desired.secret_bindings),
+        )
+        if not manifest_contains(current.intent.manifest, expected):
+            raise ValueError(
+                "retained resource can only be adopted when the live object "
+                f"already contains the desired manifest: {desired.ref}"
+            )
+        return Adoption(AdoptionMode.METADATA_ONLY, current.owner)
+    return Adoption(
+        AdoptionMode.TAKEOVER,
+        current.owner,
+        transferable_managers(
+            current.field_managers,
+            exclude=() if field_manager is None else (field_manager,),
+        ),
+    )
+
+
+def manifest_contains(actual: Any, expected: Any) -> bool:
+    """Every explicitly desired value is present; the server may add more.
+
+    Lists must have the same length and each item must contain the desired
+    item at the same position: the API server adds defaults inside list items
+    (for example a container's ``imagePullPolicy``) but never reorders them.
+    """
+    if isinstance(actual, dict) and isinstance(expected, dict):
+        return all(
+            key in actual and manifest_contains(actual[key], value)
+            for key, value in expected.items()
+        )
+    if isinstance(actual, list) and isinstance(expected, list):
+        return len(actual) == len(expected) and all(
+            manifest_contains(left, right)
+            for left, right in zip(actual, expected, strict=True)
+        )
+    return bool(actual == expected)
+
+
+def field_drift(
+    composition: DeploymentComposition,
+    snapshot: ObservedSnapshot,
+    field_manager: str,
+) -> list[dict[str, Any]]:
+    """Managed objects whose desired fields are also owned by another manager.
+
+    After an adoption Piceli is the only owner of the fields it declares, so a
+    later ``kubectl`` edit of one of them shows up here. This report is
+    informational and not part of the plan hash.
+    """
+    observed = {resource.intent.ref: resource for resource in snapshot.resources}
+    report = []
+    for component in composition.components:
+        for resource in component.resources:
+            current = observed.get(resource.ref)
+            # Retained objects are never rewritten, so co-owned fields there
+            # (e.g. after a metadata-only adoption) are expected, not drift.
+            if (
+                current is None
+                or current.ownership is not Ownership.MANAGED
+                or current.retained
+            ):
+                continue
+            managers = overlapping_managers(
+                current.field_managers, resource.manifest, exclude=(field_manager,)
+            )
+            if managers:
+                report.append(
+                    {"resource": resource.ref.__dict__, "managers": list(managers)}
+                )
+    return sorted(report, key=lambda item: ResourceRef(**item["resource"]))
+
+
 def build_plan(
     composition: DeploymentComposition,
     snapshot: ObservedSnapshot,
@@ -766,7 +1136,7 @@ def build_plan(
     adoptable = {
         ref
         for ref, resource in observed.items()
-        if ref in desired and resource.ownership is Ownership.UNMANAGED
+        if ref in desired and _adoptable(resource, authorization)
     }
     unused_adoptions = set(authorization.adopt_resources) - adoptable
     if unused_adoptions:
@@ -787,16 +1157,21 @@ def build_plan(
                     )
                 operation = PlanOperation.CREATE
                 precondition = ResourcePrecondition(must_not_exist=True)
+                adoption = None
             else:
                 if ref in snapshot.incomplete_content:
                     raise ValueError(
                         f"cannot compare resource with redacted or incomplete content: {ref}"
                     )
                 precondition = current.precondition
-                if current.ownership is Ownership.UNMANAGED:
-                    if ref not in authorization.adopt_resources:
-                        raise ValueError(f"resource requires explicit adoption: {ref}")
+                adoption = None
+                if ref in authorization.adopt_resources:
                     operation = PlanOperation.ADOPT
+                    adoption = adoption_for(
+                        desired[ref], current, authorization.field_manager
+                    )
+                elif current.ownership is Ownership.UNMANAGED:
+                    raise ValueError(f"resource requires explicit adoption: {ref}")
                 elif _equivalent(
                     desired[ref], current.intent, snapshot.defaulted_fields
                 ):
@@ -809,6 +1184,7 @@ def build_plan(
                     desired[ref],
                     tuple(sorted(dependencies[ref])),
                     precondition,
+                    adoption,
                 )
             )
 

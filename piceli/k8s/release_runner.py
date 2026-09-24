@@ -62,8 +62,12 @@ from piceli.k8s.ops.plan import (
     DeploymentComposition,
     DeploymentPlan,
     ObservedSnapshot,
+    Ownership,
     PlanAuthorization,
+    ResourceRef,
     build_plan,
+    field_drift,
+    transferable_managers,
 )
 from piceli.k8s.ops.provider_factory import ProviderBinding, build_provider
 from piceli.k8s.ops.secret_versions import (
@@ -84,6 +88,7 @@ from piceli.k8s.release_spec import (
     NodeRef,
     ReleaseSpec,
     ReleaseSpecError,
+    parse_adopt_entry,
 )
 
 POLICY_REVISION = "piceli.release-cli/v1"
@@ -138,6 +143,7 @@ def _grant(
     max_age: float,
     field_manager: str,
     owner_id: str,
+    inherited_owner_ids: Sequence[str] = (),
 ) -> ExecutionAuthorization:
     """Deterministic grant: the same parameters always rebuild the same grant."""
     return ExecutionAuthorization(
@@ -156,7 +162,110 @@ def _grant(
             if action.resource.ref.kind not in RETAINED_KINDS
         ),
         max_evidence_age_seconds=max_age,
+        inherited_owner_ids=tuple(inherited_owner_ids),
     )
+
+
+def _plan_authorization(
+    target: PlanTarget,
+    *,
+    prune: bool,
+    adopt: Sequence[Mapping[str, str]] = (),
+    inherited: Sequence[str] = (),
+    field_manager: str,
+) -> PlanAuthorization:
+    return PlanAuthorization(
+        target,
+        tuple(ResourceRef(**item) for item in adopt),
+        prune,
+        tuple(inherited),
+        field_manager,
+    )
+
+
+def resolve_adoptions(
+    requested: Sequence[str],
+    composition: DeploymentComposition,
+    snapshot: ObservedSnapshot,
+    inherited: Sequence[str],
+    field_manager: str,
+) -> tuple[list[dict[str, str]], list[str]]:
+    """Map ``Kind/name`` entries to declared resources that need adoption.
+
+    An entry must name a resource the composition declares (a typo is an
+    error, never a silent no-op). Entries whose object is absent, or already
+    managed with nothing to reclaim, need no adoption and are returned
+    separately for the report, so a standing ``[release] adopt`` list keeps
+    working after the first release. A managed, non-retained object that
+    other clients have written to since (transferable foreign field managers)
+    is taken over again, which reclaims those fields.
+    """
+    declared = [
+        resource.ref
+        for component in composition.components
+        for resource in component.resources
+    ]
+    observed = {item.intent.ref: item for item in snapshot.resources}
+    adopt: set[ResourceRef] = set()
+    not_needed: set[str] = set()
+    for entry in dict.fromkeys(requested):
+        api_version, kind, name = parse_adopt_entry(entry)
+        matches = [
+            ref
+            for ref in declared
+            if ref.kind == kind
+            and ref.name == name
+            and (api_version is None or ref.api_version == api_version)
+        ]
+        if len(matches) != 1:
+            raise ReleaseError(
+                f"adopt {entry!r} does not name exactly one resource declared by "
+                "the composition"
+            )
+        ref = matches[0]
+        current = observed.get(ref)
+        if current is not None and (
+            current.ownership is Ownership.UNMANAGED
+            or (current.retained and current.owner in set(inherited))
+            or (
+                not current.retained
+                and transferable_managers(
+                    current.field_managers, exclude=(field_manager,)
+                )
+            )
+        ):
+            adopt.add(ref)
+        else:
+            not_needed.add(f"{ref.kind}/{ref.name}")
+    unauthorized = sorted(
+        f"{ref.kind}/{ref.name}"
+        for ref in declared
+        if ref not in adopt
+        and ref in observed
+        and observed[ref].ownership is Ownership.UNMANAGED
+    )
+    if unauthorized:
+        raise ReleaseError(
+            "existing objects are not managed by this release's owner: "
+            f"{', '.join(unauthorized)}; authorize adopting them with --adopt "
+            "Kind/name (repeatable) or [release] adopt, or delete them"
+        )
+    return [ref.__dict__ for ref in sorted(adopt)], sorted(not_needed)
+
+
+def _drift(
+    composition: DeploymentComposition,
+    snapshot: ObservedSnapshot,
+    field_manager: str,
+    adopt: Sequence[Mapping[str, str]],
+) -> list[dict[str, Any]]:
+    """Drift of objects this plan does not already take over."""
+    adopted = [dict(item) for item in adopt]
+    return [
+        item
+        for item in field_drift(composition, snapshot, field_manager)
+        if item["resource"] not in adopted
+    ]
 
 
 def _summary(plan: Mapping[str, Any]) -> dict[str, int]:
@@ -166,13 +275,14 @@ def _summary(plan: Mapping[str, Any]) -> dict[str, int]:
     return dict(sorted(counts.items()))
 
 
-def _compact_actions(plan: Mapping[str, Any]) -> list[dict[str, str]]:
+def _compact_actions(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
     return [
         {
             "operation": action["operation"],
             "kind": action["resource"]["kind"],
             "name": action["resource"]["name"],
             "artifact_digest": action["artifact_digest"],
+            **({"adoption": action["adoption"]} if "adoption" in action else {}),
         }
         for action in plan["actions"]
     ]
@@ -193,6 +303,42 @@ def _execution_summary(result: Mapping[str, Any]) -> dict[str, Any]:
     return summary
 
 
+def _adopted(
+    journal: ExecutionJournal,
+    execution_id: str,
+    result: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Adoptions the journal recorded for this execution (public fields only)."""
+    execution = str(result.get("rollback_execution_id") or execution_id)
+    try:
+        rows = journal.export_execution(execution)
+    except ValueError:
+        return []
+    desired = rows["binding"].get("revision", {}).get("desired_state", {})
+    planned = desired.get("actions", []) if isinstance(desired, dict) else []
+    adopted = []
+    for row, action in zip(rows["actions"], planned, strict=False):
+        adoption = row["payload"].get("adoption")
+        if isinstance(adoption, dict) and row["state"] in {"applied", "ready"}:
+            adopted.append(
+                {
+                    "kind": action["resource"]["kind"],
+                    "name": action["resource"]["name"],
+                    **{
+                        key: adoption[key]
+                        for key in (
+                            "mode",
+                            "previous_owner",
+                            "transferred_managers",
+                            "completed_transfer",
+                        )
+                        if key in adoption
+                    },
+                }
+            )
+    return adopted
+
+
 @dataclass
 class PlanResult:
     """A persisted, approvable plan."""
@@ -205,6 +351,8 @@ class PlanResult:
     images: dict[str, dict[str, str]]
     secrets: dict[str, str]
     expires_at: str
+    drift: list[dict[str, Any]] = field(default_factory=list)
+    adopt_not_needed: list[str] = field(default_factory=list)
 
     @property
     def plan_hash(self) -> str:
@@ -230,6 +378,8 @@ class PlanResult:
             "secrets": self.secrets,
             "summary": self.counts,
             "actions": _compact_actions(self.plan),
+            "drift": self.drift,
+            "adopt_not_needed": self.adopt_not_needed,
             **({"plan": self.plan} if full else {}),
         }
 
@@ -560,13 +710,19 @@ class ReleaseRunner:
         *,
         rotate: Sequence[str] = (),
         rollback_to: str | None = None,
+        adopt: Sequence[str] = (),
     ) -> PlanResult:
         """Capture discovery and persist an approvable plan.
 
         Without ``rollback_to`` the spec decides the release; with it, an
         existing catalogued release (a name or ``previous``) is re-planned.
+        ``adopt`` adds ``Kind/name`` entries to the spec's ``[release] adopt``
+        list for this plan only.
         """
         spec = self.spec.model
+        for entry in adopt:
+            parse_adopt_entry(entry)
+        requested = tuple(dict.fromkeys((*spec.release.adopt, *adopt)))
         images = self.spec.images()
         function = self.spec.load_composition()
         binding = self.provider_factory(self.spec)
@@ -604,6 +760,7 @@ class ReleaseRunner:
                             journal,
                             store,
                             rotate,
+                            requested,
                         )
                     intent = "apply"
                 else:
@@ -611,7 +768,7 @@ class ReleaseRunner:
                         raise ReleaseError("--rotate is not valid for a rollback")
                     name = self.resolve_rollback_target(rollback_to, catalog)
                     intent = "rollback"
-                return self._plan_reapply(name, intent, binding, catalog)
+                return self._plan_reapply(name, intent, binding, catalog, requested)
             finally:
                 journal.close()
                 store.close()
@@ -647,6 +804,7 @@ class ReleaseRunner:
         journal: ExecutionJournal,
         store: SecretVersionStore,
         rotate: Sequence[str],
+        requested: Sequence[str],
     ) -> PlanResult:
         settings = self.spec.model.release
         kinds = self._kinds(composition)
@@ -655,6 +813,10 @@ class ReleaseRunner:
                 kinds |= self._kinds(composition_from_archive(record.archive))
         artifact = self._discover(binding, kinds)
         snapshot = ObservedSnapshot.from_discovery(artifact)
+        inherited = list(settings.inherited_owners)
+        adopt, not_needed = resolve_adoptions(
+            requested, composition, snapshot, inherited, settings.field_manager
+        )
         values, origin = self._private_inputs(catalog, store, binding.target, rotate)
         window = settings.approval_window_seconds
         expires_at = (_now() + timedelta(seconds=window)).isoformat()
@@ -671,6 +833,7 @@ class ReleaseRunner:
                 max_age=window,
                 field_manager=settings.field_manager,
                 owner_id=settings.owner,
+                inherited_owner_ids=inherited,
             )
 
         workflow = ReleaseWorkflow(
@@ -678,7 +841,13 @@ class ReleaseRunner:
             binding.target.namespace,
             factory,
             snapshot,
-            PlanAuthorization(binding.target, prune_managed=settings.prune),
+            _plan_authorization(
+                binding.target,
+                prune=settings.prune,
+                adopt=adopt,
+                inherited=inherited,
+                field_manager=settings.field_manager,
+            ),
             grant,
             journal,
             store,
@@ -713,6 +882,9 @@ class ReleaseRunner:
                         n: config_digest(g) for n, g in self.spec.model.secrets.items()
                     },
                     "prune": settings.prune,
+                    # The plan authorization, so the session reopens exactly.
+                    "adopt": adopt,
+                    "inherited_owners": inherited,
                 }
             )
             + "\n",
@@ -727,6 +899,8 @@ class ReleaseRunner:
             {n: i.to_dict() for n, i in images.items()},
             origin,
             expires_at,
+            _drift(composition, snapshot, settings.field_manager, adopt),
+            not_needed,
         )
         self._persist_plan(result, prune=settings.prune)
         return result
@@ -737,6 +911,7 @@ class ReleaseRunner:
         intent: str,
         binding: ProviderBinding,
         catalog: ReleaseCatalog,
+        requested: Sequence[str],
     ) -> PlanResult:
         settings = self.spec.model.release
         record = catalog.get(name)
@@ -747,10 +922,20 @@ class ReleaseRunner:
                 kinds |= self._kinds(composition_from_archive(other.archive))
         artifact = self._discover(binding, kinds)
         snapshot = ObservedSnapshot.from_discovery(artifact)
+        inherited = list(settings.inherited_owners)
+        adopt, not_needed = resolve_adoptions(
+            requested, composition, snapshot, inherited, settings.field_manager
+        )
         plan = build_plan(
             composition,
             snapshot,
-            PlanAuthorization(binding.target, prune_managed=settings.prune),
+            _plan_authorization(
+                binding.target,
+                prune=settings.prune,
+                adopt=adopt,
+                inherited=inherited,
+                field_manager=settings.field_manager,
+            ),
         )
         expires_at = (
             _now() + timedelta(seconds=settings.approval_window_seconds)
@@ -765,14 +950,26 @@ class ReleaseRunner:
             sidecar.get("images", {}),
             {},
             expires_at,
+            _drift(composition, snapshot, settings.field_manager, adopt),
+            not_needed,
         )
         self._persist_plan(
-            result, prune=settings.prune, discovery=artifact.to_private_json()
+            result,
+            prune=settings.prune,
+            discovery=artifact.to_private_json(),
+            adopt=adopt,
+            inherited=inherited,
         )
         return result
 
     def _persist_plan(
-        self, result: PlanResult, *, prune: bool, discovery: str | None = None
+        self,
+        result: PlanResult,
+        *,
+        prune: bool,
+        discovery: str | None = None,
+        adopt: Sequence[Mapping[str, str]] = (),
+        inherited: Sequence[str] = (),
     ) -> None:
         _write_private(
             self._plan_path(result.plan_hash),
@@ -785,6 +982,8 @@ class ReleaseRunner:
                     "prune": prune,
                     "expires_at": result.expires_at,
                     "discovery": discovery,
+                    "adopt": list(adopt),
+                    "inherited_owners": list(inherited),
                 }
             )
             + "\n",
@@ -845,7 +1044,8 @@ class ReleaseRunner:
             raise ReleaseError(
                 f"release {record.name!r} was planned for another owner/field manager"
             )
-        prune = bool(self._sidecar(record.name).get("prune", False))
+        sidecar = self._sidecar(record.name)
+        prune = bool(sidecar.get("prune", False))
 
         def grant(
             plan: DeploymentPlan, captured: ObservedSnapshot
@@ -858,6 +1058,7 @@ class ReleaseRunner:
                 max_age=archived["max_evidence_age_seconds"],
                 field_manager=archived["field_manager"],
                 owner_id=archived["owner_id"],
+                inherited_owner_ids=archived.get("inherited_owner_ids", ()),
             )
 
         return ReleaseWorkflow(
@@ -865,7 +1066,13 @@ class ReleaseRunner:
             target.namespace,
             lambda _refs: composition_from_archive(record.archive),
             snapshot,
-            PlanAuthorization(target, prune_managed=prune),
+            _plan_authorization(
+                target,
+                prune=prune,
+                adopt=sidecar.get("adopt", ()),
+                inherited=sidecar.get("inherited_owners", ()),
+                field_manager=archived["field_manager"],
+            ),
             grant,
             journal,
             store,
@@ -915,8 +1122,12 @@ class ReleaseRunner:
                     snapshot = ObservedSnapshot.from_discovery(
                         DiscoveryArtifact.from_private_json(pending["discovery"])
                     )
-                    plan_authorization = PlanAuthorization(
-                        binding.target, prune_managed=bool(pending["prune"])
+                    plan_authorization = _plan_authorization(
+                        binding.target,
+                        prune=bool(pending["prune"]),
+                        adopt=pending.get("adopt", ()),
+                        inherited=pending.get("inherited_owners", ()),
+                        field_manager=self.spec.model.release.field_manager,
                     )
                     composition = composition_from_archive(record.archive)
                     if (
@@ -939,6 +1150,7 @@ class ReleaseRunner:
                             max_age=settings.approval_window_seconds,
                             field_manager=settings.field_manager,
                             owner_id=settings.owner,
+                            inherited_owner_ids=plan_authorization.inherited_owner_ids,
                         )
 
                     workflow = ReleaseWorkflow(
@@ -985,6 +1197,7 @@ class ReleaseRunner:
                     "plan_hash": plan_hash,
                     "source": record.source.to_dict(),
                     "execution": _execution_summary(result),
+                    "adopted": _adopted(journal, execution_id, result),
                     "selected": catalog.selected().name,
                 }
             finally:

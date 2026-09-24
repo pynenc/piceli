@@ -51,7 +51,7 @@ components = ["worker", { name = "web", shortcut = "web" }]
                 {
                     "id": "x",
                     "label": "x",
-                    "target": "deployment/x",
+                    "target": "statefulset/x",
                     "local_port": 1,
                     "remote_port": 1,
                 }

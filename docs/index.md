@@ -129,6 +129,7 @@ source_identity
 containerized_builds
 artifact_delivery
 node_delivery
+node_local_registry
 operations_lens
 operator_workflow
 ```

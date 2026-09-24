@@ -43,7 +43,14 @@ def _reference_material(plan: DeploymentPlan) -> list[dict[str, Any]]:
 
 
 def _authorization_material(authorization: ExecutionAuthorization) -> dict[str, Any]:
-    return {
+    # Omitted when empty so revisions created before the grant existed keep
+    # their identity.
+    inherited = (
+        {"inherited_owner_ids": list(authorization.inherited_owner_ids)}
+        if authorization.inherited_owner_ids
+        else {}
+    )
+    return inherited | {
         "authorization_id": authorization.authorization_id,
         "target": authorization.target.__dict__,
         "provenance": authorization.provenance.__dict__,
@@ -211,6 +218,7 @@ class ExecutionBundle:
             "actions",
             "cluster_resources",
             "compensation_resources",
+            "inherited_owner_ids",
         )
         if any(
             getattr(authorization, field) != getattr(original, field)

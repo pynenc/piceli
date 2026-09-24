@@ -67,6 +67,9 @@ def _reference_fields(path: tuple[str, ...]) -> frozenset[str]:
         return frozenset({"secretName", "optional", "defaultMode", "items"})
     if path == ("volumes", "*", "projected", "sources", "*", "secret"):
         return frozenset({"name", "optional", "items"})
+    if path == ("volumes", "*", "projected", "sources", "*", "serviceAccountToken"):
+        # Token request settings; the token itself never appears in a manifest.
+        return frozenset({"audience", "expirationSeconds", "path"})
     container = bool(path) and path[0] in {
         "containers",
         "initContainers",
@@ -100,6 +103,10 @@ def _redact(value: Any, *, path: tuple[str, ...] = ()) -> tuple[Any, bool]:
             _SENSITIVE_KEY.search(normalized)
         ) and key not in _reference_fields(path)
         if reference and isinstance(child, dict) and set(child) <= reference:
+            sensitive = False
+        if isinstance(child, bool):
+            # A boolean switch such as ``automountServiceAccountToken`` carries
+            # no secret material; string, number and object values still do.
             sensitive = False
         if key == "value" and sensitive_env:
             sensitive = True

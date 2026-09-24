@@ -30,7 +30,9 @@ from piceli.k8s.ops.session import DeploymentSessionArchive
 from piceli.k8s.ui_config import HealthProbe, RestartPolicy, UiShortcut, legacy_health
 
 _NAME = re.compile(r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?")
-_FORWARD_TARGET = re.compile(r"(?:service|pod)/[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?")
+_FORWARD_TARGET = re.compile(
+    r"(?:service|pod|deployment)/[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?"
+)
 _LOG_TARGET = re.compile(
     r"(?:pod|deployment|statefulset|daemonset|job)/[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?"
 )
@@ -341,7 +343,9 @@ class PortForward:
         if not _NAME.fullmatch(self.name) or not _NAME.fullmatch(self.namespace):
             raise ValueError("invalid forward name or namespace")
         if not _FORWARD_TARGET.fullmatch(self.target):
-            raise ValueError("forward target must be service/NAME or pod/NAME")
+            raise ValueError(
+                "forward target must be service/NAME, deployment/NAME or pod/NAME"
+            )
         for port in (self.local_port, self.remote_port):
             if (
                 not isinstance(port, int)

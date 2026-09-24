@@ -11,6 +11,7 @@ from urllib.parse import quote, urlsplit
 
 from piceli.k8s.ops.bounds import bounded_call, positive, seconds, strict_json, text
 from piceli.k8s.ops.discovery import (
+    RETAINED_KINDS,
     ApiResource,
     ApplyProbeResult,
     ApplyProbeStatus,
@@ -28,9 +29,53 @@ from piceli.k8s.ops.discovery import (
     ResourceScope,
     ResourceType,
 )
+from piceli.k8s.ops.plan import (
+    FieldManagerEntry,
+    ResourceIntent,
+    field_manager_entries,
+    is_transferable,
+    manifest_contains,
+    transferable_managers,
+)
 
 OWNER_ANNOTATION = "piceli.io/owner"
 OPERATION_ANNOTATION = "piceli.io/operation"
+LAST_APPLIED_ANNOTATION = "kubectl.kubernetes.io/last-applied-configuration"
+
+
+def _entry(value: dict[str, Any]) -> FieldManagerEntry:
+    return FieldManagerEntry(
+        str(value.get("manager", "")),
+        str(value.get("operation", "")),
+        str(value.get("subresource", "")),
+        json.dumps(value.get("fieldsV1") or {}),
+    )
+
+
+def _merge_fields(target: dict[str, Any], source: dict[str, Any]) -> None:
+    """Union of two FieldsV1 trees."""
+    for key, child in source.items():
+        if isinstance(child, dict) and child:
+            node = target.setdefault(key, {})
+            if isinstance(node, dict):
+                _merge_fields(node, child)
+        else:
+            target.setdefault(key, {})
+
+
+def _without_ownership(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Object content minus what a metadata-only adoption may change."""
+    value = json.loads(json.dumps(manifest))
+    value.pop("status", None)
+    metadata = value.get("metadata", {})
+    for key in ("resourceVersion", "managedFields"):
+        metadata.pop(key, None)
+    annotations = metadata.get("annotations", {})
+    for key in (OWNER_ANNOTATION, OPERATION_ANNOTATION):
+        annotations.pop(key, None)
+    if not annotations:
+        metadata.pop("annotations", None)
+    return dict(value)
 
 
 class ProviderError(Exception):
@@ -438,6 +483,28 @@ class KubernetesProvider:
         dry_run: bool = False,
         deadline: float | None = None,
     ) -> DiscoveredResource | None:
+        """Create, or server-side apply with ``force=false`` (conflicts surface)."""
+        return self._write(
+            identity,
+            manifest,
+            create=create,
+            dry_run=dry_run,
+            deadline=deadline,
+            force=False,
+        )
+
+    def _write(
+        self,
+        identity: ResourceIdentity,
+        manifest: dict[str, Any],
+        *,
+        create: bool,
+        dry_run: bool,
+        deadline: float | None,
+        force: bool,
+    ) -> DiscoveredResource | None:
+        if force and create:
+            raise ProviderError("invalid-force")
         api = self.api_for(identity, deadline=deadline)
         if (
             manifest.get("apiVersion"),
@@ -453,7 +520,8 @@ class KubernetesProvider:
             raise ProviderError("missing-precondition")
         query = {"fieldManager": self.field_manager}
         if not create:
-            query["force"] = "false"
+            # ``force=true`` is reachable only through ``take_over``.
+            query["force"] = "true" if force else "false"
         if dry_run:
             query["dryRun"] = "All"
         raw = self._request(
@@ -562,6 +630,331 @@ class KubernetesProvider:
             raise ProviderError("invalid-write-response", ambiguous=True)
         return result
 
+    def take_over(
+        self,
+        current: DiscoveredResource,
+        manifest: dict[str, Any],
+        *,
+        transferred_managers: tuple[str, ...],
+        dry_run: bool = False,
+        deadline: float | None = None,
+    ) -> tuple[DiscoveredResource | None, tuple[str, ...]]:
+        """Adopt a non-retained object by transferring field ownership.
+
+        The executor calls this solely for an ADOPT action that the plan marked
+        ``takeover`` and the caller's grant authorizes. This method re-checks
+        what it can see: never a retained kind or a ``piceli.io/retained``
+        object, the exact UID/resourceVersion observed, and a manifest that
+        claims this provider's owner id.
+
+        ``dry_run`` sends the admission check: a ``dryRun=All`` server-side
+        apply with ``force=true``. It is the only request Piceli ever sends
+        with ``force=true``, and it persists nothing; a forced apply cannot
+        be used for the real write because it leaves foreign fields in place.
+        The real write is :meth:`converge_takeover`.
+        """
+        identity = current.identity
+        if identity.kind in RETAINED_KINDS or current.retained:
+            raise ProviderError("retained-resource")
+        metadata = manifest.get("metadata", {})
+        observed = current.manifest["metadata"]
+        if metadata.get("uid") != observed.get("uid") or metadata.get(
+            "resourceVersion"
+        ) != observed.get("resourceVersion"):
+            raise ProviderError("uid-version-precondition-failed")
+        annotations = metadata.get("annotations") or {}
+        operation_id = annotations.get(OPERATION_ANNOTATION)
+        if annotations.get(OWNER_ANNOTATION) != self.owner_id or not operation_id:
+            raise ProviderError("ownership-precondition-failed")
+        if dry_run:
+            self._write(
+                identity,
+                manifest,
+                create=False,
+                dry_run=True,
+                deadline=deadline,
+                force=True,
+            )
+            return None, ()
+        return self.converge_takeover(
+            current,
+            manifest,
+            transferred_managers=transferred_managers,
+            deadline=deadline,
+        )
+
+    def converge_takeover(
+        self,
+        current: DiscoveredResource,
+        manifest: dict[str, Any],
+        *,
+        transferred_managers: tuple[str, ...],
+        deadline: float | None = None,
+        attempts: int = 5,
+    ) -> tuple[DiscoveredResource, tuple[str, ...]]:
+        """Make ``manifest`` the object's full desired state (idempotent).
+
+        1. **Transfer.** A merge patch replaces ``managedFields``: the entries
+           of the planned transferable managers (and this manager's own
+           Update entries) become one Apply entry of this field manager whose
+           field set is their union. Subresource and control-plane entries
+           are kept unchanged. The patch carries the observed resourceVersion.
+        2. **Apply** the manifest with ``force=false``. This manager now owns
+           every client-written field, so the server removes each one the
+           manifest does not declare (a container another tool added, the
+           ``kubectl.kubernetes.io/last-applied-configuration`` annotation,
+           ...). A remaining conflict is with a kept manager (for example an
+           autoscaler's ``scale`` entry) and fails as a real conflict.
+        3. **Verify** the object contains the manifest and no transferable
+           foreign manager is left. An unowned leftover
+           ``last-applied-configuration`` annotation is removed.
+
+        A concurrent write makes a step fail its resourceVersion precondition;
+        the object is then re-read and the steps repeat. A transferable
+        manager that was not planned (someone else wrote in between) stops
+        the takeover. Resuming an interrupted takeover calls this again.
+        """
+        identity = current.identity
+        uid = current.manifest["metadata"].get("uid")
+        if identity.kind in RETAINED_KINDS or current.retained:
+            raise ProviderError("retained-resource")
+        if manifest.get("metadata", {}).get("uid") != uid:
+            raise ProviderError("uid-version-precondition-failed")
+        planned = set(transferred_managers) - {self.field_manager}
+        desired = ResourceIntent.from_manifest(manifest).manifest
+        declares_last_applied = LAST_APPLIED_ANNOTATION in (
+            manifest.get("metadata", {}).get("annotations") or {}
+        )
+        transferred: set[str] = set()
+        wrote = False
+        path = self._path(self.api_for(identity, deadline=deadline), identity.name)
+
+        def refresh() -> DiscoveredResource:
+            value = self.get(identity, deadline=deadline)
+            if value is None or value.manifest["metadata"].get("uid") != uid:
+                raise ProviderError("recreated-object", ambiguous=True)
+            return value
+
+        for _ in range(attempts):
+            metadata = current.manifest["metadata"]
+            entries = metadata.get("managedFields") or []
+            if not isinstance(entries, list) or any(
+                not isinstance(entry, dict) for entry in entries
+            ):
+                raise ProviderError("invalid-field-ownership-evidence", ambiguous=wrote)
+            parsed = field_manager_entries(current.manifest)
+            unplanned = {
+                entry.manager
+                for entry in parsed
+                if is_transferable(entry)
+                and entry.manager not in planned | {self.field_manager}
+            }
+            if unplanned:
+                raise ProviderError("field-owner-precondition-failed", ambiguous=wrote)
+            fold = [
+                entry
+                for entry in entries
+                if is_transferable(_entry(entry))
+                and (
+                    entry.get("manager") in planned
+                    or entry.get("manager") == self.field_manager
+                )
+            ]
+            if not (
+                len(fold) == 1
+                and fold[0].get("manager") == self.field_manager
+                and fold[0].get("operation") == "Apply"
+            ):
+                union: dict[str, Any] = {}
+                for entry in fold:
+                    _merge_fields(union, entry.get("fieldsV1") or {})
+                kept = [entry for entry in entries if entry not in fold]
+                kept.append(
+                    {
+                        "manager": self.field_manager,
+                        "operation": "Apply",
+                        "apiVersion": manifest["apiVersion"],
+                        "fieldsType": "FieldsV1",
+                        "fieldsV1": union,
+                    }
+                )
+                try:
+                    raw = self._request(
+                        "PATCH",
+                        path,
+                        body={
+                            "metadata": {
+                                "uid": uid,
+                                "resourceVersion": metadata["resourceVersion"],
+                                "managedFields": kept,
+                            }
+                        },
+                        query={"fieldManager": self.field_manager},
+                        deadline=deadline,
+                        merge=True,
+                    )
+                except ProviderError as error:
+                    if error.status != 409 or error.ambiguous:
+                        raise ProviderError(
+                            error.category, status=error.status, ambiguous=wrote
+                        ) from None
+                    current = refresh()
+                    continue
+                wrote = True
+                transferred |= {
+                    str(entry.get("manager"))
+                    for entry in fold
+                    if entry.get("manager") != self.field_manager
+                }
+                current = self._checked(raw, identity, uid)
+                metadata = current.manifest["metadata"]
+            body = json.loads(json.dumps(manifest))
+            body["metadata"]["resourceVersion"] = metadata["resourceVersion"]
+            try:
+                applied = self._write(
+                    identity,
+                    body,
+                    create=False,
+                    dry_run=False,
+                    deadline=deadline,
+                    force=False,
+                )
+            except ProviderError as error:
+                if error.status != 409:
+                    raise ProviderError(
+                        error.category,
+                        status=error.status,
+                        ambiguous=error.ambiguous or wrote,
+                    ) from None
+                refreshed = refresh()
+                if (
+                    refreshed.manifest["metadata"].get("resourceVersion")
+                    == metadata["resourceVersion"]
+                ):
+                    # Unchanged object: a real field conflict with a kept
+                    # manager (for example an autoscaler), not a race.
+                    raise ProviderError(
+                        "conflict", status=409, ambiguous=wrote
+                    ) from None
+                current = refreshed
+                continue
+            wrote = True
+            assert applied is not None
+            current = applied
+            annotations = current.manifest["metadata"].get("annotations") or {}
+            if LAST_APPLIED_ANNOTATION in annotations and not declares_last_applied:
+                try:
+                    raw = self._request(
+                        "PATCH",
+                        path,
+                        body={
+                            "metadata": {
+                                "uid": uid,
+                                "resourceVersion": current.manifest["metadata"][
+                                    "resourceVersion"
+                                ],
+                                "annotations": {LAST_APPLIED_ANNOTATION: None},
+                            }
+                        },
+                        query={"fieldManager": self.field_manager},
+                        deadline=deadline,
+                        merge=True,
+                    )
+                except ProviderError as error:
+                    if error.status != 409 or error.ambiguous:
+                        raise ProviderError(
+                            error.category, status=error.status, ambiguous=True
+                        ) from None
+                    current = refresh()
+                    continue
+                current = self._checked(raw, identity, uid)
+            leftover = transferable_managers(
+                field_manager_entries(current.manifest), exclude=(self.field_manager,)
+            )
+            if leftover:
+                current = refresh()
+                continue
+            if current.ownership is not Ownership.MANAGED or not manifest_contains(
+                ResourceIntent.from_manifest(current.manifest).manifest, desired
+            ):
+                raise ProviderError(
+                    "resource-content-precondition-failed", ambiguous=True
+                )
+            # Every planned manager's fields now belong to this manager
+            # (including those transferred by an interrupted earlier attempt).
+            return current, tuple(sorted(planned | transferred))
+        raise ProviderError("takeover-conflict", ambiguous=True)
+
+    def _checked(
+        self, raw: dict[str, Any], identity: ResourceIdentity, uid: Any
+    ) -> DiscoveredResource:
+        try:
+            result = self._resource(raw, self.api_for(identity))
+        except (ValueError, ProviderError):
+            raise ProviderError("invalid-write-response", ambiguous=True) from None
+        if result.identity != identity or result.manifest["metadata"].get("uid") != uid:
+            raise ProviderError("invalid-write-response", ambiguous=True)
+        return result
+
+    def adopt_metadata(
+        self,
+        current: DiscoveredResource,
+        *,
+        operation_id: str,
+        dry_run: bool = False,
+        deadline: float | None = None,
+    ) -> DiscoveredResource | None:
+        """Metadata-only ownership transfer of a retained object.
+
+        The merge patch carries only the owner and operation annotations plus
+        the observed UID and resourceVersion as preconditions, so spec, data
+        and every other field are never part of the request. The response is
+        checked to differ from the observed object in those annotations only.
+        """
+        identity = current.identity
+        if not current.retained:
+            raise ProviderError("not-retained")
+        observed = current.manifest["metadata"]
+        text(operation_id, "operation id")
+        raw = self._request(
+            "PATCH",
+            self._path(self.api_for(identity, deadline=deadline), identity.name),
+            body={
+                "metadata": {
+                    "uid": observed["uid"],
+                    "resourceVersion": observed["resourceVersion"],
+                    "annotations": {
+                        OWNER_ANNOTATION: self.owner_id,
+                        OPERATION_ANNOTATION: operation_id,
+                    },
+                }
+            },
+            query={"fieldManager": self.field_manager}
+            | ({"dryRun": "All"} if dry_run else {}),
+            deadline=deadline,
+            merge=True,
+        )
+        if dry_run:
+            if raw.get("metadata", {}).get("name") != identity.name:
+                raise ProviderError("invalid-write-response")
+            return None
+        try:
+            result = self._resource(raw, self.api_for(identity, deadline=deadline))
+        except (ValueError, ProviderError):
+            raise ProviderError("invalid-write-response", ambiguous=True) from None
+        annotations = result.manifest["metadata"].get("annotations", {})
+        if (
+            result.identity != identity
+            or result.manifest["metadata"].get("uid") != observed["uid"]
+            or result.ownership is not Ownership.MANAGED
+            or annotations.get(OWNER_ANNOTATION) != self.owner_id
+            or annotations.get(OPERATION_ANNOTATION) != operation_id
+            or _without_ownership(result.manifest)
+            != _without_ownership(current.manifest)
+        ):
+            raise ProviderError("invalid-write-response", ambiguous=True)
+        return result
+
     def delete(
         self,
         identity: ResourceIdentity,
@@ -570,8 +963,6 @@ class KubernetesProvider:
         resource_version: str,
         deadline: float | None = None,
     ) -> None:
-        from piceli.k8s.ops.discovery import RETAINED_KINDS
-
         if identity.kind in RETAINED_KINDS:
             raise ProviderError("retained-resource")
         text(uid, "uid")

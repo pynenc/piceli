@@ -127,7 +127,7 @@ Deterministic OCI image layouts from pinned sources. Nothing is pushed. See
 | `inspect` | Validate and describe an OCI layout. |
 | `build-spec preview` / `build-spec run` | Containerized build from a declarative `build.toml`, with a pinned builder and a `piceli.build-receipt.v1` receipt. See {doc}`../containerized_builds`. |
 | `import-local` | Import an approved layout into a local Docker engine (no tag, no push). |
-| `deliver` | Stream an image straight into a node's containerd over `ssh://` or `docker://`, verified by config digest. See {doc}`../node_delivery`. |
+| `deliver` | Deliver an image approved by config digest: push to a registry with `oci://` (default; only missing blobs are uploaded, optionally through a port-forward), or import it straight into a node's containerd over `ssh://` / `docker://`. See {doc}`../node_delivery`. |
 | `preview-command` / `execute-command` | Preview or run a pinned external build tool under an explicit grant. |
 
 ```{note}

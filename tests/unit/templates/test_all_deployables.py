@@ -136,6 +136,22 @@ CASES: dict[str, tuple[Callable[[], templates.Deployable], list[str]]] = {
         lambda: templates.PersistentVolumeClaim(name="pvc", storage="1Gi"),
         ["PersistentVolumeClaim"],
     ),
+    "node-local-registry": (
+        lambda: templates.NodeLocalRegistry(node_name="node-1"),
+        ["ConfigMap", "PersistentVolumeClaim", "Deployment"],
+    ),
+    "node-local-registry-host-path": (
+        lambda: templates.NodeLocalRegistry(
+            node_name="node-1", host_path="/var/lib/registry-data"
+        ),
+        ["ConfigMap", "Deployment"],
+    ),
+    "node-local-registry-gc": (
+        lambda: templates.NodeLocalRegistryGarbageCollection(
+            registry=templates.NodeLocalRegistry(node_name="node-1")
+        ),
+        ["Job"],
+    ),
 }
 
 

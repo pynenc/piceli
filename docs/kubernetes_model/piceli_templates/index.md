@@ -16,6 +16,7 @@ deployable/configmap
 deployable/cronjob
 deployable/deployment
 deployable/job
+deployable/node_local_registry
 deployable/role
 deployable/role_binding
 deployable/secret
@@ -30,6 +31,7 @@ deployable/volume
 - **CronJob**: Schedule jobs to run at specific times or intervals. {doc}`./deployable/cronjob`
 - **Deployment**: Manage stateless applications deployed across your cluster. {doc}`./deployable/deployment` (based in {doc}`./auxiliary/replica_manager`)
 - **Job**: Execute short-lived or batch jobs within your cluster. {doc}`./deployable/job`
+- **NodeLocalRegistry**: A registry on the node loopback that the node pulls from without registry configuration, with a garbage-collection Job. {doc}`./deployable/node_local_registry`
 - **Role and ClusterRole**: Define permissions for accessing Kubernetes resources. {doc}`./deployable/role`
 - **RoleBinding** and **ClusterRoleBinding**: Associate roles with specific users or groups. {doc}`./deployable/role_binding`
 - **Secret**: Securely store and manage sensitive information. {doc}`./deployable/secret`

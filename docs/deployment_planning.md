@@ -56,8 +56,11 @@ acceptance requires a literal loopback HTTP origin.
 manifest copies and dependency order. `ObservedSnapshot` binds coverage, provenance,
 defaults and resource identities. `build_plan(composition, snapshot, authorization)`
 produces deterministic create/adopt/apply/no-op/delete actions and a public hash.
-Existing unmanaged objects require exact adoption grants. Explicit desired values
-always participate in comparison, even when the API supplies a default.
+Existing unmanaged objects require exact adoption grants
+(`PlanAuthorization(adopt_resources=...)`); see "Adoption by ownership
+transfer" below. Explicit
+desired values always participate in comparison, even when the API supplies a
+default.
 
 Namespace, PV, PVC and Secret retention cannot be disabled. Pruning protects
 retained/unmanaged descendants and orders allowed deletion child-first. Public
@@ -88,12 +91,18 @@ build an immutable plan, then supply an `ExecutionAuthorization` binding:
 
 `executor.preview(plan)` is pure. `executor.run(id, plan, snapshot, grant)`
 checks those bindings and executes one ordered action at a time. New objects use
-conditional POST; existing objects use server-side apply with `force=false` and
-UID/resourceVersion preconditions. A dry-run admission check precedes each write.
+conditional POST; existing objects use server-side apply with `force=false` (or,
+for objects this owner already manages, a merge patch) and UID/resourceVersion
+preconditions; nothing is persisted with `force=true`. A dry-run admission
+check precedes each write (for a takeover adoption, described below, it is
+the one request sent with `force=true`).
 Deletes carry UID/version preconditions and `propagationPolicy=Orphan`.
 No retained kind is deleted. Target identity is rechecked for mutations and each
-readiness poll; resource identity, desired state and field ownership are checked
-against receipts. Controllers may update status while readiness is pending.
+readiness poll; resource identity, the declared fields' values and their field
+owners are checked against receipts. Fields the plan does not declare are not
+compared, so controllers may update status, a Deployment's revision annotation
+or a WaitForFirstConsumer claim's `spec.volumeName` and binding annotations
+while readiness is pending.
 
 The private SQLite journal commits intent before network I/O, then commits the
 receipt. A process lock excludes competing executors. Cancellation is durable:
@@ -107,7 +116,10 @@ an ambiguous create will not finish later, so it remains blocked.
 `executor.compensate(...)` refreshes complete discovery and reverses only still
 owned, explicitly authorized changes under current UID/version/field-owner
 preconditions. Created objects may be removed; owned updates may be restored.
-Adopted objects, deleted objects and retained resources are kept. Interrupted
+A takeover adoption is reversed like an update: the pre-adoption content is
+re-applied with `force=false` and the object stays owned (the transferred
+field managers are not restored). Metadata-only adoptions, deleted objects and
+retained resources are kept. Interrupted
 compensation is also journaled and reconciled by observation. This is not a
 Kubernetes-wide rollback transaction. Unknown scope, object recreation, drift,
 descendants or conflicting ownership prevent unsafe reversal.
@@ -121,6 +133,101 @@ own encryption, backup and access policy. Public reports contain neither private
 values nor private reference IDs. The durable public interchange below is a
 different machine-readable artifact: it carries opaque reference IDs solely to
 bind an exact resume to the already-private versions.
+
+### Adoption by ownership transfer
+
+An ADOPT action moves an existing object under this owner. Only objects the
+caller lists in `PlanAuthorization(adopt_resources=...)` are adopted; any
+other unmanaged desired object fails planning, and the executor refuses an
+ADOPT that its `ExecutionAuthorization` does not grant exactly, before any
+write. `build_plan` picks the mode from the observed object and records it in
+the action (`PlanAction.adoption`), so it is part of the plan hash:
+
+| Mode | Objects | Write |
+| --- | --- | --- |
+| `metadata-only` | retained: Namespace, PV, PVC, Secret, or `piceli.io/retained: "true"` | one merge patch with only `piceli.io/owner`, `piceli.io/operation` and the observed UID/resourceVersion |
+| `takeover` | everything else | transfer of client field managers to this manager (a `managedFields` merge patch), then a server-side apply with `force=false` that removes undeclared transferred fields |
+
+**Metadata-only.** Planning refuses unless the live object already contains
+the desired manifest (labels and annotations included). Private values are
+compared by the executor after resolution and before any write; the refusal
+names the resource, never the value. Spec and data are never part of the
+request, and the response must differ from the observed object only in those
+two annotations. Compensation never touches the object. A retained object
+owned by an earlier owner id can be adopted the same way when that id is in
+`PlanAuthorization.inherited_owner_ids`; the owner annotation is re-stamped.
+
+**Takeover.** It makes the desired manifest the object's full desired state,
+as Flux does for objects written by `kubectl`. `transferred_managers` in the
+plan are every *transferable* field manager of the live object, not only
+those owning declared fields (`plan.transferable_managers`):
+
+* transferred: entries on the main resource (no subresource) with operation
+  `Apply` or `Update`, for example `kubectl-client-side-apply`,
+  `kubectl-create`, `kubectl-set`, `kubectl-edit`, `kubectl-rollout`,
+  `helm` or another tool;
+* kept: every subresource entry (`status`; `scale`, as an autoscaler writes
+  it) and control-plane managers (`CONTROL_PLANE_MANAGERS`:
+  `kube-apiserver`, `kube-controller-manager`, `kube-scheduler`, `kubelet`,
+  `cloud-controller-manager`; plus names starting with `k3s` or ending in
+  `-controller` or `-controller-manager`).
+
+`PlanAuthorization.field_manager` keeps the executing manager out of the
+list. The executor then:
+
+1. re-checks that the live `managedFields`, generation and content match the
+   planned evidence (`field-owner-precondition-failed` otherwise), and that
+   the recorded transfer list matches that evidence;
+2. sends the admission check: `KubernetesProvider.take_over(dry_run=True)`,
+   a `dryRun=All` server-side apply with `force=true`. It is the only
+   `force=true` request Piceli sends and persists nothing. It refuses
+   retained kinds, a manifest that does not claim this owner, and a stale
+   UID/resourceVersion;
+3. journals intent with `adoption.transferred_managers`;
+4. `KubernetesProvider.converge_takeover`: a merge patch, guarded by the
+   observed resourceVersion, replaces `managedFields` so that the transferred
+   entries (and this manager's own Update entries) become one Apply entry of
+   this manager holding the union of their fields; kept entries are
+   unchanged. The API rejects `managedFields` in an apply body, so this is
+   its own write;
+5. applies the manifest with `force=false`. This manager now owns every
+   client-written field, so the API server removes each one the manifest
+   does not declare: a container with another name, extra labels, a
+   `restartedAt` annotation and `kubectl.kubernetes.io/last-applied-configuration`
+   (an unowned leftover of that annotation is removed too, so a client-side
+   `kubectl apply` cannot resurrect old fields). A conflict at this point is
+   with a kept manager (for example an autoscaler owning `replicas` with
+   another value) and fails as `conflict` instead of being forced;
+6. verifies the object contains the manifest and that no transferable foreign
+   manager is left, then records `adoption.completed_transfer`.
+
+A concurrent write makes steps 4–5 fail their precondition; the object is
+re-read and the steps repeat. A transferable manager that the plan did not
+list stops the takeover. The steps are idempotent: an interrupted takeover
+stays in `intent` (execution `blocked`) and resume converges it. A plan may
+also ADOPT an object this owner already manages (non-retained): the takeover
+then reclaims fields other clients wrote since. Ordinary creates and updates
+are unchanged, so real conflicts still fail with `error:conflict`. An ADOPT
+restored from a plan without an adoption mode (before this feature) never
+transfers anything.
+
+`field_drift(composition, snapshot, field_manager)` reports managed,
+non-retained objects whose declared fields are also owned by another manager,
+for example after a `kubectl set image`. It is informational and not part of
+the plan hash.
+
+**Inherited owners as a grant.** `ExecutionAuthorization.inherited_owner_ids`
+lets the executor treat retained objects of those earlier owner ids as its own
+(an unchanged object is reconciled without a write). Only ids the provider
+also lists in `KubernetesProvider(inherited_owner_ids=...)` are honoured, and
+a grant listing others is refused. The grant is part of the revision identity
+when it is not empty.
+
+**Rotating a retained Secret.** A retained Secret is never rewritten, so a new
+value under the same name fails with `retained-content-precondition-failed`.
+Rotate into a new Secret instead: give the Secret a name with a generation
+suffix (for example `api-token-2`), point the workloads at it, and apply.
+The old Secret stays until you delete it.
 
 ### Durable revisions
 

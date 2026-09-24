@@ -57,7 +57,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 UI_CONFIG_ENV = "PICELI__UI_CONFIG"
 
 _NAME = re.compile(r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?")
-_TARGET = re.compile(r"(?:service|pod)/[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?")
+_TARGET = re.compile(r"(?:service|pod|deployment)/[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?")
 _SAFE_PATH = re.compile(r"/[A-Za-z0-9._~!$&'()*+,;=:@%/?#-]*")
 
 
@@ -200,7 +200,9 @@ class UiShortcut(_Model):
     @classmethod
     def _valid_target(cls, value: str) -> str:
         if not _TARGET.fullmatch(value):
-            raise ValueError("shortcut target must be service/NAME or pod/NAME")
+            raise ValueError(
+                "shortcut target must be service/NAME, deployment/NAME or pod/NAME"
+            )
         return value
 
     @field_validator("namespace")

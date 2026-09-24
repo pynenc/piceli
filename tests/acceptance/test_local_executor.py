@@ -379,6 +379,7 @@ def test_exact_adoption_is_required_and_ssa_uses_uid_version_manager(
     local_api, tmp_path
 ):
     api, provider = local_api
+    api.field_ownership = True
     api.put(manifest(), uid="unmanaged")
     run = executor(provider, tmp_path)
     intent = ResourceIntent.from_manifest(manifest(value="two"))
@@ -386,15 +387,22 @@ def test_exact_adoption_is_required_and_ssa_uses_uid_version_manager(
         prepare(provider, [intent])
     plan, snapshot, grant = prepare(provider, [intent], adopt=(intent.ref,))
     assert run.run("adopt", plan, snapshot, grant)["state"] == "ready"
-    request = mutations(api)[0]
+    transfer, request = mutations(api)
+    assert transfer["content_type"] == "application/merge-patch+json"
     assert request["method"] == "PATCH"
     assert request["body"]["metadata"]["uid"] == "unmanaged"
+    # A takeover transfers field ownership and then applies without force.
     assert request["query"] == {
         "fieldManager": [provider.field_manager],
         "force": ["false"],
     }
+    assert api.objects[("ConfigMap", "settings")]["data"] == {"mode": "two"}
+    writes = len(mutations(api))
+    # Compensation restores the adopted object's previous content (force=false).
     run.compensate("adopt", plan, snapshot, grant)
-    assert len(mutations(api)) == 1
+    assert len(mutations(api)) == writes + 1
+    assert mutations(api)[-1]["query"]["force"] == ["false"]
+    assert api.objects[("ConfigMap", "settings")]["data"] == {"mode": "one"}
 
 
 def test_private_versions_bind_rotation_without_public_digest_oracle(

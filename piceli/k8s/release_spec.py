@@ -50,6 +50,22 @@ class ReleaseSpecError(ValueError):
     """The release spec, build receipt or composition entry point is invalid."""
 
 
+_ADOPT_ENTRY = re.compile(
+    r"(?:(?P<api>(?:[a-z0-9.-]+/)?v[0-9][a-z0-9]*)/)?"
+    r"(?P<kind>[A-Z][A-Za-z0-9]*)/(?P<name>[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?)"
+)
+
+
+def parse_adopt_entry(value: str) -> tuple[str | None, str, str]:
+    """``Kind/name`` or ``apiVersion/Kind/name`` → (api_version, kind, name)."""
+    match = _ADOPT_ENTRY.fullmatch(value) if isinstance(value, str) else None
+    if match is None or len(match["name"]) > 253:
+        raise ReleaseSpecError(
+            f"adopt entry must be 'Kind/name' or 'apiVersion/Kind/name', got {value!r}"
+        )
+    return match["api"], match["kind"], match["name"]
+
+
 class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -82,6 +98,16 @@ class ReleaseSettings(_Strict):
     approval_window_seconds: int = Field(default=900, ge=30, le=86400)
     prune: bool = False
     inherited_owners: tuple[str, ...] = ()
+    # Existing objects this release may adopt: "Kind/name" or
+    # "apiVersion/Kind/name", in the target namespace. See docs/release_cli.md.
+    adopt: tuple[str, ...] = ()
+
+    @field_validator("adopt")
+    @classmethod
+    def _adopt(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        for item in value:
+            parse_adopt_entry(item)
+        return value
 
     @field_validator("name")
     @classmethod
@@ -124,15 +150,32 @@ class DiscoverySpec(_Strict):
 
 
 class ImageSpec(_Strict):
+    """A pinned image: ``digest`` (+ optional ``ref``), or a delivery ``receipt``.
+
+    ``receipt`` points at a ``piceli.registry-delivery.v1`` receipt from
+    ``piceli artifacts deliver --to oci://…``; its ``pull_ref`` (the registry
+    manifest digest as seen from the node) becomes the image reference. A
+    ``digest`` given together with ``receipt`` pins the expected manifest digest.
+    """
+
     ref: str | None = None
-    digest: str
+    digest: str | None = None
+    receipt: Path | None = None
 
     @field_validator("digest")
     @classmethod
-    def _digest(cls, value: str) -> str:
-        if not _DIGEST.fullmatch(value):
+    def _digest(cls, value: str | None) -> str | None:
+        if value is not None and not _DIGEST.fullmatch(value):
             raise ValueError("image digest must be sha256:<64 hex>")
         return value
+
+    @model_validator(mode="after")
+    def _source(self) -> ImageSpec:
+        if self.receipt is None and self.digest is None:
+            raise ValueError("declare digest or receipt")
+        if self.receipt is not None and self.ref is not None:
+            raise ValueError("ref comes from the receipt; do not declare both")
+        return self
 
 
 class RandomSecretSpec(_Strict):
@@ -271,8 +314,64 @@ def _split_ref(ref: str) -> tuple[str, str | None, str | None]:
     return ref, tag, digest
 
 
-def _image_from_spec(name: str, value: str | ImageSpec) -> ImageRef:
+DELIVERY_RECEIPT_SCHEMA = "piceli.registry-delivery.v1"
+
+
+def load_delivery_receipt(name: str, path: Path, pin: str | None = None) -> ImageRef:
+    """Read the pull reference from a ``piceli.registry-delivery.v1`` receipt."""
+    try:
+        document = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as error:
+        raise ReleaseSpecError(
+            f"cannot read delivery receipt {path}: {error}"
+        ) from None
+    if (
+        not isinstance(document, dict)
+        or document.get("schema") != DELIVERY_RECEIPT_SCHEMA
+    ):
+        raise ReleaseSpecError(
+            f"image {name!r}: receipt must have schema {DELIVERY_RECEIPT_SCHEMA!r}"
+        )
+    if document.get("result") not in {"pushed", "already-present"}:
+        raise ReleaseSpecError(
+            f"image {name!r}: delivery did not succeed ({document.get('result')!r})"
+        )
+    image = document.get("image")
+    image = image if isinstance(image, dict) else {}
+    manifest = image.get("manifest_digest")
+    config = image.get("config_digest")
+    pull_ref = document.get("pull_ref")
+    if not (
+        isinstance(manifest, str)
+        and isinstance(config, str)
+        and _DIGEST.fullmatch(manifest)
+        and _DIGEST.fullmatch(config)
+    ):
+        raise ReleaseSpecError(f"image {name!r}: receipt digests are invalid")
+    if not isinstance(pull_ref, str):
+        raise ReleaseSpecError(f"image {name!r}: receipt has no pull_ref")
+    repository, tag, embedded = _split_ref(pull_ref)
+    if embedded != manifest:
+        raise ReleaseSpecError(
+            f"image {name!r}: receipt pull_ref is not pinned to its manifest digest"
+        )
+    if pin is not None and pin != manifest:
+        raise ReleaseSpecError(
+            f"image {name!r}: receipt manifest digest does not match the pinned digest"
+        )
+    return ImageRef(
+        name, manifest, repository, tag, manifest, image_id=config, ref=pull_ref
+    )
+
+
+def _image_from_spec(
+    name: str, value: str | ImageSpec, resolve: Callable[[Path], Path] | None = None
+) -> ImageRef:
+    if isinstance(value, ImageSpec) and value.receipt is not None:
+        path = resolve(value.receipt) if resolve else value.receipt
+        return load_delivery_receipt(name, path, value.digest)
     if isinstance(value, ImageSpec):
+        assert value.digest is not None
         repository, tag = (None, None)
         if value.ref:
             repository, tag, embedded = _split_ref(value.ref)
@@ -465,7 +564,7 @@ class ReleaseSpec:
     def images(self) -> dict[str, ImageRef]:
         """Declared images plus the build receipt's, rejecting name collisions."""
         result = {
-            name: _image_from_spec(name, value)
+            name: _image_from_spec(name, value, self.resolve)
             for name, value in self.model.images.items()
         }
         if self.model.images_from is not None:

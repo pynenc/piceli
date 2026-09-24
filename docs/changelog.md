@@ -4,6 +4,53 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.2.0
+
+- `release.toml` images can point at a registry delivery receipt:
+  `web = { receipt = "web.delivery.json" }` releases the receipt's
+  digest-pinned `pull_ref`. This chains build → delivery → release without
+  copying digests by hand.
+
+- Adopt existing objects by ownership transfer. `piceli release --adopt
+  Kind/name` (or `[release] adopt = [...]`, or
+  `PlanAuthorization.adopt_resources`) adopts objects in one of two ways:
+  - retained objects (PVC, Secret, Namespace, PV) with an owner-annotation-only
+    write; their spec and data are never touched;
+  - other objects with an explicitly authorized takeover. Field ownership of
+    every client manager (for example `kubectl-create`, `kubectl-set`) is
+    transferred to Piceli and the manifest is applied without force, so fields
+    the release does not declare are removed. Subresource and control-plane
+    managers are kept, and `force=true` is only used for the admission dry run.
+
+  Plans show the adoption mode and the displaced managers, and report field
+  drift. Inherited owners are now part of the execution grant.
+- Receipts only compare declared fields, which fixes the false drift on the
+  first apply of a WaitForFirstConsumer PVC.
+- Boolean `*Token` fields such as `automountServiceAccountToken` are no longer
+  redacted as secrets.
+
+- `templates.NodeLocalRegistry` is a digest-pinned OCI registry bound to the
+  node loopback, so the node pulls from it without any registry configuration
+  and it is not exposed on the network. It has:
+  - retained storage, delete support and loopback probes;
+  - a garbage-collection Job that is safe to run in stopped or read-only mode;
+  - a `pull_reference()` helper, and a `component()` for `piceli release`
+    compositions.
+
+  See {doc}`node_local_registry`.
+- `piceli artifacts deliver --to oci://host[:port]/repo[:tag]` is now the
+  default delivery mode:
+  - it pushes an image approved by config digest and uploads only the missing
+    blobs, chunked where needed;
+  - it is idempotent, and it re-verifies the pushed manifest;
+  - its receipt (`piceli.registry-delivery.v1`) records the manifest digest and
+    a node-side `pull_ref`;
+  - `--via-forward` pushes through a supervised loopback port-forward.
+
+  Plain HTTP is only allowed for loopback registries, and credentials come from
+  a private file. Node import over `ssh://` / `docker://` remains as the
+  fallback.
+
 ## Version 0.1.0
 
 - `piceli release {plan,preview,apply,rollback,resume,stop,status} --spec release.toml`

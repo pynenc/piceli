@@ -31,13 +31,19 @@ from piceli.k8s.ops.kubernetes_provider import (
     ProviderError,
 )
 from piceli.k8s.ops.plan import (
+    AdoptionMode,
     DeploymentPlan,
+    ObservedResource,
     ObservedSnapshot,
     PlanAction,
     PlanOperation,
     ResourceIntent,
     ResourcePrecondition,
     ResourceRef,
+    adoption_for,
+    field_manager_entries,
+    manifest_contains,
+    overlapping_managers,
 )
 from piceli.k8s.ops.secret_versions import (
     PRIVATE_VALUE,
@@ -90,8 +96,22 @@ class ExecutionAuthorization:
     compensation_resources: tuple[ResourceRef, ...] = ()
     max_evidence_age_seconds: float = 300
     resume_revision_id: str | None = None
+    # Earlier owner ids whose objects this grant lets the executor treat as
+    # its own (retained objects are then reconciled without a write, or
+    # re-stamped by an explicit metadata-only adoption). Honoured only for ids
+    # the provider also classifies as inherited.
+    inherited_owner_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        if isinstance(self.inherited_owner_ids, str):
+            raise ValueError("inherited owner ids must be a tuple of ids")
+        for value in self.inherited_owner_ids:
+            text(value, "inherited owner")
+        object.__setattr__(
+            self, "inherited_owner_ids", tuple(sorted(set(self.inherited_owner_ids)))
+        )
+        if self.owner_id in self.inherited_owner_ids:
+            raise ValueError("owner id cannot also be inherited")
         for value in (
             self.authorization_id,
             self.plan_hash,
@@ -236,6 +256,9 @@ class PlanExecutor:
         # Fault injection occurs strictly after HTTP response and before receipt.
         self.after_response = after_response
         self.telemetry = telemetry or NoopTelemetry()
+        # Owner ids accepted for retained objects; widened per run only by the
+        # authorization's inherited-owner grant.
+        self._owners: frozenset[str] = frozenset({provider.owner_id})
 
     def preview(self, plan: DeploymentPlan) -> dict[str, Any]:
         return plan.summary()
@@ -298,6 +321,10 @@ class PlanExecutor:
             raise ValueError("execution requires complete, private, verified discovery")
         if ObservedSnapshot.from_discovery(artifact) != snapshot:
             raise ValueError("snapshot does not match discovery evidence")
+        if not set(authorization.inherited_owner_ids) <= set(
+            self.provider.inherited_owner_ids
+        ):
+            raise ValueError("inherited owner grant exceeds the provider's owners")
         if (
             datetime.now(UTC) - timestamp(artifact.captured_at)
         ).total_seconds() > authorization.max_evidence_age_seconds:
@@ -345,8 +372,58 @@ class PlanExecutor:
                 ):
                     raise ValueError("unsafe retained or unmanaged descendants")
             else:
-                self._manifest(action.resource)
+                manifest = self._manifest(action.resource)
+                if action.operation is PlanOperation.ADOPT:
+                    assert current is not None
+                    self._validate_adoption(action, current, manifest, authorization)
         self.provider.verify_target(deadline=deadline)
+
+    def _granted_owners(self, authorization: ExecutionAuthorization) -> frozenset[str]:
+        """Owner ids whose objects count as ours: exact owner plus granted heirs."""
+        return frozenset({self.provider.owner_id}) | (
+            frozenset(authorization.inherited_owner_ids)
+            & self.provider.inherited_owner_ids
+        )
+
+    def _validate_adoption(
+        self,
+        action: PlanAction,
+        current: ObservedResource,
+        manifest: dict[str, Any],
+        authorization: ExecutionAuthorization,
+    ) -> None:
+        """Refuse, before any write, an adoption the evidence does not support."""
+        adoption = action.adoption
+        if adoption is None:
+            # Restored pre-adoption-mode plans keep the old, never-forced path.
+            return
+        expected = adoption_for(action.resource, current, self.provider.field_manager)
+        if (
+            adoption.mode,
+            adoption.previous_owner,
+            set(adoption.transferred_managers) - {self.provider.field_manager},
+        ) != (
+            expected.mode,
+            expected.previous_owner,
+            set(expected.transferred_managers),
+        ):
+            raise ValueError("adoption details do not match discovery evidence")
+        if adoption.mode is AdoptionMode.METADATA_ONLY:
+            if not current.retained:
+                raise ValueError("metadata-only adoption requires a retained object")
+            if current.ownership is not Ownership.UNMANAGED and (
+                current.owner not in self._granted_owners(authorization)
+            ):
+                raise ValueError("retained adoption owner is not granted")
+            if not _contains(current.intent.manifest, manifest):
+                # Value-free: the private content differs from the live object.
+                raise ValueError(
+                    "retained adoption requires the live object to contain the "
+                    f"desired manifest: {action.resource.ref}"
+                )
+            return
+        if current.retained or action.resource.ref.kind in RETAINED_KINDS:
+            raise ValueError("takeover adoption requires a non-retained object")
 
     def _binding(
         self, plan: DeploymentPlan, authorization: ExecutionAuthorization
@@ -473,10 +550,7 @@ class PlanExecutor:
         if current is None or not current.retained:
             return False
         metadata = current.manifest["metadata"]
-        if (
-            metadata.get("annotations", {}).get(OWNER_ANNOTATION)
-            != self.provider.owner_id
-        ):
+        if metadata.get("annotations", {}).get(OWNER_ANNOTATION) not in self._owners:
             raise ProviderError("ownership-precondition-failed")
         if not _contains(
             ResourceIntent.from_manifest(current.manifest).manifest,
@@ -484,6 +558,109 @@ class PlanExecutor:
         ):
             raise ProviderError("retained-content-precondition-failed")
         return True
+
+    def _foreign_owners(
+        self, resource: DiscoveredResource, desired: dict[str, Any]
+    ) -> tuple[str, ...]:
+        """Other field managers that own a field this plan declares."""
+        try:
+            entries = field_manager_entries(resource.manifest)
+        except ValueError:
+            raise ProviderError("invalid-field-ownership-evidence") from None
+        return overlapping_managers(
+            entries, desired, exclude=(self.provider.field_manager,)
+        )
+
+    def _manifest_intent(self, action: PlanAction) -> dict[str, Any]:
+        """Resolved desired content without execution metadata."""
+        return ResourceIntent.from_manifest(self._manifest(action.resource)).manifest
+
+    def _adopt_retained(
+        self,
+        execution: str,
+        row: dict[str, Any],
+        action: PlanAction,
+        current: DiscoveredResource,
+        payload: dict[str, Any],
+        authorization: ExecutionAuthorization,
+        deadline: float,
+    ) -> None:
+        """Metadata-only adoption: stamp the owner, never touch spec or data."""
+        if not current.retained:
+            raise ProviderError("retained-adoption-precondition-failed")
+        previous = (
+            current.manifest["metadata"].get("annotations", {}).get(OWNER_ANNOTATION)
+        )
+        if current.ownership is Ownership.MANAGED and previous not in self._owners:
+            raise ProviderError("ownership-precondition-failed")
+        if not _contains(
+            ResourceIntent.from_manifest(current.manifest).manifest,
+            self._manifest(action.resource),
+        ):
+            raise ProviderError("retained-content-precondition-failed")
+        if previous == self.provider.owner_id:
+            # Already ours (e.g. adopted by an earlier execution): observe only.
+            receipt = self._receipt(current, payload | {"retained_reconciled": True})
+            self.journal.record(execution, row["ordinal"], "applied", receipt)
+            return
+        payload["adoption"] = {
+            "mode": AdoptionMode.METADATA_ONLY.value,
+            "previous_owner": previous if isinstance(previous, str) else None,
+        }
+        self.provider.adopt_metadata(
+            current, operation_id=row["operation_id"], dry_run=True, deadline=deadline
+        )
+        self._guard(execution, authorization, deadline)
+        self.journal.record(execution, row["ordinal"], "intent", payload)
+        try:
+            result = self.provider.adopt_metadata(
+                current, operation_id=row["operation_id"], deadline=deadline
+            )
+            if self.after_response is not None:
+                self.after_response(row["ordinal"])
+            assert result is not None
+            self.journal.record(
+                execution, row["ordinal"], "applied", self._receipt(result, payload)
+            )
+        except ProviderError as error:
+            if not error.ambiguous:
+                self.journal.record(execution, row["ordinal"], "failed", payload)
+            raise
+
+    def _resume_takeover(
+        self,
+        row: dict[str, Any],
+        action: PlanAction,
+        adoption: dict[str, Any],
+        deadline: float,
+    ) -> tuple[DiscoveredResource, tuple[str, ...]]:
+        current = self.provider.get(_identity(action.resource.ref), deadline=deadline)
+        if current is None:
+            raise ProviderError("ambiguous-write-blocked", ambiguous=True)
+        if current.manifest["metadata"]["uid"] != action.precondition.uid:
+            raise ProviderError("recreated-object", ambiguous=True)
+        annotations = current.manifest["metadata"].get("annotations", {})
+        owner = annotations.get(OWNER_ANNOTATION)
+        if owner is not None and owner not in self._owners | {
+            action.adoption.previous_owner if action.adoption else None
+        }:
+            # Someone else claimed the object in between.
+            raise ProviderError("ownership-precondition-failed", ambiguous=True)
+        manifest = self._manifest(action.resource)
+        metadata = manifest["metadata"]
+        metadata.setdefault("annotations", {}).update(
+            {
+                OWNER_ANNOTATION: self.provider.owner_id,
+                OPERATION_ANNOTATION: row["operation_id"],
+            }
+        )
+        metadata["uid"] = current.manifest["metadata"]["uid"]
+        return self.provider.converge_takeover(
+            current,
+            manifest,
+            transferred_managers=tuple(adoption["transferred_managers"]),
+            deadline=deadline,
+        )
 
     def _reconcile(
         self, row: dict[str, Any], action: PlanAction, deadline: float
@@ -495,6 +672,21 @@ class PlanExecutor:
             raise ProviderError("ambiguous-delete-blocked", ambiguous=True)
         if current is None:
             raise ProviderError("ambiguous-write-blocked", ambiguous=True)
+        if _mode(action) is AdoptionMode.METADATA_ONLY:
+            annotations = current.manifest["metadata"].get("annotations", {})
+            if (
+                current.manifest["metadata"]["uid"] != action.precondition.uid
+                or annotations.get(OWNER_ANNOTATION) != self.provider.owner_id
+                or annotations.get(OPERATION_ANNOTATION) != row["operation_id"]
+                or current.ownership is not Ownership.MANAGED
+            ):
+                raise ProviderError("ambiguous-write-blocked", ambiguous=True)
+            if not _contains(
+                ResourceIntent.from_manifest(current.manifest).manifest,
+                self._manifest(action.resource),
+            ):
+                raise ProviderError("ambiguous-content-blocked", ambiguous=True)
+            return current, False
         if self._retained_identical(current, action):
             return current, True
         metadata = current.manifest["metadata"]
@@ -544,9 +736,17 @@ class PlanExecutor:
         if current is None or current.manifest["metadata"]["uid"] != payload["uid"]:
             raise ProviderError("recreated-object")
         after = self._load(payload["after"], current.identity)
-        if _owners(current) != _owners(after) or _receipt_intent(
-            current
-        ) != _receipt_intent(after):
+        # Only what this plan declares is compared: the server may populate
+        # other fields after the write (a WaitForFirstConsumer claim gains
+        # spec.volumeName and provisioner annotations when it binds, a
+        # Deployment a revision annotation). Values are compared as the server
+        # returned them, so quantity canonicalization is not drift either.
+        desired = self._manifest_intent(action)
+        if _project(_receipt_intent(current), desired) != _project(
+            _receipt_intent(after), desired
+        ) or set(self._foreign_owners(current, desired)) - set(
+            self._foreign_owners(after, desired)
+        ):
             raise ProviderError("applied-resource-drift")
         if current.ownership != after.ownership:
             raise ProviderError("ownership-precondition-failed")
@@ -709,6 +909,7 @@ class PlanExecutor:
         deadline = time.monotonic() + self.limits.max_seconds
         with self.journal.exclusive():
             self._validate(plan, snapshot, authorization, deadline)
+            self._owners = self._granted_owners(authorization)
             self.journal.start(
                 execution,
                 binding or self._binding(plan, authorization),
@@ -740,6 +941,17 @@ class PlanExecutor:
                             payload = self._receipt(current, payload)
                             self.journal.record(
                                 execution, row["ordinal"], "applied", payload
+                            )
+                        elif _mode(action) is AdoptionMode.METADATA_ONLY:
+                            assert current is not None
+                            self._adopt_retained(
+                                execution,
+                                row,
+                                action,
+                                current,
+                                payload,
+                                authorization,
+                                deadline,
                             )
                         elif self._retained_identical(current, action):
                             assert current is not None
@@ -783,12 +995,36 @@ class PlanExecutor:
                                             ]["resourceVersion"],
                                         }
                                     )
-                                # Admission/field conflicts are surfaced without force ownership.
+                                takeover = _mode(action) is AdoptionMode.TAKEOVER
+                                if takeover:
+                                    assert current is not None
+                                    assert action.adoption is not None
+                                    payload["adoption"] = {
+                                        "mode": AdoptionMode.TAKEOVER.value,
+                                        "previous_owner": action.adoption.previous_owner,
+                                        "transferred_managers": _transferred(
+                                            action, self.provider.field_manager
+                                        ),
+                                    }
+                                # Admission/field conflicts are surfaced without force;
+                                # a takeover's admission check is the one forced
+                                # dry run (see KubernetesProvider.take_over).
                                 if same_owner_update:
                                     assert current is not None
                                     self.provider.update_owned(
                                         current,
                                         manifest,
+                                        dry_run=True,
+                                        deadline=deadline,
+                                    )
+                                elif takeover:
+                                    assert current is not None
+                                    self.provider.take_over(
+                                        current,
+                                        manifest,
+                                        transferred_managers=tuple(
+                                            payload["adoption"]["transferred_managers"]
+                                        ),
                                         dry_run=True,
                                         deadline=deadline,
                                     )
@@ -816,6 +1052,20 @@ class PlanExecutor:
                                         deadline=deadline,
                                     )
                                     result = None
+                                elif takeover:
+                                    assert manifest is not None
+                                    assert current is not None
+                                    result, moved = self.provider.take_over(
+                                        current,
+                                        manifest,
+                                        transferred_managers=tuple(
+                                            payload["adoption"]["transferred_managers"]
+                                        ),
+                                        deadline=deadline,
+                                    )
+                                    payload["adoption"]["completed_transfer"] = list(
+                                        moved
+                                    )
                                 else:
                                     assert manifest is not None
                                     result = (
@@ -848,15 +1098,32 @@ class PlanExecutor:
                                 raise
                         row = self.journal.actions(execution)[row["ordinal"]]
                     elif row["state"] == "intent":
-                        result, retained_reconciled = self._reconcile(
-                            row, action, deadline
-                        )
+                        base = dict(row["payload"])
+                        adoption = base.get("adoption")
+                        if _is_takeover(row):
+                            # The takeover is idempotent: converge again from
+                            # whatever step was interrupted.
+                            assert isinstance(adoption, dict)
+                            result, moved = self._resume_takeover(
+                                row, action, adoption, deadline
+                            )
+                            retained_reconciled = False
+                            base["adoption"] = adoption | {
+                                "completed_transfer": sorted(
+                                    set(adoption.get("completed_transfer", ()))
+                                    | set(moved)
+                                )
+                            }
+                        else:
+                            result, retained_reconciled = self._reconcile(
+                                row, action, deadline
+                            )
                         payload = (
-                            row["payload"]
+                            base
                             if result is None
                             else self._receipt(
                                 result,
-                                row["payload"]
+                                base
                                 | (
                                     {"retained_reconciled": True}
                                     if retained_reconciled
@@ -919,10 +1186,18 @@ class PlanExecutor:
         snapshot: ObservedSnapshot,
         authorization: ExecutionAuthorization,
     ) -> dict[str, Any]:
-        """Reverse owned changes only; retained, adopted and deleted state is kept."""
+        """Reverse owned changes only; retained and deleted state is kept.
+
+        A takeover adoption is reversed like an update: its pre-adoption
+        content is re-applied, while ownership stays with this owner (the
+        transferred field managers are not restored). Metadata-only adoptions of
+        retained objects are never reversed, so volumes and their data are
+        untouched.
+        """
         deadline = time.monotonic() + self.limits.max_seconds
         with self.journal.exclusive():
             self._validate(plan, snapshot, authorization, deadline)
+            self._owners = self._granted_owners(authorization)
             self.journal.start(
                 execution,
                 self._binding(plan, authorization),
@@ -960,9 +1235,10 @@ class PlanExecutor:
                     "compensated",
                 } or action.operation in {
                     PlanOperation.NOOP,
-                    PlanOperation.ADOPT,
                     PlanOperation.DELETE,
                 }:
+                    continue
+                if action.operation is PlanOperation.ADOPT and not _is_takeover(row):
                     continue
                 current = current_by_ref.get(ref)
                 if ref.kind in RETAINED_KINDS or (
@@ -1013,7 +1289,9 @@ class PlanExecutor:
                         before = self._load(payload["before"], current.identity)
                         if _contains(
                             ResourceIntent.from_manifest(current.manifest).manifest,
-                            ResourceIntent.from_manifest(before.manifest).manifest,
+                            _restore_manifest(before)
+                            if _is_takeover(row)
+                            else ResourceIntent.from_manifest(before.manifest).manifest,
                         ):
                             self.journal.record(
                                 execution, row["ordinal"], "compensated", payload
@@ -1032,11 +1310,22 @@ class PlanExecutor:
                         deadline=deadline,
                     )
                 else:
-                    before_manifest = self._load(
-                        payload["before"], current.identity
-                    ).manifest
-                    before_manifest.pop("status", None)
-                    before_manifest["metadata"].pop("managedFields", None)
+                    if _is_takeover(row):
+                        # Restore the previous spec; the object stays ours and
+                        # the forced takeover is not repeated (force=false).
+                        before_manifest = _restore_manifest(
+                            self._load(payload["before"], current.identity)
+                        )
+                        before_manifest["metadata"]["uid"] = payload["uid"]
+                        before_manifest["metadata"].setdefault("annotations", {})[
+                            OWNER_ANNOTATION
+                        ] = self.provider.owner_id
+                    else:
+                        before_manifest = self._load(
+                            payload["before"], current.identity
+                        ).manifest
+                        before_manifest.pop("status", None)
+                        before_manifest["metadata"].pop("managedFields", None)
                     before_manifest["metadata"]["resourceVersion"] = payload[
                         "resource_version"
                     ]
@@ -1056,11 +1345,57 @@ class PlanExecutor:
             return self.journal.summary(execution)
 
 
+def _project(value: Any, template: Any) -> Any:
+    """The part of ``value`` at the paths ``template`` declares."""
+    if isinstance(value, dict) and isinstance(template, dict):
+        return {
+            key: _project(value[key], child)
+            for key, child in template.items()
+            if key in value
+        }
+    if (
+        isinstance(value, list)
+        and isinstance(template, list)
+        and len(value) == len(template)
+    ):
+        return [
+            _project(item, child) for item, child in zip(value, template, strict=True)
+        ]
+    return value
+
+
+def _is_takeover(row: dict[str, Any]) -> bool:
+    adoption = row["payload"].get("adoption")
+    return (
+        isinstance(adoption, dict)
+        and adoption.get("mode") == AdoptionMode.TAKEOVER.value
+    )
+
+
+def _mode(action: PlanAction) -> AdoptionMode | None:
+    return (
+        action.adoption.mode
+        if action.operation is PlanOperation.ADOPT and action.adoption is not None
+        else None
+    )
+
+
+def _transferred(action: PlanAction, field_manager: str) -> list[str]:
+    """Planned transferred managers other than the executor's own."""
+    assert action.adoption is not None
+    return sorted(set(action.adoption.transferred_managers) - {field_manager})
+
+
+def _restore_manifest(before: DiscoveredResource) -> dict[str, Any]:
+    """Pre-adoption content to re-apply, minus controller-owned bookkeeping."""
+    manifest = ResourceIntent.from_manifest(before.manifest).manifest
+    annotations = manifest.get("metadata", {}).get("annotations", {})
+    annotations.pop("deployment.kubernetes.io/revision", None)
+    if not annotations:
+        manifest.get("metadata", {}).pop("annotations", None)
+    return manifest
+
+
 def _contains(actual: Any, expected: Any) -> bool:
     """SSA may add server defaults. Every explicitly desired value must survive."""
-    if isinstance(actual, dict) and isinstance(expected, dict):
-        return all(
-            key in actual and _contains(actual[key], value)
-            for key, value in expected.items()
-        )
-    return actual == expected
+    return manifest_contains(actual, expected)

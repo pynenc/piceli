@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import IO, BinaryIO, Protocol, TypeVar
 from urllib.parse import parse_qsl, urlsplit
 
+from piceli.artifacts.delivery_inputs import DeliveryInputError
 from piceli.artifacts.process import ProcessLimits, ToolPin, _run_process
 
 T = TypeVar("T")
@@ -84,9 +85,9 @@ class NodeTarget:
         """
         if not isinstance(url, str) or len(url) > 1024 or not url.isprintable():
             raise ValueError("invalid delivery target")
-        if url.startswith("registry://"):
+        if url.startswith(("registry://", "oci://")):
             raise ValueError(
-                "registry delivery is not a node target; use the registry client"
+                "registry delivery is not a node target; use RegistryDelivery"
             )
         parts = urlsplit(url)
         if parts.scheme not in {"ssh", "docker"} or parts.path or parts.fragment:
@@ -162,11 +163,18 @@ class Transport:
     def __post_init__(self) -> None:
         if self.target.transport == "docker":
             if self.docker is None or self.docker_socket is None:
-                raise ValueError("docker transport requires a pinned docker tool")
+                raise DeliveryInputError(
+                    "docker-tool-required",
+                    "docker transport requires a pinned docker tool",
+                )
             if not self.docker_socket.is_absolute():
-                raise ValueError("explicit absolute Docker socket required")
+                raise DeliveryInputError(
+                    "docker-socket-required", "explicit absolute Docker socket required"
+                )
         elif self.ssh is None:
-            raise ValueError("ssh transport requires a pinned ssh tool")
+            raise DeliveryInputError(
+                "ssh-tool-required", "ssh transport requires a pinned ssh tool"
+            )
 
     def tools(self) -> tuple[ToolPin, ...]:
         tool = self.docker if self.target.transport == "docker" else self.ssh

@@ -122,7 +122,7 @@ topology_subtitle = "My application tiers"
 [[shortcuts]]
 id = "web"
 label = "Web UI"
-target = "service/web"      # service/<name> or pod/<name>
+target = "service/web"      # service/<name>, deployment/<name> or pod/<name>
 local_port = 3000
 remote_port = 3000
 path = "/login"             # optional: path opened by the "Open" link

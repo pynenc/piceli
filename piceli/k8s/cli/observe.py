@@ -140,7 +140,9 @@ def forward_save(
     user: Annotated[str, typer.Option()],
     name: Annotated[str, typer.Option()],
     namespace: Annotated[str, typer.Option()],
-    target: Annotated[str, typer.Option(help="service/NAME or pod/NAME")],
+    target: Annotated[
+        str, typer.Option(help="service/NAME, deployment/NAME or pod/NAME")
+    ],
     local_port: Annotated[int, typer.Option()],
     remote_port: Annotated[int, typer.Option()],
     preferences: Annotated[MaybePath, typer.Option()] = None,
