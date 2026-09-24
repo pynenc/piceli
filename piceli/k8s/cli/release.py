@@ -88,7 +88,14 @@ def _refusals() -> tuple[type[BaseException], ...]:
 
 
 def _refuse(error: BaseException) -> None:
-    _emit({"state": "refused", "reason": str(error) or type(error).__name__})
+    code = getattr(error, "code", None)
+    _emit(
+        {
+            "state": "refused",
+            "reason": str(error) or type(error).__name__,
+            **({"code": code} if isinstance(code, str) else {}),
+        }
+    )
     _say(f"refused: {error}")
     raise typer.Exit(EXIT_REFUSED)
 
@@ -304,3 +311,86 @@ def status(spec: SpecOption) -> None:
         f"releases: {len(value['releases'])}"
     )
     _emit(value)
+
+
+secret_app = typer.Typer(
+    help="Inspect the secret values of a release (owner only; values need --reveal).",
+    no_args_is_help=True,
+)
+app.add_typer(secret_app, name="secret")
+
+
+def _confirm_reveal(name: str) -> bool:
+    if not (sys.stdin.isatty() and sys.stderr.isatty()):
+        return False
+    answer = typer.prompt(
+        f"Type the secret name ({name}) to print its value to this terminal",
+        default="",
+        err=True,
+    )
+    return answer == name
+
+
+@secret_app.command("show")
+def secret_show(
+    name: Annotated[str, typer.Argument(help="Secret generator name from [secrets]")],
+    spec: SpecOption,
+    key: Annotated[
+        str | None,
+        typer.Option("--key", help="One output, e.g. crt, key, ca.crt, cache.crt"),
+    ] = None,
+    release: ReleaseOption = None,
+    reveal: Annotated[
+        bool,
+        typer.Option("--reveal", help="Print the value (otherwise asks on a terminal)"),
+    ] = False,
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Print JSON: metadata only unless --reveal"),
+    ] = False,
+) -> None:
+    """Show a secret's metadata, and its value with --reveal (never logged).
+
+    Reads the local state directory only; never contacts the cluster.
+    """
+    from piceli.k8s.release_secret_spec import SecretError
+
+    try:
+        runner = _runner(spec)
+        metadata = runner.secret_metadata(name, release=release)
+        if as_json and not reveal:
+            _emit(metadata)
+            return
+        if not reveal and not _confirm_reveal(name):
+            raise SecretError(
+                "secret-reveal-required",
+                f"printing secret {name!r} needs --reveal (or confirmation on a "
+                "terminal); use --json for metadata only",
+            )
+        values = runner.reveal_secret(name, key=key, release=release)
+        if not as_json and len(values) != 1:
+            raise SecretError(
+                "secret-key-required",
+                f"secret {name!r} has several values; choose one with --key "
+                f"({', '.join(sorted(values))})",
+            )
+    except _refusals() as error:
+        _refuse(error)
+        return
+    if as_json:
+        revealed: dict[str, Any] = {}
+        for item, value in values.items():
+            try:
+                revealed[item] = value.decode("utf-8")
+            except UnicodeDecodeError:
+                import base64
+
+                revealed[item] = {"base64": base64.b64encode(value).decode()}
+        _emit({**metadata, "values": revealed})
+        return
+    value = next(iter(values.values()))
+    stream = sys.stdout.buffer
+    stream.write(value)
+    if sys.stdout.isatty() and not value.endswith(b"\n"):
+        stream.write(b"\n")
+    stream.flush()
