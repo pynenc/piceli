@@ -1,5 +1,11 @@
 # Image delivery
 
+```{admonition} Maturity: preview
+:class: note
+
+`piceli artifacts deliver` options and receipts may still change in a minor release, with a changelog entry. See the {doc}`roadmap` for every feature's status.
+```
+
 `piceli artifacts deliver` moves one digest-approved image to where a cluster
 can run it, and writes a JSON receipt. It has two modes:
 

@@ -1,5 +1,11 @@
 # Deployment planning and recoverable execution
 
+```{admonition} Maturity: preview
+:class: note
+
+The recoverable engine is a tested Python API; names and fields may still change in a minor release. See the {doc}`roadmap` for every feature's status.
+```
+
 ```{admonition} In short
 :class: tip
 

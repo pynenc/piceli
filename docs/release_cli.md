@@ -1,5 +1,11 @@
 # Releases from a spec (`piceli release`)
 
+```{admonition} Maturity: preview
+:class: note
+
+`piceli release` is tested end to end against kind; options and JSON fields may still change in a minor release, with a changelog entry. See the {doc}`roadmap` for every feature's status.
+```
+
 `piceli release` deploys a composition to one namespace as a sequence of
 immutable, catalogued **releases**. It is a thin command layer over
 `ReleaseWorkflow`: every write goes through the durable deployment session,
@@ -23,6 +29,9 @@ mismatch, unknown or expired plan), `3` approval required.
 ## The spec
 
 ```toml
+# Top-level keys come before the first [table].
+# images_from = "build.receipt.json"   # optional: images from a piceli.build-receipt.v1 receipt
+
 [target]
 kubeconfig = "release.kubeconfig"   # explicit file; KUBECONFIG and ~/.kube/config are never read
 context = "kind-release-demo"       # explicit context; current-context is never used
@@ -52,7 +61,6 @@ readiness_seconds = 240
 [images]                            # pinned by digest
 web = "docker.io/library/nginx@sha256:…"
 # api = { receipt = "api.delivery.json" }  # a piceli.registry-delivery.v1 receipt
-# images_from = "build.receipt.json"   # a piceli.build-receipt.v1 receipt
 
 [secrets.api-token]
 type = "random"
@@ -76,7 +84,8 @@ resolve from the spec's directory. A complete example lives in
 
 An image is `repository@sha256:…`, a bare `sha256:…` digest, or a table
 `{ ref = "registry/app:tag", digest = "sha256:…" }`. Tags alone are refused.
-With `images_from`, images come from `outputs.images.<name>` of a build
+With the **top-level** key `images_from` (written before the first `[table]`,
+never inside `[images]`), images come from `outputs.images.<name>` of a build
 receipt whose `revision` is `piceli.build-receipt.v1`; each entry has
 `image_id`, `digest` (may be null), `platform` and `ref`. The release records
 the registry digest, or the image ID when no digest exists.
@@ -271,6 +280,34 @@ usual; adopted retained objects and their data are never touched by a
 rollback. If a takeover is interrupted, the apply ends `blocked` and `resume`
 converges it. A takeover that was approved with a different transfer list
 (for example by an older Piceli) cannot be resumed; plan again with `--adopt`.
+
+## If `plan` refuses
+
+A refused `plan` changes nothing: no object is written and no plan is stored.
+It exits with code `2`, prints `{"state": "refused", "reason": "…"}` on
+stdout and repeats the reason on stderr after `refused:`. Find the reason in
+the table and take the next step, then run `plan` again.
+
+| The reason says | What to do |
+| --- | --- |
+| `existing objects are not managed by this release's owner: Kind/name, …` | Adopt each listed object: `piceli release plan --spec release.toml --adopt Kind/name` (repeat the flag, or list them in `[release] adopt`). Review the adoption mode in the plan before approving (see [Adopting existing objects](#adopting-existing-objects)). If an object should not be kept, delete it yourself and plan again. A per-object `--replace` (delete and recreate) is planned for a later release. |
+| `adopt '…' does not name exactly one resource declared by the composition` | Fix the `--adopt` entry: it must be `Kind/name` (or `apiVersion/Kind/name`) of an object the composition declares. |
+| `discovery is incomplete, refusing to plan (…)` | Each item names a resource type and a code: `rbac-denied` (grant list/get on it to the spec's identity), `limit-exceeded` (raise `[discovery]` limits), `api-unavailable` or `deadline-exceeded` (retry). |
+| `cluster identity differs from the one recorded in this state directory` | The kubeconfig/context points at another cluster than the one this `state_dir` deployed to. Fix `[target]`; never reuse a `state_dir` across clusters. |
+| `cannot rotate undeclared secrets: …` | `--rotate` names must be `[secrets.<name>]` entries of the spec. |
+| `invalid release spec: …` | Fix the named key. `images_from` is a top-level key (before the first `[table]`), not part of `[images]`. |
+| A single code such as `rbac-denied` or `server-target-identity-mismatch` | Run `piceli explain <code>`, or see {doc}`reference/errors`. |
+
+`apply --approve HASH` refuses a hash that is unknown, expired or already
+applied (`no pending plan with this hash`): run `plan` again and approve the
+new hash.
+
+```{note}
+Release refusals still carry a sentence in `reason`. They will move to the
+fixed `{"state": "rejected", "reason": "<code>"}` form of
+{doc}`reference/errors` in a later release; match on the exit code (`2`) until
+then.
+```
 
 ## Rollback
 

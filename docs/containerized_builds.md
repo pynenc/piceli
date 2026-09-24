@@ -1,5 +1,11 @@
 # Containerized builds
 
+```{admonition} Maturity: preview
+:class: note
+
+The `piceli.build-spec.v1` format and the receipt may still change in a minor release, with a changelog entry. See the {doc}`roadmap` for every feature's status.
+```
+
 A `build.toml` describes a build that runs inside a pinned builder image with
 `docker buildx`. Piceli stages the declared inputs, runs the build, extracts
 the declared outputs and writes a **build receipt**. The receipt ties the
@@ -14,6 +20,18 @@ piceli artifacts build-spec run --spec build.toml \
 
 A complete example that builds a small Rust HTTP service for `linux/arm64`
 is in `examples/builds/rust-hello/`.
+
+```{warning}
+Source drift is currently checked over the **whole repository** of each
+declared source, not only the files the build context selects (unless the
+source sets a `subpath`). Any uncommitted change anywhere in the repository,
+even one the build never reads, makes the source dirty (refused unless
+`allow_dirty = true`) and changes its diff digest, so verification against
+`--lock` fails with `source-drift`, possibly after a long build. Commit or stash
+unrelated changes before a build, or narrow the identity with `subpath` in
+`inputs.toml` (see {doc}`source_identity`). Checking drift over the build
+context only is planned.
+```
 
 ## The spec
 
@@ -236,7 +254,8 @@ Build output never goes into the receipt. Pass `--log FILE` to keep it.
 
 Exit codes: `0` success, `1` a build step failed or timed out (stderr lists
 the steps, never their output), `2` rejected. On rejection, stderr is
-`{"state": "rejected", "reason": "<code>"}` with a fixed code:
+`{"state": "rejected", "reason": "<code>"}` with a fixed code (each is
+explained in {doc}`reference/errors` and by `piceli explain <code>`):
 
 - spec: `invalid-spec`, `spec-unreadable`
 - grant and tool: `invalid-grant`, `builder-not-approved`,

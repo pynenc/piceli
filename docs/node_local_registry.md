@@ -1,5 +1,11 @@
 # Node-local registry
 
+```{admonition} Maturity: preview
+:class: note
+
+The template's parameters may still change in a minor release, with a changelog entry. See the {doc}`roadmap` for every feature's status.
+```
+
 `templates.NodeLocalRegistry` deploys an OCI registry that one node pulls from
 without any registry configuration on that node. Workloads reference images by
 digest, pushes move only the layers the registry does not have, and nothing is

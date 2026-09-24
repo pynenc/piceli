@@ -1,5 +1,12 @@
 # Operations Lens
 
+```{admonition} Maturity: preview
+:class: note
+
+The operations lens is under active development. Its REST API and UI may change
+between minor releases. See the {doc}`roadmap` for every feature's status.
+```
+
 The operations lens answers three questions about a deployment:
 
 - *What does this release declare?*
@@ -9,13 +16,6 @@ The operations lens answers three questions about a deployment:
 It works from a {doc}`deployment session archive <deployment_planning>` and an
 explicitly selected kubeconfig. It is available as a Python API, as JSON CLI
 commands, and as a small local web UI with a REST API.
-
-```{admonition} Early preview
-:class: note
-
-The operations lens is under active development. Its REST API and UI may change
-between releases.
-```
 
 ## Where it runs
 

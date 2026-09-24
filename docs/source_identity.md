@@ -1,5 +1,11 @@
 # Source identity
 
+```{admonition} Maturity: preview
+:class: note
+
+Options and the lock format may still change in a minor release, with a changelog entry. See the {doc}`roadmap` for every feature's status.
+```
+
 A build is only reproducible if you know exactly which source it consumed.
 Piceli records that as a **source identity** per checkout, taken from git
 alone:
