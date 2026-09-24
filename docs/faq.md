@@ -47,9 +47,12 @@ The recoverable engine accepts any `apiVersion`/`kind` as a raw manifest in a
 
 ## Does Piceli push images to a registry?
 
-No. `piceli artifacts` builds deterministic OCI layouts locally and only imports
-them into a local engine when you explicitly ask it to. Nothing is pushed
-automatically.
+Only when you ask it to, and never implicitly. `piceli artifacts deliver --to
+oci://host:port/repo` pushes an image you have approved by config digest, and
+uploads only the layers the registry is missing. Plain HTTP is only allowed to
+loopback registries, for example an in-cluster registry reached through a
+port-forward. Without a registry, `deliver` can also import an image straight
+into a node's containerd. See {doc}`node_delivery`.
 
 ## Is the web UI safe to expose?
 

@@ -342,6 +342,7 @@ All runs produced the same file digest and image ID.
 ## Not in scope yet
 
 - Build secrets (`--secret`).
-- Pushing to a registry. See {doc}`node_delivery` and the registry adapter.
+- Pushing from the build itself. Deliver the built image with
+  `piceli artifacts deliver --to oci://…`; see {doc}`node_delivery`.
 - A single multi-platform manifest list. Each platform is loaded
   separately, because the classic Docker store cannot hold an index.

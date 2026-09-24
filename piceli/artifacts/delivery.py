@@ -1,5 +1,8 @@
 """Direct, digest-approved image delivery into a node's containerd, without a registry.
 
+This is the fallback mode (bootstrap and air-gapped nodes). Registry delivery,
+the default, lives in :mod:`piceli.artifacts.registry_delivery`.
+
 The approved identity is the image **config digest**: the SHA-256 of the image
 configuration blob. It is the only identifier that is byte-for-byte the same in
 ``docker save`` output (classic Docker's image ID), in the archive itself and in
@@ -43,6 +46,7 @@ from piceli.artifacts.node_transport import (
 )
 from piceli.artifacts.plan import validate_digest
 from piceli.artifacts.process import ProcessLimits, ToolPin
+from piceli.artifacts.registry import RegistryTarget
 from piceli.bounds import seconds, text
 
 SCHEMA = "piceli.node-delivery.v1"
@@ -101,7 +105,11 @@ def normalize_reference(value: str) -> str:
 
 @dataclass(frozen=True)
 class DeliveryGrant:
-    """Exact, expiring approval of one config digest for one node target."""
+    """Exact, expiring approval of one config digest for one delivery target.
+
+    ``target`` is a node target (``ssh://``, ``docker://``) or a registry
+    target (``oci://``).
+    """
 
     approved_digest: str
     target: str
@@ -109,7 +117,10 @@ class DeliveryGrant:
 
     def __post_init__(self) -> None:
         validate_digest(self.approved_digest)
-        NodeTarget.parse(self.target)
+        if isinstance(self.target, str) and self.target.startswith("oci://"):
+            RegistryTarget.parse(self.target)
+        else:
+            NodeTarget.parse(self.target)
         seconds(self.expires_at, "grant expiry", 10_000_000_000)
 
 

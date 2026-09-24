@@ -1,5 +1,6 @@
 """Unit tests for streamed OCI distribution registry client."""
 
+import hashlib
 import io
 import json
 import threading
@@ -75,11 +76,11 @@ def test_streamed_oci_client_upload_and_check() -> None:
         assert client.check_v2_support() is True
 
         # Check absent blob
-        digest = "sha256:" + "a" * 64
+        data = b"test layer bytes 12345"
+        digest = "sha256:" + hashlib.sha256(data).hexdigest()
         assert client.has_blob("test", digest) is False
 
         # Stream blob
-        data = b"test layer bytes 12345"
         client.push_blob_stream("test", io.BytesIO(data), digest)
         assert client.has_blob("test", digest) is True
 

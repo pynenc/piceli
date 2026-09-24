@@ -84,9 +84,9 @@ class NodeTarget:
         """
         if not isinstance(url, str) or len(url) > 1024 or not url.isprintable():
             raise ValueError("invalid delivery target")
-        if url.startswith("registry://"):
+        if url.startswith(("registry://", "oci://")):
             raise ValueError(
-                "registry delivery is not a node target; use the registry client"
+                "registry delivery is not a node target; use RegistryDelivery"
             )
         parts = urlsplit(url)
         if parts.scheme not in {"ssh", "docker"} or parts.path or parts.fragment:

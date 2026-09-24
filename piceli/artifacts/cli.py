@@ -29,6 +29,8 @@ from piceli.artifacts.process import (
     ProcessLimits,
     ToolPin,
 )
+from piceli.artifacts.registry import RegistryCredentials, RegistryTarget
+from piceli.artifacts.registry_delivery import RegistryDelivery, RegistryForward
 from piceli.k8s.ops.bounds import strict_json
 
 
@@ -77,6 +79,17 @@ def main(arguments: list[str] | None = None) -> int:
     cmd.add_argument("--timeout", type=float, default=600)
     cmd.add_argument("--receipt", type=Path)
     cmd.add_argument("--journal", type=Path)
+    # Registry delivery (--to oci://host[:port]/repository[:tag]).
+    cmd.add_argument("--node-registry")
+    cmd.add_argument("--credentials", type=Path)
+    cmd.add_argument("--ca-file", type=Path)
+    cmd.add_argument("--via-forward")
+    cmd.add_argument("--namespace")
+    cmd.add_argument("--kubeconfig", type=Path)
+    cmd.add_argument("--context")
+    cmd.add_argument("--forward-remote-port", type=int, default=5000)
+    cmd.add_argument("--kubectl", type=Path)
+    cmd.add_argument("--kubectl-sha256")
     add_build_spec_commands(sub)
     args = parser.parse_args(arguments)
     if args.command == "build-spec":
@@ -138,7 +151,87 @@ def main(arguments: list[str] | None = None) -> int:
         return 2
 
 
+_REGISTRY_ONLY = (
+    "node_registry",
+    "credentials",
+    "ca_file",
+    "via_forward",
+    "namespace",
+    "kubeconfig",
+    "context",
+    "kubectl",
+    "kubectl_sha256",
+)
+_NODE_ONLY = ("ref", "ssh", "ssh_sha256", "ssh_agent_socket")
+
+
 def _deliver(args: argparse.Namespace) -> dict[str, object]:
+    source = (
+        DockerImageSource(args.image)
+        if args.image
+        else ArchiveSource(args.archive.absolute())
+    )
+    grant = DeliveryGrant(args.approve_digest, args.to, time.time() + args.timeout)
+    if args.to.startswith("oci://"):
+        receipt = _deliver_registry(args, source, grant)
+    else:
+        receipt = _deliver_node(args, source, grant)
+    if args.receipt is not None:
+        write_receipt(args.receipt, receipt)
+    if args.journal is not None:
+        append_journal(args.journal, receipt)
+    return receipt
+
+
+def _deliver_registry(
+    args: argparse.Namespace,
+    source: DockerImageSource | ArchiveSource,
+    grant: DeliveryGrant,
+) -> dict[str, object]:
+    if any(getattr(args, name) is not None for name in _NODE_ONLY):
+        raise ValueError("node-import options do not apply to a registry target")
+    forward_options = ("namespace", "kubeconfig", "context", "kubectl")
+    forward = None
+    if args.via_forward is not None:
+        if args.kubectl is None or args.kubeconfig is None or args.namespace is None:
+            raise ValueError("--via-forward needs --namespace, --kubeconfig, --kubectl")
+        forward = RegistryForward(
+            namespace=args.namespace,
+            target=args.via_forward,
+            remote_port=args.forward_remote_port,
+            kubeconfig=args.kubeconfig.absolute(),
+            kubectl=ToolPin(args.kubectl, args.kubectl_sha256),
+            context=args.context,
+        )
+    elif any(getattr(args, name) is not None for name in forward_options):
+        raise ValueError("forward options need --via-forward")
+    delivery = RegistryDelivery(
+        docker=ToolPin(args.docker, args.docker_sha256) if args.docker else None,
+        docker_socket=args.docker_socket,
+        credentials=(
+            RegistryCredentials.load(args.credentials.absolute())
+            if args.credentials is not None
+            else None
+        ),
+        ca_file=args.ca_file.absolute() if args.ca_file is not None else None,
+        forward=forward,
+    )
+    return delivery.deliver(
+        source,
+        RegistryTarget.parse(args.to),
+        grant,
+        node_registry=args.node_registry,
+        limits=ProcessLimits(args.timeout),
+    )
+
+
+def _deliver_node(
+    args: argparse.Namespace,
+    source: DockerImageSource | ArchiveSource,
+    grant: DeliveryGrant,
+) -> dict[str, object]:
+    if any(getattr(args, name) is not None for name in _REGISTRY_ONLY):
+        raise ValueError("registry options do not apply to a node target")
     target = NodeTarget.parse(args.to)
     delivery = NodeDelivery(
         docker=ToolPin(args.docker, args.docker_sha256) if args.docker else None,
@@ -146,20 +239,13 @@ def _deliver(args: argparse.Namespace) -> dict[str, object]:
         ssh=ToolPin(args.ssh, args.ssh_sha256) if args.ssh else None,
         ssh_agent_socket=args.ssh_agent_socket,
     )
-    receipt = delivery.deliver(
-        DockerImageSource(args.image)
-        if args.image
-        else ArchiveSource(args.archive.absolute()),
+    return delivery.deliver(
+        source,
         target,
-        DeliveryGrant(args.approve_digest, args.to, time.time() + args.timeout),
+        grant,
         reference=args.ref,
         limits=ProcessLimits(args.timeout),
     )
-    if args.receipt is not None:
-        write_receipt(args.receipt, receipt)
-    if args.journal is not None:
-        append_journal(args.journal, receipt)
-    return receipt
 
 
 if __name__ == "__main__":
