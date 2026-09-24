@@ -293,21 +293,21 @@ def test_plan_lists_every_blocking_object_with_suggested_flags(release_env):
             "kind": "ConfigMap",
             "name": "settings",
             "code": "resource-requires-adoption",
-            "reason": "exists and is not managed by this release's owner",
+            "message": "exists and is not managed by this release's owner",
             "suggest": ["--adopt ConfigMap/settings", "--replace ConfigMap/settings"],
         },
         {
             "kind": "Deployment",
             "name": "worker",
             "code": "resource-requires-adoption",
-            "reason": "exists and is not managed by this release's owner",
+            "message": "exists and is not managed by this release's owner",
             "suggest": ["--adopt Deployment/worker", "--replace Deployment/worker"],
         },
         {
             "kind": "Secret",
             "name": "credential",
             "code": "resource-requires-adoption",
-            "reason": "exists and is not managed by this release's owner; "
+            "message": "exists and is not managed by this release's owner; "
             "retained: replace is never allowed",
             "suggest": ["--adopt Secret/credential"],
         },
@@ -428,7 +428,7 @@ def test_cli_replace_refusals_happen_before_any_write(release_env):
             "kind": "Secret",
             "name": "credential",
             "code": "replace-refused",
-            "reason": "retained objects are never deleted; adopt it instead",
+            "message": "retained objects are never deleted; adopt it instead",
             "suggest": ["--adopt Secret/credential"],
         }
     ]

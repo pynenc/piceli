@@ -71,10 +71,12 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`invalid-grant`](#error-invalid-grant) | build-spec | no |
 | [`invalid-image-stream`](#error-invalid-image-stream) | artifacts-delivery | no |
 | [`invalid-inputs`](#error-invalid-inputs) | build-spec | no |
+| [`invalid-metadata-change`](#error-invalid-metadata-change) | kubernetes | no |
 | [`invalid-node-registry`](#error-invalid-node-registry) | artifacts-input | no |
 | [`invalid-or-unavailable-artifact-input`](#error-invalid-or-unavailable-artifact-input) | cli | no |
 | [`invalid-or-unavailable-build-input`](#error-invalid-or-unavailable-build-input) | build-spec | no |
 | [`invalid-page`](#error-invalid-page) | kubernetes | yes |
+| [`invalid-propagation`](#error-invalid-propagation) | kubernetes | no |
 | [`invalid-receipt`](#error-invalid-receipt) | build-spec | no |
 | [`invalid-reference`](#error-invalid-reference) | artifacts-input | no |
 | [`invalid-request`](#error-invalid-request) | kubernetes | no |
@@ -121,6 +123,11 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`registry-unreachable`](#error-registry-unreachable) | artifacts-registry | yes |
 | [`render-model-invalid`](#error-render-model-invalid) | render | no |
 | [`render-target-invalid`](#error-render-target-invalid) | render | no |
+| [`replace-backup-failed`](#error-replace-backup-failed) | execution | yes |
+| [`replace-delete-not-observed`](#error-replace-delete-not-observed) | execution | no |
+| [`replace-delete-timeout`](#error-replace-delete-timeout) | execution | yes |
+| [`replace-precondition-failed`](#error-replace-precondition-failed) | execution | no |
+| [`replace-recreated-by-another-writer`](#error-replace-recreated-by-another-writer) | execution | no |
 | [`request-byte-limit`](#error-request-byte-limit) | kubernetes | no |
 | [`resource-content-precondition-failed`](#error-resource-content-precondition-failed) | execution | no |
 | [`response-byte-limit`](#error-response-byte-limit) | kubernetes | no |
@@ -906,6 +913,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** This is an internal contract violation; report it.
 - **Retry-safe:** no
 
+(error-invalid-metadata-change)=
+### `invalid-metadata-change`
+
+**Invalid metadata change.** A metadata-only write was asked to set a non-string value or one of Piceli's own annotations.
+
+- **Fix:** Fix the composition's labels or annotations.
+- **Retry-safe:** no
+
 (error-invalid-page)=
 ### `invalid-page`
 
@@ -913,6 +928,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Plan again; if it persists, report the API server version.
 - **Retry-safe:** yes
+
+(error-invalid-propagation)=
+### `invalid-propagation`
+
+**Invalid delete propagation.** Internal guard: a delete used a propagation policy other than Background or Orphan.
+
+- **Fix:** Report a bug; this should not happen.
+- **Retry-safe:** no
 
 (error-invalid-request)=
 ### `invalid-request`
@@ -1179,6 +1202,46 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Object was recreated.** The object has another UID than planned: someone deleted and recreated it.
 
 - **Fix:** Run `piceli release plan` again and approve the new plan hash.
+- **Retry-safe:** no
+
+(error-replace-backup-failed)=
+### `replace-backup-failed`
+
+**Replace backup failed.** The backup of the object could not be written (permissions, disk). Nothing was deleted.
+
+- **Fix:** Fix the state directory, then plan again.
+- **Retry-safe:** yes
+
+(error-replace-delete-not-observed)=
+### `replace-delete-not-observed`
+
+**Replace delete not observed.** On resume, the original object is still there although the journal recorded its delete. The execution is blocked.
+
+- **Fix:** Inspect the object, then plan again.
+- **Retry-safe:** no
+
+(error-replace-delete-timeout)=
+### `replace-delete-timeout`
+
+**Replaced object not deleted in time.** The deleted object was still present after readiness_seconds, usually because of finalizers. The execution is blocked.
+
+- **Fix:** Inspect the finalizers, then resume or plan again.
+- **Retry-safe:** yes
+
+(error-replace-precondition-failed)=
+### `replace-precondition-failed`
+
+**Replace precondition failed.** At apply time the object is managed, retained or owned by another object, or no backup directory is available. Nothing was deleted.
+
+- **Fix:** Plan again.
+- **Retry-safe:** no
+
+(error-replace-recreated-by-another-writer)=
+### `replace-recreated-by-another-writer`
+
+**Replaced object recreated by another writer.** Another client created an object with the same name after the delete. The execution is blocked and that object is not touched.
+
+- **Fix:** Decide which object to keep; the backup holds the deleted one.
 - **Retry-safe:** no
 
 (error-resource-content-precondition-failed)=

@@ -122,7 +122,7 @@ def _refuse(error: BaseException) -> None:
     _say(f"refused: {error}")
     for item in details.get("blocking", ()):
         _say(
-            f"  blocking {item['kind']}/{item['name']}: {item['reason']}"
+            f"  blocking {item['kind']}/{item['name']}: {item['message']}"
             + (f" -> {' or '.join(item['suggest'])}" if item["suggest"] else "")
         )
     raise typer.Exit(EXIT_REFUSED)

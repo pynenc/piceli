@@ -305,7 +305,7 @@ def resolve_ownership(
                     "kind": ref.kind,
                     "name": ref.name,
                     "code": "replace-refused",
-                    "reason": refusal,
+                    "message": refusal,
                     "suggest": (
                         [f"--adopt {_label(ref)}"]
                         if current.ownership is Ownership.UNMANAGED
@@ -359,7 +359,7 @@ def resolve_ownership(
                     "kind": ref.kind,
                     "name": ref.name,
                     "code": "resource-requires-adoption",
-                    "reason": "exists and is not managed by this release's owner"
+                    "message": "exists and is not managed by this release's owner"
                     + ("; retained: replace is never allowed" if retained else ""),
                     "suggest": [f"--adopt {_label(ref)}"]
                     + ([] if retained else [f"--replace {_label(ref)}"]),
@@ -375,7 +375,7 @@ def resolve_ownership(
                     "kind": ref.kind,
                     "name": ref.name,
                     "code": "retained-content-differs",
-                    "reason": "retained object: its spec/data differ from the "
+                    "message": "retained object: its spec/data differ from the "
                     "composition, and only labels and annotations may change",
                     "suggest": [
                         "change the composition to match the live object",
@@ -401,7 +401,7 @@ def resolve_ownership(
             )
         for item in blocking:
             if item["code"] != "resource-requires-adoption":
-                parts.append(f"{item['kind']}/{item['name']}: {item['reason']}")
+                parts.append(f"{item['kind']}/{item['name']}: {item['message']}")
         raise ReleaseError(
             "; ".join(parts),
             code=blocking[0]["code"]

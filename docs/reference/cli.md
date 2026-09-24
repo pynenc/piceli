@@ -865,6 +865,8 @@ Execute an approved plan (``--approve HASH``), or plan and confirm.
 | `--auto-approve` | boolean | `False` | Plan and execute without confirmation (CI) |
 | `--rotate` | text (repeatable) |  | Regenerate this secret generator's values in the new release (repeatable) |
 | `--adopt` | text (repeatable) |  | Authorize adopting this existing object, as Kind/name or apiVersion/Kind/name (repeatable; adds to [release] adopt) |
+| `--replace` | text (repeatable) |  | Authorize deleting this existing unmanaged object and creating it from the release, after writing a restorable backup (repeatable; adds to [release] replace; never retained or managed objects) |
+| `--adopt-all-desired` | boolean | `False` | Authorize adopting every existing unmanaged object the composition declares (each is listed in the plan and bound to its hash) |
 
 **Contract**
 
@@ -887,6 +889,8 @@ Capture live discovery and persist an approvable plan (prints its hash).
 | `--spec` | path | required | release.toml describing the release |
 | `--rotate` | text (repeatable) |  | Regenerate this secret generator's values in the new release (repeatable) |
 | `--adopt` | text (repeatable) |  | Authorize adopting this existing object, as Kind/name or apiVersion/Kind/name (repeatable; adds to [release] adopt) |
+| `--replace` | text (repeatable) |  | Authorize deleting this existing unmanaged object and creating it from the release, after writing a restorable backup (repeatable; adds to [release] replace; never retained or managed objects) |
+| `--adopt-all-desired` | boolean | `False` | Authorize adopting every existing unmanaged object the composition declares (each is listed in the plan and bound to its hash) |
 | `--out` | path |  | Also write the full redacted plan JSON here |
 
 **Contract**
@@ -910,6 +914,8 @@ Alias of `plan`.
 | `--spec` | path | required | release.toml describing the release |
 | `--rotate` | text (repeatable) |  | Regenerate this secret generator's values in the new release (repeatable) |
 | `--adopt` | text (repeatable) |  | Authorize adopting this existing object, as Kind/name or apiVersion/Kind/name (repeatable; adds to [release] adopt) |
+| `--replace` | text (repeatable) |  | Authorize deleting this existing unmanaged object and creating it from the release, after writing a restorable backup (repeatable; adds to [release] replace; never retained or managed objects) |
+| `--adopt-all-desired` | boolean | `False` | Authorize adopting every existing unmanaged object the composition declares (each is listed in the plan and bound to its hash) |
 | `--out` | path |  | Also write the full redacted plan JSON here |
 
 **Contract**
@@ -955,6 +961,8 @@ Re-plan and re-apply an earlier release against current cluster state.
 | `--approve` | text |  | Plan hash to execute (from a previous `plan`/`rollback` output) |
 | `--auto-approve` | boolean | `False` | Plan and execute without confirmation (CI) |
 | `--adopt` | text (repeatable) |  | Authorize adopting this existing object, as Kind/name or apiVersion/Kind/name (repeatable; adds to [release] adopt) |
+| `--replace` | text (repeatable) |  | Authorize deleting this existing unmanaged object and creating it from the release, after writing a restorable backup (repeatable; adds to [release] replace; never retained or managed objects) |
+| `--adopt-all-desired` | boolean | `False` | Authorize adopting every existing unmanaged object the composition declares (each is listed in the plan and bound to its hash) |
 
 **Contract**
 
