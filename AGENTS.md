@@ -98,5 +98,6 @@ These are enforced by tests or review. Do not weaken them.
 | Releases from a spec | `piceli/k8s/release_spec.py`, `release_runner.py`, `release_secrets.py`, `piceli/k8s/cli/release.py` |
 | Builds, source identity, image delivery | `piceli/artifacts/` |
 | Observe / operator UI and REST API | `piceli/k8s/observe*.py`, `piceli/k8s/operator*.py` |
+| Access and status (`piceli access`, `piceli status`) | `piceli/app/access.py`, `piceli/k8s/access.py`, `piceli/k8s/port_owner.py`, `piceli/k8s/cli/access.py` |
 | Examples (run in CI where possible) | `examples/` |
 | Docs (Sphinx + MyST) | `docs/`; agent entry points `llms.txt`, `docs/agents.md` |

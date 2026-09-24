@@ -43,7 +43,7 @@ interruption is harmless.
 | `3` | Approval required; nothing was executed | Show the plan to the owner and wait. |
 
 Commands whose contract is `conforms` in {doc}`reference/cli` follow these rules
-exactly (`explain`, `help-json`). Commands marked `partial` print JSON on stdout
+exactly (`explain`, `help-json`, `status`, `access`). Commands marked `partial` print JSON on stdout
 but still differ in how they refuse:
 
 - `piceli release …` prints `{"state": "refused", "reason": "<sentence>"}` on
@@ -66,6 +66,10 @@ noted.
   a pending plan and secret candidates in the spec's `state_dir`, and print the
   plan hash. They never write to the cluster.
 - `piceli release status`: reads local state only.
+- `piceli status TARGET --json`: reads the release state, the cluster through
+  the target's explicit kubeconfig, and probes the declared forwards on
+  `127.0.0.1`. It says whether the app is up (`state`) and how to reach it
+  (`access.forwards[].url`); exit `1` means not up. See {doc}`access`.
 - `piceli inputs record` and `piceli inputs verify`: read git; `record --out`
   writes the lock file.
 - `piceli artifacts preview`, `piceli artifacts inspect`, `piceli artifacts pin`,
@@ -95,7 +99,7 @@ Ask before running these, and show the owner what will happen first.
 | `piceli artifacts execute-command` | Runs a pinned tool | `--approve-plan <hash>` |
 | `piceli artifacts import-local` | The local Docker image store | `--approve-digest <digest>` |
 | `piceli operator approve`, `piceli operator promote`, `piceli operator restore` | Operator state, catalog or files | The owner's go-ahead |
-| `piceli observe serve`, `piceli operator serve`, `piceli observe forward-run`, `piceli observe forwards apply`, `piceli observe logs-run` | Long-running local processes and ports | The owner's go-ahead |
+| `piceli access`, `piceli observe serve`, `piceli operator serve`, `piceli observe forward-run`, `piceli observe forwards apply`, `piceli observe logs-run` | Long-running local processes and ports | The owner's go-ahead |
 
 Never run `piceli deploy run` from an agent: it uses the current kube context
 and deletes and recreates objects without a plan to approve. Use

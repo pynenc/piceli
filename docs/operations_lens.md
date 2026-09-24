@@ -112,7 +112,11 @@ driven by browser automation and AI agents.
 ## Dashboard configuration
 
 Without configuration the dashboard shows no shortcuts and groups live workloads
-by their `app.kubernetes.io/component` label (falling back to `app`). To add
+by their `app.kubernetes.io/component` label (falling back to `app`). An app
+declared with the typed model can supply the shortcuts itself
+(`app.access.forward`, see {doc}`access`): run `piceli access TARGET
+--dashboard PORT`, or pass `--access TARGET` to `operator serve`; the TOML file
+below then only adds badges, tiers or extra shortcuts. To add
 one-click shortcuts, topology tiers and header badges, pass a TOML file with
 `--ui-config` (or set `PICELI__UI_CONFIG`) on `observe serve` or `operator serve`:
 
@@ -221,9 +225,15 @@ these fields:
 | `consecutive_failures` | Probe failures since the last healthy probe |
 | `last_error`, `last_probe_at` | Last failure reason and last probe time (UTC) |
 | `probe` | The effective probe settings |
+| `owner` | On a `conflict`: the process holding the port (`pid`, `command`, `parent`), or `null` |
 
-A local port that another process already serves is reported as `conflict`.
-The supervisor never kills that process and never spawns a forward on the port.
+A local port that another process already serves is reported as `conflict`,
+with the owning process in `owner` and in the error text. The supervisor never
+kills that process and never spawns a forward on the port. A conflict is final
+(state `failed`) until the forward is started again explicitly: the supervisor
+does not wait for the port to free up and then silently take it back, so two
+dashboards (or a dashboard and `piceli access`) never trade a declared port
+behind your back.
 
 The broader operator features (releases, promotion, backups) are described in
 {doc}`operator_workflow`.
