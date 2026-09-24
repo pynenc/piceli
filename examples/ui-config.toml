@@ -1,0 +1,83 @@
+# Example Piceli dashboard configuration.
+#
+# Use with:
+#   piceli observe serve  --ui-config examples/ui-config.toml ...
+#   piceli operator serve --ui-config examples/ui-config.toml ...
+# or export PICELI__UI_CONFIG=/path/to/ui-config.toml
+#
+# Shortcut namespaces are left unset so they follow the served namespace
+# (--namespace). Pin one with `namespace = "..."`.
+
+topology_subtitle = "My App: web front end, API and background workers"
+
+[[badges]]
+label = "Web"
+text = "demo / demo"
+
+# ---------------------------------------------------------------- shortcuts --
+
+[[shortcuts]]
+id = "web"
+label = "Web UI"
+description = "Browser front end"
+target = "service/my-app-web"
+local_port = 3000
+remote_port = 8080
+path = "/login"
+health_path = "/"
+
+[[shortcuts]]
+id = "api"
+label = "HTTP API"
+description = "Public REST API"
+target = "service/my-app-api"
+local_port = 18080
+remote_port = 8000
+path = "/docs"
+health_path = "/healthz"
+
+# -------------------------------------------------------------------- tiers --
+
+[[tiers]]
+id = "app"
+name = "Application Tier"
+badge = "Web & API"
+
+  [[tiers.components]]
+  name = "my-app-web"
+  role = "Web front end"
+  description = "Server-rendered user interface."
+  ports = "8080"
+  shortcut = "web"
+
+  [[tiers.components]]
+  name = "my-app-api"
+  role = "REST API"
+  description = "Stateless HTTP API in front of the datastore and task queue."
+  ports = "8000"
+  shortcut = "api"
+
+[[tiers]]
+id = "data"
+name = "Data & Task Tier"
+badge = "Storage & Workers"
+
+  [[tiers.components]]
+  name = "my-app-postgres"
+  role = "Primary datastore"
+  description = "PostgreSQL with a persistent volume."
+  ports = "5432"
+
+  [[tiers.components]]
+  name = "my-app-worker"
+  role = "Task worker"
+  description = "Background workers consuming the task queue."
+  ports = "Internal"
+
+# ---------------------------------------------------------------- inventory --
+# Live objects carrying these labels count as managed by this application;
+# their release name is read from the revision label.
+
+[inventory]
+managed_labels = { "app.kubernetes.io/part-of" = "my-app" }
+revision_label = "my-app/revision"

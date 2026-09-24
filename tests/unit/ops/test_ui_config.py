@@ -58,15 +58,14 @@ def test_invalid_config_is_rejected(data: dict) -> None:
         UiConfig.model_validate(data)
 
 
-def test_consumer_example_config_is_valid() -> None:
-    example = (
-        Path(__file__).parents[5] / "docs" / "infinite-haiku" / "piceli-ui.toml"
-    )
-    if not example.exists():
-        pytest.skip("workspace consumer config not present")
+def test_example_config_is_valid() -> None:
+    example = Path(__file__).parents[3] / "examples" / "ui-config.toml"
     config = load_ui_config(example)
-    assert len(config.shortcuts) == 5
-    assert len(config.tiers) == 4
+    assert [s.id for s in config.shortcuts] == ["web", "api"]
+    assert config.shortcut("web").url == "http://127.0.0.1:3000/login"
+    assert [t.id for t in config.tiers] == ["app", "data"]
+    assert config.inventory.managed_labels == {"app.kubernetes.io/part-of": "my-app"}
+    assert config.inventory.revision_label == "my-app/revision"
 
 
 class _Reader:

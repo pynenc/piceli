@@ -1,7 +1,7 @@
 """Bounded OTLP operation spans/logs; no credentials, manifests or exception bodies.
 
 Optional dependencies load only when an exporter is explicitly constructed.
-Projection is piceli.operation-otel.v1 over IH's generic telemetry v3, not the
+Projection is piceli.operation-otel.v1 over generic OpenTelemetry spans/logs, not the
 Rustvello task-attempt mapping. Transport identity supplies tenancy.
 """
 from __future__ import annotations

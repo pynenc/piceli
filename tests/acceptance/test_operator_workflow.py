@@ -1,4 +1,4 @@
-"""Milestone R07 Acceptance Gate: comprehensive operator and reactive delivery verification.
+"""Operator workflow acceptance: operator and reactive delivery verification.
 
 Proves:
 1. Commit path and direct OCI digest path.
@@ -60,8 +60,8 @@ from tests.acceptance.test_deployment_session import _authorization, _compositio
 from tests.acceptance.test_local_executor import discover, executor
 
 
-def test_r07_full_acceptance_gate(local_api, tmp_path: Path) -> None:
-    """Complete acceptance test verifying all R07 requirements and workflow equivalence."""
+def test_operator_workflow_acceptance(local_api, tmp_path: Path) -> None:
+    """Verify the complete operator workflow and its equivalence across interfaces."""
     api, provider = local_api
     run = executor(provider, tmp_path)
 

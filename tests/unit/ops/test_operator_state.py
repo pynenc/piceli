@@ -76,16 +76,16 @@ def test_user_store_and_authentication(tmp_path: Path) -> None:
 def test_standing_policy_scope_enforcement() -> None:
     policy = StandingPolicy(
         name="staging-policy",
-        allowed_namespaces=("infinite-haiku-*", "test-*"),
+        allowed_namespaces=("my-app-*", "test-*"),
         allowed_branches=("main", "release/*"),
-        allowed_registries=("ih-registry:5000", "local"),
+        allowed_registries=("registry.local:5000", "local"),
         allowed_operations=("preview", "promote", "rollback"),
         require_pr_approval=True,
     )
 
     # Allowed
-    assert policy.authorize("preview", namespace="infinite-haiku-p2", branch="main")
-    assert policy.authorize("promote", namespace="test-app", branch="release/v1.0", registry="ih-registry:5000")
+    assert policy.authorize("preview", namespace="my-app-p2", branch="main")
+    assert policy.authorize("promote", namespace="test-app", branch="release/v1.0", registry="registry.local:5000")
 
     # Disallowed namespace
     assert not policy.authorize("preview", namespace="production", branch="main")

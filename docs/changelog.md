@@ -61,7 +61,7 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   receipts and explicit local Docker import without tags or push.
 - Added bounded OTLP deployment-operation spans/logs with exact journal states
   and signal-level drop/rejection/unknown-delivery accounting. Joined local
-  acceptance covers the real recoverable executor, fault API and Poet restart.
+  acceptance covers the real recoverable executor, fault API and telemetry consumer restart.
 
 - Replaced discovery authority v1 with validated v2 coverage, scope, timestamps,
   provenance and capture-time byte/deadline limits; retained historical v1 files.

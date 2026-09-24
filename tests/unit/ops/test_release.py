@@ -38,7 +38,7 @@ def archive() -> DeploymentSessionArchive:
 def record(name: str = "branch-a") -> ReleaseRecord:
     return ReleaseRecord(
         name=name,
-        namespace="ih-preview-branch-a",
+        namespace="app-preview-branch-a",
         source=ReleaseSource(
             "dirty",
             "sha256:" + "1" * 64,
@@ -60,7 +60,7 @@ def test_catalog_is_atomic_selectable_and_immutable(tmp_path: Path) -> None:
         catalog.add(
             ReleaseRecord(
                 name="branch-a",
-                namespace="ih-preview-branch-a",
+                namespace="app-preview-branch-a",
                 source=ReleaseSource(
                     "oci", "sha256:" + "3" * 64, artifact_digest="sha256:" + "3" * 64
                 ),
@@ -107,7 +107,7 @@ def test_retained_pvcs_cannot_be_expiry_cleanup() -> None:
     with pytest.raises(ValueError, match="retained PVC"):
         ReleaseRecord(
             name="bad",
-            namespace="ih-preview-bad",
+            namespace="app-preview-bad",
             source=record().source,
             archive=archive(),
             ttl_seconds=1,

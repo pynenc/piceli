@@ -1,4 +1,4 @@
-"""LC-06-D/X acceptance through a real injected Kubernetes ApiClient and HTTP."""
+"""Real injected Kubernetes ApiClient and HTTP acceptance for the local executor."""
 
 import json
 import multiprocessing

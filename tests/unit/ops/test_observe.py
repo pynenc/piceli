@@ -95,7 +95,7 @@ def test_observation_returns_a_scan_warning_when_a_lazy_listing_fails() -> None:
 
 def test_preferences_are_owner_only_and_build_loopback_command(tmp_path: Path) -> None:
     store = PreferenceStore(tmp_path / "observe.json")
-    forward = PortForward("kabuki", "demo", "service/kabuki", 18080, 3000)
+    forward = PortForward("web", "demo", "service/web", 18080, 3000)
     store.replace_user(UserPreferences("jose", (forward,)))
     assert stat.S_IMODE(store.path.stat().st_mode) == 0o600
     loaded = store.load()["jose"].forwards[0]
@@ -110,7 +110,7 @@ def test_preferences_are_owner_only_and_build_loopback_command(tmp_path: Path) -
         "--namespace",
         "demo",
         "port-forward",
-        "service/kabuki",
+        "service/web",
         "18080:3000",
         "--address",
         "127.0.0.1",
@@ -119,7 +119,7 @@ def test_preferences_are_owner_only_and_build_loopback_command(tmp_path: Path) -
 
 def test_forward_health_path_is_private_preference_metadata(tmp_path: Path) -> None:
     store = PreferenceStore(tmp_path / "observe.json")
-    forward = PortForward("kabuki", "demo", "service/kabuki", 18080, 3000, "/healthz")
+    forward = PortForward("web", "demo", "service/web", 18080, 3000, "/healthz")
     store.replace_user(UserPreferences("jose", (forward,)))
 
     assert store.load()["jose"].forwards == (forward,)

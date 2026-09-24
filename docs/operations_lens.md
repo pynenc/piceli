@@ -137,7 +137,8 @@ revision_label = "my-app/revision"
 ```
 
 A shortcut uses its own `namespace` if set, otherwise the namespace being served.
-Unknown keys are rejected, so typos fail fast.
+Unknown keys are rejected, so typos fail fast. A complete example lives in
+[`examples/ui-config.toml`](https://github.com/pynenc/piceli/blob/main/examples/ui-config.toml).
 
 The broader operator features (releases, promotion, backups) are described in
 {doc}`operator_workflow`.

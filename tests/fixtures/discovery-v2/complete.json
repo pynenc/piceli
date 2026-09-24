@@ -35,7 +35,7 @@
         "api_version": "apps/v1",
         "kind": "Deployment",
         "name": "worker",
-        "namespace": "ih-test"
+        "namespace": "app-test"
       }
     }
   ],
@@ -61,14 +61,14 @@
         "api_version": "apps/v1",
         "kind": "Deployment",
         "name": "worker",
-        "namespace": "ih-test"
+        "namespace": "app-test"
       },
       "manifest": {
         "apiVersion": "apps/v1",
         "kind": "Deployment",
         "metadata": {
           "name": "worker",
-          "namespace": "ih-test",
+          "namespace": "app-test",
           "resourceVersion": "7",
           "uid": "worker-uid"
         },
@@ -84,6 +84,6 @@
   "schema_version": 2,
   "target": {
     "cluster_id": "kind-local",
-    "namespace": "ih-test"
+    "namespace": "app-test"
   }
 }

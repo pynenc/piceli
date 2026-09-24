@@ -30,7 +30,7 @@ from piceli.k8s.ops.plan import (
 )
 
 
-TARGET = PlanTarget("cluster-uid", "ih-test")
+TARGET = PlanTarget("cluster-uid", "app-test")
 CONFIG_MAP = ResourceType("v1", "ConfigMap")
 
 
@@ -62,7 +62,7 @@ def provider(
         "items": items,
     }
     configuration = SimpleNamespace(
-        host="https://api.ih.test",
+        host="https://api.example.test",
         verify_ssl=True,
         refresh_api_key_hook=None,
         proxy=None,
@@ -96,7 +96,7 @@ def item(**extra: object) -> dict:
     return {
         "metadata": {
             "name": "settings",
-            "namespace": "ih-test",
+            "namespace": "app-test",
             "uid": "uid",
             "resourceVersion": "1",
         },
@@ -126,7 +126,7 @@ def test_dry_run_create_accepts_a_nonpersisted_admission_response() -> None:
         "kind": "ConfigMap",
         "metadata": {
             "name": "settings",
-            "namespace": "ih-test",
+            "namespace": "app-test",
             "annotations": {
                 "piceli.io/owner": "owner",
                 "piceli.io/operation": "operation",
@@ -135,13 +135,13 @@ def test_dry_run_create_accepts_a_nonpersisted_admission_response() -> None:
     }
     assert (
         value.write(
-            ResourceIdentity("v1", "ConfigMap", "ih-test", "settings"),
+            ResourceIdentity("v1", "ConfigMap", "app-test", "settings"),
             {
                 "apiVersion": "v1",
                 "kind": "ConfigMap",
                 "metadata": {
                     "name": "settings",
-                    "namespace": "ih-test",
+                    "namespace": "app-test",
                     "annotations": {
                         "piceli.io/owner": "owner",
                         "piceli.io/operation": "operation",
@@ -164,7 +164,7 @@ def test_pending_claim_is_not_globally_ready() -> None:
             "kind": "PersistentVolumeClaim",
             "metadata": {
                 "name": "state",
-                "namespace": "ih-test",
+                "namespace": "app-test",
                 "uid": "uid",
                 "resourceVersion": "1",
             },

@@ -30,7 +30,7 @@ def run_reopen_and_rollback(state_dir: Path) -> None:
     r1 = ReleaseRecord(
         name="v1-stable",
         source=ReleaseSource("git", "1" * 40, artifact_digest="sha256:" + "1" * 64),
-        namespace="infinite-haiku-p2",
+        namespace="my-app-preview",
         archive=archive,
     )
     catalog.add(r1, select=True)
@@ -39,7 +39,7 @@ def run_reopen_and_rollback(state_dir: Path) -> None:
     r2 = ReleaseRecord(
         name="v2-buggy",
         source=ReleaseSource("git", "2" * 40, artifact_digest="sha256:" + "2" * 64),
-        namespace="infinite-haiku-p2",
+        namespace="my-app-preview",
         archive=archive,
     )
     catalog.add(r2, select=True)
@@ -54,7 +54,7 @@ def run_reopen_and_rollback(state_dir: Path) -> None:
     class DummyWorkflow:
         def __init__(self, cat):
             self.catalog = cat
-            self.namespace = "infinite-haiku-p2"
+            self.namespace = "my-app-preview"
         def reopen(self, name):
             class DummySession:
                 def apply(self, executor):

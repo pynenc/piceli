@@ -75,7 +75,7 @@ Identical authorization and operations are exposed across:
 
 ## Examples
 
-Runnable examples are available in [`examples/r07_operator/`](https://github.com/pynenc/piceli/tree/main/examples/r07_operator):
+Runnable examples are available in [`examples/operator_workflow/`](https://github.com/pynenc/piceli/tree/main/examples/operator_workflow):
 1. `commit_and_digest_pipelines.py`: Demonstrates Git commit and direct OCI digest delivery paths.
 2. `interrupted_reopen_and_rollback.py`: Exercises interrupted session reopen, resume, and health-aware rollback.
 3. `operator_state_and_backup.py`: Exercises atomic state persistence, exclusive flock locking, and backup/restore.

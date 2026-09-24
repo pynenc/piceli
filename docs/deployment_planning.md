@@ -254,11 +254,6 @@ does not itself verify an image build/import or a live rollback.
 ```sh
 make local-test-env
 make test-local-executor
-# Maintainers only: needs a companion workspace with the telemetry consumer
-make test-local-tooling \
-  IH_WORKSPACE=/absolute/path/to/ih_workspace \
-  DOCKER=/absolute/path/to/docker \
-  DOCKER_SOCKET=/absolute/path/to/docker.sock
 ```
 
 Bootstrap uses available Python 3.12, the hash-locked

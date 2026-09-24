@@ -613,7 +613,7 @@ _PAGE_HTML = """<!doctype html>
   <header>
     <div class="brand">
       <span>Piceli Operator</span>
-      <span class="brand-tag">Piceli Observe R07</span>
+      <span class="brand-tag">Piceli Observe</span>
     </div>
     <div class="header-actions">
       <div id="hdr-badges" style="display: contents;"></div>

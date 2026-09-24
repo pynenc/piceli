@@ -64,12 +64,11 @@ post-shutdown rejection. `flush(timeout)` and `shutdown(timeout)` return within
 their caller budget and never report an undrained queue as lossless. Payloads,
 exception bodies, private version IDs and bearer tokens are not exported.
 
-The current pinned consumer profile is
-[`piceli-local-tooling-v2.json`](schemas/piceli-local-tooling-v2.json); v1 remains
-the immutable earlier record. Run the
-complete no-deployment acceptance command from the deployment planning guide.
-It uses a disposable loopback API, imports but never runs an owned format-test
-image, and verifies operation records across a restart of the telemetry consumer.
+Consumers can pin the exact Piceli sources, schemas and tool versions they
+integrate against and verify them with their own end-to-end acceptance. A
+typical no-deployment check uses a disposable loopback API, imports but never
+runs an owned format-test image, and verifies operation records across a restart
+of the telemetry consumer.
 
 ## Runnable Linux images
 
@@ -89,19 +88,8 @@ root filesystem, no Linux capabilities, a finite deadline/output budget and
 owned-container cleanup after normal exit, failure, timeout or cancellation.
 Receipts omit process output, Docker socket paths, command arguments and tokens.
 
-Consume [`piceli-runnable-image-v1.json`](schemas/piceli-runnable-image-v1.json)
-and run the source-bound acceptance on a Linux/arm64 Docker engine with the
-pinned base already present (maintainers only; it needs the companion
-workspace):
-
-```sh
-make test-runnable-image \
-  IH_WORKSPACE=/absolute/path/to/ih_workspace \
-  DOCKER=/absolute/path/to/docker \
-  DOCKER_SOCKET=/absolute/path/to/docker.sock
-```
-
-The command never pulls, pushes or deploys. It proves exact base export, OCI
-inspection/import, successful readiness, missing-runtime failure, architecture
-rejection, bounded cancellation, cleanup, and operation traces/logs across a
-restart of the telemetry consumer.
+A source-bound acceptance for this profile runs on a Linux/arm64 Docker engine
+with the pinned base already present. It never pulls, pushes or deploys, and
+covers exact base export, OCI inspection/import, successful readiness,
+missing-runtime failure, architecture rejection, bounded cancellation, cleanup,
+and operation traces/logs across a restart of the telemetry consumer.
