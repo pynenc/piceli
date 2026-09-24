@@ -4,7 +4,7 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
-## Unreleased
+## Version 0.2.0
 
 - `release.toml` images can point at a registry delivery receipt:
   `web = { receipt = "web.delivery.json" }` releases the receipt's
