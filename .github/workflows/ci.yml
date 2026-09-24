@@ -78,6 +78,22 @@ jobs:
           path: .coverage
           include-hidden-files: true
 
+  package:
+    # The wheel must work without optional extras (gcp, telemetry).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv build
+      - name: Smoke-test a core-only install
+        run: |
+          uv venv --python 3.12 /tmp/core
+          uv pip install --python /tmp/core/bin/python dist/*.whl
+          /tmp/core/bin/python -c "import importlib.util as u; assert u.find_spec('google') is None"
+          /tmp/core/bin/piceli --help
+          /tmp/core/bin/piceli artifacts --help
+          /tmp/core/bin/piceli --folder-path tests/unit/templates/resources model list
+
   docs:
     runs-on: ubuntu-latest
     steps:

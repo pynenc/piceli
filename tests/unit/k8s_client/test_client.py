@@ -10,6 +10,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from google.oauth2 import service_account
 
 from piceli.k8s.config.kubeconfig import KubeConfig
 from piceli.k8s.k8s_client import client as client_module
@@ -45,7 +46,7 @@ def isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     fake_credentials = MagicMock(name="credentials")
     from_info = MagicMock(return_value=fake_credentials)
     monkeypatch.setattr(
-        client_module.service_account.Credentials,
+        service_account.Credentials,
         "from_service_account_info",
         from_info,
     )

@@ -4,15 +4,16 @@ import logging
 import threading
 from collections.abc import Callable
 from functools import cached_property
-from typing import Any, ClassVar, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, Optional
 
-from google.auth.transport.requests import Request
-from google.oauth2 import service_account
 from kubernetes import client, config, watch
 
 from piceli.k8s.config.kubeconfig import KubeConfig
 from piceli.k8s.templates.auxiliary.resource_request import ClusterResources
 from piceli.settings import GCE_SA_INFO
+
+if TYPE_CHECKING:
+    from google.oauth2 import service_account
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ GCP_SCOPES = (
 
 def gke_credentials_factory(
     sa_info: dict[str, Any],
-) -> Callable[[], service_account.Credentials]:
+) -> Callable[[], "service_account.Credentials"]:
     """Build refreshed GKE credentials in memory from service-account info.
 
     Passed to KubeConfigLoader as ``get_google_credentials`` so the gcp
@@ -32,7 +33,16 @@ def gke_credentials_factory(
     disk; the loader calls it again whenever the token expires.
     """
 
-    def get_credentials() -> service_account.Credentials:
+    try:
+        from google.auth.transport.requests import Request
+        from google.oauth2 import service_account
+    except ImportError as exc:  # pragma: no cover - depends on installed extras
+        raise ImportError(
+            "GKE service-account authentication needs the gcp extra: "
+            'pip install "piceli[gcp]"'
+        ) from exc
+
+    def get_credentials() -> "service_account.Credentials":
         credentials = service_account.Credentials.from_service_account_info(
             sa_info, scopes=list(GCP_SCOPES)
         )
