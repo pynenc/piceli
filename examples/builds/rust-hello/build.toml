@@ -51,8 +51,13 @@ to = "bin/rust-hello"
 [[output.image]]
 name = "rust-hello"
 repository = "piceli-examples/rust-hello"
-tag = "dev"
+# A content tag: two builds with different content get different tags and
+# both stay in the engine. The receipt records the resolved `ref`.
+tag = "{image_id:12}"
 base = { image = "docker.io/library/debian:bookworm-slim", digest = "sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171" }
 files = { "bin/rust-hello" = "/usr/local/bin/rust-hello" }
 user = "65532:65532"
 entrypoint = ["/usr/local/bin/rust-hello"]
+# Run after the build in an isolated container (no network, read-only root
+# filesystem, bounded time). A wrong exit code rejects the receipt.
+smoke = { command = ["--self-test"], expect_exit = 0, timeout_seconds = 60 }

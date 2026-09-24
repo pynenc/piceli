@@ -11,12 +11,15 @@ images loaded into the local Docker engine.
   Dockerfiles and ``docker buildx`` argv. It writes nothing and starts no
   process, so ``preview`` is safe on untrusted specs.
 * `BuildSpec.run` needs a `BuildGrant` for the exact builder digest. It
-  brackets the build with `pinned_sources` (a source that changes during the
-  build fails it), stages contexts into a private temporary directory, runs a
-  pinned ``docker`` binary with explicit argv (no shell, bounded time and
-  output, a minimal environment), extracts outputs and returns a
-  `BuildReceipt` (``piceli.build-receipt.v1``). Receipts never contain
-  process output, environment values or absolute paths.
+  records the sources (or verifies them against a lock), stages contexts into
+  a private temporary directory, runs a pinned ``docker`` binary with explicit
+  argv (no shell, bounded time and output, a minimal environment), streams
+  the build log, resolves ``{image_id:N}`` tags, runs each image's smoke
+  check, re-hashes every staged file (a change to one fails the build; other
+  files of the checkout may change and are only recorded as provenance),
+  extracts outputs and returns a `BuildReceipt` (``piceli.build-receipt.v1``).
+  Receipts never contain process output, environment values or absolute
+  paths.
 
 Importing this module runs nothing.
 """
@@ -24,10 +27,12 @@ Importing this module runs nothing.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
 import stat
 import sys
@@ -36,17 +41,17 @@ import threading
 import time
 import tomllib
 from collections.abc import Callable, Mapping
-from contextlib import ExitStack
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Protocol
 
 from piceli.artifacts.build_context import (
     BuildContextError,
     ContextManifest,
     ContextSelection,
     stage_context,
+    verify_staged,
 )
 from piceli.artifacts.build_dockerfile import (
     FILES_STAGE,
@@ -66,7 +71,8 @@ from piceli.artifacts.source_identity import (
     InputsSpec,
     SourceDriftError,
     SourceIdentityError,
-    pinned_sources,
+    open_sources,
+    verify_inputs,
 )
 from piceli.bounds import object_keys, strict_json
 
@@ -106,6 +112,9 @@ _REPOSITORY = re.compile(
     r"(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*"
 )
 _TAG = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,100}")
+_TAG_PLACEHOLDER = re.compile(r"\{image_id(?::([0-9]{1,2}))?\}")
+PENDING_TAG_PREFIX = "piceli-pending-"
+MAX_SMOKE_SECONDS = 600.0
 _DIGEST = re.compile(r"sha256:[a-f0-9]{64}")
 _USER = re.compile(r"[A-Za-z0-9_.-]{1,64}(?::[A-Za-z0-9_.-]{1,64})?")
 _BUILDER_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}")
@@ -180,6 +189,42 @@ def _argv(value: Any, what: str) -> tuple[str, ...]:
     ):
         raise _fail(f"{what} must be a non-empty list of strings")
     return tuple(value)
+
+
+def _tag(value: Any) -> str:
+    """A literal tag, or a template with ``{image_id}``/``{image_id:N}``.
+
+    ``{image_id:N}`` is the first ``N`` (4-64) hex digits of the built image's
+    config digest; ``{image_id}`` is all 64. Nothing else may be in braces.
+    """
+    if not isinstance(value, str) or len(value) > 200:
+        raise _fail("invalid output.image.tag")
+
+    def width(match: re.Match[str]) -> str:
+        count = int(match.group(1) or 64)
+        if not 4 <= count <= 64:
+            raise _fail("{image_id:N} needs 4 <= N <= 64")
+        return "0" * count
+
+    rendered = _TAG_PLACEHOLDER.sub(width, value)
+    if "{" in rendered or "}" in rendered:
+        raise _fail("output.image.tag supports only {image_id} and {image_id:N}")
+    _match(_TAG, rendered, "output.image.tag")
+    return value
+
+
+def _smoke(value: Any) -> SmokeCheck:
+    _keys(value, {"command"}, {"expect_exit", "timeout_seconds"}, "smoke")
+    command = value["command"]
+    if not isinstance(command, list) or (command and not _argv(command, "smoke")):
+        raise _fail("smoke.command must be a list of strings")
+    expect = value.get("expect_exit", 0)
+    if not isinstance(expect, int) or isinstance(expect, bool) or not 0 <= expect < 256:
+        raise _fail("smoke.expect_exit must be an exit code 0-255")
+    seconds = value.get("timeout_seconds", 60)
+    if type(seconds) not in (int, float) or not 0 < seconds <= MAX_SMOKE_SECONDS:
+        raise _fail(f"smoke.timeout_seconds must be in (0, {MAX_SMOKE_SECONDS:g}]")
+    return SmokeCheck(tuple(command), expect, float(seconds))
 
 
 def _mapping(value: Any, what: str) -> dict[str, str]:
@@ -286,6 +331,27 @@ class FileOutput:
 
 
 @dataclass(frozen=True)
+class SmokeCheck:
+    """A command run in the built image after the build; see `_Execution`.
+
+    ``command`` is appended after the image (it replaces ``CMD`` and keeps the
+    entrypoint; empty runs the image's default). The container has no
+    network, a read-only root filesystem, no capabilities and a bounded time.
+    """
+
+    command: tuple[str, ...]
+    expect_exit: int = 0
+    timeout_seconds: float = 60.0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "command": list(self.command),
+            "expect_exit": self.expect_exit,
+            "timeout_seconds": self.timeout_seconds,
+        }
+
+
+@dataclass(frozen=True)
 class ImageOutput:
     name: str
     repository: str
@@ -297,13 +363,42 @@ class ImageOutput:
     user: str | None = None
     workdir: str | None = None
     target: str | None = None
+    smoke: SmokeCheck | None = None
 
-    def ref(self, platform: str, multi: bool) -> str:
-        tag = f"{self.tag}-{platform_slug(platform)[6:]}" if multi else self.tag
+    @property
+    def templated(self) -> bool:
+        """Whether the tag depends on the built image (``{image_id:N}``)."""
+        return _TAG_PLACEHOLDER.search(self.tag) is not None
+
+    def ref(
+        self,
+        platform: str,
+        multi: bool,
+        *,
+        image_id: str | None = None,
+        pending: str | None = None,
+    ) -> str:
+        """The image reference.
+
+        A templated tag resolves with ``image_id``; before the build is known
+        it is loaded under a private ``piceli-pending-<nonce>`` tag
+        (``pending``). Without either, the template text is returned (preview).
+        """
+        tag = self.tag
+        if self.templated and image_id is not None:
+            hexdigits = image_id.removeprefix("sha256:")
+            tag = _TAG_PLACEHOLDER.sub(
+                lambda match: hexdigits[: int(match.group(1) or 64)], tag
+            )
+        elif self.templated and pending is not None:
+            tag = f"{PENDING_TAG_PREFIX}{pending}"
+        tag = f"{tag}-{platform_slug(platform)[6:]}" if multi else tag
         return f"{self.repository}:{tag}"
 
     def to_dict(self) -> dict[str, Any]:
+        smoke = {"smoke": self.smoke.to_dict()} if self.smoke else {}
         return {
+            **smoke,
             "name": self.name,
             "repository": self.repository,
             "tag": self.tag,
@@ -344,10 +439,27 @@ class BuildGrant:
             raise BuildSpecError("invalid-grant", "invalid build grant")
 
 
-Runner = Callable[
-    [list[str], Path, ProcessLimits, dict[str, str], float | None],
-    tuple[dict[str, Any], bytes, bytes],
-]
+OutputSink = Callable[[str, bytes], None]
+
+
+class Runner(Protocol):
+    """Runs one docker argv; returns ``(process receipt, stdout, stderr)``.
+
+    ``on_output(stream, block)`` should receive output while it is produced
+    (the build log streams from it); it is ``None`` for short probes.
+    """
+
+    def __call__(
+        self,
+        argv: list[str],
+        cwd: Path,
+        limits: ProcessLimits,
+        environment: dict[str, str],
+        expires_at: float | None,
+        /,
+        *,
+        on_output: OutputSink | None = None,
+    ) -> tuple[dict[str, Any], bytes, bytes]: ...
 
 
 def _default_runner(
@@ -356,9 +468,17 @@ def _default_runner(
     limits: ProcessLimits,
     environment: dict[str, str],
     expires_at: float | None,
+    /,
+    *,
+    on_output: OutputSink | None = None,
 ) -> tuple[dict[str, Any], bytes, bytes]:
     return _run_process(
-        argv, cwd, limits, expires_at=expires_at, environment=environment
+        argv,
+        cwd,
+        limits,
+        expires_at=expires_at,
+        environment=environment,
+        on_output=on_output,
     )
 
 
@@ -456,6 +576,17 @@ class BuildPlan:
                     ]
                     for item in spec.images
                 },
+                **(
+                    {
+                        "smoke": {
+                            item.name: item.smoke.to_dict()
+                            for item in spec.images
+                            if item.smoke
+                        }
+                    }
+                    if any(item.smoke for item in spec.images)
+                    else {}
+                ),
             },
             "invocations": list(self.invocations),
             "executes_code": True,
@@ -528,6 +659,8 @@ class BuildSpec:
     buildx_builder: str | None = None
     inputs: str | None = None
     base: Path = field(default=Path("."), compare=False, repr=False)
+    origin: Path | None = field(default=None, compare=False, repr=False)
+    """The ``build.toml`` this spec was read from; re-checked after a build."""
 
     def __post_init__(self) -> None:
         _match(_NAME, self.name, "build name")
@@ -615,7 +748,8 @@ class BuildSpec:
             document = tomllib.loads(raw.decode())
         except (tomllib.TOMLDecodeError, UnicodeDecodeError) as error:
             raise _fail(f"invalid build spec TOML: {error}") from None
-        return cls.from_dict(document, path.resolve().parent)
+        spec = cls.from_dict(document, path.resolve().parent)
+        return dataclasses.replace(spec, origin=path.resolve())
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any], base: Path) -> BuildSpec:
@@ -745,7 +879,16 @@ class BuildSpec:
             _keys(
                 item,
                 {"name", "repository", "tag"},
-                {"base", "files", "entrypoint", "cmd", "user", "workdir", "target"},
+                {
+                    "base",
+                    "files",
+                    "entrypoint",
+                    "cmd",
+                    "user",
+                    "workdir",
+                    "target",
+                    "smoke",
+                },
                 "output.image",
             )
             files_map = item.get("files", {})
@@ -758,7 +901,7 @@ class BuildSpec:
                 ImageOutput(
                     _match(_NAME, item["name"], "output.image.name"),
                     _match(_REPOSITORY, item["repository"], "output.image.repository"),
-                    _match(_TAG, item["tag"], "output.image.tag"),
+                    _tag(item["tag"]),
                     base_image,
                     tuple(
                         (
@@ -778,6 +921,7 @@ class BuildSpec:
                     _match(_NAME, item["target"], "target")
                     if "target" in item
                     else None,
+                    _smoke(item["smoke"]) if "smoke" in item else None,
                 )
             )
         pinned = document.get("images", {})
@@ -974,6 +1118,7 @@ class BuildSpec:
         docker: str = "docker",
         builder: str = "<buildx-builder>",
         staging: str = "<staging>",
+        pending: str = "<nonce>",
         image: ImageOutput | None = None,
     ) -> list[str]:
         slug = platform_slug(platform)
@@ -1025,7 +1170,7 @@ class BuildSpec:
                 f"{staging}/metadata/{slug}-image-{image.name}.json",
                 "--load",
                 "--tag",
-                image.ref(platform, len(self.platforms) > 1),
+                image.ref(platform, len(self.platforms) > 1, pending=pending),
             ]
         main = (
             f"{staging}/contexts/{self.dockerfile_context}"
@@ -1094,8 +1239,15 @@ class BuildSpec:
         runner: Runner | None = None,
         log: Path | None = None,
         cancel: threading.Event | None = None,
+        progress: Callable[[str], None] | None = None,
+        raw_output: Callable[[bytes], None] | None = None,
     ) -> BuildReceipt:
-        """Build under ``grant`` and return the receipt (outputs written)."""
+        """Build under ``grant`` and return the receipt (outputs written).
+
+        ``log`` is appended to while the build runs (complete lines, flushed).
+        ``progress`` receives one short line per step; ``raw_output`` receives
+        the build output as it arrives. Neither ever reaches the receipt.
+        """
         inputs = inputs if inputs is not None else self.load_inputs()
         if lock is not None and inputs is None:
             raise _fail("an inputs lock needs an inputs spec")
@@ -1109,21 +1261,21 @@ class BuildSpec:
         if grant.expires_at <= time.time():
             raise BuildSpecError("grant-expired", "build grant expired")
         docker = docker if docker is not None else DockerTool.discover()
-        execution = _Execution(
-            plan, grant, docker, runner or _default_runner, log, cancel
-        )
         started_at = _now()
-        sources: list[dict[str, Any]] = []
+        start: InputsLock | None = None
         try:
-            with ExitStack() as stack:
-                if inputs is not None:
-                    identities = stack.enter_context(pinned_sources(inputs, lock))
-                    sources = identities.to_dict()["sources"]
-                outputs = execution.execute(output_dir)
+            if inputs is not None:
+                start = open_sources(inputs, lock)
         except SourceDriftError:
             raise BuildSpecError("source-drift", "a source changed") from None
         except SourceIdentityError:
             raise BuildSpecError("source-identity", "sources not verifiable") from None
+        with _BuildLog(log, progress, raw_output) as build_log:
+            build_log.line(f"### run {self.name} {started_at}")
+            execution = _Execution(
+                plan, grant, docker, runner or _default_runner, build_log, cancel
+            )
+            outputs = execution.execute(output_dir)
         receipt = {
             "revision": BUILD_RECEIPT_REVISION,
             "state": "succeeded",
@@ -1143,7 +1295,8 @@ class BuildSpec:
                 item for item in self.platforms if item != execution.native
             ],
             "inputs_spec_sha256": inputs.spec_sha256 if inputs else None,
-            "sources": sources,
+            "sources": start.to_dict()["sources"] if start is not None else [],
+            "sources_changed_during_build": _changed_sources(inputs, start),
             "contexts": {name: item.summary() for name, item in plan.contexts.items()},
             "dockerfiles_sha256": {
                 platform: digest(text.encode())
@@ -1163,9 +1316,126 @@ class BuildSpec:
         }
         return BuildReceipt(receipt)
 
+    def smoke_argv(
+        self,
+        image: ImageOutput,
+        platform: str,
+        image_id: str,
+        *,
+        docker: str = "docker",
+        name: str = "piceli-smoke-<nonce>",
+    ) -> list[str]:
+        """``docker run`` for an image's smoke check: isolated and bounded."""
+        assert image.smoke is not None
+        return [
+            docker,
+            "run",
+            "--rm",
+            "--name",
+            name,
+            "--pull",
+            "never",
+            "--platform",
+            platform,
+            "--network",
+            "none",
+            "--read-only",
+            "--tmpfs",
+            "/tmp:rw,nosuid,nodev,noexec,size=67108864",
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges",
+            "--pids-limit",
+            "256",
+            "--memory",
+            "512m",
+            image_id,
+            *image.smoke.command,
+        ]
+
+
+def _changed_sources(
+    inputs: InputsSpec | None, start: InputsLock | None
+) -> list[str] | None:
+    """Provenance only: sources whose whole-checkout identity moved meanwhile.
+
+    The build is judged by its staged files (`verify_staged`); a busy checkout
+    whose unrelated files changed is recorded here, never rejected. ``None``
+    means the sources could not be recaptured.
+    """
+    if inputs is None or start is None:
+        return []
+    try:
+        verification = verify_inputs(inputs, start)
+    except SourceIdentityError:
+        return None
+    return sorted({item.name for item in verification.drifts})
+
+
+class _BuildLog:
+    """Streams build output to ``--log`` (append, 0600) and progress sinks.
+
+    Output is written in complete lines and flushed as it arrives, so the file
+    can be followed during a long build. Partial lines are written when their
+    step ends.
+    """
+
+    def __init__(
+        self,
+        path: Path | None,
+        progress: Callable[[str], None] | None,
+        raw: Callable[[bytes], None] | None,
+    ) -> None:
+        self.path = path
+        self.progress = progress
+        self.raw = raw
+        self.stream: Any = None
+        self.pending: dict[str, bytes] = {}
+
+    def __enter__(self) -> _BuildLog:
+        if self.path is not None:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(
+                self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600
+            )
+            self.stream = os.fdopen(fd, "ab", buffering=0)
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.end_step()
+        if self.stream is not None:
+            self.stream.close()
+            self.stream = None
+
+    def _write(self, data: bytes) -> None:
+        if self.stream is not None and data:
+            self.stream.write(data)
+            self.stream.flush()
+
+    def line(self, text: str) -> None:
+        self._write(text.encode() + b"\n")
+
+    def say(self, text: str) -> None:
+        if self.progress is not None:
+            self.progress(text)
+
+    def feed(self, stream: str, block: bytes) -> None:
+        if self.raw is not None:
+            self.raw(block)
+        data = self.pending.pop(stream, b"") + block
+        cut = data.rfind(b"\n") + 1
+        self._write(data[:cut])
+        if data[cut:]:
+            self.pending[stream] = data[cut:]
+
+    def end_step(self) -> None:
+        for stream in sorted(self.pending):
+            self._write(self.pending.pop(stream) + b"\n")
+
 
 class _Execution:
-    """One run of a plan: probes, staging, invocations, output collection."""
+    """One run of a plan: probes, staging, invocations, smoke, drift, outputs."""
 
     def __init__(
         self,
@@ -1173,7 +1443,7 @@ class _Execution:
         grant: BuildGrant,
         docker: DockerTool,
         runner: Runner,
-        log: Path | None,
+        log: _BuildLog,
         cancel: threading.Event | None,
     ) -> None:
         self.plan = plan
@@ -1183,11 +1453,66 @@ class _Execution:
         self.runner = runner
         self.log = log
         self.cancel = cancel
+        self.nonce = secrets.token_hex(8)
         self.steps: list[dict[str, Any]] = []
         self.native: str | None = None
         self.buildx_version: str | None = None
         self.builder_name: str | None = None
         self.builder_manifests: dict[str, str] = {}
+        self.total = len(self.spec._invocations()) + sum(
+            len(self.spec.platforms) for item in self.spec.images if item.smoke
+        )
+
+    def _run(
+        self,
+        argv: list[str],
+        cwd: Path,
+        seconds: float,
+        *,
+        step: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], bytes]:
+        if self.cancel is not None and self.cancel.is_set():
+            raise BuildSpecError(
+                "cancelled", "build cancelled", steps=tuple(self.steps)
+            )
+        if self.grant.expires_at <= time.time():
+            raise BuildSpecError("grant-expired", "build grant expired")
+        self.docker.tool.verify()
+        if step is not None:
+            label = f"{step['platform']} {step['kind']}"
+            self.log.line(f"### {label} started")
+            self.log.say(
+                f"[piceli] {len(self.steps) + 1}/{self.total} {label}: running"
+            )
+        receipt, stdout, _ = self.runner(
+            [str(self.docker.tool.path), *argv[1:]],
+            cwd,
+            ProcessLimits(seconds, PROCESS_OUTPUT_BUDGET),
+            dict(self.docker.environment),
+            self.grant.expires_at,
+            on_output=self.log.feed if step is not None else None,
+        )
+        self.docker.tool.verify()
+        return receipt, stdout
+
+    def _record(
+        self, step: dict[str, Any], receipt: Mapping[str, Any], state: str
+    ) -> None:
+        seconds = round(float(receipt["seconds"]), 3)
+        self.steps.append(
+            {
+                **step,
+                "state": state,
+                "exit_code": receipt["exit_code"],
+                "seconds": seconds,
+            }
+        )
+        label = f"{step['platform']} {step['kind']}"
+        self.log.end_step()
+        self.log.line(f"### {label} {state} {seconds}s")
+        self.log.say(
+            f"[piceli] {len(self.steps)}/{self.total} {label}: {state} in {seconds}s"
+        )
 
     def _call(
         self,
@@ -1197,36 +1522,9 @@ class _Execution:
         *,
         step: dict[str, Any] | None = None,
     ) -> bytes:
-        if self.cancel is not None and self.cancel.is_set():
-            raise BuildSpecError(
-                "cancelled", "build cancelled", steps=tuple(self.steps)
-            )
-        if self.grant.expires_at <= time.time():
-            raise BuildSpecError("grant-expired", "build grant expired")
-        self.docker.tool.verify()
-        receipt, stdout, stderr = self.runner(
-            [str(self.docker.tool.path), *argv[1:]],
-            cwd,
-            ProcessLimits(seconds, PROCESS_OUTPUT_BUDGET),
-            dict(self.docker.environment),
-            self.grant.expires_at,
-        )
-        self.docker.tool.verify()
+        receipt, stdout = self._run(argv, cwd, seconds, step=step)
         if step is not None:
-            record = {
-                **step,
-                "state": receipt["state"],
-                "exit_code": receipt["exit_code"],
-                "seconds": round(float(receipt["seconds"]), 3),
-            }
-            self.steps.append(record)
-            if self.log is not None:
-                self.log.parent.mkdir(parents=True, exist_ok=True)
-                with self.log.open("ab") as stream:
-                    header = (
-                        f"### {step['platform']} {step['kind']} {receipt['state']}\n"
-                    )
-                    stream.write(header.encode() + stderr + stdout + b"\n")
+            self._record(step, receipt, receipt["state"])
         if receipt["state"] != "succeeded":
             code = "build-failed" if step is not None else "docker-unavailable"
             if receipt["state"] == "timed-out":
@@ -1281,6 +1579,7 @@ class _Execution:
                 docker=str(self.docker.tool.path),
                 builder=self.builder_name,
                 staging=str(staging),
+                pending=self.nonce,
             ):
                 step = {"platform": platform, "kind": kind}
                 self._call(argv, staging, spec.timeout_seconds, step=step)
@@ -1306,11 +1605,90 @@ class _Execution:
                         if multi
                         else image.name
                     )
-                    images[key] = self._inspect(
-                        image.ref(platform, multi), platform, metadata, staging
-                    )
+                    images[key] = self._image(image, platform, multi, metadata, staging)
+                    if image.smoke is not None:
+                        self._smoke(image, platform, images[key]["image_id"], staging)
+            self._verify_consumed()
             files = self._publish(collected, output_dir)
         return {"files": files, "images": images}
+
+    def _image(
+        self,
+        image: ImageOutput,
+        platform: str,
+        multi: bool,
+        metadata: Mapping[str, Any],
+        staging: Path,
+    ) -> dict[str, Any]:
+        """Inspect a loaded image; move a templated tag to its resolved value."""
+        loaded = image.ref(platform, multi, pending=self.nonce)
+        result = self._inspect(loaded, platform, metadata, staging)
+        if not image.templated:
+            return result
+        final = image.ref(platform, multi, image_id=result["image_id"])
+        self._call(["docker", "tag", loaded, final], staging, 60)
+        try:
+            self._call(["docker", "image", "rm", "--no-prune", loaded], staging, 60)
+        except BuildSpecError:
+            pass  # a leftover pending tag is harmless; the final tag is set
+        resolved = self._inspect(final, platform, metadata, staging)
+        if resolved["image_id"] != result["image_id"]:
+            raise BuildSpecError("image-mismatch", "tagged image differs from build")
+        return resolved
+
+    def _smoke(
+        self, image: ImageOutput, platform: str, image_id: str, staging: Path
+    ) -> None:
+        """Run the image's smoke check; a wrong exit code rejects the build."""
+        assert image.smoke is not None
+        name = f"piceli-smoke-{self.nonce}-{len(self.steps)}"
+        step = {"platform": platform, "kind": f"smoke:{image.name}"}
+        argv = self.spec.smoke_argv(image, platform, image_id, name=name)
+        receipt, _ = self._run(argv, staging, image.smoke.timeout_seconds, step=step)
+        state = receipt["state"]
+        finished = state in {"succeeded", "failed"}
+        passed = finished and receipt["exit_code"] == image.smoke.expect_exit
+        self._record(
+            step, receipt, "succeeded" if passed else "failed" if finished else state
+        )
+        if passed:
+            return
+        if not finished:
+            # The docker CLI was killed; the container may still be running.
+            try:
+                self._call(["docker", "rm", "--force", name], staging, 30)
+            except BuildSpecError:
+                pass
+        if state == "cancelled":
+            raise BuildSpecError(
+                "cancelled", "build cancelled", steps=tuple(self.steps)
+            )
+        code = "smoke-failed" if finished else "smoke-timed-out"
+        raise BuildSpecError(code, "smoke check failed", steps=tuple(self.steps))
+
+    def _verify_consumed(self) -> None:
+        """Drift check over what the build consumed: staged files and spec."""
+        for context in self.spec.contexts:
+            try:
+                verify_staged(
+                    self.plan.context_roots[context.name],
+                    self.plan.contexts[context.name],
+                )
+            except BuildContextError as error:
+                raise BuildSpecError(error.code, str(error)) from None
+        origin = self.spec.origin
+        if origin is not None:
+            try:
+                same = BuildSpec.from_toml(origin).spec_sha256 == self.spec.spec_sha256
+            except BuildSpecError:
+                same = False
+            if not same:
+                raise BuildSpecError("spec-changed", "build spec changed")
+        self.log.say(
+            "[piceli] drift check: "
+            f"{sum(len(item.files) for item in self.plan.contexts.values())} "
+            "staged file(s) unchanged"
+        )
 
     def _metadata(self, path: Path) -> dict[str, Any]:
         try:
@@ -1455,7 +1833,29 @@ def add_build_spec_commands(subparsers: Any) -> None:
             action.add_argument("--docker", type=Path)
             action.add_argument("--docker-sha256")
             action.add_argument("--log", type=Path)
+            action.add_argument(
+                "--progress",
+                choices=("steps", "plain", "quiet"),
+                default="steps",
+                help="stderr during the build: one line per step (default), "
+                "plus the raw build output (plain), or nothing (quiet)",
+            )
             action.add_argument("--max-seconds", type=float, default=7200.0)
+
+
+FAILED_CODES = frozenset(
+    {"build-failed", "build-timed-out", "smoke-failed", "smoke-timed-out"}
+)
+
+
+def _progress_line(text: str) -> None:
+    print(text, file=sys.stderr, flush=True)
+
+
+def _raw_output(block: bytes) -> None:
+    sys.stderr.flush()
+    sys.stderr.buffer.write(block)
+    sys.stderr.buffer.flush()
 
 
 def _write_atomic(path: Path, text: str) -> None:
@@ -1473,8 +1873,10 @@ def run_build_spec_command(
 ) -> int:
     """Run a parsed ``build-spec`` command; print JSON; return 0, 1 or 2.
 
-    Exit 1 means a docker build step failed (the steps are printed, never
-    their output). Exit 2 means the input or grant was rejected. Error output
+    Exit 1 means a docker build step or a smoke check failed (the steps are
+    printed, never their output). Exit 2 means the input or grant was
+    rejected. The result is always the last line of stderr (on failure) or
+    stdout (on success); earlier stderr lines are progress. Error output
     carries only a fixed reason code, never paths, output or secrets.
     """
     try:
@@ -1508,12 +1910,14 @@ def run_build_spec_command(
             docker=docker,
             runner=runner,
             log=args.log,
+            progress=None if args.progress == "quiet" else _progress_line,
+            raw_output=_raw_output if args.progress == "plain" else None,
         )
         _write_atomic(args.out, receipt.to_json())
         print(json.dumps(receipt.to_dict(), sort_keys=True))
         return 0
     except BuildSpecError as error:
-        failed = error.code in {"build-failed", "build-timed-out"}
+        failed = error.code in FAILED_CODES
         body: dict[str, Any] = {
             "state": "failed" if failed else "rejected",
             "reason": error.code,
