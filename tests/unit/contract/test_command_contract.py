@@ -156,7 +156,7 @@ CASES: dict[str, tuple[Argv, str]] = {
     "observe status": (
         lambda p: (
             ["observe", "status", "--archive", str(p / "junk")]
-            + ["--kubeconfig", str(p / "kubeconfig")]
+            + ["--kubeconfig", str(p / "kubeconfig"), "--context", "test"]
         ),
         "invalid-session-archive",
     ),
@@ -179,7 +179,7 @@ CASES: dict[str, tuple[Argv, str]] = {
     "observe forward-command": (
         lambda p: (
             ["observe", "forward-command", *_OBSERVE_FORWARD]
-            + ["--kubeconfig", str(p / "kubeconfig")]
+            + ["--kubeconfig", str(p / "kubeconfig"), "--context", "test"]
             + ["--preferences", str(p / "prefs.json")]
         ),
         "no-saved-forwards",
@@ -187,15 +187,16 @@ CASES: dict[str, tuple[Argv, str]] = {
     "observe forward-run": (
         lambda p: (
             ["observe", "forward-run", *_OBSERVE_FORWARD]
-            + ["--kubeconfig", str(p / "kubeconfig")]
+            + ["--kubeconfig", str(p / "kubeconfig"), "--context", "test"]
             + ["--preferences", str(p / "prefs.json")]
         ),
-        "no-saved-forwards",
+        "target-refused",
     ),
     "observe logs-command": (
         lambda p: (
             ["observe", "logs-command", "--namespace", "Not_A_Name"]
             + ["--target", "pod/web", "--kubeconfig", str(p / "kubeconfig")]
+            + ["--context", "test"]
         ),
         "invalid-log-request",
     ),
@@ -203,22 +204,24 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: (
             ["observe", "logs-run", "--namespace", "Not_A_Name"]
             + ["--target", "pod/web", "--kubeconfig", str(p / "kubeconfig")]
+            + ["--context", "test"]
         ),
-        "invalid-log-request",
+        "target-refused",
     ),
     "observe serve": (
         lambda p: (
             ["observe", "serve", "--archive", str(p / "junk")]
-            + ["--kubeconfig", str(p / "kubeconfig"), "--ui-config", str(p / "junk")]
+            + ["--kubeconfig", str(p / "kubeconfig"), "--context", "test"]
+            + ["--ui-config", str(p / "junk")]
         ),
         "invalid-access-profile",
     ),
     "observe forwards apply": (
         lambda p: (
             ["observe", "forwards", "apply", "--profile", str(p / "junk")]
-            + ["--kubeconfig", str(p / "kubeconfig")]
+            + ["--kubeconfig", str(p / "kubeconfig"), "--context", "test"]
         ),
-        "invalid-access-profile",
+        "target-refused",
     ),
     "observe forwards status": (
         lambda p: (
@@ -228,8 +231,15 @@ CASES: dict[str, tuple[Argv, str]] = {
         "unknown-shortcut",
     ),
     "operator status": (
-        lambda p: ["operator", "status", "--kubeconfig", str(p / "kubeconfig")],
-        "kubeconfig-rejected",
+        lambda p: [
+            "operator",
+            "status",
+            "--kubeconfig",
+            str(p / "kubeconfig"),
+            "--context",
+            "test",
+        ],
+        "target-refused",
     ),
     "operator promote": (
         lambda p: (
@@ -262,7 +272,14 @@ CASES: dict[str, tuple[Argv, str]] = {
     ),
     "operator serve": (
         lambda p: (
-            ["operator", "serve", "--kubeconfig", str(p / "kubeconfig")]
+            [
+                "operator",
+                "serve",
+                "--kubeconfig",
+                str(p / "kubeconfig"),
+                "--context",
+                "test",
+            ]
             + ["--ui-config", str(p / "junk")]
         ),
         "invalid-access-profile",

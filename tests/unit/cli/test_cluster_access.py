@@ -118,11 +118,8 @@ def test_operator_status_uses_the_factory(tmp_path):
         )
     assert result.exit_code == 2
     refusal = json.loads(result.stdout)
-    assert refusal == {
-        "state": "refused",
-        "reason": "proxied API transport is not supported",
-        "code": "target-refused",
-    }
+    assert (refusal["state"], refusal["reason"]) == ("rejected", "target-refused")
+    assert refusal["message"] == "proxied API transport is not supported"
     dynamic.assert_not_called()
 
 
@@ -139,10 +136,10 @@ def test_kubectl_commands_refuse_before_starting_kubectl(tmp_path):
             observe_app, [*base, "--context", "lab", "--allow-exec"]
         )
     run.assert_not_called()
-    assert json.loads(refused.stdout)["code"] == "exec-auth-not-allowed"
-    assert json.loads(unknown.stdout)["code"] == "target-refused"
+    assert json.loads(refused.stdout)["reason"] == "exec-auth-not-allowed"
+    assert json.loads(unknown.stdout)["reason"] == "target-refused"
     # Allowed, but the plugin command does not exist: still refused, not run.
-    assert json.loads(allowed.stdout)["code"] == "exec-command-not-found"
+    assert json.loads(allowed.stdout)["reason"] == "exec-command-not-found"
 
 
 def test_kubectl_argv_always_names_the_context(tmp_path):
