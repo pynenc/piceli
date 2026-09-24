@@ -49,17 +49,21 @@ def run_reopen_and_rollback(state_dir: Path) -> None:
     # Reopen v1 without rotating inputs
     reopened = catalog.get("v1-stable")
     assert reopened.archive.session_id == "e" * 32
-    print(f"[OK] Reopened '{reopened.name}' preserving exact canonical session {reopened.archive.session_id}")
+    print(
+        f"[OK] Reopened '{reopened.name}' preserving exact canonical session {reopened.archive.session_id}"
+    )
 
     # Execute health-aware rollback
     class DummyWorkflow:
         def __init__(self, cat):
             self.catalog = cat
             self.namespace = "my-app-preview"
+
         def reopen(self, name):
             class DummySession:
                 def apply(self, executor):
                     return {"state": "ready"}
+
             return DummySession()
 
     res = health_aware_rollback(
@@ -68,11 +72,14 @@ def run_reopen_and_rollback(state_dir: Path) -> None:
         None,
         check_health_fn=lambda ns, name: True,
     )
-    print(f"[OK] Health-aware rollback succeeded: {res['rollback_target']} is now active")
+    print(
+        f"[OK] Health-aware rollback succeeded: {res['rollback_target']} is now active"
+    )
     assert catalog.selected().name == "v1-stable"
 
 
 if __name__ == "__main__":
     import tempfile
+
     with tempfile.TemporaryDirectory() as tmp:
         run_reopen_and_rollback(Path(tmp))

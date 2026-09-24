@@ -1,4 +1,5 @@
 """Pinned tools, explicit code-execution authority and bounded process groups."""
+
 from __future__ import annotations
 
 import hashlib

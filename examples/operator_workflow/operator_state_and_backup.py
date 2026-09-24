@@ -33,18 +33,24 @@ def run_state_and_backup(state_dir: Path) -> None:
     # 3. Create backup archive
     backup_file = state_dir.parent / "operator-state-backup.tar.gz"
     store.create_backup(backup_file)
-    print(f"[OK] Created backup archive at {backup_file} (size: {backup_file.stat().st_size} bytes)")
+    print(
+        f"[OK] Created backup archive at {backup_file} (size: {backup_file.stat().st_size} bytes)"
+    )
 
     # 4. Restore to clean destination
     restore_target = state_dir.parent / "restored-state"
     store.restore_backup(backup_file, destination=restore_target)
     restored_store = FileStateStore(restore_target)
-    assert restored_store.load_data("preferences") == {"theme": "slate-dark", "auto_refresh": True}
+    assert restored_store.load_data("preferences") == {
+        "theme": "slate-dark",
+        "auto_refresh": True,
+    }
     assert UserStore(restored_store).authenticate(token) is not None
     print("[OK] Successfully verified restored state in new clean destination")
 
 
 if __name__ == "__main__":
     import tempfile
+
     with tempfile.TemporaryDirectory() as tmp:
         run_state_and_backup(Path(tmp) / "state")

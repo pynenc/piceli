@@ -35,7 +35,10 @@ class Container(BaseModel):
     args: list[str] | None = None
     image_pull_policy: policies.ImagePullPolicy | None = None
     ports: list[port.Port] | None = None
-    env: dict[str, str | env_vars.ValueFromField | env_vars.ValueFromResourceField] | None = None
+    env: (
+        dict[str, str | env_vars.ValueFromField | env_vars.ValueFromResourceField]
+        | None
+    ) = None
     volumes: list[volume.VolumeMount] | None = None
     liveness_pre_stop_command: list[str] | None = None
     liveness_post_start_command: list[str] | None = None

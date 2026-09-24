@@ -1,4 +1,5 @@
 """Thin JSON CLI over artifact library calls. Preview does not instantiate clients."""
+
 from __future__ import annotations
 
 import argparse

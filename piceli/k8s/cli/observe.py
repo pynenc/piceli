@@ -272,7 +272,9 @@ def serve(
     port: Annotated[int, typer.Option(min=1, max=65535)] = 9876,
     ui_config: Annotated[
         MaybePath,
-        typer.Option(exists=True, readable=True, envvar=UI_CONFIG_ENV, help=UI_CONFIG_HELP),
+        typer.Option(
+            exists=True, readable=True, envvar=UI_CONFIG_ENV, help=UI_CONFIG_HELP
+        ),
     ] = None,
 ) -> None:
     """Open the local operations dashboard and optionally restore saved forwards."""

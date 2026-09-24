@@ -1,4 +1,3 @@
-
 from piceli.k8s.constants import wait_conditions
 from piceli.k8s.k8s_client.client import ClientContext
 from piceli.k8s.object_manager import base

@@ -1,4 +1,5 @@
 """Immutable, JSON-readable build inputs. Planning never imports repository code."""
+
 from __future__ import annotations
 
 import hashlib

@@ -33,20 +33,29 @@ def test_operator_serve_starts_and_stops_without_a_cluster(tmp_path: Path) -> No
         captured.append(self)
 
     port = _free_port()
-    with patch(
-        "piceli.k8s.cli.operator.KubernetesDynamicInventoryReader",
-        return_value=object(),
-    ), patch.object(LocalObserveServer, "serve_forever", fake_serve_forever):
+    with (
+        patch(
+            "piceli.k8s.cli.operator.KubernetesDynamicInventoryReader",
+            return_value=object(),
+        ),
+        patch.object(LocalObserveServer, "serve_forever", fake_serve_forever),
+    ):
         result = runner.invoke(
             app,
             [
                 "serve",
-                "--kubeconfig", str(kubeconfig),
-                "--namespace", "demo",
-                "--preferences", str(tmp_path / "prefs.json"),
-                "--user", "tester",
-                "--port", str(port),
-                "--ui-config", str(ui_config),
+                "--kubeconfig",
+                str(kubeconfig),
+                "--namespace",
+                "demo",
+                "--preferences",
+                str(tmp_path / "prefs.json"),
+                "--user",
+                "tester",
+                "--port",
+                str(port),
+                "--ui-config",
+                str(ui_config),
             ],
         )
     assert result.exit_code == 0, result.output
@@ -66,20 +75,26 @@ def test_operator_serve_reports_an_occupied_port_without_a_traceback(
 ) -> None:
     kubeconfig = tmp_path / "kubeconfig"
     kubeconfig.write_text("apiVersion: v1\n")
-    with patch(
-        "piceli.k8s.cli.operator.KubernetesDynamicInventoryReader",
-        return_value=object(),
-    ), patch(
-        "piceli.k8s.cli.operator.LocalObserveServer",
-        side_effect=OSError(errno.EADDRINUSE, "Address already in use"),
+    with (
+        patch(
+            "piceli.k8s.cli.operator.KubernetesDynamicInventoryReader",
+            return_value=object(),
+        ),
+        patch(
+            "piceli.k8s.cli.operator.LocalObserveServer",
+            side_effect=OSError(errno.EADDRINUSE, "Address already in use"),
+        ),
     ):
         result = runner.invoke(
             app,
             [
                 "serve",
-                "--kubeconfig", str(kubeconfig),
-                "--preferences", str(tmp_path / "prefs.json"),
-                "--port", "9876",
+                "--kubeconfig",
+                str(kubeconfig),
+                "--preferences",
+                str(tmp_path / "prefs.json"),
+                "--port",
+                "9876",
             ],
         )
     assert result.exit_code != 0

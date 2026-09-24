@@ -647,7 +647,9 @@ class ForwardSupervisor:
 
     def _shortcut_namespace(self, shortcut_id: str, namespace: str | None) -> str:
         """A shortcut's pinned namespace wins, then the caller's, then the supervisor's."""
-        return self._shortcuts[shortcut_id].namespace or namespace or self._namespace or ""
+        return (
+            self._shortcuts[shortcut_id].namespace or namespace or self._namespace or ""
+        )
 
     def _shortcut_forward(
         self, shortcut_id: str, namespace: str | None = None

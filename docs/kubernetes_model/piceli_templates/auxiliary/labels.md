@@ -39,11 +39,9 @@ Creating and validating labels for a Kubernetes pod:
 from piceli.k8s.templates.auxiliary import labels
 
 # Define a set of labels
-pod_labels = labels.Labels({
-    "app": "my-application",
-    "component": "web-server",
-    "environment": "production"
-})
+pod_labels = labels.Labels(
+    {"app": "my-application", "component": "web-server", "environment": "production"}
+)
 
 # Validate labels
 validated_labels = labels.check_labels(pod_labels)

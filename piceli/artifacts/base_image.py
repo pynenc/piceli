@@ -1,4 +1,5 @@
 """Bounded offline composition of a pinned Docker base archive into OCI."""
+
 from __future__ import annotations
 
 import io

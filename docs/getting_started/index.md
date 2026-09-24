@@ -39,7 +39,9 @@ Piceli supports defining Kubernetes objects using Piceli templates, the official
        name="job0",
        containers=[
            templates.Container(
-               name="c0", command=["python", "--version"], image="python:latest",
+               name="c0",
+               command=["python", "--version"],
+               image="python:latest",
            )
        ],
    )
@@ -60,11 +62,13 @@ Piceli supports defining Kubernetes objects using Piceli templates, the official
            template=client.V1PodTemplateSpec(
                metadata=client.V1ObjectMeta(name="job0"),
                spec=client.V1PodSpec(
-                   containers=[client.V1Container(
-                       name="c0",
-                       image="python:latest",
-                       command=["python", "--version"],
-                   )],
+                   containers=[
+                       client.V1Container(
+                           name="c0",
+                           image="python:latest",
+                           command=["python", "--version"],
+                       )
+                   ],
                ),
            ),
        ),

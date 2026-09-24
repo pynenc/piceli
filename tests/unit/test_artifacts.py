@@ -1,4 +1,5 @@
 """Offline artifact and authorized process tests, without an infrastructure client."""
+
 import hashlib
 import json
 import subprocess

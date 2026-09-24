@@ -18,9 +18,9 @@ def main() -> None:
     schema = json.loads(
         (ROOT / "docs/schemas/piceli-discovery-v1.schema.json").read_text()
     )
-    schema[
-        "$id"
-    ] = "https://docs.piceli.pynenc.org/schemas/piceli-discovery-v2.schema.json"
+    schema["$id"] = (
+        "https://docs.piceli.pynenc.org/schemas/piceli-discovery-v2.schema.json"
+    )
     schema["title"] = "Piceli bounded discovery artifact v2"
     props = schema["properties"]
     props["schema_version"] = {"type": "integer", "const": 2}
@@ -66,9 +66,9 @@ def main() -> None:
         }
     schema["$defs"]["failure"]["properties"]["kind"]["enum"].append("deadline-exceeded")
     props["defaulted_fields"]["uniqueItems"] = True
-    props["defaulted_fields"]["items"]["properties"]["json_pointer"][
-        "pattern"
-    ] = r"^/(?!apiVersion(?:/|$)|kind(?:/|$)|metadata(?:/|$)|data(?:/|$)|stringData(?:/|$)|status(?:/|$))(?:[^~]|~[01])*$"
+    props["defaulted_fields"]["items"]["properties"]["json_pointer"]["pattern"] = (
+        r"^/(?!apiVersion(?:/|$)|kind(?:/|$)|metadata(?:/|$)|data(?:/|$)|stringData(?:/|$)|status(?:/|$))(?:[^~]|~[01])*$"
+    )
     manifest = props["resources"]["items"]["properties"]["manifest"]
     manifest.update(
         {

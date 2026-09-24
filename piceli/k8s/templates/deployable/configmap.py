@@ -1,4 +1,3 @@
-
 from kubernetes import client
 
 from piceli.k8s.templates.auxiliary import names

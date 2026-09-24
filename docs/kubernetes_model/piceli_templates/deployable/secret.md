@@ -27,15 +27,13 @@ from piceli.k8s import templates
 
 # Creating a generic secret
 generic_secret = templates.Secret(
-        name="test-secret",
-        secret_type=constants.SecretType.OPAQUE,
-        string_data={"KEY0": "VALUE0"},
-    )
+    name="test-secret",
+    secret_type=constants.SecretType.OPAQUE,
+    string_data={"KEY0": "VALUE0"},
+)
 
 # Creating a Docker registry secret
-docker_auth = (
-    "eyJhdXRocyI6eyJnY3IuaW8iOnsiYXV0aCI6ImRtVnllVk5sWTNWeVpWQmhjM009In19fQ=="
-)
+docker_auth = "eyJhdXRocyI6eyJnY3IuaW8iOnsiYXV0aCI6ImRtVnllVk5sWTNWeVpWQmhjM009In19fQ=="
 secret = templates.Secret.get_docker_json_secret(
     "docker-secret", docker_auth=docker_auth
 )

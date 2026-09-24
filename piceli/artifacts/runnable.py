@@ -1,4 +1,5 @@
 """Explicit build, inspection and local execution of runnable OCI artifacts."""
+
 from __future__ import annotations
 
 import json

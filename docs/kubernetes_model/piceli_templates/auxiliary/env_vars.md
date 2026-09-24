@@ -31,19 +31,18 @@ Defining a mix of static and dynamic environment variables for a container:
 from piceli.k8s import templates
 
 # Static environment variables
-env_vars_static = {
-    "LOG_LEVEL": "info",
-    "APP_MODE": "production"
-}
+env_vars_static = {"LOG_LEVEL": "info", "APP_MODE": "production"}
 
 # Dynamic environment variables from a ConfigMap
 config_map_name = "app-config"
-env_vars_from_config_map = templates.get_env_from_source([templates.configmap.ConfigMap(name=config_map_name)])
+env_vars_from_config_map = templates.get_env_from_source(
+    [templates.configmap.ConfigMap(name=config_map_name)]
+)
 
 # Combine static and dynamic environment variables
 env_vars = templates.upsert_envvars(
     base_env=templates.get_env_from_dict(env_vars_static),
-    new_env=env_vars_from_config_map
+    new_env=env_vars_from_config_map,
 )
 ```
 

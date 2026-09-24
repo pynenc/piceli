@@ -128,7 +128,7 @@ def test_forward_health_path_is_private_preference_metadata(tmp_path: Path) -> N
 
 
 def test_forward_supervisor_probe_distinguishes_open_loopback_from_missing_port(
-    tmp_path: Path
+    tmp_path: Path,
 ) -> None:
     unused_listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     unused_listener.bind(("127.0.0.1", 0))
@@ -191,7 +191,9 @@ def test_forward_supervisor_leaves_an_external_port_owner_untouched(
     try:
         port = listener.getsockname()[1]
         store.replace_user(
-            UserPreferences("jose", (PortForward("api", "demo", "service/api", port, 80),))
+            UserPreferences(
+                "jose", (PortForward("api", "demo", "service/api", port, 80),)
+            )
         )
         supervisor = ForwardSupervisor(
             preferences=store,
@@ -203,7 +205,9 @@ def test_forward_supervisor_leaves_an_external_port_owner_untouched(
             try:
                 status = supervisor.statuses()[0]
                 assert status.state == "backoff"
-                assert status.error == "loopback port is occupied by an external process"
+                assert (
+                    status.error == "loopback port is occupied by an external process"
+                )
                 spawn.assert_not_called()
             finally:
                 supervisor.close()

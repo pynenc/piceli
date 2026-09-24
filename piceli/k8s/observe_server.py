@@ -1500,9 +1500,7 @@ class LocalObserveServer(ThreadingHTTPServer):
     def allowed_hosts(self) -> frozenset[str]:
         """Host header values that name this loopback listener (DNS-rebinding defence)."""
         port = self.server_address[1]
-        return frozenset(
-            {f"127.0.0.1:{port}", f"localhost:{port}", f"[::1]:{port}"}
-        )
+        return frozenset({f"127.0.0.1:{port}", f"localhost:{port}", f"[::1]:{port}"})
 
     def allowed_origins(self) -> frozenset[str]:
         return frozenset(f"http://{host}" for host in self.allowed_hosts())
@@ -1571,7 +1569,9 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _error(self, status: int, code: str, error: BaseException | None = None) -> None:
+    def _error(
+        self, status: int, code: str, error: BaseException | None = None
+    ) -> None:
         """Return a fixed error code; keep exception detail in the server log only."""
         if error is not None:
             _LOG.warning(
@@ -1590,7 +1590,9 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
             "ui": self.server.ui_config.public_dict(),
         }
         body = (
-            _PAGE_HTML.replace("__PICELI_TOKEN__", _script_json(self.server.local_token))
+            _PAGE_HTML.replace(
+                "__PICELI_TOKEN__", _script_json(self.server.local_token)
+            )
             .replace("__PICELI_PAGE__", _script_json(page))
             .replace("__PICELI_NONCE__", nonce)
             .encode()
@@ -1609,7 +1611,10 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
             self._error(403, "forbidden-host")
             return False
         origin = self.headers.get("Origin")
-        if origin is not None and origin.strip().lower() not in self.server.allowed_origins():
+        if (
+            origin is not None
+            and origin.strip().lower() not in self.server.allowed_origins()
+        ):
             self._error(403, "forbidden-origin")
             return False
         return True
@@ -1689,7 +1694,9 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
                     "users": [
                         {
                             "user": item.user,
-                            "forwards": [forward.public_dict() for forward in item.forwards],
+                            "forwards": [
+                                forward.public_dict() for forward in item.forwards
+                            ],
                         }
                         for item in sorted(selected, key=lambda item: item.user)
                     ]
@@ -1719,33 +1726,46 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
                 for r in self.server.catalog.records():
-                    records.append({
-                        "name": r.name,
-                        "namespace": r.namespace,
-                        "kind": r.source.kind,
-                        "identity": r.source.identity,
-                        "artifact_digest": r.source.artifact_digest,
-                        "is_active": (r.name == selected_name),
-                    })
+                    records.append(
+                        {
+                            "name": r.name,
+                            "namespace": r.namespace,
+                            "kind": r.source.kind,
+                            "identity": r.source.identity,
+                            "artifact_digest": r.source.artifact_digest,
+                            "is_active": (r.name == selected_name),
+                        }
+                    )
             self._json(200, {"selected": selected_name, "releases": records})
             return
         if self.path == "/v1/artifacts":
             if self.server.artifact_inventory:
                 self._json(200, self.server.artifact_inventory.to_dict())
             else:
-                self._json(200, {"total_images": 0, "entries": [], "total_bytes": 0, "protected_bytes": 0, "reclaimable_bytes": 0})
+                self._json(
+                    200,
+                    {
+                        "total_images": 0,
+                        "entries": [],
+                        "total_bytes": 0,
+                        "protected_bytes": 0,
+                        "reclaimable_bytes": 0,
+                    },
+                )
             return
         if self.path == "/v1/automation":
             policies_data = []
             if self.server.state_store:
                 ps = PolicyStore(self.server.state_store).load_policies()
                 for p in ps.values():
-                    policies_data.append({
-                        "name": p.name,
-                        "allowed_namespaces": list(p.allowed_namespaces),
-                        "allowed_operations": list(p.allowed_operations),
-                        "require_pr_approval": p.require_pr_approval,
-                    })
+                    policies_data.append(
+                        {
+                            "name": p.name,
+                            "allowed_namespaces": list(p.allowed_namespaces),
+                            "allowed_operations": list(p.allowed_operations),
+                            "require_pr_approval": p.require_pr_approval,
+                        }
+                    )
             self._json(200, {"policies": policies_data, "watched_branches": []})
             return
         if self.path == "/v1/pods":
@@ -1774,28 +1794,36 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
             return
         cmd = [
             self.server.kubectl,
-            "--kubeconfig", str(self.server.kubeconfig),
+            "--kubeconfig",
+            str(self.server.kubeconfig),
         ]
         if self.server.context:
             cmd.extend(["--context", self.server.context])
         newline = chr(10)
-        cmd.extend([
-            "--namespace", self.server.namespace,
-            "get", "pods",
-            "-o", f"jsonpath={{range .items[*]}}{{.metadata.name}}|{{.status.phase}}|{{.status.containerStatuses[0].restartCount}}|{{.status.containerStatuses[*].name}}{newline}{{end}}",
-        ])
+        cmd.extend(
+            [
+                "--namespace",
+                self.server.namespace,
+                "get",
+                "pods",
+                "-o",
+                f"jsonpath={{range .items[*]}}{{.metadata.name}}|{{.status.phase}}|{{.status.containerStatuses[0].restartCount}}|{{.status.containerStatuses[*].name}}{newline}{{end}}",
+            ]
+        )
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
             pods = []
             for line in result.stdout.strip().splitlines():
                 parts = line.split("|")
                 if len(parts) >= 2:
-                    pods.append({
-                        "name": parts[0],
-                        "phase": parts[1],
-                        "restarts": parts[2] if len(parts) > 2 else "0",
-                        "containers": parts[3] if len(parts) > 3 else "",
-                    })
+                    pods.append(
+                        {
+                            "name": parts[0],
+                            "phase": parts[1],
+                            "restarts": parts[2] if len(parts) > 2 else "0",
+                            "containers": parts[3] if len(parts) > 3 else "",
+                        }
+                    )
             self._json(200, {"pods": pods})
         except Exception as e:
             self._error(500, "pod-list-failed", e)
@@ -1807,7 +1835,9 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
             return
         parsed = urlparse(self.path)
         params = parse_qs(parsed.query)
-        pod_names = [p.strip() for p in params.get("pods", [""])[0].split(",") if p.strip()]
+        pod_names = [
+            p.strip() for p in params.get("pods", [""])[0].split(",") if p.strip()
+        ]
         try:
             tail = int(params.get("tail", ["100"])[0])
         except ValueError:
@@ -1821,8 +1851,16 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
             self._json(400, {"error": "no pods specified"})
             return
         POD_COLORS = [
-            "#38bdf8", "#22c55e", "#eab308", "#a855f7", "#ef4444",
-            "#f97316", "#06b6d4", "#ec4899", "#14b8a6", "#6366f1",
+            "#38bdf8",
+            "#22c55e",
+            "#eab308",
+            "#a855f7",
+            "#ef4444",
+            "#f97316",
+            "#06b6d4",
+            "#ec4899",
+            "#14b8a6",
+            "#6366f1",
         ]
         all_lines = []
         for idx, pod in enumerate(pod_names[:10]):
@@ -1830,17 +1868,22 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
                 continue
             cmd = [
                 self.server.kubectl,
-                "--kubeconfig", str(self.server.kubeconfig),
+                "--kubeconfig",
+                str(self.server.kubeconfig),
             ]
             if self.server.context:
                 cmd.extend(["--context", self.server.context])
-            cmd.extend([
-                "--namespace", self.server.namespace,
-                "logs", f"pod/{pod}",
-                f"--tail={tail}",
-                "--timestamps=true",
-                "--all-containers=true",
-            ])
+            cmd.extend(
+                [
+                    "--namespace",
+                    self.server.namespace,
+                    "logs",
+                    f"pod/{pod}",
+                    f"--tail={tail}",
+                    "--timestamps=true",
+                    "--all-containers=true",
+                ]
+            )
             try:
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
                 color = POD_COLORS[idx % len(POD_COLORS)]
@@ -1852,21 +1895,25 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
                     if len(raw_line) > 30 and raw_line[4] == "-":
                         ts = raw_line[:30]
                         msg = raw_line[31:] if len(raw_line) > 31 else ""
-                    all_lines.append({
-                        "ts": ts,
-                        "pod": pod,
-                        "badge": badge,
-                        "color": color,
-                        "msg": msg,
-                    })
+                    all_lines.append(
+                        {
+                            "ts": ts,
+                            "pod": pod,
+                            "badge": badge,
+                            "color": color,
+                            "msg": msg,
+                        }
+                    )
             except Exception:
-                all_lines.append({
-                    "ts": "",
-                    "pod": pod,
-                    "badge": pod[:20],
-                    "color": POD_COLORS[idx % len(POD_COLORS)],
-                    "msg": f"[error fetching logs from {pod}]",
-                })
+                all_lines.append(
+                    {
+                        "ts": "",
+                        "pod": pod,
+                        "badge": pod[:20],
+                        "color": POD_COLORS[idx % len(POD_COLORS)],
+                        "msg": f"[error fetching logs from {pod}]",
+                    }
+                )
         all_lines.sort(key=lambda x: x.get("ts", ""))
         self._json(200, {"lines": all_lines})
 
@@ -1920,8 +1967,12 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
                     self.server.supervisor.stop(shortcut)
                 else:
                     self.server.supervisor.quick_start(shortcut, namespace=ns)
-                shortcuts = self.server.supervisor.shortcuts_status(self.server.namespace)
-                self._json(200, {"ok": True, "shortcut": shortcut, "shortcuts": shortcuts})
+                shortcuts = self.server.supervisor.shortcuts_status(
+                    self.server.namespace
+                )
+                self._json(
+                    200, {"ok": True, "shortcut": shortcut, "shortcuts": shortcuts}
+                )
             except Exception as e:
                 self._error(400, "shortcut-action-failed", e)
             return
@@ -1981,7 +2032,14 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
                 return
             try:
                 rec = promote_release(self.server.catalog, src, tgt)
-                self._json(200, {"ok": True, "promoted": rec.name, "artifact_digest": rec.source.artifact_digest})
+                self._json(
+                    200,
+                    {
+                        "ok": True,
+                        "promoted": rec.name,
+                        "artifact_digest": rec.source.artifact_digest,
+                    },
+                )
             except Exception as e:
                 self._error(400, "promote-failed", e)
             return
@@ -2004,7 +2062,9 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
         if self.path == "/v1/artifacts/gc":
             inv = self.server.artifact_inventory
             if not inv:
-                self._json(200, {"pruned_digests": [], "freed_bytes": 0, "dry_run": True})
+                self._json(
+                    200, {"pruned_digests": [], "freed_bytes": 0, "dry_run": True}
+                )
                 return
             dry_run = payload.get("dry_run", True)
             ttl = payload.get("retention_ttl_seconds", 86400)
@@ -2020,7 +2080,9 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
             if not self.server.state_store:
                 self._json(400, {"error": "state-store-not-configured"})
                 return
-            dest = self.server.state_store.base_dir / f"backup-{int(time.time())}.tar.gz"
+            dest = (
+                self.server.state_store.base_dir / f"backup-{int(time.time())}.tar.gz"
+            )
             try:
                 res = self.server.state_store.create_backup(dest)
                 self._json(200, {"ok": True, "backup_path": str(res)})

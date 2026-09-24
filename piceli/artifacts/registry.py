@@ -78,7 +78,9 @@ class StreamedOciRegistryClient:
                 return False
             raise
 
-    def push_blob_stream(self, repository: str, stream: BinaryIO, expected_digest: str) -> str:
+    def push_blob_stream(
+        self, repository: str, stream: BinaryIO, expected_digest: str
+    ) -> str:
         """Stream a blob to the registry using monolithic or single-request PUT upload."""
         validate_digest(expected_digest)
 
@@ -112,7 +114,9 @@ class StreamedOciRegistryClient:
         )
         with urllib.request.urlopen(put_req, timeout=30) as resp:
             if resp.status not in {201, 202, 200}:
-                raise RuntimeError(f"failed to complete blob upload: status {resp.status}")
+                raise RuntimeError(
+                    f"failed to complete blob upload: status {resp.status}"
+                )
 
         return expected_digest
 

@@ -1,4 +1,3 @@
-
 from kubernetes import client
 from pydantic import NonNegativeInt, model_validator
 

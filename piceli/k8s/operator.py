@@ -25,7 +25,9 @@ from piceli.k8s.ops.session import DeploymentSessionArchive
 from piceli.k8s.release import ReleaseCatalog
 
 _SECRET_REDACT_PATTERNS = [
-    re.compile(r"(?i)((?:password|token|secret|key|authorization|bearer)\s*[:=]\s*)([^\s,;]+)"),
+    re.compile(
+        r"(?i)((?:password|token|secret|key|authorization|bearer)\s*[:=]\s*)([^\s,;]+)"
+    ),
 ]
 
 
@@ -35,7 +37,7 @@ class ManagedResource:
 
     ref: ObservationRef
     classification: str  # 'managed', 'unmanaged', 'unknown'
-    state: str           # 'present', 'missing', 'unknown'
+    state: str  # 'present', 'missing', 'unknown'
     release_name: str | None = None
     session_id: str | None = None
     observed: ObservedObject | None = None
@@ -166,16 +168,17 @@ def build_operator_report(
             active_rec = None
 
         for rec in catalog.records():
-            releases_summary.append({
-                "name": rec.name,
-                "namespace": rec.namespace,
-                "session_id": rec.archive.session_id,
-                "kind": rec.source.kind,
-                "identity": rec.source.identity,
-                "artifact_digest": rec.source.artifact_digest,
-                "is_active": (rec.name == active_release_name),
-
-            })
+            releases_summary.append(
+                {
+                    "name": rec.name,
+                    "namespace": rec.namespace,
+                    "session_id": rec.archive.session_id,
+                    "kind": rec.source.kind,
+                    "identity": rec.source.identity,
+                    "artifact_digest": rec.source.artifact_digest,
+                    "is_active": (rec.name == active_release_name),
+                }
+            )
             if session_archive is None and rec.name == active_release_name:
                 session_id = rec.archive.session_id
                 declared_refs = set(archive_resources(rec.archive))
@@ -252,7 +255,9 @@ def build_operator_report(
                         state="present",
                         session_id=session_id,
                         release_name=active_release_name
-                        or (item_labels.get(revision_label) if revision_label else None),
+                        or (
+                            item_labels.get(revision_label) if revision_label else None
+                        ),
                         observed=item,
                     )
                 )

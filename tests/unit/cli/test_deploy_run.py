@@ -71,16 +71,21 @@ def test_run_command_success(
     not_found.body = '{"kind": "Status", "reason": "NotFound", "code": 404}'
     client_context_mock.core_api.read_namespace.side_effect = not_found
 
-    with patch("piceli.k8s.cli.ContextObject", return_value=ctx_object), patch(
-        "piceli.k8s.ops.deploy.strategy_auto.StrategyAuto",
-        return_value=strategy_auto_mock,
-    ), patch(
-        # run.py imports ClientContext directly, so patch the name it looks up
-        "piceli.k8s.cli.deploy.run.ClientContext",
-        return_value=client_context_mock,
-    ), patch(
-        "piceli.k8s.ops.deploy.deployment_executor.DeploymentExecutor",
-        return_value=deployment_executor_mock,
+    with (
+        patch("piceli.k8s.cli.ContextObject", return_value=ctx_object),
+        patch(
+            "piceli.k8s.ops.deploy.strategy_auto.StrategyAuto",
+            return_value=strategy_auto_mock,
+        ),
+        patch(
+            # run.py imports ClientContext directly, so patch the name it looks up
+            "piceli.k8s.cli.deploy.run.ClientContext",
+            return_value=client_context_mock,
+        ),
+        patch(
+            "piceli.k8s.ops.deploy.deployment_executor.DeploymentExecutor",
+            return_value=deployment_executor_mock,
+        ),
     ):
         result = runner.invoke(app, ["deploy", "run", "--create-namespace"])
         assert result.exit_code == 0

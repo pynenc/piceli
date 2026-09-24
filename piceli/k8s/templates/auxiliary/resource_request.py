@@ -113,7 +113,7 @@ class Resources:
         if num < 0.001:
             return "1m"
         if num < 1:
-            return f"{num*1000}m"
+            return f"{num * 1000}m"
         return f"{num}"
 
     @staticmethod
@@ -418,14 +418,14 @@ class ClusterResources:
                         pods_map[pod.metadata.name].pod_status = "OOMKilled"
                         pods_map[pod.metadata.name].pod_status_reason = "OOMKilled"
             for container in pod.spec.containers:
-                pods_map[pod.metadata.name].containers[
-                    container.name
-                ] = ContainerResourcesData(
-                    container_name=container.name,
-                    requested_resources=Resources.from_dict(
-                        container.resources.requests
-                    ),
-                    used_resources=Resources(),
+                pods_map[pod.metadata.name].containers[container.name] = (
+                    ContainerResourcesData(
+                        container_name=container.name,
+                        requested_resources=Resources.from_dict(
+                            container.resources.requests
+                        ),
+                        used_resources=Resources(),
+                    )
                 )
             pods_map[pod.metadata.name].last_update = last_update
         for pod_metrics in pods_metrics:

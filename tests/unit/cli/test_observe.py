@@ -81,15 +81,19 @@ def test_serve_reports_an_occupied_port_without_a_traceback(tmp_path: Path) -> N
     archive.write_text("{}")
     kubeconfig = tmp_path / "kubeconfig"
     kubeconfig.write_text("apiVersion: v1\n")
-    with patch(
-        "piceli.k8s.cli.observe._archive",
-        return_value=object(),
-    ), patch(
-        "piceli.k8s.cli.observe.KubernetesDynamicInventoryReader",
-        return_value=object(),
-    ), patch(
-        "piceli.k8s.cli.observe.LocalObserveServer",
-        side_effect=OSError(errno.EADDRINUSE, "Address already in use"),
+    with (
+        patch(
+            "piceli.k8s.cli.observe._archive",
+            return_value=object(),
+        ),
+        patch(
+            "piceli.k8s.cli.observe.KubernetesDynamicInventoryReader",
+            return_value=object(),
+        ),
+        patch(
+            "piceli.k8s.cli.observe.LocalObserveServer",
+            side_effect=OSError(errno.EADDRINUSE, "Address already in use"),
+        ),
     ):
         result = runner.invoke(
             app,

@@ -27,7 +27,7 @@ hpa = HorizontalPodAutoscaler(
     target_name="my-app",
     min_replicas=1,
     max_replicas=10,
-    target_cpu_utilization_percentage=80
+    target_cpu_utilization_percentage=80,
 )
 ```
 
@@ -58,6 +58,6 @@ vpa = VerticalPodAutoscaler(
     min_allowed=resource_request.Resources(cpu="500m", memory="256Mi"),
     max_allowed=resource_request.Resources(cpu="2000m", memory="1Gi"),
     control_cpu=True,
-    control_memory=True
+    control_memory=True,
 )
 ```

@@ -93,7 +93,11 @@ class ApprovalStore:
     def record_approval(self, approval: PRApproval) -> None:
         approvals = self.load_approvals()
         # Deduplicate
-        approvals = [a for a in approvals if not (a.pr_id == approval.pr_id and a.commit_hash == approval.commit_hash)]
+        approvals = [
+            a
+            for a in approvals
+            if not (a.pr_id == approval.pr_id and a.commit_hash == approval.commit_hash)
+        ]
         approvals.append(approval)
         data = {
             "schema_version": 1,
@@ -113,7 +117,11 @@ class ApprovalStore:
 
     def is_approved(self, pr_id: int, commit_hash: str, target_namespace: str) -> bool:
         for a in self.load_approvals():
-            if a.pr_id == pr_id and a.commit_hash == commit_hash and a.target_namespace == target_namespace:
+            if (
+                a.pr_id == pr_id
+                and a.commit_hash == commit_hash
+                and a.target_namespace == target_namespace
+            ):
                 return True
         return False
 
@@ -193,7 +201,9 @@ def promote_release(
     return promoted_record
 
 
-def preview_release(workflow: ReleaseWorkflow, name: str | None = None) -> dict[str, Any]:
+def preview_release(
+    workflow: ReleaseWorkflow, name: str | None = None
+) -> dict[str, Any]:
     """Provider-free preview of a release without mutating state or passing credentials."""
     return workflow.preview(name)
 
@@ -214,7 +224,9 @@ def dependency_safe_partial_release(
 
     for comp_name in components_to_deploy:
         if comp_name not in all_components:
-            raise DependencyUnsatisfiedError(f"requested component '{comp_name}' not in composition")
+            raise DependencyUnsatisfiedError(
+                f"requested component '{comp_name}' not in composition"
+            )
         comp = all_components[comp_name]
         deps = comp.get("dependencies", [])
         for dep in deps:
@@ -222,7 +234,9 @@ def dependency_safe_partial_release(
                 # Check if dependency exists in snapshot
                 present = False
                 if hasattr(workflow, "snapshot") and workflow.snapshot is not None:
-                    present = any(r.intent.ref.name == dep for r in workflow.snapshot.resources)
+                    present = any(
+                        r.intent.ref.name == dep for r in workflow.snapshot.resources
+                    )
                 if not present:
                     raise DependencyUnsatisfiedError(
                         f"component '{comp_name}' requires '{dep}' which is not scheduled or present"

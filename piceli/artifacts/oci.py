@@ -1,4 +1,5 @@
 """Deterministic offline OCI image-layout production and bounded inspection."""
+
 from __future__ import annotations
 
 import hashlib

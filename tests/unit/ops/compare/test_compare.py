@@ -167,9 +167,9 @@ def test_find_differences_with_ignored_paths() -> None:
     }
     differences = object_comparer.find_differences(desired_spec, existing_spec)
     # Check that differences that should be ignored are indeed ignored
-    assert (
-        differences.considered == []
-    ), "There should be no considered differences for ignored paths"
+    assert differences.considered == [], (
+        "There should be no considered differences for ignored paths"
+    )
     assert set(differences.ignored) == {
         object_comparer.PathComparison(
             object_comparer.Path.from_list(
@@ -194,10 +194,10 @@ def test_find_differences_with_none_and_string() -> None:
     expected = object_comparer.PathComparison(
         object_comparer.Path.from_string("key"), "existing_value", None
     )
-    assert differences.considered == [
-        expected
-    ], "Should detect and consider a difference where one value is None and the other is a string"
+    assert differences.considered == [expected], (
+        "Should detect and consider a difference where one value is None and the other is a string"
+    )
     # Also assert that there are no ignored differences in this case
-    assert (
-        differences.ignored == []
-    ), "There should be no ignored differences for this case"
+    assert differences.ignored == [], (
+        "There should be no ignored differences for this case"
+    )

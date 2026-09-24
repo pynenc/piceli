@@ -58,7 +58,10 @@ def test_promote_release_preserves_digest_and_source(tmp_path: Path) -> None:
     assert promoted.source.artifact_digest == "sha256:" + "e" * 64
     assert promoted.archive.session_id == "1" * 32
     assert catalog.selected().name == "production"
-    assert catalog.get("v1-0-0-rc1").source.artifact_digest == promoted.source.artifact_digest
+    assert (
+        catalog.get("v1-0-0-rc1").source.artifact_digest
+        == promoted.source.artifact_digest
+    )
 
 
 def test_standing_policy_blocks_unauthorized_promotion(tmp_path: Path) -> None:
@@ -120,7 +123,9 @@ def test_rollback_migration_incompatible_rejected(tmp_path: Path) -> None:
     wf = DummyWorkflow()
     wf.catalog = catalog
 
-    with pytest.raises(RollbackHealthError, match="failed migration compatibility check"):
+    with pytest.raises(
+        RollbackHealthError, match="failed migration compatibility check"
+    ):
         health_aware_rollback(
             wf,
             "old-release",

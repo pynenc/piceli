@@ -21,9 +21,9 @@ def test_classify_k8s_objects_by_deployment_level(resources: list[K8sObject]) ->
                 count_kind = sum(1 for obj in classified_objects if obj.kind == kind)
                 # Now, assert based on expected counts per kind in your test resources
                 expected_count = sum(1 for obj in resources if obj.kind == kind)
-                assert (
-                    count_kind == expected_count
-                ), f"Mismatch for {kind} at level {level}"
+                assert count_kind == expected_count, (
+                    f"Mismatch for {kind} at level {level}"
+                )
             else:
                 raise AssertionError(
                     f"No objects found at level {level}, expected {kind}"
@@ -74,9 +74,9 @@ def test_unknown_kinds_go_to_the_default_level_with_a_warning(
             [known, custom]
         )
 
-    assert max(
-        strategy_auto.DEPLOYMENT_LEVELS
-    ) == strategy_auto.DEFAULT_DEPLOYMENT_LEVEL
+    assert (
+        max(strategy_auto.DEPLOYMENT_LEVELS) == strategy_auto.DEFAULT_DEPLOYMENT_LEVEL
+    )
     assert classified[strategy_auto.DEFAULT_DEPLOYMENT_LEVEL] == [custom]
     assert sum(len(objects) for objects in classified.values()) == 2
     assert "Certificate" in caplog.text

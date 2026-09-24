@@ -54,7 +54,10 @@ def _reference_fields(path: tuple[str, ...]) -> frozenset[str]:
     roots = {
         "Pod": ("spec",),
         "CronJob": ("spec", "jobTemplate", "spec", "template", "spec"),
-        **dict.fromkeys(("Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job"), ("spec", "template", "spec")),
+        **dict.fromkeys(
+            ("Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job"),
+            ("spec", "template", "spec"),
+        ),
     }
     root = roots.get(path[0])
     if root is None or path[1 : 1 + len(root)] != root:
@@ -465,26 +468,21 @@ class DiscoveryProvider(Protocol):
     """Pure interface boundary implemented by a caller-owned provider adapter."""
 
     @property
-    def provider_id(self) -> str:
-        ...
+    def provider_id(self) -> str: ...
 
     def discover_api_resource(
         self, target: PlanTarget, resource_type: ResourceType
-    ) -> ApiResource | DiscoveryFailureKind:
-        ...
+    ) -> ApiResource | DiscoveryFailureKind: ...
 
-    def list_resources(self, request: ResourceListRequest) -> DiscoveryPage:
-        ...
+    def list_resources(self, request: ResourceListRequest) -> DiscoveryPage: ...
 
     def probe_server_side_apply(
         self, target: PlanTarget, resource: DiscoveredResource
-    ) -> ApplyProbeResult:
-        ...
+    ) -> ApplyProbeResult: ...
 
     def probe_readiness(
         self, target: PlanTarget, resource: ResourceIdentity
-    ) -> ReadinessProbeResult:
-        ...
+    ) -> ReadinessProbeResult: ...
 
 
 @dataclass(frozen=True)

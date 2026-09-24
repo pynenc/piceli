@@ -31,18 +31,14 @@ The `Service` class represents a Kubernetes Service, facilitating the creation o
 from piceli.k8s import templates
 
 # Define the service ports
-service_port = templates.ServicePort(
-    name="http",
-    port=80,
-    target_port=8080
-)
+service_port = templates.ServicePort(name="http", port=80, target_port=8080)
 
 # Create the service
 my_service = templates.Service(
     name="my-service",
     ports=[service_port],
     selector={"app": "myApp"},
-    labels={"environment": "production"}
+    labels={"environment": "production"},
 )
 ```
 

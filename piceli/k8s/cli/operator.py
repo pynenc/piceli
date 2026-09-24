@@ -34,7 +34,9 @@ from piceli.k8s.ops.session import DeploymentSessionArchive
 from piceli.k8s.release import ReleaseCatalog
 from piceli.k8s.ui_config import UI_CONFIG_ENV, load_ui_config
 
-app = typer.Typer(help="Piceli Operator commands for reactive delivery, inventory, and artifacts.")
+app = typer.Typer(
+    help="Piceli Operator commands for reactive delivery, inventory, and artifacts."
+)
 
 
 MaybePath = Path | None
@@ -78,11 +80,17 @@ def promote(
     """Promote an existing built digest to a new tag without rebuilding."""
     cat = ReleaseCatalog(catalog)
     rec = promote_release(cat, source, target)
-    typer.echo(json.dumps({
-        "promoted": rec.name,
-        "artifact_digest": rec.source.artifact_digest,
-        "namespace": rec.namespace,
-    }, sort_keys=True, indent=2))
+    typer.echo(
+        json.dumps(
+            {
+                "promoted": rec.name,
+                "artifact_digest": rec.source.artifact_digest,
+                "namespace": rec.namespace,
+            },
+            sort_keys=True,
+            indent=2,
+        )
+    )
 
 
 @app.command("approve")
@@ -103,13 +111,19 @@ def approve(
         target_namespace=namespace,
     )
     approvals.record_approval(approval)
-    typer.echo(json.dumps({
-        "approved": True,
-        "pr_id": pr_id,
-        "commit": commit,
-        "namespace": namespace,
-        "approved_by": approved_by,
-    }, sort_keys=True, indent=2))
+    typer.echo(
+        json.dumps(
+            {
+                "approved": True,
+                "pr_id": pr_id,
+                "commit": commit,
+                "namespace": namespace,
+                "approved_by": approved_by,
+            },
+            sort_keys=True,
+            indent=2,
+        )
+    )
 
 
 @app.command("backup")
@@ -147,7 +161,9 @@ def serve(
     port: Annotated[int, typer.Option(min=1, max=65535)] = 9876,
     ui_config: Annotated[
         MaybePath,
-        typer.Option(exists=True, readable=True, envvar=UI_CONFIG_ENV, help=UI_CONFIG_HELP),
+        typer.Option(
+            exists=True, readable=True, envvar=UI_CONFIG_ENV, help=UI_CONFIG_HELP
+        ),
     ] = None,
 ) -> None:
     """Launch the Piceli Operator dashboard and unified REST API."""

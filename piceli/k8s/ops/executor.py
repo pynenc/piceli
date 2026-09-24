@@ -264,9 +264,7 @@ class PlanExecutor:
     ) -> None:
         if len(plan.actions) > self.limits.max_actions:
             raise ValueError("plan exceeds action budget")
-        if timestamp(authorization.expires_at, allow_future=True) <= datetime.now(
-            UTC
-        ):
+        if timestamp(authorization.expires_at, allow_future=True) <= datetime.now(UTC):
             raise ValueError("execution authorization expired")
         if authorization.target != plan.target or plan.target != self.provider.target:
             raise ValueError("execution target mismatch")
@@ -393,9 +391,7 @@ class PlanExecutor:
             raise ProviderError("cancelled")
         if time.monotonic() >= deadline:
             raise ProviderError("deadline-exceeded")
-        if timestamp(authorization.expires_at, allow_future=True) <= datetime.now(
-            UTC
-        ):
+        if timestamp(authorization.expires_at, allow_future=True) <= datetime.now(UTC):
             raise ProviderError("authorization-expired")
         self.provider.verify_target(deadline=deadline)
 
@@ -723,7 +719,9 @@ class PlanExecutor:
             try:
                 deferred = self._first_consumer_refs(plan)
                 deferred_rows: list[tuple[dict[str, Any], PlanAction]] = []
-                for row, action in zip(self.journal.actions(execution), plan.actions, strict=False):
+                for row, action in zip(
+                    self.journal.actions(execution), plan.actions, strict=False
+                ):
                     self._guard(execution, authorization, deadline)
                     if row["state"] in {"compensated", "compensating"}:
                         raise ProviderError("compensation-already-started")
@@ -878,8 +876,9 @@ class PlanExecutor:
                 # declared consumer is being submitted. Once both exist, bind
                 # the claim first and retain normal workload readiness checks.
                 deferred_rows.sort(
-                    key=lambda item: item[1].resource.ref.kind
-                    != "PersistentVolumeClaim"
+                    key=lambda item: (
+                        item[1].resource.ref.kind != "PersistentVolumeClaim"
+                    )
                 )
                 for row, action in deferred_rows:
                     self._ready(execution, row, action, authorization, deadline)

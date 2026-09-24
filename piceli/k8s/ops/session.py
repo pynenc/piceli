@@ -384,9 +384,7 @@ class DeploymentSession:
             raise ValueError("deployment session composition/private input mismatch")
         plan = build_plan(composition, snapshot, plan_authorization)
         authorization = authorization_factory(plan, snapshot)
-        if timestamp(authorization.expires_at, allow_future=True) <= datetime.now(
-            UTC
-        ):
+        if timestamp(authorization.expires_at, allow_future=True) <= datetime.now(UTC):
             raise ValueError("deployment session authorization expired")
         revision = DeploymentRevision.create(plan, snapshot, authorization)
         if existing is None:
@@ -444,7 +442,9 @@ class DeploymentSession:
             raise ValueError("deployment session journal state is ambiguous")
         if len(record["actions"]) != len(self.bundle.action_ids) or any(
             row["operation_id"] != operation_id
-            for row, operation_id in zip(record["actions"], self.bundle.action_ids, strict=True)
+            for row, operation_id in zip(
+                record["actions"], self.bundle.action_ids, strict=True
+            )
         ):
             raise ValueError("deployment session journal action identity changed")
 

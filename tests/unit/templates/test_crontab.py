@@ -24,9 +24,9 @@ class TestCronTab:
     def test_valid_cron_expressions(self, valid_cron: str) -> None:
         try:
             cron = crontab.CronTab(valid_cron)
-            assert (
-                str(cron) == valid_cron
-            ), "CronTab should store the valid cron expression"
+            assert str(cron) == valid_cron, (
+                "CronTab should store the valid cron expression"
+            )
         except ValidationError:
             pytest.fail("CronTab raised ValidationError unexpectedly!")
 

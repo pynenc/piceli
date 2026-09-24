@@ -21,7 +21,9 @@ def test_instance_lock_prevents_concurrent_writers(tmp_path: Path) -> None:
     lock1.acquire()
     assert lock_file.exists()
 
-    with pytest.raises(ConcurrentWriterError, match="exclusive operator instance lock already held"):
+    with pytest.raises(
+        ConcurrentWriterError, match="exclusive operator instance lock already held"
+    ):
         lock2.acquire()
 
     lock1.release()
@@ -58,7 +60,9 @@ def test_user_store_and_authentication(tmp_path: Path) -> None:
     store = FileStateStore(tmp_path / "state")
     user_store = UserStore(store)
 
-    user, token = user_store.create_user("alice", "admin", "super-secret-token-123", policies=("default",))
+    user, token = user_store.create_user(
+        "alice", "admin", "super-secret-token-123", policies=("default",)
+    )
     assert user.username == "alice"
     assert user.role == "admin"
 
@@ -84,17 +88,28 @@ def test_standing_policy_scope_enforcement() -> None:
 
     # Allowed
     assert policy.authorize("preview", namespace="my-app-p2", branch="main")
-    assert policy.authorize("promote", namespace="test-app", branch="release/v1.0", registry="registry.local:5000")
+    assert policy.authorize(
+        "promote",
+        namespace="test-app",
+        branch="release/v1.0",
+        registry="registry.local:5000",
+    )
 
     # Disallowed namespace
     assert not policy.authorize("preview", namespace="production", branch="main")
 
     # Disallowed branch
-    assert not policy.authorize("preview", namespace="test-app", branch="feature/unreviewed")
+    assert not policy.authorize(
+        "preview", namespace="test-app", branch="feature/unreviewed"
+    )
 
     # Disallowed action
     assert not policy.authorize("deploy", namespace="test-app", branch="main")
 
     # PR action requiring approval
-    assert not policy.authorize("promote", namespace="test-app", branch="main", is_pr=True, approved=False)
-    assert policy.authorize("promote", namespace="test-app", branch="main", is_pr=True, approved=True)
+    assert not policy.authorize(
+        "promote", namespace="test-app", branch="main", is_pr=True, approved=False
+    )
+    assert policy.authorize(
+        "promote", namespace="test-app", branch="main", is_pr=True, approved=True
+    )

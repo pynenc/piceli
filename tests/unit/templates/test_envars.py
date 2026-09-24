@@ -154,22 +154,22 @@ def test_describe_envvar(env_var: client.V1EnvVar, expected_description: str) ->
 )
 def test_get_env_from_dict(input_data: dict, expected_output: list) -> None:
     result = env_vars.get_env_from_dict(input_data)
-    assert len(result) == len(
-        expected_output
-    ), "The number of environment variables does not match expected"
+    assert len(result) == len(expected_output), (
+        "The number of environment variables does not match expected"
+    )
     for env_var, expected_var in zip(result, expected_output, strict=True):
-        assert (
-            env_var.name == expected_var.name
-        ), f"Name mismatch: {env_var.name} != {expected_var.name}"
+        assert env_var.name == expected_var.name, (
+            f"Name mismatch: {env_var.name} != {expected_var.name}"
+        )
         if env_var.value:
-            assert (
-                env_var.value == expected_var.value
-            ), f"Value mismatch: {env_var.value} != {expected_var.value}"
+            assert env_var.value == expected_var.value, (
+                f"Value mismatch: {env_var.value} != {expected_var.value}"
+            )
         if env_var.value_from:
             # Add more detailed checks for V1EnvVarSource if necessary
-            assert isinstance(
-                env_var.value_from, client.V1EnvVarSource
-            ), "Value_from should be a V1EnvVarSource"
+            assert isinstance(env_var.value_from, client.V1EnvVarSource), (
+                "Value_from should be a V1EnvVarSource"
+            )
 
 
 @pytest.mark.parametrize(
@@ -181,10 +181,10 @@ def test_get_env_from_dict(input_data: dict, expected_output: list) -> None:
 )
 def test_get_env_pair(key: str, value: str, expected: client.V1EnvVar) -> None:
     result = env_vars.get_env_pair(key, value)
-    assert (
-        result.name == expected.name
-    ), f"Name mismatch: expected {expected.name}, got {result.name}"
-    assert (
-        result.value == expected.value
-    ), f"Value mismatch: expected {expected.value}, got {result.value}"
+    assert result.name == expected.name, (
+        f"Name mismatch: expected {expected.name}, got {result.name}"
+    )
+    assert result.value == expected.value, (
+        f"Value mismatch: expected {expected.value}, got {result.value}"
+    )
     assert result.value_from is None, "value_from should be None"

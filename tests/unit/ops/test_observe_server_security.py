@@ -107,7 +107,10 @@ def test_api_get_requires_token(server: LocalObserveServer) -> None:
     assert status == 401
     assert json.loads(body) == {"error": "unauthorized"}
     status, _, _ = _request(
-        server, "GET", "/v1/status", token=False,
+        server,
+        "GET",
+        "/v1/status",
+        token=False,
         headers={"X-Piceli-Local-Token": "wrong"},
     )
     assert status == 401
@@ -144,7 +147,9 @@ def test_oversized_body_is_rejected(server: LocalObserveServer) -> None:
 
 def test_bad_tail_is_rejected(server: LocalObserveServer) -> None:
     for tail in ("abc", "-5", "0"):
-        status, _, body = _request(server, "GET", f"/v1/logs/multi?pods=api&tail={tail}")
+        status, _, body = _request(
+            server, "GET", f"/v1/logs/multi?pods=api&tail={tail}"
+        )
         assert status == 400
         assert json.loads(body) == {"error": "invalid-tail"}
 
@@ -164,7 +169,10 @@ def test_security_headers_and_csp_nonce(server: LocalObserveServer) -> None:
     # Inline handlers would be blocked by the nonce CSP; the page uses delegation.
     assert not re.search(rb"\son[a-z]+=", body)
     _, api_headers, _ = _request(server, "GET", "/v1/status")
-    assert api_headers["Content-Security-Policy"] == "default-src 'none'; frame-ancestors 'none'"
+    assert (
+        api_headers["Content-Security-Policy"]
+        == "default-src 'none'; frame-ancestors 'none'"
+    )
     assert api_headers["X-Content-Type-Options"] == "nosniff"
 
 
@@ -201,8 +209,12 @@ def test_viewer_bearer_cannot_mutate(server: LocalObserveServer) -> None:
         assert status == 403
         assert json.loads(body) == {"error": "forbidden-role"}
     status, _, _ = _request(
-        server, "POST", "/v1/artifacts/gc", token=False,
-        headers={"Authorization": f"Bearer {operator_token}"}, body=b"{}",
+        server,
+        "POST",
+        "/v1/artifacts/gc",
+        token=False,
+        headers={"Authorization": f"Bearer {operator_token}"},
+        body=b"{}",
     )
     assert status == 200
 
@@ -233,5 +245,5 @@ def test_page_escape_function_escapes_quotes(server: LocalObserveServer) -> None
     )
     assert result.stdout == "a&#39;b&quot;c&lt;d&gt;&amp;"
     # User values reach actions through data-* attributes, never inline JS.
-    assert "data-name=\"${esc(f.name)}\"" in page
+    assert 'data-name="${esc(f.name)}"' in page
     assert "('${esc(" not in page

@@ -167,7 +167,8 @@ def wait(
             break
         if time.time() > timeout:
             logger.error(
-                msg := f"After {timeout_secs} secs, still waiting for {msg}: {status_str(status)}"
+                msg
+                := f"After {timeout_secs} secs, still waiting for {msg}: {status_str(status)}"
             )
             raise TimeoutError(msg)
         elapsed = datetime.timedelta(seconds=time.time() - start)

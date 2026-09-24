@@ -46,10 +46,45 @@ components = ["worker", { name = "web", shortcut = "web" }]
 @pytest.mark.parametrize(
     "data",
     [
-        {"shortcuts": [{"id": "x", "label": "x", "target": "deployment/x", "local_port": 1, "remote_port": 1}]},
-        {"shortcuts": [{"id": "x", "label": "x", "target": "service/x", "local_port": 0, "remote_port": 1}]},
-        {"shortcuts": [{"id": "x", "label": "x", "target": "service/x", "local_port": 1, "remote_port": 1, "path": "javascript:x"}]},
-        {"tiers": [{"name": "t", "components": [{"name": "a", "shortcut": "missing"}]}]},
+        {
+            "shortcuts": [
+                {
+                    "id": "x",
+                    "label": "x",
+                    "target": "deployment/x",
+                    "local_port": 1,
+                    "remote_port": 1,
+                }
+            ]
+        },
+        {
+            "shortcuts": [
+                {
+                    "id": "x",
+                    "label": "x",
+                    "target": "service/x",
+                    "local_port": 0,
+                    "remote_port": 1,
+                }
+            ]
+        },
+        {
+            "shortcuts": [
+                {
+                    "id": "x",
+                    "label": "x",
+                    "target": "service/x",
+                    "local_port": 1,
+                    "remote_port": 1,
+                    "path": "javascript:x",
+                }
+            ]
+        },
+        {
+            "tiers": [
+                {"name": "t", "components": [{"name": "a", "shortcut": "missing"}]}
+            ]
+        },
         {"unknown_field": True},
     ],
 )

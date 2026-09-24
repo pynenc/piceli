@@ -4,6 +4,7 @@ Optional dependencies load only when an exporter is explicitly constructed.
 Projection is piceli.operation-otel.v1 over generic OpenTelemetry spans/logs, not the
 Rustvello task-attempt mapping. Transport identity supplies tenancy.
 """
+
 from __future__ import annotations
 
 import ipaddress
@@ -135,7 +136,9 @@ class OperationTelemetry(NoopTelemetry):
         self._close_deadline = float("inf")
         self._accepted = self._processed = self._dropped = self._after_shutdown = 0
         self._signals = {
-            signal: dict.fromkeys(("attempted", "acknowledged", "rejected", "unknown", "not_sent"), 0)
+            signal: dict.fromkeys(
+                ("attempted", "acknowledged", "rejected", "unknown", "not_sent"), 0
+            )
             for signal in ("traces", "logs")
         }
         self._thread = threading.Thread(

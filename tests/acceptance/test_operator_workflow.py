@@ -77,7 +77,11 @@ def test_operator_workflow_acceptance(local_api, tmp_path: Path) -> None:
 
     discovered = discover(
         provider,
-        (ResourceType("v1", "Secret"), ResourceType("apps/v1", "Deployment"), ResourceType("v1", "ConfigMap")),
+        (
+            ResourceType("v1", "Secret"),
+            ResourceType("apps/v1", "Deployment"),
+            ResourceType("v1", "ConfigMap"),
+        ),
     )
     snapshot = ObservedSnapshot.from_discovery(discovered)
 
@@ -93,7 +97,9 @@ def test_operator_workflow_acceptance(local_api, tmp_path: Path) -> None:
             InstanceLock(state_dir / ".instance.lock").acquire()
 
     user_store = UserStore(store)
-    user, auth_token = user_store.create_user("ops-admin", "admin", "admin-bearer-token-123")
+    user, auth_token = user_store.create_user(
+        "ops-admin", "admin", "admin-bearer-token-123"
+    )
     assert user_store.authenticate(auth_token) is not None
 
     # 2. Release Workflow: Commit and Direct OCI digest paths
@@ -163,11 +169,14 @@ def test_operator_workflow_acceptance(local_api, tmp_path: Path) -> None:
     # 5. Dependency-Safe Partial Release and Health-Aware Rollback
     # "worker" depends on "credential"; partial release of worker alone fails closed
     from piceli.k8s.automation import DependencyUnsatisfiedError
+
     with pytest.raises(DependencyUnsatisfiedError, match="requires 'credential'"):
         dependency_safe_partial_release(workflow, ["worker"], "release-v1")
 
     # "credential" has no unfulfilled dependencies, so it succeeds
-    partial_session = dependency_safe_partial_release(workflow, ["credential"], "release-v1")
+    partial_session = dependency_safe_partial_release(
+        workflow, ["credential"], "release-v1"
+    )
     assert partial_session.archive.session_id == git_record.archive.session_id
 
     # Health-aware rollback to release-v1
@@ -183,8 +192,12 @@ def test_operator_workflow_acceptance(local_api, tmp_path: Path) -> None:
     assert catalog.selected().name == "release-v1"
 
     # 6. Secret Redaction and Log Safety
-    raw_log = f"Connected using bearer token={auth_token} with password: super-private-token"
-    sanitized = redact_log_content(raw_log, known_secrets=("super-private-token", auth_token))
+    raw_log = (
+        f"Connected using bearer token={auth_token} with password: super-private-token"
+    )
+    sanitized = redact_log_content(
+        raw_log, known_secrets=("super-private-token", auth_token)
+    )
     assert auth_token not in sanitized
     assert "super-private-token" not in sanitized
     assert "[REDACTED]" in sanitized
@@ -236,7 +249,13 @@ def test_operator_workflow_acceptance(local_api, tmp_path: Path) -> None:
         UserPreferences(
             user="ops-admin",
             forwards=(
-                PortForward("app-port", provider.target.namespace, "service/web-app", 18080, 3000),
+                PortForward(
+                    "app-port",
+                    provider.target.namespace,
+                    "service/web-app",
+                    18080,
+                    3000,
+                ),
             ),
         )
     )
@@ -264,11 +283,15 @@ def test_operator_workflow_acceptance(local_api, tmp_path: Path) -> None:
                 return ObservedObject(ref=ref, phase="Active")
             return None
 
-        def list(self, api_version: str, kind: str, namespace: str) -> list[ObservedObject]:
+        def list(
+            self, api_version: str, kind: str, namespace: str
+        ) -> list[ObservedObject]:
             if kind == "ConfigMap":
                 return [
                     ObservedObject(
-                        ref=ObservationRef("v1", "ConfigMap", namespace, "unmanaged-config"),
+                        ref=ObservationRef(
+                            "v1", "ConfigMap", namespace, "unmanaged-config"
+                        ),
                         phase="Active",
                     )
                 ]
@@ -277,7 +300,12 @@ def test_operator_workflow_acceptance(local_api, tmp_path: Path) -> None:
     reader = FakeReader()
     server = LocalObserveServer(
         ("127.0.0.1", 0),
-        lambda: build_operator_report(reader, provider.target.namespace, catalog=catalog, session_archive=git_record.archive),
+        lambda: build_operator_report(
+            reader,
+            provider.target.namespace,
+            catalog=catalog,
+            session_archive=git_record.archive,
+        ),
         pref_store,
         user="ops-admin",
         catalog=catalog,
@@ -324,7 +352,11 @@ def test_operator_workflow_acceptance(local_api, tmp_path: Path) -> None:
             assert art_json["reclaimable_bytes"] == 20_000_000
 
         # Test GET /v1/logs
-        with urlopen(Request(f"{base_url}/v1/logs?target=deployment/web-app", headers=token_headers)) as res:
+        with urlopen(
+            Request(
+                f"{base_url}/v1/logs?target=deployment/web-app", headers=token_headers
+            )
+        ) as res:
             logs_json = json.loads(res.read())
             assert "[REDACTED]" in logs_json["lines"][0]
             assert auth_token not in logs_json["lines"][0]
@@ -332,7 +364,9 @@ def test_operator_workflow_acceptance(local_api, tmp_path: Path) -> None:
         # Test POST /v1/releases/promote via Bearer Token
         promote_req = Request(
             f"{base_url}/v1/releases/promote",
-            data=json.dumps({"source_name": "release-v1", "target_name": "rest-promoted"}).encode(),
+            data=json.dumps(
+                {"source_name": "release-v1", "target_name": "rest-promoted"}
+            ).encode(),
             headers={
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {auth_token}",
@@ -343,7 +377,10 @@ def test_operator_workflow_acceptance(local_api, tmp_path: Path) -> None:
             p_res = json.loads(res.read())
             assert p_res["ok"] is True
             assert p_res["promoted"] == "rest-promoted"
-            assert catalog.get("rest-promoted").source.artifact_digest == git_source.artifact_digest
+            assert (
+                catalog.get("rest-promoted").source.artifact_digest
+                == git_source.artifact_digest
+            )
 
         # Test POST /v1/artifacts/gc
         gc_req = Request(
@@ -370,16 +407,34 @@ def test_operator_workflow_acceptance(local_api, tmp_path: Path) -> None:
     # CLI promote
     cli_promote = runner.invoke(
         cli_app,
-        ["operator", "promote", "--catalog", str(catalog_path), "--source", "release-v1", "--target", "cli-promoted"],
+        [
+            "operator",
+            "promote",
+            "--catalog",
+            str(catalog_path),
+            "--source",
+            "release-v1",
+            "--target",
+            "cli-promoted",
+        ],
     )
     assert cli_promote.exit_code == 0
-    assert catalog.get("cli-promoted").source.artifact_digest == git_source.artifact_digest
+    assert (
+        catalog.get("cli-promoted").source.artifact_digest == git_source.artifact_digest
+    )
 
     # CLI backup
     cli_backup_dest = tmp_path / "cli-backup.tar.gz"
     cli_backup = runner.invoke(
         cli_app,
-        ["operator", "backup", "--state-dir", str(state_dir), "--output", str(cli_backup_dest)],
+        [
+            "operator",
+            "backup",
+            "--state-dir",
+            str(state_dir),
+            "--output",
+            str(cli_backup_dest),
+        ],
     )
     assert cli_backup.exit_code == 0
     assert cli_backup_dest.exists()
@@ -387,7 +442,20 @@ def test_operator_workflow_acceptance(local_api, tmp_path: Path) -> None:
     # CLI approve PR
     cli_approve = runner.invoke(
         cli_app,
-        ["operator", "approve", "--state-dir", str(state_dir), "--pr-id", "99", "--commit", "d" * 40, "--namespace", "test-ns", "--approved-by", "alice"],
+        [
+            "operator",
+            "approve",
+            "--state-dir",
+            str(state_dir),
+            "--pr-id",
+            "99",
+            "--commit",
+            "d" * 40,
+            "--namespace",
+            "test-ns",
+            "--approved-by",
+            "alice",
+        ],
     )
     assert cli_approve.exit_code == 0
     assert ApprovalStore(store).is_approved(99, "d" * 40, "test-ns")

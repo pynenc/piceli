@@ -89,9 +89,9 @@ class FakeAPI:
                 }
             )
             if owned:
-                metadata.setdefault("annotations", {})[
-                    "piceli.io/owner"
-                ] = "acceptance-owner"
+                metadata.setdefault("annotations", {})["piceli.io/owner"] = (
+                    "acceptance-owner"
+                )
             metadata["managedFields"] = [
                 {
                     "manager": "piceli-acceptance" if owned else "other",

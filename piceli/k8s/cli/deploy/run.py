@@ -122,9 +122,7 @@ async def run_deployment(
                 update_progress(console, progress, executor),
             )
         except Exception as e:
-            console.print(
-                Panel(f"[bold red]Deployment failed:[/] {e!s}", expand=False)
-            )
+            console.print(Panel(f"[bold red]Deployment failed:[/] {e!s}", expand=False))
             raise
         else:
             console.print(

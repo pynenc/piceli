@@ -15,10 +15,7 @@ ConfigMaps allow you to decouple configuration artifacts from image content to k
 ```python
 config_map = ConfigMap(
     name="example-configmap",
-    data={
-        "configKey": "configValue",
-        "settings.json": "{\"key\": \"value\"}"
-    }
+    data={"configKey": "configValue", "settings.json": '{"key": "value"}'},
 )
 ```
 

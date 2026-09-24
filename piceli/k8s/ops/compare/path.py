@@ -125,12 +125,10 @@ class Path:
         return iter(self.elements)
 
     @overload
-    def __getitem__(self, index: slice) -> "Path":
-        ...
+    def __getitem__(self, index: slice) -> "Path": ...
 
     @overload
-    def __getitem__(self, index: int) -> PathElem:
-        ...
+    def __getitem__(self, index: int) -> PathElem: ...
 
     def __getitem__(self, index: int | slice) -> Union[PathElem, "Path"]:
         if isinstance(index, slice):

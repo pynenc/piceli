@@ -783,9 +783,7 @@ def test_execution_authorization_is_exact_and_fail_closed(local_api, tmp_path, c
         elif change == "expired":
             grant = replace(
                 grant,
-                expires_at=(
-                    datetime.now(UTC) - timedelta(seconds=1)
-                ).isoformat(),
+                expires_at=(datetime.now(UTC) - timedelta(seconds=1)).isoformat(),
             )
         elif change == "endpoint":
             grant = replace(
@@ -889,9 +887,11 @@ def test_journal_excludes_parallel_operator_and_enforces_capacity(local_api, tmp
     _, provider = local_api
     run = executor(provider, tmp_path)
     other = ExecutionJournal(run.journal.path)
-    with run.journal.exclusive(), pytest.raises(
-        ValueError, match="already executing"
-    ), other.exclusive():
+    with (
+        run.journal.exclusive(),
+        pytest.raises(ValueError, match="already executing"),
+        other.exclusive(),
+    ):
         pass
     run.journal.max_bytes = 1
     plan, snapshot, grant = prepare(provider, [manifest()])
