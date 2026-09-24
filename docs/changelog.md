@@ -29,6 +29,13 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   live object, so API-server defaults no longer show up as changes. Unchanged
   objects plan `no-op`, and every `apply` shows the fields it changes.
   New `piceli release diff`.
+- **Secret no-op plans and three-way removal:** an unchanged Secret (or
+  other secret-bound object) now plans `no-op`; its resolved values are
+  compared in-process with keyed digests and are never shown or stored. An
+  `apply` now removes labels, annotations and map keys (such as ConfigMap
+  keys) that an earlier release declared and the composition dropped, unless
+  another field manager owns them (`removes` in the plan, `remove` changes in
+  the diff).
 - **Access and status from the model (preview):** `app.access.forward(…)`
   declares how each service is reached from your laptop (it renders no
   Kubernetes object). `piceli access TARGET` runs supervised loopback port
