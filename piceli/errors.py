@@ -1488,6 +1488,19 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "access",
     ),
     _E(
+        "status-port-occupied",
+        "Forward port held by another process",
+        "A declared forward's local port is held by a process Piceli did not "
+        "start for this declaration (another project's `kubectl port-forward`, "
+        "a dev server, an orphaned forward). `piceli status` reports the forward "
+        "as `occupied` with that process's pid only, never its command line, and "
+        "never as `up`.",
+        "Stop the process holding the port (`lsof -nP -iTCP:PORT -sTCP:LISTEN`) "
+        "or change `local=`, then run `piceli access TARGET`.",
+        True,
+        "access",
+    ),
+    _E(
         "status-checks-unreadable",
         "Checks result unreadable",
         "The target's `last_checks()` hook raised.",

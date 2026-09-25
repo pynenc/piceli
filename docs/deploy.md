@@ -87,13 +87,15 @@ release (always with a changelog entry).
      inputs   rust-hello: 3 staged file(s), plan 7cd633981e19
      inputs   source piceli: 485a4dc88cee
      build    rust-hello: build (linux/arm64, builder 8fa55b2f3ddf, network none)
-     deliver  registry shop-registry-d0c1b1b7947f: create ConfigMap/registry-config, create PersistentVolumeClaim/registry-storage, create Deployment/registry
+     deliver  registry shop-registry-d0c1b1b7947f: create ConfigMap/registry-config,
+              create PersistentVolumeClaim/registry-storage, create Deployment/registry
      deliver  rust-hello: pending-build
      plan     after delivery (the release plan needs the image digests)
      apply    pending
      checks   1 check(s) (rollback on failure)
    combined hash: fab781d97321848dc074bd293a208e1057bb5cdf3b79afc12d906b7c83e6ec25
-   approve with: piceli deploy examples/shop/app.py:pipeline --approve fab781d9…
+   approve with:
+     piceli deploy examples/shop/app.py:pipeline --approve fab781d9…
    ```
 
 4. **Approve the combined hash** after reviewing the plan:

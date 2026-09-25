@@ -25,6 +25,9 @@ from piceli.k8s.observe import (
 from piceli.k8s.ops.session import DeploymentSessionArchive
 from piceli.k8s.release import ReleaseCatalog
 
+# Controller-created children, scanned only to attribute them to their owner.
+_DERIVED_TYPES = (("apps/v1", "ReplicaSet"),)
+
 _SECRET_REDACT_PATTERNS = [
     re.compile(
         r"(?i)((?:password|token|secret|key|authorization|bearer)\s*[:=]\s*)([^\s,;]+)"
@@ -43,6 +46,9 @@ class ManagedResource:
     session_id: str | None = None
     observed: ObservedObject | None = None
     error: str | None = None
+    #: ``Kind/name`` of the managed workload that owns this object through
+    #: ``ownerReferences`` (a Deployment's ReplicaSets and Pods, a Job's Pods).
+    derived_from: str | None = None
 
     def __post_init__(self) -> None:
         if self.classification not in {"managed", "unmanaged", "unknown"}:
@@ -121,6 +127,8 @@ def _resource_dict(resource: ManagedResource) -> dict[str, Any]:
         res["session_id"] = resource.session_id
     if resource.error:
         res["error"] = resource.error
+    if resource.derived_from:
+        res["derived_from"] = resource.derived_from
     if resource.observed is not None:
         obs_dict: dict[str, Any] = {
             "uid": resource.observed.uid,
@@ -230,6 +238,8 @@ def build_operator_report(
     # 2. Discover objects in namespace to find unmanaged or other managed objects
     unmanaged: list[ManagedResource] = []
     types_to_scan = set(_COMMON_TYPES) if include_common_types else set()
+    if include_common_types:
+        types_to_scan.update(_DERIVED_TYPES)
     types_to_scan.update((ref.api_version, ref.kind) for ref in declared_refs)
 
     for api_version, kind in sorted(types_to_scan):
@@ -273,6 +283,22 @@ def build_operator_report(
                     )
                 )
 
+    derived = _derived(managed, unmanaged)
+    if derived:
+        unmanaged = [item for item in unmanaged if item.ref not in derived]
+        managed.extend(
+            ManagedResource(
+                ref=item.ref,
+                classification="managed",
+                state="present",
+                session_id=session_id,
+                release_name=active_release_name,
+                observed=item.observed,
+                derived_from=root,
+            )
+            for item, root in derived.values()
+        )
+
     scan_errors.extend(reader_warnings(reader))
     return OperatorReport(
         namespace=namespace,
@@ -284,6 +310,44 @@ def build_operator_report(
         releases=tuple(releases_summary),
         scan_errors=tuple(sorted(scan_errors)),
     )
+
+
+def _derived(
+    managed: Sequence[ManagedResource], candidates: Sequence[ManagedResource]
+) -> dict[ObservationRef, tuple[ManagedResource, str]]:
+    """Unmanaged objects owned (``ownerReferences``, any depth) by a managed one.
+
+    A managed Deployment's ReplicaSets and their Pods, a managed CronJob's
+    Jobs and Pods, a StatefulSet's Pods: they are created by the controller,
+    not by hand, so listing them as unmanaged is noise. Maps each such ref to
+    ``(resource, "Kind/name" of the managed root)``. Owners are matched by
+    uid, else by kind and name (same namespace).
+    """
+    by_uid: dict[str, str] = {}
+    by_name: dict[tuple[str, str], str] = {}
+    for item in managed:
+        label = f"{item.ref.kind}/{item.ref.name}"
+        by_name[(item.ref.kind, item.ref.name)] = label
+        if item.observed is not None and item.observed.uid:
+            by_uid[item.observed.uid] = label
+    found: dict[ObservationRef, tuple[ManagedResource, str]] = {}
+    changed = True
+    while changed:  # a Pod's owner (ReplicaSet) may be derived itself
+        changed = False
+        for item in candidates:
+            if item.ref in found or item.observed is None:
+                continue
+            for kind, name, uid in item.observed.owners:
+                root = by_uid.get(uid) or by_name.get((kind, name))
+                if root is None:
+                    continue
+                found[item.ref] = (item, root)
+                if item.observed.uid:
+                    by_uid[item.observed.uid] = root
+                by_name[(item.ref.kind, item.ref.name)] = root
+                changed = True
+                break
+    return found
 
 
 def redact_log_content(line: str, known_secrets: Sequence[str] = ()) -> str:

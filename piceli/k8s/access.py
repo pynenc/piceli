@@ -29,7 +29,7 @@ from types import SimpleNamespace
 from typing import Any, Protocol
 
 from piceli.k8s.observe import local_port_in_use, probe_endpoint
-from piceli.k8s.port_owner import PortOwner, port_owner
+from piceli.k8s.port_owner import PortOwner, is_piceli_forward, port_owner
 from piceli.k8s.ui_config import UiComponent, UiConfig, UiShortcut, UiTier
 
 STATUS_SCHEMA = "piceli.status.v1"
@@ -37,6 +37,8 @@ WORKLOAD_KINDS = ("Deployment", "StatefulSet", "DaemonSet")
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 # Waiting reasons that are part of a normal start, not a problem.
 _NORMAL_WAITING = frozenset({"ContainerCreating", "PodInitializing"})
+# Command lines read to verify a forward is Piceli's (not shown past MAX_COMMAND).
+_OWNER_LIMIT = 4096
 
 
 class AccessTargetError(ValueError):
@@ -536,23 +538,64 @@ def workload_status(
     }
 
 
+def _owner_for_status(port: int) -> PortOwner | None:
+    """The port's owner with full command lines, for the ownership check only."""
+    return port_owner(port, limit=_OWNER_LIMIT)
+
+
 def forward_status(
     shortcut: UiShortcut,
     *,
+    context: str | None = None,
+    namespace: str | None = None,
     probe: Callable[..., str | None] = probe_endpoint,
     in_use: Callable[[int], bool] = local_port_in_use,
-    owner: Callable[[int], PortOwner | None] = port_owner,
+    owner: Callable[[int], PortOwner | None] | None = None,
+    owned: Callable[..., bool] | None = None,
 ) -> dict[str, Any]:
     """Whether one declared forward answers on ``127.0.0.1`` right now.
 
-    ``forward`` is ``up`` (the health probe passes), ``unhealthy`` (something
-    listens but the probe fails) or ``down`` (nothing listens). Contacts only
+    ``forward`` is ``up`` (Piceli's ``kubectl port-forward`` for this
+    declaration holds the port and the health probe passes), ``unhealthy``
+    (Piceli's forward holds the port but the probe fails), ``occupied``
+    (another process holds the port: error ``status-port-occupied``; only
+    its pid is reported, never its command line) or ``down`` (nothing
+    listens). A forward counts as Piceli's only when the listener is the
+    ``kubectl`` argv Piceli builds for this context, namespace, target and
+    ports, started by a Piceli process (see
+    :func:`~piceli.k8s.port_owner.is_piceli_forward`); without ``context``
+    nothing can be verified and a listener is ``occupied``. Contacts only
     the loopback address, never the cluster.
     """
+    owner = owner or _owner_for_status
+    owned = owned or is_piceli_forward
     outcome = probe(shortcut.local_port, shortcut.probe)
     listening = outcome is None or in_use(shortcut.local_port)
-    state = "up" if outcome is None else ("unhealthy" if listening else "down")
     holder = owner(shortcut.local_port) if listening else None
+    mine = (
+        listening
+        and context is not None
+        and owned(
+            holder,
+            context=context,
+            namespace=shortcut.namespace or namespace or "",
+            target=shortcut.target,
+            local_port=shortcut.local_port,
+            remote_port=shortcut.remote_port,
+        )
+    )
+    public_owner: dict[str, Any] | None = None
+    if not listening:
+        state, error = "down", outcome
+    elif not mine:
+        state, error = "occupied", "status-port-occupied"
+        if holder is not None:
+            public_owner = PortOwner(port=holder.port, pid=holder.pid).to_dict()
+    else:
+        state = "up" if outcome is None else "unhealthy"
+        error = outcome
+        if holder is not None:
+            public_owner = holder.shortened().to_dict()
     return {
         "id": shortcut.id,
         "label": shortcut.label,
@@ -562,8 +605,8 @@ def forward_status(
         "remote_port": shortcut.remote_port,
         "required": shortcut.required,
         "forward": state,
-        "error": outcome,
-        "owner": holder.to_dict() if holder is not None else None,
+        "error": error,
+        "owner": public_owner,
         "probe": shortcut.probe.public_dict(),
     }
 
@@ -635,7 +678,7 @@ def collect_status(
     reader: WorkloadReader | None,
     *,
     reader_error: str | None = None,
-    forward: Callable[[UiShortcut], dict[str, Any]] = forward_status,
+    forward: Callable[[UiShortcut], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """The ``piceli.status.v1`` document for ``target``.
 
@@ -691,6 +734,13 @@ def collect_status(
         if pods_error:
             item["error"] = pods_error
         summary.workloads.append(item)
+    if forward is None:
+
+        def forward(item: UiShortcut) -> dict[str, Any]:
+            return forward_status(
+                item, context=target.context, namespace=target.namespace
+            )
+
     forwards = [forward(item) for item in target.shortcuts]
     checks = None
     if target.checks is not None:

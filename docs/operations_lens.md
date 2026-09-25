@@ -73,17 +73,26 @@ piceli observe logs-run --namespace my-app --target deployment/api --tail 200 \
 ## Saved port forwards
 
 Forward preferences are stored per local user as non-secret JSON with owner-only
-permissions.
+permissions (default `~/.config/piceli/observe.json`, or `--preferences PATH`).
 
 ```bash
 piceli observe forward-save --user "$USER" --name api \
   --namespace my-app --target service/api \
-  --local-port 18080 --remote-port 8080
+  --local-port 18080 --remote-port 8080 \
+  --kubeconfig ~/.kube/config --context my-cluster
 
 piceli observe forward-list --user "$USER"
 piceli observe forward-run  --user "$USER" --name api \
   --kubeconfig ~/.kube/config --context my-cluster
 ```
+
+`--kubeconfig` and `--context` on `forward-save` **scope** the preference to
+that cluster and context: Piceli stores the context name and a digest of the
+context's API server URL (never the kubeconfig path). A saved forward is only
+ever started automatically by a dashboard for the same cluster, context and
+namespace, and only when you ask for it (see below). A preference saved
+without them is unscoped: `forward-list` shows it and `forward-run` runs it,
+but no dashboard restores it.
 
 ## Web UI and REST API
 
@@ -93,10 +102,35 @@ piceli observe serve --archive ./session.archive.json \
   --user "$USER" --port 9876 --ui-config ./piceli-ui.toml
 ```
 
-Open `http://127.0.0.1:9876/`. With `--user`, the server restores that user's
-saved forwards and supervises the processes it starts. `--namespace` defaults to
-the archive's namespace when the archive has exactly one. The page refreshes every
-few seconds.
+Open `http://127.0.0.1:9876/`. `--user` names whose saved forwards the
+dashboard manages; forwards you add in the dashboard are saved for this
+cluster, context and namespace. `--namespace` defaults to the archive's
+namespace when the archive has exactly one. The page refreshes every few
+seconds.
+
+Saved forwards are **never started implicitly**. `piceli observe serve` and
+`piceli operator serve` start them only with `--restore-forwards`, and then
+only the ones saved for the same cluster (API server digest), context and
+namespace as the command. Forwards saved for another cluster or namespace, or
+without a scope, are left alone, and the command says how many it skipped:
+
+```bash
+piceli operator serve --kubeconfig ./kind.kubeconfig --context kind-shop \
+  --namespace shop --preferences ./observe.json --restore-forwards
+```
+
+```text
+piceli: restored 1 saved forward(s): web
+piceli: left 2 saved forward(s) alone: saved for another cluster, context or namespace, or without a scope
+```
+
+Without `--preferences`, the default file for `--user` (default `$USER`) is
+used, but only read when you pass `--restore-forwards` or save a forward from
+the dashboard. `GET /v1/preferences` lists only this user's forwards for this
+cluster, context and namespace (none from `piceli access --dashboard`, which
+has no saved forwards). Access forwards declared in the model are different:
+they are part of the app, so `operator serve --access TARGET` starts them (see
+{doc}`access`).
 
 The same data is available as JSON:
 

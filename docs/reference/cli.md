@@ -584,10 +584,12 @@ Persist one harmless port-forward preference for a local user.
 | `--local-port` | integer | required |  |
 | `--remote-port` | integer | required |  |
 | `--preferences` | path |  |  |
+| `--kubeconfig` | path |  | With --context: the cluster this forward is for (needed for --restore-forwards) |
+| `--context` | text |  | With --kubeconfig: the context this forward is for |
 
 **Contract**
 
-- **Reads:** session archive
+- **Reads:** preferences file, kubeconfig (with --context, for the scope)
 - **Writes:** preferences file
 - **Cluster:** none
 - **Approval required:** no
@@ -711,7 +713,8 @@ Open the local operations dashboard and optionally restore saved forwards.
 | `--context` | text | required | Kubeconfig context to use (required; current-context is never used) |
 | `--namespace` | text |  | Namespace for shortcuts and pods (default: the archive's) |
 | `--preferences` | path |  |  |
-| `--user` | text |  | Restore this user's saved forwards |
+| `--user` | text |  | Local user whose saved forwards the dashboard manages |
+| `--restore-forwards` | boolean | `False` | Start the user's saved forwards that were saved for this cluster, context and namespace (off by default; forwards saved elsewhere or without a scope are never started) |
 | `--port` | integer | `9876` |  |
 | `--ui-config` | path | env `PICELI__UI_CONFIG` | TOML file with dashboard shortcuts, topology tiers, and badges (also $PICELI__UI_CONFIG) |
 | `--start-shortcuts`, `--no-start-shortcuts` | boolean | `False` | Start and health-supervise every configured shortcut (port-conflict preflight first) |
@@ -727,7 +730,7 @@ Open the local operations dashboard and optionally restore saved forwards.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`).
+- **Notes:** `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`). Saved forwards start only with --restore-forwards, and only those saved for this cluster, context and namespace.
 
 (cli-observe-status)=
 ### `piceli observe status`
@@ -856,6 +859,8 @@ Launch the Piceli Operator dashboard and unified REST API.
 | `--port` | integer | `9876` |  |
 | `--ui-config` | path | env `PICELI__UI_CONFIG` | TOML file with dashboard shortcuts, topology tiers, and badges (also $PICELI__UI_CONFIG) |
 | `--access` | text |  | release.toml or module:attr whose model access declarations become the dashboard shortcuts (--ui-config entries win by id) |
+| `--start-access`, `--no-start-access` | boolean | `True` | With --access: start the model's declared forwards at launch, like `piceli access TARGET --dashboard` |
+| `--restore-forwards` | boolean | `False` | Start the user's saved forwards that were saved for this cluster, context and namespace (off by default; forwards saved elsewhere or without a scope are never started) |
 | `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
 | `--exec-sha256` | text |  | Expected sha256:<hex> of the resolved exec plugin file |
 
@@ -868,7 +873,7 @@ Launch the Piceli Operator dashboard and unified REST API.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`).
+- **Notes:** `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`). --access starts the model's declared forwards; saved forwards start only with --restore-forwards, and only those saved for this cluster, context and namespace.
 
 (cli-operator-status)=
 ### `piceli operator status`

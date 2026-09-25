@@ -50,6 +50,26 @@ def _load(entry: str) -> Any:
     return value
 
 
+#: Human plan lines wrap here; continuation lines align under the stage text.
+HUMAN_WIDTH = 100
+_INDENT = " " * 11
+
+
+def _say_wrapped(head: str, text: str) -> None:
+    """``head`` + ``text`` wrapped at item boundaries (``, ``), never mid-name."""
+    items = text.split(", ")
+    line, fresh = head, True
+    for index, item in enumerate(items):
+        piece = item + ("," if index < len(items) - 1 else "")
+        if not fresh and len(line) + 1 + len(piece) > HUMAN_WIDTH:
+            say(line)
+            line = _INDENT + piece
+        else:
+            line = line + ("" if fresh else " ") + piece
+        fresh = False
+    say(line)
+
+
 def _describe(plan: Any, entry: str) -> None:
     stages = plan.stages
     say(f"deploy plan for {entry} (until {plan.until}):")
@@ -80,7 +100,7 @@ def _describe(plan: Any, entry: str) -> None:
             if registry["action"] == "unchanged"
             else changes or "apply"
         )
-        say(f"  deliver  registry {registry['release']}: {note}")
+        _say_wrapped(f"  deliver  registry {registry['release']}: ", note)
     for name, image in deliver.get("images", {}).items():
         config = image["config_digest"]
         say(
@@ -92,14 +112,15 @@ def _describe(plan: Any, entry: str) -> None:
         changes = ", ".join(
             f"{c['operation']} {c['kind']}/{c['name']}" for c in release["changes"]
         )
-        say(
-            f"  plan     release {release['release']} ({release['mode']}): "
-            f"{changes or 'no changes'}"
+        _say_wrapped(
+            f"  plan     release {release['release']} ({release['mode']}): ",
+            changes or "no changes",
         )
         for item in release.get("drift", ()):
-            say(
+            _say_wrapped(
                 f"  plan     drift {item['kind']}/{item['name']}: desired fields "
-                f"also managed by {', '.join(item['managers'])} (re-applied)"
+                "also managed by ",
+                f"{', '.join(item['managers'])} (re-applied)",
             )
     elif release.get("state") == "pending":
         say("  plan     after delivery (the release plan needs the image digests)")
@@ -225,9 +246,9 @@ def deploy(
                     **combined.to_dict(),
                 }
                 if plan:
-                    say(
-                        f"approve with: piceli deploy {target} --approve {combined.combined_hash}"
-                    )
+                    # The command stays on one line so it can be copied.
+                    say("approve with:")
+                    say(f"  piceli deploy {target} --approve {combined.combined_hash}")
                     emit_json({**body, "state": "planned"})
                     raise typer.Exit(EXIT_OK)
                 if approve is not None:
@@ -238,10 +259,8 @@ def deploy(
                         )
                         reject("pipeline-plan-changed")
                 elif not auto_approve and not _confirm(combined.combined_hash):
-                    say(
-                        f"approve with: piceli deploy {target} --approve "
-                        f"{combined.combined_hash}"
-                    )
+                    say("approve with:")
+                    say(f"  piceli deploy {target} --approve {combined.combined_hash}")
                     emit_json({**body, "state": "approval-required"})
                     raise typer.Exit(EXIT_APPROVAL)
                 result = runner.execute(

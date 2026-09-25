@@ -118,6 +118,19 @@ reads `KUBECONFIG`, `~/.kube/config` or the current context.
 4. **Check again.** In another terminal, `piceli status release.toml` now shows
    `up` next to each forward.
 
+   `up` means the port is held by the `kubectl port-forward` that Piceli
+   started for this declaration (same context, namespace, target and ports,
+   started by `piceli access` or a dashboard) and its health probe passes.
+   If another process holds the port (another project's forward, a dev
+   server), the forward is `occupied`, never `up`, and only that process's
+   pid is shown:
+
+   ```text
+   access     down
+     occupied  web          http://127.0.0.1:18080/login  -> service/web:3000
+         port 18080 is held by pid 4242, not by piceli (status-port-occupied)
+   ```
+
 ## Targets
 
 `TARGET` is either:
@@ -138,11 +151,12 @@ reads `KUBECONFIG`, `~/.kube/config` or the current context.
 | `access-none-declared` | No forward is declared, or the composition function returns `app.composition(ctx)`. | Add `access=` and return the App. |
 | `access-unknown-forward` | `--only` names an id that does not exist. | Use an id from `piceli status TARGET --json`. |
 | `access-kubectl-missing` | No `kubectl` found. | Install it or pass `--kubectl PATH`. |
+| `occupied` / `status-port-occupied` in `piceli status` | A declared local port is held by a process Piceli did not start for this forward. Only its pid is reported. | Stop that process (`lsof -nP -iTCP:PORT -sTCP:LISTEN`) or change `local=`, then run `piceli access`. |
 | `access-kubeconfig-invalid` | The kubeconfig file or context is missing or unusable. | Fix `[target] kubeconfig` / `context`. |
 | `access-target-invalid` | TARGET is neither a readable `release.toml` nor a `module:attr` object with `.app` and `.target`. | Read the message on stderr. |
 | `status` exits `1` with `state: degraded` or `down` | Some workloads are not ready. | Read `workloads[].problems` (for example `CrashLoopBackOff`, restarts). |
 | `status` shows `state: unknown` and `errors: ["status-cluster-unreadable"]` | The cluster could not be read. | Check that the context reaches the cluster, then retry. |
-| A forward shows `unhealthy` | Something listens on the port but the health probe fails. | Check `owner`: it may be another process, or the upstream is down. |
+| A forward shows `unhealthy` | Piceli's forward holds the port but the health probe fails. | The upstream is down or not ready: check the workload (`piceli status`). |
 
 Every code is explained by `piceli explain <code>` and in {doc}`reference/errors`.
 
@@ -212,8 +226,11 @@ The JSON object:
   `unavailable`, `missing` or `unknown`.
 - `workloads[].images[].digest`: the pinned digest of the spec image, else the
   single digest the pods report; `running` lists every digest the pods report.
-- `access.forwards[].forward`: `up`, `unhealthy` (something listens, the probe
-  fails) or `down` (nothing listens); `owner` is the listening process.
+- `access.forwards[].forward`: `up` (Piceli's forward for this declaration
+  holds the port and the probe passes), `unhealthy` (Piceli's forward holds
+  the port, the probe fails), `occupied` (another process holds the port;
+  `error` is `status-port-occupied` and `owner` carries only its `port` and
+  `pid`, with `command` and `parent` `null`) or `down` (nothing listens).
 - `checks`: the latest checks result when the target records one, else `null`.
 - `errors`: error codes, for example `status-cluster-unreadable`.
 
@@ -259,6 +276,11 @@ silently takes it back. The owner is found through `/proc` on Linux and
 `piceli access TARGET --dashboard 9876` serves the local operations dashboard
 (see {doc}`operations_lens`) with the model's forwards as its shortcuts and, if
 no `--ui-config` declares tiers, one tier listing the app's workloads. `piceli
-operator serve --access TARGET` does the same for the operator dashboard.
+operator serve --access TARGET` does the same for the operator dashboard, and
+also starts the declared forwards at launch (same port-conflict refusal as
+`piceli access`; `--no-start-access` leaves them stopped until you click
+Start). The model's declarations are explicit, so they start; a user's
+*saved* forwards never start without `--restore-forwards` (see
+{doc}`operations_lens`).
 `--ui-config` still works: its shortcuts win over a model forward with the same
 id, and its badges and tiers are kept.

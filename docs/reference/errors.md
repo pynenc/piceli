@@ -292,6 +292,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`state-locked`](#error-state-locked) | observe | yes |
 | [`status-checks-unreadable`](#error-status-checks-unreadable) | access | yes |
 | [`status-cluster-unreadable`](#error-status-cluster-unreadable) | access | yes |
+| [`status-port-occupied`](#error-status-port-occupied) | access | yes |
 | [`status-release-unreadable`](#error-status-release-unreadable) | access | no |
 | [`stored-discovery-missing`](#error-stored-discovery-missing) | release | no |
 | [`stored-evidence-mismatch`](#error-stored-evidence-mismatch) | release | no |
@@ -2443,6 +2444,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Cluster unreadable.** Reading a workload failed (network, authentication, RBAC or timeout). The detail is withheld because it could contain credentials.
 
 - **Fix:** Check that the target's kubeconfig context reaches the cluster and may read Deployments and Pods in the namespace, then retry.
+- **Retry-safe:** yes
+
+(error-status-port-occupied)=
+### `status-port-occupied`
+
+**Forward port held by another process.** A declared forward's local port is held by a process Piceli did not start for this declaration (another project's `kubectl port-forward`, a dev server, an orphaned forward). `piceli status` reports the forward as `occupied` with that process's pid only, never its command line, and never as `up`.
+
+- **Fix:** Stop the process holding the port (`lsof -nP -iTCP:PORT -sTCP:LISTEN`) or change `local=`, then run `piceli access TARGET`.
 - **Retry-safe:** yes
 
 (error-status-release-unreadable)=

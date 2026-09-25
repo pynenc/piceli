@@ -113,7 +113,9 @@ def _runner(spec: Path) -> Any:
     from piceli.k8s.release_runner import ReleaseRunner
     from piceli.k8s.release_spec import ReleaseSpec
 
-    return ReleaseRunner(ReleaseSpec.from_toml(spec))
+    return ReleaseRunner(
+        ReleaseSpec.from_toml(spec), progress=lambda text: _say(f"  {text}")
+    )
 
 
 def _refusals() -> tuple[type[BaseException], ...]:
@@ -161,7 +163,7 @@ def _say_changes(diff: dict[str, Any] | None, limit: int | None) -> None:
     changes = diff["changes"]
     shown = changes if limit is None else changes[:limit]
     for change in shown:
-        _say(f"            {describe_change(change)}")
+        _say(f"            {describe_change(change, indent=' ' * 12)}")
     if len(changes) > len(shown):
         _say(
             f"            ... {len(changes) - len(shown)} more "

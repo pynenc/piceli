@@ -4,6 +4,38 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.4.1
+
+- **Saved forwards never start implicitly (safety):** `piceli operator serve`
+  and `piceli observe serve` no longer start a user's saved port forwards at
+  launch. `--restore-forwards` starts them, and only those saved for the same
+  cluster (a digest of the context's API server URL), context and namespace.
+  Forwards saved without a scope (older files, or `forward-save` without the
+  new `--kubeconfig/--context`) are never restored. Forwards added from the
+  dashboard are saved with their scope, and `GET /v1/preferences` lists only
+  the current user's forwards for this cluster, context and namespace.
+- **`piceli status` only reports forwards Piceli owns:** a forward is `up`
+  only when the listener is Piceli's `kubectl port-forward` for that
+  declaration. Any other process on the port is `occupied`
+  (`status-port-occupied`) with its pid only; its command line is never
+  printed. The dashboard's supervisor also refuses to call a forward healthy
+  when another process answers on its port (`conflict`).
+- **`operator serve --access` starts the model's forwards** at launch, like
+  `piceli access --dashboard`, refusing with `access-port-conflict` when a
+  required port is taken. `--no-start-access` leaves them stopped.
+- **Operator dashboard:** Pods and ReplicaSets owned (through
+  `ownerReferences`) by a managed workload are listed as managed with
+  `derived_from` instead of unmanaged. Image references are shortened with the
+  full reference in a tooltip, and the tables keep their columns inside the
+  card.
+- **Readable plans and progress:** `release plan` shortens long values in the
+  middle (keeping the digest tail and the closing quote) and puts long changes
+  on their own lines; `piceli deploy --plan` wraps long change lists and
+  prints the approve command on its own line. `release apply` and the deploy
+  apply stage print progress on stderr while applying and waiting for
+  readiness (`applying 3/7: Deployment/web`, `waiting for Deployment/web to
+  be ready (12s)`); stdout is unchanged.
+
 ## Version 0.4.0
 
 - **Removed:** the legacy delete-and-recreate engine and its CLI

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import errno
 import json
+import os
 import signal
 import threading
 from collections.abc import Callable, Iterator
@@ -35,6 +36,7 @@ from piceli.k8s.observe import (
     PreferenceStore,
     UserPreferences,
     archive_resources,
+    forward_scope,
     kubectl_logs_command,
     observe_session,
     preflight_shortcuts,
@@ -100,6 +102,32 @@ def _saved(preferences: Path | None, user: str, name: str) -> PortForward:
         if forward.name == name:
             return forward
     reject("unknown-forward", "saved port forward does not exist", name=name)
+
+
+RESTORE_HELP = (
+    "Start the user's saved forwards that were saved for this cluster, context "
+    "and namespace (off by default; forwards saved elsewhere or without a "
+    "scope are never started)"
+)
+RestoreForwardsOption = Annotated[
+    bool, typer.Option("--restore-forwards", help=RESTORE_HELP)
+]
+
+
+def restore_saved_forwards(supervisor: ForwardSupervisor) -> None:
+    """Explicitly restore the scope-matching saved forwards; say what was skipped."""
+    with rejecting(((ValueError, OSError), "invalid-preference-store")):
+        _, other = supervisor.saved_forwards()
+        restored = supervisor.restore()
+    say(
+        f"piceli: restored {len(restored)} saved forward(s)"
+        + (f": {', '.join(restored)}" if restored else "")
+    )
+    if other:
+        say(
+            f"piceli: left {len(other)} saved forward(s) alone: saved for another "
+            "cluster, context or namespace, or without a scope"
+        )
 
 
 UI_CONFIG_HELP = (
@@ -197,13 +225,44 @@ def forward_save(
     local_port: Annotated[int, typer.Option()],
     remote_port: Annotated[int, typer.Option()],
     preferences: Annotated[MaybePath, typer.Option()] = None,
+    kubeconfig: Annotated[
+        MaybePath,
+        typer.Option(
+            exists=True,
+            readable=True,
+            help="With --context: the cluster this forward is for "
+            "(needed for --restore-forwards)",
+        ),
+    ] = None,
+    context: Annotated[
+        MaybeString,
+        typer.Option(help="With --kubeconfig: the context this forward is for"),
+    ] = None,
 ) -> None:
-    """Persist one harmless port-forward preference for a local user."""
+    """Persist one harmless port-forward preference for a local user.
+
+    With ``--kubeconfig`` and ``--context`` the preference is scoped to that
+    cluster and context (the API server URL is stored only as a digest), and
+    ``serve --restore-forwards`` restores it there. Without them it is
+    unscoped: listed and runnable with ``forward-run``, never restored.
+    """
+    if (kubeconfig is None) != (context is None):
+        reject(
+            "invalid-forward-preference",
+            "pass both --kubeconfig and --context, or neither",
+        )
+    scope = None
+    if kubeconfig is not None and context is not None:
+        scope = forward_scope(kubeconfig, context)
+        if scope is None:
+            reject("kubeconfig-rejected", "the kubeconfig does not name that context")
     store = PreferenceStore(preferences)
     with rejecting((ValueError, "invalid-forward-preference")):
         existing = _preferences(store).get(user, UserPreferences(user))
         updated = {item.name: item for item in existing.forwards}
-        updated[name] = PortForward(name, namespace, target, local_port, remote_port)
+        updated[name] = PortForward(
+            name, namespace, target, local_port, remote_port, scope=scope
+        )
         replacement = UserPreferences(
             user, tuple(sorted(updated.values(), key=lambda item: item.name))
         )
@@ -223,7 +282,10 @@ def forward_list(
     )
     typer.echo(
         json.dumps(
-            {"user": user, "forwards": [item.__dict__ for item in preference.forwards]},
+            {
+                "user": user,
+                "forwards": [item.public_dict() for item in preference.forwards],
+            },
             sort_keys=True,
         )
     )
@@ -338,8 +400,10 @@ def serve(
     ] = None,
     preferences: Annotated[MaybePath, typer.Option()] = None,
     user: Annotated[
-        MaybeString, typer.Option(help="Restore this user's saved forwards")
+        MaybeString,
+        typer.Option(help="Local user whose saved forwards the dashboard manages"),
     ] = None,
+    restore_forwards: RestoreForwardsOption = False,
     port: Annotated[int, typer.Option(min=1, max=65535)] = 9876,
     ui_config: Annotated[
         MaybePath,
@@ -357,7 +421,16 @@ def serve(
     allow_exec: AllowExecOption = False,
     exec_sha256: ExecSha256Option = None,
 ) -> None:
-    """Open the local operations dashboard and optionally restore saved forwards."""
+    """Open the local operations dashboard and optionally restore saved forwards.
+
+    Saved forwards are started only with ``--restore-forwards`` (for
+    ``--user``, default ``$USER``), and only those saved for this cluster,
+    context and namespace.
+    """
+    if restore_forwards and not user:
+        user = os.environ.get("USER") or None
+        if user is None:
+            reject("invalid-preference-store", "--restore-forwards needs --user")
     config = _profile(ui_config)
     session_archive = _archive(archive)
     if namespace is None:
@@ -379,10 +452,10 @@ def serve(
             context=context,
             shortcuts=config.shortcuts,
             namespace=namespace or None,
+            scope=forward_scope(kubeconfig, context),
         )
-        if user:
-            with rejecting((ValueError, "invalid-preference-store")):
-                supervisor.restore()
+        if restore_forwards:
+            restore_saved_forwards(supervisor)
         for shortcut_id in plan_ids:
             supervisor.quick_start(shortcut_id, namespace or None)
     server = bind_local_server(
@@ -394,6 +467,7 @@ def serve(
             user,
             namespace=namespace,
             ui_config=config,
+            preference_scope=supervisor.scope if supervisor else None,
         ),
         port,
         supervisor,

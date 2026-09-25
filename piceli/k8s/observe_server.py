@@ -26,9 +26,11 @@ from piceli.k8s.automation import (
     promote_release,
 )
 from piceli.k8s.observe import (
+    ForwardScope,
     ForwardSupervisor,
     PortForward,
     PreferenceStore,
+    UserPreferences,
 )
 from piceli.k8s.operator_state import (
     FileStateStore,
@@ -413,6 +415,21 @@ _PAGE_HTML = """<!doctype html>
     tr:hover td {
       background: rgba(255, 255, 255, 0.02);
     }
+    table.fixed {
+      table-layout: fixed;
+    }
+    table.fixed td {
+      overflow: hidden;
+    }
+    .clip {
+      display: block;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .muted-note { color: var(--muted); font-size: 11px; display: block; }
+    .badge-derived { background: rgba(56, 189, 248, 0.08); color: #7dd3fc; border: 1px solid rgba(56, 189, 248, 0.2); }
     .badge {
       display: inline-flex;
       align-items: center;
@@ -675,7 +692,10 @@ _PAGE_HTML = """<!doctype html>
 
       <div class="section-box" data-testid="section-deployment-plan">
         <h2>Desired vs Live Deployment Plan</h2>
-        <table>
+        <table class="fixed">
+          <colgroup>
+            <col style="width: 110px"><col style="width: 13%"><col style="width: 24%"><col style="width: 26%"><col>
+          </colgroup>
           <thead>
             <tr><th>Action</th><th>Kind</th><th>Name</th><th>Reason</th><th>Image / Phase</th></tr>
           </thead>
@@ -696,7 +716,10 @@ _PAGE_HTML = """<!doctype html>
 
       <div class="section-box">
         <h2>Managed Resources (Piceli Declared)</h2>
-        <table>
+        <table class="fixed">
+          <colgroup>
+            <col style="width: 14%"><col style="width: 28%"><col style="width: 100px"><col style="width: 100px"><col>
+          </colgroup>
           <thead>
             <tr><th>Kind</th><th>Name</th><th>State</th><th>Phase</th><th>Images</th></tr>
           </thead>
@@ -937,6 +960,17 @@ _PAGE_HTML = """<!doctype html>
     // HTML-escape for text and quoted attribute contexts. User-controlled values are
     // never placed inside inline JS; actions read them back from data-* attributes.
     const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    // "registry/path/name@sha256:<64 hex>" -> "name@sha256:0123456789ab…"; the
+    // full reference stays in the title tooltip, so the cell never overflows.
+    const shortImage = ref => {
+      const text = String(ref ?? '');
+      const at = text.indexOf('@sha256:');
+      const repo = at >= 0 ? text.slice(0, at) : text;
+      const name = repo.split('/').pop() || repo;
+      return at >= 0 ? `${name}@sha256:${text.slice(at + 8, at + 20)}…` : name;
+    };
+    const imageCells = images => images.map(ref =>
+      `<code class="clip" title="${esc(ref)}">${esc(shortImage(ref))}</code>`).join('');
     const LIVE_STATES = ['running', 'degraded', 'starting'];
     function healthBadge(item, testid) {
       const health = item.health || 'unknown';
@@ -1042,14 +1076,16 @@ _PAGE_HTML = """<!doctype html>
         const planRows = [];
         (status.managed || []).forEach(r => {
           const state = r.state || 'unknown';
-          const action = state === 'present' ? 'no-op' : (state === 'missing' ? 'create' : 'inspect');
-          const reason = state === 'present' ? 'declared and live' : (state === 'missing' ? 'declared but absent' : (r.error || 'reader could not prove state'));
+          const derived = r.derived_from;
+          const action = derived ? 'derived' : (state === 'present' ? 'no-op' : (state === 'missing' ? 'create' : 'inspect'));
+          const reason = derived ? 'created by ' + derived : (state === 'present' ? 'declared and live' : (state === 'missing' ? 'declared but absent' : (r.error || 'reader could not prove state')));
           planRows.push({
             action,
             kind: r.ref?.kind || '',
             name: r.ref?.name || '',
             reason,
-            detail: (r.observed?.images || []).join(', ') || r.observed?.phase || '-'
+            images: r.observed?.images || [],
+            detail: r.observed?.phase || '-'
           });
         });
         (status.unmanaged || []).forEach(r => {
@@ -1058,7 +1094,8 @@ _PAGE_HTML = """<!doctype html>
             kind: r.ref?.kind || '',
             name: (r.ref?.namespace ? r.ref.namespace + '/' : '') + (r.ref?.name || ''),
             reason: 'live object outside selected deployment archive',
-            detail: r.phase || (r.images || []).join(', ') || '-'
+            images: r.observed?.images || [],
+            detail: r.observed?.phase || '-'
           });
         });
         (status.unknown || []).forEach(r => {
@@ -1067,16 +1104,17 @@ _PAGE_HTML = """<!doctype html>
             kind: r.ref?.kind || '',
             name: r.ref?.name || '',
             reason: r.error || 'unknown live state',
+            images: [],
             detail: '-'
           });
         });
         document.getElementById('tbl-plan').innerHTML = planRows.map(row => `
           <tr>
             <td><span class="badge badge-${esc(row.action === 'no-op' ? 'present' : row.action === 'create' ? 'unknown' : row.action)}">${esc(row.action)}</span></td>
-            <td>${esc(row.kind)}</td>
-            <td><code>${esc(row.name)}</code></td>
+            <td><span class="clip" title="${esc(row.kind)}">${esc(row.kind)}</span></td>
+            <td><code class="clip" title="${esc(row.name)}">${esc(row.name)}</code></td>
             <td>${esc(row.reason)}</td>
-            <td><code>${esc(row.detail)}</code></td>
+            <td>${row.images.length ? imageCells(row.images) : `<code class="clip">${esc(row.detail)}</code>`}</td>
           </tr>
         `).join('') || '<tr><td colspan="5" style="color:var(--muted);">No deployment plan available</td></tr>';
 
@@ -1170,10 +1208,10 @@ _PAGE_HTML = """<!doctype html>
         document.getElementById('tbl-managed').innerHTML = (status.managed || []).map(r => `
           <tr data-testid="row-managed-${esc(r.ref.name)}">
             <td>${esc(r.ref.kind)}</td>
-            <td><code>${esc(r.ref.name)}</code></td>
+            <td><code class="clip" title="${esc(r.ref.name)}">${esc(r.ref.name)}</code>${r.derived_from ? `<span class="muted-note">via ${esc(r.derived_from)}</span>` : ''}</td>
             <td><span class="badge badge-${esc(r.state)}">${esc(r.state)}</span></td>
             <td>${esc(r.observed?.phase || '-')}</td>
-            <td><code>${esc((r.observed?.images || []).join(', ') || '-')}</code></td>
+            <td>${(r.observed?.images || []).length ? imageCells(r.observed.images) : '<code>-</code>'}</td>
           </tr>
         `).join('') || '<tr><td colspan="5" style="color:var(--muted);">No declared resources</td></tr>';
 
@@ -1496,6 +1534,7 @@ class LocalObserveServer(ThreadingHTTPServer):
         kubectl: str = "kubectl",
         context: str | None = None,
         ui_config: UiConfig | None = None,
+        preference_scope: ForwardScope | None = None,
     ) -> None:
         if address[0] not in {"127.0.0.1", "::1"}:
             raise ValueError("Piceli observe server must bind to loopback")
@@ -1504,6 +1543,8 @@ class LocalObserveServer(ThreadingHTTPServer):
             raise ValueError("an explicit kubeconfig context is required")
         self.report = report
         self.preferences = preferences
+        #: Only saved forwards for this cluster/context are listed (none without).
+        self.preference_scope = preference_scope
         self.supervisor = supervisor
         self.user = user
         self.catalog = catalog
@@ -1704,12 +1745,24 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
                 self._error(503, "status-unavailable", error)
             return
         if self.path == "/v1/preferences":
-            users = self.server.preferences.load()
-            selected = (
-                ((users[self.server.user],) if self.server.user in users else ())
-                if self.server.user
-                else tuple(users.values())
-            )
+            # Only this user's forwards saved for this cluster, context and
+            # namespace: other clusters' preferences are private to them.
+            scope = self.server.preference_scope
+            selected: tuple[UserPreferences, ...] = ()
+            if self.server.user and scope is not None:
+                users = self.server.preferences.load()
+                if self.server.user in users:
+                    item = users[self.server.user]
+                    selected = (
+                        UserPreferences(
+                            item.user,
+                            tuple(
+                                forward
+                                for forward in item.forwards
+                                if forward.matches(scope, self.server.namespace)
+                            ),
+                        ),
+                    )
             self._json(
                 200,
                 {
@@ -2023,7 +2076,7 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
                 self.server.supervisor.add_or_update(fwd, persist=True)
                 if start_now:
                     self.server.supervisor.start(name)
-                self._json(200, {"ok": True, "forward": fwd.__dict__})
+                self._json(200, {"ok": True, "forward": fwd.public_dict()})
             except Exception as e:
                 self._error(400, "forward-add-failed", e)
             return

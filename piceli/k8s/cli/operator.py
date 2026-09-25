@@ -31,16 +31,18 @@ from piceli.k8s.cli.cluster_access import (
 )
 from piceli.k8s.cli.observe import (
     UI_CONFIG_HELP,
+    RestoreForwardsOption,
     _archive,
-    _preferences,
     _profile,
     bind_local_server,
+    restore_saved_forwards,
     serve_until_interrupted,
 )
 from piceli.k8s.observe import (
     ForwardSupervisor,
     KubernetesDynamicInventoryReader,
     PreferenceStore,
+    forward_scope,
 )
 from piceli.k8s.observe_server import LocalObserveServer
 from piceli.k8s.operator import build_operator_report
@@ -80,6 +82,23 @@ def _catalog(path: Path) -> ReleaseCatalog:
 def _state(path: Path) -> FileStateStore:
     with rejecting((ConcurrentWriterError, "state-locked")):
         return FileStateStore(path)
+
+
+def _access_startable(shortcuts: Any) -> tuple[str, ...]:
+    """The declared forwards to start; refuse on a required port held elsewhere."""
+    from piceli.cli_contract import reject, say
+    from piceli.k8s.access import port_conflicts
+
+    conflicts = port_conflicts(shortcuts)
+    blocking = [item for item in conflicts if item.required]
+    if blocking:
+        for item in blocking:
+            say(f"piceli: {item.describe()}")
+        reject("access-port-conflict", conflicts=[item.to_dict() for item in blocking])
+    for item in conflicts:
+        say(f"piceli: skipped {item.describe()}")
+    skipped = {item.id for item in conflicts}
+    return tuple(item.id for item in shortcuts if item.id not in skipped)
 
 
 @app.command("status")
@@ -222,22 +241,41 @@ def serve(
             "become the dashboard shortcuts (--ui-config entries win by id)"
         ),
     ] = None,
+    start_access: Annotated[
+        bool,
+        typer.Option(
+            help="With --access: start the model's declared forwards at launch, "
+            "like `piceli access TARGET --dashboard`"
+        ),
+    ] = True,
+    restore_forwards: RestoreForwardsOption = False,
     allow_exec: AllowExecOption = False,
     exec_sha256: ExecSha256Option = None,
 ) -> None:
-    """Launch the Piceli Operator dashboard and unified REST API."""
+    """Launch the Piceli Operator dashboard and unified REST API.
+
+    With ``--access TARGET`` the model's declared forwards become shortcuts
+    and are started at launch (``--no-start-access`` leaves them stopped); a
+    required forward whose port another process holds is refused with
+    ``access-port-conflict`` before anything starts. Saved forwards are
+    started only with ``--restore-forwards``, and only those saved for this
+    cluster, context and namespace.
+    """
     config = _profile(ui_config)
+    access_start: tuple[str, ...] = ()
     if access is not None:
         from piceli.k8s.access import access_ui_config
         from piceli.k8s.cli.access import _resolve
 
-        config = access_ui_config(config, _resolve(access))
+        resolved = _resolve(access)
+        config = access_ui_config(config, resolved)
+        if start_access:
+            access_start = _access_startable(resolved.shortcuts)
     policy = exec_policy(allow_exec, exec_sha256)
     reader = _reader(kubeconfig, context, policy)
     cat = _catalog(catalog) if catalog else None
     arch = _archive(archive) if archive else None
     pref_store = PreferenceStore(preferences)
-    _preferences(pref_store)
     file_state = _state(state_dir) if state_dir else None
 
     effective_user = user or os.environ.get("USER") or "operator"
@@ -248,9 +286,12 @@ def serve(
         context=context,
         shortcuts=config.shortcuts,
         namespace=namespace,
+        scope=forward_scope(kubeconfig, context),
     )
-    with rejecting((ValueError, "invalid-preference-store")):
-        supervisor.restore()
+    if restore_forwards:
+        restore_saved_forwards(supervisor)
+    for shortcut_id in access_start:
+        supervisor.quick_start(shortcut_id, namespace)
 
     def report_fn() -> Any:
         return build_operator_report(
@@ -275,6 +316,7 @@ def serve(
             kubeconfig=kubeconfig,
             context=context,
             ui_config=config,
+            preference_scope=supervisor.scope,
         ),
         port,
         supervisor,

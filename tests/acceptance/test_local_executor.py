@@ -920,3 +920,35 @@ def test_secret_store_permissions_reopen_and_scope(tmp_path):
     unsafe.mkdir(mode=0o755)
     with pytest.raises(ValueError, match="permissions"):
         SecretVersionStore(unsafe / "versions.sqlite")
+
+
+def test_progress_reports_applying_and_readiness_waits(local_api, tmp_path):
+    """Human progress while applying and waiting (B12); no values, only names."""
+    api, provider = local_api
+    api.ready = False
+    lines: list[str] = []
+    run = executor(
+        provider,
+        tmp_path,
+        limits=ExecutionLimits(max_seconds=2, readiness_seconds=0.3, poll_seconds=0.02),
+        progress=lines.append,
+        progress_seconds=0.1,
+    )
+    plan, snapshot, grant = prepare(
+        provider, [manifest(), manifest("Deployment", "worker")]
+    )
+    assert run.run("slow", plan, snapshot, grant)["state"] == "failed"
+    assert lines[0].startswith("applying 1/2: ")
+    waits = [line for line in lines if line.startswith("waiting for Deployment/worker")]
+    assert waits and waits[0].endswith("to be ready (0s)")
+    # Throttled: at most one line per interval while waiting on the same object.
+    assert len(waits) <= 0.3 / 0.1 + 2
+    assert not any("ConfigMap" in line and "waiting" in line for line in lines)
+
+    def broken(_line: str) -> None:
+        raise RuntimeError("terminal gone")
+
+    api.ready = True
+    quiet = executor(provider, tmp_path / "again", progress=broken)
+    plan, snapshot, grant = prepare(provider, [manifest("Deployment", "other")])
+    assert quiet.run("ok", plan, snapshot, grant)["state"] == "ready"
