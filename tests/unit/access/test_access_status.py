@@ -40,7 +40,7 @@ from piceli.k8s.access import (
 )
 from piceli.k8s.cli import access as cli_access
 from piceli.k8s.cli import app
-from piceli.k8s.port_owner import PortOwner
+from piceli.k8s.port_owner import PortOwner, ProcessInfo, is_piceli_forward
 from piceli.k8s.ui_config import UiConfig, UiShortcut
 
 REPO = Path(__file__).resolve().parents[3]
@@ -460,35 +460,170 @@ def test_images_digests_and_problems() -> None:
     assert single["images"][0]["digest"] == RUNNING
 
 
-def test_forward_status_up_down_unhealthy(upstream: int) -> None:
-    def shortcut(port: int, **extra: Any) -> UiShortcut:
-        return UiShortcut(
-            id="api",
-            label="API",
-            target="service/api",
-            local_port=port,
-            remote_port=80,
-            **extra,
-        )
+def _shortcut(port: int, **extra: Any) -> UiShortcut:
+    return UiShortcut(
+        id="api",
+        label="API",
+        target="service/api",
+        namespace="shop",
+        local_port=port,
+        remote_port=80,
+        **extra,
+    )
 
-    up = forward_status(shortcut(upstream, health={"type": "http", "path": "/healthz"}))
+
+def _piceli_owner(port: int) -> PortOwner:
+    return PortOwner(
+        port,
+        4242,
+        f"/usr/bin/kubectl --kubeconfig /k --context kind-shop --namespace shop "
+        f"port-forward service/api {port}:80 --address 127.0.0.1",
+        ProcessInfo(4200, "/venv/bin/python /venv/bin/piceli access release.toml"),
+    )
+
+
+def test_forward_status_up_down_unhealthy(upstream: int) -> None:
+    http = {"type": "http", "path": "/healthz"}
+    up = forward_status(
+        _shortcut(upstream, health=http), context="kind-shop", owner=_piceli_owner
+    )
     assert up["forward"] == "up" and up["error"] is None
-    down = forward_status(shortcut(_free_port()))
+    assert up["owner"]["pid"] == 4242
+    down = forward_status(_shortcut(_free_port()), context="kind-shop")
     assert down["forward"] == "down" and down["owner"] is None
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         listener.listen(1)
         busy = listener.getsockname()[1]
-        owner = PortOwner(busy, 4242, "somebody")
         bad = forward_status(
-            shortcut(busy, health={"type": "http", "path": "/", "timeout": 0.3}),
-            owner=lambda port: owner,
+            _shortcut(busy, health={"type": "http", "path": "/", "timeout": 0.3}),
+            context="kind-shop",
+            owner=_piceli_owner,
         )
     assert bad["forward"] == "unhealthy"
-    assert bad["owner"] == owner.to_dict()
+    assert bad["owner"] == _piceli_owner(busy).to_dict()
 
 
-def test_collect_status_document(tmp_path: Path, upstream: int) -> None:
+def test_forward_status_never_reports_a_foreign_listener_as_up(
+    upstream: int,
+) -> None:
+    """Any process answering on the port is not Piceli's forward (B8)."""
+    http = {"type": "http", "path": "/healthz"}
+    foreign = PortOwner(
+        upstream,
+        777,
+        "kubectl --context other-project port-forward svc/x 18080:80",
+        ProcessInfo(700, "make dev-secret-thing"),
+    )
+    for owner in (lambda port: foreign, lambda port: None):
+        status = forward_status(
+            _shortcut(upstream, health=http), context="kind-shop", owner=owner
+        )
+        assert status["forward"] == "occupied"
+        assert status["error"] == "status-port-occupied"
+        assert "other-project" not in json.dumps(status)
+        assert "dev-secret-thing" not in json.dumps(status)
+    assert status["owner"] is None
+    status = forward_status(
+        _shortcut(upstream, health=http), context="kind-shop", owner=lambda p: foreign
+    )
+    assert status["owner"] == {
+        "port": upstream,
+        "pid": 777,
+        "command": None,
+        "parent": None,
+    }
+    # The real lookup: the upstream is this test process, not a piceli forward.
+    assert (
+        forward_status(_shortcut(upstream, health=http), context="kind-shop")["forward"]
+        == "occupied"
+    )
+    # Without a context nothing can be verified.
+    assert (
+        forward_status(_shortcut(upstream, health=http), owner=_piceli_owner)["forward"]
+        == "occupied"
+    )
+
+
+def test_is_piceli_forward_matches_only_the_exact_argv() -> None:
+    port = 18080
+    owner = _piceli_owner(port)
+    match = {
+        "context": "kind-shop",
+        "namespace": "shop",
+        "target": "service/api",
+        "local_port": port,
+        "remote_port": 80,
+    }
+    assert is_piceli_forward(owner, **match)
+    assert not is_piceli_forward(None, **match)
+    for change in (
+        {"context": "prod"},
+        {"namespace": "other"},
+        {"target": "service/web"},
+        {"local_port": 18081},
+        {"remote_port": 81},
+    ):
+        assert not is_piceli_forward(owner, **{**match, **change})
+    for parent in (None, ProcessInfo(1, None), ProcessInfo(9, "bash ./dev.sh")):
+        assert not is_piceli_forward(
+            PortOwner(port, 4242, owner.command, parent), **match
+        )
+    assert is_piceli_forward(
+        PortOwner(
+            port, 4242, owner.command, ProcessInfo(9, "python -m piceli access t")
+        ),
+        **match,
+    )
+    assert not is_piceli_forward(
+        PortOwner(
+            port, 4242, "nc -l 18080 port-forward service/api 18080:80", owner.parent
+        ),
+        **match,
+    )
+    truncated = PortOwner(port, 4242, owner.command[:40] + "…", owner.parent)
+    assert not is_piceli_forward(truncated, **match)
+
+
+def test_human_status_never_prints_a_foreign_command_line() -> None:
+    document = {
+        "app": "shop",
+        "state": "up",
+        "namespace": "shop",
+        "context": "kind-shop",
+        "release": None,
+        "workloads": [],
+        "access": {
+            "state": "down",
+            "forwards": [
+                {
+                    "id": "web",
+                    "forward": "occupied",
+                    "url": "http://127.0.0.1:18080/",
+                    "target": "service/web",
+                    "remote_port": 3000,
+                    "local_port": 18080,
+                    "owner": {
+                        "port": 18080,
+                        "pid": 777,
+                        "command": None,
+                        "parent": None,
+                    },
+                }
+            ],
+        },
+        "checks": None,
+        "errors": [],
+    }
+    text = cli_access._human_status(document, "release.toml")
+    assert "held by pid 777, not by piceli (status-port-occupied)" in text
+    assert max(len(line) for line in text.splitlines()) <= 120
+
+
+def test_collect_status_document(
+    tmp_path: Path, upstream: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(access_module, "is_piceli_forward", lambda owner, **_: True)
     spec = write_spec(tmp_path, local=upstream, upstream=80)
     target = resolve_target(str(spec))
     document = collect_status(target, healthy_reader())
@@ -606,6 +741,7 @@ runner = CliRunner()
 def test_cli_status_json_is_the_schema_and_exit_code_follows_state(
     tmp_path: Path, upstream: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(access_module, "is_piceli_forward", lambda owner, **_: True)
     spec = write_spec(tmp_path, local=upstream, upstream=80)
     reader = healthy_reader()
     seen: dict[str, Any] = {}

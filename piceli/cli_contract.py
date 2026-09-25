@@ -497,7 +497,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
         "observe forward-save": _C(
             "Save one port-forward preference.",
             contract="conforms",
-            reads=("session archive",),
+            reads=("preferences file", "kubeconfig (with --context, for the scope)"),
             writes=("preferences file",),
         ),
         "observe forward-list": _C(
@@ -540,7 +540,9 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             reads=("session archive", "kubeconfig", "preferences file"),
             writes=("preferences file",),
             cluster="reads",
-            notes=_EXPLICIT_CONTEXT,
+            notes=_EXPLICIT_CONTEXT
+            + " Saved forwards start only with --restore-forwards, and only"
+            " those saved for this cluster, context and namespace.",
             long_running=True,
         ),
         "observe forwards apply": _C(
@@ -598,7 +600,10 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             reads=("kubeconfig", "catalog", "archive", "preferences file"),
             writes=("preferences file", "state_dir"),
             cluster="reads",
-            notes=_EXPLICIT_CONTEXT,
+            notes=_EXPLICIT_CONTEXT
+            + " --access starts the model's declared forwards; saved forwards"
+            " start only with --restore-forwards, and only those saved for this"
+            " cluster, context and namespace.",
             long_running=True,
         ),
         # ------------------------------------------------ P5 pipeline

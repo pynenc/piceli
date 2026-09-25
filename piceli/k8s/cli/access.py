@@ -109,12 +109,19 @@ def _human_status(document: dict[str, Any], target: str) -> str:
             f"-> {forward['target']}:{forward['remote_port']}"
         )
         owner = forward.get("owner")
-        if forward["forward"] != "up":
+        if forward["forward"] == "occupied":
+            # Never print another process's command line; the pid is enough.
+            holder = f"pid {owner['pid']}" if owner else "another process"
+            lines.append(
+                f"      port {forward['local_port']} is held by {holder}, not by "
+                "piceli (status-port-occupied)"
+            )
+        elif forward["forward"] != "up":
             down = True
             if owner:
                 lines.append(
-                    f"      port {forward['local_port']} held by pid {owner['pid']}"
-                    f" ({owner.get('command') or '?'})"
+                    f"      port {forward['local_port']} held by piceli's forward "
+                    f"(pid {owner['pid']})"
                 )
     if down:
         lines.append(f"Start the forwards with: piceli access {target}")

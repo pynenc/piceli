@@ -20,7 +20,7 @@ import threading
 import time
 from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
@@ -92,6 +92,8 @@ class ObservedObject:
     images: tuple[str, ...] = ()
     labels: tuple[tuple[str, str], ...] = ()
     annotations: tuple[tuple[str, str], ...] = ()
+    #: ``(kind, name, uid)`` of each ``metadata.ownerReferences`` entry.
+    owners: tuple[tuple[str, str, str], ...] = ()
 
     def __post_init__(self) -> None:
         if any(not isinstance(value, str) or not value for value in self.images):
@@ -305,6 +307,16 @@ class KubernetesDynamicInventoryReader:
         lbls = tuple(sorted((str(k), str(v)) for k, v in raw_labels.items()))
         raw_ann = metadata.get("annotations") or {}
         anns = tuple(sorted((str(k), str(v)) for k, v in raw_ann.items()))
+        references = metadata.get("ownerReferences") or ()
+        owners = tuple(
+            (
+                str(item.get("kind", "")),
+                str(item.get("name", "")),
+                str(item.get("uid") or ""),
+            )
+            for item in references
+            if isinstance(item, Mapping)
+        )
         return ObservedObject(
             ref=fallback,
             uid=_string(metadata.get("uid")),
@@ -314,6 +326,7 @@ class KubernetesDynamicInventoryReader:
             images=tuple(images),
             labels=lbls,
             annotations=anns,
+            owners=owners,
         )
 
     def get(self, ref: ObservationRef) -> ObservedObject | None:
@@ -368,9 +381,78 @@ def _integer(value: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
+_CLUSTER_DIGEST = re.compile(r"sha256:[0-9a-f]{16}")
+
+
+@dataclass(frozen=True)
+class ForwardScope:
+    """The cluster a saved forward belongs to: a context name and API server digest.
+
+    ``cluster`` is ``sha256:`` plus the first 16 hex characters of the digest
+    of the context's API server URL, so two kubeconfig files naming the same
+    cluster and context match while the file path (private) is never stored.
+    A saved forward is restored only by a supervisor with an equal scope (and,
+    when the supervisor has one, the same namespace): a preference saved for
+    one cluster never starts against another.
+    """
+
+    context: str
+    cluster: str
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.context, str)
+            or not self.context
+            or len(self.context) > 253
+            or any(ord(char) < 32 for char in self.context)
+        ):
+            raise ValueError("invalid forward scope context")
+        if not isinstance(self.cluster, str) or not _CLUSTER_DIGEST.fullmatch(
+            self.cluster
+        ):
+            raise ValueError("invalid forward scope cluster digest")
+
+    def public_dict(self) -> dict[str, str]:
+        return {"context": self.context, "cluster": self.cluster}
+
+
+def forward_scope(kubeconfig: Path, context: str) -> ForwardScope | None:
+    """The :class:`ForwardScope` of ``context`` in ``kubeconfig``, or ``None``.
+
+    Reads only the named file and context (never ``KUBECONFIG`` or the
+    current context) and does not contact the cluster. ``None`` when the file
+    or context cannot be read: nothing is then restored.
+    """
+    import hashlib
+
+    from piceli.k8s.ops.provider_factory import _named, _read_kubeconfig
+
+    if not context:
+        return None
+    try:
+        document = _read_kubeconfig(Path(kubeconfig).expanduser())
+        entry = _named(document, "contexts", context)
+        cluster = _named(document, "clusters", str(entry.get("cluster", "")))
+    except (OSError, ValueError):
+        return None
+    server = str(cluster.get("server", "")).rstrip("/")
+    if not server:
+        return None
+    digest = hashlib.sha256(server.encode()).hexdigest()[:16]
+    try:
+        return ForwardScope(context=context, cluster=f"sha256:{digest}")
+    except ValueError:
+        return None
+
+
 @dataclass(frozen=True)
 class PortForward:
-    """One non-secret local forwarding preference for a user profile."""
+    """One non-secret local forwarding preference for a user profile.
+
+    ``scope`` records the cluster and context it was saved for; an unscoped
+    forward (saved by an older Piceli or without ``--kubeconfig/--context``)
+    is listed and can be run explicitly, but is never restored automatically.
+    """
 
     name: str
     namespace: str
@@ -378,6 +460,26 @@ class PortForward:
     local_port: int
     remote_port: int
     health_path: str | None = None
+    scope: ForwardScope | None = None
+
+    @classmethod
+    def from_json(cls, value: Mapping[str, Any]) -> PortForward:
+        """Parse one stored preference (``scope`` is optional)."""
+        if not isinstance(value, Mapping):
+            raise ValueError("invalid Piceli forward preference")
+        fields = dict(value)
+        scope = fields.pop("scope", None)
+        if scope is not None:
+            if not isinstance(scope, Mapping) or set(scope) != {"context", "cluster"}:
+                raise ValueError("invalid Piceli forward scope")
+            fields["scope"] = ForwardScope(**scope)
+        return cls(**fields)
+
+    def matches(self, scope: ForwardScope | None, namespace: str | None) -> bool:
+        """Whether this preference was saved for ``scope`` (and ``namespace``)."""
+        if self.scope is None or scope is None or self.scope != scope:
+            return False
+        return not namespace or self.namespace == namespace
 
     def __post_init__(self) -> None:
         if not _NAME.fullmatch(self.name) or not _NAME.fullmatch(self.namespace):
@@ -427,6 +529,8 @@ class PortForward:
         }
         if self.health_path is not None:
             value["health_path"] = self.health_path
+        if self.scope is not None:
+            value["scope"] = self.scope.public_dict()
         return value
 
 
@@ -469,7 +573,9 @@ class PreferenceStore:
                 raise ValueError("invalid Piceli forwards")
             preference = UserPreferences(
                 user=item["user"],
-                forwards=tuple(PortForward(**forward) for forward in forward_values),
+                forwards=tuple(
+                    PortForward.from_json(forward) for forward in forward_values
+                ),
             )
             if preference.user in users:
                 raise ValueError("duplicate Piceli user preference")
@@ -485,7 +591,7 @@ class PreferenceStore:
             "users": [
                 {
                     "user": item.user,
-                    "forwards": [asdict(forward) for forward in item.forwards],
+                    "forwards": [forward.public_dict() for forward in item.forwards],
                 }
                 for item in sorted(preferences.values(), key=lambda item: item.user)
             ],
@@ -689,10 +795,12 @@ class ForwardSupervisor:
         kubectl: str = "kubectl",
         shortcuts: Iterable[UiShortcut] = (),
         namespace: str | None = None,
+        scope: ForwardScope | None = None,
     ) -> None:
         if not context:
             # kubectl would otherwise fall back to the file's current-context.
             raise ValueError("an explicit kubeconfig context is required")
+        self._scope = scope
         self._preferences = preferences
         self._user = user
         self._kubeconfig = kubeconfig
@@ -705,17 +813,47 @@ class ForwardSupervisor:
         self._stopped = threading.Event()
         self._thread: threading.Thread | None = None
 
-    def restore(self) -> None:
-        """Load one user's saved preferences and begin supervising them."""
+    @property
+    def scope(self) -> ForwardScope | None:
+        """The cluster and context this supervisor forwards to (for saved forwards)."""
+        return self._scope
+
+    def saved_forwards(self) -> tuple[tuple[PortForward, ...], tuple[PortForward, ...]]:
+        """``(matching, other)``: the user's saved forwards split by scope.
+
+        ``matching`` were saved for this supervisor's cluster, context and
+        namespace; ``other`` were saved for another cluster, context or
+        namespace, or without a scope, and are never restored here.
+        """
+        if self._preferences is None or not self._user:
+            return (), ()
+        preference = self._preferences.load().get(
+            self._user, UserPreferences(self._user)
+        )
+        matching = tuple(
+            item
+            for item in preference.forwards
+            if item.matches(self._scope, self._namespace)
+        )
+        other = tuple(item for item in preference.forwards if item not in matching)
+        return matching, other
+
+    def restore(self) -> tuple[str, ...]:
+        """Start the user's saved forwards that were saved for this cluster.
+
+        Only forwards whose :class:`ForwardScope` equals this supervisor's
+        scope (and whose namespace equals its namespace, when it has one) are
+        started; forwards saved for another cluster, context or namespace, or
+        without a scope, are left alone. Callers restore only on an explicit
+        request (``--restore-forwards``). Returns the restored names.
+        """
         if self._preferences is None or not self._user:
             raise ValueError(
                 "restoring saved forwards needs a preference store and user"
             )
-        preference = self._preferences.load().get(
-            self._user, UserPreferences(self._user)
-        )
+        matching, _ = self.saved_forwards()
         with self._lock:
-            configured = {forward.name: forward for forward in preference.forwards}
+            configured = {forward.name: forward for forward in matching}
             for name in set(self._forwards) - set(configured):
                 self._stop_locked(name)
             for name, forward in configured.items():
@@ -726,6 +864,7 @@ class ForwardSupervisor:
                     self._forwards[name] = self._managed(forward)
             self._ensure_locked()
             self._ensure_thread_locked()
+        return tuple(sorted(configured))
 
     def _managed(self, forward: PortForward) -> _ManagedForward:
         """Wrap ``forward`` with its shortcut's probe/policy, or the legacy probe."""
@@ -842,7 +981,13 @@ class ForwardSupervisor:
         )
 
     def add_or_update(self, forward: PortForward, persist: bool = True) -> None:
-        """Add or update a forward preference and optionally persist it."""
+        """Add or update a forward preference and optionally persist it.
+
+        A forward without a scope is saved with this supervisor's scope, so it
+        is only ever restored against the same cluster and context.
+        """
+        if forward.scope is None and self._scope is not None:
+            forward = replace(forward, scope=self._scope)
         with self._lock:
             if forward.name in self._forwards:
                 managed = self._forwards[forward.name]
@@ -980,15 +1125,27 @@ class ForwardSupervisor:
         if not due:
             return
 
-        def run(item: tuple[_ManagedForward, Any]) -> str | None:
-            return probe_endpoint(item[0].forward.local_port, item[0].probe)
+        def run(item: tuple[_ManagedForward, Any]) -> tuple[str | None, Any]:
+            managed, process = item
+            outcome = probe_endpoint(managed.forward.local_port, managed.probe)
+            foreign = None
+            if outcome is None and managed.health != "healthy":
+                # Before first calling it healthy, make sure the answer came
+                # from our own process and not from whoever else holds the port.
+                foreign = self._foreign_owner(managed.forward.local_port, process)
+            return outcome, foreign
 
         results = list(pool.map(run, due)) if pool else [run(item) for item in due]
         with self._lock:
-            for (managed, process), outcome in zip(due, results, strict=True):
+            for (managed, process), (outcome, foreign) in zip(
+                due, results, strict=True
+            ):
                 current = self._forwards.get(managed.forward.name)
                 if current is managed and managed.process is process:
-                    self._record_probe_locked(managed, outcome)
+                    if foreign is not None:
+                        self._conflict_locked(managed, foreign)
+                    else:
+                        self._record_probe_locked(managed, outcome)
 
     def _record_probe_locked(
         self, managed: _ManagedForward, outcome: str | None
@@ -1068,16 +1225,7 @@ class ForwardSupervisor:
             # declared port back from whoever owns it now (another dashboard,
             # or ``piceli access`` restarting its forward). Only an explicit
             # start retries.
-            owner = self._owner(managed.forward.local_port)
-            reason = _OCCUPIED
-            if owner is not None:
-                reason = f"{_OCCUPIED}: {owner.describe()}"
-            managed.owner = owner
-            managed.health = "conflict"
-            managed.error = reason
-            managed.last_error = reason
-            managed.given_up = True
-            managed.next_start = float("inf")
+            self._conflict_locked(managed, self._owner(managed.forward.local_port))
             return
         command = managed.forward.command(
             kubectl=self._kubectl, kubeconfig=self._kubeconfig, context=self._context
@@ -1100,6 +1248,34 @@ class ForwardSupervisor:
         managed.consecutive_failures = 0
         managed.started_at = now
         managed.next_probe = now + min(0.25, managed.probe.interval)
+
+    def _conflict_locked(
+        self, managed: _ManagedForward, owner: PortOwner | None
+    ) -> None:
+        """Mark a forward whose port another process holds; stop our own process."""
+        process = managed.process
+        managed.process = None
+        if process is not None and process.poll() is None:
+            self._stop_process(process)
+        reason = _OCCUPIED
+        if owner is not None:
+            reason = f"{_OCCUPIED}: {owner.describe()}"
+        managed.owner = owner
+        managed.health = "conflict"
+        managed.error = reason
+        managed.last_error = reason
+        managed.given_up = True
+        managed.next_start = float("inf")
+
+    def _foreign_owner(self, port: int, process: Any) -> PortOwner | None:
+        """The port's owner when it is provably not our process (else ``None``)."""
+        owner = self._owner(port)
+        if owner is None or process is None:
+            return None  # cannot tell: keep the previous behaviour
+        ours = {process.pid}
+        if owner.pid in ours or (owner.parent is not None and owner.parent.pid in ours):
+            return None
+        return owner
 
     def _stop_locked(self, name: str) -> None:
         managed = self._forwards.get(name)

@@ -788,8 +788,13 @@ class ReleaseRunner:
         *,
         provider_factory: ProviderFactory = default_provider_factory,
         check_context_factory: CheckContextFactory = default_check_context,
+        progress: Callable[[str], None] | None = None,
     ) -> None:
         self.spec = spec
+        #: Human progress while an execution applies and waits for readiness
+        #: (``applying 3/7: Deployment/web``, ``waiting for Deployment/web to
+        #: be ready (12s)``): callers print it on stderr. Kinds and names only.
+        self.progress = progress
         self.provider_factory = provider_factory
         self.check_context_factory = check_context_factory
         self.state = spec.state_dir
@@ -1743,6 +1748,7 @@ class ReleaseRunner:
                     store,
                     limits=self._limits(),
                     backups=self.backups,
+                    progress=self.progress,
                 )
                 if pending["mode"] == "create":
                     workflow = self._session_workflow(
@@ -2068,6 +2074,7 @@ class ReleaseRunner:
                     store,
                     limits=self._limits(),
                     backups=self.backups,
+                    progress=self.progress,
                 )
                 try:
                     result = workflow.resume(executor, name)

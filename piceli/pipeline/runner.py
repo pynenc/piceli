@@ -954,6 +954,7 @@ class PipelineRunner:
             info["action"] = "unchanged"
             return info, False
         self.say(f"[deliver] registry {result.release}: applying")
+        runner.progress = lambda text: self.say(f"[deliver] registry: {text}")
         outcome = runner.apply(result.plan_hash)
         info["action"] = "applied"
         info["execution"] = outcome["execution"]
@@ -1045,6 +1046,7 @@ class PipelineRunner:
         runner = work.runner
         release = planned.get("release") or work.release_plan.release
         plan_hash = planned.get("plan_hash") or work.release_plan.plan_hash
+        runner.progress = lambda text: self.say(f"[apply] {release}: {text}")
         if self._unchanged(work, reapply):
             self.say(f"[apply] {release}: unchanged, already deployed and ready")
             return "skipped", {"release": release, "why": "unchanged"}
@@ -1163,6 +1165,7 @@ class PipelineRunner:
                 "message": str(error),
             }
         self.say(f"[checks] rolling back to {target}")
+        runner.progress = lambda text: self.say(f"[checks] rollback {target}: {text}")
         try:
             result = runner.plan(rollback_to="previous")
             outcome = runner.apply(

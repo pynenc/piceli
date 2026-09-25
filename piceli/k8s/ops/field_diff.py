@@ -31,6 +31,7 @@ from __future__ import annotations
 import copy
 import difflib
 import json
+import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -247,19 +248,53 @@ def plan_diffs(
     return diffs
 
 
-def describe_change(change: Mapping[str, Any], width: int = 60) -> str:
-    """One human line for a change: ``~ /spec/replicas: 1 -> 2``."""
+#: A human change line longer than this puts its values on their own lines.
+CHANGE_LINE_WIDTH = 100
+_DIGEST_HEX = re.compile(r"(sha256:)([0-9a-f]{12})[0-9a-f]{46}([0-9a-f]{6})")
 
-    def short(value: Any) -> str:
-        encoded = json.dumps(value, sort_keys=True)
-        return encoded if len(encoded) <= width else encoded[: width - 3] + "..."
 
+def short_value(value: Any, width: int = 60) -> str:
+    """``value`` as JSON, shortened in the middle to at most ``width`` characters.
+
+    A ``sha256:`` digest first becomes ``sha256:<12 hex>…<6 hex>``; anything
+    still too long keeps its head and a longer tail (the tag or digest end
+    and the closing quote or bracket), so a value stays recognisable and is
+    never mistaken for a complete one.
+    """
+    encoded = json.dumps(value, sort_keys=True)
+    if len(encoded) <= width:
+        return encoded
+    encoded = _DIGEST_HEX.sub(r"\1\2…\3", encoded)
+    if len(encoded) <= width:
+        return encoded
+    keep = max(width - 1, 2)
+    head = keep * 2 // 5
+    return encoded[:head] + "…" + encoded[len(encoded) - (keep - head) :]
+
+
+def describe_change(
+    change: Mapping[str, Any], width: int = 60, indent: str = ""
+) -> str:
+    """A human line for a change: ``~ /spec/replicas: 1 -> 2``.
+
+    When the line would exceed :data:`CHANGE_LINE_WIDTH`, the values move to
+    their own lines, each prefixed with ``indent`` (the caller's indentation).
+    """
     symbol = {"add": "+", "remove": "-", "replace": "~"}[change["op"]]
-    if change["op"] == "add":
-        return f"{symbol} {change['path']}: {short(change['after'])}"
-    if change["op"] == "remove":
-        return f"{symbol} {change['path']}: {short(change['before'])}"
-    return (
-        f"{symbol} {change['path']}: {short(change['before'])} -> "
-        f"{short(change['after'])}"
+    head = f"{symbol} {change['path']}:"
+    if change["op"] in {"add", "remove"}:
+        value = short_value(
+            change["after"] if change["op"] == "add" else change["before"], width
+        )
+        line = f"{head} {value}"
+        return (
+            line if len(line) <= CHANGE_LINE_WIDTH else f"{head}\n{indent}    {value}"
+        )
+    before, after = (
+        short_value(change["before"], width),
+        short_value(change["after"], width),
     )
+    line = f"{head} {before} -> {after}"
+    if len(line) <= CHANGE_LINE_WIDTH:
+        return line
+    return f"{head}\n{indent}    {before}\n{indent} -> {after}"

@@ -151,7 +151,7 @@ def _load_spec(spec: str, *, current: bool) -> tuple[Any, Any]:
 def _runner(spec: str, *, current: bool = False) -> Any:
     from piceli.k8s.release_runner import ReleaseRunner
 
-    return ReleaseRunner(_load_spec(spec, current=current)[0])
+    return ReleaseRunner(_load_spec(spec, current=current)[0], progress=_progress)
 
 
 @contextmanager
@@ -165,12 +165,16 @@ def _locked_runner(spec: str, *, current: bool) -> Iterator[Any]:
 
     loaded, pipeline = _load_spec(spec, current=current)
     if pipeline is None:
-        yield ReleaseRunner(loaded)
+        yield ReleaseRunner(loaded, progress=_progress)
         return
     from piceli.pipeline.journal import Journal
 
     with Journal(pipeline.state_dir).locked():
-        yield ReleaseRunner(loaded)
+        yield ReleaseRunner(loaded, progress=_progress)
+
+
+def _progress(text: str) -> None:
+    _say(f"  {text}")
 
 
 def _refusals() -> tuple[type[BaseException], ...]:
@@ -218,7 +222,7 @@ def _say_changes(diff: dict[str, Any] | None, limit: int | None) -> None:
     changes = diff["changes"]
     shown = changes if limit is None else changes[:limit]
     for change in shown:
-        _say(f"            {describe_change(change)}")
+        _say(f"            {describe_change(change, indent=' ' * 12)}")
     if len(changes) > len(shown):
         _say(
             f"            ... {len(changes) - len(shown)} more "
