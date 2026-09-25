@@ -31,13 +31,23 @@ from piceli.pipeline.model import (
     Target,
     TargetNode,
 )
-from piceli.pipeline.secrets import Random, Secrets, Static, Template, TlsCa
+from piceli.pipeline.secrets import (
+    AwsSecret,
+    Random,
+    Secrets,
+    Sops,
+    Static,
+    Template,
+    TlsCa,
+    Vault,
+)
 
 if TYPE_CHECKING:
     from piceli.pipeline.runner import CombinedPlan, PipelineRunner
 
 __all__ = [
     "STAGES",
+    "AwsSecret",
     "Build",
     "CheckContext",
     "CheckReportLike",
@@ -53,11 +63,13 @@ __all__ = [
     "Registry",
     "Secrets",
     "Smoke",
+    "Sops",
     "Static",
     "Target",
     "TargetNode",
     "Template",
     "TlsCa",
+    "Vault",
 ]
 
 

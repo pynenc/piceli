@@ -82,7 +82,8 @@ pip install piceli        # or: uv add piceli
 ```
 
 Python 3.12 or later. Optional extras: `piceli[telemetry]` (OTLP deployment
-telemetry) and `piceli[gcp]` (GKE cluster helpers). The PyPI release can lag
+telemetry), `piceli[gcp]` (GKE cluster helpers) and `piceli[aws]` (AWS Secrets
+Manager as a secret source). The PyPI release can lag
 behind `main` while the project is pre-alpha; to follow `main`:
 `pip install git+https://github.com/pynenc/piceli.git`.
 

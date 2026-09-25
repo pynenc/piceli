@@ -281,6 +281,17 @@ never build. The approval rules above apply unchanged:
   plan written by `release plan --out` is redacted.
 - Pass registry credentials only as a file (`--credentials`, mode `0600`),
   never on the command line or in logs.
+- External secret sources (`sops`, `vault`, `aws-secrets-manager` in
+  `[secrets.*]`, or `Sops`/`Vault`/`AwsSecret` in a pipeline) are
+  configured by the owner. Never read, create, copy or configure their
+  credentials yourself: no Vault token files or `VAULT_TOKEN`, no `~/.aws`,
+  AWS profiles or keys, no age/PGP keys or `~/.config/sops`, and do not run
+  `sops`, `vault` or `aws` to look at a value. `plan` reads the sources
+  itself; when it refuses with `secret-source-auth-failed`,
+  `secret-source-tool-missing` or `secret-source-not-found`, report the code
+  and ask the owner. `secret-source-timeout` and `secret-source-failed` are
+  safe to retry once. Do not use `--rotate` on an external source (refused
+  with `secret-rotation-refused`): the owner rotates it at the source.
 - Error codes never contain secrets or private paths, so they are safe to
   report.
 - Never put a secret in a build's smoke check (`smoke.env`, `command`,

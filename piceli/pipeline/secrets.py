@@ -11,6 +11,10 @@ only ever holds opaque references::
     )
     app.secret("cache", {"url": secrets.ref("cache_url")})
 
+External sources (:func:`Sops`, :func:`Vault`, :func:`AwsSecret`) are read at
+every plan; a changed value becomes a new version, an unchanged one is carried
+over. The app still only sees references.
+
 Importing this module is side-effect free.
 """
 
@@ -19,6 +23,7 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from piceli.pipeline.errors import PipelineError
@@ -26,11 +31,14 @@ from piceli.pipeline.errors import PipelineError
 if TYPE_CHECKING:
     from piceli.k8s.ops.secret_versions import SecretVersionRef
     from piceli.k8s.release_secret_spec import (
+        AwsSecretSpec,
         GeneratorSpec,
         RandomSecretSpec,
+        SopsSecretSpec,
         StaticSecretSpec,
         TemplateSecretSpec,
         TlsCaSpec,
+        VaultSecretSpec,
     )
 
 _NAME = re.compile(r"[a-z][a-z0-9_-]{0,62}")
@@ -101,11 +109,129 @@ def TlsCa(
     )
 
 
+def _drop_none(values: Mapping[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in values.items() if value is not None}
+
+
+def Sops(
+    file: str | Path,
+    key: str | Sequence[str] | None = None,
+    *,
+    format: str | None = None,
+    sops: str | Path = "sops",
+    sops_sha256: str | None = None,
+    pass_env: Sequence[str] = (),
+    timeout_seconds: float = 30,
+    encoding: str = "base64",
+) -> SopsSecretSpec:
+    """One value of a SOPS-encrypted file (``key = "db.password"``).
+
+    ``file`` is relative to the pipeline's base directory. ``sops`` runs with
+    ``PATH``, ``HOME`` and the variables in ``pass_env`` (for example
+    ``SOPS_AGE_KEY_FILE``) only. ``format="binary"`` takes the whole file.
+    """
+    from piceli.k8s.release_secret_spec import SopsSecretSpec
+
+    return SopsSecretSpec.model_validate(
+        _drop_none(
+            {
+                "type": "sops",
+                "file": str(file),
+                "key": key if isinstance(key, str | None) else list(key),
+                "format": format,
+                "sops": str(sops),
+                "sops_sha256": sops_sha256,
+                "pass_env": list(pass_env),
+                "timeout_seconds": timeout_seconds,
+                "encoding": encoding,
+            }
+        )
+    )
+
+
+def Vault(
+    address: str,
+    path: str,
+    key: str,
+    *,
+    mount: str = "secret",
+    token_file: str | Path | None = None,
+    token_env: str | None = None,
+    namespace: str | None = None,
+    version: int | None = None,
+    ca_file: str | Path | None = None,
+    timeout_seconds: float = 10,
+    encoding: str = "base64",
+) -> VaultSecretSpec:
+    """One key of a HashiCorp Vault KV v2 secret (``mount``/``path``).
+
+    The token comes from ``token_file`` or the variable ``token_env``
+    (exactly one); it is never part of the model.
+    """
+    from piceli.k8s.release_secret_spec import VaultSecretSpec
+
+    return VaultSecretSpec.model_validate(
+        _drop_none(
+            {
+                "type": "vault",
+                "address": address,
+                "mount": mount,
+                "path": path,
+                "key": key,
+                "token_file": None if token_file is None else str(token_file),
+                "token_env": token_env,
+                "namespace": namespace,
+                "version": version,
+                "ca_file": None if ca_file is None else str(ca_file),
+                "timeout_seconds": timeout_seconds,
+                "encoding": encoding,
+            }
+        )
+    )
+
+
+def AwsSecret(
+    secret_id: str,
+    *,
+    region: str,
+    key: str | None = None,
+    version_stage: str | None = None,
+    version_id: str | None = None,
+    profile: str | None = None,
+    endpoint_url: str | None = None,
+    timeout_seconds: float = 10,
+    encoding: str = "base64",
+) -> AwsSecretSpec:
+    """An AWS Secrets Manager secret, or one ``key`` of its JSON value.
+
+    Credentials come from botocore's standard chain; needs ``piceli[aws]``.
+    """
+    from piceli.k8s.release_secret_spec import AwsSecretSpec
+
+    return AwsSecretSpec.model_validate(
+        _drop_none(
+            {
+                "type": "aws-secrets-manager",
+                "secret_id": secret_id,
+                "region": region,
+                "key": key,
+                "version_stage": version_stage,
+                "version_id": version_id,
+                "profile": profile,
+                "endpoint_url": endpoint_url,
+                "timeout_seconds": timeout_seconds,
+                "encoding": encoding,
+            }
+        )
+    )
+
+
 class Secrets:
     """Named secret generators and the references an app binds to their outputs.
 
     :param generators: Generator name → spec (``Random``, ``Template``,
-        ``Static``, ``TlsCa`` or any ``release.toml`` secret spec).
+        ``Static``, ``TlsCa``, ``Sops``, ``Vault``, ``AwsSecret`` or any
+        ``release.toml`` secret spec).
 
     :meth:`ref` returns an opaque reference to one output: the generator name
     for single-value generators, ``<name>.<key>`` for multi-output ones

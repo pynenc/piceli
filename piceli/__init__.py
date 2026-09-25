@@ -39,6 +39,7 @@ _APP_EXPORTS = frozenset(
 # The pipeline API (``piceli deploy``) is exported lazily the same way.
 _PIPELINE_EXPORTS = frozenset(
     {
+        "AwsSecret",
         "Build",
         "NodeImport",
         "NodeLoopbackRegistry",
@@ -47,10 +48,12 @@ _PIPELINE_EXPORTS = frozenset(
         "Registry",
         "Secrets",
         "Smoke",
+        "Sops",
         "Static",
         "Target",
         "Template",
         "TlsCa",
+        "Vault",
     }
 )
 
@@ -90,6 +93,7 @@ if TYPE_CHECKING:
     )
     from piceli.checks import Checks  # noqa: F401
     from piceli.pipeline import (  # noqa: F401
+        AwsSecret,
         Build,
         NodeImport,
         NodeLoopbackRegistry,
@@ -98,10 +102,12 @@ if TYPE_CHECKING:
         Registry,
         Secrets,
         Smoke,
+        Sops,
         Static,
         Target,
         Template,
         TlsCa,
+        Vault,
     )
 
 

@@ -4,6 +4,28 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.7.0
+
+- **External secret sources (preview):** three new `[secrets.*]` types, and
+  `Sops`, `Vault` and `AwsSecret` for `piceli.pipeline.Secrets`: `sops` (one
+  value of a SOPS-encrypted file, or the whole file, decrypted by the `sops`
+  binary with an explicit argv, a minimal environment plus `pass_env`, a
+  timeout and an optional `sops_sha256` pin), `vault` (one key of a HashiCorp
+  Vault KV v2 secret over verified TLS, token from `token_file` or
+  `token_env`, `namespace`, `version`, `ca_file`) and `aws-secrets-manager`
+  (a secret or one JSON key, through botocore; new extra `piceli[aws]`). They
+  are read at every `plan` and `diff`; each value is reduced to an HMAC-SHA256
+  under a private key (`state_dir/secret-sources.key`) that is part of the
+  release fingerprint, so an unchanged value re-plans the same release and a
+  changed one creates a new release with a new private version (new plan
+  origin `fetched`; the others are `carried:<release>`). A refused plan stores
+  nothing, and values never reach plans, journals, receipts, logs or errors.
+  `--rotate` refuses an external source (rotate it at the source). New codes
+  `secret-source-auth-failed`, `secret-source-not-found`,
+  `secret-source-tool-missing`, `secret-source-timeout` and
+  `secret-source-failed`. Specs without external sources keep their release
+  names; `secret show --json` adds `source` for them.
+
 ## Version 0.5.0
 
 - **Mirror third-party images (preview):** `NodeLoopbackRegistry(mirror=[…])`
