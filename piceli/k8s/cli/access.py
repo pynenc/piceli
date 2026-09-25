@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import shutil
 import threading
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -65,6 +66,14 @@ def _short(digest: str | None) -> str:
     return digest.split(":", 1)[-1][:12] if digest else "-"
 
 
+def _seconds(timestamp: str) -> str:
+    """An ISO timestamp without microseconds (human output; JSON keeps it)."""
+    try:
+        return datetime.fromisoformat(timestamp).replace(microsecond=0).isoformat()
+    except ValueError:
+        return timestamp
+
+
 def _human_status(document: dict[str, Any], target: str) -> str:
     lines = [
         f"{document['app']} is {document['state'].upper()}  "
@@ -73,7 +82,8 @@ def _human_status(document: dict[str, Any], target: str) -> str:
     release = document.get("release")
     if release:
         latest = release.get("latest") or {}
-        when = f", {latest['intent']} at {latest['at']}" if latest.get("at") else ""
+        at = _seconds(str(latest.get("at") or ""))
+        when = f", {latest['intent']} at {at}" if at else ""
         lines.append(
             f"release    {release.get('current') or release['name']}  "
             f"{release['state']}{when}"

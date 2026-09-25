@@ -74,6 +74,9 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   apply stage print progress on stderr while applying and waiting for
   readiness (`applying 3/7: Deployment/web`, `waiting for Deployment/web to
   be ready (12s)`); stdout is unchanged.
+- Human output shortens delivered image digests (`@sha256:<12 hex>…`) and
+  drops microseconds from the `piceli status` release time; JSON output keeps
+  the full values.
 
 ## Version 0.4.0
 

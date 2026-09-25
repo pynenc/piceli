@@ -136,7 +136,7 @@ New to Piceli? Start with {doc}`getting_started/index`.
    [deliver] registry: waiting for PersistentVolumeClaim/registry-storage to be ready (1s)
    [deliver] registry: waiting for Deployment/registry to be ready (1s)
    [deliver] rust-hello: pushing to shop/rust-hello
-   [deliver] rust-hello: pushed 127.0.0.1:5000/shop/rust-hello@sha256:9b2fbdad…
+   [deliver] rust-hello: pushed 127.0.0.1:5000/shop/rust-hello@sha256:9b2fbdad1c04…
    [deliver] done
    [plan] release shop-fbcc92695da7 (create): 7 create
    [plan] done
@@ -157,7 +157,7 @@ New to Piceli? Start with {doc}`getting_started/index`.
    ```text
    [build] rust-hello: cached (plan 7cd633981e19)
    [build] skipped
-   [deliver] rust-hello: present 127.0.0.1:5000/shop/rust-hello@sha256:9b2fbdad…
+   [deliver] rust-hello: present 127.0.0.1:5000/shop/rust-hello@sha256:9b2fbdad1c04…
    [deliver] skipped
    [plan] done
    [apply] shop-fbcc92695da7: unchanged, already deployed and ready

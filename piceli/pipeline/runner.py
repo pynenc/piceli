@@ -935,7 +935,8 @@ class PipelineRunner:
                 receipt=str(self._delivery_path(name, config)),
             )
             self.say(
-                f"[deliver] {name}: {images[name]['action']} {delivered.reference}"
+                f"[deliver] {name}: {images[name]['action']} "
+                f"{_short_reference(delivered.reference)}"
             )
         output["images"] = images
         return ("done" if acted else "skipped"), output
@@ -1185,3 +1186,9 @@ class PipelineRunner:
             "release": target,
             "execution": outcome["execution"],
         }
+
+
+def _short_reference(reference: str) -> str:
+    """``repo@sha256:<12 hex>…`` for human lines; receipts keep the full digest."""
+    name, sep, digest = reference.partition("@sha256:")
+    return f"{name}@sha256:{digest[:12]}…" if sep and len(digest) > 12 else reference

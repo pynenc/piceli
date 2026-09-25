@@ -930,3 +930,21 @@ def test_cli_access_supervises_declared_forwards_and_serves_the_dashboard(
     while time.monotonic() < deadline and access_module.local_port_in_use(local):
         time.sleep(0.05)
     assert not access_module.local_port_in_use(local)  # no leftover relay
+
+
+def test_human_status_timestamp_has_no_microseconds() -> None:
+    from piceli.k8s.cli.access import _seconds
+
+    assert _seconds("2026-09-25T06:46:30.456827+00:00") == "2026-09-25T06:46:30+00:00"
+    assert _seconds("") == ""
+    assert _seconds("not a time") == "not a time"
+
+
+def test_deliver_line_shortens_the_digest() -> None:
+    from piceli.pipeline.runner import _short_reference
+
+    digest = "a" * 64
+    assert _short_reference(f"127.0.0.1:5001/web@sha256:{digest}") == (
+        "127.0.0.1:5001/web@sha256:aaaaaaaaaaaa…"
+    )
+    assert _short_reference("web:1.0") == "web:1.0"
