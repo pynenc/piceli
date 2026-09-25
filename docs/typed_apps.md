@@ -115,6 +115,10 @@ or `render-model-invalid` (the model failed to render).
 
 ## A complete example
 
+{doc}`reference_app` walks through `examples/reference/app.py`: every kind on
+this page, a custom resource and a SOPS secret in one module, deployed to
+dev, staging and prod with typed environment overrides.
+
 `examples/release/composition.py` is the release example as a typed model.
 It renders byte for byte the same resource intents as the dict-based
 composition it replaced (a unit test compares the canonical JSON):
@@ -495,7 +499,9 @@ of the workload must request that resource (checked when declared).
 - The HPA's changes are not a difference: the next plan is a no-op.
 
 Only one autoscaler per workload. Metrics need a metrics server in the
-cluster; without one the HPA still enforces `min_replicas`.
+cluster; without one the HPA still enforces `min_replicas`. An environment
+changes the bounds with `autoscalers={"api": Scaling(min_replicas=3,
+max_replicas=20)}` (see {doc}`environments`).
 
 ## Limit disruptions
 

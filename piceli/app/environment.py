@@ -1,8 +1,8 @@
 """Environments: typed overrides that turn one App into dev, staging and prod.
 
 An :class:`Environment` names the values that differ between environments
-(replicas, images, container resources, config values, hosts, node
-selectors, resource specs and which components are enabled). It is declared
+(replicas, autoscaler bounds, images, container resources, config values,
+hosts, node selectors, resource specs and which components are enabled). It is declared
 on the app with :meth:`App.environment <piceli.app.App.environment>` and
 applied with :meth:`App.for_environment <piceli.app.App.for_environment>`,
 which returns a new app; the declaring app never changes. ``piceli render
@@ -23,7 +23,9 @@ from pydantic import (
     ConfigDict,
     Field,
     NonNegativeInt,
+    PositiveInt,
     field_validator,
+    model_validator,
 )
 
 from piceli.app.model import Config, Labels, Name, Resources
@@ -54,6 +56,42 @@ class EnvironmentInvalid(ValueError):
         self.code = code
 
 
+class Scaling(BaseModel):
+    """New bounds or targets for one autoscaler in an environment.
+
+    Only the fields you set change; the others keep the values given to
+    :meth:`App.autoscaler <piceli.app.app.App.autoscaler>`. The result is
+    checked like a declaration (``min_replicas`` at most ``max_replicas``).
+
+    :param min_replicas: Lowest replica count.
+    :param max_replicas: Highest replica count.
+    :param cpu: Target average CPU utilization, in percent of the requests.
+    :param memory: Target average memory utilization, in percent of the requests.
+
+    Example::
+
+        app.environment("prod", autoscalers={"web": Scaling(min_replicas=3,
+                                                             max_replicas=10)})
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    min_replicas: PositiveInt | None = None
+    max_replicas: PositiveInt | None = None
+    cpu: int | None = Field(default=None, ge=1, le=1000)
+    memory: int | None = Field(default=None, ge=1, le=1000)
+
+    @model_validator(mode="after")
+    def _some(self) -> Scaling:
+        if not self.model_fields_set:
+            raise ValueError("Scaling() changes nothing; set at least one field")
+        return self
+
+    def changes(self) -> dict[str, int]:
+        """The fields this override sets (plain JSON)."""
+        return self.model_dump(exclude_none=True)
+
+
 class Environment(BaseModel):
     """Typed overrides of one environment, keyed by the objects they change.
 
@@ -66,7 +104,11 @@ class Environment(BaseModel):
     :param namespace: Namespace ``piceli render --env`` uses when no
         ``--namespace`` or spec gives one. A pipeline deploys each environment
         to its own ``Target``, whose namespace wins.
-    :param replicas: Workload → replicas.
+    :param replicas: Workload → replicas. Refused for a workload an
+        autoscaler targets; use ``autoscalers``.
+    :param autoscalers: Autoscaler (``app.autoscaler``; named after its
+        workload by default) → :class:`Scaling`: new ``min_replicas``,
+        ``max_replicas``, ``cpu`` or ``memory``.
     :param images: Workload → image of its main (first) container.
     :param resources: Workload → :class:`~piceli.app.model.Resources` of its
         main container (replaces them).
@@ -90,6 +132,7 @@ class Environment(BaseModel):
             "prod",
             namespace="shop-prod",
             replicas={"api": 3},
+            autoscalers={"web": Scaling(min_replicas=3, max_replicas=10)},
             resources={"api": Resources(cpu="500m", memory="512Mi")},
             config={"settings": {"LOG_LEVEL": "warning"}},
             enabled={"debug-tools": False},
@@ -101,6 +144,7 @@ class Environment(BaseModel):
     name: Name
     namespace: Name | None = None
     replicas: dict[str, NonNegativeInt] = Field(default_factory=dict)
+    autoscalers: dict[str, Scaling] = Field(default_factory=dict)
     images: dict[str, Image] = Field(default_factory=dict)
     resources: dict[str, Resources] = Field(default_factory=dict)
     config: dict[str, dict[str, str | None]] = Field(default_factory=dict)
@@ -149,6 +193,7 @@ class Environment(BaseModel):
             result["namespace"] = self.namespace
         for field in (
             "replicas",
+            "autoscalers",
             "images",
             "resources",
             "config",
@@ -164,6 +209,8 @@ class Environment(BaseModel):
                 value: Any = {
                     k: v.model_dump(exclude_none=True) for k, v in table.items()
                 }
+            elif field == "autoscalers":
+                value = {k: v.changes() for k, v in table.items()}
             elif field == "specs":
                 value = {k: spec_json(v) for k, v in table.items()}
             elif field == "hosts":
@@ -271,14 +318,21 @@ def apply_environment(app: App, env: Environment) -> list[Declared]:
     def replicas(item: Any, value: int) -> Any:
         if (_kind(item), item.name) in scaled:
             raise ValueError(
-                f"{_kind(item)} {item.name!r} is autoscaled; set the autoscaler's "
-                "min_replicas/max_replicas instead"
+                f"{_kind(item)} {item.name!r} is autoscaled; set its bounds with "
+                "autoscalers={name: Scaling(min_replicas=..., max_replicas=...)}"
             )
         return _updated(item, replicas=value)
 
     change("replicas", _has("replicas"), "workload", replicas)
+    change(
+        "autoscalers",
+        lambda o: type(o).__name__ == "Autoscaler",
+        "autoscaler",
+        lambda o, v: _updated(o, **v.changes()),
+    )
     change("images", workload, "workload", lambda o, v: _main(o, image=v))
     change("resources", workload, "workload", lambda o, v: _main(o, resources=v))
+    _check_autoscaled_requests(env, objects)
     change(
         "node_selector",
         _has("node_selector"),
@@ -326,6 +380,35 @@ def apply_environment(app: App, env: Environment) -> list[Declared]:
 
     change("specs", lambda o: isinstance(o, Resource), "resource", spec)
     return _enabled(app, env, objects)
+
+
+def _check_autoscaled_requests(env: Environment, objects: Sequence[Any]) -> None:
+    """Every autoscaled workload still requests what its utilization targets use.
+
+    ``app.autoscaler`` checks this at declaration; an environment's
+    ``resources`` or ``autoscalers`` override must not undo it.
+    """
+    for scaler in objects:
+        if type(scaler).__name__ != "Autoscaler":
+            continue
+        for item in objects:
+            if (_kind(item), item.name) != (scaler.target_kind, scaler.target):
+                continue
+            for resource in ("cpu", "memory"):
+                if getattr(scaler, resource) is None:
+                    continue
+                missing = [
+                    container.name
+                    for container in item.containers
+                    if getattr(container.resources, resource, None) is None
+                ]
+                if missing:
+                    raise EnvironmentInvalid(
+                        f"environment {env.name!r}: autoscaler {scaler.name!r} "
+                        f"targets {resource} utilization of {_kind(item)} "
+                        f"{item.name!r}, which needs a {resource} request on "
+                        f"every container; missing on {missing}"
+                    )
 
 
 def _enabled(app: App, env: Environment, objects: list[Any]) -> list[Any]:
@@ -418,17 +501,53 @@ def field_changes(a: Any, b: Any, path: str = "") -> list[dict[str, Any]]:
     return [{"path": path or ".", "a": a, "b": b}]
 
 
-def _objects(components: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
+#: Where a release's namespace appears inside RBAC objects: stripped by
+#: :func:`_without_namespace`, so two environments that differ only in their
+#: namespace compare equal.
+_NAMESPACE_PLACEHOLDER = "<namespace>"
+
+
+def _without_namespace(manifest: dict[str, Any], namespace: str) -> None:
+    """Remove the release namespace from a manifest (in place).
+
+    Besides ``metadata.namespace``: a (Cluster)RoleBinding's ServiceAccount
+    subjects in that namespace, and the ``<namespace>:<app>:<name>`` names of
+    the ClusterRoles and ClusterRoleBindings an app renders.
+    """
+    metadata = manifest.get("metadata") or {}
+    metadata.pop("namespace", None)
+    annotations = metadata.get("annotations") or {}
+    annotations.pop("piceli.io/namespace", None)
+    if not annotations:
+        metadata.pop("annotations", None)
+    if not str(manifest.get("apiVersion", "")).startswith("rbac.authorization.k8s.io/"):
+        return
+    prefix = f"{namespace}:"
+
+    def local(name: Any) -> Any:
+        if isinstance(name, str) and name.startswith(prefix):
+            return _NAMESPACE_PLACEHOLDER + ":" + name[len(prefix) :]
+        return name
+
+    if manifest.get("kind") in {"ClusterRole", "ClusterRoleBinding"}:
+        metadata["name"] = local(metadata.get("name"))
+    role_ref = manifest.get("roleRef")
+    if isinstance(role_ref, dict) and role_ref.get("kind") == "ClusterRole":
+        role_ref["name"] = local(role_ref.get("name"))
+    for subject in manifest.get("subjects") or []:
+        if isinstance(subject, dict) and subject.get("namespace") == namespace:
+            subject.pop("namespace")
+
+
+def _objects(
+    components: Sequence[Mapping[str, Any]], namespace: str
+) -> dict[str, dict[str, Any]]:
     result: dict[str, dict[str, Any]] = {}
     for component in components:
         for resource in component["resources"]:
             manifest = json.loads(json.dumps(resource["manifest"]))
+            _without_namespace(manifest, namespace)
             metadata = manifest.get("metadata") or {}
-            metadata.pop("namespace", None)
-            annotations = metadata.get("annotations") or {}
-            annotations.pop("piceli.io/namespace", None)
-            if not annotations:
-                metadata.pop("annotations", None)
             key = f"{manifest['apiVersion']}/{manifest['kind']}/{metadata['name']}"
             result[key] = {
                 "api_version": manifest["apiVersion"],
@@ -448,8 +567,10 @@ def environment_diff(
 
     Each side is ``(name, namespace, environment, rendered components)``, as
     :func:`piceli.app.render.rendered` returns them. Manifests are compared
-    without their namespace (reported under ``namespaces``), so only real
-    differences show.
+    without their namespace (reported under ``namespaces``), also where RBAC
+    objects repeat it (binding subjects, ``<namespace>:<app>:<name>``
+    ClusterRole names, shown as ``<namespace>:…``), so only real differences
+    show.
     """
     name_a, namespace_a, env_a, components_a = first
     name_b, namespace_b, env_b, components_b = second
@@ -459,7 +580,8 @@ def environment_diff(
         if key != "namespace":
             values_a.setdefault(key, {})
             values_b.setdefault(key, {})
-    objects_a, objects_b = _objects(components_a), _objects(components_b)
+    objects_a = _objects(components_a, namespace_a)
+    objects_b = _objects(components_b, namespace_b)
     objects: list[dict[str, Any]] = []
     summary = {"changed": 0, "only-a": 0, "only-b": 0, "same": 0}
     for key in sorted(set(objects_a) | set(objects_b)):

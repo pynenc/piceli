@@ -335,3 +335,86 @@ def test_replicas_of_an_autoscaled_workload_are_refused() -> None:
     app.autoscaler(api, max_replicas=5, cpu=70)
     with pytest.raises(EnvironmentInvalid, match="autoscaled"):
         app.environment("prod", replicas={"api": 3})
+
+
+def test_autoscaler_bounds_are_typed_overrides() -> None:
+    # Regression: the refusal above said "set the autoscaler's
+    # min_replicas/max_replicas instead", but no override could.
+    from piceli import App, Resources, Scaling
+    from piceli.app.environment import EnvironmentInvalid
+
+    app = App("shop")
+    api = app.deployment(
+        "api",
+        image="nginx@sha256:" + "a" * 64,
+        resources=Resources(cpu="100m", memory="64Mi"),
+    )
+    app.autoscaler(api, max_replicas=2, cpu=70)
+    app.environment(
+        "prod", autoscalers={"api": Scaling(min_replicas=3, max_replicas=10, cpu=60)}
+    )
+    app.environment("staging", autoscalers={"api": Scaling(max_replicas=4)})
+    hpa = _objects(app.for_environment("prod"))[("HorizontalPodAutoscaler", "api")]
+    assert (hpa["spec"]["minReplicas"], hpa["spec"]["maxReplicas"]) == (3, 10)
+    metric = hpa["spec"]["metrics"][0]["resource"]["target"]
+    assert metric["averageUtilization"] == 60
+    staging = _objects(app.for_environment("staging"))
+    hpa = staging[("HorizontalPodAutoscaler", "api")]
+    assert (hpa["spec"]["minReplicas"], hpa["spec"]["maxReplicas"]) == (1, 4)
+    assert app.environments[0].values()["autoscalers"] == {
+        "api": {"cpu": 60, "max_replicas": 10, "min_replicas": 3}
+    }
+    with pytest.raises(EnvironmentInvalid, match="min_replicas cannot be above"):
+        app.environment("bad", autoscalers={"api": Scaling(min_replicas=5)})
+    with pytest.raises(EnvironmentInvalid, match="names no declared autoscaler"):
+        app.environment("typo", autoscalers={"web": Scaling(max_replicas=3)})
+    with pytest.raises(EnvironmentInvalid, match="autoscalers"):
+        app.environment("replicas", replicas={"api": 3})
+
+
+def test_resources_of_an_autoscaled_workload_keep_the_requests_it_needs() -> None:
+    # Regression: an environment could drop the CPU request an autoscaler's
+    # utilization target needs; app.autoscaler refuses that at declaration.
+    from piceli import App, Resources
+    from piceli.app.environment import EnvironmentInvalid
+
+    app = App("shop")
+    api = app.deployment(
+        "api",
+        image="nginx@sha256:" + "a" * 64,
+        resources=Resources(cpu="100m", memory="64Mi"),
+    )
+    app.autoscaler(api, max_replicas=2, cpu=70)
+    app.environment("prod", resources={"api": Resources(cpu="1", memory="1Gi")})
+    with pytest.raises(EnvironmentInvalid, match="cpu request"):
+        app.environment("dev", resources={"api": Resources(memory="64Mi")})
+
+
+def test_environment_diff_ignores_the_namespace_inside_rbac_objects() -> None:
+    # Regression: a RoleBinding's subject namespace and the namespaced names
+    # of ClusterRoles showed as differences between two environments that
+    # differ only in their namespace.
+    from piceli import App, Rule
+
+    app = App("shop")
+    account = app.service_account(
+        "watcher",
+        rules=[Rule(resources=["pods"], verbs=["get"])],
+        cluster_rules=[Rule(resources=["nodes"], verbs=["get"])],
+    )
+    app.deployment("watcher", image=IMAGE, service_account=account)
+    app.environment("staging", namespace="shop-staging")
+    app.environment("prod", namespace="shop-prod", replicas={"watcher": 2})
+    sides = []
+    for name in ("staging", "prod"):
+        derived = app.for_environment(name)
+        env = derived.selected_environment
+        assert env is not None and env.namespace is not None
+        sides.append(
+            (name, env.namespace, env, rendered(derived.render(env.namespace), {}))
+        )
+    diff = environment_diff(sides[0], sides[1])
+    assert [(o["kind"], o["change"]) for o in diff["objects"]] == [
+        ("Deployment", "changed")
+    ], diff["objects"]
+    assert diff["summary"] == {"changed": 1, "only-a": 0, "only-b": 0, "same": 5}

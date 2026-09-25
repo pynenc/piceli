@@ -15,6 +15,7 @@ how to deploy each one to its own target.
 ## Prerequisites
 
 - Piceli 0.7.0 or later and a typed app (see {doc}`typed_apps`).
+  {doc}`reference_app` is a complete example with three environments.
 - To deploy, a `Pipeline` (see {doc}`deploy`) with one `Target` per
   environment.
 
@@ -66,7 +67,8 @@ how to deploy each one to its own target.
 
 `--diff-env` prints the environments' typed differences: the override values,
 then every object that differs, field by field (namespaces are compared
-separately, so moving between namespaces is not noise):
+separately, also where RBAC objects repeat them, so moving between namespaces
+is not noise):
 
 ```text
 environments: staging (a) -> prod (b)
@@ -120,9 +122,10 @@ rendered object. `piceli deploy --env NAME --plan --json` adds
 | Override | Keys | Effect |
 | --- | --- | --- |
 | `namespace` | – | Namespace for `piceli render --env` without `--namespace` or a spec. |
-| `replicas` | workload | Replaces `replicas`. Refused for a workload an autoscaler targets: change the autoscaler instead. |
+| `replicas` | workload | Replaces `replicas`. Refused for a workload an autoscaler targets: use `autoscalers`. |
+| `autoscalers` | autoscaler (named after its workload by default) | A `Scaling(min_replicas=…, max_replicas=…, cpu=…, memory=…)`: the fields it sets replace the autoscaler's. |
 | `images` | workload | Replaces the image of the main (first) container. In a pipeline it must still be a build handle or pinned by digest. |
-| `resources` | workload | Replaces the main container's `Resources`. |
+| `resources` | workload | Replaces the main container's `Resources`. An autoscaled workload must keep the requests its utilization targets use. |
 | `config` | config | Merges values into its data; `None` removes a key. |
 | `node_selector` | workload | Merges labels over the workload's own `node_selector` (the app's `pod_defaults` still apply). |
 | `hosts` | object with `hosts`/`host` | Replaces its host names (routes and ingresses). |
@@ -176,6 +179,6 @@ the same. Plans of pipelines without environments keep their hashes.
 
 | Task | Types |
 | --- | --- |
-| Declare and apply | {py:class}`~piceli.app.environment.Environment`, {py:meth}`App.environment <piceli.app.app.App.environment>`, {py:meth}`App.for_environment <piceli.app.app.App.for_environment>`, `App.environments`, `App.selected_environment` |
+| Declare and apply | {py:class}`~piceli.app.environment.Environment`, {py:class}`~piceli.app.environment.Scaling`, {py:meth}`App.environment <piceli.app.app.App.environment>`, {py:meth}`App.for_environment <piceli.app.app.App.for_environment>`, `App.environments`, `App.selected_environment` |
 | Pipelines | {py:class}`~piceli.pipeline.model.Pipeline` (`target=` mapping, `for_environment`, `environment`, `needs_environment`) |
 | Compare | {py:func}`~piceli.app.environment.environment_diff`, {py:func}`~piceli.app.environment.field_changes` |
