@@ -23,6 +23,7 @@ from piceli.pipeline.errors import PipelineError
 
 if TYPE_CHECKING:
     from piceli.app import App
+    from piceli.app.environment import Environment
     from piceli.artifacts.build_spec import BuildSpec
     from piceli.k8s.ops.exec_credentials import ExecPolicy
     from piceli.pipeline.secrets import Secrets
@@ -899,7 +900,11 @@ class Pipeline:
     live discovery), ``apply`` (the release engine) and ``checks``.
 
     :param app: The typed :class:`~piceli.app.App`.
-    :param target: Where it runs (:meth:`Target.kubeconfig`).
+    :param target: Where it runs (:meth:`Target.kubeconfig`), or one target
+        per environment the app declares (``{"dev": Target…, "prod":
+        Target…}``); then every command names one with ``--env`` and each
+        environment keeps its own state under
+        ``<state_dir>/environments/<name>`` (see ``docs/environments.md``).
     :param build: One :class:`Build` or several; their images are used as
         ``build["name"]`` in the app.
     :param deliver: :class:`NodeLoopbackRegistry`, :class:`NodeImport` or
@@ -935,7 +940,7 @@ class Pipeline:
     def __init__(
         self,
         app: App,
-        target: Target,
+        target: Target | Mapping[str, Target],
         *,
         build: Build | Sequence[Build] | None = None,
         deliver: Delivery | None = None,
@@ -955,8 +960,7 @@ class Pipeline:
 
         if not isinstance(app, App):
             raise PipelineError("pipeline-invalid", "app must be a piceli App")
-        if not isinstance(target, Target):
-            raise PipelineError("pipeline-invalid", "target must be a Target")
+        targets = _environment_targets(app, target)
         builds: tuple[Build, ...]
         if build is None:
             builds = ()
@@ -981,7 +985,11 @@ class Pipeline:
                 "pipeline-invalid", "a deployed app name has at most 42 characters"
             )
         self.app = app
-        self.target = target
+        #: Target per environment (empty for a single-target pipeline).
+        self.targets: dict[str, Target] = targets
+        self._target: Target | None = None if targets else target  # type: ignore[assignment]
+        #: The environment this pipeline was selected for (``for_environment``).
+        self.environment: Environment | None = None
         self.builds = builds
         self.deliver = deliver
         self.checks = _checks(checks)
@@ -1008,6 +1016,69 @@ class Pipeline:
     def name(self) -> str:
         return self.app.name
 
+    @property
+    def target(self) -> Target:
+        """Where this pipeline deploys.
+
+        :raises PipelineError: ``environment-required`` for a pipeline with one
+            target per environment that was not selected with
+            :meth:`for_environment` (``--env``).
+        """
+        if self._target is None:
+            raise PipelineError(
+                "environment-required",
+                "this pipeline deploys one target per environment "
+                f"({', '.join(sorted(self.targets))}); pass --env NAME",
+            )
+        return self._target
+
+    @property
+    def needs_environment(self) -> bool:
+        """Whether a command must select an environment (``--env``) first."""
+        return self._target is None
+
+    def for_environment(self, name: str) -> Pipeline:
+        """This pipeline for one environment: its app overrides and target.
+
+        The returned pipeline deploys ``app.for_environment(name)`` to
+        ``target[name]`` with its own state directory
+        (``<state_dir>/environments/<name>``), and its plan hash covers the
+        environment's name and resolved values.
+
+        :raises PipelineError: ``environment-unknown`` when the pipeline has no
+            target for ``name``; ``environment-invalid`` when an override does
+            not apply.
+        """
+        import copy
+
+        from piceli.app.environment import EnvironmentInvalid
+
+        if self.environment is not None:
+            raise PipelineError(
+                "environment-invalid",
+                f"this pipeline is already environment {self.environment.name!r}",
+            )
+        if name not in self.targets:
+            raise PipelineError(
+                "environment-unknown",
+                f"the pipeline has no target for environment {name!r}; "
+                + (
+                    f"environments: {sorted(self.targets)}"
+                    if self.targets
+                    else "declare target={name: Target...} for each environment"
+                ),
+            )
+        try:
+            app = self.app.for_environment(name)
+        except EnvironmentInvalid as error:
+            raise PipelineError(error.code, str(error)) from None
+        selected = copy.copy(self)
+        selected.app = app
+        selected._target = self.targets[name]
+        selected.environment = app.selected_environment
+        selected.state_dir = self.state_dir / "environments" / name
+        return selected
+
     def handles(self) -> Iterator[str]:
         """Image names the app uses through build handles (renders the app)."""
         from piceli.pipeline.compose import used_handles
@@ -1015,10 +1086,51 @@ class Pipeline:
         yield from used_handles(self)
 
     def __repr__(self) -> str:
+        where = (
+            f"targets={sorted(self.targets)}"
+            if self._target is None
+            else f"target={self._target!r}"
+        )
         return (
-            f"Pipeline(app={self.app.name!r}, target={self.target!r}, "
+            f"Pipeline(app={self.app.name!r}, {where}, "
             f"builds={len(self.builds)}, deliver={self.deliver!r})"
         )
+
+
+def _environment_targets(app: App, target: Any) -> dict[str, Target]:
+    """Validate ``target``: one Target, or one per declared environment."""
+    if isinstance(target, Target):
+        return {}
+    if not isinstance(target, Mapping) or not target:
+        raise PipelineError(
+            "pipeline-invalid",
+            "target must be a Target or a mapping of environment name to Target",
+        )
+    declared = {env.name for env in app.environments}
+    targets: dict[str, Target] = {}
+    seen: dict[tuple[str, str, str], str] = {}
+    for name, value in sorted(target.items()):
+        if not isinstance(value, Target):
+            raise PipelineError(
+                "pipeline-invalid", f"target[{name!r}] must be a Target"
+            )
+        if name not in declared:
+            raise PipelineError(
+                "pipeline-invalid",
+                f"target names environment {name!r}, which the app does not "
+                f"declare; declared: {sorted(declared) or 'none'} "
+                "(app.environment(name, ...))",
+            )
+        where = (str(value.kubeconfig), value.context, value.namespace)
+        if where in seen:
+            raise PipelineError(
+                "pipeline-invalid",
+                f"environments {seen[where]!r} and {name!r} target the same "
+                "context and namespace; give each environment its own namespace",
+            )
+        seen[where] = name
+        targets[name] = value
+    return targets
 
 
 def pinned(reference: str) -> bool:

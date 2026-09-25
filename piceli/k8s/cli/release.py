@@ -106,6 +106,18 @@ SkipChecksOption = Annotated[
         ),
     ),
 ]
+EnvOption = Annotated[
+    str | None,
+    typer.Option(
+        "--env",
+        help=(
+            "Environment of a pipeline (--spec MODULE:ATTR): its app overrides, "
+            "target and state (required when the pipeline has one target per "
+            "environment)"
+        ),
+        show_default=False,
+    ),
+]
 ReleaseOption = Annotated[
     str | None,
     typer.Option("--release", help="Release name (default: the latest execution)"),
@@ -129,7 +141,7 @@ def is_pipeline_target(spec: str) -> bool:
     return not spec.endswith(".toml") and ":" in spec
 
 
-def _load_spec(spec: str, *, current: bool) -> tuple[Any, Any]:
+def _load_spec(spec: str, *, current: bool, env: str | None = None) -> tuple[Any, Any]:
     """``(release spec, pipeline or None)`` for ``--spec``.
 
     ``current``: the command plans a new release from the current model, so a
@@ -138,6 +150,12 @@ def _load_spec(spec: str, *, current: bool) -> tuple[Any, Any]:
     from piceli.k8s.release_spec import ReleaseSpec, ReleaseSpecError
 
     if not is_pipeline_target(spec):
+        if env is not None:
+            raise ReleaseSpecError(
+                "--env selects an environment of a pipeline (--spec MODULE:ATTR); "
+                "a release.toml describes one release",
+                code="environment-unsupported",
+            )
         path = Path(spec).expanduser()
         if not path.is_file():
             raise ReleaseSpecError(f"release spec not found: {spec}")
@@ -145,18 +163,22 @@ def _load_spec(spec: str, *, current: bool) -> tuple[Any, Any]:
     from piceli.k8s.cli.deploy_pipeline import load_pipeline
     from piceli.pipeline.operate import operations_spec
 
-    pipeline = load_pipeline(spec)
+    pipeline = load_pipeline(spec, env)
     return operations_spec(pipeline, current=current), pipeline
 
 
-def _runner(spec: str, *, current: bool = False) -> Any:
+def _runner(spec: str, *, current: bool = False, env: str | None = None) -> Any:
     from piceli.k8s.release_runner import ReleaseRunner
 
-    return ReleaseRunner(_load_spec(spec, current=current)[0], progress=_progress)
+    return ReleaseRunner(
+        _load_spec(spec, current=current, env=env)[0], progress=_progress
+    )
 
 
 @contextmanager
-def _locked_runner(spec: str, *, current: bool) -> Iterator[Any]:
+def _locked_runner(
+    spec: str, *, current: bool, env: str | None = None
+) -> Iterator[Any]:
     """A runner for a command that changes the cluster.
 
     For a pipeline it holds the pipeline's run lock, so it never races a
@@ -164,7 +186,7 @@ def _locked_runner(spec: str, *, current: bool) -> Iterator[Any]:
     """
     from piceli.k8s.release_runner import ReleaseRunner
 
-    loaded, pipeline = _load_spec(spec, current=current)
+    loaded, pipeline = _load_spec(spec, current=current, env=env)
     if pipeline is None:
         yield ReleaseRunner(loaded, progress=_progress)
         return
@@ -243,7 +265,9 @@ def _diff_index(report: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]
     }
 
 
-def _describe_plan(result: Any, spec: str, command: str) -> None:
+def _describe_plan(
+    result: Any, spec: str, command: str, env: str | None = None
+) -> None:
     counts = ", ".join(f"{n} {op}" for op, n in result.counts.items()) or "no actions"
     _say(f"release {result.release} ({result.mode}, {result.intent}): {counts}")
     report = result.to_dict()
@@ -281,7 +305,9 @@ def _describe_plan(result: Any, spec: str, command: str) -> None:
         )
     _say(f"plan hash: {result.plan_hash} (valid until {result.expires_at})")
     _say(
-        f"approve with: piceli release {command} --spec {spec} --approve {result.plan_hash}"
+        f"approve with: piceli release {command} --spec {spec}"
+        + (f" --env {env}" if env else "")
+        + f" --approve {result.plan_hash}"
     )
 
 
@@ -420,6 +446,7 @@ def _plan_then_execute(
     replace: list[str] | None = None,
     adopt_all_desired: bool = False,
     skip_checks: bool = False,
+    env: str | None = None,
 ) -> None:
     if approve is not None and (
         auto_approve or rotate or adopt or replace or adopt_all_desired
@@ -433,7 +460,7 @@ def _plan_then_execute(
         )
     try:
         # A rollback re-applies a catalogued release (its recorded images).
-        with _locked_runner(spec, current=rollback_to is None) as runner:
+        with _locked_runner(spec, current=rollback_to is None, env=env) as runner:
             if approve is not None:
                 expected = None
                 if rollback_to is not None:
@@ -452,7 +479,7 @@ def _plan_then_execute(
                     replace=replace or (),
                     adopt_all_desired=adopt_all_desired,
                 )
-                _describe_plan(result, spec, command)
+                _describe_plan(result, spec, command, env)
                 if not auto_approve and not _confirm(result):
                     _emit({"state": "approval-required", **result.to_dict()})
                     raise typer.Exit(EXIT_APPROVAL)
@@ -474,10 +501,11 @@ def plan(
         Path | None,
         typer.Option("--out", help="Also write the full redacted plan JSON here"),
     ] = None,
+    env: EnvOption = None,
 ) -> None:
     """Capture live discovery and persist an approvable plan (prints its hash)."""
     try:
-        result = _runner(spec, current=True).plan(
+        result = _runner(spec, current=True, env=env).plan(
             rotate=rotate or (),
             adopt=adopt or (),
             replace=replace or (),
@@ -490,7 +518,7 @@ def plan(
     except _refusals() as error:
         _refuse(error)
         return
-    _describe_plan(result, spec, "apply")
+    _describe_plan(result, spec, "apply", env)
     _emit({"state": "planned", **result.to_dict()})
 
 
@@ -509,10 +537,11 @@ def diff(
             "--exit-code", help="Exit 1 when the release would change something"
         ),
     ] = False,
+    env: EnvOption = None,
 ) -> None:
     """Show what `plan` would change, field by field (read-only, nothing stored)."""
     try:
-        value = _runner(spec, current=True).diff(
+        value = _runner(spec, current=True, env=env).diff(
             adopt=adopt or (),
             replace=replace or (),
             adopt_all_desired=adopt_all_desired,
@@ -549,6 +578,7 @@ def apply(
     replace: ReplaceOption = None,
     adopt_all_desired: AdoptAllOption = False,
     skip_checks: SkipChecksOption = False,
+    env: EnvOption = None,
 ) -> None:
     """Execute an approved plan (``--approve HASH``), or plan and confirm.
 
@@ -561,6 +591,7 @@ def apply(
     _plan_then_execute(
         spec,
         command="apply",
+        env=env,
         approve=approve,
         auto_approve=auto_approve,
         rotate=rotate,
@@ -583,6 +614,7 @@ def rollback(
     replace: ReplaceOption = None,
     adopt_all_desired: AdoptAllOption = False,
     skip_checks: SkipChecksOption = False,
+    env: EnvOption = None,
 ) -> None:
     """Re-plan and re-apply an earlier release against current cluster state.
 
@@ -591,6 +623,7 @@ def rollback(
     _plan_then_execute(
         spec,
         command=f"rollback {target}",
+        env=env,
         approve=approve,
         auto_approve=auto_approve,
         rollback_to=target,
@@ -606,10 +639,11 @@ def resume(
     spec: SpecOption,
     release: ReleaseOption = None,
     skip_checks: SkipChecksOption = False,
+    env: EnvOption = None,
 ) -> None:
     """Resume an interrupted apply of a created release (same grant and ids)."""
     try:
-        with _locked_runner(spec, current=False) as runner:
+        with _locked_runner(spec, current=False, env=env) as runner:
             outcome = runner.resume(release, skip_checks=skip_checks)
     except _refusals() as error:
         _refuse(error)
@@ -618,10 +652,12 @@ def resume(
 
 
 @app.command("stop")
-def stop(spec: SpecOption, release: ReleaseOption = None) -> None:
+def stop(
+    spec: SpecOption, release: ReleaseOption = None, env: EnvOption = None
+) -> None:
     """Cancel the latest execution of a release (exact owner only)."""
     try:
-        with _locked_runner(spec, current=False) as runner:
+        with _locked_runner(spec, current=False, env=env) as runner:
             outcome = runner.stop(release)
     except _refusals() as error:
         _refuse(error)
@@ -636,13 +672,14 @@ def check(
         str | None,
         typer.Option("--release", help="Release to check (default: the selected one)"),
     ] = None,
+    env: EnvOption = None,
 ) -> None:
     """Run the spec's [[checks]] now against a release; changes nothing.
 
     Exit code ``0`` when every check passed, ``1`` when one failed.
     """
     try:
-        outcome = _runner(spec).check(release)
+        outcome = _runner(spec, env=env).check(release)
     except _refusals() as error:
         _refuse(error)
         return
@@ -655,10 +692,10 @@ def check(
 
 
 @app.command("status")
-def status(spec: SpecOption) -> None:
+def status(spec: SpecOption, env: EnvOption = None) -> None:
     """Show catalogued releases, their executions and history (no cluster access)."""
     try:
-        value = _runner(spec).status()
+        value = _runner(spec, env=env).status()
     except _refusals() as error:
         _refuse(error)
         return
@@ -716,6 +753,7 @@ def secret_show(
         bool,
         typer.Option("--json", help="Print JSON: metadata only unless --reveal"),
     ] = False,
+    env: EnvOption = None,
 ) -> None:
     """Show a secret's metadata, and its value with --reveal (never logged).
 
@@ -724,7 +762,7 @@ def secret_show(
     from piceli.k8s.release_secret_spec import SecretError
 
     try:
-        runner = _runner(spec)
+        runner = _runner(spec, env=env)
         metadata = runner.secret_metadata(name, release=release)
         if as_json and not reveal:
             _emit(metadata)

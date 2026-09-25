@@ -150,6 +150,8 @@ kubernetes_model/index
 deploy
 ci
 typed_apps
+crds
+environments
 release_cli
 checks
 plans_and_diffs

@@ -6,6 +6,10 @@ accounts with their permissions, pod security defaults, network policies,
 autoscalers, disruption budgets, Ingresses and Gateway API HTTPRoutes with
 typed Python objects, and
 how to render them to manifests or release them, with no manifest dicts or YAML.
+Objects of any other kind, custom resources included, are declared with
+`app.resource(...)` and a spec generated from their CRD (see {doc}`crds`);
+one module can describe dev, staging and prod with typed overrides (see
+{doc}`environments`).
 
 ```{admonition} Maturity: preview
 :class: note
@@ -327,10 +331,14 @@ release in the cluster sees them. `piceli release` handles them like this:
   dropping `cluster_rules` (or the account) deletes exactly this release's
   ClusterRole and ClusterRoleBinding; a rollback to a release that had them
   recreates them.
-- **Only RBAC.** A release refuses other cluster-scoped kinds (Namespace,
-  PersistentVolume, CustomResourceDefinition, …) with `invalid-composition`.
-  A hand-built ClusterRole or ClusterRoleBinding in a composition is stamped
-  with `piceli.io/namespace`; one that names another namespace is refused.
+- **RBAC and declared resources.** Besides ClusterRoles and
+  ClusterRoleBindings, a release manages other cluster-scoped objects only
+  when they carry `piceli.io/namespace` (as `app.resource(...,
+  scope="cluster")` renders them, see {doc}`crds`); Namespace,
+  PersistentVolume and CustomResourceDefinition are always refused with
+  `invalid-composition`. A hand-built ClusterRole or ClusterRoleBinding in a
+  composition is stamped with `piceli.io/namespace`; one that names another
+  namespace is refused.
 - **The deployer needs cluster rights.** Planning lists ClusterRoles and
   ClusterRoleBindings cluster-wide, and applying writes them, so the
   kubeconfig user needs those permissions (and Kubernetes only lets it grant
@@ -581,7 +589,9 @@ documented in the API docs.
 
 | Task | Types |
 | --- | --- |
-| Collect and render an app | {py:class}`~piceli.app.app.App` (`deployment`, `stateful_set`, `daemon_set`, `job`, `cron_job`, `service`, `config`, `secret`, `service_account`, `network_policy`, `autoscaler`, `disruption_budget`, `ingress`, `http_route`, `release_selector`, `depends`, `add`, `override`, `composition`, `render`) |
+| Collect and render an app | {py:class}`~piceli.app.app.App` (`deployment`, `stateful_set`, `daemon_set`, `job`, `cron_job`, `service`, `config`, `secret`, `service_account`, `network_policy`, `autoscaler`, `disruption_budget`, `ingress`, `http_route`, `resource`, `release_selector`, `depends`, `add`, `override`, `environment`, `for_environment`, `composition`, `render`) |
+| Any other kind, custom resources ({doc}`crds`) | {py:class}`~piceli.app.resource.Resource`, `piceli codegen crd` |
+| Environments ({doc}`environments`) | {py:class}`~piceli.app.environment.Environment` |
 | Pod settings | {py:class}`~piceli.app.model.PodDefaults`, {py:class}`~piceli.app.model.Security` |
 | Permissions | {py:class}`~piceli.app.model.Rule`, {py:class}`~piceli.app.model.ServiceAccount` |
 | Containers | {py:class}`~piceli.app.model.Container`, {py:class}`~piceli.app.model.ContainerPort`, {py:class}`~piceli.app.model.Resources` |
@@ -599,6 +609,7 @@ has no side effects.
 
 ```text
 piceli render [TARGET] [--spec release.toml] [--namespace NS] [--format yaml|json]
+              [--env NAME [--diff-env OTHER]]
 ```
 
 | | |
@@ -608,16 +619,22 @@ piceli render [TARGET] [--spec release.toml] [--namespace NS] [--format yaml|jso
 | `--namespace` | Overrides the namespace (default: the spec's namespace, otherwise `default`). A `Pipeline` renders into its target's namespace; another value is refused. |
 | A `Pipeline` | Renders the app as `piceli deploy` would release it: the target's namespace and declared nodes (`node="alias"` pins resolve, unverified), secret inputs as placeholders, build images as `pipeline.piceli.invalid/<image>:unresolved`, pinned images as they are, and the delivery node's `kubernetes.io/hostname` pin on workloads that use a built image. It reads no kubeconfig, build spec or pipeline state. |
 | `--format` | `yaml` (default, multi-document) or `json` (one object). |
+| `--env` | Renders one environment of the App (new in 0.7.0, see {doc}`environments`); a `Pipeline` also uses its target for it. JSON output adds `"environment"`. |
+| `--diff-env` | With `--env`: prints the typed difference between the two environments instead of manifests (text, or one `{"state": "diffed", …}` object with `--format json`). |
 | Side effects | Imports the target module and reads the spec and the receipts it names. It never contacts a cluster or reads a kubeconfig, never reads or generates secret values and never writes files. |
 | Retry | Always safe. |
 | Approval | None. |
-| Exit codes | `0` rendered, `2` rejected (`render-target-invalid`, `render-model-invalid`). |
+| Exit codes | `0` rendered, `2` rejected (`render-target-invalid`, `render-model-invalid`, `environment-unknown`, `environment-required`, `environment-invalid`, `environment-unsupported`). |
 
 ## Not typed yet
 
 Tolerations, affinity and topology spread constraints are not part of `App`
 yet, nor are other kinds (custom resources, other Gateway API routes). In the
 meantime:
+
+- declare a whole object of any kind with `app.resource(api_version, kind,
+  name, spec)` ({doc}`crds`): a typed spec generated from a CRD, or a JSON
+  mapping;
 
 - set a field of a declared object with `app.override(obj, patch)`: the patch
   is merged into the rendered manifest (mappings key by key, `None` removes a
@@ -640,9 +657,9 @@ meantime:
   )
   ```
 
-- for a whole object, build a `DeploymentComponent` from `ResourceIntent`
-  objects (or from the {doc}`templates <kubernetes_model/index>`) and include
-  it with `app.add(...)`.
+- for a whole component built elsewhere, build a `DeploymentComponent` from
+  `ResourceIntent` objects (or from the {doc}`templates <kubernetes_model/index>`)
+  and include it with `app.add(...)`.
 
 `container=` names the main container when it must not be named after the
 Deployment. `piceli import` ({doc}`migrate_from_kubectl`) generates both

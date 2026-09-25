@@ -300,6 +300,7 @@ CASES: dict[str, tuple[Argv, str]] = {
         "invalid-access-profile",
     ),
     "explain": (lambda p: ["explain", "no-such-code"], "unknown-error-code"),
+    "codegen crd": (lambda p: ["codegen", "crd", str(p / "junk")], "crd-invalid"),
 }
 
 

@@ -4,9 +4,10 @@ Maturity: **preview** (the API may change before 1.0).
 
 ``App`` collects Deployments, StatefulSets, DaemonSets, Jobs, CronJobs,
 Services, ConfigMaps, Secrets, ServiceAccounts (with their RBAC rules),
-NetworkPolicies, HorizontalPodAutoscalers, PodDisruptionBudgets, Ingresses and
-Gateway API HTTPRoutes declared with typed models and renders them to the
-``ResourceIntent`` objects
+NetworkPolicies, HorizontalPodAutoscalers, PodDisruptionBudgets, Ingresses,
+Gateway API HTTPRoutes and objects of any other kind (``app.resource``, custom
+resources included) declared with typed models, applies an ``Environment``'s
+overrides, and renders them to the ``ResourceIntent`` objects
 of a ``DeploymentComposition``, which ``piceli release`` plans and applies.
 Services may also declare how to reach them from a laptop
 (``app.access.forward``), which ``piceli access`` and ``piceli status`` use.
@@ -15,6 +16,7 @@ See ``docs/typed_apps.md`` and ``docs/access.md``.
 
 from piceli.app.access import Access, Forward
 from piceli.app.app import App
+from piceli.app.environment import Environment
 from piceli.app.kinds import (
     Autoscaler,
     CronJob,
@@ -53,6 +55,7 @@ from piceli.app.model import (
     ServicePort,
     Workload,
 )
+from piceli.app.resource import Resource
 from piceli.k8s.ui_config import HealthProbe
 
 __all__ = [
@@ -69,6 +72,7 @@ __all__ = [
     "DaemonSet",
     "Deployment",
     "DisruptionBudget",
+    "Environment",
     "ExistingClaim",
     "FieldRef",
     "Forward",
@@ -82,6 +86,7 @@ __all__ = [
     "NetworkPolicy",
     "PodDefaults",
     "Probe",
+    "Resource",
     "Resources",
     "Route",
     "Rule",

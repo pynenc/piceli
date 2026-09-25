@@ -318,6 +318,13 @@ class PipelineRunner:
             "owner": pipeline.owner,
             "field_manager": pipeline.field_manager,
             "target": pipeline.target.identity(),
+            # Added in 0.7.0 only for an environment, so other plans keep
+            # their hashes: the name and every resolved override value.
+            **(
+                {"environment": pipeline.environment.identity()}
+                if pipeline.environment is not None
+                else {}
+            ),
         }
 
     def _emit(

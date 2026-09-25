@@ -84,7 +84,16 @@ noted.
 - `piceli render`: imports the model module and reads the spec; never contacts
   a cluster or reads secret values. `piceli render MODULE:pipeline` renders a
   `Pipeline` with its target's namespace and declared nodes, and build images
-  as placeholders; it reads no kubeconfig.
+  as placeholders; it reads no kubeconfig. `--env NAME` renders one
+  environment; `--env A --diff-env B` prints their typed difference (use it
+  to show the owner what differs before deploying another environment; see
+  {doc}`environments`).
+- `piceli codegen crd FILE` (reads the file) and `piceli codegen crd
+  --from-cluster --kubeconfig F --context C --crd NAME` (one read of the CRD
+  through the explicit context): generate typed models for a custom resource
+  (see {doc}`crds`). `--out` writes that one file and replaces it only when
+  Piceli generated it. The output depends only on the schema. Never pick the
+  kubeconfig or context yourself.
 - `piceli release plan` and `piceli release preview`: read the cluster, store
   a pending plan and secret candidates in the spec's `state_dir`, and print the
   plan hash. They never write to the cluster.
@@ -208,6 +217,14 @@ unattended CI job for this exact spec.
    (`adopt` keeps it and its data in place; `replace` backs it up, deletes
    and recreates it). Registry credentials for `mirror_credentials=` are files
    the owner provides; never create, read or print them.
+
+**Deploying an environment.** When the pipeline declares one target per
+environment, every `deploy` and `release --spec MODULE:ATTR` command needs
+`--env NAME` (`environment-required` otherwise). Plan, show and approve each
+environment separately: the combined hash covers the environment's name and
+override values, so one environment's hash never approves another
+(`pipeline-plan-changed`). Use exactly the approval command `--plan`
+prints (it repeats `--env`). Never choose the environment for the owner.
 
 **Deploying a commit.** When the working tree is shared or dirty, or the
 owner asked for a specific commit, add `--ref SOURCE=REV` (or a bare

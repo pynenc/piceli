@@ -811,6 +811,11 @@ secret generators and composition, plus the pipeline's `checks=` and
 | `rollback`, `resume`, `stop`, `check`, `status`, `secret show` | The catalogued releases' own records. A rollback re-applies the archived composition with its recorded image digests (`oci-set` source). |
 | `plan`, `preview`, `diff`, `apply` | The images `piceli deploy` last built from the **current** build inputs and delivered; otherwise refused with `pipeline-not-delivered` (run `piceli deploy`). |
 
+A pipeline with one target per environment (see {doc}`environments`) needs
+`--env NAME` on every command (`environment-required` otherwise); each
+environment's release lives in `state_dir/environments/NAME`. `--env` with a
+`release.toml` is refused with `environment-unsupported`.
+
 `apply`, `rollback`, `resume` and `stop` on a pipeline hold its run lock and
 are refused with `pipeline-locked` while `piceli deploy` runs on the same
 state directory. A module that fails to import is `pipeline-load-failed`; a

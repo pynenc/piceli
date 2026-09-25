@@ -54,11 +54,13 @@ from piceli.k8s.ops.bounds import timestamp
 from piceli.k8s.ops.discovery import (
     RELEASE_CLUSTER_KINDS,
     RELEASE_NAMESPACE_ANNOTATION,
+    RELEASE_REFUSED_CLUSTER_KINDS,
     RETAINED_KINDS,
     DiscoveryArtifact,
     DiscoveryLimits,
     DiscoveryRequest,
     PlanTarget,
+    ResourceScope,
     ResourceType,
     capture_discovery,
 )
@@ -338,10 +340,13 @@ def scoped_composition(
 
     Namespaced objects must target ``namespace``. Cluster-scoped objects must
     be of a kind in :data:`~piceli.k8s.ops.discovery.RELEASE_CLUSTER_KINDS`
-    (ClusterRole, ClusterRoleBinding); each gets the
-    ``piceli.io/namespace: <namespace>`` annotation (typed apps render it)
-    so that only this namespace's release manages it. An object that already
-    names another namespace is refused.
+    (ClusterRole, ClusterRoleBinding), which get the
+    ``piceli.io/namespace: <namespace>`` annotation (typed apps render it),
+    or of another kind already annotated with it (``app.resource(...,
+    scope="cluster")``), except the kinds in
+    :data:`~piceli.k8s.ops.discovery.RELEASE_REFUSED_CLUSTER_KINDS`. Only this
+    namespace's release manages them. An object that already names another
+    namespace is refused.
 
     :raises ReleaseSpecError: ``invalid-composition``.
     """
@@ -358,17 +363,22 @@ def scoped_composition(
                     )
                 resources.append(resource)
                 continue
-            if (ref.api_version, ref.kind) not in RELEASE_CLUSTER_KINDS:
-                raise ReleaseSpecError(
-                    "cluster-scoped resources other than rbac.authorization.k8s.io/v1 "
-                    "ClusterRole and ClusterRoleBinding are not supported by "
-                    f"releases: {ref.kind}/{ref.name}",
-                    code="invalid-composition",
-                )
             manifest = resource.manifest
             metadata = manifest.setdefault("metadata", {})
             annotations = metadata.get("annotations") or {}
             declared = annotations.get(RELEASE_NAMESPACE_ANNOTATION)
+            if (ref.api_version, ref.kind) not in RELEASE_CLUSTER_KINDS and (
+                declared is None or ref.kind in RELEASE_REFUSED_CLUSTER_KINDS
+            ):
+                raise ReleaseSpecError(
+                    "a release manages cluster-scoped objects only per namespace: "
+                    "rbac.authorization.k8s.io/v1 ClusterRole and "
+                    "ClusterRoleBinding, and other kinds declared with "
+                    'app.resource(..., scope="cluster") (annotated '
+                    f"{RELEASE_NAMESPACE_ANNOTATION}); never Namespace, "
+                    f"CustomResourceDefinition or PersistentVolume: {ref.kind}/{ref.name}",
+                    code="invalid-composition",
+                )
             if declared is not None and declared != namespace:
                 raise ReleaseSpecError(
                     f"{ref.kind}/{ref.name} is annotated "
@@ -395,6 +405,39 @@ def scoped_composition(
             )
         )
     return DeploymentComposition(tuple(components))
+
+
+def _check_scopes(
+    composition: DeploymentComposition, artifact: DiscoveryArtifact
+) -> None:
+    """Refuse objects whose scope contradicts the API server's discovery.
+
+    A typed resource declares its scope (``App.resource(..., scope=...)``);
+    the server's discovery is authoritative, so a namespaced declaration of a
+    cluster-scoped kind (or the reverse) is refused before planning.
+
+    :raises ReleaseSpecError: ``resource-scope-mismatch``.
+    """
+    scopes = {
+        (item.resource_type.api_version, item.resource_type.kind): item.scope
+        for item in artifact.coverage.api_resources
+    }
+    for component in composition.components:
+        for resource in component.resources:
+            ref = resource.ref
+            served = scopes.get((ref.api_version, ref.kind))
+            if served is None:
+                continue
+            declared = (
+                ResourceScope.NAMESPACED if ref.namespace else ResourceScope.CLUSTER
+            )
+            if declared is not served:
+                raise ReleaseSpecError(
+                    f"{ref.kind}/{ref.name} is declared {declared.value}, but the "
+                    f"API server serves {ref.api_version} {ref.kind} as "
+                    f"{served.value}; declare it with scope={served.value!r}",
+                    code="resource-scope-mismatch",
+                )
 
 
 @dataclass(frozen=True)
@@ -1083,7 +1126,10 @@ class ReleaseRunner:
 
     # ------------------------------------------------------------ discovery
     def _discover(
-        self, binding: ProviderBinding, kinds: set[ResourceType]
+        self,
+        binding: ProviderBinding,
+        kinds: set[ResourceType],
+        composition: DeploymentComposition | None = None,
     ) -> DiscoveryArtifact:
         for item in self.spec.model.discovery.kinds:
             api_version, _, kind = item.rpartition("/")
@@ -1114,6 +1160,8 @@ class ReleaseRunner:
                 + (f" ({'; '.join(failures)})" if failures else ""),
                 code="discovery-incomplete",
             )
+        if composition is not None:
+            _check_scopes(composition, artifact)
         return artifact
 
     def _dry_runs(
@@ -1341,7 +1389,7 @@ class ReleaseRunner:
                 for record in records.values():
                     kinds |= self._kinds(composition_from_archive(record.archive))
             artifact, unavailable = self._dry_runs(
-                binding, composition, self._discover(binding, kinds)
+                binding, composition, self._discover(binding, kinds, composition)
             )
             snapshot = ObservedSnapshot.from_discovery(artifact)
             inherited = list(settings.inherited_owners)
@@ -1415,7 +1463,7 @@ class ReleaseRunner:
             if settings.prune:
                 for record in catalog.records():
                     kinds |= self._kinds(composition_from_archive(record.archive))
-            artifact = self._discover(binding, kinds)
+            artifact = self._discover(binding, kinds, composition)
             skipped = sorted(
                 {
                     (resource.ref.kind, resource.ref.name)
@@ -1509,7 +1557,7 @@ class ReleaseRunner:
             for record in catalog.records():
                 kinds |= self._kinds(composition_from_archive(record.archive))
         artifact, unavailable = self._dry_runs(
-            binding, composition, self._discover(binding, kinds)
+            binding, composition, self._discover(binding, kinds, composition)
         )
         snapshot = ObservedSnapshot.from_discovery(artifact)
         inherited = list(settings.inherited_owners)
@@ -1686,7 +1734,7 @@ class ReleaseRunner:
             for other in catalog.records():
                 kinds |= self._kinds(composition_from_archive(other.archive))
         artifact, unavailable = self._dry_runs(
-            binding, composition, self._discover(binding, kinds)
+            binding, composition, self._discover(binding, kinds, composition)
         )
         snapshot = ObservedSnapshot.from_discovery(artifact)
         inherited = list(settings.inherited_owners)

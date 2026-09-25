@@ -1210,6 +1210,11 @@ class KubernetesProvider:
             )
             if spec.get("type") == "LoadBalancer":
                 ready = ready and bool(status.get("loadBalancer", {}).get("ingress"))
+        elif (
+            "/" in resource.identity.api_version
+            and "." in (resource.identity.api_version.split("/", 1)[0])
+        ):
+            ready = _generic_ready(status, generation, observed)
         else:
             return ReadinessProbeResult(resource.identity, ReadinessStatus.UNSUPPORTED)
         return ReadinessProbeResult(
@@ -1236,3 +1241,26 @@ class KubernetesProvider:
                 if error.status in {401, 403}
                 else ReadinessStatus.UNSUPPORTED,
             )
+
+
+def _generic_ready(status: Any, generation: Any, observed: Any) -> bool:
+    """Readiness of a kind Piceli has no rule for (custom resources).
+
+    The convention controllers share (kstatus): with a ``Ready`` condition the
+    object is ready when it is ``True`` for the current generation; without
+    one it is ready once applied, since nothing reports progress.
+    """
+    if not isinstance(status, dict):
+        return True
+    if (
+        isinstance(observed, int)
+        and isinstance(generation, int)
+        and not isinstance(observed, bool)
+        and observed < generation
+    ):
+        return False
+    conditions = status.get("conditions")
+    for condition in conditions if isinstance(conditions, list) else ():
+        if isinstance(condition, dict) and condition.get("type") == "Ready":
+            return condition.get("status") == "True"
+    return True
