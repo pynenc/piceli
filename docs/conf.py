@@ -138,7 +138,7 @@ myst_substitutions = {
 html_theme = "furo"
 html_title = "Piceli"
 html_logo = "_static/logo.webp"
-html_favicon = "_static/logo.webp"
+html_favicon = "_static/favicon.png"
 
 language = "en"
 html_static_path = ["_static"]
