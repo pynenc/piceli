@@ -5919,9 +5919,7 @@
    "testing": {},
    "utils": {},
    "version": {
-    "params": [
-     "distribution_name"
-    ]
+    "params": null
    }
   },
   "piceli.app": {
@@ -6265,39 +6263,13 @@
     ]
    },
    "dataclass": {
-    "params": [
-     "eq",
-     "frozen",
-     "init",
-     "kw_only",
-     "match_args",
-     "order",
-     "repr",
-     "slots",
-     "unsafe_hash",
-     "weakref_slot"
-    ]
+    "params": null
    },
    "field": {
-    "params": [
-     "compare",
-     "default",
-     "default_factory",
-     "doc",
-     "hash",
-     "init",
-     "kw_only",
-     "metadata",
-     "repr"
-    ]
+    "params": null
    },
    "field_validator": {
-    "params": [
-     "check_fields",
-     "field",
-     "json_schema_input_type",
-     "mode"
-    ]
+    "params": null
    },
    "hashlib": {},
    "importlib": {},
@@ -6323,9 +6295,7 @@
     "returns": "ImageRef"
    },
    "model_validator": {
-    "params": [
-     "mode"
-    ]
+    "params": null
    },
    "parse_adopt_entry": {
     "params": [

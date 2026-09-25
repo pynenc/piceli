@@ -124,11 +124,21 @@ def _collect_classes() -> dict[str, type]:
     return found
 
 
+def _foreign(module: str | None) -> bool:
+    """Whether a callable comes from outside Piceli (builtins, stdlib, deps).
+
+    Their signatures are not Piceli's API and vary with the Python version
+    (``dataclasses.field`` gained ``doc`` in 3.14; builtins become
+    introspectable in some builds), so the snapshot records them unchecked.
+    """
+    return not (module or "").startswith("piceli")
+
+
 def _from_builtins(cls: type, attr: str) -> bool:
-    """Whether ``cls`` gets ``attr`` from a built-in base (``str``, ``Exception``…)."""
+    """Whether ``cls`` gets ``attr`` from a base defined outside Piceli."""
     for base in cls.__mro__:
         if attr in vars(base):
-            return base.__module__ == "builtins"
+            return _foreign(base.__module__)
     return False
 
 
@@ -175,9 +185,7 @@ def _describe_class(
         if not callable(value) or isinstance(value, type):
             continue
         if _from_builtins(cls, attr):
-            # Inherited from ``str``, ``Exception``…: not Piceli's API, and
-            # whether its signature is introspectable depends on the CPython
-            # build, so the snapshot would differ between machines.
+            # Inherited from ``str``, ``Exception``, ``Enum``…: see ``_foreign``.
             methods[attr] = None
             continue
         methods[attr] = _params(value)
@@ -232,6 +240,8 @@ def introspect_python() -> dict[str, Any]:
             value = getattr(module, name, None)
             if isinstance(value, type):
                 entries[name] = {"class": value.__name__}
+            elif callable(value) and _foreign(getattr(value, "__module__", None)):
+                entries[name] = {"params": None}  # imported, e.g. ``field``
             elif callable(value):
                 entry: dict[str, Any] = {"params": _params(value)}
                 if (known := _returns(value, names)) is not None:
