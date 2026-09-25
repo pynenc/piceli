@@ -46,7 +46,7 @@ The lens runs **on the operator's own machine**, not inside the cluster.
 ```bash
 piceli observe status \
   --archive ./session.archive.json \
-  --kubeconfig ~/.kube/config --context my-cluster
+  --kubeconfig ./my-cluster.kubeconfig --context my-cluster
 ```
 
 The JSON report classifies every object:
@@ -63,11 +63,11 @@ The JSON report classifies every object:
 ```bash
 # Print the exact kubectl argv without running it
 piceli observe logs-command --namespace my-app --target deployment/api --tail 200 \
-  --kubeconfig ~/.kube/config --context my-cluster
+  --kubeconfig ./my-cluster.kubeconfig --context my-cluster
 
 # Run it in the foreground
 piceli observe logs-run --namespace my-app --target deployment/api --tail 200 \
-  --kubeconfig ~/.kube/config --context my-cluster
+  --kubeconfig ./my-cluster.kubeconfig --context my-cluster
 ```
 
 ## Saved port forwards
@@ -82,15 +82,26 @@ piceli observe forward-save --user "$USER" --name api \
 
 piceli observe forward-list --user "$USER"
 piceli observe forward-run  --user "$USER" --name api \
-  --kubeconfig ~/.kube/config --context my-cluster
+  --kubeconfig ./my-cluster.kubeconfig --context my-cluster
 ```
 
 ## Web UI and REST API
 
 ```bash
 piceli observe serve --archive ./session.archive.json \
-  --kubeconfig ~/.kube/config --context my-cluster \
+  --kubeconfig ./my-cluster.kubeconfig --context my-cluster \
   --user "$USER" --port 9876 --ui-config ./piceli-ui.toml
+```
+
+```{figure} _static/img/dashboard-overview.webp
+:alt: The Piceli Operator dashboard for the shop namespace. Two forwarding shortcuts, api on 127.0.0.1:13080 and web on 127.0.0.1:13000, are running and healthy. Below, tiles show 7 managed workloads, 10 unmanaged visible objects, 0 unknown or failed, and the active release shop-318322668422, followed by the desired-versus-live table listing api, cache and web as no-op.
+:width: 100%
+
+The operator dashboard after deploying the shop example ({doc}`deploy`),
+served with `piceli operator serve --access examples/shop/app.py:pipeline`
+and the pipeline's release catalog (`--catalog`, `--state-dir`): the
+model's forwards as one-click shortcuts, the active release, and each
+declared object compared with the cluster.
 ```
 
 Open `http://127.0.0.1:9876/`. With `--user`, the server restores that user's
@@ -207,7 +218,7 @@ Start and supervise every declared forward in the foreground:
 
 ```bash
 piceli observe forwards apply --profile ./access.toml \
-  --kubeconfig ~/.kube/config --context my-cluster --namespace my-app
+  --kubeconfig ./my-cluster.kubeconfig --context my-cluster --namespace my-app
 ```
 
 Before it starts anything, `apply` runs a port-conflict preflight. If another
