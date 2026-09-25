@@ -221,9 +221,11 @@ def _from_pipeline(entry: str, base: Path) -> AccessTarget:
     except RenderError as error:
         raise AccessTargetError("access-target-invalid", str(error)) from None
     except Exception as error:  # the user's module raised while importing
+        from piceli.cli_contract import describe_user_error
+
         raise AccessTargetError(
             "access-target-invalid",
-            f"importing {entry!r} failed: {type(error).__name__}",
+            f"importing {entry!r} failed: {describe_user_error(error)}",
         ) from None
     if getattr(value, "needs_environment", False):
         raise AccessTargetError(

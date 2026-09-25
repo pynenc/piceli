@@ -24,7 +24,9 @@ Importing this module is side-effect free.
 from __future__ import annotations
 
 import json
+import os
 import sys
+import traceback
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -123,6 +125,24 @@ def _report(
         say(f"  {hint}")
     say(f"  next: {entry.fix}")
     raise Rejected(reason, exit_code)
+
+
+#: Set to ``1`` to also print the traceback of an exception raised by the
+#: user's module (``MODULE:ATTR``) on stderr; stdout keeps the rejection.
+DEBUG_ENV = "PICELI_DEBUG"
+
+
+def describe_user_error(error: BaseException) -> str:
+    """``Type: message`` of an exception raised by the user's model module.
+
+    Used as the rejection's ``message`` when importing or evaluating a
+    ``MODULE:ATTR`` target raised: never a traceback on stdout. With
+    ``PICELI_DEBUG=1`` the traceback is printed on stderr.
+    """
+    if os.environ.get(DEBUG_ENV, "") not in {"", "0"}:
+        traceback.print_exception(error, file=sys.stderr)
+    text = str(error).strip()
+    return f"{type(error).__name__}: {text}" if text else type(error).__name__
 
 
 def error_code(error: BaseException, default: str) -> str:

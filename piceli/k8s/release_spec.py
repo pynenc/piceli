@@ -915,8 +915,10 @@ class ReleaseSpec:
                 sys.modules[module_name] = module
                 try:
                     loader_spec.loader.exec_module(module)
-                except BaseException:
+                except BaseException as error:
                     del sys.modules[module_name]
+                    if isinstance(error, Exception):
+                        raise _composition_raised(entry, "importing", error) from None
                     raise
         else:
             try:
@@ -926,6 +928,8 @@ class ReleaseSpec:
                     f"cannot import composition module {target!r}: {error}",
                     code="invalid-composition",
                 ) from None
+            except Exception as error:  # the module raised while importing
+                raise _composition_raised(entry, "importing", error) from None
         function = getattr(module, attribute, None)
         if not callable(function):
             raise ReleaseSpecError(
@@ -947,3 +951,17 @@ class ReleaseSpec:
             values=MappingProxyType(dict(self.model.values)),
             nodes=MappingProxyType(dict(nodes or {})),
         )
+
+
+def _composition_raised(entry: str, doing: str, error: Exception) -> ReleaseSpecError:
+    """``invalid-composition`` for an exception raised by the user's module.
+
+    The message is the exception's type and text, never a traceback
+    (``PICELI_DEBUG=1`` prints it on stderr).
+    """
+    from piceli.cli_contract import describe_user_error
+
+    return ReleaseSpecError(
+        f"{doing} composition {entry!r} failed: {describe_user_error(error)}",
+        code="invalid-composition",
+    )

@@ -4,6 +4,31 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Unreleased
+
+- `piceli deploy MODULE:ATTR --plan` refused for adoption or replacement now
+  suggests what `piceli deploy` can act on: each `blocking[].suggest` entry
+  names the Pipeline declaration (`Pipeline(adopt=["Deployment/web"])`,
+  `Pipeline(replace=["Deployment/web"])`) instead of the `--adopt`/`--replace`
+  flags of `piceli release`, which `deploy` does not take; the refusal's
+  sentence says the same. `blocking[].code` and `message` are unchanged, and
+  `piceli release` keeps suggesting its flags. Consumers that matched the old
+  `--adopt …` strings for a deploy must match the new ones.
+- `piceli deploy` rejections and failures carry the contract's `message`
+  (the sentence stderr shows first) next to `reason`; the
+  `piceli.deploy-event.v1` schema documents it.
+- A model module that raises no longer breaks the output contract with a
+  traceback. `piceli render` rejects with `render-target-invalid` (exit `2`,
+  one JSON object whatever `--format` says) when the target, or the spec's
+  composition, raises while importing or evaluating (a duplicate name, a wrong
+  keyword, any exception); the `message` is `importing|evaluating TARGET
+  failed: Type: text`. `release … --spec release.toml` rejects the same case
+  with `invalid-composition` (a composition module that raised `ValueError`
+  while importing was `release-refused`). `deploy` and `release --spec
+  MODULE:ATTR` (`pipeline-load-failed`), `status` and `access`
+  (`access-target-invalid`) now put the exception's type and text in
+  `message` too. `PICELI_DEBUG=1` prints the traceback on stderr.
+
 ## Version 0.7.0
 
 - **Reference app:** `examples/reference/app.py` deploys a realistic app to

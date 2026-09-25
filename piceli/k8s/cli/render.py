@@ -17,11 +17,14 @@ Contract:
   the difference (text, or one JSON object ``{"state": "diffed", …}``).
   stderr: human text.
 - Exit codes: ``0`` rendered, ``2`` rejected (the target or spec cannot be
-  loaded, the model is invalid, or an environment is unknown or invalid). A
+  loaded, the model module raised while importing or evaluating, the model is
+  invalid, or an environment is unknown or invalid). A
   rejection always prints one JSON object on stdout, whatever ``--format``
   says: ``{"state": "rejected", "reason": "render-target-invalid" |
   "render-model-invalid" | "environment-…", "message": …}``
-  (:func:`piceli.cli_contract.reject`).
+  (:func:`piceli.cli_contract.reject`). When the model module raises, the
+  message is ``importing|evaluating TARGET failed: Type: text``; never a
+  traceback (``PICELI_DEBUG=1`` prints it on stderr).
 """
 
 from __future__ import annotations
@@ -34,6 +37,7 @@ from typing import Annotated, Any, NoReturn
 
 import typer
 
+from piceli.cli_contract import describe_user_error
 from piceli.cli_contract import reject as contract_reject
 
 
@@ -148,15 +152,18 @@ def _render(
     from piceli.pipeline import Pipeline, PipelineError
 
     inputs = {}
+    value: Any = None
     try:
         if spec is None and target:
             value = rendering.load_target(target, Path.cwd())
-            if isinstance(value, Pipeline):
-                return _render_pipeline(value, namespace, env, reject)
     except rendering.RenderError as error:
         reject("render-target-invalid", str(error))
     except PipelineError as error:
         reject("render-target-invalid", str(error))
+    except Exception as error:  # the model module raised while importing
+        reject("render-target-invalid", _import_failed(target, error))
+    if spec is None and isinstance(value, Pipeline):
+        return _render_pipeline(value, namespace, env, reject)
     if spec is not None and not spec.is_file():
         reject("render-target-invalid", f"release spec not found: {spec}")
     try:
@@ -174,6 +181,11 @@ def _render(
             )
     except (rendering.RenderError, ReleaseSpecError, OSError) as error:
         reject("render-target-invalid", str(error))
+    except Exception as error:  # the model or composition module raised
+        reject(
+            "render-target-invalid",
+            _import_failed(target or "the spec's composition", error),
+        )
     if isinstance(value, Pipeline):
         reject(
             "render-target-invalid",
@@ -187,6 +199,8 @@ def _render(
         reject(error.code, str(error))
     except (ValidationError, ValueError) as error:
         reject("render-model-invalid", str(error))
+    except Exception as error:  # a composition function raised
+        reject("render-target-invalid", _evaluation_failed(target, error))
     environment = app.selected_environment if app is not None else None
     return context.namespace, rendering.rendered(composition, inputs), environment
 
@@ -223,8 +237,22 @@ def _render_pipeline(
         reject("render-model-invalid" if model else "render-target-invalid", str(error))
     except (ValidationError, ValueError) as error:
         reject("render-model-invalid", str(error))
+    except Exception as error:  # the pipeline's model raised while composing
+        reject("render-target-invalid", _evaluation_failed("the pipeline", error))
     return (
         context.namespace,
         rendering.rendered(composition, dict(context.secrets)),
         pipeline.environment,
+    )
+
+
+def _import_failed(target: str | None, error: Exception) -> str:
+    """The rejection message when importing the target module raised."""
+    return f"importing {target} failed: {describe_user_error(error)}"
+
+
+def _evaluation_failed(target: str | None, error: Exception) -> str:
+    """The rejection message when evaluating the target raised."""
+    return (
+        f"evaluating {target or 'the composition'} failed: {describe_user_error(error)}"
     )

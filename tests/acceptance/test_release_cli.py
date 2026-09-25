@@ -305,3 +305,30 @@ def test_unknown_spec_keys_are_rejected(release_env):
     assert code == 2
     assert "surprise" in refused["message"]
     assert refused["reason"] == "invalid-release-spec"
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ('raise TypeError("bad keyword")\n', "importing composition"),
+        ('raise RuntimeError("model broke")\n', "importing composition"),
+        (
+            "def build(ctx):\n    raise TypeError('build() got an unexpected keyword')\n",
+            "evaluating composition",
+        ),
+    ],
+)
+def test_composition_that_raises_is_rejected_without_traceback(
+    release_env, source, expected
+):
+    api, tmp_path = release_env
+    (tmp_path / "compose.py").write_text(source)
+    for command in ("plan", "diff"):
+        code, refused, result = _run(tmp_path, command)
+        assert code == 2, result.output
+        assert refused["state"] == "rejected"
+        assert refused["reason"] == "invalid-composition"
+        assert refused["message"].startswith(expected)
+        assert "Error: " in refused["message"]
+        assert "Traceback" not in result.output
+    assert not (tmp_path / "state" / "plans").exists()

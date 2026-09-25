@@ -70,6 +70,7 @@
           "description": "With --ref (planned/approval-required): each pinned source's resolved commit SHA, which the combined hash covers."
         },
         "reason": {"type": "string", "description": "Error code (piceli explain <code>)."},
+        "message": {"type": "string", "description": "With failed/rejected: the human sentence for reason (may change; parse reason)."},
         "stage": {"$ref": "#/$defs/stageName"},
         "blocking": {"type": "array", "items": {"type": "object"}},
         "preview": {"$ref": "#/$defs/previewMarker"},
@@ -92,6 +93,7 @@
       "properties": {
         "state": {"const": "rejected"},
         "reason": {"type": "string"},
+        "message": {"type": "string", "description": "The human sentence for reason (may change; parse reason)."},
         "stage": {"$ref": "#/$defs/stageName"},
         "blocking": {"type": "array", "items": {"type": "object"}},
         "preview": {"$ref": "#/$defs/previewMarker"},
