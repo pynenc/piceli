@@ -189,3 +189,49 @@ def test_deploy_one_environment_at_a_time(tmp_path: Path) -> None:
         assert result.exit_code == 0, result.output
         assert set(json.loads(result.stdout)["summary"]) == {"no-op"}
         assert "--env prod --approve" in result.stderr
+
+
+def test_a_plan_file_keeps_its_environment(tmp_path: Path) -> None:
+    """``--plan --out`` records ``--env``; ``--apply`` deploys that environment."""
+    shutil.copytree(ROOT / "examples" / "environments" / "crds", tmp_path / "crds")
+    _write(tmp_path)
+    dev, prod = FakeAPI(types=TYPES_WITH_CRDS), FakeAPI(types=TYPES_WITH_CRDS)
+    with serve(dev) as (dev, dev_url), serve(prod) as (prod, prod_url):
+        (tmp_path / "kubeconfig").write_text(
+            textwrap.dedent(
+                f"""
+                apiVersion: v1
+                kind: Config
+                clusters:
+                - {{name: dev, cluster: {{server: "{dev_url}"}}}}
+                - {{name: prod, cluster: {{server: "{prod_url}"}}}}
+                users: [{{name: nobody, user: {{}}}}]
+                contexts:
+                - {{name: dev, context: {{cluster: dev, user: nobody}}}}
+                - {{name: prod, context: {{cluster: prod, user: nobody}}}}
+                """
+            )
+        )
+        plan_file = tmp_path / "deploy-plan.json"
+        code, lines, result = _deploy(
+            tmp_path, "--env", "prod", "--plan", "--out", str(plan_file), "--json"
+        )
+        assert code == 0, result.output
+        combined = lines[-1]["combined_hash"]
+        assert json.loads(plan_file.read_text())["environment"] == "prod"
+
+        code, lines, result = _deploy(
+            tmp_path, "--apply", str(plan_file), "--approve", combined, "--env", "dev"
+        )
+        assert code == 2, result.output
+        assert lines[-1]["reason"] == "deploy-plan-file-mismatch"
+        assert _replicas(dev) is None and _replicas(prod) is None
+
+        result = CliRunner().invoke(
+            cli,
+            ["deploy", "--apply", str(plan_file), "--approve", combined, "--json"],
+        )
+        assert result.exit_code == 0, result.output
+        lines = [json.loads(x) for x in result.stdout.splitlines() if x.strip()]
+        assert lines[-1]["state"] == "ready", lines[-1]
+        assert _replicas(prod) == 3 and _replicas(dev) is None

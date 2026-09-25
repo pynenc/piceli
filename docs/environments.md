@@ -63,6 +63,11 @@ how to deploy each one to its own target.
    piceli release status --spec examples/environments/app.py:pipeline --env prod
    ```
 
+   A portable plan file (`--plan --out FILE`, see {doc}`deploy`) records the
+   environment, and `piceli deploy --apply FILE --approve HASH` deploys that
+   environment; with `state="cluster"` ({doc}`state`) each environment's
+   state and release lock live in its own target namespace.
+
 ### Expected output
 
 `--diff-env` prints the environments' typed differences: the override values,

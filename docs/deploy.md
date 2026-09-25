@@ -548,9 +548,10 @@ piceli deploy examples/shop/app.py:pipeline --ref main --plan --out deploy-plan.
 piceli deploy --apply deploy-plan.json --approve <combined hash>   # on any runner
 ```
 
-`--apply` takes the pipeline, stages, commits and `--reapply` from the file
+`--apply` takes the pipeline, stages, commits, `--reapply` and `--env` from the file
 and plans again against live state; it runs only when the hash is still the
-approved one, and refuses a file for another pipeline or cluster. Across
+approved one, and refuses a file for another pipeline or cluster (or an
+`--env` other than the file's: `deploy-plan-file-mismatch`). Across
 runners, use shared state (below): the release catalog and secret store of
 the plan runner are needed to compute the same plan.
 
