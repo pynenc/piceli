@@ -5,7 +5,7 @@ The documentation uses [Sphinx](https://www.sphinx-doc.org/) with
 [Furo](https://pradyunsg.me/furo/) theme and
 [sphinx-autodoc2](https://sphinx-autodoc2.readthedocs.io/) for the API reference.
 It is published on Read the Docs at
-[docs.pynenc.org/projects/piceli](https://docs.pynenc.org/projects/piceli/), as a
+[docs.pynenc.org/projects/piceli](https://docs.pynenc.org/projects/piceli/en/stable/), as a
 subproject of the Pynenc documentation.
 
 ## Build locally

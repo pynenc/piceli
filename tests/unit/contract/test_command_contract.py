@@ -73,6 +73,34 @@ CASES: dict[str, tuple[Argv, str]] = {
             "stop",
             "status",
             "secret show",
+            "diff",
+            "check",
+        )
+    },
+    "render": (
+        lambda p: ["render", str(p / "missing.py") + ":app"],
+        "render-target-invalid",
+    ),
+    "publish": (
+        lambda p: ["publish", str(p / "missing.py") + ":app", "--to", "http://x"],
+        "gitops-target-invalid",
+    ),
+    **{
+        f"state {command}": (
+            lambda p, command=command, extra=extra: [
+                "state",
+                command,
+                "--spec",
+                str(p / "bad-release.toml"),
+                *[str(p / item) if item.endswith(".json") else item for item in extra],
+            ],
+            "invalid-release-spec",
+        )
+        for command, extra in (
+            ("show", []),
+            ("pull", []),
+            ("export", ["--out", "export.json"]),
+            ("import", ["--in", "export.json"]),
         )
     },
     "status": (
@@ -81,6 +109,10 @@ CASES: dict[str, tuple[Argv, str]] = {
     ),
     "access": (
         lambda p: ["access", str(p / "missing-release.toml")],
+        "access-target-invalid",
+    ),
+    "access stop": (
+        lambda p: ["access", "stop", "--stale", str(p / "missing-release.toml")],
         "access-target-invalid",
     ),
     "import yaml": (
@@ -97,6 +129,22 @@ CASES: dict[str, tuple[Argv, str]] = {
     "deploy": (
         lambda p: ["deploy", str(p / "missing.py") + ":pipeline"],
         "pipeline-not-found",
+    ),
+    "cache status": (
+        lambda p: ["cache", "status", str(p / "missing.py") + ":pipeline"],
+        "pipeline-not-found",
+    ),
+    "cache prune": (
+        lambda p: ["cache", "prune", "--state-dir", str(p), "--budget", "lots"],
+        "cache-budget-invalid",
+    ),
+    "doctor": (
+        lambda p: ["doctor", str(p / "missing.py") + ":pipeline"],
+        "pipeline-not-found",
+    ),
+    "runs": (
+        lambda p: ["runs", "--env", "prod", "--state-dir", str(p)],
+        "cache-arguments-conflict",
     ),
     "inputs record": (
         lambda p: ["inputs", "record", "--spec", str(p / "junk")],
@@ -300,6 +348,7 @@ CASES: dict[str, tuple[Argv, str]] = {
         "invalid-access-profile",
     ),
     "explain": (lambda p: ["explain", "no-such-code"], "unknown-error-code"),
+    "codegen crd": (lambda p: ["codegen", "crd", str(p / "junk")], "crd-invalid"),
 }
 
 
@@ -319,6 +368,30 @@ def test_every_conforming_command_has_a_rejection_case() -> None:
     }
     # help-json has no rejection path: it takes no input.
     assert conforming - {"help-json"} == set(CASES)
+
+
+def test_no_command_is_partial() -> None:
+    assert [
+        path for path, item in COMMANDS.items() if item.contract != "conforms"
+    ] == []
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["render", "--spec", "{p}/missing-release.toml"],
+        ["render", "--spec", "{p}/junk"],
+        ["render"],
+    ],
+)
+def test_render_refuses_with_json_in_any_format(argv: list[str], files: Path) -> None:
+    for extra in ([], ["--format", "yaml"], ["--format", "json"]):
+        status, stdout, stderr = _invoke([arg.format(p=files) for arg in argv] + extra)
+        assert status == 2, (stdout, stderr)
+        body = json.loads(stdout)
+        assert body["state"] == "rejected"
+        assert body["reason"] == "render-target-invalid"
+        assert "[render-target-invalid]" in stderr
 
 
 @pytest.mark.parametrize("path", sorted(CASES))

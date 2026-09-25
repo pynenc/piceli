@@ -19,6 +19,7 @@ Priorities may change. Progress is tracked in
 | Dependency-ordered plan and apply | ✅ Available |
 | Image handoff by digest (build → deliver → release, immutable references only) | 🟡 Preview |
 | One command from source to a verified release (`piceli deploy`) | 🟡 Preview: journaled, resumable, skips unchanged stages |
+| Shared state and release lock for team CI (`state="cluster"`, plan files) | 🟡 Preview: plan on one runner, apply or resume on another |
 | Server-side apply with preconditions, journal and resume | ✅ The only engine: `piceli release` and the Python API |
 | Field-level diff and true no-op plans | 🟡 Preview: `release plan`/`release diff` (server dry runs) |
 | Safe pruning of removed resources | 🟡 Opt-in (`prune = true`) |
@@ -26,11 +27,11 @@ Priorities may change. Progress is tracked in
 | Post-deploy checks (http, exec, metric, Python) with automatic rollback | 🟡 Preview |
 | Import a live namespace or manifest files as a typed app module (`piceli import live`, `piceli import yaml`) | 🟡 Preview |
 | Public fake Kubernetes API for consumers' tests (`piceli.testing`) | 🟡 Preview |
-| Environments and overlays (Kustomize equivalent) | ❌ Not yet: plain Python functions for now |
+| Environments and overlays (Kustomize equivalent) | 🟡 Preview: typed `Environment` overrides, `--env`, `--diff-env` |
 | Reusable, versioned packages (Helm equivalent) | ❌ Not yet |
-| Custom resources (CRDs) | 🟡 As raw manifests in a composition |
+| Custom resources (CRDs) | 🟡 Preview: `app.resource` with models from `piceli codegen crd` |
 | Local operations UI and JSON API | 🟡 Early preview |
-| Continuous reconciliation from Git (Argo CD equivalent) | ❌ Not yet |
+| Continuous reconciliation from Git (Argo CD equivalent) | 🟡 Handoff only: `piceli publish` (Flux OCI artifact) and `render --out` for Flux or Argo CD; no in-cluster Piceli controller |
 | Cloud infrastructure lifecycle (Terraform/OpenTofu equivalent) | ❌ Not yet; GKE cluster helpers only |
 
 ## Feature status
@@ -49,13 +50,21 @@ Every feature page starts with its maturity, and this table lists them all:
 | Object model: templates, `kubernetes` client models, YAML/JSON (loader) | {doc}`kubernetes_model/index` | stable |
 | CLI overview | {doc}`cli/index` | preview |
 | Typed apps (`piceli.App`, `piceli render`) | {doc}`typed_apps` | preview |
+| Custom resources and generated models (`app.resource`, `piceli codegen crd`) | {doc}`crds` | preview |
+| Environments (`app.environment`, `--env`, `--diff-env`) | {doc}`environments` | preview |
+| Reference app: dev/staging/prod in one typed module (`examples/reference`, tested on kind) | {doc}`reference_app` | preview |
+| When to use Piceli, and the same app in Helm, Kustomize, cdk8s and Pulumi (`examples/comparisons`, rendered and compared in CI) | {doc}`when_to_use`, {doc}`comparisons` | preview |
 | Engine: discovery, plans, executor, journals (Python API) | {doc}`deployment_planning` | preview |
 | Deploy from source (`piceli deploy`, `piceli.pipeline`) | {doc}`deploy` | preview |
 | Deploy a commit (`piceli deploy --ref`) | {ref}`deploy-ref` | preview |
 | Deploy from CI with an approval step (GitHub Actions recipe) | {doc}`ci` | preview |
+| GitOps handoff to Flux or Argo CD (`piceli publish`, `piceli render --out`) | {doc}`gitops` | preview |
+| Shared deployment state, release lock, plan files, `piceli state` | {doc}`state` | preview |
+| Runner hygiene: temporary-file cleanup, `piceli cache status/prune`, `cache_budget=`, `piceli doctor`, run summaries and `piceli runs` | {doc}`maintenance` | preview |
 | Releases from a spec (`piceli release`) | {doc}`release_cli` | preview |
 | Post-deploy checks and automatic rollback (`[[checks]]`, `piceli.checks`, `release check`) | {doc}`checks` | preview |
 | Field-level diffs and no-op detection (`release plan`, `release diff`) | {doc}`plans_and_diffs` | preview |
+| Supported Kubernetes versions (last four minors, kind matrix) and shared ownership (autoscalers, operators, webhooks) | {doc}`compatibility` | preview |
 | Managed-cluster credentials: exec plugins for GKE, EKS, AKS, OIDC (`[target] allow_exec`) | {doc}`managed_clusters` | preview |
 | Source identity (`piceli inputs`) | {doc}`source_identity` | preview |
 | Containerized builds (`piceli artifacts build-spec`) | {doc}`containerized_builds` | preview |
@@ -66,11 +75,19 @@ Every feature page starts with its maturity, and this table lists them all:
 | Access and status from the model (`app.access.forward`, `piceli access`, `piceli status`) | {doc}`access` | preview |
 | Operations lens (`piceli observe`) | {doc}`operations_lens` | preview |
 | CLI contract: `piceli explain`, `piceli help-json`, error codes | {doc}`agents` | preview |
+| Owner-declared approval policy (`auto_approve`, `--approve-if-policy`) | {ref}`deploy-approval-policy` | preview |
+| Agent skill (`skills/piceli`, run in CI against the built wheel) | {doc}`agents` | preview |
 | Import and migration kit (`piceli import live`, `piceli import yaml`, `App.override`) | {doc}`migrate_from_kubectl` | preview |
 | Test double: fake Kubernetes API (`piceli.testing`) | {doc}`testing` | preview |
+| Cross-model eval of agents using Piceli (`evals/`, contributor tooling) | {doc}`contributing/evals` | experimental |
 | Operator workflow (`piceli operator`) | {doc}`operator_workflow` | experimental |
 
 ## How Piceli compares
+
+{doc}`comparisons` writes one app with Piceli, Helm, Kustomize, cdk8s and
+Pulumi, tests that all five render the same objects, and compares their
+size, steps and safety features; {doc}`when_to_use` is the short version.
+The table below is the long-term view.
 
 | | Kustomize | Helm | OpenTofu / Terraform | Argo CD | Piceli (goal) |
 | --- | --- | --- | --- | --- | --- |
@@ -113,15 +130,15 @@ audience.
 - Templates for Namespace, Ingress and Gateway API, NetworkPolicy, DaemonSet,
   PodDisruptionBudget, ClusterRole/ClusterRoleBinding, ResourceQuota and
   LimitRange.
-- A typed generic resource for any kind, including CRDs, with optional generated
-  models.
+- ✅ A typed generic resource for any kind, including CRDs, with generated
+  models (preview, see {doc}`crds`).
 - Namespaces, annotations and rollout strategies on every template.
 
 ### 4. Composition and environments
 
 - Reusable, parameterised components: the Python counterpart of a Helm chart.
-- Environment overlays (dev, staging, production) as typed configuration: the
-  Python counterpart of Kustomize.
+- ✅ Environment overlays (dev, staging, production) as typed configuration:
+  the Python counterpart of Kustomize (preview, see {doc}`environments`).
 - ✅ `piceli render` produces plain YAML, so teams can adopt Piceli gradually and
   feed its output into existing tools.
 

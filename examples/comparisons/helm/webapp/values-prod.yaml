@@ -1,0 +1,14 @@
+settings:
+  LOG_LEVEL: warning
+api:
+  replicas: 3
+  resources:
+    requests: {cpu: 200m, memory: 128Mi}
+    limits: {memory: 256Mi}
+web:
+  resources:
+    requests: {cpu: 100m, memory: 64Mi}
+    limits: {memory: 128Mi}
+  autoscaling:
+    minReplicas: 3
+    maxReplicas: 10

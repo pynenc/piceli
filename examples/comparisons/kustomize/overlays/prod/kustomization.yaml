@@ -1,0 +1,25 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: webapp-prod
+resources:
+  - ../../base
+replicas:
+  - name: api
+    count: 3
+  - name: web
+    count: 3
+patches:
+  - path: resources.yaml
+  - target: {kind: ConfigMap, name: settings}
+    patch: |-
+      - op: replace
+        path: /data/LOG_LEVEL
+        value: warning
+  - target: {kind: HorizontalPodAutoscaler, name: web}
+    patch: |-
+      - op: replace
+        path: /spec/minReplicas
+        value: 3
+      - op: replace
+        path: /spec/maxReplicas
+        value: 10

@@ -10,6 +10,15 @@ ran but did not succeed, ``2`` rejected, ``3`` approval required.
 ``--ref [SOURCE=]REV`` reads the sources from commits instead of the working
 tree (:mod:`piceli.pipeline.refs`); the printed approval command pins the
 resolved commit SHAs.
+
+``--approve-if-policy`` runs the plan without ``--approve`` only when every
+action is inside the owner's ``auto_approve`` policy declared in the pipeline
+(:mod:`piceli.approval_policy`); otherwise it prints the approval command and
+exits ``3`` with ``"reason": "approval-policy-exceeded"``.
+
+``--plan --out FILE`` also writes a portable plan (:mod:`piceli.pipeline.planfile`);
+``--apply FILE --approve HASH`` applies it on any runner: it re-plans against
+live state and runs only when the combined hash is still the approved one.
 """
 
 from __future__ import annotations
@@ -29,6 +38,7 @@ from piceli.cli_contract import (
     EXIT_FAILED,
     EXIT_OK,
     EXIT_REJECTED,
+    describe_user_error,
     emit_json,
     reject,
     say,
@@ -37,26 +47,50 @@ from piceli.cli_contract import (
 STAGE_NAMES = ("inputs", "build", "deliver", "plan", "apply", "checks")
 
 
-def load_pipeline(entry: str) -> Any:
-    """Import `MODULE:ATTR` and return its Pipeline; rejects (exit 2) otherwise."""
+def load_pipeline(entry: str, env: str | None = None) -> Any:
+    """Import `MODULE:ATTR` and return its Pipeline; rejects (exit 2) otherwise.
+
+    ``env`` selects one environment (``Pipeline.for_environment``); a pipeline
+    with one target per environment is refused without it
+    (``environment-required``).
+    """
     from piceli.app.render import RenderError, load_target
+    from piceli.approval_policy import ApprovalPolicyError
     from piceli.pipeline import Pipeline, PipelineError
 
     try:
         value = load_target(entry, Path.cwd())
-    except PipelineError as error:
-        say(f"the pipeline module refused its declaration: {error}")
-        reject(error.code)
+    except (PipelineError, ApprovalPolicyError) as error:
+        reject(error.code, f"the pipeline module refused its declaration: {error}")
     except RenderError as error:
-        say(str(error))
-        reject("pipeline-not-found")
-    except Exception as error:
-        say(f"importing {entry} failed: {type(error).__name__}: {error}")
-        reject("pipeline-load-failed")
+        reject("pipeline-not-found", str(error))
+    except Exception as error:  # the pipeline module raised while importing
+        reject(
+            "pipeline-load-failed",
+            f"importing {entry} failed: {describe_user_error(error)}",
+        )
     if not isinstance(value, Pipeline):
-        say(f"{entry} is a {type(value).__name__}, not a piceli Pipeline")
-        reject("pipeline-not-found")
+        reject(
+            "pipeline-not-found",
+            f"{entry} is a {type(value).__name__}, not a piceli Pipeline",
+        )
+    if env is not None:
+        try:
+            return value.for_environment(env)
+        except PipelineError as error:
+            reject(error.code, str(error))
+    if value.needs_environment:
+        reject(
+            "environment-required",
+            f"{entry} deploys one target per environment "
+            f"({', '.join(sorted(value.targets))}); pass --env NAME",
+        )
     return value
+
+
+def env_flag(env: str | None) -> str:
+    """`` --env NAME`` for printed follow-up commands (empty without one)."""
+    return f" --env {env}" if env else ""
 
 
 #: Human plan lines wrap here; continuation lines align under the stage text.
@@ -219,11 +253,14 @@ def _confirm(combined_hash: str) -> bool:
     return bool(answer) and len(answer) >= 12 and combined_hash.startswith(answer)
 
 
-def _approve_command(target: str, combined: Any) -> str:
+def _approve_command(target: str, combined: Any, env: str | None = None) -> str:
     """The approval command; ``--ref`` values are pinned to the planned SHAs."""
     refs = combined.stages.get("inputs", {}).get("refs", {})
     pinned = "".join(f" --ref {name}={value['commit']}" for name, value in refs.items())
-    return f"piceli deploy {target}{pinned} --approve {combined.combined_hash}"
+    return (
+        f"piceli deploy {target}{env_flag(env)}{pinned} "
+        f"--approve {combined.combined_hash}"
+    )
 
 
 @contextmanager
@@ -254,11 +291,12 @@ def _human(event: dict[str, Any]) -> None:
 
 def deploy(
     target: Annotated[
-        str,
+        str | None,
         typer.Argument(
-            help="The pipeline: MODULE:ATTR or path/to/file.py:ATTR naming a Pipeline"
+            help="The pipeline: MODULE:ATTR or path/to/file.py:ATTR naming a "
+            "Pipeline (optional with --apply: the plan file names it)"
         ),
-    ],
+    ] = None,
     plan: Annotated[
         bool,
         typer.Option(
@@ -290,6 +328,15 @@ def deploy(
             "--auto-approve", help="Plan and execute without confirmation (CI)"
         ),
     ] = False,
+    approve_if_policy: Annotated[
+        bool,
+        typer.Option(
+            "--approve-if-policy",
+            help="Execute without --approve only when every action of the plan "
+            "is inside the pipeline's auto_approve policy (declared by the "
+            "owner); otherwise print the approval command and exit 3",
+        ),
+    ] = False,
     reapply: Annotated[
         bool,
         typer.Option(
@@ -311,6 +358,32 @@ def deploy(
             "every source when they are one repository",
         ),
     ] = None,
+    out: Annotated[
+        Path | None,
+        typer.Option(
+            "--out",
+            help="With --plan: also write the portable plan file here (apply it "
+            "on any runner with --apply FILE --approve HASH)",
+        ),
+    ] = None,
+    apply_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--apply",
+            help="Apply the plan file written by --plan --out (needs --approve "
+            "with its combined hash); re-plans and refuses any change",
+        ),
+    ] = None,
+    env: Annotated[
+        str | None,
+        typer.Option(
+            "--env",
+            help="Environment to deploy: the app's overrides and the pipeline's "
+            "target for it (required when the pipeline has one target per "
+            "environment); the combined hash covers its name and values",
+            show_default=False,
+        ),
+    ] = None,
 ) -> None:
     """Deploy a pipeline: inputs → build → deliver → plan → apply → checks.
 
@@ -319,9 +392,38 @@ def deploy(
     --ref the sources are read from commits, and the hash covers the commits.
     """
     from piceli.pipeline import PipelineError, PipelineRunner
-    from piceli.pipeline.refs import parse_refs
+    from piceli.pipeline.refs import parse_refs, recorded_requests
     from piceli.pipeline.runner import preview_hash
 
+    document: dict[str, Any] | None = None
+    decision: Any = None
+    if apply_file is not None:
+        document = _plan_file(
+            apply_file,
+            approve,
+            conflicting=bool(
+                plan
+                or auto_approve
+                or approve_if_policy
+                or resume
+                or reapply
+                or ref
+                or out
+            )
+            or until != "checks",
+        )
+        until, reapply = document["until"], document["reapply"]
+        target = target or document["entry"]
+        if env is not None and env != document.get("environment"):
+            say("--apply deploys the environment the plan file was made for")
+            reject("deploy-plan-file-mismatch")
+        env = document.get("environment")
+    if out is not None and not plan:
+        say("--out writes the plan file of --plan; add --plan")
+        reject("deploy-flags-conflict")
+    if target is None:
+        say("name the pipeline: piceli deploy MODULE:ATTR (or --apply FILE)")
+        reject("deploy-flags-conflict")
     if until not in STAGE_NAMES:
         say(f"--until must be one of {', '.join(STAGE_NAMES)}")
         reject("deploy-stage-unknown")
@@ -334,6 +436,12 @@ def deploy(
     if plan and auto_approve:
         say("--plan executes nothing; drop --auto-approve")
         reject("deploy-flags-conflict")
+    if approve_if_policy and (plan or approve or auto_approve or resume):
+        say(
+            "--approve-if-policy plans and runs in one step; it cannot be "
+            "combined with --plan, --approve, --auto-approve or --resume"
+        )
+        reject("deploy-flags-conflict")
     if resume and ref:
         say("--resume reuses the commits the run was approved with; drop --ref")
         reject("deploy-flags-conflict")
@@ -342,32 +450,56 @@ def deploy(
     except PipelineError as error:
         say(str(error))
         reject(error.code)
-    pipeline = load_pipeline(target)
+    if document is not None:
+        # The plan's own commits, never a re-resolved branch.
+        refs = recorded_requests(document.get("refs") or {})
+    pipeline = load_pipeline(target, env)
+    if approve_if_policy and pipeline.auto_approve is None:
+        say(
+            f"{target} declares no auto_approve policy; only the owner can add "
+            "one (in the pipeline). Plan with --plan and ask for the hash"
+        )
+        reject("approval-policy-missing")
     runner = PipelineRunner(
         pipeline, on_event=emit_json if as_json else _human, say=say, refs=refs
     )
+    finished: tuple[int, dict[str, Any]] | None = None
     try:
         with _terminate_as_interrupt(), runner.locked(), runner.sources():
             if resume:
                 result = runner.resume()
             else:
+                if document is not None:
+                    seeded = runner.adopt_plan_file(document)
+                    if seeded:
+                        say(f"plan file: {len(seeded)} receipt(s) from the plan runner")
                 combined = runner.plan(until, reapply=reapply)
-                _describe(combined, target)
+                _describe(combined, target + env_flag(env))
                 body = {
                     "schema": "piceli.deploy-event.v1",
                     "event": "result",
                     **combined.to_dict(),
                 }
+                if pipeline.environment is not None:
+                    body["environment"] = pipeline.environment.identity()
                 refs_planned = combined.stages["inputs"].get("refs")
                 if refs_planned:
                     body["refs"] = {n: v["commit"] for n, v in refs_planned.items()}
                 if plan:
+                    if out is not None:
+                        _write_plan_file(runner, combined, out, target, reapply, env)
+                        body["plan_file"] = str(out)
                     # The command stays on one line so it can be copied.
                     say("approve with:")
-                    say(f"  {_approve_command(target, combined)}")
-                    emit_json({**body, "state": "planned"})
-                    raise typer.Exit(EXIT_OK)
-                if approve is not None:
+                    say(f"  {_approve_command(target, combined, env)}")
+                    if out is not None:
+                        say("or on another runner:")
+                        say(
+                            f"  piceli deploy --apply {out} --approve "
+                            f"{combined.combined_hash}"
+                        )
+                    finished = (EXIT_OK, {**body, "state": "planned"})
+                elif approve is not None:
                     if approve == preview_hash(combined):
                         say(
                             "that is the hash of the placeholder preview, which "
@@ -385,32 +517,129 @@ def deploy(
                             )
                         )
                         reject("pipeline-plan-changed")
+                elif approve_if_policy:
+                    decision = runner.policy_decision(combined)
+                    if decision.allowed:
+                        say(
+                            "inside the owner's approval policy "
+                            f"({decision.changes} change(s)); executing"
+                        )
+                    else:
+                        _say_wrapped(
+                            "outside the owner's approval policy: ",
+                            ", ".join(decision.violations),
+                        )
+                        say("the owner must review this plan; approve with:")
+                        say(f"  {_approve_command(target, combined, env)}")
+                        finished = (
+                            EXIT_APPROVAL,
+                            {
+                                **body,
+                                "state": "approval-required",
+                                "reason": "approval-policy-exceeded",
+                                "policy": decision.to_dict(),
+                            },
+                        )
                 elif not auto_approve and not _confirm(combined.combined_hash):
                     say("approve with:")
-                    say(f"  {_approve_command(target, combined)}")
-                    emit_json({**body, "state": "approval-required"})
-                    raise typer.Exit(EXIT_APPROVAL)
-                result = runner.execute(
-                    combined, combined.combined_hash, reapply=reapply
-                )
+                    say(f"  {_approve_command(target, combined, env)}")
+                    finished = (EXIT_APPROVAL, {**body, "state": "approval-required"})
+                if finished is None:
+                    result = runner.execute(
+                        combined,
+                        combined.combined_hash,
+                        reapply=reapply,
+                        policy=decision if approve_if_policy else None,
+                    )
     except PipelineError as error:
-        _fail(runner, error)
+        _fail(runner, error, target, env)
     except (ValueError, OSError) as error:
         from piceli.pipeline.runner import classify
 
-        _fail(runner, classify(error))
+        _fail(runner, classify(error), target, env)
     except KeyboardInterrupt:
-        say("interrupted; continue with: piceli deploy " + target + " --resume")
+        say(
+            "interrupted; continue with: piceli deploy "
+            + target
+            + env_flag(env)
+            + " --resume"
+        )
         if runner.run is not None:
             emit_json(runner.result("interrupted"))
         raise typer.Exit(EXIT_FAILED) from None
+    if finished is not None:
+        # Printed after the state session closed: with shared state the
+        # plan's state is in the cluster before its hash is published.
+        emit_json(finished[1])
+        raise typer.Exit(finished[0])
     state = result["state"]
     say(f"deploy {state}: release {result.get('release')}")
     emit_json(result)
     raise typer.Exit(EXIT_OK)
 
 
-def _fail(runner: Any, error: Any) -> None:
+def _plan_file(path: Path, approve: str | None, *, conflicting: bool) -> dict[str, Any]:
+    """Load ``--apply FILE`` and check it against ``--approve`` (rejects)."""
+    from piceli.pipeline import PipelineError
+    from piceli.pipeline.planfile import load_plan_document
+
+    if conflicting:
+        say(
+            "--apply takes the plan file's own stages, commits and flags; only "
+            "--approve and --json may be added"
+        )
+        reject("deploy-flags-conflict")
+    if approve is None:
+        say("--apply needs --approve <combined hash> (the hash the reviewer approved)")
+        reject("deploy-flags-conflict")
+    try:
+        document = load_plan_document(path)
+    except PipelineError as error:
+        say(str(error))
+        reject(error.code)
+    if approve != document["combined_hash"]:
+        say("the approved hash is not this plan file's combined hash")
+        reject("deploy-plan-file-mismatch")
+    return document
+
+
+def _write_plan_file(
+    runner: Any,
+    combined: Any,
+    out: Path,
+    target: str,
+    reapply: bool,
+    env: str | None,
+) -> None:
+    from piceli.pipeline.planfile import (
+        observed_target,
+        plan_document,
+        write_plan_document,
+    )
+
+    observed: dict[str, str] | None
+    try:
+        observed = observed_target(runner.pipeline)
+    except Exception as error:
+        # A plan that stops before the cluster (--until inputs/build) may run
+        # without cluster access; --apply then skips the identity check.
+        say(f"plan file: target identity not recorded ({type(error).__name__})")
+        observed = None
+    document = plan_document(
+        runner,
+        combined,
+        entry=target,
+        reapply=reapply,
+        observed=observed,
+        environment=env,
+    )
+    write_plan_document(out, document)
+    say(f"plan file: {out}")
+
+
+def _fail(
+    runner: Any, error: Any, target: str | None = None, env: str | None = None
+) -> None:
     say(f"{'failed' if error.failed else 'rejected'}: {error} ({error.code})")
     for item in error.details.get("blocking", ()):
         suggest = " or ".join(item.get("suggest", ()))
@@ -425,7 +654,21 @@ def _fail(runner: Any, error: Any) -> None:
             + _placeholder_note(preview)
             + "; nothing was built or delivered)"
         )
+    diagnosis = error.details.get("diagnosis")
+    if isinstance(diagnosis, dict):
+        from piceli.k8s.ops.diagnosis import headline, human_lines
+
+        title = headline(diagnosis)
+        if title:
+            say(f"  {title}:")
+        for line in human_lines(diagnosis):
+            say(f"  {line}")
     say(f"explain with: piceli explain {error.code}")
+    if runner.run is not None and isinstance(diagnosis, dict):
+        say(
+            f"again later: piceli release status --spec {target or 'MODULE:ATTR'}"
+            f"{env_flag(env)} --run {runner.run.run_id}"
+        )
     if runner.run is not None:
         body = runner.result(runner.run.state)
         if not error.failed:
@@ -449,9 +692,22 @@ def _fail(runner: Any, error: Any) -> None:
         body = {"state": "rejected", "reason": error.code}
         if "stage" in error.details:
             body["stage"] = error.details["stage"]
+    # The contract's human sentence (the same one stderr shows first).
+    body["message"] = str(error)
     if error.details.get("blocking"):
         body["blocking"] = error.details["blocking"]
+    if error.details.get("holder"):
+        # A held release lock: who holds it and for how long (no command line).
+        body["lock"] = {
+            key: error.details[key]
+            for key in ("holder", "expires_in")
+            if key in error.details
+        }
     if isinstance(preview, dict):
         body["preview"] = preview
+    if isinstance(diagnosis, dict):
+        body["diagnosis"] = diagnosis
+    if isinstance(error.details.get("policy"), dict):
+        body["policy"] = error.details["policy"]
     emit_json(body)
     raise typer.Exit(EXIT_FAILED if error.failed else EXIT_REJECTED)

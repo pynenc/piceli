@@ -33,7 +33,13 @@ from piceli.k8s.ops.discovery import (
     ServerDryRun,
 )
 from piceli.k8s.ops.kubernetes_provider import ProviderError
-from piceli.k8s.ops.plan import DeploymentComposition, ResourceIntent, ResourceRef
+from piceli.k8s.ops.plan import (
+    DeploymentComposition,
+    ObservedSnapshot,
+    ResourceIntent,
+    ResourceRef,
+    autoscaled_replicas,
+)
 
 #: At most this many dry-run requests per plan; later objects get no evidence.
 MAX_DRY_RUNS = 256
@@ -129,6 +135,16 @@ def capture_server_dry_runs(
     preview = getattr(provider, "preview_update", None)
     if preview is None:
         return artifact, ()
+    try:
+        # The planner declares what :func:`autoscaled_replicas` leaves, so
+        # the evidence must be for that exact write.
+        composition, _ = autoscaled_replicas(
+            composition,
+            ObservedSnapshot.from_discovery(artifact),
+            getattr(provider, "field_manager", None),
+        )
+    except ValueError:
+        pass
     runs: list[ServerDryRun] = []
     unavailable: list[DryRunUnavailable] = []
     candidates = [

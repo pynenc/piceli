@@ -20,6 +20,7 @@ make typecheck            # mypy on piceli/
 make lint                 # every pre-commit hook: ruff check + format, uv lock, YAML/TOML
 make docs                 # Sphinx with warnings as errors
 make docs-reference       # regenerate docs/reference/{errors,cli}.md from code
+make evals-check          # self-tests of the cross-model eval harness (evals/)
 make help                 # every target
 ```
 
@@ -32,14 +33,24 @@ uv run --frozen ruff check . && uv run --frozen ruff format --check .
 uv run --frozen --group docs sphinx-build -W --keep-going -b html docs docs/_build/html
 ```
 
-`make test-integration` runs against the **current kubeconfig context**. Use a
-disposable cluster (`kind create cluster`) and never a shared one.
+`make test-integration` runs the kind tests against the cluster named by
+`PICELI_KIND_KUBECONFIG` and `PICELI_KIND_CONTEXT` (plus `PICELI_KIND_NODE`,
+the node container, for the node-delivery tests); without them they are
+skipped. They never use the current context. Create a disposable cluster with
+a supported node image (see `.github/kind-nodes.json`), for example
+`kind create cluster --name piceli-it --kubeconfig /tmp/it.kubeconfig`, then
+`PICELI_KIND_KUBECONFIG=/tmp/it.kubeconfig PICELI_KIND_CONTEXT=kind-piceli-it
+PICELI_KIND_NODE=piceli-it-control-plane make test-integration`. Never point
+them at a shared cluster.
 
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/)
 (`feat:`, `fix:`, `docs:`, `test:` …). Behaviour changes get a line in
 `docs/changelog.md`. A new command, option or error code also needs
 `make docs-reference`, and an entry in `docs/agents.md` and `llms.txt` when it
-is safe to run or needs approval.
+is safe to run or needs approval. A change to the public Python API or the CLI
+also needs `uv run --frozen python evals/run.py api-surface --write` (the eval
+harness checks model answers against that snapshot; `make evals-check` fails
+until it is refreshed).
 
 ## Invariants
 
@@ -98,7 +109,8 @@ These are enforced by tests or review. Do not weaken them.
 | Templates (typed object model) | `piceli/k8s/templates/` |
 | Discovery, plans, executor, journal, sessions | `piceli/k8s/ops/` |
 | Releases from a spec | `piceli/k8s/release_spec.py`, `release_runner.py`, `release_secrets.py`, `piceli/k8s/cli/release.py` |
-| Deploy from source (`Pipeline`, `piceli deploy`) | `piceli/pipeline/` |
+| Deploy from source (`Pipeline`, `piceli deploy`, plan files) | `piceli/pipeline/` |
+| Shared state, release lock, `piceli state` | `piceli/state/`, `piceli/k8s/cli/state.py` |
 | Post-deploy checks (`Checks`, `release check`) | `piceli/checks/` |
 | Builds, source identity, image delivery | `piceli/artifacts/` |
 | Typed apps (`App`, `app.override`) | `piceli/app/` |
@@ -107,6 +119,8 @@ These are enforced by tests or review. Do not weaken them.
 | Observe / operator UI and REST API | `piceli/k8s/observe*.py`, `piceli/k8s/operator*.py` |
 | Access and status (`piceli access`, `piceli status`) | `piceli/app/access.py`, `piceli/k8s/access.py`, `piceli/k8s/port_owner.py`, `piceli/k8s/cli/access.py` |
 | Examples (run in CI where possible) | `examples/` |
+| Cross-model eval of agents using Piceli (tasks, grader, sandbox, baselines) | `evals/` (see `evals/README.md`) |
 | Docs (Sphinx + MyST) | `docs/`; agent entry points `llms.txt`, `docs/agents.md` |
-| First-run path for new users | `README.md` quick start, `docs/getting_started/index.md` and the taste in `docs/index.md`; keep the three in sync |
+| First-run path for new users | `README.md` quick start (included from `examples/readme/`: edit the files, then `python scripts/readme_examples.py sync`; run against the fake API by `tests/acceptance/test_readme_quickstart.py`), `docs/getting_started/index.md` (includes the same `app.py`) and the taste in `docs/index.md`; keep the three in sync |
+| Same app in Helm, Kustomize, cdk8s and Pulumi | `examples/comparisons/`, `tests/unit/comparisons/` (CI job `comparisons`), `docs/comparisons.md`, `docs/when_to_use.md` |
 | Human contributor guide | `CONTRIBUTING.md`, `docs/contributing/` |

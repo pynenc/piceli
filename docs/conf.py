@@ -32,6 +32,8 @@ extensions = [
 # -- Options for extlinks ----------------------------------------------------
 extlinks = {
     "pypi": ("https://pypi.org/project/%s/", "%s"),
+    # A file of the repository; tests/unit/test_docs_claims.py checks each exists.
+    "src": ("https://github.com/pynenc/piceli/blob/main/%s", "%s"),
 }
 
 templates_path = ["_templates"]
@@ -109,7 +111,7 @@ html_theme_options: dict[str, Any] = {
     "source_branch": "main",
     "source_directory": "docs/",
     "announcement": (
-        f"<b>{version}</b> is out. See the <a href='https://docs.pynenc.org/projects/piceli/en/latest/changelog.html'>changelog</a>"
+        f"<b>{version}</b> is out. See the <a href='https://docs.pynenc.org/projects/piceli/en/stable/changelog.html'>changelog</a>"
         " for details. Piceli is pre-alpha: APIs may change between releases."
     ),
 }

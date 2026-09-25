@@ -14,6 +14,9 @@ journals and reports only ever see opaque references.
 * ``import``: a value read from a file, an environment variable or a live
   Secret key, recorded as the first version.
 * ``static``: a public value.
+* ``sops``, ``vault``, ``aws-secrets-manager``: values read from an external
+  source by :mod:`piceli.k8s.secret_sources` before the plan; carried over
+  while the value (its keyed digest) is unchanged, else stored as ``fetched``.
 
 Certificates come from a pinned ``openssl`` binary called with an explicit
 argv (no shell). The optional ``openssl_sha256`` pins the binary's content;
@@ -30,11 +33,11 @@ import os
 import secrets
 import stat
 import subprocess
-import tempfile
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from piceli.k8s.release_secret_spec import (
     GeneratorSpec,
@@ -47,12 +50,17 @@ from piceli.k8s.release_secret_spec import (
     TlsCaSpec,
     TlsLeafSpec,
     TlsSelfSignedSpec,
+    check_rotation,
     generation_order,
+    is_external,
     outputs,
     render_template,
     template_dependencies,
 )
 from piceli.k8s.release_spec import ReleaseSpecError
+
+if TYPE_CHECKING:
+    from piceli.k8s.secret_sources import Fetched
 
 __all__ = [
     "Carry",
@@ -99,11 +107,25 @@ def config_digest(spec: GeneratorSpec) -> str:
 
     A changed digest means a carried-over value no longer matches the spec, so
     it is regenerated. The tool path/pin is excluded (upgrading openssl must
-    not rotate certificates), and so is an import's rotation policy.
+    not rotate certificates), and so is an import's rotation policy and an
+    external source's tool, credentials and time limits.
     """
     exclude = {"openssl", "openssl_sha256"}
     if isinstance(spec, ImportSecretSpec):
         exclude |= {"rotate", "bytes"}
+    elif is_external(spec):
+        # How the source is reached (tool, credentials, CA, time limits) does
+        # not shape the value; where it is read from does.
+        exclude |= {
+            "sops",
+            "sops_sha256",
+            "pass_env",
+            "timeout_seconds",
+            "token_file",
+            "token_env",
+            "ca_file",
+            "profile",
+        }
     return _digest(spec.model_dump(mode="json", exclude=exclude))
 
 
@@ -179,10 +201,12 @@ def _openssl(openssl: Path, *arguments: str) -> None:
         raise SecretGeneratorError("openssl timed out") from None
 
 
-def _private_tempdir() -> tempfile.TemporaryDirectory[str]:
-    directory = tempfile.TemporaryDirectory(prefix="piceli-tls-")
-    os.chmod(directory.name, 0o700)
-    return directory
+def _private_tempdir() -> AbstractContextManager[Path]:
+    """An owner-only ``piceli-tls-*`` directory for key material, removed on
+    exit, error and terminating signals (:mod:`piceli.tempfiles`)."""
+    from piceli.tempfiles import temporary_directory
+
+    return temporary_directory("tls")
 
 
 def _write_private_file(path: Path, content: bytes) -> None:
@@ -458,7 +482,8 @@ class Materialized:
     """Every output value (encoded) plus public bookkeeping for the release.
 
     ``origin`` per generator: ``generated``, ``imported``, ``rotated``,
-    ``rendered``, ``static``, ``carried:<release>`` or, for a ``tls-ca``
+    ``rendered``, ``static``, ``fetched`` (a new or changed external value),
+    ``carried:<release>`` or, for a ``tls-ca``
     whose CA was carried, ``signed:<release>``.
     """
 
@@ -480,6 +505,8 @@ def describe(name: str, spec: GeneratorSpec) -> dict[str, Any]:
     if isinstance(spec, ImportSecretSpec):
         value["source"] = spec.source()
         value["rotate"] = spec.rotate
+    elif is_external(spec):
+        value["source"] = spec.source()  # type: ignore[union-attr]
     return value
 
 
@@ -489,20 +516,15 @@ def materialize(
     rotate: Sequence[str] = (),
     carry: Carry | None = None,
     sources: ImportSources | None = None,
+    external: Mapping[str, Fetched] | None = None,
 ) -> Materialized:
     """Produce every output, in dependency order, carrying values over.
 
-    Nothing here writes to the store; the caller stores the result only after
-    the plan was accepted.
+    ``external`` holds the values already read from external sources (see
+    :func:`piceli.k8s.secret_sources.fetch_all`). Nothing here writes to the
+    store; the caller stores the result only after the plan was accepted.
     """
-    for name in rotate:
-        spec = secrets_spec.get(name)
-        if isinstance(spec, TemplateSecretSpec | StaticSecretSpec):
-            raise SecretError(
-                "secret-rotation-refused",
-                f"secret {name!r} is a {spec.type}; rotate what it is made of, "
-                "or change its value in the spec",
-            )
+    check_rotation(secrets_spec, rotate)
     sources = sources or ImportSources()
     dependencies = template_dependencies(secrets_spec)
     raw: dict[str, bytes] = {}
@@ -513,9 +535,28 @@ def materialize(
     for name in generation_order(secrets_spec):
         spec = secrets_spec[name]
         digests = part_digests(spec)
+        fetched = (external or {}).get(name)
+        if is_external(spec):
+            if fetched is None:
+                raise SecretError(
+                    "secret-source-failed",
+                    f"secret {name!r} was not read from its source before the plan",
+                )
+            # The keyed value digest makes a changed value a new version.
+            digests = {"": _digest({"config": digests[""], "value": fetched.digest})}
         parts[name] = digests
         meta[name] = describe(name, spec)
-        if isinstance(spec, TemplateSecretSpec):
+        if fetched is not None and is_external(spec):
+            found = carry(name, "", digests[""], (name,)) if carry is not None else None
+            if found is not None:
+                fresh = {
+                    key: decode(value, spec.encoding) for key, value in found[0].items()
+                }
+                origin[name] = f"carried:{found[1]}"
+            else:
+                fresh = {name: fetched.value}
+                origin[name] = "fetched"
+        elif isinstance(spec, TemplateSecretSpec):
             texts: dict[str, str] = {}
             for placeholder, output in dependencies[name].items():
                 try:

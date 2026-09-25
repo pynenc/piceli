@@ -31,6 +31,7 @@ from pydantic import (
     model_validator,
 )
 
+from piceli.approval_policy import DEFAULT_ALLOW, ApprovalPolicy
 from piceli.checks.model import Check, unique_names
 from piceli.k8s.ops.discovery import valid_resource_name
 from piceli.k8s.ops.exec_credentials import ExecPolicy
@@ -38,14 +39,17 @@ from piceli.k8s.ops.plan import DeploymentComposition
 from piceli.k8s.ops.provider_factory import KubeconfigTarget, NodeExpectation
 from piceli.k8s.ops.secret_versions import SecretVersionRef
 from piceli.k8s.release_secret_spec import (  # noqa: F401 (re-exported)
+    AwsSecretSpec,
     GeneratorSpec,
     ImportSecretSpec,
     RandomSecretSpec,
     SecretSpec,
+    SopsSecretSpec,
     StaticSecretSpec,
     TemplateSecretSpec,
     TlsCaSpec,
     TlsSelfSignedSpec,
+    VaultSecretSpec,
     check_secrets,
 )
 
@@ -151,6 +155,29 @@ class TargetSpec(_Strict):
         return self
 
 
+class AutoApproveSpec(_Strict):
+    """``[release] auto_approve``: the owner's approval policy.
+
+    See :class:`piceli.approval_policy.ApprovalPolicy` and docs/agents.md.
+    """
+
+    allow: tuple[str, ...] = tuple(sorted(DEFAULT_ALLOW))
+    deny: tuple[str, ...] = ()
+    max_objects: int | None = None
+
+    @model_validator(mode="after")
+    def _valid(self) -> AutoApproveSpec:
+        self.policy()
+        return self
+
+    def policy(self) -> ApprovalPolicy:
+        return ApprovalPolicy(
+            allow=frozenset(self.allow),
+            deny=frozenset(self.deny),
+            max_objects=self.max_objects,
+        )
+
+
 class ReleaseSettings(_Strict):
     name: str
     owner: str = Field(min_length=1, max_length=128)
@@ -160,6 +187,10 @@ class ReleaseSettings(_Strict):
     catalog: Path | None = None
     journal: Path | None = None
     secret_store: Path | None = None
+    # "cluster": the state lives in the release namespace behind a Lease lock;
+    # state_dir is this runner's working copy. See docs/state.md.
+    state: Literal["local", "cluster"] = "local"
+    state_lease_seconds: int = Field(default=60, ge=5, le=3600)
     approval_window_seconds: int = Field(default=900, ge=30, le=86400)
     prune: bool = False
     inherited_owners: tuple[str, ...] = ()
@@ -172,6 +203,27 @@ class ReleaseSettings(_Strict):
     # After a release's checks fail, re-apply the previous ready release
     # automatically (journaled like any rollback). See docs/checks.md.
     rollback_on_failed_checks: bool = False
+    # The owner's approval policy for `apply --approve-if-policy`; part of
+    # the plan hash. See docs/agents.md.
+    auto_approve: AutoApproveSpec | None = None
+
+    @property
+    def approval_policy(self) -> ApprovalPolicy | None:
+        """The declared approval policy, or ``None``."""
+        return None if self.auto_approve is None else self.auto_approve.policy()
+
+    @model_validator(mode="after")
+    def _shared_state(self) -> ReleaseSettings:
+        if self.state == "cluster" and (
+            self.catalog is not None
+            or self.journal is not None
+            or self.secret_store is not None
+        ):
+            raise ValueError(
+                'state = "cluster" keeps the catalog, journal and secret store '
+                "in state_dir; remove catalog, journal and secret_store"
+            )
+        return self
 
     @field_validator("adopt")
     @classmethod
@@ -211,6 +263,11 @@ class ExecutionSpec(_Strict):
     readiness_seconds: float = Field(default=300, gt=0, le=3600)
     poll_seconds: float = Field(default=1.0, gt=0, le=60)
     max_polls: int = Field(default=1000, gt=0, le=10000)
+    write_settle_seconds: float = Field(default=60, gt=0, le=3600)
+    # Fail the apply at once when a workload's new pods cannot start (crash
+    # loop, image pull, config error) or restarted ``crash_restarts`` times.
+    fail_fast: bool = True
+    crash_restarts: int = Field(default=3, ge=1, le=1000)
 
 
 class DiscoverySpec(_Strict):
@@ -887,11 +944,17 @@ class ReleaseSpec:
                         code="invalid-composition",
                     )
                 module = importlib.util.module_from_spec(loader_spec)
+                # Like `piceli render`: modules next to the file (such as
+                # generated CRD models) import, after every installed package.
+                if str(path.parent) not in sys.path:
+                    sys.path.append(str(path.parent))
                 sys.modules[module_name] = module
                 try:
                     loader_spec.loader.exec_module(module)
-                except BaseException:
+                except BaseException as error:
                     del sys.modules[module_name]
+                    if isinstance(error, Exception):
+                        raise _composition_raised(entry, "importing", error) from None
                     raise
         else:
             try:
@@ -901,6 +964,8 @@ class ReleaseSpec:
                     f"cannot import composition module {target!r}: {error}",
                     code="invalid-composition",
                 ) from None
+            except Exception as error:  # the module raised while importing
+                raise _composition_raised(entry, "importing", error) from None
         function = getattr(module, attribute, None)
         if not callable(function):
             raise ReleaseSpecError(
@@ -922,3 +987,17 @@ class ReleaseSpec:
             values=MappingProxyType(dict(self.model.values)),
             nodes=MappingProxyType(dict(nodes or {})),
         )
+
+
+def _composition_raised(entry: str, doing: str, error: Exception) -> ReleaseSpecError:
+    """``invalid-composition`` for an exception raised by the user's module.
+
+    The message is the exception's type and text, never a traceback
+    (``PICELI_DEBUG=1`` prints it on stderr).
+    """
+    from piceli.cli_contract import describe_user_error
+
+    return ReleaseSpecError(
+        f"{doing} composition {entry!r} failed: {describe_user_error(error)}",
+        code="invalid-composition",
+    )

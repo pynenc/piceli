@@ -33,8 +33,16 @@ test-acceptance: ## Fault-injected API acceptance tests (no cluster needed)
 	uv run pytest tests/acceptance
 
 .PHONY: test-integration
-test-integration: ## Integration tests against the current kubeconfig context (use a disposable kind cluster)
+test-integration: ## Integration tests on the kind cluster named by PICELI_KIND_KUBECONFIG/PICELI_KIND_CONTEXT
 	uv run pytest tests/integration
+
+.PHONY: skill-check
+skill-check: ## Fresh-agent check: run the agent skill's walkthrough from a copy of skills/piceli (fake API)
+	uv run python scripts/skill_check.py
+
+.PHONY: evals-check
+evals-check: ## Self-tests of the cross-model eval harness (mock models, no keys, no network)
+	uv run --frozen pytest evals/tests
 
 .PHONY: coverage
 coverage: ## Unit + acceptance tests with an HTML coverage report

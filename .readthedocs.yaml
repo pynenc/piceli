@@ -1,5 +1,5 @@
 # Read the Docs configuration (https://docs.readthedocs.io/en/stable/config-file/v2.html)
-# Published as a subproject of the Pynenc docs: https://docs.pynenc.org/projects/piceli/
+# Published as a subproject of the Pynenc docs: https://docs.pynenc.org/projects/piceli/en/stable/
 version: 2
 
 build:

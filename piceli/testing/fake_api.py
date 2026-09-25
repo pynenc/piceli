@@ -5,8 +5,8 @@ names listed in ``__all__`` only change in a minor release with a changelog
 entry, never silently.
 
 The server speaks enough of the Kubernetes REST API (discovery, list with
-pagination, get, create, server-side apply, merge patch, delete with
-preconditions, dry run) for :class:`~piceli.k8s.ops.kubernetes_provider.KubernetesProvider`,
+pagination and label selectors, get, create, server-side apply, merge patch,
+delete with preconditions, dry run) for :class:`~piceli.k8s.ops.kubernetes_provider.KubernetesProvider`,
 ``piceli release`` and ``piceli import live`` to run against it unchanged over a
 loopback HTTP socket. Faults (HTTP errors, delays, disconnects, raw bodies) can
 be injected per request, and an opt-in field-ownership model reproduces
@@ -14,7 +14,8 @@ server-side-apply bookkeeping (``managedFields``, conflicts, pruning).
 
 It is not a conformance-tested API server: there is no admission, no
 defaulting beyond readiness status, no watch, and one namespace
-(:data:`TARGET` ``.namespace``) holds every namespaced object.
+(:data:`TARGET` ``.namespace`` unless ``FakeAPI(namespace=...)`` names
+another) holds every namespaced object.
 
 Importing this module has no side effects: nothing listens until
 :func:`serve` (or :func:`fake_cluster`) is entered.
@@ -38,7 +39,7 @@ import textwrap
 import threading
 import time
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -73,10 +74,19 @@ TYPES: Mapping[str, tuple[str, str, bool]] = {
     "secrets": ("v1", "Secret", True),
     "services": ("v1", "Service", True),
     "pods": ("v1", "Pod", True),
+    "replicasets": ("apps/v1", "ReplicaSet", True),
     "persistentvolumeclaims": ("v1", "PersistentVolumeClaim", True),
     "persistentvolumes": ("v1", "PersistentVolume", False),
     "namespaces": ("v1", "Namespace", False),
     "deployments": ("apps/v1", "Deployment", True),
+    "statefulsets": ("apps/v1", "StatefulSet", True),
+    "daemonsets": ("apps/v1", "DaemonSet", True),
+    "jobs": ("batch/v1", "Job", True),
+    "cronjobs": ("batch/v1", "CronJob", True),
+    "horizontalpodautoscalers": ("autoscaling/v2", "HorizontalPodAutoscaler", True),
+    "poddisruptionbudgets": ("policy/v1", "PodDisruptionBudget", True),
+    "ingresses": ("networking.k8s.io/v1", "Ingress", True),
+    "httproutes": ("gateway.networking.k8s.io/v1", "HTTPRoute", True),
     "networkpolicies": ("networking.k8s.io/v1", "NetworkPolicy", True),
     "serviceaccounts": ("v1", "ServiceAccount", True),
     "roles": ("rbac.authorization.k8s.io/v1", "Role", True),
@@ -88,6 +98,8 @@ TYPES: Mapping[str, tuple[str, str, bool]] = {
         False,
     ),
     "widgets": ("example.test/v1", "Widget", False),
+    # The release lock of shared state (``state="cluster"``).
+    "leases": ("coordination.k8s.io/v1", "Lease", True),
 }
 
 
@@ -276,9 +288,32 @@ def _prune(manifest: dict[str, Any], removed: set[Path], kept: set[Path]) -> Non
             _remove_path(manifest, path)
 
 
-def _validation_error(body: Any) -> str | None:
-    """The API server's validation rules the fake models (a small subset)."""
-    if not isinstance(body, dict) or body.get("kind") != "Deployment":
+# Spec fields the API server refuses to change on an existing object.
+_IMMUTABLE_SPEC = {
+    "Job": ("template", "completions", "completionMode", "selector"),
+    "StatefulSet": (
+        "selector",
+        "serviceName",
+        "podManagementPolicy",
+        "volumeClaimTemplates",
+    ),
+}
+
+
+def _validation_error(body: Any, current: Any = None) -> str | None:
+    """The API server's validation rules the fake models (a small subset).
+
+    Besides a Deployment's strategy, an update may not change the immutable
+    spec fields of a Job or StatefulSet (``field is immutable``).
+    """
+    if not isinstance(body, dict):
+        return None
+    if isinstance(current, dict) and body.get("kind") in _IMMUTABLE_SPEC:
+        before, after = current.get("spec") or {}, body.get("spec") or {}
+        for key in _IMMUTABLE_SPEC[body["kind"]]:
+            if before.get(key) != after.get(key):
+                return f"spec.{key}: Invalid value: field is immutable"
+    if body.get("kind") != "Deployment":
         return None
     strategy = (body.get("spec") or {}).get("strategy") or {}
     if strategy.get("type") == "Recreate" and strategy.get("rollingUpdate"):
@@ -386,7 +421,8 @@ class FakeAPI:
     - ``requests``: every request received (method, path, query, body,
       content type), in order;
     - ``field_ownership``: opt in to the server-side-apply field model;
-    - ``ready``: whether Deployments report ready replicas;
+    - ``ready``: whether Deployments, StatefulSets and DaemonSets report
+      ready pods and Jobs report completion;
     - ``wait_for_first_consumer``: claim names that stay ``Pending`` until a
       workload mounts them;
     - ``types``: the served resources (default :data:`TYPES`);
@@ -396,13 +432,34 @@ class FakeAPI:
       garbage collector removes the finalizer.
     - ``nodes``: ``{name: Node manifest}`` served at ``/api/v1/nodes/NAME``
       (read-only, not part of discovery); add one with :meth:`add_node`.
+    - ``pod_failures``: workloads whose pods cannot start (see
+      :meth:`fail_pods`); ``pod_logs`` ``{(pod, container, previous):
+      text}`` served at ``pods/NAME/log``; ``events``: Event objects served
+      at ``/api/v1/namespaces/NS/events`` (``fieldSelector`` on
+      ``involvedObject.kind``/``name``).
+
+    - ``intercept``: an optional ``(request, phase) -> bool`` called for
+      every request with ``phase`` ``"received"`` (before the server acts on
+      it) and ``"committed"`` (after it acted, before the response). Returning
+      true drops the connection at that point: a ``"received"`` request is
+      then never applied, a ``"committed"`` one is applied but unanswered.
+      Kill tests use it to stop a client process at an exact step.
 
     Use :meth:`put` to seed objects and :meth:`inject` to add faults.
+
+    :param types: The served resources (default :data:`TYPES`).
+    :param namespace: The one namespace that holds namespaced objects
+        (default :data:`TARGET`'s); requests to any other are refused with
+        ``403``, as for a user bound to one namespace.
     """
 
     def __init__(
-        self, types: Mapping[str, tuple[str, str, bool]] | None = None
+        self,
+        types: Mapping[str, tuple[str, str, bool]] | None = None,
+        *,
+        namespace: str = TARGET.namespace,
     ) -> None:
+        self.namespace = namespace
         self.types: dict[str, tuple[str, str, bool]] = dict(
             TYPES if types is None else types
         )
@@ -418,8 +475,12 @@ class FakeAPI:
         self._terminating: dict[tuple[str, str], int] = {}
         self.version = 1
         self.nodes: dict[str, dict[str, Any]] = {}
+        self.intercept: Callable[[dict[str, Any], str], bool] | None = None
+        self.pod_failures: dict[str, dict[str, Any]] = {}
+        self.pod_logs: dict[tuple[str, str, bool], str] = {}
+        self.events: list[dict[str, Any]] = []
         self.put(manifest("Namespace", "kube-system"), uid="cluster-uid")
-        self.put(manifest("Namespace", TARGET.namespace), uid="namespace-uid")
+        self.put(manifest("Namespace", namespace), uid="namespace-uid")
 
     def put(
         self,
@@ -463,6 +524,253 @@ class FakeAPI:
             self.nodes[name] = node
         return copy.deepcopy(node)
 
+    def scale(
+        self,
+        kind: str,
+        name: str,
+        replicas: int,
+        *,
+        manager: str = "kube-controller-manager",
+    ) -> dict[str, Any]:
+        """Write ``spec.replicas`` through the ``scale`` subresource.
+
+        What a HorizontalPodAutoscaler does: ``manager`` gets an ``Update``
+        entry with ``subresource: scale`` owning ``spec.replicas``, which no
+        other entry owns afterwards.
+        """
+        with self.lock:
+            current = self.objects[(kind, name)]
+            self.version += 1
+            current.setdefault("spec", {})["replicas"] = replicas
+            metadata = current["metadata"]
+            metadata["resourceVersion"] = str(self.version)
+            metadata["generation"] = metadata.get("generation", 1) + 1
+            owned: set[Path] = {("f:spec", "f:replicas")}
+            entries = []
+            for entry in metadata.get("managedFields", []):
+                if entry.get("subresource") == "scale":
+                    continue
+                entry["fieldsV1"] = fields_v1(paths_of(entry["fieldsV1"]) - owned)
+                if entry["fieldsV1"]:
+                    entries.append(entry)
+            entries.append(
+                {
+                    "manager": manager,
+                    "operation": "Update",
+                    "subresource": "scale",
+                    "apiVersion": current["apiVersion"],
+                    "fieldsType": "FieldsV1",
+                    "fieldsV1": fields_v1(owned),
+                }
+            )
+            metadata["managedFields"] = entries
+            self._readiness(current)
+            return copy.deepcopy(current)
+
+    def fail_pods(
+        self,
+        workload: str,
+        *,
+        reason: str | None = "CrashLoopBackOff",
+        exit_code: int | None = 1,
+        restarts: int = 1,
+        logs: str = "",
+        message: str = "",
+        container: str | None = None,
+        init: bool = False,
+        events: tuple[tuple[str, str], ...] = (),
+    ) -> None:
+        """Make the pods of the Deployment/StatefulSet/DaemonSet/Job ``workload`` fail.
+
+        When the executor reads the workload (with :attr:`ready` false) the
+        fake creates what the controllers would: for a Deployment a
+        ReplicaSet of its current revision, and one pod owned by it (or by
+        the workload), whose container ``container`` (default: the first of
+        the template) waits with ``reason`` (``None``: running) after
+        ``restarts`` restarts, the last one exiting ``exit_code``. ``logs``
+        is the previous instance's log (the current one when ``restarts`` is
+        0); ``events`` are ``(reason, message)`` Warning events of the pod.
+        """
+        with self.lock:
+            self.pod_failures[workload] = {
+                "reason": reason,
+                "exit_code": exit_code,
+                "restarts": restarts,
+                "logs": logs,
+                "message": message,
+                "container": container,
+                "init": init,
+                "events": tuple(events),
+            }
+
+    def _materialize_pods(self, value: dict[str, Any]) -> None:
+        """Create the failing pods of a workload registered with :meth:`fail_pods`."""
+        kind = value["kind"]
+        metadata = value["metadata"]
+        failure = self.pod_failures.get(metadata["name"])
+        if failure is None or kind not in {
+            "Deployment",
+            "StatefulSet",
+            "DaemonSet",
+            "Job",
+        }:
+            return
+        spec = value.get("spec") or {}
+        template = spec.get("template") or {}
+        labels = dict((template.get("metadata") or {}).get("labels") or {})
+        digest = hashlib.sha256(
+            json.dumps(template, sort_keys=True).encode()
+        ).hexdigest()[:10]
+        owner = {"kind": kind, "name": metadata["name"], "uid": metadata["uid"]}
+        if kind == "Deployment":
+            revision = str(metadata.get("generation", 1))
+            metadata.setdefault("annotations", {})[
+                "deployment.kubernetes.io/revision"
+            ] = revision
+            rs_name = f"{metadata['name']}-{digest}"
+            if ("ReplicaSet", rs_name) not in self.objects:
+                self.objects[("ReplicaSet", rs_name)] = {
+                    "apiVersion": "apps/v1",
+                    "kind": "ReplicaSet",
+                    "metadata": {
+                        "name": rs_name,
+                        "namespace": self.namespace,
+                        "uid": uuid.uuid4().hex,
+                        "resourceVersion": str(self.version),
+                        "labels": {**labels, "pod-template-hash": digest},
+                        "annotations": {"deployment.kubernetes.io/revision": revision},
+                        "ownerReferences": [owner],
+                    },
+                }
+            rs = self.objects[("ReplicaSet", rs_name)]["metadata"]
+            owner = {"kind": "ReplicaSet", "name": rs_name, "uid": rs["uid"]}
+            labels["pod-template-hash"] = digest
+        elif kind == "StatefulSet":
+            value.setdefault("status", {})["updateRevision"] = (
+                f"{metadata['name']}-{digest}"
+            )
+            labels["controller-revision-hash"] = f"{metadata['name']}-{digest}"
+        elif kind == "DaemonSet":
+            labels["pod-template-generation"] = str(metadata.get("generation", 1))
+        pod_name = f"{metadata['name']}-{digest}-x1"
+        if ("Pod", pod_name) in self.objects:
+            return
+        pod_spec = template.get("spec") or {}
+        containers = [
+            str(item.get("name"))
+            for item in pod_spec.get(
+                "initContainers" if failure["init"] else "containers"
+            )
+            or ()
+            if isinstance(item, dict)
+        ] or ["main"]
+        name = failure["container"] or containers[0]
+        terminated_reason = "Error"
+        last = (
+            {
+                "terminated": {
+                    "exitCode": failure["exit_code"],
+                    "reason": terminated_reason,
+                }
+            }
+            if failure["exit_code"] is not None and failure["restarts"]
+            else {}
+        )
+        state: dict[str, Any] = (
+            {"waiting": {"reason": failure["reason"], "message": failure["message"]}}
+            if failure["reason"]
+            else {"running": {}}
+        )
+        status = {
+            "name": name,
+            "ready": False,
+            "restartCount": failure["restarts"],
+            "state": state,
+            "lastState": last,
+            "image": "example.test/app:1",
+        }
+        self.version += 1
+        self.objects[("Pod", pod_name)] = {
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "metadata": {
+                "name": pod_name,
+                "namespace": self.namespace,
+                "uid": uuid.uuid4().hex,
+                "resourceVersion": str(self.version),
+                "labels": labels,
+                "ownerReferences": [owner],
+            },
+            "spec": copy.deepcopy(pod_spec),
+            "status": {
+                "phase": "Pending" if failure["init"] else "Running",
+                "initContainerStatuses" if failure["init"] else "containerStatuses": [
+                    status
+                ],
+            },
+        }
+        if failure["logs"]:
+            self.pod_logs[(pod_name, name, bool(failure["restarts"]))] = failure["logs"]
+        for index, (reason, message) in enumerate(failure["events"]):
+            self.events.append(
+                {
+                    "apiVersion": "v1",
+                    "kind": "Event",
+                    "metadata": {"name": f"{pod_name}.{index}"},
+                    "involvedObject": {"kind": "Pod", "name": pod_name},
+                    "type": "Warning",
+                    "reason": reason,
+                    "message": message,
+                    "count": 1,
+                    "lastTimestamp": f"2026-01-01T00:00:{index:02d}Z",
+                }
+            )
+
+    def _serve_pod_extras(
+        self, path: str, method: str, query: dict[str, Any]
+    ) -> tuple[int, Any] | None:
+        """``pods/NAME/log`` (text) and the namespace's ``events``, or ``None``."""
+        base = f"/api/v1/namespaces/{self.namespace}/"
+        if method != "GET" or not path.startswith(base):
+            return None
+        rest = [unquote(part) for part in path[len(base) :].split("/")]
+        if rest == ["events"]:
+            wanted = dict(
+                term.split("=", 1)
+                for term in query.get("fieldSelector", [""])[0].split(",")
+                if "=" in term
+            )
+            items = [
+                copy.deepcopy(event)
+                for event in self.events
+                if all(
+                    str(event.get("involvedObject", {}).get(key.split(".", 1)[1]))
+                    == value
+                    for key, value in wanted.items()
+                    if key.startswith("involvedObject.")
+                )
+            ]
+            return 200, {
+                "apiVersion": "v1",
+                "kind": "EventList",
+                "metadata": {"resourceVersion": str(self.version)},
+                "items": items,
+            }
+        if len(rest) == 3 and rest[0] == "pods" and rest[2] == "log":
+            if ("Pod", rest[1]) not in self.objects:
+                return 404, {}
+            container = query.get("container", [""])[0]
+            previous = query.get("previous", ["false"])[0] == "true"
+            text = self.pod_logs.get((rest[1], container, previous))
+            if text is None:
+                return (400, {}) if previous else (200, b"")
+            tail = int(query.get("tailLines", [0])[0] or 0)
+            lines = text.splitlines(keepends=True)
+            if tail:
+                lines = lines[-tail:]
+            return 200, "".join(lines).encode()
+        return None
+
     def managers(self, kind: str, name: str) -> dict[str, set[Path]]:
         """Owned field paths by ``manager/operation`` (status excluded)."""
         entries = self.objects[(kind, name)]["metadata"].get("managedFields", [])
@@ -504,13 +812,26 @@ class FakeAPI:
             return copy.deepcopy(value)
 
     def _readiness(self, value: dict[str, Any]) -> None:
-        if value["kind"] == "Deployment":
+        if value["kind"] in {"Deployment", "StatefulSet"}:
             count = value.get("spec", {}).get("replicas", 1)
             value["status"] = {
                 "observedGeneration": value["metadata"]["generation"],
                 "readyReplicas": count if self.ready else 0,
                 "updatedReplicas": count,
                 "replicas": count,
+            }
+        elif value["kind"] == "DaemonSet":
+            value["status"] = {
+                "observedGeneration": value["metadata"]["generation"],
+                "desiredNumberScheduled": 1,
+                "numberReady": 1 if self.ready else 0,
+                "updatedNumberScheduled": 1,
+            }
+        elif value["kind"] == "Job":
+            value["status"] = {
+                "conditions": [{"type": "Complete", "status": "True"}]
+                if self.ready
+                else []
             }
         elif value["kind"] == "Namespace":
             value["status"] = {"phase": "Active"}
@@ -669,11 +990,17 @@ class FakeAPI:
                 if "raw" in fault:
                     self.respond(200, None, raw=fault["raw"])
                     return
-                if fault.get("disconnect_before"):
+                if fault.get("disconnect_before") or (
+                    api.intercept is not None and api.intercept(request, "received")
+                ):
                     self.connection.close()
                     return
                 with api.lock:
                     status, response = api.route(request)
+                if api.intercept is not None and api.intercept(request, "committed"):
+                    self.connection.shutdown(socket.SHUT_RDWR)
+                    self.connection.close()
+                    return
                 if fault.get("after_commit_delay"):
                     time.sleep(fault["after_commit_delay"])
                 if fault.get("disconnect_after"):
@@ -685,10 +1012,15 @@ class FakeAPI:
             def respond(
                 self, status: int, value: Any, *, raw: bytes | None = None
             ) -> None:
+                text = isinstance(value, bytes)
+                if isinstance(value, bytes):
+                    raw = value
                 encoded = raw if raw is not None else json.dumps(value).encode()
                 try:
                     self.send_response(status)
-                    self.send_header("Content-Type", "application/json")
+                    self.send_header(
+                        "Content-Type", "text/plain" if text else "application/json"
+                    )
                     self.send_header("Content-Length", str(len(encoded)))
                     self.end_headers()
                     self.wfile.write(encoded)
@@ -718,6 +1050,9 @@ class FakeAPI:
                         if api == version
                     ],
                 }
+        extra = self._serve_pod_extras(path, method, query)
+        if extra is not None:
+            return extra
         if path.startswith("/api/v1/nodes/") and method == "GET":
             node = self.nodes.get(path.rsplit("/", 1)[1])
             return (200, copy.deepcopy(node)) if node is not None else (404, {})
@@ -732,7 +1067,7 @@ class FakeAPI:
         if not found:
             return 404, {}
         index, (api_version, kind, namespaced) = found[-1]
-        if namespaced and parts[index - 2 : index] != ["namespaces", TARGET.namespace]:
+        if namespaced and parts[index - 2 : index] != ["namespaces", self.namespace]:
             return 403, {}
         name = parts[index + 1] if len(parts) > index + 1 else ""
         current = self.objects.get((kind, name))
@@ -750,12 +1085,15 @@ class FakeAPI:
                 if current is None:
                     return 404, {}
                 self._readiness(current)
+                if not self.ready:
+                    self._materialize_pods(current)
                 return 200, copy.deepcopy(current)
+            selector = query.get("labelSelector", [""])[0]
             values = sorted(
                 [
                     copy.deepcopy(item)
                     for (item_kind, _), item in self.objects.items()
-                    if item_kind == kind
+                    if item_kind == kind and _selected(item, selector)
                 ],
                 key=lambda value: value["metadata"]["name"],
             )
@@ -860,7 +1198,7 @@ class FakeAPI:
                 ],
             }
         )
-        invalid = _validation_error(body)
+        invalid = _validation_error(body, current)
         if invalid is not None:
             return 422, {"kind": "Status", "message": invalid}
         self._readiness(body)
@@ -875,7 +1213,7 @@ class FakeAPI:
     def _commit(
         self, query: dict[str, Any], kind: str, name: str, body: Any, status: int
     ) -> tuple[int, Any]:
-        invalid = _validation_error(body)
+        invalid = _validation_error(body, self.objects.get((kind, name)))
         if invalid is not None:
             return 422, {"kind": "Status", "message": invalid}
         if self.server_defaults:
@@ -1092,7 +1430,7 @@ class FakeCluster:
     @property
     def namespace(self) -> str:
         """The namespace every namespaced object lives in."""
-        return TARGET.namespace
+        return self.api.namespace
 
     def kubeconfig(self, path: FilePath, *, context: str = "fake") -> FilePath:
         """Write a kubeconfig for this server (see :func:`write_kubeconfig`)."""
@@ -1124,6 +1462,26 @@ def fake_cluster(
             yield FakeCluster(served, url, provider)
         finally:
             provider.client.close()
+
+
+def _selected(value: dict[str, Any], selector: str) -> bool:
+    """Whether ``value`` matches a label selector (``k``, ``!k``, ``k=v``, ``k!=v``)."""
+    labels = value.get("metadata", {}).get("labels") or {}
+    for term in filter(None, (item.strip() for item in selector.split(","))):
+        if term.startswith("!"):
+            if term[1:] in labels:
+                return False
+        elif "!=" in term:
+            key, _, wanted = term.partition("!=")
+            if labels.get(key) == wanted:
+                return False
+        elif "=" in term:
+            key, _, wanted = term.partition("=")
+            if labels.get(key) != wanted.lstrip("="):
+                return False
+        elif term not in labels:
+            return False
+    return True
 
 
 def _merge_patch(current: Any, patch: Any) -> Any:

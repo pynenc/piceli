@@ -845,11 +845,15 @@ def write_receipt(path: Path, receipt: Mapping[str, Any]) -> None:
     partial = path.with_name(f".{path.name}.{os.getpid()}.partial")
     fd = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
-        os.write(fd, body)
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-    os.replace(partial, path)
+        try:
+            os.write(fd, body)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(partial, path)
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
 
 
 def append_journal(path: Path, receipt: Mapping[str, Any]) -> None:

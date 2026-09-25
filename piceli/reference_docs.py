@@ -153,13 +153,15 @@ def render_cli(tree: Mapping[str, Any] | None = None) -> str:
         "## Conventions",
         "",
         "- **stdout** is for machine output: one JSON object (JSON lines for "
-        "streaming commands).",
+        "streaming commands; `render` prints YAML manifests unless "
+        "`--format json`).",
         "- **stderr** is for human text: summaries and hints.",
-        '- A refusal prints `{"state": "rejected", "reason": "<code>"}` and '
-        "exits `2`; see {doc}`errors` or run `piceli explain <code>`.",
+        '- A refusal prints `{"state": "rejected", "reason": "<code>", '
+        '"message": "<text>"}` and exits `2`; see {doc}`errors` or run '
+        "`piceli explain <code>`.",
         "- **Output contract** `conforms` means the command follows these rules "
-        "exactly; `partial` means it prints JSON but its refusals do not yet use "
-        "the rejection shape above.",
+        "exactly; `partial` (no command since 0.5.1) means it prints JSON but "
+        "its refusals do not yet use the rejection shape above.",
         "",
         "| Exit code | Meaning |",
         "| --- | --- |",

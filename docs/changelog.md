@@ -4,6 +4,429 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.8.0
+
+- **`Build.spec(path, platform=...)`:** build a spec for another platform than
+  its `platforms` (for example `linux/amd64` for a published arm64 example),
+  as part of the plan hash; the post-build spec re-check applies the same
+  override. The kind tests use it to build for the node's platform, so they
+  pass on amd64 CI runners as well as arm64 machines.
+
+- **Fix:** `piceli deploy MODULE:ATTR --plan` refused for adoption or replacement now
+  suggests what `piceli deploy` can act on: each `blocking[].suggest` entry
+  names the Pipeline declaration (`Pipeline(adopt=["Deployment/web"])`,
+  `Pipeline(replace=["Deployment/web"])`) instead of the `--adopt`/`--replace`
+  flags of `piceli release`, which `deploy` does not take; the refusal's
+  sentence says the same. `blocking[].code` and `message` are unchanged, and
+  `piceli release` keeps suggesting its flags. Consumers that matched the old
+  `--adopt …` strings for a deploy must match the new ones.
+- **Fix:** `piceli deploy` rejections and failures carry the contract's `message`
+  (the sentence stderr shows first) next to `reason`; the
+  `piceli.deploy-event.v1` schema documents it.
+- **Fix:** a model module that raises no longer breaks the output contract with a
+  traceback. `piceli render` rejects with `render-target-invalid` (exit `2`,
+  one JSON object whatever `--format` says) when the target, or the spec's
+  composition, raises while importing or evaluating (a duplicate name, a wrong
+  keyword, any exception); the `message` is `importing|evaluating TARGET
+  failed: Type: text`. `release … --spec release.toml` rejects the same case
+  with `invalid-composition` (a composition module that raised `ValueError`
+  while importing was `release-refused`). `deploy` and `release --spec
+  MODULE:ATTR` (`pipeline-load-failed`), `status` and `access`
+  (`access-target-invalid`), and the new `publish`, `render --out` (`render-target-invalid`),
+  `runs`, `cache` and `doctor` (`pipeline-load-failed`) put the exception's
+  type and text in `message` too. `PICELI_DEBUG=1` prints the traceback on stderr.
+- **Fix:** another process's command line is no longer printed in port conflicts
+  (`access-port-conflict`, the dashboard port, `observe`/dashboard forward
+  conflicts): its pid only, as `piceli status` already did (`owner.command`
+  and `owner.parent` are `null` for it).
+- **Fail fast with causes:** while an apply waits for a workload, Piceli
+  watches the pods of the revision being rolled out. `CrashLoopBackOff`
+  (`Init:CrashLoopBackOff`), `ImagePullBackOff`, `ErrImagePull`,
+  `InvalidImageName`, `CreateContainerConfigError`, `CreateContainerError`,
+  `RunContainerError`, `[execution] crash_restarts` restarts (default 3), a
+  failed Job or Pod fail the apply at once with `apply-crashloop`
+  (`pipeline-apply-crashloop` from `piceli deploy`) instead of at
+  `readiness_seconds`. The result adds `diagnosis` (`piceli.diagnosis.v1`:
+  per workload, each container's reason, exit code, restarts, last 20 log
+  lines and latest events, redacted against the release's secret store and
+  secret-looking text) and stderr prints one line per cause; an apply that
+  times out reports what its pods show too. `execution.causes` (compact, no
+  logs) is added to results and `release status`. `[execution] fail_fast =
+  false` restores waiting for the deadline. Not rolled back automatically, as
+  for any apply that does not become ready.
+- `piceli release status --spec … --run ID` (and `piceli explain --run ID
+  --spec …`) shows one past execution, by execution id, unique prefix or
+  `piceli deploy` run id, with the causes recorded in the journal
+  (`unknown-execution` otherwise).
+- **Own stale processes:** `piceli access` recognises a port held by
+  Piceli's own process for the same app (its `kubectl port-forward`,
+  supervised or orphaned, or `piceli access` / `observe serve` / `operator
+  serve` for the same target), says so and suggests the new `piceli access
+  stop --stale TARGET [--port N]`, which stops only those processes. Conflicts
+  add `holder` (`piceli-forward`, `piceli-server`, `other`, `unknown`).
+- `piceli.testing`: `FakeAPI.fail_pods(...)`, pod logs and events, and
+  ReplicaSets in the default `TYPES`.
+- **Temporary files are always removed:** every temporary directory Piceli
+  creates (generated TLS keys, OCI layouts, build staging, `--ref`
+  worktrees, local image imports, state archives, SQLite snapshot copies) is
+  named `piceli-<purpose>-*`, owner-only, and removed on success, error,
+  `Ctrl-C` and now also on `SIGTERM`/`SIGHUP` (the `piceli` entry point
+  removes live ones before the signal's default action; an `atexit` hook
+  catches threads). A failed write of the release catalog, a delivery
+  receipt or a build output no longer leaves a partial file. The SQLite
+  snapshot copy was named `.snapshot-*`; it is `piceli-snapshot-*` now. The
+  test suite fails when any test leaves a temporary file behind.
+- **`piceli cache status [--json]` and `piceli cache prune [--keep-last N]
+  [--budget 20GiB] [--dry-run]` (preview):** disk used per state directory
+  (each environment's too) and category (builds, toolchains, blobs,
+  receipts, runs, release, other, temp) and by stale temporary directories;
+  a prune that never removes the release state, the secret store, approved
+  plans, build or mirror receipts, the latest or a resumable run, or the runs
+  of the last N applied releases, under the state directory's run lock. With
+  shared state only machine-local files are pruned.
+  `Pipeline(cache_budget="20GiB")` prunes after every run; the deploy result
+  adds `cache`. New codes `cache-budget-invalid`, `cache-over-budget`,
+  `cache-arguments-conflict`. See `docs/maintenance.md`.
+- **`piceli doctor [--json]` (preview):** free disk and memory against what
+  the next build needs (from the last build receipts) and the tools the
+  pipeline uses (`docker`, `docker buildx`, `kubectl`); exit `1` with
+  `runner-disk-low`, `runner-memory-low` or `runner-tool-missing`.
+- **Run summaries (preview):** every deploy run writes
+  `<state_dir>/runs/<id>/summary.json` (`piceli.run-summary.v1`,
+  `docs/schemas/piceli-run-summary-v1.schema.json`) and `summary.md` when it
+  ends, whatever the outcome: commits and refs, image digests, sizes and
+  reused blobs, plan action classes and counts, changed objects with their
+  changed field paths, checks, the failure's code and message (with the
+  compact causes of a workload that cannot start), `approved_by: "policy"`
+  when the owner's approval policy approved the run, stage timings; never
+  secret values or log lines. The deploy result adds `summary`, and the
+  journaled plan stage output adds `diff` (changed field paths). `piceli runs
+  [--json]` lists the runs. The CI recipe posts `summary.md` as the job
+  summary of `apply` and `resume` and keeps `summary.json` in the artifact
+  (`docs/ci.md` also shows a pull request comment).
+- Build receipts record each image's engine size (`size_bytes`).
+- **Owner-declared approval policy:** `Pipeline(..., auto_approve=ApprovalPolicy(allow=…, deny=…, max_objects=…))`
+  and `[release] auto_approve = {...}` declare which plans may run without the
+  owner approving the hash; `piceli deploy --approve-if-policy` and
+  `piceli release apply --approve-if-policy` run a plan only when every action
+  is inside it, and otherwise exit `3` with `approval-policy-exceeded`, the
+  violations and the usual approval command. `delete`, `replace` and `adopt`
+  are never inside a policy; cluster-scoped objects and drift need an explicit
+  `allow`. The policy is part of the combined hash and of the release plan
+  hash (plans without one keep their hashes); there is no flag that sets or
+  widens it. A deploy approved by the policy re-checks the release plan made
+  after delivery and records `"approved_by": "policy"`. New codes
+  `approval-policy-invalid`, `approval-policy-missing`,
+  `approval-policy-exceeded`, `approve-if-policy-flags-conflict`; the deploy
+  event schema adds `policy` and `approved_by`, and release plan changes gain
+  `cluster_scoped` in `stages.plan.changes`.
+- **Agent skill:** `skills/piceli` (`SKILL.md`, an example `App` and
+  `Pipeline`, and scripts to check the install, plan and ask the owner,
+  deploy with the approved hash or the owner's policy, check status,
+  diagnose with `piceli explain`, resume and roll back). CI copies the skill
+  alone and runs its walkthrough against the built wheel and the fake API
+  (`make skill-check`); `tests/integration/test_skill_kind.py` runs it against
+  `examples/shop` on a disposable kind cluster.
+- **GitOps handoff (preview):** `piceli publish MODULE:ATTR [--env E] --to
+  oci://registry/repo[:tag]` packages the rendered manifests as an OCI
+  artifact in the `flux push artifact` layout (config
+  `application/vnd.cncf.flux.config.v1+json`, one
+  `application/vnd.cncf.flux.content.v1.tar+gzip` layer), with a
+  deterministic digest; it prints the digest and exits 3, and pushes by
+  digest (then the tag) only with `--approve <digest>`. `piceli render
+  --out DIR` writes the same files for a Git directory. A Secret is refused
+  unless `--secrets external` leaves Secrets out; redacted values and
+  placeholder images are always refused. New codes `gitops-*` and
+  `render-out-refused`. Flux and Argo CD examples in `docs/gitops.md`; a kind
+  test has Flux reconcile a published artifact.
+- **Docs: when to use Piceli, and comparisons:** `docs/when_to_use.md` (use
+  it when / don't) and `docs/comparisons.md`: one app written with Piceli,
+  Helm, Kustomize, cdk8s and Pulumi (`examples/comparisons/<tool>`, pinned
+  versions), with files, lines, steps and safety features compared and
+  where the others are better. A new CI job (`comparisons`) renders every
+  version for dev, staging and prod and checks that it equals `piceli render`.
+- The README quick start is `examples/readme/app.py` and
+  `examples/readme/commands.sh`, included verbatim
+  (`scripts/readme_examples.py check`, also a pre-commit hook) and run
+  against the fake API in `tests/acceptance/test_readme_quickstart.py`;
+  the getting-started page includes the same file.
+- Public documentation links (README, `llms.txt`, package metadata) point at
+  `/en/stable/`; pages not yet in the stable release keep `/en/latest/`.
+- `piceli.testing.FakeAPI(namespace=...)` serves another namespace than
+  `TARGET.namespace`, so an app that names its own namespace runs against the
+  fake API unchanged.
+  `fail_pods` creates its pods, logs and events in that namespace.
+- **Cross-model eval (experimental, contributor tooling):** `evals/` measures
+  how language models install, implement, operate and recommend Piceli:
+  fixed tasks (install; a web app with a Deployment, Service, HPA and PostgreSQL
+  StatefulSet; a staging environment; a `piceli.testing` test; deploy with the
+  owner's approval, diagnose a refused plan, roll back) and four discovery
+  prompts that do not name Piceli. Answers run in a sandbox (empty `HOME` and
+  `KUBECONFIG`, no inherited credentials, loopback-only network) against
+  `piceli render` and the fake Kubernetes API, and are scored for task
+  success, wrong Python API and CLI use (against a snapshot of the public API
+  and `piceli help-json`), safety violations (default kubeconfig or context,
+  `--auto-approve`, `--allow-exec`, printed or hardcoded secrets: a hard
+  fail), interventions and recommendation rate. Anthropic, OpenAI and Gemini
+  models via environment keys (skipped without them, never printed); mock
+  models validate the harness (`make evals-check`, run in CI), and the
+  committed 0.7.0 and 0.8.0 baselines are harness validations, not model
+  measurements. `--approve-if-policy` is not scored as approving on the
+  owner's behalf (the owner's reviewed policy decides); a captured
+  `piceli publish` digest is.
+  See `docs/contributing/evals.md`.
+
+## Version 0.7.0
+
+- **Reference app:** `examples/reference/app.py` deploys a realistic app to
+  dev, staging and prod from one typed module (StatefulSet with claim
+  templates, Job and CronJob, HPA and PDB, HTTPRoute, a cert-manager
+  `Certificate` typed by `piceli codegen crd`, a release-wide NetworkPolicy,
+  RBAC, restricted pods, a SOPS-encrypted password and checks), with render,
+  fake-API and kind tests; walkthrough in `docs/reference_app.md`.
+- Environments: `autoscalers={name: Scaling(min_replicas=…, max_replicas=…,
+  cpu=…, memory=…)}` changes an autoscaler per environment (the `replicas=`
+  refusal pointed at a fix no override could express), and a `resources=`
+  override that drops a request an autoscaler's utilization target needs is
+  refused (`environment-invalid`).
+- `--diff-env` no longer reports the namespace inside RBAC objects (binding
+  subjects, `<namespace>:<app>:<name>` ClusterRole names) as a difference.
+- `Checks.exec(...)` with a StatefulSet or DaemonSet handle targets
+  `statefulset/<name>` or `daemonset/<name>` instead of `deployment/<name>`;
+  a Job or CronJob handle is refused.
+- An environment's `replicas=` on a workload an autoscaler targets is refused
+  (`environment-invalid`) instead of being ignored.
+
+- **External secret sources (preview):** three new `[secrets.*]` types, and
+  `Sops`, `Vault` and `AwsSecret` for `piceli.pipeline.Secrets`: `sops` (one
+  value of a SOPS-encrypted file, or the whole file, decrypted by the `sops`
+  binary with an explicit argv, a minimal environment plus `pass_env`, a
+  timeout and an optional `sops_sha256` pin), `vault` (one key of a HashiCorp
+  Vault KV v2 secret over verified TLS, token from `token_file` or
+  `token_env`, `namespace`, `version`, `ca_file`) and `aws-secrets-manager`
+  (a secret or one JSON key, through botocore; new extra `piceli[aws]`). They
+  are read at every `plan` and `diff`; each value is reduced to an HMAC-SHA256
+  under a private key (`state_dir/secret-sources.key`) that is part of the
+  release fingerprint, so an unchanged value re-plans the same release and a
+  changed one creates a new release with a new private version (new plan
+  origin `fetched`; the others are `carried:<release>`). A refused plan stores
+  nothing, and values never reach plans, journals, receipts, logs or errors.
+  `--rotate` refuses an external source (rotate it at the source). New codes
+  `secret-source-auth-failed`, `secret-source-not-found`,
+  `secret-source-tool-missing`, `secret-source-timeout` and
+  `secret-source-failed`. Specs without external sources keep their release
+  names; `secret show --json` adds `source` for them.
+- **Custom resources and any other kind (preview):** `app.resource(api_version,
+  kind, name, spec, *, fields=, scope=, public=, labels=, annotations=,
+  component=)` declares one object of any kind with a typed spec (a pydantic
+  model, validated at declaration) or a JSON mapping; it renders by alias with
+  only the fields that were set, joins components, `depends` and `override`
+  like other declarations. Cluster-scoped resources follow the per-namespace
+  ownership rules of ClusterRoles (no namespace, `piceli.io/namespace`
+  annotation, never another namespace's objects); a release now manages any
+  such annotated cluster-scoped kind except Namespace,
+  CustomResourceDefinition and PersistentVolume. A declared scope that the
+  server's discovery contradicts is refused at plan time
+  (`resource-scope-mismatch`). See `docs/crds.md`.
+- **`piceli codegen crd` (preview):** generates a deterministic module of
+  frozen pydantic models (`<Kind>Spec` with `API_VERSION`, `KIND`, `SCOPE`)
+  from a CRD's structural OpenAPI v3 schema, from a file or with
+  `--from-cluster --kubeconfig F --context C --crd NAME`; `--out` replaces
+  only files it generated. A small in-house generator (no new dependency; it
+  understands `x-kubernetes-int-or-string` and preserve-unknown-fields). New
+  codes: `crd-invalid`, `crd-not-found`, `codegen-flags-conflict`,
+  `codegen-output-refused`, `codegen-cluster-read-failed`. Pinned
+  cert-manager `Certificate` and Prometheus-operator `ServiceMonitor` CRDs are
+  vendored in `tests/fixtures/crds/` with their source and licence.
+- **Environments (preview):** `app.environment(name, ...)` declares typed
+  overrides (replicas, images, container resources, config values, hosts,
+  node selectors, resource specs, enabled components) checked against the
+  declared objects; `app.for_environment(name)` returns the derived App.
+  `piceli render --env NAME` renders one environment and `--diff-env OTHER`
+  prints their typed difference (text, or JSON with `--format json`).
+  `Pipeline(app, {"dev": Target…, "prod": Target…})` deploys each environment
+  to its own target with its own state (`state_dir/environments/NAME`);
+  `piceli deploy --env` and `piceli release … --spec MODULE:ATTR --env` select
+  one, and the combined hash covers the environment's name and resolved
+  values. JSON adds `environment` (render, deploy result) only with `--env`.
+  New codes: `environment-unknown`, `environment-required`,
+  `environment-invalid`, `environment-unsupported`. See `docs/environments.md`.
+- Plans show Secret *references* in any kind (`secretName`, `*File`/`*Path`
+  strings, `{name, key}` selectors, `secretTemplate`) instead of redacting
+  them, so custom resources that reference Secrets can be applied; the
+  `piceli.io/public-fields` annotation (`app.resource(..., public=[...])`)
+  declares other sensitive-looking fields public. Values stay redacted.
+- A file target (`piceli render path/app.py:app`, a pipeline, a release
+  composition file) can import the modules next to it (such as generated CRD
+  models); its directory is appended to `sys.path`.
+- `piceli` and `piceli.app` export `Environment` and `Resource`.
+- **Typed App kinds (preview):** `app.stateful_set(...)` (per-pod
+  `ClaimTemplate` volumes, a governing headless Service by default,
+  `pod_management`, `update_strategy`), `app.daemon_set(...)`, `app.job(...)`,
+  `app.cron_job(...)`, `app.autoscaler(workload, ...)` (HPA `autoscaling/v2`),
+  `app.disruption_budget(workload, ...)` (PDB `policy/v1`), `app.ingress(...)`
+  and Gateway API `app.http_route(...)` with typed `Route` and `GatewayRef`.
+  Every pod kind shares the Deployment's pod model (`piceli.app.Workload`):
+  `pod_defaults`, `service_account=`, `node=` pins, images, secrets, config
+  dependencies and `override` work the same. Workload names are now unique
+  across kinds. `Service(headless=True)` renders `clusterIP: None`.
+- **Autoscaled replicas, one rule:** a workload targeted by `app.autoscaler`
+  refuses `replicas=` and renders the autoscaler's `min_replicas` as its
+  initial `spec.replicas`; the plan's autoscaled-replicas rule of 0.6.0
+  (`initial`, `held`, `yielded`) decides what is written for typed apps and
+  plain manifests alike, and a plan never removes `/spec/replicas` from a
+  workload an autoscaler targets, whether the autoscaler is in the release
+  or only live. See {doc}`compatibility`.
+- **Claims are never pruned:** StatefulSets render
+  `persistentVolumeClaimRetentionPolicy` `Retain`/`Retain`, and prune and
+  replace delete them with `Orphan` propagation; the claims their templates
+  create are never part of a plan.
+- **Immutable fields:** a plan that would change a managed Job's pod template
+  or `completions`, or a StatefulSet's `serviceName`, `podManagementPolicy`,
+  selector or claim templates, is refused with the new code
+  `immutable-field-changed` (`blocking[].suggest` names the flag).
+  `--replace Kind/name` now also accepts a **managed** Job or StatefulSet and
+  recreates it (Jobs with `Background`, StatefulSets with `Orphan`
+  propagation); every other managed object is still refused.
+- **Readiness, one rule:** HorizontalPodAutoscalers, PodDisruptionBudgets,
+  Ingresses and HTTPRoutes are ready once they exist (they need metrics or
+  another controller; in 0.6.0 they followed the status conventions); every
+  other kind without a specific rule, custom or built in, follows the status
+  conventions of 0.6.0 (`observedGeneration`, `Ready`, `Reconciling`,
+  `Stalled`; ready once applied when it reports none). See
+  {ref}`readiness-rules`. HTTPRoutes are applied with Ingresses, after
+  Services.
+- Portable plan files (`deploy --plan --out`) record `--env`, and `--apply`
+  deploys that environment (`deploy-plan-file-mismatch` for another `--env`).
+- `piceli.testing`: the fake API serves StatefulSets, DaemonSets, Jobs,
+  CronJobs, HorizontalPodAutoscalers, PodDisruptionBudgets, Ingresses and
+  HTTPRoutes (added to `TYPES`), reports their readiness, and refuses updates
+  to immutable Job and StatefulSet fields with `422`.
+## Version 0.6.0
+
+- **Fix:** reads the API server throttles with 429 (for example while the
+  watch cache of a just-installed CRD initializes) are retried after
+  `Retry-After` (bounded, within the deadline); writes are never retried.
+
+- **Shared deployment state (preview):** `Pipeline(state="cluster")` and
+  `[release] state = "cluster"` keep the run journal, receipts, release
+  catalog, execution journal and secret store in the release namespace
+  (gzip snapshot in `piceli.io/state` Secrets, chunked, never in ConfigMaps),
+  and `state_dir` becomes a working copy. Every command holds a
+  release-scoped lock, a `Lease piceli-lock-<release>` renewed by the holder,
+  taken over when its holder stopped renewing (`state_lease_seconds`,
+  default 60), and fenced: each state write proves the holder and
+  `leaseTransitions` first. State is written at every journaled stage change
+  and after every execution journal commit, before the change it records, so
+  a deploy interrupted or killed on one runner resumes on another. The first
+  `state="cluster"` run moves an existing local state to the cluster. The
+  default stays `local`. See {doc}`state`.
+- **Portable approved plans:** `piceli deploy … --plan --out FILE` writes a
+  `piceli.deploy-plan-file.v1` document (combined hash, stages, `--ref`
+  commits, pipeline and observed target identity, build/delivery/mirror
+  receipts); `piceli deploy --apply FILE --approve HASH` applies it on any
+  runner: it refuses another hash, pipeline or cluster, plans again against
+  live state and runs only when the combined hash is unchanged. A build whose
+  images are already delivered by digest is not rebuilt, so no build cache is
+  needed; a resumed run whose build happened on another runner rebuilds
+  before delivering.
+- **`piceli state show|pull|export|import`:** where a release's state lives,
+  who holds its lock, refresh the working copy, export it to one file (secret
+  material excluded, or AES-256-GCM encrypted with `--include-secrets
+  --key-file`; new extra `piceli[crypto]`) and import it back after
+  approving the import digest (exit `3` without `--approve`).
+- `pipeline-locked` now covers the release lock and adds `lock` (`holder`,
+  `expires_in`) to the rejection; the deploy result adds `plan_file`. New
+  codes: `release-locked`, `state-lock-lost`, `state-unavailable`,
+  `state-access-denied`, `state-corrupt`, `state-layout-mismatch`,
+  `state-too-large`, `state-export-invalid`, `state-key-required`,
+  `state-crypto-unavailable`, `state-import-partial`, `state-import-changed`,
+  `state-output-exists`, `deploy-plan-file-invalid`,
+  `deploy-plan-file-mismatch`, `deploy-plan-target-mismatch`.
+- `piceli release plan|check --spec MODULE:ATTR` now hold the pipeline's run
+  lock like `apply` (refused with `pipeline-locked` while a deploy runs);
+  `release status|diff|secret show` and `piceli status` refresh a shared
+  state's working copy first (reads only).
+- Discovery lists with the label selector `!piceli.io/state`, so plans,
+  pruning and `piceli import live` never see the state objects.
+  `piceli.testing` serves Leases and equality/existence label selectors.
+- The CI recipe (`examples/ci/github-actions-deploy.yml`, {doc}`ci`) runs
+  plan, apply and resume on any runner: no persistent state directory, the
+  plan file travels as the `deploy-plan` artifact.
+- **Supported Kubernetes versions:** the four most recent minors, 1.34 to
+  1.37, each tested on kind with node images pinned by digest
+  (`.github/kind-nodes.json`, kind v0.33.0). Pull requests run the
+  integration suite on the newest; a nightly job runs it on all four and the
+  unit and acceptance tests with the lowest allowed `kubernetes` client
+  (`>=29.0.0`). CI now passes the cluster to the integration tests
+  explicitly, so they run instead of being skipped. See {doc}`compatibility`.
+- **Autoscalers own `spec.replicas`:** for a workload a
+  HorizontalPodAutoscaler targets (declared in the release, or live and
+  discovered), plans no longer declare `spec.replicas` once the autoscaler
+  owns it, and declare the live value while Piceli still does. Before, a
+  re-plan showed a perpetual `replicas` diff and drift, and applying it reset
+  the count and failed with `applied-resource-drift`. `release plan --json`
+  and `release diff` (JSON on stdout) add `autoscaled` (mode `initial`, `held` or
+  `yielded` per workload).
+- **Controllers writing status during a plan or an apply** (found by the
+  kind matrix, most often on 1.37): a status update between discovery and a
+  server dry run made the dry run conflict, and an unchanged release planned
+  `apply` from a literal comparison; `plan`, `diff` and `rollback` now
+  capture discovery and the dry runs again (up to three times) when a dry
+  run conflicts. A status update between the executor's read and its merge
+  patch failed the apply with `conflict`; the patch is now sent again at the
+  new `resourceVersion` when only the status or bookkeeping changed (content
+  and field ownership unchanged). An autoscaler scaling a workload through
+  the `scale` subresource while Piceli waits for readiness is no longer
+  `applied-resource-drift`.
+- **Readiness of other kinds:** HorizontalPodAutoscalers, custom resources,
+  PodDisruptionBudgets and other kinds without a dedicated rule follow the
+  common status conventions (`observedGeneration`, `Ready`, `Reconciling`,
+  `Stalled`) and are ready once written when they have none. Before, a
+  release containing any of them failed with `readiness-unsupported`, which
+  now only means a malformed `status`.
+- **Interrupted executions:** `release resume` after a kill before a write
+  reached the cluster (a create whose object is absent, a write or delete
+  whose object still has the recorded version) sends the write again, once
+  the new `[execution] write_settle_seconds` (default 60) have passed since
+  it was sent, instead of stopping with `ambiguous-write-blocked`,
+  `ambiguous-content-blocked` or `ambiguous-delete-blocked` for good.
+  Kill tests stop `release apply` and `release rollback` at every write
+  (before it, after the server applied it, at the next request) and on kind
+  mid-rollout; {doc}`plans_and_diffs` documents the recovery and the rollback
+  boundary (what a rollback restores, and that it cannot restore data,
+  external side effects or what others own).
+- **Ownership tests on kind:** an autoscaler owning `replicas`, an
+  operator-like writer sharing a custom resource, a mutating admission
+  webhook, and adoption and pruning with a third field manager.
+- `piceli.testing.FakeAPI` adds `scale()` (an autoscaler's `scale`
+  subresource write) and `intercept` (stop a client at an exact request
+  phase).
+
+## Version 0.5.1
+
+- **Fix:** stopping a finished build step no longer fails intermittently on
+  macOS with `PermissionError` when only the exited process-group leader is
+  left.
+
+- **Every command follows the output contract:** `render`, `release diff` and
+  `release check` are now `conforms` (none is `partial`). `piceli render`
+  prints its rejection object on stdout for every `--format` (it did only with
+  `--format json`), and a missing `--spec` file is a `render-target-invalid`
+  rejection instead of a usage error. `release check` adds `"state":
+  "succeeded"`, or `"state": "failed"` with `"reason": "check-failed"` when it
+  exits `1`. `release diff --exit-code` adds `"reason":
+  "release-changes-pending"` (new code) when it exits `1`. Existing fields are
+  unchanged.
+- **Retry-safe releases:** the release workflow asks PyPI whether the version
+  is released instead of trusting the git tag, uploads only what is missing
+  (retrying transient index failures), verifies every file on PyPI and only
+  then pushes the tag, which is never moved. An interrupted release finishes
+  on re-run. TestPyPI pre-releases from pull requests are retried and
+  verified the same way.
+- **Provenance:** wheels and sdists are published with PEP 740 attestations
+  (Sigstore, trusted publishing); see `SECURITY.md`.
+
 ## Version 0.5.0
 
 - **Mirror third-party images (preview):** `NodeLoopbackRegistry(mirror=[…])`

@@ -2,7 +2,9 @@
 
 This page shows how to run `piceli deploy` from GitHub Actions: on every push
 the pushed commit is planned, a reviewer approves that exact plan, and a
-second job applies it, from the same commit, with the same inputs.
+second job applies it, from the same commit, with the same inputs, **on any
+runner**: the jobs share no disk and no build cache, only the cluster (where
+the deployment state lives, see {doc}`state`) and the plan file.
 
 ```{admonition} Maturity: preview
 :class: note
@@ -16,14 +18,14 @@ commands match the CLI of this version.
 
 | Job | Runs | Approval |
 | --- | --- | --- |
-| `plan` | `piceli deploy "$PIPELINE" --ref "$GITHUB_SHA" --plan --json`; publishes the plan (job summary and a `deploy-plan` artifact) and its `combined_hash` as a job output | None: `--plan` never changes the cluster, a registry or a node |
-| `apply` | `piceli deploy "$PIPELINE" --ref "$GITHUB_SHA" --approve "$COMBINED_HASH" --json` | A protected GitHub environment: required reviewers approve after reading the plan |
+| `plan` | `piceli deploy "$PIPELINE" --ref "$GITHUB_SHA" --plan --out deploy-plan.json --json`; publishes the plan (job summary and a `deploy-plan` artifact with the plan file) and its `combined_hash` as a job output | None: `--plan` never changes the cluster, a registry or a node (it writes the shared state) |
+| `apply` | `piceli deploy --apply deploy-plan.json --approve "$COMBINED_HASH" --json` | A protected GitHub environment: required reviewers approve after reading the plan |
 | `resume` (manual) | `piceli deploy "$PIPELINE" --resume --json` | The same environment |
 
 The approval is bound twice. GitHub lets `apply` start only after a reviewer
 approved the `production` environment for this workflow run, and Piceli runs
-it only when the new plan has **the same combined hash** as the one the
-reviewer read. The hash covers the commit (`--ref` pins it by SHA), the
+it only when the plan file's hash is the approved one **and** planning again
+on the apply runner, against live state, gives **the same combined hash**. The hash covers the commit (`--ref` pins it by SHA), the
 staged build inputs, the builders, the delivery, the release's actions (or
 the rendered model while the images are not built yet), the checks and the
 target. When anything changed in between (a new object in the cluster,
@@ -43,8 +45,9 @@ anything the reviewed preview did not show.
 ## Prerequisites
 
 - A pipeline module whose builds declare their sources in an `inputs.toml`
-  (see {doc}`source_identity`), for example `deploy/app.py`. It reads the
-  kubeconfig path and the state directory from the environment and names its
+  (see {doc}`source_identity`), for example `deploy/app.py`, with **shared
+  state** (`state="cluster"`). It reads the kubeconfig path and the state
+  directory (a per-job working copy) from the environment and names its
   context explicitly:
 
   ```python
@@ -62,22 +65,20 @@ anything the reviewed preview did not show.
       target,
       build=images,
       deliver=...,
+      state="cluster",  # journal, catalog, secrets and lock in the namespace
       state_dir=os.environ.get("DEPLOY_STATE_DIR", ".piceli-deploy"),
   )
   ```
 
-- **A self-hosted runner** that reaches the cluster's API server and has
+- **Self-hosted runners** that reach the cluster's API server and have
   Docker with `buildx` (and `kubectl` for a node-loopback registry), with a
-  label such as `deploy-my-app`. Both jobs run on it.
-- **A persistent state directory** on that runner, outside the checkout
-  (`DEPLOY_STATE_DIR`, for example `/var/lib/piceli/my-app`). It holds the
-  run journal, the release catalog and the private secret store; a fresh
-  directory on every run would generate new secrets and lose the release
-  history. Back it up like any other deployment state.
+  label such as `deploy-my-app`. Any of them can run any job.
 - **A repository secret** `DEPLOY_KUBECONFIG` with a kubeconfig that holds
   only the context the pipeline declares. The plan needs it too: it reads the
-  cluster and runs server-side dry runs, which need the same rights as the
-  apply.
+  cluster, runs server-side dry runs (the same rights as the apply) and
+  writes the shared state. Besides the release's own objects it needs `get`,
+  `create`, `patch` and `delete` on `secrets` and `leases` in the namespace
+  (see {doc}`state`).
 - **An environment** `production` (Settings → Environments) with required
   reviewers, and "Prevent self-review" if the pusher must not approve alone.
 
@@ -85,7 +86,7 @@ anything the reviewed preview did not show.
 
 1. Copy `examples/ci/github-actions-deploy.yml` to
    `.github/workflows/deploy.yml` in your repository and adapt `PIPELINE`,
-   `DEPLOY_STATE_DIR`, the runner labels and the concurrency group:
+   the runner labels and the concurrency group:
 
    ```{literalinclude} ../examples/ci/github-actions-deploy.yml
    :language: yaml
@@ -94,15 +95,51 @@ anything the reviewed preview did not show.
 2. Push to `main`. The `plan` job's summary shows the plan
    (`inputs   ref shop: <sha> = commit <sha>`, the builds, the deliveries,
    the release's changes and the checks) and the combined hash; the
-   `deploy-plan` artifact holds `plan.json` (the result object, with
-   `combined_hash`, `refs` and every stage's plan) and `plan.txt`.
+   `deploy-plan` artifact holds `deploy-plan.json` (the portable plan file:
+   hash, commits, stages, target identity, receipts), `plan.json` (the
+   result object) and `plan.txt`.
 3. A reviewer reads the summary and approves the `production` deployment of
-   the run. The `apply` job plans again from the same commit, checks the
-   hash, and runs the stages. Its JSON lines are kept as the `deploy-result`
-   artifact.
+   the run. The `apply` job downloads the artifact, and
+   `piceli deploy --apply deploy-plan.json` checks the file against the
+   approved hash, plans again from the same commits against live state,
+   checks the hash, and runs the stages. Its JSON lines are kept as the
+   `deploy-result` artifact.
 4. Expected output: the `apply` job ends with
    `deploy ready: release <name>` on stderr and a last JSON line with
-   `"state": "ready"`.
+   `"state": "ready"`. Its job summary shows the run's summary (below).
+
+## Run summaries in the job summary
+
+Every deploy run writes `summary.md` and `summary.json` next to its journal
+(see {ref}`maintenance-summaries`), and the result line names them
+(`summary.markdown`, `summary.json`). The `apply` and `resume` jobs'
+**Post the run summary** step (`if: always()`, so a failed run is posted too)
+appends `summary.md` to `$GITHUB_STEP_SUMMARY`: status, release, commits,
+image digests and sizes (blobs uploaded and reused), the plan's action
+classes and changed objects with their changed fields, the checks, the
+failure's code and `piceli explain` command, and stage timings. It copies
+both files into the job's artifact (`run-summary.md`, `run-summary.json`):
+an agent reviewing the deploy reads the JSON
+(`docs/schemas/piceli-run-summary-v1.schema.json`), not the Markdown. A
+summary never contains a secret value or a kubeconfig path.
+
+To also comment on the pull request that was merged into `main`, add this
+step after **Post the run summary** and grant the job
+`pull-requests: write` (the sample keeps `contents: read` only):
+
+```yaml
+      - name: Comment the run summary on the merged pull request
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [ -f run-summary.md ] || exit 0
+          pr=$(gh pr list --state merged --search "$GITHUB_SHA" --json number --jq '.[0].number')
+          [ -z "$pr" ] || gh pr comment "$pr" --body-file run-summary.md
+```
+
+For a workflow that runs on `pull_request` instead, comment on
+`${{ github.event.pull_request.number }}`.
 
 ## Secrets and the kubeconfig
 
@@ -122,10 +159,13 @@ anything the reviewed preview did not show.
 - Put the runner inside the network that reaches the cluster's API server
   (or the node, for `NodeImport` and `NodeLoopbackRegistry`); no inbound
   access to the cluster is needed from GitHub.
-- Run `plan` and `apply` on **the same runner** (one label, one machine):
-  they share the local image store (a build is reused when its staged files
-  are unchanged) and the state directory. A plan job on another machine sees
-  different local images and would produce a different combined hash.
+- `plan`, `apply` and `resume` may run on **different runners** (ephemeral
+  ones too). Each job gets a fresh working copy of the state in
+  `$RUNNER_TEMP` (removed at the end of the job); the state itself is in the
+  namespace. An image built and delivered by an earlier run is found by its
+  delivery receipt and its digest in the registry, so the apply runner does
+  not build it again; an image that was never delivered is built by the
+  apply job, from the pinned commit.
 - `--ref "$GITHUB_SHA"` makes the build independent of the runner's
   workspace: even a runner that reuses a dirty workspace builds the exact
   commit, from a temporary worktree that is removed at the end (also when the
@@ -139,9 +179,12 @@ anything the reviewed preview did not show.
 
 `concurrency: {group: deploy-my-app, cancel-in-progress: false}` queues
 deploys of one target instead of cancelling a running one. Piceli also holds
-a lock on the state directory: a second `piceli deploy` of the same
-pipeline is refused with `pipeline-locked` (exit `2`) rather than racing the
-first. Use one group per target (cluster, namespace and app).
+the **release lock** (a Lease in the namespace) for every command: a second
+deployer of the same release, from any runner, workflow or laptop, is
+refused with `pipeline-locked` (exit `2`, with the holder and when its lease
+expires) rather than racing the first. A cancelled job frees the lock; a
+runner that died frees it when its lease expires (`state_lease_seconds`,
+default 60). Use one group per target (cluster, namespace and app).
 
 ## Resume
 
@@ -150,7 +193,8 @@ become ready), fix the cause and run the workflow by hand with **resume**
 checked (Actions → deploy → Run workflow). The `resume` job runs
 `piceli deploy "$PIPELINE" --resume --json`: it continues the same run at its
 failed stage with the approved plan and **the commits the run recorded**, not
-the branch's newer head. It needs no new plan, but the environment approval
+the branch's newer head, on whichever runner picks it up (the run journal is
+in the shared state). It needs no new plan, but the environment approval
 still applies. Re-running the failed `apply` job instead plans again and
 usually stops with `pipeline-plan-changed`, because the first attempt already
 built or delivered something.
@@ -161,10 +205,14 @@ built or delivered something.
 | --- | --- | --- |
 | `apply` exit `2`, `pipeline-plan-changed` | Something changed between the plan and the approval | Re-run the workflow (new plan, new approval) |
 | `apply` exit `1` with `reason` and `stage` | A stage ran but did not succeed | Fix it, then run the workflow with **resume** |
-| `pipeline-locked` | Another deploy of the same state directory runs | Wait; keep one concurrency group per target |
+| `pipeline-locked` (with `lock.holder`) | Another deploy of the same release runs | Wait; keep one concurrency group per target |
+| `deploy-plan-file-mismatch` | `COMBINED_HASH` is not the plan file's hash, or the artifact is from another pipeline | Use the artifact and output of the same workflow run |
+| `deploy-plan-target-mismatch` | The kubeconfig reaches another cluster than the plan did | Fix the `DEPLOY_KUBECONFIG` secret, re-run the workflow |
+| `state-access-denied` | The kubeconfig may not write the shared state | Grant the Secret and Lease verbs (see {doc}`state`) |
 | `deploy-ref-unknown` | The runner's clone does not have the commit | Check the checkout step (`ref`, `fetch-depth`) |
 | `deploy-ref-model-differs` | The checkout's pipeline module is not the commit's | Check out `$GITHUB_SHA` (the default) |
 | `pipeline-nothing-to-resume` | The last run finished; nothing to resume | Push or re-run the workflow for a new plan |
+| A build fails with a full disk | The runner's disk filled up | Run `piceli doctor "$PIPELINE"` before the deploy step, and set `cache_budget=` or run `piceli cache prune` (see {doc}`maintenance`) |
 
 Every code is explained by `piceli explain <code>` and in
 {doc}`reference/errors`.

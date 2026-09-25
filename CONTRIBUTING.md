@@ -3,7 +3,7 @@
 Contributions are welcome: bug reports, documentation fixes, new templates and
 larger features. For anything beyond a small fix, please open an
 [issue](https://github.com/pynenc/piceli/issues) first so the design can be
-discussed. The [roadmap](https://docs.pynenc.org/projects/piceli/en/latest/roadmap.html)
+discussed. The [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 lists the areas where help has the most impact.
 
 ## Development setup
@@ -29,8 +29,15 @@ uv run --frozen ruff check . && uv run --frozen ruff format --check .
 uv run --frozen --group docs sphinx-build -W --keep-going -b html docs docs/_build/html
 ```
 
-`make test-integration` runs against the **current kubeconfig context**. Use a
-disposable cluster (`kind create cluster`), never a shared one.
+`make test-integration` runs the kind tests against the cluster named by
+`PICELI_KIND_KUBECONFIG` and `PICELI_KIND_CONTEXT` (plus `PICELI_KIND_NODE`,
+the node container, for the node-delivery tests); without them they are
+skipped. They never use the current context. Create a disposable cluster with
+a supported node image (see `.github/kind-nodes.json`), for example
+`kind create cluster --name piceli-it --kubeconfig /tmp/it.kubeconfig`, then
+`PICELI_KIND_KUBECONFIG=/tmp/it.kubeconfig PICELI_KIND_CONTEXT=kind-piceli-it
+PICELI_KIND_NODE=piceli-it-control-plane make test-integration`. Never point
+them at a shared cluster.
 
 ## Pull requests
 
@@ -55,7 +62,7 @@ Guidelines:
 The design invariants (side-effect-free imports, no ambient kube context, plan
 before apply, fixed error codes, the CLI output contract, secrets never
 printed) and a map of the code are in [AGENTS.md](AGENTS.md). The
-[contributing guide](https://docs.pynenc.org/projects/piceli/en/latest/contributing/index.html)
+[contributing guide](https://docs.pynenc.org/projects/piceli/en/stable/contributing/index.html)
 in the documentation covers building the docs and page conventions.
 
 ## Reporting bugs

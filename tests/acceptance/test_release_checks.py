@@ -152,9 +152,12 @@ def test_failed_checks_roll_back_automatically(release_env):  # noqa: F811
     code, checked, _ = _run(tmp_path, "check")
     assert code == 0, checked
     assert checked["release"] == first["release"]
-    code, checked, _ = _run(tmp_path, "check", "--release", broken["release"])
+    assert checked["state"] == "succeeded" and "reason" not in checked
+    code, checked, result = _run(tmp_path, "check", "--release", broken["release"])
     assert code == 1
+    assert checked["state"] == "failed" and checked["reason"] == "check-failed"
     assert checked["checks"]["failed"] == ["image"]  # live image is the good one
+    assert "[check-failed]" in result.stderr
     assert _history(tmp_path) == history
 
 

@@ -21,7 +21,9 @@ FIRST_ARGUMENT = {
     "BuildContextError",
     "ExecAuthError",
     "ProviderError",
+    "_Diagnosed",
     "RegistryError",
+    "GitOpsError",
     "_input",
     "SecretError",
     "ImageHandoffError",
@@ -35,6 +37,10 @@ FIRST_ARGUMENT = {
     "ImportFailure",
     "PipelineError",
     "MirrorError",
+    "StateError",
+    "SecretSourceError",
+    "_source_refusal",
+    "CacheError",
 }
 # ``_Failure(result, reason)`` in the delivery modules; ``reject_error(error, default)``;
 # ``DryRunUnavailable(resource, reason)`` in ``k8s/ops/dry_run.py``.
@@ -98,6 +104,10 @@ DYNAMIC = {
     "status-release-unreadable",
     "status-checks-unreadable",
     "status-port-occupied",
+    # state/scopes.py: the lock code of a release.toml scope (lock_code=...)
+    "release-locked",
+    # k8s/cli/publish.py: a RegistryError reason that is not registered
+    "gitops-push-failed",
 }
 # Registered for the CLI contract itself (piceli/cli_contract.py users).
 CONTRACT = {"unknown-error-code"}

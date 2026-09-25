@@ -67,7 +67,10 @@ or still matches the server's answer from planning.
   changed in between, more than 256 objects, the discovery deadline), the
   object is compared literally with the desired manifest, which can only
   report a change that is not there. The plan lists these objects in
-  `dry_run_unavailable` with a reason code.
+  `dry_run_unavailable` with a reason code. An object that changed between
+  discovery and its dry run (`conflict`, typically a controller updating
+  the status while a rollout finishes) makes the plan capture discovery and
+  the dry runs again, up to three times, before it falls back.
 * **Secret values are never shown.** Objects with values bound to secret
   versions (and every `Secret`) are not dry-run. They are compared privately
   instead (see below). Their bound fields appear in the diff's
@@ -179,3 +182,85 @@ which the API server honours for `PATCH` (its options are query parameters).
 This was verified on kind: the `resourceVersion` of every object is unchanged
 after `plan` and `diff`. `plan` and `diff` remain the commands an agent may run
 without asking (see {doc}`agents`).
+
+(interrupted-executions)=
+## Interrupted apply and rollback
+
+The executor journals every action before and after its write, and every
+write is preconditioned on the object's UID and `resourceVersion` (a create
+on the object's absence). An execution can therefore be killed at any step
+and the next command converges:
+
+| Interrupted | Recovery |
+| --- | --- |
+| `apply` of a new release | `piceli release resume` continues the same execution (same grant, same operation IDs). |
+| `apply` re-applying an existing release, or `rollback` | not resumable: run the same `apply`/`rollback` again; it re-plans against the live state. |
+
+At each step the resume decides from the journal and the live object:
+
+* **before the write reached the object** (a create whose object is still
+  absent, or a write whose object still has the recorded version): the write
+  is sent again, exactly as planned, once `[execution] write_settle_seconds`
+  (default 60) have passed since it was sent. A request already on its way
+  can still reach the API server after its client died; until then the
+  resume stops as `blocked` (`ambiguous-write-blocked`,
+  `ambiguous-content-blocked` or `ambiguous-delete-blocked`) and can simply
+  be run again;
+  with shared state ({doc}`state`) the intent and its write time reach the
+  cluster state before the write is sent, so another runner resumes the same
+  way. The time is the sending runner's clock: keep runners' clocks in sync.
+  Another runner can only resume after taking the release lock over, which
+  already needs `state_lease_seconds` without renewals, and the lock is
+  renewed right before each state write, so a slow state write never shortens
+  the settle window;
+* **after the server applied it** but before Piceli recorded the answer: the
+  live object carries the action's operation ID (or contains the declared
+  content), so the action counts as applied without a second write;
+* **after the receipt** (during readiness): readiness is checked again.
+
+Anything else (the object changed in between in a way that does not contain
+the planned content) stops as `blocked` with an `ambiguous-*` code instead of
+guessing; plan again. A second `resume` of a finished execution writes
+nothing.
+
+This is tested by killing `piceli release apply` (a SIGKILL of its process)
+at every write of an apply and of a rollback, before the write, after the
+server applied it and at the next request, and with shared state resumed by
+another runner (`tests/acceptance/test_kill_resume.py`), and mid-rollout on kind
+(`tests/integration/test_kill_kind.py`).
+
+(rollback-boundary)=
+## What a rollback restores, and what it cannot
+
+`piceli release rollback <release>` re-plans that release's archived
+composition against the live cluster and applies the difference, exactly like
+an `apply` (see {doc}`release_cli`). It restores what the release declares:
+
+* every declared field of every object the release declares: images, command,
+  environment, ConfigMap data, labels, annotations, resources, `replicas`
+  (unless an autoscaler owns it, see {doc}`compatibility`);
+* declared objects that were deleted since (they are created again);
+* with `prune = true`, the removal of objects a later release added.
+
+It reuses the release's own secret versions; nothing is regenerated.
+
+It **cannot** restore:
+
+* **Data.** Volumes, databases and object stores keep what the newer version
+  wrote; a schema migration is not reversed. PersistentVolumeClaims,
+  PersistentVolumes, Namespaces and Secrets are retained objects that a
+  rollback never deletes or rewrites (see {doc}`secrets` for rotating a
+  Secret).
+* **External side effects** of the newer version: messages sent, jobs that
+  ran, calls to other services, DNS or cloud resources created outside the
+  cluster, images pushed to a registry.
+* **What others own**: fields other field managers wrote (an autoscaler's
+  replica count, an operator's fields and `status`, webhook injections),
+  objects outside the release, and objects that controllers create from the
+  release's objects (Pods, ReplicaSets, Jobs' Pods), which follow their owner
+  again only as their controller reconciles.
+* **Replaced objects**: a `replace` action is not undone (see
+  {doc}`release_cli`).
+
+Roll back application data with the application's own tools (backups,
+reversible migrations) before or after the Piceli rollback.

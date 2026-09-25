@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Nightly: the integration suite on every supported Kubernetes minor.
+  schedule:
+    - cron: "23 3 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -45,8 +49,16 @@ jobs:
           enable-cache: true
           cache-dependency-glob: uv.lock
       - run: uv sync --all-extras --python ${{ matrix.python }}
+      - name: Install sops (the reference app's SOPS source)
+        run: |
+          curl -sSfL -o /tmp/sops https://github.com/getsops/sops/releases/download/v3.10.2/sops-v3.10.2.linux.amd64
+          echo "79b0f844237bd4b0446e4dc884dbc1765fc7dedc3968f743d5949c6f2e701739  /tmp/sops" | sha256sum -c -
+          sudo install -m 0755 /tmp/sops /usr/local/bin/sops
       - name: Unit and acceptance tests
         run: uv run pytest --cov --cov-report=term --cov-report=xml
+      - name: Eval harness self-tests (mock models, no keys, no network)
+        if: matrix.python == '3.12'
+        run: make evals-check
       - name: Store coverage data
         if: matrix.python == '3.12'
         uses: actions/upload-artifact@v6
@@ -55,8 +67,75 @@ jobs:
           path: .coverage
           include-hidden-files: true
 
-  integration:
+  comparisons:
+    # examples/comparisons: the same app in Helm, Kustomize, cdk8s and Pulumi
+    # renders the same objects as Piceli (docs/comparisons.md). Pinned tools;
+    # PICELI_COMPARISONS=require turns a missing tool into a failure.
     runs-on: ubuntu-latest
+    env:
+      HELM_VERSION: v4.3.0
+      HELM_SHA256: 86584a54def73570558f66f5111cc53dfed56689637ae32c1201205d494f54fb
+      KUSTOMIZE_VERSION: v5.8.1
+      KUSTOMIZE_SHA256: 029a7f0f4e1932c52a0476cf02a0fd855c0bb85694b82c338fc648dcb53a819d
+      PICELI_COMPARISONS: require
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      - name: Install helm and kustomize
+        run: |
+          curl -sSfL -o /tmp/helm.tgz "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
+          echo "${HELM_SHA256}  /tmp/helm.tgz" | sha256sum -c -
+          tar -xzf /tmp/helm.tgz -C /tmp linux-amd64/helm
+          sudo install -m 0755 /tmp/linux-amd64/helm /usr/local/bin/helm
+          curl -sSfL -o /tmp/kustomize.tgz "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2F${KUSTOMIZE_VERSION}/kustomize_${KUSTOMIZE_VERSION}_linux_amd64.tar.gz"
+          echo "${KUSTOMIZE_SHA256}  /tmp/kustomize.tgz" | sha256sum -c -
+          tar -xzf /tmp/kustomize.tgz -C /tmp kustomize
+          sudo install -m 0755 /tmp/kustomize /usr/local/bin/kustomize
+      - run: uv sync --all-extras --python 3.12
+      - name: Render every comparison and compare it with Piceli
+        run: >-
+          uv run
+          --with-requirements examples/comparisons/cdk8s/requirements.txt
+          --with-requirements examples/comparisons/pulumi/requirements.txt
+          pytest tests/unit/comparisons -v
+
+  kind-nodes:
+    # The supported Kubernetes minors (.github/kind-nodes.json, newest first,
+    # pinned by digest). Pull requests and pushes test the newest; the nightly
+    # schedule and manual runs test all of them.
+    runs-on: ubuntu-latest
+    outputs:
+      kind: ${{ steps.pick.outputs.kind }}
+      nodes: ${{ steps.pick.outputs.nodes }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: pick
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" = schedule ] || [ "$EVENT" = workflow_dispatch ]; then
+            select='.nodes'
+          else
+            select='[.nodes[0]]'
+          fi
+          echo "kind=$(jq -r .kind .github/kind-nodes.json)" >> "$GITHUB_OUTPUT"
+          echo "nodes=$(jq -c "$select" .github/kind-nodes.json)" >> "$GITHUB_OUTPUT"
+
+  integration:
+    name: integration (k8s ${{ matrix.node.minor }})
+    needs: kind-nodes
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ${{ fromJSON(needs.kind-nodes.outputs.nodes) }}
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v7
@@ -66,17 +145,52 @@ jobs:
       - name: Create kind cluster
         uses: helm/kind-action@v1
         with:
-          node_image: kindest/node:v1.33.1
+          version: ${{ needs.kind-nodes.outputs.kind }}
+          node_image: ${{ matrix.node.image }}
+          kubectl_version: ${{ matrix.node.kubectl }}
           cluster_name: piceli-ci
+      - name: Name the cluster explicitly for the tests
+        # The tests never use the current context: they read these variables.
+        run: |
+          kind get kubeconfig --name piceli-ci > "$RUNNER_TEMP/kind.kubeconfig"
+          {
+            echo "PICELI_KIND_KUBECONFIG=$RUNNER_TEMP/kind.kubeconfig"
+            echo "PICELI_KIND_CONTEXT=kind-piceli-ci"
+            echo "PICELI_KIND_NODE=piceli-ci-control-plane"
+          } >> "$GITHUB_ENV"
       - run: uv sync --all-extras --python 3.12
+      - name: Pull the images the registry tests push from the local engine
+        run: |
+          docker pull busybox:1.36
+          docker pull "$(uv run python -c 'from piceli.k8s.templates.deployable.node_local_registry import DEFAULT_REGISTRY_IMAGE as i; print(i)')"
+      - name: Install sops (the reference app's SOPS source)
+        run: |
+          curl -sSfL -o /tmp/sops https://github.com/getsops/sops/releases/download/v3.10.2/sops-v3.10.2.linux.amd64
+          echo "79b0f844237bd4b0446e4dc884dbc1765fc7dedc3968f743d5949c6f2e701739  /tmp/sops" | sha256sum -c -
+          sudo install -m 0755 /tmp/sops /usr/local/bin/sops
       - name: Integration tests
         run: uv run pytest tests/integration --cov --cov-report=term
       - name: Store coverage data
         uses: actions/upload-artifact@v6
         with:
-          name: coverage-data-integration
+          name: coverage-data-integration-${{ matrix.node.minor }}
           path: .coverage
           include-hidden-files: true
+
+  kubernetes-client-floor:
+    # The lowest `kubernetes` Python client pyproject.toml allows still runs
+    # the unit and acceptance tests (nightly and manual runs).
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --all-extras --python 3.12
+      - run: uv pip install "kubernetes==$(grep -oP '"kubernetes>=\K[0-9.]+' pyproject.toml)"
+      - run: uv run --no-sync pytest -q
 
   package:
     # The wheel must work without optional extras (gcp, telemetry).
@@ -101,6 +215,11 @@ jobs:
           /tmp/core/bin/piceli render --spec examples/typed_app/release.toml > /tmp/render.yaml
           grep -q "kind: Deployment" /tmp/render.yaml
           /tmp/core/bin/piceli render --spec examples/typed_app/release.toml --format json | /tmp/core/bin/python -c "import json, sys; assert json.load(sys.stdin)"
+      # A fresh agent with only the skill: every SKILL.md command runs from a
+      # copy of skills/piceli against the built wheel and the fake API of
+      # piceli.testing (no cluster), so the skill cannot drift.
+      - name: Agent skill walkthrough against the built wheel
+        run: /tmp/core/bin/python scripts/skill_check.py
 
   build-spec-arm64:
     # Real containerized build of examples/builds/rust-hello on a native arm64 runner.
@@ -157,11 +276,30 @@ jobs:
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
       - run: uv build
+      # Re-running this job reuses the version (same run number): files an
+      # earlier attempt uploaded are skipped, and one retry covers transient
+      # index failures. The comment is posted only once TestPyPI lists them.
       - name: Publish to TestPyPI
+        id: upload-1
+        continue-on-error: true
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          attestations: true
+          skip-existing: true
+      - if: steps.upload-1.outcome == 'failure'
+        run: rm -f dist/*.publish.attestation && sleep 60
+      - name: Publish to TestPyPI (retry)
+        if: steps.upload-1.outcome == 'failure'
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          attestations: true
+          skip-existing: true
+      - name: Wait until TestPyPI lists every file
         run: >-
-          uv publish --trusted-publishing always
-          --publish-url https://test.pypi.org/legacy/
-          --check-url https://test.pypi.org/simple/
+          uv run --no-project --python 3.12 scripts/release_state.py verify
+          --dist dist --index https://test.pypi.org --attempts 10
       - name: Comment the install command on the PR
         uses: actions/github-script@v8
         with:
@@ -192,7 +330,7 @@ jobs:
         with:
           pattern: coverage-data-*
       - run: |
-          uv run coverage combine coverage-data-unit/.coverage coverage-data-integration/.coverage
+          uv run coverage combine coverage-data-*/.coverage
           uv run coverage report
           uv run coverage html --show-contexts --title "Combined coverage"
       - uses: actions/upload-artifact@v6

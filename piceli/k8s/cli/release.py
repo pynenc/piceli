@@ -79,9 +79,10 @@ ReplaceOption = Annotated[
     typer.Option(
         "--replace",
         help=(
-            "Authorize deleting this existing unmanaged object and creating it "
+            "Authorize deleting this existing unmanaged object (or a managed "
+            "Job or StatefulSet whose immutable fields change) and creating it "
             "from the release, after writing a restorable backup (repeatable; "
-            "adds to [release] replace; never retained or managed objects)"
+            "adds to [release] replace; never retained objects)"
         ),
     ),
 ]
@@ -95,6 +96,17 @@ AdoptAllOption = Annotated[
         ),
     ),
 ]
+ApproveIfPolicyOption = Annotated[
+    bool,
+    typer.Option(
+        "--approve-if-policy",
+        help=(
+            "Plan and execute only when every action is inside the spec's "
+            "[release] auto_approve policy (declared by the owner); otherwise "
+            "print the plan hash to approve and exit 3"
+        ),
+    ),
+]
 SkipChecksOption = Annotated[
     bool,
     typer.Option(
@@ -103,6 +115,18 @@ SkipChecksOption = Annotated[
             "Do not run the spec's [[checks]] after readiness (emergencies only; "
             "recorded in the release history)"
         ),
+    ),
+]
+EnvOption = Annotated[
+    str | None,
+    typer.Option(
+        "--env",
+        help=(
+            "Environment of a pipeline (--spec MODULE:ATTR): its app overrides, "
+            "target and state (required when the pipeline has one target per "
+            "environment)"
+        ),
+        show_default=False,
     ),
 ]
 ReleaseOption = Annotated[
@@ -128,49 +152,73 @@ def is_pipeline_target(spec: str) -> bool:
     return not spec.endswith(".toml") and ":" in spec
 
 
-def _load_spec(spec: str, *, current: bool) -> tuple[Any, Any]:
-    """``(release spec, pipeline or None)`` for ``--spec``.
+@contextmanager
+def _runner(
+    spec: str,
+    *,
+    current: bool = False,
+    write: bool = False,
+    env: str | None = None,
+) -> Iterator[Any]:
+    """A runner whose state is open for the command.
 
-    ``current``: the command plans a new release from the current model, so a
-    pipeline's build images must be delivered from its current sources.
+    ``write``: the command changes state or the cluster. For a pipeline it
+    holds the pipeline's run lock, so it never races a ``piceli deploy`` of
+    the same state (``pipeline-locked``). With shared state (``state =
+    "cluster"``) the working copy is refreshed from the cluster first; a
+    writing command holds the release lock and writes the state back at every
+    apply step and when it ends. Local ``release.toml`` state is used as is.
     """
+    from piceli.k8s.release_runner import ReleaseRunner
     from piceli.k8s.release_spec import ReleaseSpec, ReleaseSpecError
+    from piceli.state import session
+    from piceli.state.scopes import pipeline_scope, release_scope
 
-    if not is_pipeline_target(spec):
+    pipeline = None
+    loaded: Any = None
+    if is_pipeline_target(spec):
+        from piceli.k8s.cli.deploy_pipeline import load_pipeline
+
+        pipeline = load_pipeline(spec, env)
+        scope = pipeline_scope(pipeline)
+    else:
+        if env is not None:
+            raise ReleaseSpecError(
+                "--env selects an environment of a pipeline (--spec MODULE:ATTR); "
+                "a release.toml describes one release",
+                code="environment-unsupported",
+            )
         path = Path(spec).expanduser()
         if not path.is_file():
             raise ReleaseSpecError(f"release spec not found: {spec}")
-        return ReleaseSpec.from_toml(path), None
-    from piceli.k8s.cli.deploy_pipeline import load_pipeline
-    from piceli.pipeline.operate import operations_spec
+        loaded = ReleaseSpec.from_toml(path)
+        scope = release_scope(loaded)
+    local = scope.settings.backend == "local"
+    if local and (pipeline is None or not write):
+        if pipeline is not None:
+            from piceli.pipeline.operate import operations_spec
 
-    pipeline = load_pipeline(spec)
-    return operations_spec(pipeline, current=current), pipeline
-
-
-def _runner(spec: str, *, current: bool = False) -> Any:
-    from piceli.k8s.release_runner import ReleaseRunner
-
-    return ReleaseRunner(_load_spec(spec, current=current)[0], progress=_progress)
-
-
-@contextmanager
-def _locked_runner(spec: str, *, current: bool) -> Iterator[Any]:
-    """A runner for a command that changes the cluster.
-
-    For a pipeline it holds the pipeline's run lock, so it never races a
-    ``piceli deploy`` of the same state directory (``pipeline-locked``).
-    """
-    from piceli.k8s.release_runner import ReleaseRunner
-
-    loaded, pipeline = _load_spec(spec, current=current)
-    if pipeline is None:
+            loaded = operations_spec(pipeline, current=current)
         yield ReleaseRunner(loaded, progress=_progress)
         return
-    from piceli.pipeline.journal import Journal
+    with session(scope, write=write, say=_say) as held:
+        if pipeline is not None:
+            from piceli.pipeline.operate import operations_spec
 
-    with Journal(pipeline.state_dir).locked():
-        yield ReleaseRunner(loaded, progress=_progress)
+            loaded = operations_spec(pipeline, current=current)
+
+        def progress(text: str) -> None:
+            _progress(text)
+            held.checkpoint()
+
+        runner = ReleaseRunner(loaded, progress=progress)
+        runner.checkpoint = lambda: held.checkpoint(force=True)
+        yield runner
+
+
+def _locked_runner(spec: str, *, current: bool, env: str | None = None) -> Any:
+    """A runner for a command that changes the cluster (see :func:`_runner`)."""
+    return _runner(spec, current=current, write=True, env=env)
 
 
 def _progress(text: str) -> None:
@@ -242,7 +290,9 @@ def _diff_index(report: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]
     }
 
 
-def _describe_plan(result: Any, spec: str, command: str) -> None:
+def _describe_plan(
+    result: Any, spec: str, command: str, env: str | None = None
+) -> None:
     counts = ", ".join(f"{n} {op}" for op, n in result.counts.items()) or "no actions"
     _say(f"release {result.release} ({result.mode}, {result.intent}): {counts}")
     report = result.to_dict()
@@ -262,10 +312,23 @@ def _describe_plan(result: Any, spec: str, command: str) -> None:
             f"  drift   {resource['kind']}/{resource['name']}: desired fields "
             f"also managed by {', '.join(item['managers'])}"
         )
+    for item in report.get("autoscaled", ()):
+        if item["mode"] == "initial":
+            continue
+        resource = item["resource"]
+        _say(
+            f"  replicas {resource['kind']}/{resource['name']}: "
+            + (
+                "left to "
+                if item["mode"] == "yielded"
+                else "kept at the live value for "
+            )
+            + ", ".join(item["autoscalers"])
+        )
     for entry in report["adopt_not_needed"]:
         _say(f"  adopt {entry}: not needed (absent or already managed)")
     for entry in report["authorized"].get("replace_not_needed", ()):
-        _say(f"  replace {entry}: not needed (absent)")
+        _say(f"  replace {entry}: not needed (absent, or managed and unchanged)")
     for name, origin in result.secrets.items():
         _say(f"  secret {name}: {origin}")
     checks = report.get("checks") or {}
@@ -280,7 +343,9 @@ def _describe_plan(result: Any, spec: str, command: str) -> None:
         )
     _say(f"plan hash: {result.plan_hash} (valid until {result.expires_at})")
     _say(
-        f"approve with: piceli release {command} --spec {spec} --approve {result.plan_hash}"
+        f"approve with: piceli release {command} --spec {spec}"
+        + (f" --env {env}" if env else "")
+        + f" --approve {result.plan_hash}"
     )
 
 
@@ -362,6 +427,18 @@ def _describe_rollback(rollback: dict[str, Any] | None) -> None:
     _describe_checks(rollback.get("checks"), "    ")
 
 
+def describe_diagnosis(diagnosis: dict[str, Any] | None, reason: str) -> None:
+    """``failed: 2 workloads not starting (<reason>)`` and one line per cause."""
+    from piceli.k8s.ops.diagnosis import headline, human_lines
+
+    title = headline(diagnosis)
+    if title is None:
+        return
+    _say(f"failed: {title} ({reason})")
+    for line in human_lines(diagnosis):
+        _say(line)
+
+
 def _finish(outcome: dict[str, Any]) -> None:
     from piceli.errors import ERRORS
 
@@ -394,6 +471,8 @@ def _finish(outcome: dict[str, Any]) -> None:
             + ")"
         )
     _describe_checks(outcome.get("checks"))
+    if failed and outcome.get("diagnosis"):
+        describe_diagnosis(outcome["diagnosis"], reason)
     _say(
         f"{outcome['intent']} {outcome['release']}: {state}"
         + (
@@ -419,7 +498,25 @@ def _plan_then_execute(
     replace: list[str] | None = None,
     adopt_all_desired: bool = False,
     skip_checks: bool = False,
+    env: str | None = None,
+    approve_if_policy: bool = False,
 ) -> None:
+    if approve_if_policy and (
+        approve is not None
+        or auto_approve
+        or rotate
+        or adopt
+        or replace
+        or adopt_all_desired
+    ):
+        from piceli.cli_contract import reject
+
+        # The owner's policy decides alone: no flag may add what it covers.
+        reject(
+            "approve-if-policy-flags-conflict",
+            "--approve-if-policy cannot be combined with --approve, "
+            "--auto-approve, --rotate, --adopt, --replace or --adopt-all-desired",
+        )
     if approve is not None and (
         auto_approve or rotate or adopt or replace or adopt_all_desired
     ):
@@ -432,7 +529,7 @@ def _plan_then_execute(
         )
     try:
         # A rollback re-applies a catalogued release (its recorded images).
-        with _locked_runner(spec, current=rollback_to is None) as runner:
+        with _locked_runner(spec, current=rollback_to is None, env=env) as runner:
             if approve is not None:
                 expected = None
                 if rollback_to is not None:
@@ -444,6 +541,8 @@ def _plan_then_execute(
                     skip_checks=skip_checks,
                 )
             else:
+                if approve_if_policy:
+                    _declared_policy(runner)  # refuse before anything is planned
                 result = runner.plan(
                     rotate=rotate or (),
                     rollback_to=rollback_to,
@@ -451,15 +550,58 @@ def _plan_then_execute(
                     replace=replace or (),
                     adopt_all_desired=adopt_all_desired,
                 )
-                _describe_plan(result, spec, command)
-                if not auto_approve and not _confirm(result):
+                _describe_plan(result, spec, command, env)
+                if approve_if_policy:
+                    decision = _policy_decision(runner, result)
+                    if not decision.allowed:
+                        _say(
+                            "outside the owner's approval policy: "
+                            + ", ".join(decision.violations)
+                        )
+                        _say("the owner must review this plan and approve its hash")
+                        _emit(
+                            {
+                                "state": "approval-required",
+                                "reason": "approval-policy-exceeded",
+                                "policy": decision.to_dict(),
+                                **result.to_dict(),
+                            }
+                        )
+                        raise typer.Exit(EXIT_APPROVAL)
+                    _say(
+                        "inside the owner's approval policy "
+                        f"({decision.changes} change(s)); applying"
+                    )
+                elif not auto_approve and not _confirm(result):
                     _emit({"state": "approval-required", **result.to_dict()})
                     raise typer.Exit(EXIT_APPROVAL)
                 outcome = runner.apply(result.plan_hash, skip_checks=skip_checks)
+                if approve_if_policy:
+                    outcome = {**outcome, "approved_by": "policy"}
     except _refusals() as error:
         _refuse(error)
         return
     _finish(outcome)
+
+
+def _declared_policy(runner: Any) -> Any:
+    """The spec's ``[release] auto_approve`` policy; refuses without one."""
+    from piceli.k8s.release_spec import ReleaseSpecError
+
+    policy = runner.spec.model.release.approval_policy
+    if policy is None:
+        raise ReleaseSpecError(
+            "the spec declares no [release] auto_approve policy; only the owner "
+            "can add one. Approve the plan hash instead",
+            code="approval-policy-missing",
+        )
+    return policy
+
+
+def _policy_decision(runner: Any, result: Any) -> Any:
+    """The spec's approval policy applied to every action of ``result``."""
+    value = result.to_dict()
+    return _declared_policy(runner).evaluate(value["actions"], drift=value["drift"])
 
 
 @app.command("plan")
@@ -473,15 +615,17 @@ def plan(
         Path | None,
         typer.Option("--out", help="Also write the full redacted plan JSON here"),
     ] = None,
+    env: EnvOption = None,
 ) -> None:
     """Capture live discovery and persist an approvable plan (prints its hash)."""
     try:
-        result = _runner(spec, current=True).plan(
-            rotate=rotate or (),
-            adopt=adopt or (),
-            replace=replace or (),
-            adopt_all_desired=adopt_all_desired,
-        )
+        with _runner(spec, current=True, write=True, env=env) as runner:
+            result = runner.plan(
+                rotate=rotate or (),
+                adopt=adopt or (),
+                replace=replace or (),
+                adopt_all_desired=adopt_all_desired,
+            )
         if out is not None:
             out.write_text(
                 json.dumps(result.to_dict(full=True), sort_keys=True, indent=2)
@@ -489,7 +633,7 @@ def plan(
     except _refusals() as error:
         _refuse(error)
         return
-    _describe_plan(result, spec, "apply")
+    _describe_plan(result, spec, "apply", env)
     _emit({"state": "planned", **result.to_dict()})
 
 
@@ -508,14 +652,16 @@ def diff(
             "--exit-code", help="Exit 1 when the release would change something"
         ),
     ] = False,
+    env: EnvOption = None,
 ) -> None:
     """Show what `plan` would change, field by field (read-only, nothing stored)."""
     try:
-        value = _runner(spec, current=True).diff(
-            adopt=adopt or (),
-            replace=replace or (),
-            adopt_all_desired=adopt_all_desired,
-        )
+        with _runner(spec, current=True, env=env) as runner:
+            value = runner.diff(
+                adopt=adopt or (),
+                replace=replace or (),
+                adopt_all_desired=adopt_all_desired,
+            )
     except _refusals() as error:
         _refuse(error)
         return
@@ -533,9 +679,12 @@ def diff(
             _say("secret-bound values not shown: " + ", ".join(item["not_compared"]))
     counts = ", ".join(f"{n} {op}" for op, n in value["summary"].items())
     _say(f"release {value['release']}: {counts or 'no actions'}")
-    _emit({"state": "diffed", **value})
     if exit_code and value["changes"]:
+        # Exit 1 names its code, as every "ran but did not succeed" result does.
+        _emit({**value, "state": "diffed", "reason": "release-changes-pending"})
+        _say("changes pending [release-changes-pending]")
         raise typer.Exit(EXIT_NOT_READY)
+    _emit({**value, "state": "diffed"})
 
 
 @app.command("apply")
@@ -548,8 +697,15 @@ def apply(
     replace: ReplaceOption = None,
     adopt_all_desired: AdoptAllOption = False,
     skip_checks: SkipChecksOption = False,
+    env: EnvOption = None,
+    approve_if_policy: ApproveIfPolicyOption = False,
 ) -> None:
     """Execute an approved plan (``--approve HASH``), or plan and confirm.
+
+    ``--approve-if-policy`` plans and applies only when every action is
+    inside the spec's ``[release] auto_approve`` policy, which only the owner
+    declares; any other plan is stored and its hash printed (exit 3,
+    ``approval-policy-exceeded``).
 
     When the execution is ready, the spec's ``[[checks]]`` run; the release
     is ready only when they pass (``release_state``: ``ready`` or
@@ -560,6 +716,7 @@ def apply(
     _plan_then_execute(
         spec,
         command="apply",
+        env=env,
         approve=approve,
         auto_approve=auto_approve,
         rotate=rotate,
@@ -567,6 +724,7 @@ def apply(
         replace=replace,
         adopt_all_desired=adopt_all_desired,
         skip_checks=skip_checks,
+        approve_if_policy=approve_if_policy,
     )
 
 
@@ -582,6 +740,7 @@ def rollback(
     replace: ReplaceOption = None,
     adopt_all_desired: AdoptAllOption = False,
     skip_checks: SkipChecksOption = False,
+    env: EnvOption = None,
 ) -> None:
     """Re-plan and re-apply an earlier release against current cluster state.
 
@@ -590,6 +749,7 @@ def rollback(
     _plan_then_execute(
         spec,
         command=f"rollback {target}",
+        env=env,
         approve=approve,
         auto_approve=auto_approve,
         rollback_to=target,
@@ -605,10 +765,11 @@ def resume(
     spec: SpecOption,
     release: ReleaseOption = None,
     skip_checks: SkipChecksOption = False,
+    env: EnvOption = None,
 ) -> None:
     """Resume an interrupted apply of a created release (same grant and ids)."""
     try:
-        with _locked_runner(spec, current=False) as runner:
+        with _locked_runner(spec, current=False, env=env) as runner:
             outcome = runner.resume(release, skip_checks=skip_checks)
     except _refusals() as error:
         _refuse(error)
@@ -617,10 +778,12 @@ def resume(
 
 
 @app.command("stop")
-def stop(spec: SpecOption, release: ReleaseOption = None) -> None:
+def stop(
+    spec: SpecOption, release: ReleaseOption = None, env: EnvOption = None
+) -> None:
     """Cancel the latest execution of a release (exact owner only)."""
     try:
-        with _locked_runner(spec, current=False) as runner:
+        with _locked_runner(spec, current=False, env=env) as runner:
             outcome = runner.stop(release)
     except _refusals() as error:
         _refuse(error)
@@ -635,29 +798,105 @@ def check(
         str | None,
         typer.Option("--release", help="Release to check (default: the selected one)"),
     ] = None,
+    env: EnvOption = None,
 ) -> None:
     """Run the spec's [[checks]] now against a release; changes nothing.
 
-    Exit code ``0`` when every check passed, ``1`` when one failed.
+    Exit code ``0`` when every check passed (``"state": "succeeded"``), ``1``
+    when one failed (``"state": "failed", "reason": "check-failed"``).
     """
     try:
-        outcome = _runner(spec).check(release)
+        with _runner(spec, write=True, env=env) as runner:
+            outcome = runner.check(release)
     except _refusals() as error:
         _refuse(error)
         return
-    _emit(outcome)
-    _describe_checks(outcome["checks"])
     passed = outcome["checks"]["passed"]
-    _say(f"check {outcome['release']}: {'passed' if passed else 'checks-failed'}")
+    if passed:
+        _emit({**outcome, "state": "succeeded"})
+    else:
+        _emit({**outcome, "state": "failed", "reason": "check-failed"})
+    _describe_checks(outcome["checks"])
+    _say(
+        f"check {outcome['release']}: "
+        + ("passed" if passed else "checks-failed [check-failed]")
+    )
     if not passed:
         raise typer.Exit(EXIT_NOT_READY)
 
 
+_RUN_ID = r"[0-9]{8}T[0-9]{12}Z-[0-9a-f]{8}"
+
+
+def _pipeline_execution(runner: Any, run_id: str) -> str | None:
+    """The release execution a ``piceli deploy`` run applied (``--run RUN_ID``)."""
+    import re
+
+    if not re.fullmatch(_RUN_ID, run_id):
+        return None
+    path = Path(runner.state).parent / "runs" / f"{run_id}.json"
+    try:
+        value = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    apply = ((value.get("stages") or {}).get("apply") or {}).get("output") or {}
+    execution = (apply.get("execution") or {}).get("execution_id")
+    return str(execution) if execution else None
+
+
+def _describe_run(value: dict[str, Any]) -> None:
+    execution = value["execution"]
+    category = execution.get("failure_category")
+    _say(
+        f"{value.get('intent')} {value.get('release')} "
+        f"(execution {value['execution_id'][:12]}, {value.get('at')}): "
+        f"{value.get('release_state')}" + (f" ({category})" if category else "")
+    )
+    diagnosis = value.get("diagnosis")
+    if diagnosis:
+        describe_diagnosis(diagnosis, category or str(diagnosis.get("code")))
+        for workload in diagnosis.get("workloads", ()):
+            for cause in workload.get("causes", ()):
+                label = f"{workload['name']}/{cause.get('container') or '-'}"
+                for line in cause.get("logs", ()):
+                    _say(f"    {label} | {line}")
+                for event in cause.get("events", ()):
+                    _say(
+                        f"    {label} event {event['reason']} x{event['count']}: "
+                        f"{event['message']}"
+                    )
+    elif category:
+        _say(f"  explain with: piceli explain {category}")
+
+
 @app.command("status")
-def status(spec: SpecOption) -> None:
+def status(
+    spec: SpecOption,
+    env: EnvOption = None,
+    run: Annotated[
+        str | None,
+        typer.Option(
+            "--run",
+            help="Show one past execution (an execution id, a unique prefix of "
+            "at least 8 characters, or a `piceli deploy` run id): its state and "
+            "the recorded causes of a failure (redacted log tails, events)",
+        ),
+    ] = None,
+) -> None:
     """Show catalogued releases, their executions and history (no cluster access)."""
     try:
-        value = _runner(spec).status()
+        with _runner(spec, env=env) as runner:
+            if run is not None:
+                execution = (
+                    _pipeline_execution(runner, run)
+                    if is_pipeline_target(spec)
+                    else None
+                )
+                found = runner.run(execution or run)
+                _describe_run(found)
+                _emit(found)
+                return
+            value = runner.status()
     except _refusals() as error:
         _refuse(error)
         return
@@ -715,35 +954,56 @@ def secret_show(
         bool,
         typer.Option("--json", help="Print JSON: metadata only unless --reveal"),
     ] = False,
+    env: EnvOption = None,
 ) -> None:
     """Show a secret's metadata, and its value with --reveal (never logged).
 
-    Reads the local state directory only; never contacts the cluster.
+    Reads the local state directory only; with shared state (``state =
+    "cluster"``) it refreshes the working copy from the cluster first.
     """
-    from piceli.k8s.release_secret_spec import SecretError
-
     try:
-        runner = _runner(spec)
-        metadata = runner.secret_metadata(name, release=release)
-        if as_json and not reveal:
-            _emit(metadata)
-            return
-        if not reveal and not _confirm_reveal(name):
-            raise SecretError(
-                "secret-reveal-required",
-                f"printing secret {name!r} needs --reveal (or confirmation on a "
-                "terminal); use --json for metadata only",
-            )
-        values = runner.reveal_secret(name, key=key, release=release)
-        if not as_json and len(values) != 1:
-            raise SecretError(
-                "secret-key-required",
-                f"secret {name!r} has several values; choose one with --key "
-                f"({', '.join(sorted(values))})",
-            )
+        with _runner(spec, env=env) as runner:
+            metadata = runner.secret_metadata(name, release=release)
+            if as_json and not reveal:
+                _emit(metadata)
+                return
+            values = _reveal(runner, name, key, release, reveal=reveal, as_json=as_json)
     except _refusals() as error:
         _refuse(error)
         return
+    _print_values(metadata, values, as_json=as_json)
+
+
+def _reveal(
+    runner: Any,
+    name: str,
+    key: str | None,
+    release: str | None,
+    *,
+    reveal: bool,
+    as_json: bool,
+) -> dict[str, bytes]:
+    from piceli.k8s.release_secret_spec import SecretError
+
+    if not reveal and not _confirm_reveal(name):
+        raise SecretError(
+            "secret-reveal-required",
+            f"printing secret {name!r} needs --reveal (or confirmation on a "
+            "terminal); use --json for metadata only",
+        )
+    values: dict[str, bytes] = runner.reveal_secret(name, key=key, release=release)
+    if not as_json and len(values) != 1:
+        raise SecretError(
+            "secret-key-required",
+            f"secret {name!r} has several values; choose one with --key "
+            f"({', '.join(sorted(values))})",
+        )
+    return values
+
+
+def _print_values(
+    metadata: dict[str, Any], values: dict[str, bytes], *, as_json: bool
+) -> None:
     if as_json:
         revealed: dict[str, Any] = {}
         for item, value in values.items():

@@ -8,7 +8,7 @@ import json
 import os
 import re
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -26,6 +26,9 @@ class ExecutionJournal:
     No manifests, secret values, private value digests or server errors belong in
     this journal. Payloads contain identity, random private refs and allowlisted
     operation states. Cancellation has a separate transaction and survives death.
+    The one exception is a failed execution's *diagnosis*
+    (:mod:`piceli.k8s.ops.diagnosis`): bounded pod causes whose log lines and
+    messages were redacted before they were recorded.
     """
 
     def __init__(self, path: Path, *, max_bytes: int = 64_000_000) -> None:
@@ -53,10 +56,24 @@ class ExecutionJournal:
                 archive_sha256 TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS deployment_sessions (
                 id TEXT PRIMARY KEY, archive TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS diagnoses (
+                execution TEXT PRIMARY KEY REFERENCES executions(id),
+                payload TEXT NOT NULL);
         """
         )
         if self.connection.execute("PRAGMA quick_check").fetchone()[0] != "ok":
             raise ValueError("journal integrity check failed")
+
+    #: Called after every committed transaction, before the caller's IO
+    #: (shared state writes the journal through; see :mod:`piceli.state`).
+    on_commit: Callable[[], None] | None = None
+
+    @contextmanager
+    def _transaction(self) -> Iterator[None]:
+        with self.connection:
+            yield
+        if self.on_commit is not None:
+            self.on_commit()
 
     def _capacity(self, encoded: str = "") -> None:
         # Reserve several SQLite pages for a complete intent/receipt transaction.
@@ -110,7 +127,7 @@ class ExecutionJournal:
                 raise ValueError("journal action inventory is incomplete or invalid")
             return
         self._capacity(encoded)
-        with self.connection:
+        with self._transaction():
             self.connection.execute(
                 "INSERT INTO executions(id,binding) VALUES (?,?)", (execution, encoded)
             )
@@ -154,8 +171,11 @@ class ExecutionJournal:
             "resource_version",
             "retained_reconciled",
             "same_owner_update",
+            "written_at",
         }:
             raise ValueError("legacy receipt is not secret-safe")
+        if "written_at" in payload and not isinstance(payload["written_at"], str):
+            raise ValueError("legacy receipt has invalid write time")
         for key in ("before", "after"):
             if key not in payload:
                 continue
@@ -246,7 +266,7 @@ class ExecutionJournal:
         if state == "ready" and any(item[1] != "ready" for item in prepared):
             raise ValueError("ready legacy execution has incomplete receipts")
         self._capacity(encoded_binding + encoded_archive)
-        with self.connection:
+        with self._transaction():
             self.connection.execute(
                 "INSERT INTO executions(id,binding,state) VALUES (?,?,?)",
                 (execution, encoded_binding, state),
@@ -292,7 +312,7 @@ class ExecutionJournal:
                 raise ValueError("deployment session archive changed")
             return
         self._capacity(encoded)
-        with self.connection:
+        with self._transaction():
             self.connection.execute(
                 "INSERT INTO deployment_sessions(id,archive) VALUES (?,?)",
                 (session_id, encoded),
@@ -321,7 +341,7 @@ class ExecutionJournal:
             payload, sort_keys=True, separators=(",", ":"), allow_nan=False
         )
         self._capacity(encoded)
-        with self.connection:
+        with self._transaction():
             cursor = self.connection.execute(
                 "UPDATE actions SET state=?,payload=? WHERE execution=? AND ordinal=?",
                 (state, encoded, execution, ordinal),
@@ -337,21 +357,53 @@ class ExecutionJournal:
         """Persist one bounded provider failure category without exception details."""
         if not re.fullmatch(r"[a-z][a-z0-9-]{0,79}", category):
             raise ValueError("invalid provider failure category")
-        with self.connection:
+        with self._transaction():
             self.connection.execute(
                 "INSERT INTO events(execution,ordinal,state) VALUES (?,NULL,?)",
                 (execution, f"error:{category}"),
             )
 
+    def record_diagnosis(self, execution: str, diagnosis: dict[str, Any]) -> None:
+        """Keep the (already redacted, bounded) diagnosis of a failed execution."""
+        encoded = json.dumps(
+            diagnosis, sort_keys=True, separators=(",", ":"), allow_nan=False
+        )
+        if len(encoded) > 256_000:
+            raise ValueError("diagnosis too large")
+        self._capacity(encoded)
+        with self._transaction():
+            self.connection.execute(
+                "INSERT OR REPLACE INTO diagnoses(execution,payload) VALUES (?,?)",
+                (execution, encoded),
+            )
+
+    def clear_diagnosis(self, execution: str) -> None:
+        """Forget an earlier attempt's diagnosis (a resumed execution)."""
+        if self.diagnosis(execution) is None:
+            return
+        with self._transaction():
+            self.connection.execute(
+                "DELETE FROM diagnoses WHERE execution=?", (execution,)
+            )
+
+    def diagnosis(self, execution: str) -> dict[str, Any] | None:
+        row = self.connection.execute(
+            "SELECT payload FROM diagnoses WHERE execution=?", (execution,)
+        ).fetchone()
+        if row is None:
+            return None
+        value = strict_json(row[0])
+        return value if isinstance(value, dict) else None
+
     def set_state(self, execution: str, state: str) -> None:
         self._capacity()
-        with self.connection:
+        with self._transaction():
             self.connection.execute(
                 "UPDATE executions SET state=? WHERE id=?", (state, execution)
             )
 
     def cancel(self, execution: str) -> None:
-        with self.connection:
+        with self._transaction():
             cursor = self.connection.execute(
                 "UPDATE executions SET cancelled=1,state='cancelled' WHERE id=?",
                 (execution,),
@@ -360,7 +412,7 @@ class ExecutionJournal:
                 raise ValueError("unknown execution")
 
     def resume(self, execution: str) -> None:
-        with self.connection:
+        with self._transaction():
             self.connection.execute(
                 "UPDATE executions SET cancelled=0,state='pending' WHERE id=?",
                 (execution,),
@@ -396,6 +448,9 @@ class ExecutionJournal:
         ).fetchone()
         if failure is not None and row["state"] in {"blocked", "failed"}:
             result["failure_category"] = failure["state"].removeprefix("error:")
+            diagnosis = self.diagnosis(execution)
+            if diagnosis is not None:
+                result["diagnosis"] = diagnosis
         return result
 
     def close(self) -> None:

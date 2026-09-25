@@ -21,7 +21,7 @@ piceli release rollback <release|previous> --spec release.toml [--approve <hash>
 piceli release resume   --spec release.toml [--release NAME] [--skip-checks]
 piceli release stop     --spec release.toml [--release NAME]
 piceli release check    --spec release.toml [--release NAME]
-piceli release status   --spec release.toml
+piceli release status   --spec release.toml [--run EXECUTION_ID]
 piceli release secret show NAME --spec release.toml [--key KEY] [--release NAME] [--reveal] [--json]
 ```
 
@@ -71,16 +71,22 @@ owner = "release-demo"              # piceli.io/owner of managed objects
 field_manager = "release-demo"
 composition = "composition.py:build"   # or "package.module:function"
 state_dir = ".piceli-release"       # catalog, journal, secret store, plans (0700)
+# state = "cluster"                 # share the state in the namespace, see docs/state.md
+# state_lease_seconds = 60          # how long a dead runner keeps the release lock
 approval_window_seconds = 900       # plan validity and evidence age limit
 prune = false                       # delete managed objects a release drops
 # inherited_owners = ["old-owner"]  # earlier owner ids whose objects count as ours
 # adopt = ["Deployment/web", "PersistentVolumeClaim/data"]   # see "Adopting existing objects"
 # replace = ["Deployment/legacy"]   # one-off delete-and-recreate, see "Replacing an object"
 # rollback_on_failed_checks = true  # re-apply the previous ready release when [[checks]] fail
+# auto_approve = { allow = ["create", "apply", "no-op"], max_objects = 10 }  # see "Approval policy"
 
 [execution]
 max_seconds = 300
 readiness_seconds = 240
+# write_settle_seconds = 60         # resume re-sends a write that never landed after this long
+# fail_fast = true                  # stop at once when new pods cannot start (apply-crashloop)
+# crash_restarts = 3                # restarts of a new container that count as not starting
 
 [images]                            # pinned by digest
 web = "docker.io/library/nginx@sha256:…"
@@ -405,6 +411,37 @@ $ piceli release apply --spec release.toml --approve 4123ff6e…29b8e4
 apply web-716dfe62698b: ready
 ```
 
+(release-approval-policy)=
+### Approval policy
+
+`[release] auto_approve` is the owner's policy for plans that may apply
+without a human approving the hash:
+
+```toml
+[release]
+# ...
+auto_approve = { allow = ["create", "apply", "no-op"], deny = ["cluster_scoped"], max_objects = 10 }
+```
+
+`piceli release apply --spec release.toml --approve-if-policy` plans and
+applies only when every action of the plan is inside the policy (the output
+adds `"approved_by": "policy"`). Otherwise nothing is applied: the plan is
+stored, its hash and the usual `--approve` command are printed, and the exit
+code is `3` with `"reason": "approval-policy-exceeded"` and a `policy` object
+whose `violations` name each action outside it. `delete`, `replace` and
+`adopt` are never inside a policy (`approval-policy-invalid` if `allow` names
+one); `cluster_scoped` objects and `drift` need an explicit `allow`; `deny`
+removes classes from `allow`; `max_objects` caps the changed objects.
+
+The policy is part of the plan hash, so changing it changes every plan's
+hash. No flag sets or widens it: `--approve-if-policy` without a declared
+policy is refused (`approval-policy-missing`) before anything is planned, and
+combining it with `--approve`, `--auto-approve`, `--rotate`, `--adopt`,
+`--replace` or `--adopt-all-desired` is refused
+(`approve-if-policy-flags-conflict`). A pipeline's policy
+(`Pipeline(auto_approve=...)`, see {ref}`deploy-approval-policy`) applies to
+`piceli release apply --spec MODULE:ATTR --approve-if-policy` the same way.
+
 (release-plan-output)=
 ### What a plan shows
 
@@ -468,7 +505,8 @@ diffs on stderr and `{"state": "diffed", "summary", "changes", "actions",
 "diffs", "dry_run_unavailable"}` on stdout. It stores no plan and no local
 state and sends the cluster only reads and `dryRun=All` requests, so it is
 safe to run at any time. With `--exit-code` it exits `1` when the release
-would change something.
+would change something, and the object also carries
+`"reason": "release-changes-pending"`.
 
 ## Adopting existing objects
 
@@ -594,13 +632,19 @@ authorizes deleting such an object and creating it from the release. Every
 replace needs its own explicit entry; there is no "replace all".
 
 Replace is allowed only for objects that are **unmanaged**, **not retained**
-and **not owned by another object** (`ownerReferences`). It is refused, before
-any write, for:
+and **not owned by another object** (`ownerReferences`), and for **managed
+Jobs and StatefulSets**, whose immutable fields a release cannot update (a
+Job's pod template; a StatefulSet's `serviceName`, `podManagementPolicy`,
+selector or claim templates). Such a change refuses the plan with
+`immutable-field-changed` until the object is named with `--replace`; see
+{doc}`typed_apps`. A managed Job or StatefulSet named for replace without
+such a change is reported as not needed, so a standing `[release] replace`
+entry never reruns a Job. It is refused, before any write, for:
 
 * retained kinds and objects (Namespace, PersistentVolume, PVC, Secret,
   `piceli.io/retained: "true"`): adopt them instead;
-* objects already managed by this release (including inherited owners): the
-  release already updates them;
+* other objects already managed by this release (including inherited
+  owners): the release already updates them;
 * objects owned by another object, and workloads whose retained dependents a
   background delete would remove.
 
@@ -677,6 +721,7 @@ Choosing between adopt and replace:
 | Adopt everything the composition declares, after reviewing the list | `--adopt-all-desired` | The same takeover for each unmanaged declared object; retained ones metadata-only. |
 | A volume claim, Secret or other retained object | `--adopt Kind/name` (never replace) | Metadata-only: owner annotation and declared labels/annotations; the spec/data must already match. |
 | An immutable field must change (selector, Service `clusterIP`…), or an adoption fails with `invalid-request` | `--replace Kind/name` | Backup, delete, create. New UID; workload pods restart. |
+| A managed Job or StatefulSet whose immutable fields change (`immutable-field-changed`) | `--replace Job/name`, `--replace StatefulSet/name` | Backup, delete, create. A Job runs again; a StatefulSet is deleted with `Orphan` propagation, keeps its pods (adopted by the new one) and its claims. |
 | The object is not yours to change | neither | Rename the object in the composition, or remove it from the composition. |
 
 Refusal codes (`reason` in the JSON, also per object in `blocking[].code`):
@@ -684,7 +729,8 @@ Refusal codes (`reason` in the JSON, also per object in `blocking[].code`):
 | Code | Cause | Fix |
 | --- | --- | --- |
 | `resource-requires-adoption` | An object the composition declares exists without this release's owner. | `--adopt` or `--replace` it (see `suggest`), `--adopt-all-desired`, or delete it. |
-| `replace-refused` | `--replace` names a retained object, an object already managed, or one owned by another object. | Adopt a retained object instead; remove managed objects from the replace list (`[release] replace` is for a one-off migration). |
+| `replace-refused` | `--replace` names a retained object, an object already managed (other than a Job or StatefulSet), or one owned by another object. | Adopt a retained object instead; remove managed objects from the replace list (`[release] replace` is for a one-off migration). |
+| `immutable-field-changed` | The composition changes an immutable field of a managed Job or StatefulSet. | `--replace Kind/name` (see `suggest`), or revert the change. |
 | `retained-content-differs` | A retained object's spec or data differ from the composition; only labels and annotations may change. | Make the composition match the live object (or create a new object under a new name). |
 | `adopt-and-replace` | The same object is named by an adopt and a replace entry. | Keep one. |
 | `adopt-entry-not-declared`, `replace-entry-not-declared` | An entry does not name exactly one resource the composition declares. | Fix the `Kind/name` (or use `apiVersion/Kind/name`). |
@@ -718,6 +764,15 @@ Execution failures of these paths (`failure_category` of `apply`):
 | `replace-delete-not-observed` | On resume, the original object is still there although the journal recorded its delete. Execution `blocked`. | Inspect the object, then plan again. |
 | `invalid-metadata-change` | A metadata-only write was asked to set a non-string value or Piceli's own annotations. | Fix the composition's labels/annotations. |
 | `retained-content-precondition-failed` | A retained object's content (for example a private Secret value) differs from the composition at apply time. Nothing was written. | Use a new object name (see "Secret generators"). |
+| `apply-crashloop` | A workload's new pods cannot start (crash loop, image pull or config error, `crash_restarts` restarts, a failed Job or Pod); the apply stopped without waiting for `readiness_seconds`. The result's `diagnosis` has per workload each container's reason, exit code, restarts, redacted log tail and events; stderr one line per cause. | Fix the cause and plan again, or `rollback previous`. `status --run EXECUTION_ID` shows the causes again ({ref}`deploy-diagnosis`). |
+| `readiness-timeout`, `deadline-exceeded` | An object did not become ready in time. For a workload whose pods show a reason, `diagnosis` lists it too. | See `diagnosis`; fix the workload and `resume`, or plan again. |
+
+`piceli release status --spec release.toml --run EXECUTION_ID` (an id from
+`history`, a unique prefix of at least 8 characters, or with a pipeline its
+`piceli deploy` run id) prints that execution's state and, when it failed,
+the recorded `diagnosis`: one line per cause, then the redacted log lines and
+events. It reads only the local state (`piceli explain --run ID --spec …` is
+the same). An unknown id is `unknown-execution`.
 
 ## Post-deploy checks
 
@@ -769,7 +824,19 @@ after failed checks is described in {doc}`checks`.
 * `status` reads the catalog, journal and history without contacting the
   cluster: releases with their image identities, executions and latest check
   outcome (`checks`), the deployed and previous release, pending plans and
-  recent history.
+  recent history. With `state = "cluster"` it first refreshes the working
+  copy from the namespace (reads only).
+
+## Shared state
+
+With `[release] state = "cluster"` the state directory is a working copy of
+state kept in the release namespace (Secrets plus a Lease lock, see
+{doc}`state`): `plan`, `apply`, `rollback`, `resume`, `stop` and `check` hold
+the release lock (`release-locked` while another runner holds it; a runner
+that died is taken over when its lease expires), and every execution journal
+commit is written back before the change it records, so any machine can
+resume. `catalog`, `journal` and `secret_store` must then stay inside
+`state_dir`.
 
 An execution the executor refused before changing anything is recorded in
 the history with `"state": "rejected"` and `"reason": "execution-refused"`
@@ -802,6 +869,11 @@ secret generators and composition, plus the pipeline's `checks=` and
 | --- | --- |
 | `rollback`, `resume`, `stop`, `check`, `status`, `secret show` | The catalogued releases' own records. A rollback re-applies the archived composition with its recorded image digests (`oci-set` source). |
 | `plan`, `preview`, `diff`, `apply` | The images `piceli deploy` last built from the **current** build inputs and delivered; otherwise refused with `pipeline-not-delivered` (run `piceli deploy`). |
+
+A pipeline with one target per environment (see {doc}`environments`) needs
+`--env NAME` on every command (`environment-required` otherwise); each
+environment's release lives in `state_dir/environments/NAME`. `--env` with a
+`release.toml` is refused with `environment-unsupported`.
 
 `apply`, `rollback`, `resume` and `stop` on a pipeline hold its run lock and
 are refused with `pipeline-locked` while `piceli deploy` runs on the same

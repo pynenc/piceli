@@ -6,7 +6,6 @@ import io
 import json
 import stat
 import tarfile
-import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
@@ -21,6 +20,7 @@ from piceli.artifacts.oci import (
 )
 from piceli.artifacts.plan import canonical, validate_digest
 from piceli.artifacts.process import ProcessLimits, ToolPin, run_process
+from piceli.tempfiles import temporary_directory
 
 
 @dataclass(frozen=True)
@@ -75,7 +75,7 @@ class DockerLocalImporter:
         self.tool.verify()
         index = json.loads((layout / "index.json").read_text())
         manifest = json.loads(blob_path(layout, index["manifests"][0]).read_text())
-        with tempfile.TemporaryDirectory(prefix="piceli-local-import-") as directory:
+        with temporary_directory("local-import") as directory:
             archive_path = Path(directory) / "image.tar"
             # Docker's legacy store also accepts this transport. The image config and
             # uncompressed layer bytes remain exactly those of the verified OCI layout.
@@ -153,7 +153,7 @@ class DockerLocalImporter:
         max_bytes: int = 1024 * 1024 * 1024,
     ) -> dict[str, Any]:
         """Validate a bounded OCI tar, then use the same exact import grant."""
-        with tempfile.TemporaryDirectory(prefix="piceli-oci-archive-") as directory:
+        with temporary_directory("oci-archive") as directory:
             layout = Path(directory) / "oci"
             receipt = unpack_oci_archive(archive, layout, max_bytes=max_bytes)
             if receipt.manifest_digest != grant.manifest_digest:

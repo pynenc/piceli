@@ -27,8 +27,9 @@ Other targets (`make help` lists them all):
 | `make lint` | Every pre-commit hook on all files (ruff lint + format, uv lock check, YAML/TOML) |
 | `make typecheck` | mypy on the `piceli` package |
 | `make test-unit` / `make test-acceptance` | One test suite |
-| `make test-integration` | Integration tests against your **current kubeconfig context**. Use a disposable cluster, e.g. `kind create cluster` |
+| `make test-integration` | Integration tests against the disposable cluster named by `PICELI_KIND_KUBECONFIG`, `PICELI_KIND_CONTEXT` (and `PICELI_KIND_NODE`); skipped without them, never the current context |
 | `make coverage` | Tests with an HTML coverage report in `htmlcov/` |
+| `make evals-check` | Self-tests of the cross-model eval harness in `evals/` (see {doc}`evals`) |
 | `make docs` | Build the documentation with warnings treated as errors |
 | `make build` | Build the sdist and wheel into `dist/` |
 
@@ -36,7 +37,21 @@ Add dependencies with `uv add <package>` (or `uv add --group test <package>` for
 development-only tools) so that `pyproject.toml` and `uv.lock` stay in sync.
 
 CI runs the same commands on Python 3.12, 3.13 and 3.14, plus the integration
-tests on a [kind](https://kind.sigs.k8s.io/) cluster and a strict docs build.
+tests on a [kind](https://kind.sigs.k8s.io/) cluster of the newest supported
+Kubernetes minor (nightly: all four, see {doc}`../compatibility`) and a strict
+docs build.
+
+## Releases
+
+Releases are cut from `main` by `.github/workflows/release.yml` after CI
+passes. PyPI, not the git tag, decides whether a version is released
+(`scripts/release_state.py`, unit-tested in `tests/unit/release/`): the
+workflow uploads the files PyPI does not list yet, with PEP 740 attestations
+through trusted publishing, waits until PyPI lists every file, then pushes the
+`v<version>` tag and publishes the release notes. Any run can be re-run, and a
+new run finishes an interrupted one; a tag is never moved. To release a
+version, bump it in `pyproject.toml` and add its changelog section. Pull
+requests from this repository publish a pre-release to TestPyPI.
 
 ## Guidelines
 
@@ -54,4 +69,5 @@ tests on a [kind](https://kind.sigs.k8s.io/) cluster and a strict docs build.
 :maxdepth: 1
 
 docs
+evals
 ```

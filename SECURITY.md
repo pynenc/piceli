@@ -12,6 +12,25 @@ Piceli is pre-1.0. Security fixes go into the latest minor release only.
 | latest `0.x` release | yes |
 | older releases | no, upgrade first |
 
+## Release provenance
+
+Releases are built and uploaded by the `Release` GitHub Actions workflow
+(`.github/workflows/release.yml`) from `main`, with PyPI trusted publishing:
+no long-lived upload token exists. From 0.5.1 on, every wheel and sdist on
+PyPI carries a [PEP 740](https://peps.python.org/pep-0740/) attestation signed
+with Sigstore for that workflow's identity; PyPI shows it on each file's page
+("Provenance"). To check a file yourself:
+
+```sh
+pip install pypi-attestations
+pypi-attestations verify pypi --repository https://github.com/pynenc/piceli \
+  pypi:piceli-0.5.1-py3-none-any.whl
+```
+
+Earlier releases (0.5.0 and before) have no attestations. The `v<version>` git
+tag is pushed only after PyPI lists every file of the version, and is never
+moved.
+
 ## Reporting a vulnerability
 
 Report privately through

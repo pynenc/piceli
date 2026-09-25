@@ -253,7 +253,7 @@ def _run_process(
         if state != "succeeded" or proc.poll() is None:
             try:
                 signal_group(proc.pid, signal.SIGKILL)
-            except ProcessLookupError:
+            except (ProcessLookupError, PermissionError):
                 pass
         code = proc.wait(timeout=1)
         if state == "succeeded" and code != 0:
@@ -271,7 +271,9 @@ def _run_process(
         # A successful parent must not leave forked children running either.
         try:
             signal_group(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
+        except (ProcessLookupError, PermissionError):
+            # macOS refuses (EPERM) a group whose only member is the exited,
+            # not yet reaped leader: nothing is left to stop.
             pass
         proc.wait(timeout=1)
         selector.close()

@@ -155,7 +155,9 @@ New to Piceli? Start with {doc}`getting_started/index`.
 
 | You see | Meaning | Next step |
 | --- | --- | --- |
-| `access-port-conflict` | A declared local port is held by another process. The rejection lists `conflicts[].owner` with its `pid`, `command` and parent (often an older `piceli access`, a dashboard or a `kubectl port-forward`). Piceli never takes a port over. | Stop that process (or the dashboard that supervises it), or change `local=`, then run again. |
+| `access-port-conflict` | A declared local port (or the `--dashboard` port) is held by another process. Piceli never takes a port over. When the holder is Piceli's own process for this app (`holder`: `piceli-forward` or `piceli-server`, for example a `piceli access` left running in another terminal, or a `kubectl port-forward` whose `piceli access` died), stderr says so and prints the command that stops it. Any other process is named by its pid only. | Piceli's own: `piceli access stop --stale TARGET` ({ref}`access-stop-stale`). Otherwise stop that pid yourself, or change `local=`, then run again. |
+| `access-stop-needs-stale` | `piceli access stop` without `--stale`. | Add `--stale`. |
+| `access-stop-incomplete` | A stale Piceli process got SIGTERM but its port was still held 5 s later (usually the orphaned `kubectl` of a supervisor that just stopped). | Run `piceli access stop --stale TARGET` again. |
 | `access-none-declared` | No forward is declared, or the composition function returns `app.composition(ctx)`. | Add `access=` and return the App. |
 | `access-unknown-forward` | `--only` names an id that does not exist. | Use an id from `piceli status TARGET --json`. |
 | `access-kubectl-missing` | No `kubectl` found. | Install it or pass `--kubectl PATH`. |
@@ -268,10 +270,20 @@ A required forward on a taken port rejects the command:
 
 ```json
 {"state": "rejected", "reason": "access-port-conflict",
- "conflicts": [{"id": "web", "local_port": 18080, "required": true,
-                "owner": {"port": 18080, "pid": 4242, "command": "kubectl … port-forward service/web 18080:3000",
-                          "parent": {"pid": 4200, "command": "… piceli observe serve …"}}}]}
+ "conflicts": [{"id": "web", "local_port": 18080, "required": true, "holder": "piceli-forward",
+                "owner": {"port": 18080, "pid": 4242, "command": "kubectl … port-forward service/web 18080:3000 --address 127.0.0.1",
+                          "parent": {"pid": 4200, "command": "… piceli access release.toml"}}}]}
 ```
+
+`holder` is `piceli-forward` (the `kubectl port-forward` Piceli starts for one
+of this app's declared forwards: the same kubeconfig, context, namespace,
+target and ports, started by a Piceli process or orphaned), `piceli-server`
+(`piceli access` with the same TARGET, or `observe serve` / `operator serve`
+with the same `--kubeconfig` and `--context`), `other` or `unknown`. Only a
+Piceli process keeps its `command` and `parent`; for `other` they are `null`
+and stderr shows the pid alone (`… is held by pid 4242 (not piceli)`), as in
+`piceli status`. Since 0.8.0 the command line of another process is never
+printed, here, in the dashboard's forward conflicts or in `observe`.
 
 A forward with `required=False` on a taken port is listed under `skipped` and
 not started. While supervising, a forward whose port another process takes is
@@ -279,6 +291,36 @@ marked `conflict` with that owner and is **not** retried: no supervisor (the
 dashboard's or `piceli access`) waits for a declared port to free up and then
 silently takes it back. The owner is found through `/proc` on Linux and
 `lsof` on macOS; when neither works, `owner` is `null`.
+
+(access-stop-stale)=
+## Stop Piceli's stale processes
+
+```sh
+piceli access stop --stale TARGET [--port PORT]...
+```
+
+Checks each declared forward's local port (and each `--port`, for a
+dashboard, `observe serve` or `operator serve` port) and frees the ones held
+by Piceli's own process for this app, as recognised above: a supervised
+forward's supervisor (`piceli access`, `observe serve`, `operator serve`) gets
+SIGTERM, so it stops all of its forwards cleanly; an orphaned `kubectl` gets
+SIGTERM itself; so does a Piceli server for the same target. The holder is
+looked up twice and signalled only when it is still the same process. Any
+other process is left alone and reported by pid only. Nothing in the cluster
+is touched.
+
+```json
+{"state": "succeeded", "app": "shop", "namespace": "shop",
+ "stopped": [{"port": 18080, "pid": 4200, "holder": "piceli-forward", "owner": {"pid": 4242, "…": "…"}}],
+ "left": [{"port": 18081, "holder": "other", "owner": {"port": 18081, "pid": 777, "command": null, "parent": null}}],
+ "failed": [], "free": [9876]}
+```
+
+Exit `0` when every Piceli holder let go of its port (also when there was
+none), `1` (`access-stop-incomplete`) when one still holds it after 5 seconds,
+`2` when rejected (no `--stale`, an invalid TARGET, no declared forward and no
+`--port`). It needs the `/proc` file system (Linux) or `lsof` (macOS) to see a
+port's owner.
 
 ## The dashboard
 

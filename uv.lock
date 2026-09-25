@@ -273,6 +273,20 @@ wheels = [
 ]
 
 [[package]]
+name = "botocore"
+version = "1.43.102"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "jmespath" },
+    { name = "python-dateutil" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/7d/12/97d043f9bfdd54984f8d562169a9ac800c7b94a5b5fdb9b7d7b46659ebd2/botocore-1.43.102.tar.gz", hash = "sha256:3239f3c8611f0fbfb1a3fda77fb70e18f87bec102edf38f67e40902c56639c10", size = 16232455, upload-time = "2026-09-24T19:25:13.238Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5a/95/e2791a9dfc989e3580ce087085a45a67987e693f364e2461904d962e3951/botocore-1.43.102-py3-none-any.whl", hash = "sha256:78d9dcee19950444b4ff0250125aff735da4f7d6db46eb1e9aca82dc8f101a66", size = 15926988, upload-time = "2026-09-24T19:25:09.891Z" },
+]
+
+[[package]]
 name = "certifi"
 version = "2026.7.22"
 source = { registry = "https://pypi.org/simple" }
@@ -996,6 +1010,15 @@ wheels = [
 ]
 
 [[package]]
+name = "jmespath"
+version = "1.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d3/59/322338183ecda247fb5d1763a6cbe46eff7222eaeebafd9fa65d4bf5cb11/jmespath-1.1.0.tar.gz", hash = "sha256:472c87d80f36026ae83c6ddd0f1d05d4e510134ed462851fd5f754c8c3cbb88d", size = 27377, upload-time = "2026-01-22T16:35:26.279Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/14/2f/967ba146e6d58cf6a652da73885f52fc68001525b4197effc174321d70b4/jmespath-1.1.0-py3-none-any.whl", hash = "sha256:a5663118de4908c91729bea0acadca56526eb2698e83de10cd116ae0f4e97c64", size = 20419, upload-time = "2026-01-22T16:35:24.919Z" },
+]
+
+[[package]]
 name = "jsonschema"
 version = "4.26.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1520,7 +1543,7 @@ wheels = [
 
 [[package]]
 name = "piceli"
-version = "0.5.0"
+version = "0.8.0"
 source = { editable = "." }
 dependencies = [
     { name = "cron-validator" },
@@ -1532,6 +1555,12 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+aws = [
+    { name = "botocore" },
+]
+crypto = [
+    { name = "cryptography" },
+]
 gcp = [
     { name = "google-api-core" },
     { name = "google-auth" },
@@ -1580,7 +1609,9 @@ test = [
 
 [package.metadata]
 requires-dist = [
+    { name = "botocore", marker = "extra == 'aws'", specifier = ">=1.34" },
     { name = "cron-validator", specifier = ">=1.0.8" },
+    { name = "cryptography", marker = "extra == 'crypto'", specifier = ">=42" },
     { name = "google-api-core", marker = "extra == 'gcp'", specifier = ">=2.17" },
     { name = "google-auth", marker = "extra == 'gcp'", specifier = ">=2.27" },
     { name = "google-cloud-container", marker = "extra == 'gcp'", specifier = ">=2.40" },
@@ -1593,7 +1624,7 @@ requires-dist = [
     { name = "tenacity", marker = "extra == 'gcp'", specifier = ">=8.2.3" },
     { name = "typer", specifier = ">=0.12" },
 ]
-provides-extras = ["gcp", "telemetry"]
+provides-extras = ["gcp", "aws", "telemetry", "crypto"]
 
 [package.metadata.requires-dev]
 dev = [

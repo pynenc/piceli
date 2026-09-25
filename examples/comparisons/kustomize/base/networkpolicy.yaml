@@ -1,0 +1,17 @@
+# Only this release's pods may connect to its pods.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: internal
+  labels:
+    app.kubernetes.io/part-of: webapp
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: webapp
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: webapp

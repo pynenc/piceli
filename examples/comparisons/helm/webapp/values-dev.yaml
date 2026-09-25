@@ -1,0 +1,6 @@
+settings:
+  LOG_LEVEL: debug
+web:
+  autoscaling:
+    minReplicas: 1
+    maxReplicas: 2

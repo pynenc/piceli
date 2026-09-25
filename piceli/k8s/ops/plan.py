@@ -17,7 +17,9 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
+from piceli.approval_policy import ApprovalPolicy
 from piceli.k8s.ops.discovery import (
+    RELEASE_NAMESPACE_ANNOTATION,
     DiscoveryArtifact,
     DiscoveryCoverage,
     DiscoveryProvenance,
@@ -83,6 +85,7 @@ _KIND_LEVEL = {
                 "NetworkPolicy",
                 "PodDisruptionBudget",
                 "HorizontalPodAutoscaler",
+                "HTTPRoute",
             ),
         )
     )
@@ -345,9 +348,18 @@ class ResourceRef:
             raise ValueError("resource apiVersion is required")
         if not isinstance(kind, str) or not kind:
             raise ValueError("resource kind is required")
+        annotations = metadata.get("annotations")
         resolved_scope = scope or (
             ResourceScope.CLUSTER
             if kind in _CLUSTER_SCOPED_KINDS
+            # Any other kind is cluster-scoped when it names its release's
+            # namespace in the annotation instead of in metadata.namespace
+            # (how ``App.resource(..., scope="cluster")`` renders it).
+            or (
+                not metadata.get("namespace")
+                and isinstance(annotations, Mapping)
+                and RELEASE_NAMESPACE_ANNOTATION in annotations
+            )
             else ResourceScope.NAMESPACED
         )
         namespace = (
@@ -785,6 +797,9 @@ class PlanAuthorization:
     # map keys declared there that the composition no longer declares (see
     # :func:`planned_removals`); without it no field is ever removed.
     previous: tuple[ResourceIntent, ...] = field(default=(), repr=False)
+    # The owner's approval policy (``auto_approve``): recorded in the plan
+    # and so in its hash; it decides nothing here (see approval_policy).
+    approval_policy: ApprovalPolicy | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -945,10 +960,13 @@ class DeploymentPlan:
     levels: tuple[tuple[ResourceRef, ...], ...]
     protected_resources: tuple[ResourceRef, ...] = ()
     schema_version: int = PLAN_SCHEMA_VERSION
+    # The owner's approval policy, bound into the hash only when declared
+    # (plans without one keep their hash).
+    approval_policy: ApprovalPolicy | None = None
     plan_hash: str = field(init=False)
 
     def __post_init__(self) -> None:
-        material = {
+        material: dict[str, Any] = {
             "schema_version": self.schema_version,
             "target": self.target.__dict__,
             "snapshot_hash": self.snapshot_hash,
@@ -960,6 +978,8 @@ class DeploymentPlan:
                 resource.__dict__ for resource in self.protected_resources
             ],
         }
+        if self.approval_policy is not None:
+            material["approval_policy"] = self.approval_policy.identity()
         object.__setattr__(self, "plan_hash", _digest(material))
 
     def validate_for(self, snapshot: ObservedSnapshot) -> None:
@@ -984,6 +1004,12 @@ class DeploymentPlan:
                 )
 
     def summary(self) -> dict[str, Any]:
+        value = self._summary()
+        if self.approval_policy is not None:
+            value["approval_policy"] = self.approval_policy.identity()
+        return value
+
+    def _summary(self) -> dict[str, Any]:
         return {
             "schema_version": self.schema_version,
             "plan_hash": self.plan_hash,
@@ -1483,13 +1509,70 @@ def replace_propagation(kind: str) -> str:
     return "Background" if kind in _BACKGROUND_REPLACE_KINDS else "Orphan"
 
 
+#: Kinds whose spec is immutable in parts (see :func:`immutable_changes`): a
+#: release may also replace one it already manages, when named explicitly.
+REPLACEABLE_MANAGED_KINDS = frozenset({"Job", "StatefulSet"})
+
+# Spec fields the API server refuses to change on an existing object.
+_IMMUTABLE_SPEC = {
+    "Job": ("template", "completions", "completionMode", "selector"),
+    "StatefulSet": (
+        "selector",
+        "serviceName",
+        "podManagementPolicy",
+        "volumeClaimTemplates",
+    ),
+}
+
+
+def immutable_changes(
+    desired: ResourceIntent,
+    current: ObservedResource,
+    removals: Iterable[str] = (),
+) -> tuple[str, ...]:
+    """Immutable spec fields (``spec.<field>``) that ``desired`` would change.
+
+    A field changes when the desired value is not contained in the live one
+    (the server may add defaults), or when a planned removal falls inside it.
+    Kinds without immutable fields, and objects without a live spec, never
+    report a change. Pure: no cluster access.
+    """
+    fields = _IMMUTABLE_SPEC.get(desired.ref.kind, ())
+    live = current.intent.manifest.get("spec")
+    wanted = desired.manifest.get("spec")
+    if not fields or not isinstance(live, dict) or not isinstance(wanted, dict):
+        return ()
+    removed = set()
+    for pointer in removals:
+        parts = _removal_parts(pointer)
+        if len(parts) > 1 and parts[0] == "spec":
+            removed.add(parts[1])
+    return tuple(
+        f"spec.{field}"
+        for field in fields
+        if field in removed
+        or (field in wanted and not manifest_contains(live.get(field), wanted[field]))
+    )
+
+
 def replace_refusal(resource: ObservedResource) -> str | None:
-    """Why an observed object cannot be replaced, or ``None``."""
+    """Why an observed object cannot be replaced, or ``None``.
+
+    Unmanaged objects may be replaced; so may managed objects of a kind in
+    :data:`REPLACEABLE_MANAGED_KINDS` (a Job or StatefulSet whose immutable
+    fields change).
+    """
     if resource.retained or resource.intent.ref.kind in _RETAINED_KINDS:
         return "retained objects are never deleted; adopt it instead"
-    if resource.ownership is not Ownership.UNMANAGED:
+    if (
+        resource.ownership is not Ownership.UNMANAGED
+        and resource.intent.ref.kind not in REPLACEABLE_MANAGED_KINDS
+    ):
         return (
-            "the object is already managed; replace applies only to unmanaged objects"
+            "the object is already managed; replace applies only to unmanaged "
+            "objects and to managed "
+            + " or ".join(sorted(REPLACEABLE_MANAGED_KINDS))
+            + " objects"
         )
     if resource.owner_uids:
         return "the object is owned by another object (ownerReferences)"
@@ -1639,6 +1722,151 @@ def _public_metadata_changes(
     return metadata_changes(expected, current.intent.manifest)
 
 
+AUTOSCALER_KINDS = frozenset({("autoscaling", "HorizontalPodAutoscaler")})
+_REPLICAS = {"spec": {"replicas": 0}}
+
+
+def _group(api_version: str) -> str:
+    return api_version.split("/")[0] if "/" in api_version else ""
+
+
+@dataclass(frozen=True, order=True)
+class AutoscaledReplicas:
+    """How a plan treats ``spec.replicas`` of a workload an autoscaler targets.
+
+    ``mode`` is one of:
+
+    * ``initial``: the workload does not exist yet; the declared value (if
+      any) is its initial size;
+    * ``held``: the workload exists and no autoscaler has written the field
+      yet (Piceli still owns it); the plan declares the **live** value, so a
+      new release never changes the count and never removes the field;
+    * ``yielded``: an autoscaler (a ``scale`` subresource or controller
+      manager) owns the field; the plan does not declare it at all.
+    """
+
+    resource: ResourceRef
+    autoscalers: tuple[str, ...]
+    mode: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "resource": self.resource.__dict__,
+            "field": "/spec/replicas",
+            "autoscalers": list(self.autoscalers),
+            "mode": self.mode,
+        }
+
+
+def _autoscaler_targets(
+    composition: DeploymentComposition, snapshot: ObservedSnapshot | None
+) -> dict[tuple[str, str, str, str], set[str]]:
+    """``(group, kind, namespace, name)`` of each autoscaled workload -> HPAs.
+
+    Autoscalers come from the composition and from the observed snapshot
+    (when discovery covers their kind), so one created by another tool is
+    honoured too.
+    """
+    autoscalers: dict[ResourceRef, dict[str, Any]] = {
+        resource.intent.ref: resource.intent.manifest
+        for resource in (snapshot.resources if snapshot is not None else ())
+        if (_group(resource.intent.ref.api_version), resource.intent.ref.kind)
+        in AUTOSCALER_KINDS
+    }
+    for component in composition.components:
+        for intent in component.resources:
+            if (_group(intent.ref.api_version), intent.ref.kind) in AUTOSCALER_KINDS:
+                autoscalers[intent.ref] = intent.manifest
+    targets: dict[tuple[str, str, str, str], set[str]] = {}
+    for ref, manifest in autoscalers.items():
+        spec = manifest.get("spec")
+        target = spec.get("scaleTargetRef") if isinstance(spec, Mapping) else None
+        if not isinstance(target, Mapping):
+            continue
+        key = (
+            _group(str(target.get("apiVersion", ""))),
+            str(target.get("kind", "")),
+            ref.namespace,
+            str(target.get("name", "")),
+        )
+        targets.setdefault(key, set()).add(f"{ref.kind}/{ref.name}")
+    return targets
+
+
+def autoscaled_replicas(
+    composition: DeploymentComposition,
+    snapshot: ObservedSnapshot,
+    field_manager: str | None,
+) -> tuple[DeploymentComposition, tuple[AutoscaledReplicas, ...]]:
+    """Leave ``spec.replicas`` of autoscaled workloads to their autoscaler.
+
+    A HorizontalPodAutoscaler writes ``spec.replicas`` through the ``scale``
+    subresource. Declaring the field in a release would reset the count on
+    every apply (a fight) and show a perpetual diff. For each workload an
+    autoscaler targets (see :class:`AutoscaledReplicas` for the modes):
+
+    * not live: the declared value is kept as the initial size;
+    * live, and a manager other than ``field_manager`` that a takeover keeps
+      (a subresource entry or a controller) owns the field: it is dropped
+      from the desired manifest;
+    * live otherwise: the live value is declared, so nothing changes and no
+      three-way removal resets it.
+
+    Idempotent: applying it to its own result changes nothing. Returns the
+    composition to plan and one report per autoscaled workload.
+    """
+    targets = _autoscaler_targets(composition, snapshot)
+    if not targets:
+        return composition, ()
+    observed = {resource.intent.ref: resource for resource in snapshot.resources}
+    report: list[AutoscaledReplicas] = []
+    components = []
+    for component in composition.components:
+        resources = []
+        for intent in component.resources:
+            ref = intent.ref
+            autoscalers = targets.get(
+                (_group(ref.api_version), ref.kind, ref.namespace, ref.name)
+            )
+            if not autoscalers:
+                resources.append(intent)
+                continue
+            current = observed.get(ref)
+            manifest = intent.manifest
+            spec = manifest.get("spec")
+            live_spec = None if current is None else current.intent.manifest.get("spec")
+            if current is None or not isinstance(spec, dict):
+                mode = "initial"
+            elif any(
+                entry.manager != field_manager
+                and not is_transferable(entry)
+                and _fields_overlap(entry.fields, _REPLICAS)
+                for entry in current.field_managers
+            ):
+                mode = "yielded"
+                spec.pop("replicas", None)
+            elif isinstance(live_spec, Mapping) and "replicas" in live_spec:
+                mode = "held"
+                spec["replicas"] = live_spec["replicas"]
+            else:
+                mode = "initial"
+            report.append(AutoscaledReplicas(ref, tuple(sorted(autoscalers)), mode))
+            if manifest != intent.manifest:
+                intent = ResourceIntent(
+                    ref,
+                    _canonical_json(manifest),
+                    intent.dependencies,
+                    intent.secret_bindings,
+                )
+            resources.append(intent)
+        components.append(
+            DeploymentComponent(
+                component.name, tuple(resources), component.dependencies
+            )
+        )
+    return DeploymentComposition(tuple(components)), tuple(sorted(report))
+
+
 def field_drift(
     composition: DeploymentComposition,
     snapshot: ObservedSnapshot,
@@ -1650,6 +1878,7 @@ def field_drift(
     later ``kubectl`` edit of one of them shows up here. This report is
     informational and not part of the plan hash.
     """
+    composition, _ = autoscaled_replicas(composition, snapshot, field_manager)
     observed = {resource.intent.ref: resource for resource in snapshot.resources}
     report = []
     for component in composition.components:
@@ -1673,6 +1902,31 @@ def field_drift(
     return sorted(report, key=lambda item: ResourceRef(**item["resource"]))
 
 
+def autoscaled(
+    composition: DeploymentComposition, snapshot: ObservedSnapshot | None = None
+) -> frozenset[ResourceRef]:
+    """Workloads of ``composition`` a HorizontalPodAutoscaler targets.
+
+    Autoscalers come from the composition and, with ``snapshot``, from the
+    live objects (see :func:`autoscaled_replicas`, which uses the same
+    targets). Their ``spec.replicas`` belongs to the autoscaler: a plan never
+    removes it (see :func:`build_plan`).
+    """
+    targets = _autoscaler_targets(composition, snapshot)
+    return frozenset(
+        resource.ref
+        for component in composition.components
+        for resource in component.resources
+        if (
+            _group(resource.ref.api_version),
+            resource.ref.kind,
+            resource.ref.namespace,
+            resource.ref.name,
+        )
+        in targets
+    )
+
+
 def build_plan(
     composition: DeploymentComposition,
     snapshot: ObservedSnapshot,
@@ -1688,6 +1942,9 @@ def build_plan(
     """
     if authorization.target != snapshot.target:
         raise ValueError("authorization target does not match observed target")
+    composition, _ = autoscaled_replicas(
+        composition, snapshot, authorization.field_manager
+    )
     for ref in (*authorization.adopt_resources, *authorization.replace_resources):
         _validate_target_ref(snapshot.target, ref)
     desired = {
@@ -1722,6 +1979,7 @@ def build_plan(
             raise ValueError(f"cannot replace {ref}: retained descendants exist")
     dependencies = _desired_dependencies(composition)
     levels = _topological_levels(dependencies)
+    scaled = autoscaled(composition, snapshot)
     actions: list[PlanAction] = []
     changes: tuple[str, ...]
     previous = {intent.ref: intent for intent in authorization.previous}
@@ -1756,11 +2014,16 @@ def build_plan(
                 elif current.ownership is Ownership.UNMANAGED:
                     raise ValueError(f"resource requires explicit adoption: {ref}")
                 elif not (
-                    removals := planned_removals(
-                        previous.get(ref),
-                        desired[ref],
-                        current,
-                        authorization.field_manager,
+                    removals := tuple(
+                        pointer
+                        for pointer in planned_removals(
+                            previous.get(ref),
+                            desired[ref],
+                            current,
+                            authorization.field_manager,
+                        )
+                        # An autoscaler owns the replica count: never reset it.
+                        if not (ref in scaled and pointer == "/spec/replicas")
                     )
                 ) and (
                     _equivalent(desired[ref], current.intent, snapshot.defaulted_fields)
@@ -1772,6 +2035,13 @@ def build_plan(
                     operation = PlanOperation.NOOP
                 else:
                     operation = PlanOperation.APPLY
+                    changed = immutable_changes(desired[ref], current, removals)
+                    if changed:
+                        raise ValueError(
+                            f"immutable fields of {ref} would change "
+                            f"({', '.join(changed)}); name it with --replace "
+                            f"{ref.kind}/{ref.name} to recreate it"
+                        )
                     if current.retained:
                         # A retained object is never rewritten: only its
                         # labels and annotations may change, with a
@@ -1846,4 +2116,5 @@ def build_plan(
         tuple(actions),
         levels,
         tuple(sorted(protected)),
+        approval_policy=authorization.approval_policy,
     )

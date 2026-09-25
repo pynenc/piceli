@@ -316,8 +316,15 @@ def test_release_diff_is_read_only(release_env):
     assert "release/Deployment/worker" in result.stderr
     assert f"+      - image: registry.example/app/api@{DIGEST_2}" in result.stderr
 
-    code, _, _ = _run(tmp_path, "diff", "--exit-code")
+    assert "reason" not in value
+
+    code, pending, result = _run(tmp_path, "diff", "--exit-code")
     assert code == 1
+    # Exit 1 names its registered code, like every "ran but did not succeed".
+    assert pending["state"] == "diffed"
+    assert pending["reason"] == "release-changes-pending"
+    assert pending["summary"] == value["summary"]
+    assert "[release-changes-pending]" in result.stderr
     assert {
         path: path.read_bytes() for path in state.rglob("*") if path.is_file()
     } == files
@@ -350,6 +357,59 @@ def test_denied_dry_run_falls_back_to_a_literal_comparison(release_env):
     )
     assert worker["basis"] == "client"
     assert SECRET_VALUE_MARKER not in result.stdout + result.stderr
+
+
+def test_object_changed_between_discovery_and_dry_run_is_observed_again(
+    release_env,
+):
+    """Regression: a status write between discovery and the dry run (a rollout
+    finishing) made the dry run conflict, and the unchanged release planned
+    ``apply`` from a literal comparison (seen on Kubernetes 1.37)."""
+    api, tmp_path = release_env
+    code, _, result = _run(tmp_path, "apply", "--auto-approve")
+    assert code == 0, result.output
+    api.inject("PATCH", "/deployments/worker", status=409, dry_run=True)
+
+    code, planned, result = _run(tmp_path, "plan")
+    assert code == 0, result.output
+    assert set(_operations(planned).values()) == {"no-op"}, planned["diffs"]
+    assert planned["dry_run_unavailable"] == []
+    assert len([r for r in _dry_runs(api) if "deployments" in r["path"]]) == 2
+
+
+def test_observing_again_still_excludes_shared_state_objects(release_env):
+    """Discovery captured again after a dry-run conflict keeps the
+    ``!piceli.io/state`` selector: state objects never enter a plan."""
+    api, tmp_path = release_env
+    code, _, result = _run(tmp_path, "apply", "--auto-approve")
+    assert code == 0, result.output
+    api.put(
+        {
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {
+                "name": "piceli-state-app-0",
+                "namespace": TARGET.namespace,
+                "labels": {"piceli.io/state": "app"},
+            },
+            "data": {},
+        },
+        owned=True,
+    )
+    api.inject("PATCH", "/deployments/worker", status=409, dry_run=True)
+    before = len(api.requests)
+
+    code, planned, result = _run(tmp_path, "plan")
+    assert code == 0, result.output
+    assert set(_operations(planned).values()) == {"no-op"}, planned["diffs"]
+    lists = [
+        request
+        for request in api.requests[before:]
+        if request["method"] == "GET" and request["path"].endswith("/secrets")
+    ]
+    assert len(lists) == 2  # discovered twice
+    assert all(r["query"]["labelSelector"] == ["!piceli.io/state"] for r in lists)
+    assert "piceli-state" not in json.dumps(planned)
 
 
 def _drop(tmp_path: Path) -> None:

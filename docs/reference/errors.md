@@ -21,6 +21,8 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`access-kubectl-missing`](#error-access-kubectl-missing) | access | no |
 | [`access-none-declared`](#error-access-none-declared) | access | no |
 | [`access-port-conflict`](#error-access-port-conflict) | access | no |
+| [`access-stop-incomplete`](#error-access-stop-incomplete) | access | yes |
+| [`access-stop-needs-stale`](#error-access-stop-needs-stale) | access | no |
 | [`access-target-invalid`](#error-access-target-invalid) | access | no |
 | [`access-unknown-forward`](#error-access-unknown-forward) | access | no |
 | [`adopt-and-replace`](#error-adopt-and-replace) | release | no |
@@ -30,6 +32,11 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`ambiguous-write-blocked`](#error-ambiguous-write-blocked) | execution | no |
 | [`api-unavailable`](#error-api-unavailable) | kubernetes | yes |
 | [`applied-resource-drift`](#error-applied-resource-drift) | execution | no |
+| [`apply-crashloop`](#error-apply-crashloop) | execution | no |
+| [`approval-policy-exceeded`](#error-approval-policy-exceeded) | approval | no |
+| [`approval-policy-invalid`](#error-approval-policy-invalid) | approval | no |
+| [`approval-policy-missing`](#error-approval-policy-missing) | approval | no |
+| [`approve-if-policy-flags-conflict`](#error-approve-if-policy-flags-conflict) | approval | no |
 | [`approve-with-planning-flags`](#error-approve-with-planning-flags) | release | no |
 | [`auth-provider-refused`](#error-auth-provider-refused) | target | no |
 | [`authorization-expired`](#error-authorization-expired) | execution | no |
@@ -40,6 +47,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`build-failed`](#error-build-failed) | build-spec | no |
 | [`build-timed-out`](#error-build-timed-out) | build-spec | yes |
 | [`builder-not-approved`](#error-builder-not-approved) | build-spec | no |
+| [`cache-arguments-conflict`](#error-cache-arguments-conflict) | maintenance | no |
+| [`cache-budget-invalid`](#error-cache-budget-invalid) | maintenance | no |
+| [`cache-over-budget`](#error-cache-over-budget) | maintenance | no |
 | [`cancelled`](#error-cancelled) | artifacts-delivery | yes |
 | [`check-api-unavailable`](#error-check-api-unavailable) | checks | yes |
 | [`check-callable-invalid`](#error-check-callable-invalid) | checks | no |
@@ -56,6 +66,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`checks-rollback-unavailable`](#error-checks-rollback-unavailable) | checks | no |
 | [`cluster-identity-changed`](#error-cluster-identity-changed) | release | no |
 | [`cluster-identity-unreadable`](#error-cluster-identity-unreadable) | kubernetes | yes |
+| [`codegen-cluster-read-failed`](#error-codegen-cluster-read-failed) | codegen | yes |
+| [`codegen-flags-conflict`](#error-codegen-flags-conflict) | codegen | no |
+| [`codegen-output-refused`](#error-codegen-output-refused) | codegen | no |
 | [`command-cancelled`](#error-command-cancelled) | artifacts-delivery | yes |
 | [`command-failed`](#error-command-failed) | artifacts-delivery | no |
 | [`command-output-limit`](#error-command-output-limit) | artifacts-delivery | no |
@@ -67,12 +80,17 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`context-empty`](#error-context-empty) | build-spec | no |
 | [`context-missing`](#error-context-missing) | build-spec | no |
 | [`context-symlink`](#error-context-symlink) | build-spec | no |
+| [`crd-invalid`](#error-crd-invalid) | codegen | no |
+| [`crd-not-found`](#error-crd-not-found) | codegen | no |
 | [`credentials-file-not-private`](#error-credentials-file-not-private) | artifacts-input | no |
 | [`cross-origin-location-refused`](#error-cross-origin-location-refused) | artifacts-registry | no |
 | [`deadline-exceeded`](#error-deadline-exceeded) | kubernetes | yes |
 | [`deleted-resource-reappeared`](#error-deleted-resource-reappeared) | execution | no |
 | [`delivery-not-succeeded`](#error-delivery-not-succeeded) | images | no |
 | [`deploy-flags-conflict`](#error-deploy-flags-conflict) | cli | no |
+| [`deploy-plan-file-invalid`](#error-deploy-plan-file-invalid) | pipeline | no |
+| [`deploy-plan-file-mismatch`](#error-deploy-plan-file-mismatch) | pipeline | no |
+| [`deploy-plan-target-mismatch`](#error-deploy-plan-target-mismatch) | pipeline | no |
 | [`deploy-ref-ambiguous`](#error-deploy-ref-ambiguous) | pipeline | no |
 | [`deploy-ref-checkout-failed`](#error-deploy-ref-checkout-failed) | pipeline | yes |
 | [`deploy-ref-invalid`](#error-deploy-ref-invalid) | pipeline | no |
@@ -88,6 +106,10 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`dockerfile-unpinned`](#error-dockerfile-unpinned) | build-spec | no |
 | [`dry-run-limit-exceeded`](#error-dry-run-limit-exceeded) | kubernetes | no |
 | [`dry-run-placeholder-image`](#error-dry-run-placeholder-image) | kubernetes | no |
+| [`environment-invalid`](#error-environment-invalid) | environments | no |
+| [`environment-required`](#error-environment-required) | environments | no |
+| [`environment-unknown`](#error-environment-unknown) | environments | no |
+| [`environment-unsupported`](#error-environment-unsupported) | environments | no |
 | [`exec-auth-not-allowed`](#error-exec-auth-not-allowed) | target | no |
 | [`exec-command-not-found`](#error-exec-command-not-found) | target | no |
 | [`exec-command-unsafe`](#error-exec-command-unsafe) | target | no |
@@ -102,6 +124,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`execution-other-owner`](#error-execution-other-owner) | release | no |
 | [`execution-other-target`](#error-execution-other-target) | release | no |
 | [`execution-refused`](#error-execution-refused) | release | no |
+| [`explain-run-needs-spec`](#error-explain-run-needs-spec) | cli | no |
 | [`field-owner-precondition-failed`](#error-field-owner-precondition-failed) | execution | no |
 | [`forward-options-incomplete`](#error-forward-options-incomplete) | artifacts-input | no |
 | [`forward-options-without-forward`](#error-forward-options-without-forward) | artifacts-input | no |
@@ -113,6 +136,13 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`generation-precondition-failed`](#error-generation-precondition-failed) | execution | no |
 | [`git-timed-out`](#error-git-timed-out) | inputs | yes |
 | [`git-unavailable`](#error-git-unavailable) | inputs | no |
+| [`gitops-artifact-changed`](#error-gitops-artifact-changed) | gitops | no |
+| [`gitops-empty`](#error-gitops-empty) | gitops | no |
+| [`gitops-image-unresolved`](#error-gitops-image-unresolved) | gitops | no |
+| [`gitops-push-failed`](#error-gitops-push-failed) | gitops | yes |
+| [`gitops-secret-value`](#error-gitops-secret-value) | gitops | no |
+| [`gitops-secrets-present`](#error-gitops-secrets-present) | gitops | no |
+| [`gitops-target-invalid`](#error-gitops-target-invalid) | gitops | no |
 | [`grant-expired`](#error-grant-expired) | build-spec | yes |
 | [`grant-mismatch`](#error-grant-mismatch) | artifacts-input | yes |
 | [`identity-mismatch`](#error-identity-mismatch) | kubernetes | no |
@@ -121,6 +151,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`image-invalid`](#error-image-invalid) | build-spec | no |
 | [`image-mismatch`](#error-image-mismatch) | build-spec | no |
 | [`image-not-immutable`](#error-image-not-immutable) | images | no |
+| [`immutable-field-changed`](#error-immutable-field-changed) | release | no |
 | [`import-cancelled`](#error-import-cancelled) | artifacts-delivery | yes |
 | [`import-discovery-failed`](#error-import-discovery-failed) | import | yes |
 | [`import-failed`](#error-import-failed) | artifacts-delivery | yes |
@@ -207,6 +238,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`operator-state-unavailable`](#error-operator-state-unavailable) | observe | no |
 | [`output-invalid`](#error-output-invalid) | build-spec | no |
 | [`ownership-precondition-failed`](#error-ownership-precondition-failed) | execution | no |
+| [`pipeline-apply-crashloop`](#error-pipeline-apply-crashloop) | pipeline | no |
 | [`pipeline-apply-not-ready`](#error-pipeline-apply-not-ready) | pipeline | yes |
 | [`pipeline-checks-failed`](#error-pipeline-checks-failed) | pipeline | no |
 | [`pipeline-checks-unavailable`](#error-pipeline-checks-unavailable) | pipeline | no |
@@ -256,11 +288,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`registry-response-too-large`](#error-registry-response-too-large) | artifacts-registry | no |
 | [`registry-unauthorized`](#error-registry-unauthorized) | artifacts-registry | no |
 | [`registry-unreachable`](#error-registry-unreachable) | artifacts-registry | yes |
+| [`release-changes-pending`](#error-release-changes-pending) | release | no |
 | [`release-history-malformed`](#error-release-history-malformed) | release | no |
+| [`release-locked`](#error-release-locked) | state | yes |
 | [`release-owner-mismatch`](#error-release-owner-mismatch) | release | no |
 | [`release-refused`](#error-release-refused) | release | no |
 | [`release-state-unavailable`](#error-release-state-unavailable) | release | yes |
 | [`render-model-invalid`](#error-render-model-invalid) | render | no |
+| [`render-out-refused`](#error-render-out-refused) | render | no |
 | [`render-target-invalid`](#error-render-target-invalid) | render | no |
 | [`replace-backup-failed`](#error-replace-backup-failed) | execution | yes |
 | [`replace-delete-not-observed`](#error-replace-delete-not-observed) | execution | no |
@@ -272,6 +307,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`request-byte-limit`](#error-request-byte-limit) | kubernetes | no |
 | [`resource-content-precondition-failed`](#error-resource-content-precondition-failed) | execution | no |
 | [`resource-requires-adoption`](#error-resource-requires-adoption) | release | no |
+| [`resource-scope-mismatch`](#error-resource-scope-mismatch) | release | no |
 | [`response-byte-limit`](#error-response-byte-limit) | kubernetes | no |
 | [`restore-refused`](#error-restore-refused) | observe | no |
 | [`resume-refused`](#error-resume-refused) | release | no |
@@ -280,6 +316,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`retained-content-precondition-failed`](#error-retained-content-precondition-failed) | execution | no |
 | [`retained-resource`](#error-retained-resource) | execution | no |
 | [`rotate-not-valid-for-rollback`](#error-rotate-not-valid-for-rollback) | release | no |
+| [`runner-disk-low`](#error-runner-disk-low) | maintenance | yes |
+| [`runner-memory-low`](#error-runner-memory-low) | maintenance | yes |
+| [`runner-tool-missing`](#error-runner-tool-missing) | maintenance | no |
 | [`scope-mismatch`](#error-scope-mismatch) | kubernetes | no |
 | [`secret-dependency-cycle`](#error-secret-dependency-cycle) | secrets | no |
 | [`secret-generator-failed`](#error-secret-generator-failed) | secrets | yes |
@@ -290,6 +329,11 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`secret-not-text`](#error-secret-not-text) | secrets | no |
 | [`secret-reveal-required`](#error-secret-reveal-required) | secrets | no |
 | [`secret-rotation-refused`](#error-secret-rotation-refused) | secrets | no |
+| [`secret-source-auth-failed`](#error-secret-source-auth-failed) | secrets | no |
+| [`secret-source-failed`](#error-secret-source-failed) | secrets | yes |
+| [`secret-source-not-found`](#error-secret-source-not-found) | secrets | no |
+| [`secret-source-timeout`](#error-secret-source-timeout) | secrets | yes |
+| [`secret-source-tool-missing`](#error-secret-source-tool-missing) | secrets | no |
 | [`secret-template-invalid`](#error-secret-template-invalid) | secrets | no |
 | [`secret-unknown-reference`](#error-secret-unknown-reference) | secrets | no |
 | [`server-target-identity-mismatch`](#error-server-target-identity-mismatch) | kubernetes | no |
@@ -311,7 +355,19 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`spec-changed`](#error-spec-changed) | build-spec | yes |
 | [`spec-unreadable`](#error-spec-unreadable) | build-spec | no |
 | [`ssh-tool-required`](#error-ssh-tool-required) | artifacts-input | no |
+| [`state-access-denied`](#error-state-access-denied) | state | no |
+| [`state-corrupt`](#error-state-corrupt) | state | no |
+| [`state-crypto-unavailable`](#error-state-crypto-unavailable) | state | no |
+| [`state-export-invalid`](#error-state-export-invalid) | state | no |
+| [`state-import-changed`](#error-state-import-changed) | state | no |
+| [`state-import-partial`](#error-state-import-partial) | state | no |
+| [`state-key-required`](#error-state-key-required) | state | no |
+| [`state-layout-mismatch`](#error-state-layout-mismatch) | state | no |
+| [`state-lock-lost`](#error-state-lock-lost) | state | no |
 | [`state-locked`](#error-state-locked) | observe | yes |
+| [`state-output-exists`](#error-state-output-exists) | state | no |
+| [`state-too-large`](#error-state-too-large) | state | no |
+| [`state-unavailable`](#error-state-unavailable) | state | yes |
 | [`status-checks-unreadable`](#error-status-checks-unreadable) | access | yes |
 | [`status-cluster-unreadable`](#error-status-cluster-unreadable) | access | yes |
 | [`status-port-occupied`](#error-status-port-occupied) | access | yes |
@@ -329,6 +385,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`uid-version-precondition-failed`](#error-uid-version-precondition-failed) | execution | no |
 | [`undiscovered-api`](#error-undiscovered-api) | kubernetes | no |
 | [`unknown-error-code`](#error-unknown-error-code) | cli | no |
+| [`unknown-execution`](#error-unknown-execution) | release | no |
 | [`unknown-forward`](#error-unknown-forward) | observe | no |
 | [`unknown-release`](#error-unknown-release) | release | no |
 | [`unknown-rotate-secret`](#error-unknown-rotate-secret) | release | no |
@@ -342,9 +399,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-deploy-flags-conflict)=
 ### `deploy-flags-conflict`
 
-**Conflicting deploy flags.** `piceli deploy` got flags that cannot be combined (`--resume` with planning flags or `--ref`, `--approve` with `--plan` or `--auto-approve`, or `--plan` with `--auto-approve`).
+**Conflicting deploy flags.** `piceli deploy` got flags that cannot be combined (`--resume` with planning flags or `--ref`, `--approve` with `--plan` or `--auto-approve`, `--plan` with `--auto-approve`, `--approve-if-policy` with `--plan`, `--approve`, `--auto-approve`, `--resume` or `--apply`, `--out` without `--plan`, `--apply` without `--approve` or with planning flags, or no pipeline).
 
-- **Fix:** Use `--plan`, then `--approve HASH` (with the same `--ref`); or `--auto-approve` alone; or `--resume` alone (it reuses the run's commits).
+- **Fix:** Use `--plan` (optionally `--out FILE`), then `--approve HASH` (with the same `--ref`) or `--apply FILE --approve HASH`; or `--auto-approve` alone; or `--resume` alone (it reuses the run's commits).
 - **Retry-safe:** no
 
 (error-deploy-stage-unknown)=
@@ -353,6 +410,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Unknown stage.** `--until` names a stage that does not exist.
 
 - **Fix:** Use one of inputs, build, deliver, plan, apply or checks.
+- **Retry-safe:** no
+
+(error-explain-run-needs-spec)=
+### `explain-run-needs-spec`
+
+**Which state holds the run?.** `piceli explain --run ID` reads a past execution from a release's local state, so it needs `--spec` (and takes no error code).
+
+- **Fix:** Run `piceli explain --run ID --spec release.toml` (or `--spec MODULE:ATTR` for a pipeline), or `piceli release status --spec … --run ID`.
 - **Retry-safe:** no
 
 (error-invalid-or-unavailable-artifact-input)=
@@ -1263,7 +1328,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 **Invalid write response.** The API server's answer to a write did not confirm the requested object and ownership.
 
-- **Fix:** Inspect the object with a read-only tool; when it matches the release, run `piceli release resume --spec release.toml`, otherwise plan again.
+- **Fix:** Inspect the object with a read-only tool; when it matches the release, run `piceli release resume --spec release.toml`, otherwise plan again. A write that never reached the object (still absent, or unchanged) is sent again by a resume once `[execution] write_settle_seconds` (60 s) have passed.
 - **Retry-safe:** no
 
 (error-kubeconfig-rejected)=
@@ -1426,7 +1491,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 **Ambiguous write content differs.** A previous write's result is unknown and the live content differs from the plan.
 
-- **Fix:** Inspect the object with a read-only tool; when it matches the release, run `piceli release resume --spec release.toml`, otherwise plan again.
+- **Fix:** Inspect the object with a read-only tool; when it matches the release, run `piceli release resume --spec release.toml`, otherwise plan again. A write that never reached the object (still absent, or unchanged) is sent again by a resume once `[execution] write_settle_seconds` (60 s) have passed.
 - **Retry-safe:** no
 
 (error-ambiguous-delete-blocked)=
@@ -1434,7 +1499,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 **Ambiguous delete blocked.** A previous delete's result is unknown and the object still exists.
 
-- **Fix:** Inspect the object with a read-only tool; when it matches the release, run `piceli release resume --spec release.toml`, otherwise plan again.
+- **Fix:** Inspect the object with a read-only tool; when it matches the release, run `piceli release resume --spec release.toml`, otherwise plan again. A write that never reached the object (still absent, or unchanged) is sent again by a resume once `[execution] write_settle_seconds` (60 s) have passed.
 - **Retry-safe:** no
 
 (error-ambiguous-write-blocked)=
@@ -1442,7 +1507,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 **Ambiguous write blocked.** A previous write's result is unknown and the live object does not prove it was ours.
 
-- **Fix:** Inspect the object with a read-only tool; when it matches the release, run `piceli release resume --spec release.toml`, otherwise plan again.
+- **Fix:** Inspect the object with a read-only tool; when it matches the release, run `piceli release resume --spec release.toml`, otherwise plan again. A write that never reached the object (still absent, or unchanged) is sent again by a resume once `[execution] write_settle_seconds` (60 s) have passed.
 - **Retry-safe:** no
 
 (error-applied-resource-drift)=
@@ -1451,6 +1516,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Applied object drifted.** An object changed after Piceli applied it (another writer is active).
 
 - **Fix:** Stop the other writer, then plan again.
+- **Retry-safe:** no
+
+(error-apply-crashloop)=
+### `apply-crashloop`
+
+**Workload cannot start.** While waiting for readiness, a pod of the new revision was in `CrashLoopBackOff` (`Init:CrashLoopBackOff`), `ImagePullBackOff`, `ErrImagePull`, `InvalidImageName`, `CreateContainerConfigError`, `CreateContainerError` or `RunContainerError`, or restarted `[execution] crash_restarts` times (a failed Job or Pod counts too), so the apply failed at once instead of at the deadline. The result's `diagnosis` names each workload, container, reason, exit code, restart count, the last log lines (redacted) and the latest events.
+
+- **Fix:** Read the causes (`piceli release status --spec … --run EXECUTION_ID` shows them again); fix the image, command, config or Secret and plan again, or `piceli release rollback previous`. An app that is expected to crash while its dependencies start can set `[execution] fail_fast = false`.
 - **Retry-safe:** no
 
 (error-authorization-expired)=
@@ -1536,9 +1609,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-readiness-unsupported)=
 ### `readiness-unsupported`
 
-**Readiness unsupported.** Piceli cannot evaluate readiness for this kind.
+**Readiness unsupported.** The applied object's `status` is malformed (not an object, or `conditions` is not a list of objects), so its readiness cannot be evaluated.
 
-- **Fix:** Report the kind; meanwhile verify it by hand.
+- **Fix:** Check the object's controller (`kubectl get -o yaml`); verify it by hand and plan again.
 - **Retry-safe:** no
 
 (error-recreated-object)=
@@ -1814,9 +1887,49 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-secret-rotation-refused)=
 ### `secret-rotation-refused`
 
-**Secret rotation refused.** --rotate named a template or static generator.
+**Secret rotation refused.** --rotate named a template, static or external-source (sops, vault, aws-secrets-manager) generator.
 
-- **Fix:** Rotate the values the template uses, or edit the spec.
+- **Fix:** Rotate the values the template uses, edit the spec, or rotate an external value at its source and plan again.
+- **Retry-safe:** no
+
+(error-secret-source-auth-failed)=
+### `secret-source-auth-failed`
+
+**Secret source refused the credentials.** An external secret source refused access: Vault answered 401/403 or the token file/variable is missing, AWS denied the request or found no credentials, or sops could not decrypt the file's data key (exit code 128).
+
+- **Fix:** Provide a valid Vault token (token_file or token_env), AWS credentials or profile, or the age/PGP/KMS key sops needs (pass_env), then plan again.
+- **Retry-safe:** no
+
+(error-secret-source-failed)=
+### `secret-source-failed`
+
+**Secret source read failed.** An external secret source failed: a network or TLS verification error, an unexpected HTTP status or AWS error, sops failed or does not match sops_sha256, or the response was malformed or too large.
+
+- **Fix:** Read the category in the message (for example tls-verify-failed: set ca_file); retrying is safe once the source is reachable.
+- **Retry-safe:** yes
+
+(error-secret-source-not-found)=
+### `secret-source-not-found`
+
+**Secret source has no such value.** The SOPS file, the Vault path, the AWS secret or the key inside it does not exist, is empty or is not a scalar value.
+
+- **Fix:** Fix file, path, secret_id or key in the spec (the message names the source, never the value).
+- **Retry-safe:** no
+
+(error-secret-source-timeout)=
+### `secret-source-timeout`
+
+**Secret source timed out.** sops, Vault or AWS did not answer within timeout_seconds.
+
+- **Fix:** Check connectivity to the source or raise timeout_seconds; retrying is safe.
+- **Retry-safe:** yes
+
+(error-secret-source-tool-missing)=
+### `secret-source-tool-missing`
+
+**Secret source tool not installed.** The sops binary is not found or not executable, or botocore is missing for an aws-secrets-manager secret.
+
+- **Fix:** Install sops (or set sops = "/absolute/path"), or install the extra: pip install 'piceli[aws]'.
 - **Retry-safe:** no
 
 (error-secret-template-invalid)=
@@ -1846,12 +1959,20 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Fix the model as the message describes; `piceli render` shows the result without a cluster.
 - **Retry-safe:** no
 
+(error-render-out-refused)=
+### `render-out-refused`
+
+**Render output directory refused.** `--out` names a directory that holds files `piceli render --out` did not write (or a file it would overwrite), or it was combined with `--diff-env`.
+
+- **Fix:** Pass a new or empty directory, or the directory of a previous `--out` (it holds `.piceli-render`).
+- **Retry-safe:** no
+
 (error-render-target-invalid)=
 ### `render-target-invalid`
 
-**Render target invalid.** The module:attr target cannot be imported or is not an App, composition or composition function.
+**Render target invalid.** The module:attr target (or the spec's composition) cannot be imported, is not an App, composition or composition function, or raised while importing or evaluating (the message names the exception's type and text, never a traceback).
 
-- **Fix:** Point at `module:attr` or `file.py:attr` of an App, DeploymentComposition or build(ctx) function.
+- **Fix:** Point at `module:attr` or `file.py:attr` of an App, DeploymentComposition or build(ctx) function, and fix the error the message names (`PICELI_DEBUG=1` prints the traceback on stderr).
 - **Retry-safe:** no
 
 
@@ -1988,6 +2109,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Run `piceli release plan --spec release.toml` again and approve the new plan hash.
 - **Retry-safe:** no
 
+(error-immutable-field-changed)=
+### `immutable-field-changed`
+
+**Immutable fields would change.** The composition changes a field the API server never updates on an existing object: a Job's pod template or `completions`, or a StatefulSet's `serviceName`, `podManagementPolicy`, selector or claim templates (see `blocking`).
+
+- **Fix:** Name the object with `--replace Kind/name` (or `[release] replace`; for `piceli deploy`, the Pipeline's `replace=["Kind/name"]`) to delete and recreate it from the release (a StatefulSet keeps its pods and claims), or revert the change.
+- **Retry-safe:** no
+
 (error-invalid-adopt-entry)=
 ### `invalid-adopt-entry`
 
@@ -1999,7 +2128,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-invalid-composition)=
 ### `invalid-composition`
 
-**Invalid composition.** The composition entry point could not be loaded, did not return a DeploymentComposition, declared a cluster-scoped object other than a ClusterRole or ClusterRoleBinding (or one annotated `piceli.io/namespace` with another namespace), targeted another namespace, or its secret bindings do not match the declared secret inputs.
+**Invalid composition.** The composition entry point could not be loaded (its module or function raised: the message names the exception's type and text), did not return a DeploymentComposition, declared a cluster-scoped object other than a ClusterRole or ClusterRoleBinding (or one annotated `piceli.io/namespace` with another namespace), targeted another namespace, or its secret bindings do not match the declared secret inputs.
 
 - **Fix:** Fix the composition function named by `[release] composition`, then plan again.
 - **Retry-safe:** no
@@ -2100,6 +2229,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Run `piceli release rollback <target> --spec release.toml` and approve the hash it prints.
 - **Retry-safe:** no
 
+(error-release-changes-pending)=
+### `release-changes-pending`
+
+**Release would change objects.** `piceli release diff --exit-code` found objects the release would change (the diff is in the output); nothing was changed.
+
+- **Fix:** Review the diff. If it is expected, plan and apply it (`piceli release plan`); otherwise fix the model or the cluster.
+- **Retry-safe:** no
+
 (error-release-history-malformed)=
 ### `release-history-malformed`
 
@@ -2143,7 +2280,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-replace-refused)=
 ### `replace-refused`
 
-**Replace refused.** A `--replace` entry names an object that may not be replaced: it is managed, retained or owned by another object (see `blocking`).
+**Replace refused.** A `--replace` entry names an object that may not be replaced: it is retained, owned by another object, or already managed and not a Job or StatefulSet (see `blocking`).
 
 - **Fix:** Use `--adopt Kind/name` for an unmanaged object, or remove the entry from `--replace`/`[release] replace`.
 - **Retry-safe:** no
@@ -2153,7 +2290,15 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 **Existing object requires adoption.** An object the composition declares already exists and is not managed by this release's owner (see `blocking` for each object and the flags that unblock it). A cluster-scoped object (ClusterRole, ClusterRoleBinding) is managed only when it also carries `piceli.io/namespace` with this release's namespace.
 
-- **Fix:** Plan again with `--adopt Kind/name` (or `--replace Kind/name` for non-retained objects), `[release] adopt`/`replace`, or `--adopt-all-desired`; or delete the object.
+- **Fix:** Plan again with `--adopt Kind/name` (or `--replace Kind/name` for non-retained objects), `[release] adopt`/`replace`, or `--adopt-all-desired`; or delete the object. For `piceli deploy`, declare it on the Pipeline instead (`adopt=["Kind/name"]` or `replace=[…]`; see `blocking[].suggest`).
+- **Retry-safe:** no
+
+(error-resource-scope-mismatch)=
+### `resource-scope-mismatch`
+
+**Declared scope contradicts discovery.** An object is declared namespaced but the API server serves its kind cluster-scoped, or the reverse (for example `app.resource(..., scope=...)` for a custom resource whose CRD says otherwise). Nothing was planned.
+
+- **Fix:** Declare the scope the CRD states (`scope="cluster"` or `"namespaced"`); `piceli codegen crd` records it in the generated module's `SCOPE`.
 - **Retry-safe:** no
 
 (error-resume-refused)=
@@ -2202,6 +2347,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Stored release mismatch.** The catalogued release no longer reproduces the approved plan.
 
 - **Fix:** Run `piceli release plan --spec release.toml` again and approve the new plan hash.
+- **Retry-safe:** no
+
+(error-unknown-execution)=
+### `unknown-execution`
+
+**Unknown execution.** `--run` names no execution of this state directory's history (or a prefix shorter than 8 characters, or one that matches several).
+
+- **Fix:** Run `piceli release status --spec …` and copy an `execution_id` from `history`, or pass a `piceli deploy` run id with the pipeline's `--spec`.
 - **Retry-safe:** no
 
 (error-unknown-release)=
@@ -2504,15 +2657,31 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-access-port-conflict)=
 ### `access-port-conflict`
 
-**Declared local port already in use.** A required forward's local port is already held by another process (often an older `piceli access`, dashboard or `kubectl port-forward`). Piceli never takes a port over; the rejection lists each port's owner pid and command when it can be found.
+**Declared local port already in use.** A required forward's local port (or the `--dashboard` port) is already held by another process. Piceli never takes a port over; the rejection lists each port's owner by pid (`holder`: `piceli-forward` or `piceli-server` when it is Piceli's own process for this app, else `other`; another process's command line is never printed).
 
-- **Fix:** Stop the listed process (or the dashboard that supervises it), or change `local=` in the model, then run the command again.
+- **Fix:** When Piceli's own stale process holds it: `piceli access stop --stale TARGET` (add `--port N` for a dashboard port). Otherwise stop the listed pid yourself, or change `local=` in the model, then run the command again.
+- **Retry-safe:** no
+
+(error-access-stop-incomplete)=
+### `access-stop-incomplete`
+
+**A stale process did not stop.** A Piceli process for this app got SIGTERM but its port was still held 5 seconds later (a supervised `kubectl` is left behind when its supervisor ends).
+
+- **Fix:** Run `piceli access stop --stale TARGET` again; it then stops the orphaned `kubectl` itself.
+- **Retry-safe:** yes
+
+(error-access-stop-needs-stale)=
+### `access-stop-needs-stale`
+
+**Say which processes to stop.** `piceli access stop` only stops Piceli's own stale processes for the app, and needs `--stale` to say so.
+
+- **Fix:** Run `piceli access stop --stale TARGET`.
 - **Retry-safe:** no
 
 (error-access-target-invalid)=
 ### `access-target-invalid`
 
-**Access target invalid.** TARGET is neither a readable release.toml whose composition yields an App or composition, nor `module:attr` of an object with `.app` (a piceli App) and `.target` (explicit kubeconfig, context and namespace).
+**Access target invalid.** TARGET is neither a readable release.toml whose composition yields an App or composition, nor `module:attr` of an object with `.app` (a piceli App) and `.target` (explicit kubeconfig, context and namespace), or importing that module raised (the message names the exception).
 
 - **Fix:** Pass `path/to/release.toml`, or `module:attr` of a pipeline object; the message says which part is missing.
 - **Retry-safe:** no
@@ -2718,6 +2887,30 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 ## Deploying a pipeline from source (`piceli deploy`)
 
+(error-deploy-plan-file-invalid)=
+### `deploy-plan-file-invalid`
+
+**Plan file unreadable.** The file given to `piceli deploy --apply` is not a readable `piceli.deploy-plan-file.v1` document (missing, truncated, another schema, or a malformed field).
+
+- **Fix:** Use the file `piceli deploy … --plan --out FILE` wrote, unchanged (for example the CI artifact of the plan job).
+- **Retry-safe:** no
+
+(error-deploy-plan-file-mismatch)=
+### `deploy-plan-file-mismatch`
+
+**Plan file does not match.** `--approve` is not the plan file's combined hash, or the plan file was made for another pipeline, owner or declared target.
+
+- **Fix:** Approve the combined hash printed with this plan file (its `combined_hash`), with the pipeline module it was planned from.
+- **Retry-safe:** no
+
+(error-deploy-plan-target-mismatch)=
+### `deploy-plan-target-mismatch`
+
+**Plan made against another cluster.** The kubeconfig of the applying runner reaches a cluster or namespace whose UIDs differ from the ones the plan file recorded.
+
+- **Fix:** Apply with the kubeconfig the plan was made with, or plan again against this cluster.
+- **Retry-safe:** no
+
 (error-deploy-ref-ambiguous)=
 ### `deploy-ref-ambiguous`
 
@@ -2765,6 +2958,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Fetch it (`git fetch`) or pass an existing branch, tag or full commit SHA.
 - **Retry-safe:** yes
+
+(error-pipeline-apply-crashloop)=
+### `pipeline-apply-crashloop`
+
+**Release cannot start.** The release was applied but a workload's new pods cannot start (crash loop, image pull or configuration error; see `apply-crashloop`), so the apply stopped at once. The result's `diagnosis` has one entry per failing workload with redacted log tails and events.
+
+- **Fix:** Fix the cause, then deploy again (or `--resume`), or roll back with `piceli release rollback previous --spec MODULE:ATTR`. `piceli release status --spec MODULE:ATTR --run RUN_ID` shows the causes again.
+- **Retry-safe:** no
 
 (error-pipeline-apply-not-ready)=
 ### `pipeline-apply-not-ready`
@@ -2825,17 +3026,17 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-pipeline-load-failed)=
 ### `pipeline-load-failed`
 
-**Pipeline module failed to import.** Importing the pipeline's module raised an exception (the message on stderr names it).
+**Pipeline module failed to import.** Importing the pipeline's module raised an exception (the rejection's `message` names its type and text; never a traceback).
 
-- **Fix:** Fix the module until `python path/to/app.py` imports cleanly, then run the command again.
+- **Fix:** Fix the module until `python path/to/app.py` imports cleanly, then run the command again (`PICELI_DEBUG=1` prints the traceback on stderr).
 - **Retry-safe:** no
 
 (error-pipeline-locked)=
 ### `pipeline-locked`
 
-**Pipeline state directory in use.** Another `piceli deploy` run holds the lock of this pipeline's state directory.
+**Pipeline release locked.** Another run holds the pipeline's lock: another process using this state directory, or, with `state="cluster"`, another runner holding the release's Lease (the rejection's `lock` names the holder and when its lease expires).
 
-- **Fix:** Wait for the other run to finish, then run the command again.
+- **Fix:** Wait for the other run to finish, then run the command again. A runner that died frees the lock when its lease expires (`piceli state show` shows the holder).
 - **Retry-safe:** yes
 
 (error-pipeline-mirror-failed)=
@@ -2957,3 +3158,333 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Fix the local problem, then continue with `piceli deploy MODULE:ATTR --resume`.
 - **Retry-safe:** yes
+
+
+## Shared deployment state and release locks (`state = "cluster"`, `piceli state …`)
+
+(error-release-locked)=
+### `release-locked`
+
+**Release locked.** Another runner holds the release's Lease in the namespace (`[release] state = "cluster"`); the rejection names the holder and when its lease expires.
+
+- **Fix:** Wait for the other run to finish, then run the command again. A runner that died frees the lock when its lease expires (`piceli state show` shows the holder).
+- **Retry-safe:** yes
+
+(error-state-access-denied)=
+### `state-access-denied`
+
+**Shared state not permitted.** The target's kubeconfig may not read or write the shared state: it needs `get`, `create`, `patch` and `delete` on `secrets` and `leases` (`coordination.k8s.io`) in the release namespace.
+
+- **Fix:** Grant those verbs to the deploying identity in the namespace (see `docs/state.md`), then run the command again.
+- **Retry-safe:** no
+
+(error-state-corrupt)=
+### `state-corrupt`
+
+**Shared state unreadable.** The shared state in the namespace does not match its manifest (a missing or altered chunk Secret, an unknown schema) or a snapshot or export holds an unsafe member.
+
+- **Fix:** Do not edit `piceli-state-*` Secrets by hand. Restore the state from an export with `piceli state import`, or ask the owner.
+- **Retry-safe:** no
+
+(error-state-crypto-unavailable)=
+### `state-crypto-unavailable`
+
+**Encryption library missing.** Encrypting or decrypting the secret material of a state export needs the `cryptography` package, which is not installed.
+
+- **Fix:** Install it (`pip install 'piceli[crypto]'`), or export without `--include-secrets`.
+- **Retry-safe:** no
+
+(error-state-export-invalid)=
+### `state-export-invalid`
+
+**State export unreadable.** The file given to `piceli state import` is not a `piceli.state-export.v1` document, its digest does not match, or it was exported for another release or namespace.
+
+- **Fix:** Use the unchanged file `piceli state export` wrote for this release.
+- **Retry-safe:** no
+
+(error-state-import-changed)=
+### `state-import-changed`
+
+**Import approval does not match.** The `--approve` digest of `piceli state import` is not the digest of this export for this release and state backend.
+
+- **Fix:** Run `piceli state import` without `--approve`, review it, then approve the digest it prints.
+- **Retry-safe:** no
+
+(error-state-import-partial)=
+### `state-import-partial`
+
+**State export without secrets.** The export holds no secret material (secret store, stored discovery, execution journal, backups); importing it would make the next release generate new secret values.
+
+- **Fix:** Import an export made with `--include-secrets --key-file`, or pass `--allow-partial` when regenerating every secret is intended.
+- **Retry-safe:** no
+
+(error-state-key-required)=
+### `state-key-required`
+
+**State key needed.** Exporting secret material (`--include-secrets`) or importing an export that holds it needs `--key-file` with the key (at least 32 characters, in a file only its owner can read); or the key does not decrypt the export.
+
+- **Fix:** Pass `--key-file` naming an owner-only (mode 0600) file with the key used for the export.
+- **Retry-safe:** no
+
+(error-state-layout-mismatch)=
+### `state-layout-mismatch`
+
+**Shared state of another kind.** The namespace already holds shared state for this release name written by another kind of spec (a pipeline versus a `release.toml`).
+
+- **Fix:** Give the release another name, or keep using the spec that wrote the state.
+- **Retry-safe:** no
+
+(error-state-lock-lost)=
+### `state-lock-lost`
+
+**Release lock lost.** This run's release lock was taken over by another runner (its lease expired while this run could not renew it), so this run stopped writing the shared state (fencing).
+
+- **Fix:** Check who holds the lock with `piceli state show`; when that run finished, continue with `piceli deploy … --resume` (or `piceli release resume`).
+- **Retry-safe:** no
+
+(error-state-output-exists)=
+### `state-output-exists`
+
+**Export file exists.** `piceli state export --out` names a file that already exists.
+
+- **Fix:** Choose another path, or pass `--force` to overwrite it.
+- **Retry-safe:** no
+
+(error-state-too-large)=
+### `state-too-large`
+
+**Shared state too large.** The compressed state is larger than the shared-state limit (64 chunks of 512 KiB).
+
+- **Fix:** Remove releases you no longer need from the catalog, or keep this release on `state = "local"`.
+- **Retry-safe:** no
+
+(error-state-unavailable)=
+### `state-unavailable`
+
+**Shared state unreachable.** Reading or writing the shared state or its Lease in the release namespace failed (the API server was unreachable or answered an error).
+
+- **Fix:** Check that the cluster is reachable with the target's kubeconfig, then run the command again.
+- **Retry-safe:** yes
+
+
+## Typed models from CRDs (`piceli codegen crd`)
+
+(error-codegen-cluster-read-failed)=
+### `codegen-cluster-read-failed`
+
+**Reading the CRD from the cluster failed.** The API server refused or failed the read of the CRD (an HTTP error such as 403, or a transport error). Details are withheld because they could contain credentials.
+
+- **Fix:** Check that the kubeconfig user may `get customresourcedefinitions` and that the cluster is reachable, then run the command again.
+- **Retry-safe:** yes
+
+(error-codegen-flags-conflict)=
+### `codegen-flags-conflict`
+
+**Code generation options conflict.** Pass either a CRD file or `--from-cluster`; `--from-cluster` needs `--kubeconfig`, `--context` and `--crd`, and the cluster options only apply with it.
+
+- **Fix:** Run `piceli codegen crd FILE` or `piceli codegen crd --from-cluster --kubeconfig F --context C --crd NAME`.
+- **Retry-safe:** no
+
+(error-codegen-output-refused)=
+### `codegen-output-refused`
+
+**Code generation output refused.** The `--out` directory does not exist, or the file exists and was not generated by Piceli.
+
+- **Fix:** Choose another path, create the directory, or pass `--force` to overwrite the file.
+- **Retry-safe:** no
+
+(error-crd-invalid)=
+### `crd-invalid`
+
+**CRD invalid.** The input is not an apiextensions.k8s.io/v1 CustomResourceDefinition with a structural schema for the requested version (unparsable YAML/JSON, no CRD, no group or kind, an unknown --version, or no openAPIV3Schema).
+
+- **Fix:** Pass the CRD manifest the operator publishes (for example its release's CRD file) and, if needed, `--version` with a version the CRD lists.
+- **Retry-safe:** no
+
+(error-crd-not-found)=
+### `crd-not-found`
+
+**CRD not found.** `--crd NAME` names no CRD in the file or the cluster, or the file holds several CRDs and `--crd` was not given.
+
+- **Fix:** Pass `--crd` with the CRD's name (`plural.group`, such as `certificates.cert-manager.io`) or its kind; `kubectl get crd` lists them.
+- **Retry-safe:** no
+
+
+## Environments (`App.environment`, `--env`, `--diff-env`)
+
+(error-environment-invalid)=
+### `environment-invalid`
+
+**Environment override invalid.** An environment override names no suitable declared object (a typo, or an override the object cannot take, such as replicas on a ConfigMap), is ambiguous, disables a component another workload still reads, or holds a value the object refuses.
+
+- **Fix:** Fix the override as the message says; `piceli render MODULE:ATTR --env NAME` shows the result without a cluster.
+- **Retry-safe:** no
+
+(error-environment-required)=
+### `environment-required`
+
+**Environment required.** The pipeline declares one target per environment, so the command must say which one (`--env`); or `--diff-env` was given without `--env`.
+
+- **Fix:** Add `--env NAME` (one of the pipeline's environments).
+- **Retry-safe:** no
+
+(error-environment-unknown)=
+### `environment-unknown`
+
+**Unknown environment.** `--env` (or `--diff-env`) names an environment the app does not declare, or, for a pipeline, one it has no target for.
+
+- **Fix:** Use a declared name (`app.environment(name, ...)`); a pipeline needs `target={name: Target...}` for each environment it deploys.
+- **Retry-safe:** no
+
+(error-environment-unsupported)=
+### `environment-unsupported`
+
+**Environment not supported here.** `--env` selects an environment of an `App`; the target is a `DeploymentComposition`, a composition function that does not return an App, or a release.toml spec.
+
+- **Fix:** Return the App from the composition function, or use a pipeline (`--spec MODULE:ATTR`) whose app declares the environment.
+- **Retry-safe:** no
+
+
+## Runner hygiene (`piceli cache`, `piceli doctor`, `piceli runs`, `cache_budget=`)
+
+(error-cache-arguments-conflict)=
+### `cache-arguments-conflict`
+
+**Conflicting cache arguments.** The command was given both a pipeline and `--state-dir`, or `--env` without a pipeline.
+
+- **Fix:** Name the pipeline (`MODULE:ATTR`, optionally with `--env`) or a state directory (`--state-dir`), not both.
+- **Retry-safe:** no
+
+(error-cache-budget-invalid)=
+### `cache-budget-invalid`
+
+**Cache budget invalid.** `--budget` or `Pipeline(cache_budget=...)` is not a positive size.
+
+- **Fix:** Give bytes or a size with a unit, for example `20GiB`, `500MB` or `1073741824`.
+- **Retry-safe:** no
+
+(error-cache-over-budget)=
+### `cache-over-budget`
+
+**State directory still over its budget.** After removing everything a prune may remove, a state directory still uses more than its budget. What is left is the release state, receipts and the runs a resume or a rollback of the last releases needs, which are never pruned.
+
+- **Fix:** Run `piceli cache status` to see what is left, then raise the budget, lower `--keep-last`, or move the state directory to a larger disk.
+- **Retry-safe:** no
+
+(error-runner-disk-low)=
+### `runner-disk-low`
+
+**Runner disk space low.** The free space where the state directory or the temporary directory lives is below what the next build needs (estimated from the last build receipts).
+
+- **Fix:** Free space: `piceli cache prune` (add `--budget`), prune the container engine's build cache, or use a runner with a larger disk.
+- **Retry-safe:** yes
+
+(error-runner-memory-low)=
+### `runner-memory-low`
+
+**Runner memory low.** The runner's available memory is below what the next build needs.
+
+- **Fix:** Stop other work on the runner or use a runner with more memory, then run the command again.
+- **Retry-safe:** yes
+
+(error-runner-tool-missing)=
+### `runner-tool-missing`
+
+**Required tool missing.** A tool the pipeline uses is not installed or does not run: `docker` or `docker buildx` for a build, `kubectl` for a node-loopback registry's port forward.
+
+- **Fix:** Install the tool on the runner (and put it on `PATH`), then run `piceli doctor` again.
+- **Retry-safe:** no
+
+
+## Owner-declared approval policies (`auto_approve`, `--approve-if-policy`)
+
+(error-approval-policy-exceeded)=
+### `approval-policy-exceeded`
+
+**Plan outside the approval policy.** `--approve-if-policy` planned a change the owner's policy does not cover: a `delete`, `replace` or `adopt`, a cluster-scoped object or drift the policy does not allow, or more changed objects than `max_objects` (the `policy.violations` list names each). Nothing was applied; the plan is stored and its hash printed.
+
+- **Fix:** Show the plan to the owner and, after they approve, run the printed command with `--approve <hash>`. Never widen the policy or split the change to fit it.
+- **Retry-safe:** no
+
+(error-approval-policy-invalid)=
+### `approval-policy-invalid`
+
+**Approval policy invalid.** The `auto_approve` policy (`ApprovalPolicy(...)` in a pipeline, `[release] auto_approve` in a spec) names an unknown action class, allows `delete`, `replace` or `adopt` (which always need the owner's approval of the hash), or has a `max_objects` outside 0-4096.
+
+- **Fix:** Only the owner changes the policy: use the classes `create`, `apply`, `no-op`, `cluster_scoped` and `drift` in `allow`, any class in `deny`, and an integer `max_objects`.
+- **Retry-safe:** no
+
+(error-approval-policy-missing)=
+### `approval-policy-missing`
+
+**No approval policy declared.** `--approve-if-policy` was given, but the pipeline (`auto_approve=`) or the spec (`[release] auto_approve`) declares no policy. Nothing was planned or changed.
+
+- **Fix:** Plan (`piceli deploy MODULE:ATTR --plan` or `piceli release plan`), show the plan to the owner and run it with `--approve <hash>` after they approve. Never add a policy yourself: only the owner declares one.
+- **Retry-safe:** no
+
+(error-approve-if-policy-flags-conflict)=
+### `approve-if-policy-flags-conflict`
+
+**Flags cannot be combined with --approve-if-policy.** `release apply --approve-if-policy` was combined with `--approve`, `--auto-approve`, `--rotate`, `--adopt`, `--replace` or `--adopt-all-desired`. Only the owner's declared policy decides what applies without a human hash, so no flag may add to the plan.
+
+- **Fix:** Drop the other flags, or plan with them (`piceli release plan …`) and ask the owner to approve the hash.
+- **Retry-safe:** no
+
+
+## GitOps handoff (`piceli publish`, `piceli render --out`)
+
+(error-gitops-artifact-changed)=
+### `gitops-artifact-changed`
+
+**Artifact changed since approval.** `--approve` does not match the digest of this render's artifact: the model, the options or the annotations changed.
+
+- **Fix:** Run `piceli publish` without `--approve`, review the new digest and approve it.
+- **Retry-safe:** no
+
+(error-gitops-empty)=
+### `gitops-empty`
+
+**Nothing to hand off.** The render has no object left to publish (for example only Secrets, left out by `--secrets external`).
+
+- **Fix:** Check the target and `--env`; `piceli render` shows what it renders.
+- **Retry-safe:** no
+
+(error-gitops-image-unresolved)=
+### `gitops-image-unresolved`
+
+**Placeholder image in a GitOps handoff.** An object uses a placeholder image (a pipeline build that has not run, or an image the spec does not pin), which no controller can pull.
+
+- **Fix:** Render from a `release.toml` whose `[images]` or receipts pin every image by digest, or deploy the pipeline with `piceli deploy`.
+- **Retry-safe:** no
+
+(error-gitops-push-failed)=
+### `gitops-push-failed`
+
+**Artifact push failed.** The registry refused or broke off the push. The detail is withheld because it could contain server messages.
+
+- **Fix:** Check the registry, the repository and `--credentials`, then run the same command again; pushes are content-addressed.
+- **Retry-safe:** yes
+
+(error-gitops-secret-value)=
+### `gitops-secret-value`
+
+**Secret value in a GitOps handoff.** A non-Secret object holds a value Piceli redacts (a field or env var named like a password, token or credential) or injects at apply time from its secret store.
+
+- **Fix:** Move the value into a Secret provided outside the files, or list a field that is not secret in the object's `piceli.io/public-fields` annotation.
+- **Retry-safe:** no
+
+(error-gitops-secrets-present)=
+### `gitops-secrets-present`
+
+**Secret in a GitOps handoff.** The render holds a Secret object. A published artifact or rendered directory is applied by Flux or Argo CD as it is and must never carry secret values.
+
+- **Fix:** Provide the Secret outside the files (a SOPS-encrypted file, an `ExternalSecret`, or created by hand) and pass `--secrets external` to leave Secrets out.
+- **Retry-safe:** no
+
+(error-gitops-target-invalid)=
+### `gitops-target-invalid`
+
+**Invalid publish target.** `--to` is missing or not `oci://host[:port]/repository[:tag]`, or an annotation value (`--source`, `--revision`) is not short printable text.
+
+- **Fix:** Pass `--to oci://registry.example/team/app:tag` (plain HTTP only for a loopback registry).
+- **Retry-safe:** no

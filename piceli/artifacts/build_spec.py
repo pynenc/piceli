@@ -37,7 +37,6 @@ import secrets
 import shutil
 import stat
 import sys
-import tempfile
 import threading
 import time
 import tomllib
@@ -76,6 +75,7 @@ from piceli.artifacts.source_identity import (
     verify_inputs,
 )
 from piceli.bounds import object_keys, strict_json
+from piceli.tempfiles import temporary_directory
 
 BUILD_SPEC_REVISION = "piceli.build-spec.v1"
 BUILD_RECEIPT_REVISION = "piceli.build-receipt.v1"
@@ -771,6 +771,8 @@ class BuildSpec:
     base: Path = field(default=Path("."), compare=False, repr=False)
     origin: Path | None = field(default=None, compare=False, repr=False)
     """The ``build.toml`` this spec was read from; re-checked after a build."""
+    platform_override: str | None = field(default=None, compare=False, repr=False)
+    """A platform that replaced the file's ``platforms`` (``Build.spec(platform=)``)."""
 
     def __post_init__(self) -> None:
         _match(_NAME, self.name, "build name")
@@ -1104,6 +1106,16 @@ class BuildSpec:
             "buildx_builder": self.buildx_builder,
             "inputs": self.inputs,
         }
+
+    def with_platform(self, platform: str) -> BuildSpec:
+        """This spec built for one ``platform`` instead of the file's ``platforms``.
+
+        The override is part of the spec digest (so of every plan hash) and is
+        applied again when the file is re-checked after a build.
+        """
+        return dataclasses.replace(
+            self, platforms=(platform,), platform_override=platform
+        )
 
     @property
     def spec_sha256(self) -> str:
@@ -1690,8 +1702,8 @@ class _Execution:
 
     def execute(self, output_dir: Path) -> dict[str, Any]:
         spec = self.spec
-        with tempfile.TemporaryDirectory(prefix="piceli-build-") as directory:
-            staging = Path(directory)
+        with temporary_directory("build") as directory:
+            staging = directory
             self._probe(staging)
             assert self.builder_name is not None
             (staging / "empty").mkdir()
@@ -1848,7 +1860,10 @@ class _Execution:
         origin = self.spec.origin
         if origin is not None:
             try:
-                same = BuildSpec.from_toml(origin).spec_sha256 == self.spec.spec_sha256
+                fresh = BuildSpec.from_toml(origin)
+                if self.spec.platform_override is not None:
+                    fresh = fresh.with_platform(self.spec.platform_override)
+                same = fresh.spec_sha256 == self.spec.spec_sha256
             except BuildSpecError:
                 same = False
             if not same:
@@ -1941,11 +1956,14 @@ class _Execution:
         # config digest. Only a distinct value is a real manifest digest.
         if manifest == image_id:
             manifest = None
+        size = image.get("Size")
         return {
             "image_id": image_id,
             "digest": manifest,
             "platform": platform,
             "ref": ref,
+            # Added in 0.8.0: the engine's size of the image, for summaries.
+            **({"size_bytes": size} if type(size) is int and size >= 0 else {}),
         }
 
     def _publish(
@@ -2036,8 +2054,12 @@ def _raw_output(block: bytes) -> None:
 def _write_atomic(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.piceli-partial")
-    temporary.write_text(text)
-    os.replace(temporary, path)
+    try:
+        temporary.write_text(text)
+        os.replace(temporary, path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 def run_build_spec_command(

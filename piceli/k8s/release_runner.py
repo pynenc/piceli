@@ -40,8 +40,9 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from piceli.approval_policy import ApprovalPolicy
 from piceli.checks import (
     Check,
     CheckContext,
@@ -51,14 +52,17 @@ from piceli.checks import (
     run_checks,
 )
 from piceli.k8s.ops.bounds import timestamp
+from piceli.k8s.ops.diagnosis import compact
 from piceli.k8s.ops.discovery import (
     RELEASE_CLUSTER_KINDS,
     RELEASE_NAMESPACE_ANNOTATION,
+    RELEASE_REFUSED_CLUSTER_KINDS,
     RETAINED_KINDS,
     DiscoveryArtifact,
     DiscoveryLimits,
     DiscoveryRequest,
     PlanTarget,
+    ResourceScope,
     ResourceType,
     capture_discovery,
 )
@@ -73,6 +77,7 @@ from piceli.k8s.ops.executor import (
 from piceli.k8s.ops.field_diff import plan_diffs
 from piceli.k8s.ops.kubernetes_provider import ProviderError
 from piceli.k8s.ops.plan import (
+    REPLACEABLE_MANAGED_KINDS,
     DeploymentComponent,
     DeploymentComposition,
     DeploymentPlan,
@@ -82,9 +87,11 @@ from piceli.k8s.ops.plan import (
     PrivateEvidence,
     ResourceIntent,
     ResourceRef,
+    autoscaled_replicas,
     build_plan,
     declared_union,
     field_drift,
+    immutable_changes,
     private_evidence,
     replace_refusal,
     retained_content_contained,
@@ -103,7 +110,11 @@ from piceli.k8s.release import (
     ReleaseSource,
     ReleaseWorkflow,
 )
-from piceli.k8s.release_secret_spec import SecretError, consumed_outputs
+from piceli.k8s.release_secret_spec import (
+    SecretError,
+    check_rotation,
+    consumed_outputs,
+)
 from piceli.k8s.release_secrets import (
     ImportSources,
     Materialized,
@@ -120,6 +131,9 @@ from piceli.k8s.release_spec import (
     ReleaseSpecError,
     parse_adopt_entry,
 )
+
+if TYPE_CHECKING:
+    from piceli.k8s.secret_sources import Fetched
 
 POLICY_REVISION = "piceli.release-cli/v1"
 _HASH = re.compile(r"[0-9a-f]{64}")
@@ -145,6 +159,10 @@ class ReleaseError(ValueError):
         super().__init__(message)
         self.code = code
         self.details = dict(details or {})
+
+
+#: Discovery and dry runs are captured at most this many times per plan.
+OBSERVE_ATTEMPTS = 3
 
 
 def _canonical(value: Any) -> str:
@@ -261,7 +279,10 @@ def _plan_authorization(
     field_manager: str,
     replace: Sequence[Mapping[str, str]] = (),
     previous: Sequence[ResourceIntent] = (),
+    policy: ApprovalPolicy | Mapping[str, Any] | None = None,
 ) -> PlanAuthorization:
+    if isinstance(policy, Mapping):
+        policy = ApprovalPolicy.from_identity(policy)
     return PlanAuthorization(
         target,
         tuple(ResourceRef(**item) for item in adopt),
@@ -270,7 +291,13 @@ def _plan_authorization(
         field_manager,
         tuple(ResourceRef(**item) for item in replace),
         tuple(previous),
+        approval_policy=policy,
     )
+
+
+def _policy_record(policy: ApprovalPolicy | None) -> dict[str, Any]:
+    """The policy a plan was made with, for its sidecar or pending file."""
+    return {} if policy is None else {"approval_policy": policy.identity()}
 
 
 def _previous_declared(
@@ -329,6 +356,41 @@ def _label(ref: ResourceRef) -> str:
     return f"{ref.kind}/{ref.name}"
 
 
+#: How a release spec or ``piceli release plan`` authorizes unmanaged objects.
+RELEASE_AUTHORIZATION = (
+    "authorize them with --adopt or --replace Kind/name (repeatable), "
+    "[release] adopt/replace or --adopt-all-desired, or delete them"
+)
+
+
+def blocking_message(
+    blocking: Sequence[Mapping[str, Any]], authorize: str = RELEASE_AUTHORIZATION
+) -> str:
+    """The refusal's sentence for ``blocking`` objects (each with ``suggest``).
+
+    ``authorize`` says how the caller unblocks unmanaged objects: the release
+    flags by default; a pipeline names its own declaration instead.
+    """
+    unmanaged = [
+        item for item in blocking if item["code"] == "resource-requires-adoption"
+    ]
+    parts = []
+    if unmanaged:
+        parts.append(
+            "existing objects are not managed by this release's owner: "
+            + ", ".join(
+                f"{item['kind']}/{item['name']} ({' or '.join(item['suggest'])})"
+                for item in unmanaged
+            )
+            + "; "
+            + authorize
+        )
+    for item in blocking:
+        if item["code"] != "resource-requires-adoption":
+            parts.append(f"{item['kind']}/{item['name']}: {item['message']}")
+    return "; ".join(parts)
+
+
 def scoped_composition(
     composition: DeploymentComposition, namespace: str
 ) -> DeploymentComposition:
@@ -336,10 +398,13 @@ def scoped_composition(
 
     Namespaced objects must target ``namespace``. Cluster-scoped objects must
     be of a kind in :data:`~piceli.k8s.ops.discovery.RELEASE_CLUSTER_KINDS`
-    (ClusterRole, ClusterRoleBinding); each gets the
-    ``piceli.io/namespace: <namespace>`` annotation (typed apps render it)
-    so that only this namespace's release manages it. An object that already
-    names another namespace is refused.
+    (ClusterRole, ClusterRoleBinding), which get the
+    ``piceli.io/namespace: <namespace>`` annotation (typed apps render it),
+    or of another kind already annotated with it (``app.resource(...,
+    scope="cluster")``), except the kinds in
+    :data:`~piceli.k8s.ops.discovery.RELEASE_REFUSED_CLUSTER_KINDS`. Only this
+    namespace's release manages them. An object that already names another
+    namespace is refused.
 
     :raises ReleaseSpecError: ``invalid-composition``.
     """
@@ -356,17 +421,22 @@ def scoped_composition(
                     )
                 resources.append(resource)
                 continue
-            if (ref.api_version, ref.kind) not in RELEASE_CLUSTER_KINDS:
-                raise ReleaseSpecError(
-                    "cluster-scoped resources other than rbac.authorization.k8s.io/v1 "
-                    "ClusterRole and ClusterRoleBinding are not supported by "
-                    f"releases: {ref.kind}/{ref.name}",
-                    code="invalid-composition",
-                )
             manifest = resource.manifest
             metadata = manifest.setdefault("metadata", {})
             annotations = metadata.get("annotations") or {}
             declared = annotations.get(RELEASE_NAMESPACE_ANNOTATION)
+            if (ref.api_version, ref.kind) not in RELEASE_CLUSTER_KINDS and (
+                declared is None or ref.kind in RELEASE_REFUSED_CLUSTER_KINDS
+            ):
+                raise ReleaseSpecError(
+                    "a release manages cluster-scoped objects only per namespace: "
+                    "rbac.authorization.k8s.io/v1 ClusterRole and "
+                    "ClusterRoleBinding, and other kinds declared with "
+                    'app.resource(..., scope="cluster") (annotated '
+                    f"{RELEASE_NAMESPACE_ANNOTATION}); never Namespace, "
+                    f"CustomResourceDefinition or PersistentVolume: {ref.kind}/{ref.name}",
+                    code="invalid-composition",
+                )
             if declared is not None and declared != namespace:
                 raise ReleaseSpecError(
                     f"{ref.kind}/{ref.name} is annotated "
@@ -393,6 +463,39 @@ def scoped_composition(
             )
         )
     return DeploymentComposition(tuple(components))
+
+
+def _check_scopes(
+    composition: DeploymentComposition, artifact: DiscoveryArtifact
+) -> None:
+    """Refuse objects whose scope contradicts the API server's discovery.
+
+    A typed resource declares its scope (``App.resource(..., scope=...)``);
+    the server's discovery is authoritative, so a namespaced declaration of a
+    cluster-scoped kind (or the reverse) is refused before planning.
+
+    :raises ReleaseSpecError: ``resource-scope-mismatch``.
+    """
+    scopes = {
+        (item.resource_type.api_version, item.resource_type.kind): item.scope
+        for item in artifact.coverage.api_resources
+    }
+    for component in composition.components:
+        for resource in component.resources:
+            ref = resource.ref
+            served = scopes.get((ref.api_version, ref.kind))
+            if served is None:
+                continue
+            declared = (
+                ResourceScope.NAMESPACED if ref.namespace else ResourceScope.CLUSTER
+            )
+            if declared is not served:
+                raise ReleaseSpecError(
+                    f"{ref.kind}/{ref.name} is declared {declared.value}, but the "
+                    f"API server serves {ref.api_version} {ref.kind} as "
+                    f"{served.value}; declare it with scope={served.value!r}",
+                    code="resource-scope-mismatch",
+                )
 
 
 @dataclass(frozen=True)
@@ -426,8 +529,12 @@ def resolve_ownership(
     is taken over again, which reclaims those fields.
 
     Replace entries must name an existing **unmanaged, non-retained** object
-    that no other object owns; absent objects are reported as not needed and
-    every other case is refused. ``adopt_all_desired`` adopts every unmanaged
+    that no other object owns, or a managed Job or StatefulSet (whose
+    immutable fields change); absent objects, and managed ones without an
+    immutable change, are reported as not needed and
+    every other case is refused. A managed object whose immutable fields
+    would change and that is not named for replace blocks the plan
+    (``immutable-field-changed``). ``adopt_all_desired`` adopts every unmanaged
     object the composition declares that is not replaced, and nothing else.
 
     Every object that blocks the plan is reported in one refusal, each with
@@ -453,7 +560,14 @@ def resolve_ownership(
     for entry in dict.fromkeys(replace):
         ref = _declared_match(entry, declared, "replace")
         current = observed.get(ref)
-        if current is None:
+        if current is None or (
+            # A managed Job or StatefulSet is replaced only for a change the
+            # API server cannot apply; a standing entry never reruns a Job.
+            current.ownership is Ownership.MANAGED
+            and ref.kind in REPLACEABLE_MANAGED_KINDS
+            and not current.retained
+            and not immutable_changes(intents[ref], current)
+        ):
             replace_not_needed.add(_label(ref))
             continue
         refusal = replace_refusal(current)
@@ -525,6 +639,23 @@ def resolve_ownership(
                 }
             )
         elif (
+            ref not in replaced
+            and ref not in adopt
+            and current.ownership is Ownership.MANAGED
+            and (changed := immutable_changes(intents[ref], current))
+        ):
+            blocking.append(
+                {
+                    "kind": ref.kind,
+                    "name": ref.name,
+                    "code": "immutable-field-changed",
+                    "message": "immutable fields would change ("
+                    + ", ".join(changed)
+                    + "); the API server refuses the update",
+                    "suggest": [f"--replace {_label(ref)}"],
+                }
+            )
+        elif (
             current.retained
             and (ref in adopt or current.ownership is Ownership.MANAGED)
             and not retained_content_contained(intents[ref], current)
@@ -543,26 +674,8 @@ def resolve_ownership(
             )
     if blocking:
         blocking.sort(key=lambda item: (item["kind"], item["name"]))
-        unmanaged = [
-            item for item in blocking if item["code"] == "resource-requires-adoption"
-        ]
-        parts = []
-        if unmanaged:
-            parts.append(
-                "existing objects are not managed by this release's owner: "
-                + ", ".join(
-                    f"{item['kind']}/{item['name']} ({' or '.join(item['suggest'])})"
-                    for item in unmanaged
-                )
-                + "; authorize them with --adopt or --replace Kind/name "
-                "(repeatable), [release] adopt/replace or --adopt-all-desired, "
-                "or delete them"
-            )
-        for item in blocking:
-            if item["code"] != "resource-requires-adoption":
-                parts.append(f"{item['kind']}/{item['name']}: {item['message']}")
         raise ReleaseError(
-            "; ".join(parts),
+            blocking_message(blocking),
             code=blocking[0]["code"]
             if len({item["code"] for item in blocking}) == 1
             else "plan-blocked",
@@ -605,6 +718,14 @@ def _drift(
     ]
 
 
+def _autoscaled(
+    composition: DeploymentComposition, snapshot: ObservedSnapshot, field_manager: str
+) -> list[dict[str, Any]]:
+    """What the plan does with autoscaled ``spec.replicas`` (see the plan module)."""
+    _, report = autoscaled_replicas(composition, snapshot, field_manager)
+    return [item.to_dict() for item in report]
+
+
 def _summary(plan: Mapping[str, Any]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for action in plan["actions"]:
@@ -645,6 +766,11 @@ def _execution_summary(result: Mapping[str, Any]) -> dict[str, Any]:
     }
     if "failure_category" in result:
         summary["failure_category"] = result["failure_category"]
+    causes = compact(result.get("diagnosis"))
+    if causes:
+        # Public: names, reasons and exit codes only (logs stay in the
+        # journal and the command's own result).
+        summary["causes"] = causes
     return summary
 
 
@@ -755,6 +881,9 @@ class PlanResult:
     # and the objects the server dry run could not cover.
     diffs: list[dict[str, Any]] = field(default_factory=list)
     dry_run_unavailable: list[dict[str, Any]] = field(default_factory=list)
+    # Workloads whose ``spec.replicas`` an autoscaler owns (see
+    # ``autoscaled_replicas``); informational, bound through the actions.
+    autoscaled: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def plan_hash(self) -> str:
@@ -786,6 +915,7 @@ class PlanResult:
             "checks": self.checks,
             "diffs": self.diffs,
             "dry_run_unavailable": self.dry_run_unavailable,
+            "autoscaled": self.autoscaled,
             **({"plan": self.plan} if full else {}),
         }
 
@@ -874,6 +1004,9 @@ class ReleaseRunner:
         self.progress = progress
         self.provider_factory = provider_factory
         self.check_context_factory = check_context_factory
+        #: Called after every execution journal commit (before the IO it
+        #: records): shared state writes the state through here.
+        self.checkpoint: Callable[[], None] | None = None
         self.state = spec.state_dir
         self.history = _History(self.state / "history.json")
         # Restorable copies of objects deleted by ``replace`` (owner-only).
@@ -882,9 +1015,11 @@ class ReleaseRunner:
     # ------------------------------------------------------------------ state
     def _open(self) -> tuple[ReleaseCatalog, ExecutionJournal, SecretVersionStore]:
         private_directory(self.state)
+        journal = ExecutionJournal(self.spec.journal_path)
+        journal.on_commit = self.checkpoint
         return (
             ReleaseCatalog(self.spec.catalog_path),
-            ExecutionJournal(self.spec.journal_path),
+            journal,
             SecretVersionStore(self.spec.secret_store_path),
         )
 
@@ -953,11 +1088,23 @@ class ReleaseRunner:
             from piceli.app.app import App
 
             context = self.spec.context(images, refs, nodes)
-            composition = function(context)
-            if isinstance(composition, App):
-                # Returning the App keeps its access declarations visible to
-                # `piceli access` / `piceli status`; render it here.
-                composition = composition.composition(context)
+            try:
+                composition = function(context)
+                if isinstance(composition, App):
+                    # Returning the App keeps its access declarations visible
+                    # to `piceli access` / `piceli status`; render it here.
+                    composition = composition.composition(context)
+            except ValueError:
+                raise  # model validation keeps its own code and message
+            except Exception as error:  # the user's composition raised
+                from piceli.cli_contract import describe_user_error
+
+                raise ReleaseSpecError(
+                    "evaluating composition "
+                    f"{self.spec.model.release.composition!r} failed: "
+                    f"{describe_user_error(error)}",
+                    code="invalid-composition",
+                ) from None
             if not isinstance(composition, DeploymentComposition):
                 raise ReleaseSpecError(
                     "the composition function must return an App or a DeploymentComposition",
@@ -1053,7 +1200,10 @@ class ReleaseRunner:
 
     # ------------------------------------------------------------ discovery
     def _discover(
-        self, binding: ProviderBinding, kinds: set[ResourceType]
+        self,
+        binding: ProviderBinding,
+        kinds: set[ResourceType],
+        composition: DeploymentComposition | None = None,
     ) -> DiscoveryArtifact:
         for item in self.spec.model.discovery.kinds:
             api_version, _, kind = item.rpartition("/")
@@ -1084,6 +1234,8 @@ class ReleaseRunner:
                 + (f" ({'; '.join(failures)})" if failures else ""),
                 code="discovery-incomplete",
             )
+        if composition is not None:
+            _check_scopes(composition, artifact)
         return artifact
 
     def _dry_runs(
@@ -1101,6 +1253,30 @@ class ReleaseRunner:
         )
         return artifact, [item.to_dict() for item in unavailable]
 
+    def _observe(
+        self,
+        binding: ProviderBinding,
+        composition: DeploymentComposition,
+        kinds: set[ResourceType],
+    ) -> tuple[DiscoveryArtifact, list[dict[str, Any]]]:
+        """Discovery plus the server dry runs, consistent with each other.
+
+        A dry run is preconditioned on the discovered resourceVersion, so an
+        object written in between (a controller's status update while a
+        rollout finishes) answers ``conflict``. Discovery and the dry runs are
+        then captured again, a few times, before planning without evidence.
+        """
+        for attempt in range(OBSERVE_ATTEMPTS):
+            artifact, unavailable = self._dry_runs(
+                binding, composition, self._discover(binding, kinds, composition)
+            )
+            if attempt + 1 == OBSERVE_ATTEMPTS or not any(
+                item["reason"] == "conflict" for item in unavailable
+            ):
+                break
+            time.sleep(0.5 * (attempt + 1))
+        return artifact, unavailable
+
     # -------------------------------------------------------------- secrets
     def _private_inputs(
         self,
@@ -1108,11 +1284,13 @@ class ReleaseRunner:
         store: SecretVersionStore,
         binding: ProviderBinding,
         rotate: Sequence[str],
+        external: Mapping[str, Fetched] | None = None,
     ) -> Materialized:
         """Carry values over from earlier releases unless rotated or reconfigured.
 
         Called only after the plan was validated; imports read their source
-        here (a live Secret through the release's own provider).
+        here (a live Secret through the release's own provider). External
+        sources were read before the release was named (``external``).
         """
         records = sorted(
             catalog.records(),
@@ -1149,6 +1327,39 @@ class ReleaseRunner:
             rotate=rotate,
             carry=carry,
             sources=ImportSources(self.spec.resolve, read_secret),
+            external=external,
+        )
+
+    def _external_sources(self, *, create: bool) -> dict[str, Fetched]:
+        """Read every external secret source now (values stay in memory).
+
+        The keyed digests name the release, so a changed value makes a new
+        release and an unchanged one re-plans the existing release. ``create``
+        creates the private digest key when missing (``plan``); without it
+        (``diff``, read-only) a missing key means no release can match.
+        """
+        from secrets import token_bytes
+
+        from piceli.k8s.release_secret_spec import is_external
+        from piceli.k8s.secret_sources import (
+            KEY_FILE,
+            ExternalSources,
+            fetch_all,
+            source_key,
+        )
+
+        specs = {
+            name: spec
+            for name, spec in self.spec.model.secrets.items()
+            if is_external(spec)
+        }
+        if not specs:
+            return {}
+        key = source_key(self.state / KEY_FILE, create=create)
+        return fetch_all(
+            specs,
+            key if key is not None else token_bytes(32),
+            ExternalSources(self.spec.resolve),
         )
 
     @staticmethod
@@ -1209,7 +1420,12 @@ class ReleaseRunner:
                 factory = self._factory(function, images, self._nodes(binding))
                 if rollback_to is None:
                     composition, material = self._preview_composition(factory)
-                    fingerprint = self._fingerprint(images, material, rotate)
+                    if rotate:
+                        # Refuse --rotate of a template, static or external
+                        # value before any source is read.
+                        check_rotation(spec.secrets, rotate)
+                    external = self._external_sources(create=True)
+                    fingerprint = self._fingerprint(images, material, rotate, external)
                     name = f"{spec.release.name}-{fingerprint[:12]}"
                     existing = {record.name for record in catalog.records()}
                     if name not in existing:
@@ -1225,6 +1441,7 @@ class ReleaseRunner:
                             store,
                             rotate,
                             requested,
+                            external,
                         )
                     intent = "apply"
                 else:
@@ -1249,20 +1466,24 @@ class ReleaseRunner:
         images: Mapping[str, ImageRef],
         material: list[dict[str, Any]],
         rotate: Sequence[str] = (),
+        external: Mapping[str, Fetched] | None = None,
     ) -> str:
-        """The release fingerprint; its first 12 characters name the release."""
-        return hashlib.sha256(
-            _canonical(
-                {
-                    "images": {n: i.identity for n, i in images.items()},
-                    "composition": material,
-                    "secrets": {
-                        n: config_digest(g) for n, g in self.spec.model.secrets.items()
-                    },
-                    "rotation": uuid.uuid4().hex if rotate else None,
-                }
-            ).encode()
-        ).hexdigest()
+        """The release fingerprint; its first 12 characters name the release.
+
+        External secret values contribute their keyed digests (only when the
+        spec has external sources, so other fingerprints are unchanged).
+        """
+        document: dict[str, Any] = {
+            "images": {n: i.identity for n, i in images.items()},
+            "composition": material,
+            "secrets": {
+                n: config_digest(g) for n, g in self.spec.model.secrets.items()
+            },
+            "rotation": uuid.uuid4().hex if rotate else None,
+        }
+        if external:
+            document["sources"] = {n: item.digest for n, item in external.items()}
+        return hashlib.sha256(_canonical(document).encode()).hexdigest()
 
     def diff(
         self,
@@ -1300,7 +1521,9 @@ class ReleaseRunner:
             factory = self._factory(function, images, self._nodes(binding))
             composition, material = self._preview_composition(factory)
             records = {record.name: record for record in catalog.records()}
-            name = f"{settings.name}-{self._fingerprint(images, material)[:12]}"
+            external = self._external_sources(create=False)
+            fingerprint = self._fingerprint(images, material, external=external)
+            name = f"{settings.name}-{fingerprint[:12]}"
             existing = records.get(name)
             if existing is not None:
                 # An unchanged release: its archived composition carries the
@@ -1310,9 +1533,7 @@ class ReleaseRunner:
             if settings.prune:
                 for record in records.values():
                     kinds |= self._kinds(composition_from_archive(record.archive))
-            artifact, unavailable = self._dry_runs(
-                binding, composition, self._discover(binding, kinds)
-            )
+            artifact, unavailable = self._observe(binding, composition, kinds)
             snapshot = ObservedSnapshot.from_discovery(artifact)
             inherited = list(settings.inherited_owners)
             resolved = requested.resolve(
@@ -1336,6 +1557,7 @@ class ReleaseRunner:
                     field_manager=settings.field_manager,
                     replace=resolved.replace,
                     previous=_previous_declared(catalog, sorted(records)),
+                    policy=settings.approval_policy,
                 ),
                 private=private,
             )
@@ -1350,6 +1572,7 @@ class ReleaseRunner:
             "actions": _compact_actions(summary),
             "diffs": plan_diffs(plan, snapshot),
             "dry_run_unavailable": unavailable,
+            "autoscaled": _autoscaled(composition, snapshot, settings.field_manager),
         }
 
     def placeholder_preview(
@@ -1385,7 +1608,7 @@ class ReleaseRunner:
             if settings.prune:
                 for record in catalog.records():
                     kinds |= self._kinds(composition_from_archive(record.archive))
-            artifact = self._discover(binding, kinds)
+            artifact = self._discover(binding, kinds, composition)
             skipped = sorted(
                 {
                     (resource.ref.kind, resource.ref.name)
@@ -1416,6 +1639,7 @@ class ReleaseRunner:
                     field_manager=settings.field_manager,
                     replace=resolved.replace,
                     previous=_previous_declared(catalog, records),
+                    policy=settings.approval_policy,
                 ),
             )
         finally:
@@ -1472,15 +1696,14 @@ class ReleaseRunner:
         store: SecretVersionStore,
         rotate: Sequence[str],
         requested: _Ownership,
+        external: Mapping[str, Fetched] | None = None,
     ) -> PlanResult:
         settings = self.spec.model.release
         kinds = self._kinds(composition)
         if settings.prune:
             for record in catalog.records():
                 kinds |= self._kinds(composition_from_archive(record.archive))
-        artifact, unavailable = self._dry_runs(
-            binding, composition, self._discover(binding, kinds)
-        )
+        artifact, unavailable = self._observe(binding, composition, kinds)
         snapshot = ObservedSnapshot.from_discovery(artifact)
         inherited = list(settings.inherited_owners)
         resolved = requested.resolve(
@@ -1496,6 +1719,7 @@ class ReleaseRunner:
             field_manager=settings.field_manager,
             replace=replace,
             previous=_previous_declared(catalog, previous_releases),
+            policy=settings.approval_policy,
         )
         window = settings.approval_window_seconds
         expires_at = (_now() + timedelta(seconds=window)).isoformat()
@@ -1519,7 +1743,7 @@ class ReleaseRunner:
         # first: a refused plan must not generate, import or store any secret.
         preview = build_plan(composition, snapshot, plan_authorization)
         grant(preview, snapshot)
-        secrets = self._private_inputs(catalog, store, binding, rotate)
+        secrets = self._private_inputs(catalog, store, binding, rotate, external)
         origin = secrets.origin
         placeholders = self._placeholders()
         bound_refs = {
@@ -1600,6 +1824,8 @@ class ReleaseRunner:
                     # Earlier releases whose declarations the plan's field
                     # removals are computed from (records are immutable).
                     "previous_releases": previous_releases,
+                    # The owner's approval policy, bound into the plan hash.
+                    **_policy_record(settings.approval_policy),
                     # A pipeline's sources (commit, dirty, --ref); not hashed.
                     **(
                         {"provenance": dict(provenance)}
@@ -1635,6 +1861,7 @@ class ReleaseRunner:
             self._checks_policy(),
             plan_diffs(planned, snapshot),
             unavailable,
+            _autoscaled(stored, snapshot, settings.field_manager),
         )
         self._persist_plan(result, prune=settings.prune)
         return result
@@ -1655,9 +1882,7 @@ class ReleaseRunner:
         if settings.prune:
             for other in catalog.records():
                 kinds |= self._kinds(composition_from_archive(other.archive))
-        artifact, unavailable = self._dry_runs(
-            binding, composition, self._discover(binding, kinds)
-        )
+        artifact, unavailable = self._observe(binding, composition, kinds)
         snapshot = ObservedSnapshot.from_discovery(artifact)
         inherited = list(settings.inherited_owners)
         resolved = requested.resolve(
@@ -1676,6 +1901,7 @@ class ReleaseRunner:
                 field_manager=settings.field_manager,
                 replace=replace,
                 previous=_previous_declared(catalog, previous_releases),
+                policy=settings.approval_policy,
             ),
             private=_private(composition, snapshot, store),
         )
@@ -1698,6 +1924,7 @@ class ReleaseRunner:
             self._checks_policy(),
             plan_diffs(plan, snapshot),
             unavailable,
+            _autoscaled(composition, snapshot, settings.field_manager),
         )
         self._persist_plan(
             result,
@@ -1741,6 +1968,7 @@ class ReleaseRunner:
                     "rollback_on_failed_checks": (
                         self.spec.model.release.rollback_on_failed_checks
                     ),
+                    **_policy_record(self.spec.model.release.approval_policy),
                 }
             )
             + "\n",
@@ -1779,6 +2007,10 @@ class ReleaseRunner:
             readiness_seconds=min(execution.readiness_seconds, execution.max_seconds),
             poll_seconds=min(execution.poll_seconds, execution.readiness_seconds),
             max_polls=execution.max_polls,
+            write_settle_seconds=execution.write_settle_seconds,
+            fail_fast=execution.fail_fast,
+            crash_restarts=execution.crash_restarts,
+            diagnose_seconds=min(2.0, execution.readiness_seconds),
         )
 
     def _session_workflow(
@@ -1846,6 +2078,7 @@ class ReleaseRunner:
                 previous=_previous_declared(
                     catalog, sidecar.get("previous_releases", ())
                 ),
+                policy=sidecar.get("approval_policy"),
             ),
             grant,
             journal,
@@ -1931,6 +2164,7 @@ class ReleaseRunner:
                         previous=_previous_declared(
                             catalog, pending.get("previous_releases", ())
                         ),
+                        policy=pending.get("approval_policy"),
                     )
                     composition = composition_from_archive(record.archive)
                     if (
@@ -2023,6 +2257,11 @@ class ReleaseRunner:
                     "plan_hash": plan_hash,
                     "source": record.source.to_dict(),
                     "execution": _execution_summary(result),
+                    **(
+                        {"diagnosis": result["diagnosis"]}
+                        if "diagnosis" in result
+                        else {}
+                    ),
                     "release_state": state,
                     "checks": report,
                     "adopted": _adopted(journal, execution_id, result),
@@ -2264,6 +2503,11 @@ class ReleaseRunner:
                     "release": name,
                     "intent": "resume",
                     "execution": _execution_summary(result),
+                    **(
+                        {"diagnosis": result["diagnosis"]}
+                        if "diagnosis" in result
+                        else {}
+                    ),
                     "release_state": state,
                     "checks": report,
                 }
@@ -2436,6 +2680,63 @@ class ReleaseRunner:
         finally:
             if journal is not None:
                 journal.close()
+
+    def run(self, execution_id: str) -> dict[str, Any]:
+        """One past execution from the journal: state, category and causes.
+
+        ``execution_id`` is an id from ``history`` (``execution_id``) or a
+        unique prefix of one (at least 8 characters). The ``diagnosis`` (pod
+        causes with redacted log tails and events) is the one recorded when
+        the execution failed. Never contacts the cluster.
+        """
+        entries = self.history.entries() if self.state.exists() else []
+        matches = sorted(
+            {
+                str(entry["execution_id"])
+                for entry in entries
+                if len(execution_id) >= 8
+                and str(entry.get("execution_id", "")).startswith(execution_id)
+            }
+        )
+        if len(matches) != 1:
+            raise ReleaseError(
+                f"no single execution matches {execution_id!r}; list them with "
+                "`piceli release status`",
+                code="unknown-execution",
+            )
+        found = matches[0]
+        entry = next(
+            item for item in reversed(entries) if item["execution_id"] == found
+        )
+        journal = (
+            ExecutionJournal(self.spec.journal_path)
+            if self.spec.journal_path.exists()
+            else None
+        )
+        try:
+            try:
+                summary = journal.summary(found) if journal is not None else None
+            except ValueError:
+                summary = None
+        finally:
+            if journal is not None:
+                journal.close()
+        return {
+            "execution_id": found,
+            "release": entry.get("release"),
+            "intent": entry.get("intent"),
+            "at": entry.get("at"),
+            "release_state": entry.get("state"),
+            "execution": _execution_summary(summary)
+            if summary is not None
+            else {"execution_id": found, "state": "not-started"},
+            **(
+                {"diagnosis": summary["diagnosis"]}
+                if summary is not None and "diagnosis" in summary
+                else {}
+            ),
+            **({"rollback": entry["rollback"]} if "rollback" in entry else {}),
+        }
 
     # -------------------------------------------------------------- secrets
     def _secret_record(

@@ -68,6 +68,8 @@ New to Piceli? Start with {doc}`getting_started/index`.
      paths (the kubeconfig, the build spec, `state_dir`) resolve from the
      directory of the file that declares them.
    - `Build.spec(...)` wraps a `build.toml` (see {doc}`containerized_builds`);
+     `Build.spec(path, platform="linux/amd64")` builds it for another
+     platform than its `platforms` (for example your nodes' architecture);
      `Build.dockerfile(...)` builds one image per Dockerfile target stage;
      its `smoke={"api": Smoke(["--version"], expect_stdout=r"^api ")}` runs
      an isolated check in a built image (arguments, plain `env`, an
@@ -234,7 +236,7 @@ stage's outputs.
 | Stage | Content identity | Skipped when |
 | --- | --- | --- |
 | `inputs` | The build plan hash over every staged file, plus the sources' git identity (provenance only) and, with `--ref`, the pinned commits | Never; it is the cheap scan the other stages key on |
-| `build` | The build plan hash (spec, staged files, Dockerfiles, invocations) | The last receipt has the same plan hash and its images are still in the local engine |
+| `build` | The build plan hash (spec, staged files, Dockerfiles, invocations) | The last receipt has the same plan hash and each image the app uses is still in the local engine, or already delivered (its delivery receipt's digest is in the registry or node: built by another runner) |
 | `deliver` | The image's config digest and the target repository | The registry serves the receipt's manifest digest (`HEAD`), or the node holds the config digest behind the content tag |
 | `plan` | The release name: a fingerprint of the delivered digests, the rendered objects and the secret settings | Never; it reads live discovery |
 | `apply` | The release name | That release is deployed and ready, the plan creates, deletes, adopts and replaces nothing, and no other field manager owns a desired field (drift) |
@@ -256,7 +258,10 @@ the registry release's actions and any live registry it adopts or replaces,
 the release's actions (or, while the
 images are not built yet, the fingerprint of the rendered app and the
 preview's adopt/replace/delete set), the checks, `--until`, the target
-identity and, with `--ref`, the resolved commit of each pinned source. `--approve HASH` re-plans and runs only when the hash is
+identity, with `--ref`, the resolved commit of each pinned source and, with
+`--env`, the environment's name and resolved override values (see
+{doc}`environments`) and, when declared, the owner's `auto_approve` policy
+(see {ref}`deploy-approval-policy`). `--approve HASH` re-plans and runs only when the hash is
 unchanged; otherwise it is refused with `pipeline-plan-changed` and nothing
 runs. Stages whose plan depends on earlier outputs (the release plan after a
 build) run under that approval, within the limits of the preview below.
@@ -279,7 +284,11 @@ placeholder images:
   images pinned by digest are used as they are.
 - Ownership is resolved exactly as for a real plan. An object that needs
   adoption or replacement refuses `--plan` (and `--approve`, before any
-  build) with the release engine's `blocking` list and suggested flags.
+  build) with the release engine's `blocking` list. Each object's `suggest`
+  names the Pipeline declaration that unblocks it
+  (`Pipeline(adopt=["Deployment/web"])` or
+  `Pipeline(replace=["Deployment/web"])`); the adoption becomes part of the
+  pipeline, and so of the combined hash.
 - The preview is **never approvable** and never persisted: no release, plan
   or secret file is written, and no secret value is generated or read. Its
   `preview_hash` only identifies it; `--approve <preview_hash>` is refused
@@ -533,6 +542,95 @@ release; the rollback is journaled in the run and the result's state is
 `rolled-back`. `Checks` is importable from `piceli` next to `Pipeline`
 (`from piceli import Checks`); see {doc}`checks` for every check type.
 
+(deploy-approval-policy)=
+
+## Let a policy approve routine plans
+
+The owner can declare in the pipeline which plans may run without them
+approving the hash, for example an agent or a CI job that ships routine
+image updates:
+
+```python
+from piceli import ApprovalPolicy, Pipeline
+
+pipeline = Pipeline(
+    app,
+    target,
+    build=images,
+    deliver=NodeLoopbackRegistry(),
+    auto_approve=ApprovalPolicy(
+        allow={"create", "apply", "no-op"},  # the default
+        deny={"cluster_scoped"},  # optional: remove classes from allow
+        max_objects=10,  # optional: at most this many changes
+    ),
+)
+```
+
+```console
+$ piceli deploy deploy/app.py:pipeline --approve-if-policy --json
+```
+
+`--approve-if-policy` plans every stage like `--plan`, then runs the plan
+only when **every** action is inside the policy: the release's actions (or,
+before the images exist, the placeholder preview's), the node-loopback
+registry's actions and a registry takeover. The run records
+`"approved_by": "policy"` in its journal and result, and the release plan
+made after delivery is checked against the policy again before anything is
+applied (`approval-policy-exceeded`, exit `2`, nothing applied). A plan
+outside the policy runs nothing: the command prints the plan, each
+`policy.violations` item (`delete Service/web`, `cluster_scoped
+ClusterRole/x`, `max_objects: 12 changed objects > 10`) and the usual
+`--approve <combined hash>` command, and exits `3` with
+`"reason": "approval-policy-exceeded"`.
+
+The policy can only narrow what runs unattended:
+
+- `delete`, `replace` and `adopt` are never inside a policy; `allow` naming
+  one is refused (`approval-policy-invalid`), so they always need the hash.
+- `cluster_scoped` objects and `drift` (a desired field another manager wrote,
+  which the apply overwrites) are outside unless `allow` names them.
+- `no-op` actions change nothing and are always inside.
+- The policy is part of the combined hash (and of the release plan hash), so
+  a changed policy makes earlier plans unapprovable and resuming a run
+  refuses it (`pipeline-resume-changed`).
+- There is no command-line flag that sets or widens a policy;
+  `--approve-if-policy` without one is refused (`approval-policy-missing`),
+  and it cannot be combined with `--plan`, `--approve`, `--auto-approve`,
+  `--resume` or `--apply` (`deploy-flags-conflict`). Secrets, exec
+  credential plugins (`allow_exec`) and the release's own refusals work as
+  without a policy.
+
+Keep the policy in reviewed code: an agent must never add or widen it (see
+{doc}`agents`).
+
+## Plan here, apply there
+
+`--plan --out FILE` also writes a portable plan file
+(`piceli.deploy-plan-file.v1`): the combined hash, every stage's plan, the
+`--ref` commits, the pipeline and observed target identity, and the build,
+delivery and mirror receipts it used. Another runner applies it with no
+checkout of the state and no build cache:
+
+```sh
+piceli deploy examples/shop/app.py:pipeline --ref main --plan --out deploy-plan.json
+piceli deploy --apply deploy-plan.json --approve <combined hash>   # on any runner
+```
+
+`--apply` takes the pipeline, stages, commits, `--reapply` and `--env` from the file
+and plans again against live state; it runs only when the hash is still the
+approved one, and refuses a file for another pipeline or cluster (or an
+`--env` other than the file's: `deploy-plan-file-mismatch`). Across
+runners, use shared state (below): the release catalog and secret store of
+the plan runner are needed to compute the same plan.
+
+## Share the state between runners
+
+`Pipeline(..., state="cluster")` keeps the run journal, receipts, release
+catalog, execution journal and secret store in the release namespace, behind
+a release lock (a Lease with fencing and stale-owner takeover), so any runner
+can plan, apply, resume or roll back, and two deployers of one release never
+interleave. `state_dir` becomes a working copy. See {doc}`state`.
+
 ## Resume an interrupted run
 
 A run is journaled under `state_dir/runs/` after every stage change. When a
@@ -547,9 +645,24 @@ approved plan: finished stages keep their receipts, an interrupted release
 execution is resumed with the same grant, and a build whose staged files
 changed since the approval is refused (`pipeline-resume-changed`). A run
 planned with `--ref` is resumed from the same commits (checked out again),
-never from a branch's newer head. A run that
+never from a branch's newer head. With `state="cluster"` any runner resumes
+it (the journal is in the namespace); a build that finished elsewhere but
+was not delivered is built again first. A run that
 finished, rolled back or stopped at `--until` has nothing to resume: plan a
 new run, and unchanged stages are skipped.
+
+## Run summaries and disk use
+
+When a run ends, whatever the outcome, it writes
+`state_dir/runs/<run id>/summary.json` (for agents; schema
+`docs/schemas/piceli-run-summary-v1.schema.json`) and `summary.md` (for
+people and CI job summaries): commits, image digests and sizes, the plan's
+action classes and changed fields, checks, the failure's code and stage
+timings, never secret values. The result names them (`summary`), and
+`piceli runs MODULE:ATTR` lists the runs. `Pipeline(cache_budget="20GiB")`
+keeps the state directory within a budget after each run; `piceli cache
+status|prune` and `piceli doctor` show and free disk on the runner. See
+{doc}`maintenance`.
 
 ## Operate the release: rollback, status and secrets
 
@@ -580,7 +693,8 @@ generators and the composition. They never build or deliver:
   changed.
 - `apply`, `rollback`, `resume` and `stop` hold the pipeline's run lock, so
   they are refused with `pipeline-locked` while a `piceli deploy` of the same
-  state directory runs.
+  state directory runs (with `state="cluster"`: of the same release, on any
+  runner); since 0.6.0 `plan` and `check` hold it too.
 - The pipeline's `checks=` (`piceli.checks` declarations) run after readiness
   of an `apply`, `rollback` or `resume`, and `release check` runs them now;
   `rollback_on_failed_checks=True` applies as for `piceli deploy`.
@@ -618,11 +732,12 @@ The policy is used by `piceli deploy` (plan, apply, checks), `piceli status`,
 | --- | --- | --- |
 | Exit `3`, `"state": "approval-required"` | No `--approve`/`--auto-approve` and no terminal to confirm on | Review the plan, then `--approve <combined hash>` |
 | `pipeline-plan-changed` | Something changed since `--plan` | Plan again and approve the new hash |
-| `resource-requires-adoption` (or `plan-blocked`) with `blocking` and `"preview"` | The release preview needs adoption or replacement of existing objects; nothing was built | Add `adopt=["Kind/name"]` (or `replace=`) to the `Pipeline`, or delete the objects, then plan again |
+| `pipeline-load-failed` | Importing the pipeline's module raised (`message`: the exception's type and text, never a traceback) | Fix the module until it imports; `PICELI_DEBUG=1` prints the traceback on stderr |
+| `resource-requires-adoption` (or `plan-blocked`) with `blocking` and `"preview"` | The release preview needs adoption or replacement of existing objects; nothing was built | Do what `blocking[].suggest` names: `Pipeline(adopt=["Kind/name"])` (or `replace=`), after the owner chose it, or delete the objects, then plan again. `deploy` takes no `--adopt`/`--replace` |
 | `pipeline-preview-not-approvable` | `--approve` got the preview's `preview_hash` | Approve the `combined_hash` |
 | `pipeline-preview-changed` | After delivery the release plan adopts, replaces or deletes beyond the approved preview; nothing was applied | Plan again (build and delivery are skipped) and approve the real plan |
 | `pipeline-image-not-pinned` | An image is a movable tag | Pin it by digest or build it |
-| `pipeline-release-refused` with `blocking` objects | The release needs adoption or replacement of existing objects | Add `adopt=["Kind/name"]` (or `replace=`) to the `Pipeline`; see {doc}`release_cli` |
+| `pipeline-release-refused` with `blocking` objects | The release needs adoption or replacement of existing objects | Add `adopt=["Kind/name"]` (or `replace=`) to the `Pipeline`, as `blocking[].suggest` names; see {doc}`release_cli` |
 | `build-failed`, `smoke-failed`, `smoke-output-mismatch` (exit `1`) | The build or its smoke check failed (for a mismatch, stderr shows an excerpt of the unmatched output) | Read `state_dir/builds/<name>/build.log`, fix, deploy again |
 | `pipeline-registry-not-ready` | The node-loopback registry did not start (its port may be held by a process outside the namespace) | Choose another `port=` or free it, then `--resume` |
 | `pipeline-registry-takeover-required` | A live registry holds the port, or a Deployment with the registry's name is not the registry release's | `NodeLoopbackRegistry(adopt="NAME")` or `replace="NAME"` (see {ref}`deploy-registry-takeover`), or another `port=` |
@@ -630,9 +745,11 @@ The policy is used by `piceli deploy` (plan, apply, checks), `piceli status`,
 | `pipeline-mirror-not-pinned` | A `mirror=` entry has no digest | Pin it: `repository@sha256:…` |
 | `mirror-platform-unavailable` (exit `1`) | The mirrored image has no manifest for the node's platform | Pin an image that supports the node |
 | `registry-unauthorized` at `deliver` | A mirror source needs a login | Add `mirror_credentials={"registry": "file.json"}` |
-| `pipeline-apply-not-ready` (exit `1`) | The release did not become ready | Fix the workload (image, probe, claim), then `--resume` |
+| `pipeline-apply-crashloop` (exit `1`) | A workload's new pods cannot start: crash loop, image pull or configuration error, or `crash_restarts` restarts. The apply stopped at once; stderr has one line per cause and the result's `diagnosis` the redacted log tails and events | Fix the cause, then deploy again (or `--resume`); `piceli release status --spec MODULE:ATTR --run RUN_ID` shows the causes again ({ref}`deploy-diagnosis`) |
+| `pipeline-apply-not-ready` (exit `1`) | The release did not become ready in time (`diagnosis` lists what its pods show, when anything) | Fix the workload (image, probe, claim), then `--resume` |
 | `pipeline-checks-failed` (exit `1`) | A check failed; see `checks.results` and `checks.rollback` in the run | Fix the app and deploy again |
-| `pipeline-locked` | Another run uses the state directory | Wait, then retry |
+| `pipeline-locked` | Another run uses the state directory (with `state="cluster"`: the release, see `lock.holder`) | Wait, then retry |
+| `deploy-plan-file-mismatch`, `deploy-plan-target-mismatch` | `--apply`: the hash, pipeline or cluster is not the plan file's | Approve the file's hash with its pipeline and kubeconfig |
 | `deploy-ref-unknown` | `--ref` names no local commit | `git fetch`, or pass a full SHA |
 | `deploy-ref-source-unknown`, `deploy-ref-ambiguous`, `deploy-ref-invalid` | `--ref` names no declared source, is bare with several repositories, or is malformed | `--ref SOURCE=REV` with a name from `inputs.toml` |
 | `deploy-ref-model-differs` | With `--ref`, the pipeline's Python files differ from the pinned commit | Commit them, or deploy from a checkout of that commit |
@@ -643,14 +760,79 @@ The policy is used by `piceli deploy` (plan, apply, checks), `piceli status`,
 Every code is explained by `piceli explain <code>` and in
 {doc}`reference/errors`.
 
+(deploy-diagnosis)=
+### A workload that cannot start
+
+While the apply waits for a Deployment, StatefulSet, DaemonSet, Job or Pod to
+become ready, Piceli looks at the pods of the revision being rolled out every
+two seconds. A container in `CrashLoopBackOff` (`Init:CrashLoopBackOff` for an
+init container), `ImagePullBackOff`, `ErrImagePull`, `InvalidImageName`,
+`CreateContainerConfigError`, `CreateContainerError` or `RunContainerError`,
+one that restarted `crash_restarts` times (default 3), a failed Job or a
+failed Pod stops the apply **at once**, instead of at `readiness_seconds`:
+
+```text
+[apply] failed (pipeline-apply-crashloop)
+failed: release shop-1a2b3c4d5e6f cannot start (apply-crashloop) (pipeline-apply-crashloop)
+  2 workloads not starting:
+    cache  cache  exit 101  "config file must be owner-only"
+    web    web    exit 1    "fatal: cannot open catalog"
+```
+
+One line per cause: workload, container, exit code (or the reason when the
+container never ran, such as `ImagePullBackOff`) and the last log line (or the
+status message or latest event). The result JSON adds `diagnosis`
+(`piceli.diagnosis.v1`): per workload, each cause's pod, container, reason,
+exit code, restart count, the last 20 log lines and the latest 5 events.
+Every text read from the cluster is **redacted** first: any value in the
+release's secret store (and its decoded form) and anything that looks like a
+secret (`password=…`, bearer tokens, URL credentials, JSON Web Tokens, private
+key markers) becomes `[REDACTED]`, and lines are cut to 300 characters.
+
+The causes are kept in the private execution journal, so they can be read
+again later without the cluster:
+
+```sh
+piceli release status --spec app.py:pipeline --run RUN_ID   # or an execution id
+piceli explain --run RUN_ID --spec app.py:pipeline          # the same
+```
+
+The run journal (`state_dir/runs/`) and `release status` keep only the compact
+causes (workload, container, reason, exit code, restarts), never log lines.
+
+Only pods of the new revision count: an old pod that crash-loops while the new
+one starts never fails the apply, and when the revision cannot be told apart
+(no ReplicaSet yet, the credentials cannot read pods) Piceli simply waits, as
+before. Reading pods, their logs (`pods/log`), events and ReplicaSets needs
+`get`/`list` on them in the namespace; without it the diagnosis is skipped.
+
+A failed apply is not rolled back automatically, exactly as for an apply that
+does not become ready in time: `rollback_on_failed_checks` only acts when the
+release became ready and a check failed. Roll back by hand with
+`piceli release rollback previous --spec MODULE:ATTR`, or fix and deploy
+again. An app that is expected to crash a few times while its dependencies
+start can raise `crash_restarts` or turn the early stop off:
+
+```python
+Pipeline(..., execution={"fail_fast": False})  # wait for readiness_seconds
+Pipeline(..., execution={"crash_restarts": 10})  # tolerate more restarts
+```
+
+(`[execution] fail_fast = false` / `crash_restarts = 10` in a `release.toml`.)
+Even then, an apply that times out reports what the pods show in `diagnosis`.
+
 ## Command contract
 
-`piceli deploy TARGET [--ref [SOURCE=]REV]... [--plan] [--until STAGE] [--resume] [--approve HASH | --auto-approve] [--reapply] [--json]`
+`piceli deploy TARGET [--ref [SOURCE=]REV]... [--plan [--out FILE]] [--until STAGE] [--resume] [--approve HASH | --auto-approve] [--reapply] [--json]`
+
+`piceli deploy [TARGET] --apply FILE --approve HASH [--json]`
 
 | Argument | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `TARGET` | text | required | `path/to/file.py:ATTR` or `package.module:ATTR` naming a `Pipeline` |
 | `--plan` | flag | off | Plan every stage, print the combined hash, execute nothing |
+| `--out FILE` | path | none | With `--plan`: also write the portable plan file (new in 0.6.0) |
+| `--apply FILE` | path | none | Apply a plan file (with `--approve` its hash); `TARGET` defaults to the file's (new in 0.6.0) |
 | `--until STAGE` | text | `checks` | Stop after `inputs`, `build`, `deliver`, `plan`, `apply` or `checks` (bound to the hash) |
 | `--resume` | flag | off | Continue the latest unfinished run; takes no other planning flag |
 | `--approve HASH` | text | none | Execute exactly this combined plan |
@@ -689,7 +871,9 @@ Every code is explained by `piceli explain <code>` and in
   Stage states: `planned`, `running`, `done`, `skipped`, `failed`,
   `rejected`, `interrupted`. Result states: `planned`, `approval-required`,
   `ready`, `stopped`, `failed`, `rolled-back`, `interrupted`, `rejected`
-  (with `reason`, the failed `stage` and any `blocking` objects).
+  (with `reason`, the failed `stage` and any `blocking` objects). New in
+  0.6.0: a planned result written with `--out` adds `plan_file`, and a
+  `pipeline-locked` rejection adds `lock` (`holder`, `expires_in`).
 
   While the images are not delivered, `stages.plan` keeps
   `"state": "pending"` and adds `preview` (new in 0.5.0): `approvable`

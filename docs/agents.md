@@ -7,10 +7,9 @@ the errors, how to resume, and what never to print.
 ```{admonition} Maturity: preview
 :class: note
 
-The output contract below is new in 0.3.0 and, since 0.4.0, covers every
-command (marked `conforms` in {doc}`reference/cli`) except `render`,
-`release check` and `release diff`, which are still `partial`. See the
-{doc}`roadmap` for every feature's status.
+The output contract below is new in 0.3.0 and, since 0.5.1, covers every
+command (all marked `conforms` in {doc}`reference/cli`; none is `partial`).
+See the {doc}`roadmap` for every feature's status.
 ```
 
 ## Start here
@@ -20,7 +19,10 @@ command (marked `conforms` in {doc}`reference/cli`) except `render`,
 | Every command, option, side effect and approval rule, as JSON | `piceli help-json` (same as `piceli --help-json`) |
 | What an error code means and what to do next | `piceli explain <code> --json` |
 | The same, as pages | {doc}`reference/cli`, {doc}`reference/errors` |
-| An index of the documentation for language models | [`llms.txt`](https://docs.pynenc.org/projects/piceli/en/latest/llms.txt) |
+| An index of the documentation for language models | [`llms.txt`](https://docs.pynenc.org/projects/piceli/en/stable/llms.txt) |
+| A ready agent skill (`SKILL.md` and scripts: install, plan, ask, deploy, status, diagnose, resume, roll back) | [`skills/piceli`](https://github.com/pynenc/piceli/tree/main/skills/piceli); its walkthrough runs in CI against the built wheel |
+| Whether Piceli fits a task, or another tool fits better | {doc}`when_to_use`, {doc}`comparisons` |
+| How well models follow these rules (the rules below are scored; breaking one fails the task) | {doc}`contributing/evals` |
 
 `piceli help-json` is generated from the command definitions. For each
 command, `contract.side_effects` says what it reads and writes and whether it
@@ -32,7 +34,9 @@ interruption is harmless.
 
 - **stdout** carries machine output: one JSON object per command, or JSON lines
   for streaming commands (`observe forwards apply`). Parse it; do not scrape
-  stderr.
+  stderr. `render` prints YAML manifests unless you pass `--format json`, but
+  its refusals are always the JSON rejection object below, also when the
+  model module raises (`render-target-invalid`).
 - **stderr** carries human text: summaries, hints and the plan hash to approve.
   It never carries a JSON object.
 - A refusal prints
@@ -42,11 +46,19 @@ interruption is harmless.
   commands add fields: `release` refusals keep `blocking[]` (each item with
   its own `code` and `message`), `inputs` adds `source`, `observe forwards
   apply` adds `preflight`.
+- A `MODULE:ATTR` target whose module raises while importing or evaluating is
+  a refusal like any other (`render-target-invalid` for `render`,
+  `pipeline-load-failed` for `deploy` and `release --spec MODULE:ATTR`,
+  `access-target-invalid` for `status` and `access`, `invalid-composition`
+  for a `release.toml` composition); `message` names the exception's type
+  and text, never a traceback. Report it; `PICELI_DEBUG=1` adds the
+  traceback on stderr when the owner needs it.
 - An operation that ran but did not succeed exits `1` and its result names
   the code in `reason`: `{"state": "failed", "reason": …}` for `release
-  apply|rollback|resume` and `artifacts build-spec run`, `"state": "drift"`
-  for `inputs verify`, a receipt with `state` `failed`/`rejected` for
-  `artifacts deliver`.
+  apply|rollback|resume`, `release check` (`check-failed`) and `artifacts
+  build-spec run`, `{"state": "diffed", "reason": "release-changes-pending"}`
+  for `release diff --exit-code`, `"state": "drift"` for `inputs verify`, a
+  receipt with `state` `failed`/`rejected` for `artifacts deliver`.
 
 | Exit code | Meaning | What to do |
 | --- | --- | --- |
@@ -80,11 +92,29 @@ See also {ref}`the release contract changes <release-contract-changes>`.
 These never change a cluster, registry or node. Some write local files, as
 noted.
 
-- `piceli explain`, `piceli help-json`
+- `piceli explain`, `piceli help-json`; `piceli explain --run ID --spec …`
+  reads why a past execution failed from local state (same as
+  `release status --run`).
 - `piceli render`: imports the model module and reads the spec; never contacts
   a cluster or reads secret values. `piceli render MODULE:pipeline` renders a
   `Pipeline` with its target's namespace and declared nodes, and build images
-  as placeholders; it reads no kubeconfig.
+  as placeholders; it reads no kubeconfig. `--env NAME` renders one
+  environment; `--env A --diff-env B` prints their typed difference (use it
+  to show the owner what differs before deploying another environment; see
+  {doc}`environments`, and {doc}`reference_app` for a complete example).
+  `--out DIR` writes one YAML file per object into `DIR` (a directory the
+  owner commits for Argo CD or Flux; it must be absent, empty or a previous
+  `--out`); a Secret is refused unless `--secrets external`. See
+  {doc}`gitops`.
+- `piceli publish TARGET --to oci://…` **without** `--approve`: renders,
+  packages the Flux OCI artifact and prints its digest (exit `3`); nothing
+  is pushed.
+- `piceli codegen crd FILE` (reads the file) and `piceli codegen crd
+  --from-cluster --kubeconfig F --context C --crd NAME` (one read of the CRD
+  through the explicit context): generate typed models for a custom resource
+  (see {doc}`crds`). `--out` writes that one file and replaces it only when
+  Piceli generated it. The output depends only on the schema. Never pick the
+  kubeconfig or context yourself.
 - `piceli release plan` and `piceli release preview`: read the cluster, store
   a pending plan and secret candidates in the spec's `state_dir`, and print the
   plan hash. They never write to the cluster.
@@ -93,7 +123,9 @@ noted.
   local state.
 - `piceli release status`: reads local state only. Like every `release`
   command it takes `--spec release.toml` or `--spec MODULE:ATTR` (a
-  pipeline; see {ref}`agents-pipeline-release`).
+  pipeline; see {ref}`agents-pipeline-release`). `--run ID` (an execution
+  id, or with a pipeline the `run_id` of its deploy result) shows one past execution
+  with the causes recorded when it failed (`diagnosis`).
 - `piceli --version`: prints `piceli <version>` (the JSON form is the
   `version` field of `piceli help-json`).
 - `piceli status TARGET --json`: reads the release state, the cluster through
@@ -122,10 +154,29 @@ noted.
   with placeholder images (`stages.plan.preview`), and refuses with the
   `blocking` objects when the release would need adoption or replacement. With `--ref SOURCE=REV` it also checks the commit out
   into a temporary git worktree, removed before it exits.
+- `piceli state show --spec …` (where the state lives, its generation, the
+  release lock's holder; never prints content), `piceli state pull --spec …`
+  (refreshes the local working copy of shared state) and
+  `piceli state export --spec … --out FILE` (secret material left out; with
+  `--include-secrets` only encrypted with a key file the owner provides,
+  never one you create).
 - `piceli artifacts build`: assembles an OCI layout in `--output` without
   running any code.
 - `piceli observe forward-save`, `piceli operator backup`: write a local
   preferences file or backup archive.
+- `piceli cache status [MODULE:ATTR | --state-dir DIR] --json`, `piceli
+  cache prune … --dry-run`, `piceli doctor [MODULE:ATTR] --json` and
+  `piceli runs [MODULE:ATTR] --json`: read the state directories, the
+  temporary directory and (doctor) the tools' versions; never a cluster (see
+  {doc}`maintenance`). `doctor` exits `1` with `runner-disk-low`,
+  `runner-memory-low` or `runner-tool-missing` before a build would fail.
+- `piceli cache prune [MODULE:ATTR | --state-dir DIR]` without `--dry-run`
+  deletes local files only: stale temporary directories, runs beyond
+  `--keep-last`, unused delivery receipts and (over `--budget`) build
+  outputs and logs; never the release state, the secret store, approved
+  plans, a resumable run or what a rollback of the last releases needs. Run
+  it when the owner asked to free space or configured `cache_budget=`; show
+  the `--dry-run` list first otherwise.
 
 ## Commands that need the owner's approval
 
@@ -133,21 +184,48 @@ Ask before running these, and show the owner what will happen first.
 
 | Command | Changes | Approve with |
 | --- | --- | --- |
-| `piceli deploy` | Builds images, pushes them to a registry or node, applies a release | `--approve <combined hash>` from `piceli deploy MODULE:ATTR --plan`, after the owner reviewed that plan; `--resume` continues an approved run |
-| `piceli release apply` | The cluster | `--approve <plan hash>` from `release plan`, after the owner reviewed that plan |
+| `piceli deploy` | Builds images, pushes them to a registry or node, applies a release | `--approve <combined hash>` from `piceli deploy MODULE:ATTR --plan`, after the owner reviewed that plan (or `--apply <plan file> --approve <its hash>` on another runner); `--resume` continues an approved run; `--approve-if-policy` only when the owner declared an `auto_approve` policy (see below) |
+| `piceli state import` | Replaces the release's state (local directory or the shared state in the namespace) | `--approve <import digest>` printed by `piceli state import` without `--approve`, after the owner agreed to replace the state |
+| `piceli release apply` | The cluster | `--approve <plan hash>` from `release plan`, after the owner reviewed that plan; `--approve-if-policy` only with the owner's `[release] auto_approve` |
 | `piceli release rollback` | The cluster | `--approve <plan hash>` from `release rollback <target>` without `--approve` |
 | `piceli release resume` | The cluster (continues an approved execution) | The owner's go-ahead to continue |
 | `piceli release stop` | Local journal (cancels an execution) | The owner's go-ahead |
 | `piceli release check` | Nothing by itself, but runs the spec's checks (declared pod execs and Python functions) | The owner's go-ahead for a spec you did not write |
 | `piceli artifacts deliver` | A registry or node | `--approve-digest <config digest>` |
+| `piceli publish` | A registry (the manifests as a Flux OCI artifact, which a GitOps controller then applies without Piceli's plan) | `--approve <artifact digest>` printed by `piceli publish` without `--approve`, after the owner reviewed the files and the target; see {doc}`gitops` |
 | `piceli artifacts build-spec run` | Runs a build, writes outputs and images | `--approve-builder <digest>` and `--approve-plan <hash>` |
 | `piceli artifacts execute-command` | Runs a pinned tool | `--approve-plan <hash>` |
 | `piceli artifacts import-local` | The local Docker image store | `--approve-digest <digest>` |
 | `piceli operator approve`, `piceli operator promote`, `piceli operator restore` | Operator state, catalog or files | The owner's go-ahead |
 | `piceli access`, `piceli observe serve`, `piceli operator serve`, `piceli observe forward-run`, `piceli observe forwards apply`, `piceli observe logs-run` | Long-running local processes and ports | The owner's go-ahead |
+| `piceli access stop --stale` | Stops Piceli's own local processes for the app (a forward or dashboard the owner may still be using in another terminal); never another process | The owner's go-ahead |
 
 Never add `--auto-approve` unless the owner has said that this run is an
 unattended CI job for this exact spec.
+
+(agents-approval-policy)=
+### When the owner declared an approval policy
+
+An owner may declare, in reviewed code, which plans may run without them
+approving the hash: `Pipeline(..., auto_approve=ApprovalPolicy(allow={"create",
+"apply", "no-op"}, max_objects=10))` or `[release] auto_approve = {...}` (see
+{ref}`deploy-approval-policy` and {ref}`release-approval-policy`). Then
+`piceli deploy MODULE:ATTR --approve-if-policy --json` and
+`piceli release apply --spec … --approve-if-policy` run a plan only when
+**every** action is inside the policy (`"approved_by": "policy"` in the
+result).
+
+- Exit `3` with `"reason": "approval-policy-exceeded"`: nothing ran. Show the
+  owner the plan and `policy.violations`, and run the printed
+  `--approve <hash>` command only after they approve it.
+- `approval-policy-missing`: there is no policy. Plan and ask as usual.
+- `delete`, `replace` and `adopt` are never inside a policy, and
+  cluster-scoped objects and drift are outside unless the owner allowed them.
+- **Never add, edit or widen `auto_approve` yourself**, never split a change
+  to fit under `max_objects`, and never combine `--approve-if-policy` with
+  `--adopt`, `--replace`, `--rotate` or `--adopt-all-desired` (refused). There
+  is no flag that passes a policy: the policy is part of the plan hash.
+- The secret and exec rules below apply unchanged.
 
 ## The approval workflow
 
@@ -158,7 +236,9 @@ unattended CI job for this exact spec.
    other clients wrote). Point out every action with `"cluster_scoped": true`
    (`[cluster-scoped]` in the text): a ClusterRole or ClusterRoleBinding
    grants permissions across the whole cluster. A plan whose `summary` has
-   only `no-op` changes nothing.
+   only `no-op` changes nothing. `autoscaled` lists workloads whose
+   `spec.replicas` an autoscaler owns: Piceli leaves that field to it (see
+   compatibility), so do not propose editing `replicas` for them.
 3. Wait for the owner to approve **that plan hash**. A plan expires after
    `approval_window_seconds`; if it did, plan again and ask again.
 4. Run `piceli release apply --spec release.toml --approve <hash>`.
@@ -188,7 +268,11 @@ unattended CI job for this exact spec.
    (refused with `pipeline-preview-not-approvable`). If the owner wants to
    see the real release plan first, approve `--until deliver`, then plan
    again. A refused plan with `"preview"` and `blocking` means nothing was
-   built: report each object's `suggest` flags to the owner.
+   built: report each object's `suggest` to the owner. For a pipeline it
+   names the declaration (`Pipeline(adopt=["Kind/name"])` or
+   `Pipeline(replace=["Kind/name"])`); `piceli deploy` takes no
+   `--adopt`/`--replace`. Never add `adopt=` or `replace=` to the pipeline
+   yourself: the owner chooses (`replace` deletes and recreates the object).
 3. After the owner approves **that combined hash**, run
    `piceli deploy MODULE:ATTR --approve <hash> --json`. Each stdout line is
    one stage event; the last one is the result.
@@ -209,6 +293,14 @@ unattended CI job for this exact spec.
    and recreates it). Registry credentials for `mirror_credentials=` are files
    the owner provides; never create, read or print them.
 
+**Deploying an environment.** When the pipeline declares one target per
+environment, every `deploy` and `release --spec MODULE:ATTR` command needs
+`--env NAME` (`environment-required` otherwise). Plan, show and approve each
+environment separately: the combined hash covers the environment's name and
+override values, so one environment's hash never approves another
+(`pipeline-plan-changed`). Use exactly the approval command `--plan`
+prints (it repeats `--env`). Never choose the environment for the owner.
+
 **Deploying a commit.** When the working tree is shared or dirty, or the
 owner asked for a specific commit, add `--ref SOURCE=REV` (or a bare
 `--ref REV` when all sources are one repository) to the `--plan` command.
@@ -222,6 +314,21 @@ pipeline module's Python files must match the commit
 changes yourself. In CI, the approval is a protected environment and the
 apply job passes the plan job's `combined_hash` (see {doc}`ci`); an agent
 never approves that environment on the owner's behalf.
+
+**Planning and applying on different machines.** `--plan --out FILE`
+writes a plan file; `piceli deploy --apply FILE --approve <combined hash>`
+applies it anywhere (it plans again and refuses any difference:
+`pipeline-plan-changed`, `deploy-plan-file-mismatch`,
+`deploy-plan-target-mismatch`). Across runners the pipeline needs
+`state="cluster"` (see {doc}`state`); never switch a pipeline's `state`
+yourself.
+
+**Shared state and the release lock.** With `state="cluster"` every command
+takes the release lock. `pipeline-locked` (or `release-locked`) names the
+holder and `expires_in`: another deployer is running, so wait and retry; do
+not delete the `piceli-lock-*` Lease or any `piceli-state-*` Secret, ever.
+`state-lock-lost` means another runner took the lock over: run
+`piceli state show`, report it, and resume only when the owner agrees.
 
 (agents-pipeline-release)=
 ### Operating a pipeline's release
@@ -243,7 +350,8 @@ never build. The approval rules above apply unchanged:
 3. `plan`/`diff`/`apply` with a pipeline refuse with `pipeline-not-delivered`
    when the current sources were not built and delivered yet: use
    `piceli deploy` instead. `pipeline-locked` means a `piceli deploy` of the
-   same state directory is running: wait.
+   same state directory (with shared state: of the same release, anywhere)
+   is running: wait.
 
 ## When something fails
 
@@ -255,6 +363,39 @@ never build. The approval rules above apply unchanged:
 4. An unknown code (`piceli explain` exits `2` with `unknown-error-code`)
    should not happen for a `conforms` command: report the whole JSON object
    verbatim.
+5. `apply-crashloop` (`pipeline-apply-crashloop` from `piceli deploy`): a
+   workload's new pods cannot start, so the apply stopped at once. Read
+   `diagnosis.workloads[].causes[]` (container, `reason`, `exit_code`,
+   `restarts`, `logs`, `events`; texts are already redacted) and report
+   them; stderr has one line per cause. Do not retry unchanged: the image,
+   command, configuration or Secret must change first, or the owner rolls
+   back (`piceli release rollback previous`, which needs approval). Later,
+   `piceli release status --spec … --run ID` shows the same causes.
+6. `access-port-conflict` with `conflicts[].holder` `piceli-forward` or
+   `piceli-server`: Piceli's own process for this app holds the port (often
+   a `piceli access` left running). Ask the owner before running the
+   suggested `piceli access stop --stale TARGET`. With `holder` `other`,
+   report the pid; never stop another process.
+7. `immutable-field-changed` (a Job's pod template, or a StatefulSet's
+   service name, pod management, selector or claim templates would change):
+   do not add `--replace` yourself. Show the owner the `blocking` entry;
+   replacing deletes and recreates the object (a Job runs again). Plan with
+   the suggested `--replace Kind/name` only when the owner asks for it, and
+   have them approve that plan's hash.
+
+## Reading what a deploy did
+
+Every `piceli deploy` run that executed writes
+`<state_dir>/runs/<run id>/summary.json` (schema
+`docs/schemas/piceli-run-summary-v1.schema.json`) and `summary.md`; the
+result line names them (`summary.json`, `summary.markdown`) and
+`piceli runs MODULE:ATTR --json` lists them, newest first. Read the JSON, not
+the Markdown: `state`, `failure.stage`, `failure.reason` (then
+`piceli explain <reason> --json`), `failure.category` and `failed_checks`,
+`plan.classes` and `plan.changes[].fields` (changed JSON pointers, never
+values), `images` (digests, sizes, blobs reused) and `stages` (timings). A
+summary never holds a secret value; post the Markdown as is (CI job summary,
+pull request comment).
 
 ## Resuming interrupted work
 
@@ -262,11 +403,20 @@ never build. The approval rules above apply unchanged:
   `piceli release status --spec release.toml`, then
   `piceli release resume --spec release.toml`. Resume reuses the approved
   grant and operation ids; do not plan and apply a new release instead.
-  Re-applies and rollbacks are not resumable: plan them again.
+  It is safe at any point of the interruption: a write that never reached
+  the cluster is sent again, one that did is not repeated.
+- **A re-apply or `release rollback` was interrupted**: these are not
+  resumable (`resume` refuses with `not-resumable`). Run the same `rollback`
+  (or `plan`/`apply`) again: it re-plans against the live state and needs the
+  owner's approval of the new plan hash. A rollback restores what the release
+  declares, never data, external side effects or what other managers own
+  (see "What a rollback restores" in plans_and_diffs).
 - **`piceli deploy` was interrupted** (or failed at a stage you then fixed):
   run `piceli deploy MODULE:ATTR --resume`. It continues the approved run at
   the first unfinished stage and reuses the finished stages' receipts; an
-  interrupted apply is resumed with the same grant.
+  interrupted apply is resumed with the same grant. With `state="cluster"`
+  this works from any runner, also when the first runner's state directory
+  is gone; a runner that died holds the lock until its lease expires.
 - **`artifacts deliver` was interrupted**: run it again with the same
   arguments. Registry pushes are content addressed and send only missing
   layers.
@@ -281,6 +431,17 @@ never build. The approval rules above apply unchanged:
   plan written by `release plan --out` is redacted.
 - Pass registry credentials only as a file (`--credentials`, mode `0600`),
   never on the command line or in logs.
+- External secret sources (`sops`, `vault`, `aws-secrets-manager` in
+  `[secrets.*]`, or `Sops`/`Vault`/`AwsSecret` in a pipeline) are
+  configured by the owner. Never read, create, copy or configure their
+  credentials yourself: no Vault token files or `VAULT_TOKEN`, no `~/.aws`,
+  AWS profiles or keys, no age/PGP keys or `~/.config/sops`, and do not run
+  `sops`, `vault` or `aws` to look at a value. `plan` reads the sources
+  itself; when it refuses with `secret-source-auth-failed`,
+  `secret-source-tool-missing` or `secret-source-not-found`, report the code
+  and ask the owner. `secret-source-timeout` and `secret-source-failed` are
+  safe to retry once. Do not use `--rotate` on an external source (refused
+  with `secret-rotation-refused`): the owner rotates it at the source.
 - Error codes never contain secrets or private paths, so they are safe to
   report.
 - Never put a secret in a build's smoke check (`smoke.env`, `command`,

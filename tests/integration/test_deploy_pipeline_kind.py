@@ -42,6 +42,7 @@ from pathlib import Path
 import pytest
 
 from piceli.k8s.ops.provider_factory import api_client_from_kubeconfig
+from tests.integration.kind_support import node_platform
 
 KUBECONFIG = os.environ.get("PICELI_KIND_KUBECONFIG", "")
 CONTEXT = os.environ.get("PICELI_KIND_CONTEXT", "")
@@ -103,6 +104,7 @@ def _module(tmp_path: Path, namespace: str, *, failing_check: bool = False) -> P
             spec = importlib.util.spec_from_file_location("shop_example", {str(EXAMPLE)!r})
             shop = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(shop)
+            shop.images.platform = {node_platform()!r}  # build for the kind node
             {extra}
             pipeline = Pipeline(
                 shop.app, shop.target, build=shop.images,
@@ -177,7 +179,11 @@ def test_shop_deploys_resumes_and_reruns_as_noop(namespace, tmp_path) -> None:
         "placeholders": {"rust-hello": "pending-build"},
     }
     assert [(b["kind"], b["name"], b["suggest"]) for b in blocked["blocking"]] == [
-        ("Service", "web", ["--adopt Service/web", "--replace Service/web"])
+        (
+            "Service",
+            "web",
+            ['Pipeline(adopt=["Service/web"])', 'Pipeline(replace=["Service/web"])'],
+        )
     ]
     assert "blocking Service/web" in stderr, stderr
     assert not (tmp_path / "state" / "builds").exists()  # nothing was built

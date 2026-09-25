@@ -1,0 +1,7 @@
+config:
+  webapp:kubeconfig: dev.kubeconfig
+  webapp:context: kind-dev
+  webapp:namespace: webapp-dev
+  webapp:logLevel: debug
+  webapp:webMinReplicas: "1"
+  webapp:webMaxReplicas: "2"

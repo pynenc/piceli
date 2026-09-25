@@ -30,6 +30,7 @@ from piceli.artifacts.delivery import (
 )
 from piceli.artifacts.node_transport import NodeTarget, SubprocessRunner, Transport
 from piceli.artifacts.process import ProcessLimits, ToolPin
+from tests.integration.kind_support import node_platform
 from tests.unit.test_node_delivery import docker_archive, oci_archive
 
 NODE = os.environ.get("PICELI_KIND_NODE", "")
@@ -68,7 +69,8 @@ def test_archive_delivery_is_verified_idempotent_and_digest_gated(
     url, target = _target()
     tag = uuid.uuid4().hex[:12]
     name = f"registry.test/piceli-delivery:{tag}"
-    archive, digest = builder(tag.encode())
+    arch = node_platform().split("/", 1)[1]
+    archive, digest = builder(tag.encode(), architecture=arch)
     path = tmp_path / "image.tar"
     path.write_bytes(archive)
     grant = DeliveryGrant(digest, url, time.time() + 120)
@@ -105,7 +107,9 @@ def test_real_runtime_rejects_a_stream_whose_index_was_withheld(delivery):
     _, target = _target()
     tag = uuid.uuid4().hex[:12]
     name = f"registry.test/piceli-delivery:{tag}-stream"
-    archive, _ = docker_archive(tag.encode())
+    archive, _ = docker_archive(
+        tag.encode(), architecture=node_platform().split("/", 1)[1]
+    )
     argv = Transport(target, delivery.docker, delivery.docker_socket).argv(
         target.runtime_argv("images", "import", "-"), stdin=True
     )

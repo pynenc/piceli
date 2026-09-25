@@ -39,7 +39,6 @@ from __future__ import annotations
 import dataclasses
 import re
 import shutil
-import tempfile
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -264,8 +263,11 @@ class SourceCheckouts:
     def materialise(self) -> None:
         """Check every pinned commit out (one worktree per repository and commit)."""
         from piceli.artifacts.source_identity import SourceIdentityError
+        from piceli.tempfiles import make_directory, track
 
-        self._directory = Path(tempfile.mkdtemp(prefix="piceli-ref-")).resolve()
+        self._directory = make_directory("ref").resolve()
+        # A terminating signal also drops the worktrees, not just the files.
+        track(self._directory, self.close)
         hooks = self._directory / "hooks"
         hooks.mkdir()
         shared: dict[tuple[Path, str], Path] = {}
@@ -327,7 +329,9 @@ class SourceCheckouts:
                 except Exception:  # cleanup is best effort
                     pass
         if self._directory is not None:
-            shutil.rmtree(self._directory, ignore_errors=True)
+            from piceli.tempfiles import discard
+
+            discard(self._directory)
             self._directory = None
         for checkout in self.checkouts.values():
             checkout.root = None
@@ -375,6 +379,8 @@ class SourceCheckouts:
             assert build.document is not None
             base = (build.base or Path.cwd()).resolve()
             spec = BuildSpec.from_dict(build.document, self.remap(base))
+        if build.platform is not None:
+            spec = spec.with_platform(build.platform)
         if len(spec.platforms) != 1:
             raise PipelineError(
                 "pipeline-invalid",

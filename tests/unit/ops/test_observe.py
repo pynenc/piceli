@@ -226,8 +226,10 @@ def test_forward_supervisor_leaves_an_external_port_owner_untouched(
             supervisor.restore()
             try:
                 status = supervisor.statuses()[0]
-                assert status.owner == owner.to_dict()
-                assert "pid 4242 (other-dashboard --serve)" in (status.error or "")
+                # Another process: its pid only, never its command line.
+                assert status.owner == PortOwner(port=port, pid=4242).to_dict()
+                assert "pid 4242" in (status.error or "")
+                assert "other-dashboard" not in (status.error or "")
                 assert status.state == "failed"
                 assert status.health == "conflict"
                 assert (status.error or "").startswith(

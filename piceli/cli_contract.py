@@ -24,7 +24,9 @@ Importing this module is side-effect free.
 from __future__ import annotations
 
 import json
+import os
 import sys
+import traceback
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -123,6 +125,24 @@ def _report(
         say(f"  {hint}")
     say(f"  next: {entry.fix}")
     raise Rejected(reason, exit_code)
+
+
+#: Set to ``1`` to also print the traceback of an exception raised by the
+#: user's module (``MODULE:ATTR``) on stderr; stdout keeps the rejection.
+DEBUG_ENV = "PICELI_DEBUG"
+
+
+def describe_user_error(error: BaseException) -> str:
+    """``Type: message`` of an exception raised by the user's model module.
+
+    Used as the rejection's ``message`` when importing or evaluating a
+    ``MODULE:ATTR`` target raised: never a traceback on stdout. With
+    ``PICELI_DEBUG=1`` the traceback is printed on stderr.
+    """
+    if os.environ.get(DEBUG_ENV, "") not in {"", "0"}:
+        traceback.print_exception(error, file=sys.stderr)
+    text = str(error).strip()
+    return f"{type(error).__name__}: {text}" if text else type(error).__name__
 
 
 def error_code(error: BaseException, default: str) -> str:
@@ -234,6 +254,10 @@ _RELEASE_READS = (
     "kubeconfig",
 )
 _RELEASE_EXIT = (0, 1, 2, 3)
+_ENV_NOTE = (
+    " With a pipeline, --env NAME selects one environment (its target, "
+    "overrides and state)."
+)
 
 COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
     {
@@ -241,10 +265,58 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
         "render": _C(
             "Print the manifests of a typed app, composition or pipeline (YAML or JSON).",
             reads=("module/app file", "release.toml (optional)", "local receipts"),
-            notes="Never contacts a cluster; secret values are placeholders. A "
+            writes=("--out directory",),
+            contract="conforms",
+            notes="Never contacts a cluster; secret values are placeholders. "
+            "--out DIR writes one YAML file per object (a directory for Argo CD "
+            "or Flux from Git; a Secret needs --secrets external, redacted "
+            "values and placeholder images are refused) and prints one JSON "
+            "object; DIR must be absent, empty or a previous --out. A "
             "Pipeline renders with its target's namespace and declared nodes, "
             "build images as placeholders, and reads no kubeconfig, build spec "
-            "or state.",
+            "or state. --env NAME renders one environment of the App (a "
+            "pipeline's target for it); --diff-env OTHER prints the typed "
+            "difference between the two environments instead (JSON with "
+            "--format json). stdout carries the manifests (YAML, or one JSON "
+            "object with --format json); a refusal is always the JSON rejection "
+            "object.",
+        ),
+        "publish": _C(
+            "Push the rendered manifests as a Flux OCI artifact (approval by digest).",
+            reads=(
+                "module/app file",
+                "release.toml (optional)",
+                "local receipts",
+                "credentials file",
+            ),
+            writes=("OCI registry (artifact blobs, manifest, tag)",),
+            approval_required=True,
+            safe_to_retry=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2, 3),
+            notes="Never contacts a cluster. Without --approve it prints the "
+            "deterministic artifact digest and exits 3 (nothing is pushed); "
+            "--approve DIGEST pushes by digest, then the tag, and reads both "
+            "back. Layout of `flux push artifact` (config "
+            "application/vnd.cncf.flux.config.v1+json, one layer "
+            "application/vnd.cncf.flux.content.v1.tar+gzip). A Secret needs "
+            "--secrets external; redacted values and placeholder images are "
+            "refused. Credentials only from --credentials FILE, never printed.",
+        ),
+        # ------------------------------------------------------ codegen
+        "codegen crd": _C(
+            "Generate pydantic models from a CustomResourceDefinition's schema.",
+            reads=("CRD file", "kubeconfig (with --from-cluster)"),
+            writes=("--out file",),
+            cluster="reads",
+            contract="conforms",
+            notes=(
+                "A file never contacts a cluster; --from-cluster sends one GET "
+                "of the CRD through an explicit --kubeconfig and --context "
+                "(exec plugins only with --allow-exec). Deterministic: the same "
+                "schema always generates the same module. --out replaces only a "
+                "file piceli generated, unless --force."
+            ),
         ),
         # ------------------------------------------------------- import
         "import live": _C(
@@ -273,6 +345,9 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
         "explain": _C(
             "Print the registry entry for an error code.",
             contract="conforms",
+            notes="`--run ID --spec SPEC` explains a past execution instead, from "
+            "the local state (same as `piceli release status --spec SPEC --run "
+            "ID`).",
         ),
         "help-json": _C(
             "Print the whole CLI tree, with contracts, as JSON.",
@@ -289,9 +364,24 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             contract="conforms",
             exit_codes=(0, 1, 2),
             notes="Refuses (access-port-conflict) when a declared local port is "
-            "held by another process and names its pid and command; never takes "
-            "a port over. Stops every forward it started on Ctrl-C/SIGTERM/SIGHUP. "
-            "Exit 1 only when every forward gave up.",
+            "held by another process and names its pid (another process's command "
+            "line is never printed); when the holder is Piceli's own stale process "
+            "for this app it says so and suggests `piceli access stop --stale "
+            "TARGET`. Never takes a port over. Stops every forward it started on "
+            "Ctrl-C/SIGTERM/SIGHUP. Exit 1 only when every forward gave up.",
+        ),
+        "access stop": _C(
+            "Stop Piceli's own stale forwards and servers for the app (--stale).",
+            reads=("release.toml or module:attr", "local process table"),
+            writes=("signals Piceli's own processes for this app (SIGTERM)",),
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            notes="Only with --stale. Checks the app's declared forward ports and "
+            "each --port; stops a port's holder only when it is Piceli's own "
+            "process for this target (its kubectl port-forward, orphaned or "
+            "supervised, or piceli access / observe serve / operator serve with "
+            "the same target), never another process, which is reported by pid "
+            "only. Local only: never contacts the cluster.",
         ),
         "status": _C(
             "Say whether the app is up and how to reach it (release, images, "
@@ -314,6 +404,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             notes=(
                 "Never changes the cluster: reads plus dryRun=All requests "
                 "(server dry runs of the writes). Prints the plan hash to approve."
+                + _ENV_NOTE
             ),
         ),
         "release preview": _C(
@@ -325,13 +416,15 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
         ),
         "release diff": _C(
             "Show what `release plan` would change, field by field.",
+            contract="conforms",
             reads=_RELEASE_READS,
             cluster="reads",
             exit_codes=(0, 1, 2),
             notes=(
                 "Read-only: stores no plan and no local state. Sends only reads "
                 "and dryRun=All requests (server dry runs of the writes). "
-                "Exit 1 with --exit-code when something would change."
+                "Exit 1 with --exit-code when something would change (reason "
+                "release-changes-pending)."
             ),
         ),
         "release apply": _C(
@@ -347,7 +440,10 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "[[checks]] after readiness (exit 1 with release_state "
             "checks-failed); with rollback_on_failed_checks it re-applies the "
             "previous ready release without a further approval. --skip-checks "
-            "is recorded.",
+            "is recorded. --approve-if-policy plans and applies only when "
+            "every action is inside the spec's [release] auto_approve policy "
+            "(declared by the owner, part of the plan hash); otherwise exit 3 "
+            "with reason approval-policy-exceeded and the hash to approve." + _ENV_NOTE,
         ),
         "release rollback": _C(
             "Re-plan and re-apply an earlier release.",
@@ -362,12 +458,14 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
         ),
         "release check": _C(
             "Run the spec's [[checks]] now against a release.",
+            contract="conforms",
             reads=_RELEASE_READS,
             cluster="reads",
             exit_codes=(0, 1, 2),
             notes="Writes no state and never rolls back. Checks open temporary "
             "loopback port forwards, may exec declared commands in pods and "
-            "run declared Python check functions.",
+            "run declared Python check functions. Exit 1 when a check failed "
+            "(state failed, reason check-failed).",
         ),
         "release resume": _C(
             "Resume an interrupted apply with the same grant and ids.",
@@ -403,6 +501,60 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "Show catalogued releases, executions and history.",
             contract="conforms",
             reads=("release.toml or pipeline module (--spec MODULE:ATTR)", "state_dir"),
+            notes='With state = "cluster" it first refreshes the working copy '
+            "from the cluster (reads only, no lock). `--run ID` shows one past "
+            "execution (an execution id or unique prefix, or a `piceli deploy` "
+            "run id) with the causes recorded when it failed (pod reasons, exit "
+            "codes, redacted log tails, events).",
+        ),
+        # -------------------------------------------------------- state
+        "state show": _C(
+            "Show where a release's state lives, its generation and the lock holder.",
+            contract="conforms",
+            reads=("release.toml or pipeline module (--spec MODULE:ATTR)", "state_dir"),
+            cluster="reads",
+            notes="Read-only; never prints state content. With local state it "
+            "does not contact the cluster.",
+        ),
+        "state pull": _C(
+            "Refresh the local working copy of a release's shared state.",
+            contract="conforms",
+            reads=("release.toml or pipeline module (--spec MODULE:ATTR)",),
+            writes=("state_dir (replaced by the shared snapshot)",),
+            cluster="reads",
+            notes="Takes no release lock; skipped while a run on this machine "
+            "holds the state directory. A no-op with local state.",
+        ),
+        "state export": _C(
+            "Write a release's state to one file; secret material only encrypted.",
+            contract="conforms",
+            reads=(
+                "release.toml or pipeline module (--spec MODULE:ATTR)",
+                "state_dir",
+                "--key-file",
+            ),
+            writes=("--out file",),
+            cluster="reads",
+            notes="Secret store, stored discovery, journals, pending plans and "
+            "backups are left out unless --include-secrets --key-file (AES-256-GCM, "
+            "scrypt key); refuses an existing --out without --force.",
+        ),
+        "state import": _C(
+            "Replace a release's state with an export (approval by digest).",
+            contract="conforms",
+            reads=(
+                "release.toml or pipeline module (--spec MODULE:ATTR)",
+                "--in file",
+                "--key-file",
+            ),
+            writes=("state_dir", 'shared state Secrets and Lease (state = "cluster")'),
+            cluster="writes",
+            approval_required=True,
+            safe_to_retry=True,
+            exit_codes=(0, 2, 3),
+            notes="Without --approve it prints the import digest and exits 3; "
+            "with it, it holds the release lock and replaces the state. An "
+            "export without secret material needs --allow-partial.",
         ),
         # ------------------------------------------------------- inputs
         "inputs record": _C(
@@ -624,6 +776,8 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             ),
             writes=(
                 "state_dir (run journal, receipts, release catalog, secret store)",
+                'shared state Secrets and release Lease (state="cluster")',
+                "--out plan file",
                 "local Docker image store",
                 "registry or node image store",
                 "temporary git worktrees with --ref (removed on exit)",
@@ -647,7 +801,93 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "Unchanged stages are skipped. --ref [SOURCE=]REV builds the "
             "sources from commits in temporary worktrees; the combined hash "
             "covers the resolved SHAs, --approve needs the same --ref, and "
-            "--resume reuses the run's SHAs.",
+            "--resume reuses the run's SHAs. --plan --out FILE writes a "
+            "portable plan; --apply FILE --approve HASH applies it on any "
+            "runner (it re-plans and refuses any difference; no build cache "
+            'needed for images already delivered). With state="cluster" '
+            "every command holds the release's Lease (pipeline-locked when "
+            "another runner holds it; a stale lease is taken over) and "
+            "--plan writes its state to the cluster too. --env NAME deploys one "
+            "environment (the app's overrides and the pipeline's target for it, "
+            "state under <state_dir>/environments/NAME); the combined hash "
+            "covers the environment's name and resolved values, so --approve, "
+            "--resume and --plan --out/--apply need the same --env. "
+            "--approve-if-policy plans and executes without a hash only when "
+            "every action is inside the pipeline's auto_approve policy "
+            "(declared by the owner, part of the combined hash; never delete, "
+            "replace or adopt); otherwise exit 3 with reason "
+            "approval-policy-exceeded and the approval command. "
+            "Every run "
+            "that starts executing writes <state_dir>/runs/<run id>/summary.json "
+            "(schema docs/schemas/piceli-run-summary-v1.schema.json) and "
+            "summary.md; the result names them (summary). With the pipeline's "
+            "cache_budget the state directory is pruned after the run (result: "
+            "cache).",
+        ),
+        # ------------------------------------------- 0.8.0 maintenance
+        "cache status": _C(
+            "Show the disk Piceli uses per state directory and category, and "
+            "its temporary directories.",
+            reads=(
+                "pipeline module or --state-dir",
+                "state_dir",
+                "temporary directory",
+            ),
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="Read-only; never contacts a cluster. Categories: builds "
+            "(outputs and logs), toolchains, blobs, receipts, runs (journals "
+            "and summaries), release (never pruned), other, temp (partial "
+            "files). reclaimable_bytes is what cache prune with --keep-last "
+            "would free.",
+        ),
+        "cache prune": _C(
+            "Remove stale temporary directories, old runs, unused delivery "
+            "receipts and, over --budget, build outputs and logs.",
+            reads=(
+                "pipeline module or --state-dir",
+                "state_dir",
+                "temporary directory",
+            ),
+            writes=(
+                "state_dir (old runs, unused delivery receipts, build outputs "
+                "and logs, stale partial files)",
+                "stale piceli-* temporary directories",
+            ),
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            notes="Never removes the release state (catalog, execution journal, "
+            "secret store, approved plans, backups, history), build or mirror "
+            "receipts, the latest run, a resumable run or the runs of the last "
+            "--keep-last applied releases. Holds each state directory's run "
+            "lock (pipeline-locked while a deploy runs). With shared state "
+            '(state="cluster") only machine-local files are pruned. --dry-run '
+            "removes nothing. Exit 1 (cache-over-budget) when a state directory "
+            "is still over the budget. Always prints one JSON object.",
+        ),
+        "doctor": _C(
+            "Check free disk and memory against the next build's needs, and "
+            "the tools the pipeline uses.",
+            reads=(
+                "pipeline module or --state-dir",
+                "build receipts",
+                "docker, docker buildx, kubectl (version only)",
+            ),
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            notes="Read-only; never contacts a cluster. Exit 1 with a warning "
+            "(runner-disk-low, runner-memory-low, runner-tool-missing); the "
+            "need is estimated from the last build receipts.",
+        ),
+        "runs": _C(
+            "List a pipeline's deploy runs with state, release, duration and "
+            "summary files.",
+            reads=("pipeline module or --state-dir", "state_dir"),
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="Read-only; newest first. With shared state it reads the local "
+            "working copy (piceli state pull first). summary.json follows "
+            "docs/schemas/piceli-run-summary-v1.schema.json.",
         ),
     }
 )
@@ -718,6 +958,18 @@ def _click_tree(command: Any, path: tuple[str, ...]) -> dict[str, Any]:
         and param.name not in {"help", "install_completion", "show_completion"}
     ]
     node: dict[str, Any] = {"name": path[-1] if path else "piceli", "path": name}
+    default = getattr(command, "default_command", None)
+    if default is not None and hasattr(command, "commands"):
+        # A command with subcommands (``piceli access TARGET`` and ``piceli
+        # access stop``): the node stays a runnable command, as it was
+        # before it had any, and lists the others under ``subcommands``.
+        node = _click_tree(command.commands[default], path)
+        node["subcommands"] = [
+            _click_tree(sub, (*path, sub_name))
+            for sub_name, sub in sorted(command.commands.items())
+            if sub_name != default and not getattr(sub, "hidden", False)
+        ]
+        return node
     if hasattr(command, "commands"):
         node["help"] = help_text
         node["params"] = params
@@ -839,5 +1091,12 @@ def help_tree() -> dict[str, Any]:
 def leaf_commands(node: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     """Every runnable command below ``node`` in a :func:`help_tree` tree."""
     if "commands" not in node:
-        return [node]
+        return [
+            node,
+            *(
+                leaf
+                for child in node.get("subcommands", ())
+                for leaf in leaf_commands(child)
+            ),
+        ]
     return [leaf for child in node["commands"] for leaf in leaf_commands(child)]

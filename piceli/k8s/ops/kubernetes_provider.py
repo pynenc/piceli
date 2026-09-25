@@ -7,6 +7,7 @@ import hashlib
 import ipaddress
 import json
 import time
+from collections.abc import Mapping
 from typing import Any
 from urllib.parse import quote, urlsplit
 
@@ -79,6 +80,51 @@ def _without_ownership(manifest: dict[str, Any]) -> dict[str, Any]:
     if not annotations:
         metadata.pop("annotations", None)
     return dict(value)
+
+
+#: Label of Piceli's shared-state objects (see :mod:`piceli.state.cluster`).
+STATE_LABEL = "piceli.io/state"
+
+
+#: A write refused only because the status moved its resourceVersion is sent
+#: at most this many times.
+PRECONDITION_ATTEMPTS = 4
+
+
+def status_only_change(before: DiscoveredResource, after: DiscoveredResource) -> bool:
+    """Same object, content and field ownership; only status/bookkeeping moved."""
+
+    def owners(resource: DiscoveredResource) -> list[FieldManagerEntry]:
+        return [
+            entry
+            for entry in field_manager_entries(resource.manifest)
+            if entry.subresource != "status"
+        ]
+
+    try:
+        return (
+            before.manifest["metadata"].get("uid")
+            == after.manifest["metadata"].get("uid")
+            and before.ownership == after.ownership
+            and ResourceIntent.from_manifest(before.manifest).manifest
+            == ResourceIntent.from_manifest(after.manifest).manifest
+            and owners(before) == owners(after)
+        )
+    except ValueError:
+        return False
+
+
+#: A read answered ``429 Too Many Requests`` is sent at most this many times.
+THROTTLED_READ_ATTEMPTS = 5
+
+
+def _retry_after(value: str | None) -> float:
+    """Seconds to wait before resending a throttled read (bounded to [0.1, 2])."""
+    try:
+        seconds = float(value) if value is not None else 0.5
+    except ValueError:
+        seconds = 0.5
+    return min(2.0, max(0.1, seconds))
 
 
 class ProviderError(Exception):
@@ -211,6 +257,31 @@ class KubernetesProvider:
         apply: bool = False,
         merge: bool = False,
     ) -> dict[str, Any]:
+        result = self._call(
+            method,
+            path,
+            body=body,
+            query=query,
+            deadline=deadline,
+            apply=apply,
+            merge=merge,
+        )
+        assert isinstance(result, dict)
+        return result
+
+    def _call(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: Any = None,
+        query: dict[str, Any] | None = None,
+        deadline: float | None = None,
+        apply: bool = False,
+        merge: bool = False,
+        raw_text: bool = False,
+    ) -> dict[str, Any] | str:
+        """One bounded request; ``raw_text`` returns the body as text (pod logs)."""
         self._target(self.target)
         end = min(
             deadline if deadline is not None else float("inf"),
@@ -222,7 +293,7 @@ class KubernetesProvider:
         if mutating:
             self.verify_target(deadline=end)
         headers = {
-            "Accept": "application/json",
+            "Accept": "*/*" if raw_text else "application/json",
             "Content-Type": (
                 "application/apply-patch+yaml"
                 if apply
@@ -239,7 +310,7 @@ class KubernetesProvider:
         ):
             raise ProviderError("request-byte-limit")
 
-        def send() -> dict[str, Any]:
+        def send() -> dict[str, Any] | str:
             from urllib.parse import urlencode
 
             from urllib3 import Timeout
@@ -250,21 +321,41 @@ class KubernetesProvider:
                 url += "?" + urlencode(query)
             response = None
             try:
-                if time.monotonic() >= end:
-                    raise ProviderError("deadline-exceeded")
-                remaining = max(0.001, end - time.monotonic())
-                response = self.client.rest_client.pool_manager.request(
-                    method,
-                    url,
-                    body=None
-                    if body is None
-                    else json.dumps(body, allow_nan=False).encode(),
-                    headers=headers,
-                    preload_content=False,
-                    retries=False,
-                    redirect=False,
-                    timeout=Timeout(total=remaining, connect=remaining, read=remaining),
-                )
+                for attempt in range(THROTTLED_READ_ATTEMPTS):
+                    if time.monotonic() >= end:
+                        raise ProviderError("deadline-exceeded")
+                    remaining = max(0.001, end - time.monotonic())
+                    response = self.client.rest_client.pool_manager.request(
+                        method,
+                        url,
+                        body=None
+                        if body is None
+                        else json.dumps(body, allow_nan=False).encode(),
+                        headers=headers,
+                        preload_content=False,
+                        retries=False,
+                        redirect=False,
+                        timeout=Timeout(
+                            total=remaining, connect=remaining, read=remaining
+                        ),
+                    )
+                    # A read answered 429 (API priority and fairness, or a
+                    # watch cache still initializing, as for a CRD installed
+                    # a moment ago) is sent again after Retry-After, as
+                    # client-go does. Writes are never retried here.
+                    if (
+                        response.status != 429
+                        or method != "GET"
+                        or attempt + 1 == THROTTLED_READ_ATTEMPTS
+                    ):
+                        break
+                    wait = _retry_after(response.headers.get("Retry-After"))
+                    response.close()
+                    response = None
+                    if time.monotonic() + wait >= end:
+                        raise ProviderError("api-unavailable", status=429)
+                    time.sleep(wait)
+                assert response is not None
                 # Error bodies are intentionally never loaded or included in errors.
                 if not 200 <= response.status < 300:
                     category = {
@@ -283,6 +374,8 @@ class KubernetesProvider:
                 raw = response.read(self.max_response_bytes + 1, decode_content=True)
                 if len(raw) > self.max_response_bytes:
                     raise ProviderError("response-byte-limit", ambiguous=mutating)
+                if raw_text:
+                    return str(raw.decode(errors="replace"))
                 decoded = strict_json(raw.decode(), self.max_response_bytes)
                 if not isinstance(decoded, dict):
                     raise ValueError("expected object")
@@ -428,7 +521,12 @@ class KubernetesProvider:
         if api != request.api_resource:
             raise ProviderError("undiscovered-api")
         positive(request.page_size, "page", 1000)
-        query: dict[str, Any] = {"limit": request.page_size}
+        # Piceli's own shared-state objects (Lease lock, state Secrets) are
+        # never part of a release: excluded from every discovery.
+        query: dict[str, Any] = {
+            "limit": request.page_size,
+            "labelSelector": "!" + STATE_LABEL,
+        }
         if request.continuation is not None:
             query["continue"] = text(request.continuation, "continuation")
         try:
@@ -659,14 +757,37 @@ class KubernetesProvider:
         query: dict[str, Any] = {"fieldManager": self.field_manager}
         if dry_run:
             query["dryRun"] = "All"
-        raw = self._request(
-            "PATCH",
-            self._path(self.api_for(identity, deadline=deadline), identity.name),
-            body=manifest,
-            query=query,
-            deadline=deadline,
-            merge=True,
-        )
+        path = self._path(self.api_for(identity, deadline=deadline), identity.name)
+        body = manifest
+        for attempt in range(PRECONDITION_ATTEMPTS):
+            try:
+                raw = self._request(
+                    "PATCH", path, body=body, query=query, deadline=deadline, merge=True
+                )
+                break
+            except ProviderError as error:
+                # A 409 is a definite refusal. When only the status (or other
+                # bookkeeping) moved the resourceVersion, as a controller does
+                # while a rollout progresses, send the same patch again at the
+                # new version; any content or ownership change still fails.
+                if (
+                    error.status != 409
+                    or error.ambiguous
+                    or attempt + 1 == PRECONDITION_ATTEMPTS
+                ):
+                    raise
+                fresh = self.get(identity, deadline=deadline)
+                if fresh is None or not status_only_change(current, fresh):
+                    raise
+                body = {
+                    **body,
+                    "metadata": {
+                        **body["metadata"],
+                        "resourceVersion": fresh.manifest["metadata"][
+                            "resourceVersion"
+                        ],
+                    },
+                }
         if dry_run:
             returned = raw.get("metadata", {})
             if returned.get("name") != identity.name:
@@ -1130,7 +1251,11 @@ class KubernetesProvider:
         manifest = resource.manifest
         kind = resource.identity.kind
         metadata = manifest["metadata"]
-        status = manifest.get("status", {})
+        status = manifest.get("status") or {}
+        if not isinstance(status, dict):
+            # Malformed: the specific rules see no status (not ready); the
+            # generic rule reports it as unsupported.
+            status = {}
         generation = metadata.get("generation", 0)
         observed = status.get("observedGeneration")
         ready = False
@@ -1146,6 +1271,12 @@ class KubernetesProvider:
             "ClusterRoleBinding",
             "NetworkPolicy",
             "CronJob",
+            # Accepted by the API server is all a release waits for: an HPA
+            # needs metrics, and an Ingress or HTTPRoute a controller, to act.
+            "HorizontalPodAutoscaler",
+            "PodDisruptionBudget",
+            "Ingress",
+            "HTTPRoute",
         }:
             ready = True
         elif kind in {"Deployment", "StatefulSet", "DaemonSet"}:
@@ -1205,7 +1336,12 @@ class KubernetesProvider:
             if spec.get("type") == "LoadBalancer":
                 ready = ready and bool(status.get("loadBalancer", {}).get("ingress"))
         else:
-            return ReadinessProbeResult(resource.identity, ReadinessStatus.UNSUPPORTED)
+            generic = _generic_readiness(manifest)
+            if generic is None:
+                return ReadinessProbeResult(
+                    resource.identity, ReadinessStatus.UNSUPPORTED
+                )
+            ready = generic
         return ReadinessProbeResult(
             resource.identity,
             ReadinessStatus.READY if ready else ReadinessStatus.NOT_READY,
@@ -1230,3 +1366,118 @@ class KubernetesProvider:
                 if error.status in {401, 403}
                 else ReadinessStatus.UNSUPPORTED,
             )
+
+    # ------------------------------------------------------ pod diagnosis
+    # Read-only helpers for :mod:`piceli.k8s.ops.diagnosis`: the pods of a
+    # workload being rolled out, their events and a bounded log tail. Always
+    # in the target namespace, through the same bounded transport.
+
+    def _namespaced(self, root: str, plural: str, name: str | None = None) -> str:
+        path = f"{root}/namespaces/{quote(self.target.namespace, safe='')}/{plural}"
+        return path + ("/" + quote(name, safe="") if name else "")
+
+    def _items(
+        self, path: str, query: dict[str, Any], deadline: float | None
+    ) -> list[dict[str, Any]]:
+        value = self._request("GET", path, query=query, deadline=deadline)
+        items = value.get("items")
+        if not isinstance(items, list):
+            raise ValueError("list response without items")
+        return [item for item in items if isinstance(item, dict)]
+
+    def list_pods(
+        self, selector: str, *, deadline: float | None = None, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        """Pods matching a label selector (one bounded page)."""
+        return self._items(
+            self._namespaced("/api/v1", "pods"),
+            {"labelSelector": selector, "limit": limit},
+            deadline,
+        )
+
+    def list_replica_sets(
+        self, selector: str, *, deadline: float | None = None, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        """ReplicaSets matching a label selector (one bounded page)."""
+        return self._items(
+            self._namespaced("/apis/apps/v1", "replicasets"),
+            {"labelSelector": selector, "limit": limit},
+            deadline,
+        )
+
+    def pod_events(
+        self, pod: str, *, deadline: float | None = None, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        """Events about one Pod (one bounded page)."""
+        return self._items(
+            self._namespaced("/api/v1", "events"),
+            {
+                "fieldSelector": f"involvedObject.kind=Pod,involvedObject.name={pod}",
+                "limit": limit,
+            },
+            deadline,
+        )
+
+    def pod_log(
+        self,
+        pod: str,
+        container: str,
+        *,
+        previous: bool,
+        tail_lines: int,
+        limit_bytes: int,
+        deadline: float | None = None,
+    ) -> str:
+        """The last ``tail_lines`` log lines of a container (at most ``limit_bytes``)."""
+        result = self._call(
+            "GET",
+            self._namespaced("/api/v1", "pods", pod) + "/log",
+            query={
+                "container": container,
+                "tailLines": tail_lines,
+                "limitBytes": limit_bytes,
+                **({"previous": "true"} if previous else {}),
+            },
+            deadline=deadline,
+            raw_text=True,
+        )
+        return result if isinstance(result, str) else ""
+
+
+def _generic_readiness(manifest: Mapping[str, Any]) -> bool | None:
+    """Readiness of a kind without a specific rule (HPA, PDB, custom resources).
+
+    The common status conventions (as in ``kstatus``): not ready while
+    ``status.observedGeneration`` is behind ``metadata.generation``, while a
+    ``Reconciling`` or ``Stalled`` condition is ``True``, or while a ``Ready``
+    condition is not ``True``. An object without such status (a
+    HorizontalPodAutoscaler, most configuration objects) is ready once it is
+    written. ``None`` when the status is malformed.
+    """
+    status = manifest.get("status", {})
+    if status is None:
+        status = {}
+    if not isinstance(status, Mapping):
+        return None
+    generation = manifest.get("metadata", {}).get("generation")
+    observed = status.get("observedGeneration")
+    if (
+        isinstance(observed, int)
+        and isinstance(generation, int)
+        and not isinstance(observed, bool)
+        and observed < generation
+    ):
+        return False
+    conditions = status.get("conditions", [])
+    if conditions is None:
+        conditions = []
+    if not isinstance(conditions, list) or not all(
+        isinstance(item, Mapping) for item in conditions
+    ):
+        return None
+    states = {str(item.get("type")): item.get("status") for item in conditions}
+    if states.get("Reconciling") == "True" or states.get("Stalled") == "True":
+        return False
+    if "Ready" in states:
+        return states["Ready"] == "True"
+    return True

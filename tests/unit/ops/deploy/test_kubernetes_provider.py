@@ -281,3 +281,66 @@ def test_pruning_includes_only_listed_inherited_owners() -> None:
     ]
     value = provider([], owner_id="team-a-v2", inherited_owner_ids=("team-a-v1",))
     assert prune_plan(value, items) == {"current", "previous"}
+
+
+def _readiness_of(value: dict) -> str:
+    manifest = {
+        "metadata": {
+            "name": "web",
+            "namespace": "app-test",
+            "uid": "uid",
+            "resourceVersion": "1",
+            "generation": 2,
+        },
+        **value,
+    }
+    resource = DiscoveredResource.from_manifest(
+        manifest, scope=ResourceScope.NAMESPACED
+    )
+    return provider([]).readiness(resource).status.value
+
+
+def test_autoscaler_without_status_is_ready() -> None:
+    """Regression: a release with an HPA failed with ``readiness-unsupported``."""
+    hpa = {"apiVersion": "autoscaling/v2", "kind": "HorizontalPodAutoscaler"}
+    assert _readiness_of(hpa) == "ready"
+    # Metrics may be unavailable (ScalingActive False): still ready.
+    assert (
+        _readiness_of(
+            hpa
+            | {
+                "status": {
+                    "observedGeneration": 2,
+                    "conditions": [{"type": "ScalingActive", "status": "False"}],
+                }
+            }
+        )
+        == "ready"
+    )
+
+
+@pytest.mark.parametrize(
+    "status,expected",
+    [
+        ({}, "ready"),
+        ({"observedGeneration": 1}, "not-ready"),
+        ({"observedGeneration": 2}, "ready"),
+        ({"conditions": [{"type": "Ready", "status": "False"}]}, "not-ready"),
+        ({"conditions": [{"type": "Ready", "status": "True"}]}, "ready"),
+        (
+            {
+                "observedGeneration": 1,
+                "conditions": [{"type": "Ready", "status": "True"}],
+            },
+            "not-ready",
+        ),
+        ({"conditions": [{"type": "Stalled", "status": "True"}]}, "not-ready"),
+        ({"conditions": [{"type": "Reconciling", "status": "True"}]}, "not-ready"),
+        ({"conditions": "invalid"}, "unsupported"),
+    ],
+)
+def test_other_kinds_follow_generic_status_conventions(
+    status: dict, expected: str
+) -> None:
+    widget = {"apiVersion": "example.test/v1", "kind": "Widget", "status": status}
+    assert _readiness_of(widget) == expected

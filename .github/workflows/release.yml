@@ -1,81 +1,187 @@
 name: Release
 
 # PyPI releases come only from main. After CI succeeds on a push to main (or
-# when run manually), the version in pyproject.toml is released if its tag
-# `v<version>` does not exist yet: the tag is created, the package is published
-# to PyPI and the release notes are published. Otherwise nothing is published.
+# when run manually), the version in pyproject.toml is released when PyPI does
+# not list all of its files yet. The index decides, not the git tag:
+#
+#   build   build the wheel and sdist, ask PyPI which files it lists for the
+#           version (scripts/release_state.py plan);
+#   publish upload the missing files with PEP 740 attestations (trusted
+#           publishing through the `pypi` environment), retrying transient
+#           index failures;
+#   tag     wait until PyPI lists every file, then push `v<version>` at the
+#           released commit (never moved once pushed);
+#   notes   publish the release notes if the release does not exist yet.
+#
+# Every job can be re-run, and a new run after an interrupted one finishes it:
+# files already on PyPI are not uploaded again, the tag is pushed once. When
+# the version is already released from an earlier commit, nothing happens.
+# To release a specific commit or tag (for example one whose upload failed),
+# run the workflow manually with `ref`.
 # Pull requests publish pre-releases to TestPyPI from ci.yml.
-# Publishing uses PyPI trusted publishing (OIDC) through the `pypi` environment.
 on:
   workflow_run:
     workflows: [CI]
     types: [completed]
     branches: [main]
   workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit, branch or tag to release (default the workflow's commit)
+        required: false
+        default: ""
 
 permissions:
   contents: read
 
+# One release at a time; a queued run waits instead of cancelling.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
-  check-version:
+  build:
     if: >-
       github.event_name == 'workflow_dispatch'
       || (github.event.workflow_run.conclusion == 'success'
           && github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
     outputs:
-      tag: ${{ steps.tag.outputs.tag }}
-      sha: ${{ steps.tag.outputs.sha }}
+      tag: ${{ steps.plan.outputs.tag }}
+      sha: ${{ steps.source.outputs.sha }}
+      publish: ${{ steps.plan.outputs.publish }}
+      finish: ${{ steps.plan.outputs.finish }}
     steps:
-      - uses: actions/checkout@v5
+      - name: Check out the commit to release
+        uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          ref: ${{ inputs.ref || github.event.workflow_run.head_sha || github.sha }}
+          path: source
+          persist-credentials: false
+      - name: Check out the release script
+        uses: actions/checkout@v5
+        with:
+          path: tools
+          sparse-checkout: scripts/release_state.py
+          sparse-checkout-cone-mode: false
       - uses: astral-sh/setup-uv@v7
-      - name: Tag the version if it is not released yet
-        id: tag
-        run: |
-          version=$(uv run --no-project --python 3.12 python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
-          tag="v${version}"
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null; then
-            echo "${tag} already exists; nothing to release."
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "${tag}" -m "Released version ${version}"
-          git push origin "refs/tags/${tag}"
-          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-          echo "Tagged ${tag}"
+      - id: source
+        run: echo "sha=$(git -C source rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - run: uv build --out-dir dist source
+      - name: Ask PyPI whether the version is released
+        id: plan
+        run: >-
+          uv run --no-project --python 3.12 tools/scripts/release_state.py plan
+          --dist dist --sha "$SHA" --git-dir tools
+        env:
+          SHA: ${{ steps.source.outputs.sha }}
+      - uses: actions/upload-artifact@v6
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
 
-  publish-pypi:
-    needs: check-version
-    if: needs.check-version.outputs.tag != ''
+  publish:
+    needs: build
+    if: needs.build.outputs.publish == 'true'
     runs-on: ubuntu-latest
-    environment: pypi
+    environment:
+      name: pypi
+      url: https://pypi.org/p/piceli
     permissions:
       contents: read
-      id-token: write
+      id-token: write # trusted publishing and the Sigstore attestations
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v7
         with:
-          ref: ${{ needs.check-version.outputs.sha }}
+          name: dist
+          path: dist
+      # Transient index failures (5xx, OIDC exchange) are retried; files that
+      # an earlier attempt uploaded are skipped.
+      - id: upload-1
+        continue-on-error: true
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          attestations: true
+          skip-existing: true
+      - if: steps.upload-1.outcome == 'failure'
+        run: rm -f dist/*.publish.attestation && sleep 60
+      - id: upload-2
+        if: steps.upload-1.outcome == 'failure'
+        continue-on-error: true
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          attestations: true
+          skip-existing: true
+      - if: steps.upload-2.outcome == 'failure'
+        run: rm -f dist/*.publish.attestation && sleep 180
+      - if: steps.upload-2.outcome == 'failure'
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          attestations: true
+          skip-existing: true
+
+  tag:
+    needs: [build, publish]
+    # Also after a skipped publish: a previous run uploaded but never tagged.
+    if: >-
+      always()
+      && needs.build.result == 'success'
+      && needs.build.outputs.finish == 'true'
+      && (needs.publish.result == 'success' || needs.publish.result == 'skipped')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the release script
+        uses: actions/checkout@v5
+        with:
+          sparse-checkout: scripts/release_state.py
+          sparse-checkout-cone-mode: false
       - uses: astral-sh/setup-uv@v7
-      - run: uv build
-      - run: uv publish --trusted-publishing always
+      - uses: actions/download-artifact@v7
+        with:
+          name: dist
+          path: dist
+      - name: Wait until PyPI lists every file
+        run: >-
+          uv run --no-project --python 3.12 scripts/release_state.py verify
+          --dist dist --attempts 12
+      - name: Tag the released commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          uv run --no-project --python 3.12 scripts/release_state.py tag \
+            --tag "$TAG" --sha "$SHA"
+        env:
+          TAG: ${{ needs.build.outputs.tag }}
+          SHA: ${{ needs.build.outputs.sha }}
 
   release-notes:
-    needs: [check-version, publish-pypi]
+    needs: [build, tag]
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: read
     steps:
-      - uses: release-drafter/release-drafter@v7
+      - name: Skip when the release is already published
+        id: existing
+        run: |
+          if gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" >/dev/null 2>&1; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "${TAG} already has a published release."
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.build.outputs.tag }}
+      - if: steps.existing.outputs.published == 'false'
+        uses: release-drafter/release-drafter@v7
         with:
           publish: true
-          tag: ${{ needs.check-version.outputs.tag }}
+          tag: ${{ needs.build.outputs.tag }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

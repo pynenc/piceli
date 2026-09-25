@@ -6,7 +6,10 @@ can be resumed at the stage that did not finish. A run records the approved
 combined plan hash, each stage's state, content identity and outputs
 (receipt paths, digests, release names), never secret values.
 
-A lock file serializes runs that share a state directory.
+A lock file serializes runs that share a state directory; with shared state
+(``state="cluster"``) the release lock of :mod:`piceli.state` also guards
+the release, and :attr:`Journal.on_save` writes every change through to the
+cluster.
 
 Importing this module is side-effect free.
 """
@@ -18,7 +21,7 @@ import json
 import os
 import tempfile
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -60,9 +63,12 @@ def write_private(path: Path, text: str) -> None:
 class Run:
     """One journaled run; every mutation is persisted before it returns."""
 
-    def __init__(self, path: Path, data: dict[str, Any]) -> None:
+    def __init__(
+        self, path: Path, data: dict[str, Any], journal: Journal | None = None
+    ) -> None:
         self.path = path
         self.data = data
+        self.journal = journal
 
     @property
     def run_id(self) -> str:
@@ -78,6 +84,8 @@ class Run:
     def save(self) -> None:
         self.data["updated_at"] = now()
         write_private(self.path, json.dumps(self.data, sort_keys=True, indent=2) + "\n")
+        if self.journal is not None and self.journal.on_save is not None:
+            self.journal.on_save()
 
     def set_stage(self, name: str, **values: Any) -> dict[str, Any]:
         entry = self.data["stages"][name]
@@ -104,6 +112,8 @@ class Journal:
     def __init__(self, state_dir: Path) -> None:
         self.state_dir = state_dir
         self.directory = state_dir / "runs"
+        #: Called after every persisted change (shared state checkpoints).
+        self.on_save: Callable[[], None] | None = None
 
     @contextmanager
     def locked(self) -> Iterator[None]:
@@ -131,6 +141,7 @@ class Journal:
         approval: str,
         plan: Mapping[str, Any],
         refs: Mapping[str, Any] | None = None,
+        approved_by: str | None = None,
     ) -> Run:
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
         run_id = f"{stamp}-{uuid.uuid4().hex[:8]}"
@@ -146,10 +157,13 @@ class Journal:
             "plan": dict(plan),
             "stages": {name: {"state": "pending"} for name in STAGES},
         }
+        if approved_by is not None:
+            # "policy": the owner's auto_approve policy approved the run.
+            data["approved_by"] = approved_by
         if refs:
             # ``--ref``: source → {ref, commit}; --resume re-opens these commits.
             data["refs"] = {name: dict(value) for name, value in refs.items()}
-        run = Run(self.directory / f"{run_id}.json", data)
+        run = Run(self.directory / f"{run_id}.json", data, self)
         run.save()
         return run
 
@@ -164,7 +178,7 @@ class Journal:
             except (OSError, json.JSONDecodeError):
                 continue
             if isinstance(data, dict) and data.get("schema") == RUN_SCHEMA:
-                result.append(Run(path, data))
+                result.append(Run(path, data, self))
         return result
 
     def latest(self) -> Run | None:

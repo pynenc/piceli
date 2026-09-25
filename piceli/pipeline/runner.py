@@ -92,6 +92,7 @@ from piceli.pipeline.refs import (
 )
 
 if TYPE_CHECKING:
+    from piceli.approval_policy import PolicyDecision
     from piceli.artifacts.build_spec import BuildPlan, BuildSpec
     from piceli.artifacts.source_identity import InputsLock, InputsSpec
     from piceli.k8s.release_runner import PlanResult, ReleaseRunner
@@ -185,7 +186,12 @@ def _changes(result: PlanResult) -> list[dict[str, Any]]:
 
 def _changed(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
-        {"operation": item["operation"], "kind": item["kind"], "name": item["name"]}
+        {
+            "operation": item["operation"],
+            "kind": item["kind"],
+            "name": item["name"],
+            **({"cluster_scoped": True} if item.get("cluster_scoped") else {}),
+        }
         for item in actions
         if item["operation"] != "no-op"
     ]
@@ -204,6 +210,24 @@ def _drifted(drift: list[dict[str, Any]]) -> list[dict[str, Any]]:
         }
         for item in drift
     ]
+
+
+def _diff_fields(result: PlanResult) -> list[dict[str, Any]]:
+    """Per changed object, the JSON pointers its apply changes (no values)."""
+    found = []
+    for item in result.diffs:
+        resource = item.get("resource") or {}
+        paths = [change["path"] for change in item.get("changes") or []]
+        found.append(
+            {
+                "kind": resource.get("kind"),
+                "name": resource.get("name"),
+                "operation": item.get("operation"),
+                "changed": len(paths),
+                "fields": paths[:20],
+            }
+        )
+    return found
 
 
 #: Operations that change who owns an object or remove one. After delivery,
@@ -274,6 +298,63 @@ def classify(error: BaseException) -> PipelineError:
     return PipelineError("pipeline-stage-error", f"{type(error).__name__}: {error}")
 
 
+#: How a pipeline authorizes unmanaged objects: its own declaration, since
+#: ``piceli deploy`` takes no ``--adopt``/``--replace`` (they are part of the
+#: pipeline, and so of the combined hash).
+PIPELINE_AUTHORIZATION = (
+    'declare them in the Pipeline: adopt=["Kind/name"] or replace=["Kind/name"], '
+    "or delete them"
+)
+
+
+def pipeline_suggestion(suggestion: str) -> str:
+    """A release engine suggestion rewritten for a pipeline's declaration.
+
+    ``--adopt Kind/name`` becomes ``Pipeline(adopt=["Kind/name"])`` and
+    ``--replace Kind/name`` ``Pipeline(replace=["Kind/name"])``; any other
+    suggestion (such as changing the model) is kept.
+    """
+    for flag in ("adopt", "replace"):
+        prefix = f"--{flag} "
+        if suggestion.startswith(prefix):
+            return f"Pipeline({flag}={json.dumps([suggestion[len(prefix) :]])})"
+    head, found, _ = suggestion.partition(" from --replace/[release] replace")
+    if found and head.startswith("remove "):
+        return f'remove "{head[len("remove ") :]}" from Pipeline(replace=...)'
+    return suggestion
+
+
+def app_release_refusal(error: BaseException) -> PipelineError:
+    """:func:`classify` for the app's release plan (and its preview).
+
+    Objects that block the plan keep their ``code`` and ``message``; their
+    ``suggest`` entries and the refusal's message name the ``Pipeline``
+    declaration (``adopt=``/``replace=``) that unblocks them, never release
+    flags ``piceli deploy`` does not take.
+    """
+    from piceli.k8s.release_runner import blocking_message
+
+    failure = classify(error)
+    blocking = failure.details.get("blocking")
+    if not blocking:
+        return failure
+    rewritten = [
+        {
+            **item,
+            "suggest": [
+                pipeline_suggestion(entry) for entry in item.get("suggest", ())
+            ],
+        }
+        for item in blocking
+    ]
+    return PipelineError(
+        failure.code,
+        blocking_message(rewritten, PIPELINE_AUTHORIZATION),
+        failed=failure.failed,
+        details={**failure.details, "blocking": rewritten},
+    )
+
+
 # ------------------------------------------------------------------ runner
 
 
@@ -309,6 +390,10 @@ class PipelineRunner:
         self.check_runner = check_runner
         self.journal = Journal(pipeline.state_dir)
         self.run: Run | None = None
+        #: The ``cache_budget`` outcome of the last run (``None``: no budget).
+        self.cache: dict[str, Any] | None = None
+        #: The open state session (:mod:`piceli.state`) while :meth:`locked`.
+        self.session: Any = None
 
     # ------------------------------------------------------------ helpers
     def identity(self) -> dict[str, Any]:
@@ -318,6 +403,20 @@ class PipelineRunner:
             "owner": pipeline.owner,
             "field_manager": pipeline.field_manager,
             "target": pipeline.target.identity(),
+            # Added in 0.7.0 only for an environment, so other plans keep
+            # their hashes: the name and every resolved override value.
+            **(
+                {"environment": pipeline.environment.identity()}
+                if pipeline.environment is not None
+                else {}
+            ),
+            # Added in 0.7.0 only when declared, so other plans keep their
+            # hashes: the owner's approval policy is part of the combined hash.
+            **(
+                {"approval_policy": pipeline.auto_approve.identity()}
+                if pipeline.auto_approve is not None
+                else {}
+            ),
         }
 
     def _emit(
@@ -337,8 +436,68 @@ class PipelineRunner:
 
     @contextmanager
     def locked(self) -> Iterator[None]:
-        with self.journal.locked():
-            yield
+        """Hold the release's state for this run (see :mod:`piceli.state`).
+
+        ``local``: the state directory's lock file. ``cluster``: the release
+        lock in the namespace; the working copy is refreshed from the cluster
+        first, and every journaled change is written back (fenced).
+        """
+        from piceli.state import session
+        from piceli.state.scopes import pipeline_scope
+
+        with session(pipeline_scope(self.pipeline), write=True, say=self.say) as held:
+            self.session = held
+            self.journal.on_save = lambda: held.checkpoint(force=True)
+            try:
+                yield
+            finally:
+                self.journal.on_save = None
+                self.session = None
+
+    def _checkpoint(self) -> None:
+        """Write the working state through (throttled; shared state only)."""
+        if self.session is not None:
+            self.session.checkpoint()
+
+    def _bind(self, runner: ReleaseRunner, prefix: str) -> None:
+        """Progress lines and journal write-through for a release runner."""
+        runner.progress = self._progress(prefix)
+        if self.session is not None:
+            session = self.session
+            runner.checkpoint = lambda: session.checkpoint(force=True)
+
+    def _progress(self, prefix: str) -> Callable[[str], None]:
+        """A release runner progress sink: say the line, then checkpoint."""
+
+        def progress(text: str) -> None:
+            self.say(f"{prefix}{text}")
+            self._checkpoint()
+
+        return progress
+
+    def adopt_plan_file(self, document: Mapping[str, Any]) -> list[str]:
+        """Check a plan file against this pipeline and seed its receipts.
+
+        Refuses another pipeline or target (``deploy-plan-file-mismatch``) and
+        another cluster than the one planned (``deploy-plan-target-mismatch``).
+        Call it inside :meth:`locked` (after the working copy is refreshed)
+        and before :meth:`plan`.
+        """
+        from piceli.pipeline.planfile import observed_target, seed_receipts
+
+        if document.get("pipeline") != json.loads(canonical(self.identity())):
+            raise PipelineError(
+                "deploy-plan-file-mismatch",
+                "the plan file was made for another pipeline, owner or target",
+            )
+        observed = document.get("observed_target")
+        if observed and observed_target(self.pipeline) != observed:
+            raise PipelineError(
+                "deploy-plan-target-mismatch",
+                "the kubeconfig reaches another cluster or namespace than the "
+                "one the plan was made against",
+            )
+        return seed_receipts(self.pipeline, dict(document))
 
     @contextmanager
     def sources(self) -> Iterator[None]:
@@ -585,13 +744,29 @@ class PipelineRunner:
             return False, {}
         if receipt.get("plan_hash") != item.plan.plan_hash:
             return False, {}
-        for entry in images.values():
+        used = set(self._work.used) if self._work is not None else set()
+        for name, entry in images.items():
             image_id = entry.get("image_id") if isinstance(entry, dict) else None
-            if not isinstance(image_id, str) or not self.backend.image_present(
-                image_id
-            ):
+            if not isinstance(image_id, str):
                 return False, {}
+            if self.backend.image_present(image_id):
+                continue
+            # Another runner built it: the build is not needed again when the
+            # registry or node still has this exact image (by digest).
+            if name in used and self._delivered_elsewhere(name, image_id):
+                continue
+            return False, {}
         return True, images
+
+    def _delivered_elsewhere(self, name: str, config: str) -> bool:
+        if self._work is None or self.pipeline.deliver is None:
+            return False
+        if self._receipt(name, config) is None:
+            return False
+        try:
+            return self._present(name, config, self._work)
+        except Exception:
+            return False
 
     def _plan_deliver(
         self, work: _Work, _reapply: bool
@@ -853,7 +1028,7 @@ class PipelineRunner:
             runner = self.backend.release_runner(release_spec(self.pipeline, images))
             result = runner.placeholder_preview(skip_dry_run=uses_pending_image)
         except Exception as error:
-            failure = classify(error)
+            failure = app_release_refusal(error)
             failure.details = {**failure.details, "stage": "plan", "preview": marker}
             raise failure from None
         changes = _changed(result["actions"])
@@ -893,7 +1068,7 @@ class PipelineRunner:
         try:
             result = runner.plan()
         except Exception as error:
-            raise classify(error) from None
+            raise app_release_refusal(error) from None
         work.runner, work.release_plan = runner, result
         work.release_images = {name: ref.identity for name, ref in images.items()}
         return result
@@ -927,11 +1102,87 @@ class PipelineRunner:
         }
         return dict(value), value
 
+    # ------------------------------------------------------ approval policy
+    def policy_decision(self, plan: CombinedPlan) -> PolicyDecision:
+        """Whether every action of ``plan`` is inside the owner's policy.
+
+        Covers the release plan (or, before the images exist, its placeholder
+        preview: the real plan may not adopt, replace or delete beyond it and
+        is checked against the policy again after delivery) and the
+        node-loopback registry's release.
+
+        :raises PipelineError: ``approval-policy-missing`` when the pipeline
+            declares no ``auto_approve``.
+        """
+        policy = self.pipeline.auto_approve
+        if policy is None:
+            raise PipelineError(
+                "approval-policy-missing",
+                "the pipeline declares no auto_approve policy; approve the "
+                "combined hash instead",
+            )
+        release = plan.stages.get("plan", {})
+        if release.get("state") == "pending":
+            release = release.get("preview") or {}
+        actions = list(release.get("changes", ()))
+        drift = list(release.get("drift", ()))
+        registry = plan.stages.get("deliver", {}).get("registry")
+        if isinstance(registry, dict):
+            actions.extend(registry.get("changes", ()))
+            existing = registry.get("existing") or {}
+            if existing.get("action") in {"adopt", "replace"}:
+                actions.append(
+                    {
+                        "operation": existing["action"],
+                        "kind": "Deployment",
+                        "name": existing.get("name"),
+                    }
+                )
+        return policy.evaluate(actions, drift=drift)
+
+    def _within_policy(self, result: PlanResult) -> None:
+        """Refuse a policy-approved run whose real release plan left the policy."""
+        if self.run is None or self.run.data.get("approved_by") != "policy":
+            return
+        policy = self.pipeline.auto_approve
+        decision = (
+            policy.evaluate(_changes(result), drift=_drift(result))
+            if policy is not None
+            else None
+        )
+        if decision is None or not decision.allowed:
+            raise PipelineError(
+                "approval-policy-exceeded",
+                "after delivery the release plan is outside the owner's "
+                "approval policy ("
+                + ", ".join(decision.violations if decision else ["no policy"])
+                + "); nothing was applied: plan again and have the owner "
+                "approve the combined hash",
+                details={"policy": decision.to_dict()} if decision else {},
+            )
+
     # ---------------------------------------------------------- execution
     def execute(
-        self, plan: CombinedPlan, approval: str, *, reapply: bool = False
+        self,
+        plan: CombinedPlan,
+        approval: str,
+        *,
+        reapply: bool = False,
+        policy: PolicyDecision | None = None,
     ) -> dict[str, Any]:
-        """Run an approved plan (``approval`` must equal its combined hash)."""
+        """Run an approved plan (``approval`` must equal its combined hash).
+
+        ``policy`` is the decision of :meth:`policy_decision` when the run is
+        approved by the owner's policy instead of a human (it must allow the
+        plan); the release plan made after delivery is then checked again.
+        """
+        if policy is not None and not policy.allowed:
+            raise PipelineError(
+                "approval-policy-exceeded",
+                "the plan is outside the owner's approval policy: "
+                + ", ".join(policy.violations),
+                details={"policy": policy.to_dict()},
+            )
         if approval == preview_hash(plan):
             raise PipelineError(
                 "pipeline-preview-not-approvable",
@@ -951,6 +1202,7 @@ class PipelineRunner:
             approval=approval,
             plan={"hashed": plan.hashed, "stages": plan.stages},
             refs=self.checkouts.describe() if self.checkouts else None,
+            approved_by="policy" if policy is not None else None,
         )
         return self._continue(plan.until, reapply=reapply)
 
@@ -978,6 +1230,7 @@ class PipelineRunner:
             for name, value in refs.items():
                 self.checkouts.checkouts[name].rev = str(value.get("ref"))
         self._work = self._restore(run)
+        self._rebuild_missing(run)
         run.set_state("running", resumed_at=now())
         return self._continue(str(run.data["until"]), reapply=False, resuming=True)
 
@@ -1023,11 +1276,50 @@ class PipelineRunner:
         )
         if run.stage("deliver").get("state") in {"done", "skipped"}:
             for name, entry in run.output("deliver").get("images", {}).items():
-                work.delivered[name] = load_delivery_receipt(
-                    name, Path(entry["receipt"])
+                # By digest in this state directory: the run may have started
+                # on another runner (shared state), where the path differed.
+                config = entry.get("config_digest")
+                path = (
+                    self._delivery_path(name, config)
+                    if isinstance(config, str)
+                    else Path(entry["receipt"])
                 )
+                work.delivered[name] = load_delivery_receipt(name, path)
                 work.present[name] = True
         return work
+
+    def _rebuild_missing(self, run: Run) -> None:
+        """Build again what a resume cannot deliver (the run began elsewhere).
+
+        With shared state a run can be resumed on another runner. When its
+        build finished but its delivery did not, the images exist only in the
+        first runner's engine: the build stage runs again (same approved
+        build plan), unless each image is here or already delivered.
+        """
+        work = self._work
+        if (
+            work is None
+            or run.stage("build").get("state") not in {"done", "skipped"}
+            or run.stage("deliver").get("state") in {"done", "skipped"}
+        ):
+            return
+        missing = False
+        for item in work.builds:
+            for name, entry in item.images.items():
+                config = entry.get("image_id") if isinstance(entry, dict) else None
+                if not isinstance(config, str) or name not in work.used:
+                    continue
+                if self.backend.image_present(config) or self._delivered_elsewhere(
+                    name, config
+                ):
+                    continue
+                item.cached, item.images, missing = False, {}, True
+                break
+        if missing:
+            self.say(
+                "[build] images of the interrupted run are not here: building again"
+            )
+            run.set_stage("build", state="pending")
 
     def _continue(
         self, until: str, *, reapply: bool, resuming: bool = False
@@ -1047,6 +1339,7 @@ class PipelineRunner:
                 run.set_stage(name, state="interrupted")
                 run.set_state("interrupted")
                 self._emit(name, "interrupted")
+                self._finish()
                 raise
             except BaseException as error:
                 failure = classify(error)
@@ -1066,6 +1359,7 @@ class PipelineRunner:
                 final = failure.details.get("run_state", "failed")
                 run.set_state(final, reason=failure.code)
                 self._emit(name, result, {"reason": failure.code})
+                self._finish()
                 raise failure from None
             run.set_stage(
                 name,
@@ -1076,7 +1370,59 @@ class PipelineRunner:
             self._emit(name, state, output)
         final = "ready" if limit == len(STAGES) - 1 else "stopped"
         run.set_state(final)
+        self._finish()
         return self.result(final)
+
+    def _finish(self) -> None:
+        """After a run ends (any outcome): write its summary, then keep the
+        state directory within ``cache_budget``. Neither may fail the run."""
+        assert self.run is not None
+        from piceli.pipeline import summary
+
+        try:
+            summary.write(self.run, self.pipeline.state_dir)
+        except Exception as error:  # a summary never changes the outcome
+            self.say(f"[summary] not written ({type(error).__name__})")
+        self.cache = self._enforce_budget()
+
+    def _enforce_budget(self) -> dict[str, Any] | None:
+        """Prune the state directory to ``cache_budget`` (the run lock is held)."""
+        budget = self.pipeline.cache_budget
+        if budget is None:
+            return None
+        from piceli.maintenance.cache import (
+            PruneOptions,
+            format_size,
+            prune_one,
+            prune_temporary,
+            state_dirs,
+        )
+
+        try:
+            item = state_dirs(self.pipeline)[0]
+            report = prune_one(item, PruneOptions(budget=budget))
+            prune_temporary()
+        except Exception as error:
+            self.say(f"[cache] budget not enforced ({type(error).__name__})")
+            return None
+        over = report["budget"]["over"]
+        if report["freed_bytes"] or over:
+            self.say(
+                f"[cache] {format_size(report['bytes_after'])} of "
+                f"{format_size(budget)} budget"
+                + (
+                    f", freed {format_size(report['freed_bytes'])}"
+                    if report["freed_bytes"]
+                    else ""
+                )
+                + (" (still over budget: piceli cache status)" if over else "")
+            )
+        return {
+            "budget_bytes": budget,
+            "bytes": report["bytes_after"],
+            "freed_bytes": report["freed_bytes"],
+            "over_budget": over,
+        }
 
     def result(self, state: str) -> dict[str, Any]:
         assert self.run is not None
@@ -1084,7 +1430,9 @@ class PipelineRunner:
         stages = {name: run.stage(name).get("state") for name in STAGES}
         plan = run.output("plan")
         apply = run.output("apply")
-        return {
+        from piceli.pipeline.summary import summary_paths
+
+        body = {
             "schema": EVENT_SCHEMA,
             "event": "result",
             "state": state,
@@ -1093,7 +1441,18 @@ class PipelineRunner:
             "stages": stages,
             "release": apply.get("release") or plan.get("release"),
             "images": plan.get("images", {}),
+            **(
+                {"approved_by": "policy"}
+                if run.data.get("approved_by") == "policy"
+                else {}
+            ),
         }
+        json_path, markdown_path = summary_paths(run.path)
+        if json_path.is_file() and markdown_path.is_file():
+            body["summary"] = {"json": str(json_path), "markdown": str(markdown_path)}
+        if self.cache is not None:
+            body["cache"] = self.cache
+        return body
 
     # -------------------------------------------------------- stage: inputs
     def _run_inputs(
@@ -1172,6 +1531,11 @@ class PipelineRunner:
                         key: entry.get(key)
                         for key in ("image_id", "digest", "ref", "platform")
                     }
+                    | (
+                        {"size_bytes": entry["size_bytes"]}
+                        if type(entry.get("size_bytes")) is int
+                        else {}
+                    )
                     for image, entry in item.images.items()
                 },
             }
@@ -1309,7 +1673,7 @@ class PipelineRunner:
             info["action"] = "unchanged"
             return info, False
         self.say(f"[deliver] registry {result.release}: applying")
-        runner.progress = lambda text: self.say(f"[deliver] registry: {text}")
+        self._bind(runner, "[deliver] registry: ")
         outcome = runner.apply(result.plan_hash)
         info["action"] = "applied"
         info["execution"] = outcome["execution"]
@@ -1372,6 +1736,7 @@ class PipelineRunner:
                     "the release differs from the approved one; plan again",
                 )
         self._within_preview(result)
+        self._within_policy(result)
         self.say(
             f"[plan] release {result.release} ({result.mode}): "
             + (
@@ -1385,6 +1750,7 @@ class PipelineRunner:
             "plan_hash": result.plan_hash,
             "summary": result.counts,
             "changes": _changes(result),
+            "diff": _diff_fields(result),
             "images": work.release_images,
             "source": result.source,
         }
@@ -1426,7 +1792,7 @@ class PipelineRunner:
         runner = work.runner
         release = planned.get("release") or work.release_plan.release
         plan_hash = planned.get("plan_hash") or work.release_plan.plan_hash
-        runner.progress = lambda text: self.say(f"[apply] {release}: {text}")
+        self._bind(runner, f"[apply] {release}: ")
         if self._unchanged(work, reapply):
             self.say(f"[apply] {release}: unchanged, already deployed and ready")
             return "skipped", {"release": release, "why": "unchanged"}
@@ -1458,7 +1824,10 @@ class PipelineRunner:
             except ReleaseError:
                 if not resuming:
                     raise
-                result = runner.plan()
+                try:
+                    result = runner.plan()
+                except ReleaseError as error:
+                    raise app_release_refusal(error) from None
                 work.release_plan = result
                 outcome = runner.apply(result.plan_hash)
         output = {
@@ -1467,12 +1836,26 @@ class PipelineRunner:
             **({"source": outcome["source"]} if "source" in outcome else {}),
         }
         if outcome["execution"]["state"] != "ready":
+            category = outcome["execution"].get("failure_category", "not ready")
+            diagnosis = outcome.get("diagnosis")
+            # ``output`` (journaled) keeps only the compact causes;
+            # ``diagnosis`` (log tails, events) is for this result only.
+            details = {
+                "output": output,
+                **({"diagnosis": diagnosis} if diagnosis else {}),
+            }
+            if category == "apply-crashloop":
+                raise PipelineError(
+                    "pipeline-apply-crashloop",
+                    f"release {release} cannot start ({category})",
+                    failed=True,
+                    details=details,
+                )
             raise PipelineError(
                 "pipeline-apply-not-ready",
-                f"release {release} did not become ready "
-                f"({outcome['execution'].get('failure_category', 'not ready')})",
+                f"release {release} did not become ready ({category})",
                 failed=True,
-                details={"output": output},
+                details=details,
             )
         return "done", output
 
@@ -1549,7 +1932,7 @@ class PipelineRunner:
                 "message": str(error),
             }
         self.say(f"[checks] rolling back to {target}")
-        runner.progress = lambda text: self.say(f"[checks] rollback {target}: {text}")
+        self._bind(runner, f"[checks] rollback {target}: ")
         try:
             result = runner.plan(rollback_to="previous")
             outcome = runner.apply(

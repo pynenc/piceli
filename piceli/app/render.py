@@ -27,7 +27,12 @@ class RenderError(ValueError):
 
 
 def load_target(entry: str, base: Path) -> Any:
-    """Import ``module:attr`` or ``path/to/file.py:attr`` (``attr`` may be dotted)."""
+    """Import ``module:attr`` or ``path/to/file.py:attr`` (``attr`` may be dotted).
+
+    A file target can import the modules and packages next to it (such as
+    generated CRD models): its directory is appended to ``sys.path``, after
+    every installed package, so a sibling never shadows one.
+    """
     target, sep, attribute = entry.rpartition(":")
     if not sep or not target or not attribute:
         raise RenderError(f"target must be module:attr or file.py:attr, got {entry!r}")
@@ -42,6 +47,8 @@ def load_target(entry: str, base: Path) -> Any:
             if spec is None or spec.loader is None:
                 raise RenderError(f"cannot import {path}")
             module = importlib.util.module_from_spec(spec)
+            if str(path.parent) not in sys.path:
+                sys.path.append(str(path.parent))
             sys.modules[name] = module
             try:
                 spec.loader.exec_module(module)
@@ -107,19 +114,59 @@ def empty_context(namespace: str) -> Any:
     return ReleaseContext(namespace=namespace, images=empty, secrets=empty)
 
 
-def render_target(target: Any, context: Any) -> DeploymentComposition:
-    """Turn an App, a composition, or a function of the context into a composition."""
+def environment_namespace(target: Any, env: str | None) -> str | None:
+    """The ``namespace`` the environment ``env`` of an App target declares."""
+    if env is None or not isinstance(target, App):
+        return None
+    for item in target.environments:
+        if item.name == env:
+            return item.namespace
+    return None
+
+
+def _for_environment(app: App, env: str | None) -> App:
+    return app if env is None else app.for_environment(env)
+
+
+def render_target(
+    target: Any, context: Any, env: str | None = None
+) -> DeploymentComposition:
+    """Turn an App, a composition, or a function of the context into a composition.
+
+    See :func:`render_app_target`, which also returns the rendered App.
+    """
+    return render_app_target(target, context, env)[0]
+
+
+def render_app_target(
+    target: Any, context: Any, env: str | None = None
+) -> tuple[DeploymentComposition, App | None]:
+    """``(composition, app)`` of an App, a composition, or a function of the context.
+
+    ``env`` selects an environment of the App (the target itself, or the one
+    the function returns); ``app`` is the rendered App (``None`` for a
+    composition).
+
+    :raises EnvironmentInvalid: ``environment-unknown``/``environment-invalid``
+        for the App's environments, ``environment-unsupported`` when ``env``
+        is given and the target yields no App.
+    """
+    from piceli.app.environment import EnvironmentInvalid
+
     value = target
-    if isinstance(value, App):
-        return value.composition(context)
-    if isinstance(value, DeploymentComposition):
-        return value
-    if callable(value):
+    if callable(value) and not isinstance(value, App | DeploymentComposition):
         value = value(context)
-        if isinstance(value, App):
-            return value.composition(context)
-        if isinstance(value, DeploymentComposition):
-            return value
+    if isinstance(value, App):
+        app = _for_environment(value, env)
+        return app.composition(context), app
+    if isinstance(value, DeploymentComposition) and env is None:
+        return value, None
+    if env is not None and isinstance(value, DeploymentComposition):
+        raise EnvironmentInvalid(
+            "--env selects an environment of an App; this target renders a "
+            "DeploymentComposition (return the App instead)",
+            "environment-unsupported",
+        )
     raise RenderError(
         "the target must be an App, a DeploymentComposition, or a function of "
         f"the release context returning one; got {type(value).__name__}"
@@ -168,9 +215,14 @@ def to_yaml(components: list[dict[str, Any]]) -> str:
     return "---\n" + "---\n".join(documents) if documents else ""
 
 
-def to_json(namespace: str, components: list[dict[str, Any]]) -> str:
-    return json.dumps(
-        {"state": "rendered", "namespace": namespace, "components": components},
-        indent=2,
-        sort_keys=True,
-    )
+def to_json(
+    namespace: str, components: list[dict[str, Any]], environment: str | None = None
+) -> str:
+    body: dict[str, Any] = {
+        "state": "rendered",
+        "namespace": namespace,
+        "components": components,
+    }
+    if environment is not None:  # added in 0.7.0, only with --env
+        body["environment"] = environment
+    return json.dumps(body, indent=2, sort_keys=True)

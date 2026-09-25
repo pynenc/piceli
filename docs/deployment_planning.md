@@ -248,6 +248,14 @@ non-retained objects whose declared fields are also owned by another manager,
 for example after a `kubectl set image`. It is informational and not part of
 the plan hash.
 
+`autoscaled_replicas(composition, snapshot, field_manager)` returns the
+composition `build_plan` actually plans, with `spec.replicas` of every
+workload a HorizontalPodAutoscaler targets left to the autoscaler (kept as
+the initial size, held at the live value, or dropped once the autoscaler's
+`scale` entry owns it; see {doc}`compatibility`), and one
+`AutoscaledReplicas` report per workload. `build_plan`, `field_drift` and
+`capture_server_dry_runs` apply it themselves; it is idempotent.
+
 **Inherited owners as a grant.** `ExecutionAuthorization.inherited_owner_ids`
 lets the executor treat retained objects of those earlier owner ids as its own
 (an unchanged object is reconciled without a write). Only ids the provider
