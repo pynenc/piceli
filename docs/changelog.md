@@ -10,7 +10,6 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   is a real child group: never `1`, `0` or its own group. A test double's
   `pid` (which converts to `1`) made the forward supervisor send SIGTERM to
   process group 1, which on Linux CI stopped the job itself.
-
 - **Release commands for pipeline releases:** every `piceli release`
   subcommand (`plan`, `preview`, `diff`, `apply`, `rollback`, `resume`,
   `stop`, `check`, `status`, `secret show`) now takes `--spec MODULE:ATTR`
