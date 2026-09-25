@@ -5,7 +5,8 @@ Every command that reaches a cluster takes ``--kubeconfig`` **and** a required
 Piceli's own client nor by the ``kubectl`` processes it starts. Exec
 credential plugins (GKE, EKS, AKS, OIDC) run only with ``--allow-exec``,
 optionally pinned with ``--exec-sha256`` (see ``docs/managed_clusters.md``).
-Refusals print ``{"state": "refused", "reason": ..., "code": ...}`` and exit 2.
+Refusals follow the CLI contract: ``{"state": "rejected", "reason": "<code>",
+"message": ...}`` on stdout (``reason`` a registered error code), exit 2.
 """
 
 from __future__ import annotations

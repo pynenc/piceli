@@ -30,6 +30,10 @@ An access declaration is part of the model, but not part of the cluster:
 
 Everything uses the target's explicit kubeconfig file and context. Piceli never
 reads `KUBECONFIG`, `~/.kube/config` or the current context.
+An exec credential plugin (GKE, EKS, AKS, OIDC) runs only when the target
+allows it: `[target] allow_exec = true` or `Target.kubeconfig(…,
+allow_exec=True)` (see {doc}`managed_clusters`); otherwise `status` reports
+`exec-auth-not-allowed` in `errors` and `access` refuses with that code.
 
 ## Prerequisites
 
@@ -128,9 +132,11 @@ New to Piceli? Start with {doc}`getting_started/index`.
   declarations from the App that `[release] composition` returns; or
 - **`module:attr`** (or `file.py:attr`) of an object with `.app` (a piceli
   `App`) and `.target` (with `.kubeconfig`, `.context` and `.namespace`), such
-  as a pipeline object. Optional: `.release_spec` (a `ReleaseSpec` or a path to
-  `release.toml`) adds the release state, and `.last_checks()` adds the latest
-  checks result.
+  as a pipeline object. For a `piceli.pipeline.Pipeline` the release state
+  `piceli deploy` keeps (`state_dir/release`) is read automatically. For
+  other objects, `.release_spec` (a `ReleaseSpec` or a path to
+  `release.toml`) adds the release state, and `.last_checks()` adds the
+  latest checks result.
 
 ## If it fails
 
@@ -141,6 +147,7 @@ New to Piceli? Start with {doc}`getting_started/index`.
 | `access-unknown-forward` | `--only` names an id that does not exist. | Use an id from `piceli status TARGET --json`. |
 | `access-kubectl-missing` | No `kubectl` found. | Install it or pass `--kubectl PATH`. |
 | `access-kubeconfig-invalid` | The kubeconfig file or context is missing or unusable. | Fix `[target] kubeconfig` / `context`. |
+| `exec-auth-not-allowed` | The context's user runs an exec plugin and the target does not allow it. | Review the plugin, then set `allow_exec` on the target. |
 | `access-target-invalid` | TARGET is neither a readable `release.toml` nor a `module:attr` object with `.app` and `.target`. | Read the message on stderr. |
 | `status` exits `1` with `state: degraded` or `down` | Some workloads are not ready. | Read `workloads[].problems` (for example `CrashLoopBackOff`, restarts). |
 | `status` shows `state: unknown` and `errors: ["status-cluster-unreadable"]` | The cluster could not be read. | Check that the context reaches the cluster, then retry. |

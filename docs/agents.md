@@ -89,7 +89,11 @@ noted.
 - `piceli release diff`: reads the cluster and sends only server-side dry runs
   (`dryRun=All`); prints what `plan` would change, field by field. Writes no
   local state.
-- `piceli release status`: reads local state only.
+- `piceli release status`: reads local state only. Like every `release`
+  command it takes `--spec release.toml` or `--spec MODULE:ATTR` (a
+  pipeline; see {ref}`agents-pipeline-release`).
+- `piceli --version`: prints `piceli <version>` (the JSON form is the
+  `version` field of `piceli help-json`).
 - `piceli status TARGET --json`: reads the release state, the cluster through
   the target's explicit kubeconfig, and probes the declared forwards on
   `127.0.0.1`. It says whether the app is up (`state`) and how to reach it
@@ -175,6 +179,28 @@ unattended CI job for this exact spec.
    restored). Exit `2` with `pipeline-plan-changed` means something changed
    since the plan: plan and ask again.
 
+(agents-pipeline-release)=
+### Operating a pipeline's release
+
+The release a pipeline deployed is operated with the ordinary `piceli release`
+commands, passing the pipeline as `--spec MODULE:ATTR` (for example
+`piceli release status --spec deploy/app.py:pipeline`). They use the same
+state directory, release name, target and composition as `piceli deploy` and
+never build. The approval rules above apply unchanged:
+
+1. `piceli release status --spec MODULE:ATTR` and
+   `piceli release secret show NAME --spec MODULE:ATTR --json` (metadata only)
+   need no approval. Never pass `--reveal` unless the owner asked for the
+   value, and never log it.
+2. To roll back, run `piceli release rollback previous --spec MODULE:ATTR`
+   (exit `3`, prints the plan hash; the plan's `source` is the recorded
+   `oci-set` image set), show the owner the plan, and after approval run it
+   again with `--approve <hash>`.
+3. `plan`/`diff`/`apply` with a pipeline refuse with `pipeline-not-delivered`
+   when the current sources were not built and delivered yet: use
+   `piceli deploy` instead. `pipeline-locked` means a `piceli deploy` of the
+   same state directory is running: wait.
+
 ## When something fails
 
 1. Read `reason` from the JSON.
@@ -225,8 +251,8 @@ missing context is a usage error (exit `2`), never a fallback to the file's
 `current-context`. Do not change the kubeconfig or context an owner has set
 in a spec, and do not pick a context yourself: ask the owner which one to use.
 
-Never add or change `allow_exec`, `exec_sha256` or `exec_pass_env` in a spec,
-or pass `--allow-exec`/`--exec-sha256`, yourself: allowing an exec credential plugin runs a program with the owner's
+Never add or change `allow_exec`, `exec_sha256` or `exec_pass_env` in a spec
+or in a pipeline's `Target`, or pass `--allow-exec`/`--exec-sha256`, yourself: allowing an exec credential plugin runs a program with the owner's
 cloud login ({doc}`managed_clusters`). On `exec-auth-not-allowed`,
 `exec-pin-mismatch` or `auth-provider-refused`, report the code and wait for
 the owner. `exec-plugin-failed` usually means the owner must log in again.

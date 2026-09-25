@@ -193,6 +193,7 @@ def default_check_context(
         base=spec.base,
         transport=target.transport,
         request_seconds=target.request_seconds,
+        exec_policy=spec.kubeconfig_target().exec_policy,
     )
 
 
@@ -1837,7 +1838,9 @@ class ReleaseRunner:
                 try:
                     result = run()
                 except ValueError as error:
-                    self.history.update(execution_id, state="refused")
+                    self.history.update(
+                        execution_id, state="rejected", reason="execution-refused"
+                    )
                     raise ReleaseError(
                         f"execution refused: {error}", code="execution-refused"
                     ) from None

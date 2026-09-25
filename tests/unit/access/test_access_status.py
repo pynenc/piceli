@@ -628,7 +628,7 @@ def test_cli_status_json_is_the_schema_and_exit_code_follows_state(
     assert result.exit_code == 1
     text = result.stdout
     assert text.startswith("shop is DEGRADED  (namespace shop, context demo)")
-    assert "unavailable  Deployment/web  0/1" in text
+    assert "unavailable  Deployment/web     0/1" in text  # columns aligned
     assert f"api={DIGEST[7:19]}" in text
     assert f"up        api          http://127.0.0.1:{upstream}/" in text
     assert f"Start the forwards with: piceli access {spec}" in text

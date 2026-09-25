@@ -204,6 +204,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`pipeline-invalid`](#error-pipeline-invalid) | pipeline | no |
 | [`pipeline-load-failed`](#error-pipeline-load-failed) | pipeline | no |
 | [`pipeline-locked`](#error-pipeline-locked) | pipeline | yes |
+| [`pipeline-not-delivered`](#error-pipeline-not-delivered) | pipeline | no |
 | [`pipeline-not-found`](#error-pipeline-not-found) | pipeline | no |
 | [`pipeline-nothing-to-resume`](#error-pipeline-nothing-to-resume) | pipeline | no |
 | [`pipeline-plan-changed`](#error-pipeline-plan-changed) | pipeline | no |
@@ -2686,10 +2687,18 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Wait for the other run to finish, then run the command again.
 - **Retry-safe:** yes
 
+(error-pipeline-not-delivered)=
+### `pipeline-not-delivered`
+
+**Pipeline images not delivered.** `piceli release plan|preview|diff|apply --spec MODULE:ATTR` plans a new release from the pipeline's current model, but a build image it uses was not built from the current build inputs and delivered (or no image of the pipeline was ever delivered). The release commands never build.
+
+- **Fix:** Run `piceli deploy MODULE:ATTR` (it builds and delivers only what changed). Commands on existing releases (`status`, `rollback`, `secret show`, `stop`, `resume`, `check`) use the recorded images and need no new delivery.
+- **Retry-safe:** no
+
 (error-pipeline-not-found)=
 ### `pipeline-not-found`
 
-**Pipeline not found.** The `MODULE:ATTR` given to `piceli deploy` does not name a file or module, or its attribute is not a `Pipeline`.
+**Pipeline not found.** The `MODULE:ATTR` given to `piceli deploy` (or to `piceli release … --spec`) does not name a file or module, or its attribute is not a `Pipeline`.
 
 - **Fix:** Pass `path/to/app.py:pipeline` or `package.module:pipeline` naming a `piceli.Pipeline` object.
 - **Retry-safe:** no

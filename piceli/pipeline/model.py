@@ -24,6 +24,7 @@ from piceli.pipeline.errors import PipelineError
 if TYPE_CHECKING:
     from piceli.app import App
     from piceli.artifacts.build_spec import BuildSpec
+    from piceli.k8s.ops.exec_credentials import ExecPolicy
     from piceli.pipeline.secrets import Secrets
 
 #: Host of the placeholder a build image handle renders to before delivery.
@@ -89,11 +90,16 @@ class Target:
 
     Attributes: ``kubeconfig`` (path), ``context``, ``namespace``,
     ``cluster_uid``, ``namespace_uid``, ``nodes`` (alias →
-    :class:`TargetNode`), ``transport`` and ``request_seconds``.
+    :class:`TargetNode`), ``transport``, ``request_seconds`` and the exec
+    credential plugin opt-in ``allow_exec``, ``exec_sha256``,
+    ``exec_pass_env`` and ``exec_timeout_seconds`` (the same keys and
+    semantics as ``[target]`` in ``release.toml``; see
+    ``docs/managed_clusters.md``).
 
     Invariants: every node alias is a lowercase identifier; with
     ``cluster_uid``/node UIDs set, the release verifies them against the
-    server before planning.
+    server before planning; a context whose user runs an exec plugin is
+    refused unless ``allow_exec=True``, and the ``exec_*`` options need it.
 
     Example::
 
@@ -116,6 +122,10 @@ class Target:
         nodes: Mapping[str, TargetNode | tuple[str, str | None] | str] | None = None,
         transport: str = "https",
         request_seconds: float = 10.0,
+        allow_exec: bool = False,
+        exec_sha256: str | None = None,
+        exec_pass_env: Sequence[str] = (),
+        exec_timeout_seconds: float | None = None,
         base: Path | None = None,
     ) -> None:
         if not isinstance(context, str) or not context:
@@ -138,6 +148,27 @@ class Target:
                 name, uid = tuple(value)
                 node = TargetNode(str(name), None if uid is None else str(uid))
             parsed[alias] = node
+        if not allow_exec and (
+            exec_sha256 is not None or exec_pass_env or exec_timeout_seconds is not None
+        ):
+            raise PipelineError(
+                "pipeline-invalid", "exec_* target options require allow_exec=True"
+            )
+        if isinstance(exec_pass_env, str):
+            raise PipelineError(
+                "pipeline-invalid", "exec_pass_env must be a list of variable names"
+            )
+        from piceli.k8s.ops.exec_credentials import ExecPolicy
+
+        try:
+            ExecPolicy(
+                allow_exec,
+                exec_sha256,
+                tuple(exec_pass_env),
+                60.0 if exec_timeout_seconds is None else float(exec_timeout_seconds),
+            )
+        except (TypeError, ValueError) as error:
+            raise PipelineError("pipeline-invalid", str(error)) from None
         values = {
             "_kubeconfig": _resolve(kubeconfig, base),
             "context": context,
@@ -147,6 +178,10 @@ class Target:
             "nodes": dict(sorted(parsed.items())),
             "transport": transport,
             "request_seconds": float(request_seconds),
+            "allow_exec": allow_exec,
+            "exec_sha256": exec_sha256,
+            "exec_pass_env": tuple(exec_pass_env),
+            "exec_timeout_seconds": exec_timeout_seconds,
         }
         for key, item in values.items():
             object.__setattr__(self, key, item)
@@ -159,6 +194,10 @@ class Target:
     nodes: dict[str, TargetNode]
     transport: str
     request_seconds: float
+    allow_exec: bool
+    exec_sha256: str | None
+    exec_pass_env: tuple[str, ...]
+    exec_timeout_seconds: float | None
 
     def __setattr__(self, name: str, value: Any) -> None:
         raise AttributeError("Target is immutable")
@@ -175,6 +214,10 @@ class Target:
         nodes: Mapping[str, TargetNode | tuple[str, str | None] | str] | None = None,
         transport: str = "https",
         request_seconds: float = 10.0,
+        allow_exec: bool = False,
+        exec_sha256: str | None = None,
+        exec_pass_env: Sequence[str] = (),
+        exec_timeout_seconds: float | None = None,
     ) -> Target:
         """A target reached with ``kubeconfig`` and ``context`` (both explicit).
 
@@ -186,6 +229,12 @@ class Target:
         :param nodes: Alias → ``(node name, uid or None)`` the target must have.
         :param transport: ``https``, or ``loopback-http`` for a local test API.
         :param request_seconds: Per-request timeout.
+        :param allow_exec: Allow the context's exec credential plugin (GKE,
+            EKS, AKS, OIDC); without it an exec user is refused.
+        :param exec_sha256: Expected ``sha256:<hex>`` of the resolved plugin.
+        :param exec_pass_env: Extra variables passed to the plugin
+            (``PATH`` and ``HOME`` always are).
+        :param exec_timeout_seconds: Limit for one plugin run (default 60).
         """
         return cls(
             kubeconfig,
@@ -196,6 +245,10 @@ class Target:
             nodes=nodes,
             transport=transport,
             request_seconds=request_seconds,
+            allow_exec=allow_exec,
+            exec_sha256=exec_sha256,
+            exec_pass_env=exec_pass_env,
+            exec_timeout_seconds=exec_timeout_seconds,
             base=_caller_dir(),
         )
 
@@ -216,6 +269,31 @@ class Target:
                 f"{sorted(self.nodes)}",
             )
         return alias, self.nodes[alias]
+
+    def exec_policy(self) -> ExecPolicy:
+        """The explicit authority to run the context's exec plugin (if any)."""
+        from piceli.k8s.ops.exec_credentials import ExecPolicy
+
+        return ExecPolicy(
+            self.allow_exec,
+            self.exec_sha256,
+            self.exec_pass_env,
+            60.0 if self.exec_timeout_seconds is None else self.exec_timeout_seconds,
+        )
+
+    def exec_table(self) -> dict[str, Any]:
+        """The ``[target]`` exec keys of a release spec (empty without allow_exec)."""
+        if not self.allow_exec:
+            return {}
+        table: dict[str, Any] = {
+            "allow_exec": True,
+            "exec_pass_env": list(self.exec_pass_env),
+        }
+        if self.exec_sha256 is not None:
+            table["exec_sha256"] = self.exec_sha256
+        if self.exec_timeout_seconds is not None:
+            table["exec_timeout_seconds"] = self.exec_timeout_seconds
+        return table
 
     def identity(self) -> dict[str, Any]:
         """What an approval binds to (never the kubeconfig path)."""

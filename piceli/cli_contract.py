@@ -227,7 +227,12 @@ _EXPLICIT_CONTEXT = (
     "kubectl processes it starts); exec credential plugins need `--allow-exec` "
     "(optionally `--exec-sha256`)."
 )
-_RELEASE_READS = ("release.toml", "composition", "state_dir", "kubeconfig")
+_RELEASE_READS = (
+    "release.toml or pipeline module (--spec MODULE:ATTR)",
+    "composition",
+    "state_dir",
+    "kubeconfig",
+)
 _RELEASE_EXIT = (0, 1, 2, 3)
 
 COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
@@ -385,13 +390,16 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
         "release secret show": _C(
             "Show a generated secret's metadata, or its value with --reveal.",
             contract="conforms",
-            reads=("release.toml", "state_dir (secret store)"),
+            reads=(
+                "release.toml or pipeline module (--spec MODULE:ATTR)",
+                "state_dir (secret store)",
+            ),
             notes="Owner only. Never contacts the cluster; values print only with --reveal or a terminal confirmation.",
         ),
         "release status": _C(
             "Show catalogued releases, executions and history.",
             contract="conforms",
-            reads=("release.toml", "state_dir"),
+            reads=("release.toml or pipeline module (--spec MODULE:ATTR)", "state_dir"),
         ),
         # ------------------------------------------------------- inputs
         "inputs record": _C(
