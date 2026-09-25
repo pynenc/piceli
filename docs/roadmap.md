@@ -51,6 +51,7 @@ Every feature page starts with its maturity, and this table lists them all:
 | Typed apps (`piceli.App`, `piceli render`) | {doc}`typed_apps` | preview |
 | Custom resources and generated models (`app.resource`, `piceli codegen crd`) | {doc}`crds` | preview |
 | Environments (`app.environment`, `--env`, `--diff-env`) | {doc}`environments` | preview |
+| Reference app: dev/staging/prod in one typed module (`examples/reference`, tested on kind) | {doc}`reference_app` | preview |
 | Engine: discovery, plans, executor, journals (Python API) | {doc}`deployment_planning` | preview |
 | Deploy from source (`piceli deploy`, `piceli.pipeline`) | {doc}`deploy` | preview |
 | Deploy a commit (`piceli deploy --ref`) | {ref}`deploy-ref` | preview |

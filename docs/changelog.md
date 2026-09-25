@@ -6,6 +6,22 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ## Version 0.7.0
 
+- **Reference app:** `examples/reference/app.py` deploys a realistic app to
+  dev, staging and prod from one typed module (StatefulSet with claim
+  templates, Job and CronJob, HPA and PDB, HTTPRoute, a cert-manager
+  `Certificate` typed by `piceli codegen crd`, a release-wide NetworkPolicy,
+  RBAC, restricted pods, a SOPS-encrypted password and checks), with render,
+  fake-API and kind tests; walkthrough in `docs/reference_app.md`.
+- Environments: `autoscalers={name: Scaling(min_replicas=…, max_replicas=…,
+  cpu=…, memory=…)}` changes an autoscaler per environment (the `replicas=`
+  refusal pointed at a fix no override could express), and a `resources=`
+  override that drops a request an autoscaler's utilization target needs is
+  refused (`environment-invalid`).
+- `--diff-env` no longer reports the namespace inside RBAC objects (binding
+  subjects, `<namespace>:<app>:<name>` ClusterRole names) as a difference.
+- `Checks.exec(...)` with a StatefulSet or DaemonSet handle targets
+  `statefulset/<name>` or `daemonset/<name>` instead of `deployment/<name>`;
+  a Job or CronJob handle is refused.
 - An environment's `replicas=` on a workload an autoscaler targets is refused
   (`environment-invalid`) instead of being ignored.
 

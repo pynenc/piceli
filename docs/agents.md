@@ -87,7 +87,7 @@ noted.
   as placeholders; it reads no kubeconfig. `--env NAME` renders one
   environment; `--env A --diff-env B` prints their typed difference (use it
   to show the owner what differs before deploying another environment; see
-  {doc}`environments`).
+  {doc}`environments`, and {doc}`reference_app` for a complete example).
 - `piceli codegen crd FILE` (reads the file) and `piceli codegen crd
   --from-cluster --kubeconfig F --context C --crd NAME` (one read of the CRD
   through the explicit context): generate typed models for a custom resource

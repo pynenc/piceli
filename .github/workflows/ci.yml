@@ -45,6 +45,11 @@ jobs:
           enable-cache: true
           cache-dependency-glob: uv.lock
       - run: uv sync --all-extras --python ${{ matrix.python }}
+      - name: Install sops (the reference app's SOPS source)
+        run: |
+          curl -sSfL -o /tmp/sops https://github.com/getsops/sops/releases/download/v3.10.2/sops-v3.10.2.linux.amd64
+          echo "79b0f844237bd4b0446e4dc884dbc1765fc7dedc3968f743d5949c6f2e701739  /tmp/sops" | sha256sum -c -
+          sudo install -m 0755 /tmp/sops /usr/local/bin/sops
       - name: Unit and acceptance tests
         run: uv run pytest --cov --cov-report=term --cov-report=xml
       - name: Store coverage data
@@ -69,8 +74,19 @@ jobs:
           node_image: kindest/node:v1.33.1
           cluster_name: piceli-ci
       - run: uv sync --all-extras --python 3.12
+      - name: Install sops (the reference app's SOPS source)
+        run: |
+          curl -sSfL -o /tmp/sops https://github.com/getsops/sops/releases/download/v3.10.2/sops-v3.10.2.linux.amd64
+          echo "79b0f844237bd4b0446e4dc884dbc1765fc7dedc3968f743d5949c6f2e701739  /tmp/sops" | sha256sum -c -
+          sudo install -m 0755 /tmp/sops /usr/local/bin/sops
       - name: Integration tests
         run: uv run pytest tests/integration --cov --cov-report=term
+      - name: Reference app on kind
+        run: |
+          kind get kubeconfig --name piceli-ci > "$RUNNER_TEMP/kind.kubeconfig"
+          PICELI_KIND_KUBECONFIG="$RUNNER_TEMP/kind.kubeconfig" \
+          PICELI_KIND_CONTEXT=kind-piceli-ci \
+            uv run pytest tests/integration/test_reference_app_kind.py --cov --cov-append --cov-report=term
       - name: Store coverage data
         uses: actions/upload-artifact@v6
         with:

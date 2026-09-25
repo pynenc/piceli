@@ -1,0 +1,4 @@
+# EXAMPLE ONLY: encrypt files under secrets/ for the example's public test key.
+creation_rules:
+  - path_regex: secrets/.*\.enc\.yaml$
+    age: age1uglvfp2gr8qyfck2tmh9hevase96frm0vv0spdmw9xyr2908kfnq7j55hd
