@@ -1,0 +1,27 @@
+{
+  "blocking": [
+    {
+      "code": "resource-requires-adoption",
+      "kind": "Deployment",
+      "message": "exists and is not managed by this release's owner",
+      "name": "web",
+      "suggest": [
+        "Pipeline(adopt=[\"Deployment/web\"])",
+        "Pipeline(replace=[\"Deployment/web\"])"
+      ]
+    },
+    {
+      "code": "resource-requires-adoption",
+      "kind": "Service",
+      "message": "exists and is not managed by this release's owner",
+      "name": "web",
+      "suggest": [
+        "Pipeline(adopt=[\"Service/web\"])",
+        "Pipeline(replace=[\"Service/web\"])"
+      ]
+    }
+  ],
+  "message": "existing objects are not managed by this release's owner: Deployment/web (Pipeline(adopt=[\"Deployment/web\"]) or Pipeline(replace=[\"Deployment/web\"])), Service/web (Pipeline(adopt=[\"Service/web\"]) or Pipeline(replace=[\"Service/web\"])); declare them in the Pipeline: adopt=[\"Kind/name\"] or replace=[\"Kind/name\"], or delete them",
+  "reason": "resource-requires-adoption",
+  "state": "rejected"
+}

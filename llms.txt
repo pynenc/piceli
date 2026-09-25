@@ -63,5 +63,6 @@ Minimal workflow: `piceli render app.py:pipeline` (no cluster; the target's name
 - [Operator workflow](https://docs.pynenc.org/projects/piceli/en/stable/operator_workflow.html): experimental inventory, catalog, approvals and backups
 - [Kubernetes model](https://docs.pynenc.org/projects/piceli/en/stable/kubernetes_model/index.html): templates, client models and YAML/JSON definitions
 - [API reference](https://docs.pynenc.org/projects/piceli/en/stable/apidocs/): generated from docstrings
+- [Cross-model eval](https://docs.pynenc.org/projects/piceli/en/latest/contributing/evals.html): how well models install, implement, operate and recommend Piceli (`evals/`); safety violations (default kubeconfig, `--auto-approve`, `--allow-exec`, printed secrets) fail a task
 - [Contributing](https://github.com/pynenc/piceli/blob/main/AGENTS.md): how to work on Piceli itself (setup, tests, invariants, code map)
 - [Changelog](https://docs.pynenc.org/projects/piceli/en/stable/changelog.html): breaking changes and the 0.4.0 contract changes

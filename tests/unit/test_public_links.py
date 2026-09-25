@@ -19,6 +19,7 @@ DOCS_URL = "https://docs.pynenc.org/projects/piceli/"
 LATEST_ONLY = {
     "comparisons",
     "compatibility",
+    "contributing/evals",
     "crds",
     "environments",
     "gitops",
@@ -58,11 +59,14 @@ def test_public_docs_links_use_the_stable_version() -> None:
     for name, url in links:
         version, _, page = url.removeprefix(DOCS_URL + "en/").partition("/")
         stem = re.split(r"[.#/]", page, maxsplit=1)[0] if page else ""
+        # A page under a directory (``contributing/evals``) may be listed alone.
+        path = re.split(r"[.#]", page, maxsplit=1)[0] if page else ""
+        latest_only = stem in LATEST_ONLY or path in LATEST_ONLY
         if version == "stable":
-            if stem in LATEST_ONLY:
+            if latest_only:
                 wrong.append(f"{name}: {url} is not in the stable docs yet")
         elif version == "latest":
-            if stem not in LATEST_ONLY:
+            if not latest_only:
                 wrong.append(f"{name}: {url} should link /en/stable/")
         else:
             wrong.append(f"{name}: {url} names no version")

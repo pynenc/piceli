@@ -1,0 +1,6792 @@
+{
+ "classes": {
+  "Access": {
+   "attrs": [
+    "forward"
+   ],
+   "init": [],
+   "methods": {
+    "forward": [
+     "description",
+     "health",
+     "label",
+     "local",
+     "name",
+     "path",
+     "port",
+     "required",
+     "restart"
+    ]
+   },
+   "returns": {
+    "forward": "Forward"
+   }
+  },
+  "ApiDefaultedField": {
+   "attr_types": {
+    "resource": "ResourceIdentity"
+   },
+   "attrs": [
+    "json_pointer",
+    "resource"
+   ],
+   "init": [
+    "json_pointer",
+    "resource"
+   ],
+   "methods": {}
+  },
+  "ApiResource": {
+   "attr_types": {
+    "resource_type": "ResourceType",
+    "scope": "ResourceScope"
+   },
+   "attrs": [
+    "plural",
+    "resource_type",
+    "scope"
+   ],
+   "init": [
+    "plural",
+    "resource_type",
+    "scope"
+   ],
+   "methods": {}
+  },
+  "App": {
+   "attr_types": {
+    "access": "Access",
+    "pod_defaults": "PodDefaults",
+    "probe": "Probe"
+   },
+   "attrs": [
+    "access",
+    "add",
+    "added_components",
+    "autoscaler",
+    "composition",
+    "config",
+    "cron_job",
+    "daemon_set",
+    "depends",
+    "deployment",
+    "disruption_budget",
+    "environment",
+    "environments",
+    "for_environment",
+    "http_route",
+    "ingress",
+    "job",
+    "labels",
+    "name",
+    "network_policy",
+    "object_labels",
+    "objects",
+    "override",
+    "owner",
+    "pod_defaults",
+    "probe",
+    "release_selector",
+    "render",
+    "resource",
+    "secret",
+    "selected_environment",
+    "service",
+    "service_account",
+    "shortcuts",
+    "stateful_set"
+   ],
+   "init": [
+    "labels",
+    "name",
+    "owner",
+    "pod_defaults"
+   ],
+   "methods": {
+    "add": [
+     "component"
+    ],
+    "added_components": [],
+    "autoscaler": [
+     "cpu",
+     "max_replicas",
+     "memory",
+     "min_replicas",
+     "name",
+     "scale_down_stabilization_seconds",
+     "workload"
+    ],
+    "composition": [
+     "ctx"
+    ],
+    "config": [
+     "component",
+     "data",
+     "name"
+    ],
+    "cron_job": [
+     "active_deadline_seconds",
+     "args",
+     "automount_token",
+     "backoff_limit",
+     "command",
+     "completions",
+     "component",
+     "concurrency",
+     "container",
+     "env",
+     "failed_jobs_history",
+     "image",
+     "init",
+     "labels",
+     "live",
+     "name",
+     "node",
+     "node_selector",
+     "parallelism",
+     "ports",
+     "pull_policy",
+     "ready",
+     "resources",
+     "restart_policy",
+     "schedule",
+     "security",
+     "service_account",
+     "share_process_namespace",
+     "sidecars",
+     "starting_deadline_seconds",
+     "startup",
+     "successful_jobs_history",
+     "suspend",
+     "termination_grace_seconds",
+     "time_zone",
+     "ttl_seconds_after_finished",
+     "volumes",
+     "working_dir"
+    ],
+    "daemon_set": [
+     "args",
+     "automount_token",
+     "command",
+     "component",
+     "container",
+     "env",
+     "image",
+     "init",
+     "labels",
+     "live",
+     "min_ready_seconds",
+     "name",
+     "node",
+     "node_selector",
+     "ports",
+     "pull_policy",
+     "ready",
+     "resources",
+     "security",
+     "selector",
+     "service_account",
+     "share_process_namespace",
+     "sidecars",
+     "startup",
+     "termination_grace_seconds",
+     "update_strategy",
+     "volumes",
+     "working_dir"
+    ],
+    "depends": [
+     "dependent",
+     "on"
+    ],
+    "deployment": [
+     "access",
+     "args",
+     "automount_token",
+     "command",
+     "component",
+     "container",
+     "env",
+     "image",
+     "init",
+     "labels",
+     "live",
+     "name",
+     "node",
+     "node_selector",
+     "ports",
+     "pull_policy",
+     "ready",
+     "replicas",
+     "resources",
+     "security",
+     "selector",
+     "service_account",
+     "share_process_namespace",
+     "sidecars",
+     "startup",
+     "strategy",
+     "termination_grace_seconds",
+     "volumes",
+     "working_dir"
+    ],
+    "disruption_budget": [
+     "max_unavailable",
+     "min_available",
+     "name",
+     "unhealthy_pod_eviction",
+     "workload"
+    ],
+    "environment": [
+     "autoscalers",
+     "config",
+     "enabled",
+     "environment",
+     "hosts",
+     "identity",
+     "images",
+     "name",
+     "namespace",
+     "node_selector",
+     "replicas",
+     "resources",
+     "specs",
+     "values"
+    ],
+    "for_environment": [
+     "name"
+    ],
+    "http_route": [
+     "component",
+     "gateway",
+     "hosts",
+     "name",
+     "routes"
+    ],
+    "ingress": [
+     "class_name",
+     "component",
+     "hosts",
+     "name",
+     "routes",
+     "tls_secret"
+    ],
+    "job": [
+     "active_deadline_seconds",
+     "args",
+     "automount_token",
+     "backoff_limit",
+     "command",
+     "completions",
+     "component",
+     "container",
+     "env",
+     "image",
+     "init",
+     "labels",
+     "live",
+     "name",
+     "node",
+     "node_selector",
+     "parallelism",
+     "ports",
+     "pull_policy",
+     "ready",
+     "resources",
+     "restart_policy",
+     "security",
+     "service_account",
+     "share_process_namespace",
+     "sidecars",
+     "startup",
+     "termination_grace_seconds",
+     "ttl_seconds_after_finished",
+     "volumes",
+     "working_dir"
+    ],
+    "network_policy": [
+     "allow_from",
+     "allow_from_selector",
+     "component",
+     "name",
+     "ports",
+     "selector",
+     "workload"
+    ],
+    "override": [
+     "item",
+     "patch"
+    ],
+    "render": [
+     "namespace",
+     "nodes"
+    ],
+    "resource": [
+     "annotations",
+     "api_version",
+     "component",
+     "fields",
+     "kind",
+     "labels",
+     "name",
+     "public",
+     "scope",
+     "spec"
+    ],
+    "secret": [
+     "component",
+     "data",
+     "name",
+     "type"
+    ],
+    "service": [
+     "access",
+     "name",
+     "port",
+     "ports",
+     "target_port",
+     "type",
+     "workload"
+    ],
+    "service_account": [
+     "cluster_rules",
+     "component",
+     "name",
+     "rules"
+    ],
+    "shortcuts": [
+     "namespace"
+    ],
+    "stateful_set": [
+     "args",
+     "automount_token",
+     "command",
+     "component",
+     "container",
+     "env",
+     "headless",
+     "image",
+     "init",
+     "labels",
+     "live",
+     "min_ready_seconds",
+     "name",
+     "node",
+     "node_selector",
+     "pod_management",
+     "ports",
+     "pull_policy",
+     "ready",
+     "replicas",
+     "resources",
+     "security",
+     "selector",
+     "service_account",
+     "service_name",
+     "share_process_namespace",
+     "sidecars",
+     "startup",
+     "termination_grace_seconds",
+     "update_strategy",
+     "volumes",
+     "working_dir"
+    ]
+   },
+   "pydantic": true,
+   "returns": {
+    "autoscaler": "Autoscaler",
+    "composition": "DeploymentComposition",
+    "config": "Config",
+    "cron_job": "CronJob",
+    "daemon_set": "DaemonSet",
+    "deployment": "Deployment",
+    "disruption_budget": "DisruptionBudget",
+    "environment": "Environment",
+    "for_environment": "App",
+    "http_route": "HttpRoute",
+    "ingress": "Ingress",
+    "job": "Job",
+    "network_policy": "NetworkPolicy",
+    "render": "DeploymentComposition",
+    "resource": "Resource",
+    "secret": "Secret",
+    "service": "Service",
+    "service_account": "ServiceAccount",
+    "stateful_set": "StatefulSet"
+   }
+  },
+  "ApplyProbeResult": {
+   "attr_types": {
+    "resource": "ResourceIdentity",
+    "status": "ApplyProbeStatus"
+   },
+   "attrs": [
+    "conflicting_fields",
+    "resource",
+    "status"
+   ],
+   "init": [
+    "conflicting_fields",
+    "resource",
+    "status"
+   ],
+   "methods": {}
+  },
+  "ApplyProbeStatus": {
+   "attrs": [
+    "ACCEPTED",
+    "CONFLICT",
+    "DENIED",
+    "UNSUPPORTED",
+    "capitalize",
+    "casefold",
+    "center",
+    "count",
+    "encode",
+    "endswith",
+    "expandtabs",
+    "find",
+    "format",
+    "format_map",
+    "index",
+    "isalnum",
+    "isalpha",
+    "isascii",
+    "isdecimal",
+    "isdigit",
+    "isidentifier",
+    "islower",
+    "isnumeric",
+    "isprintable",
+    "isspace",
+    "istitle",
+    "isupper",
+    "join",
+    "ljust",
+    "lower",
+    "lstrip",
+    "maketrans",
+    "partition",
+    "removeprefix",
+    "removesuffix",
+    "replace",
+    "rfind",
+    "rindex",
+    "rjust",
+    "rpartition",
+    "rsplit",
+    "rstrip",
+    "split",
+    "splitlines",
+    "startswith",
+    "strip",
+    "swapcase",
+    "title",
+    "translate",
+    "upper",
+    "zfill"
+   ],
+   "init": [],
+   "methods": {
+    "capitalize": [],
+    "casefold": [],
+    "center": [
+     "fillchar",
+     "width"
+    ],
+    "count": null,
+    "encode": [
+     "encoding",
+     "errors"
+    ],
+    "endswith": null,
+    "expandtabs": [
+     "tabsize"
+    ],
+    "find": null,
+    "format": null,
+    "format_map": [
+     "mapping"
+    ],
+    "index": null,
+    "isalnum": [],
+    "isalpha": [],
+    "isascii": [],
+    "isdecimal": [],
+    "isdigit": [],
+    "isidentifier": [],
+    "islower": [],
+    "isnumeric": [],
+    "isprintable": [],
+    "isspace": [],
+    "istitle": [],
+    "isupper": [],
+    "join": [
+     "iterable"
+    ],
+    "ljust": [
+     "fillchar",
+     "width"
+    ],
+    "lower": [],
+    "lstrip": [
+     "chars"
+    ],
+    "maketrans": null,
+    "partition": [
+     "sep"
+    ],
+    "removeprefix": [
+     "prefix"
+    ],
+    "removesuffix": [
+     "suffix"
+    ],
+    "replace": [
+     "count",
+     "new",
+     "old"
+    ],
+    "rfind": null,
+    "rindex": null,
+    "rjust": [
+     "fillchar",
+     "width"
+    ],
+    "rpartition": [
+     "sep"
+    ],
+    "rsplit": [
+     "maxsplit",
+     "sep"
+    ],
+    "rstrip": [
+     "chars"
+    ],
+    "split": [
+     "maxsplit",
+     "sep"
+    ],
+    "splitlines": [
+     "keepends"
+    ],
+    "startswith": null,
+    "strip": [
+     "chars"
+    ],
+    "swapcase": [],
+    "title": [],
+    "translate": [
+     "table"
+    ],
+    "upper": [],
+    "zfill": [
+     "width"
+    ]
+   }
+  },
+  "Autoscaler": {
+   "attr_types": {
+    "target_kind": "Deployment"
+   },
+   "attrs": [
+    "component",
+    "component_name",
+    "cpu",
+    "manifest",
+    "max_replicas",
+    "memory",
+    "min_replicas",
+    "name",
+    "scale_down_stabilization_seconds",
+    "target",
+    "target_kind"
+   ],
+   "init": [
+    "component",
+    "cpu",
+    "max_replicas",
+    "memory",
+    "min_replicas",
+    "name",
+    "scale_down_stabilization_seconds",
+    "target",
+    "target_kind"
+   ],
+   "methods": {
+    "manifest": [
+     "labels",
+     "namespace"
+    ]
+   },
+   "pydantic": true
+  },
+  "AwsSecretSpec": {
+   "attrs": [
+    "encoding",
+    "endpoint_url",
+    "key",
+    "profile",
+    "region",
+    "secret_id",
+    "source",
+    "timeout_seconds",
+    "type",
+    "version_id",
+    "version_stage"
+   ],
+   "init": [
+    "encoding",
+    "endpoint_url",
+    "key",
+    "profile",
+    "region",
+    "secret_id",
+    "timeout_seconds",
+    "type",
+    "version_id",
+    "version_stage"
+   ],
+   "methods": {
+    "source": []
+   },
+   "pydantic": true
+  },
+  "Build": {
+   "attrs": [
+    "dockerfile",
+    "image_names",
+    "load",
+    "spec"
+   ],
+   "init": [
+    "base",
+    "document",
+    "images",
+    "lock",
+    "path"
+   ],
+   "methods": {
+    "dockerfile": [
+     "args",
+     "builder",
+     "builder_arg",
+     "context",
+     "dockerfile",
+     "exclude",
+     "include",
+     "name",
+     "network",
+     "platform",
+     "repository",
+     "smoke",
+     "source",
+     "sources",
+     "targets",
+     "timeout_seconds"
+    ],
+    "image_names": [],
+    "load": [],
+    "spec": [
+     "lock",
+     "path"
+    ]
+   },
+   "returns": {
+    "dockerfile": "Build",
+    "spec": "Build"
+   }
+  },
+  "CheckContext": {
+   "attrs": [
+    "app",
+    "base",
+    "state_dir"
+   ],
+   "init": [
+    "app",
+    "base",
+    "context",
+    "images",
+    "kubeconfig",
+    "namespace",
+    "release",
+    "state_dir",
+    "target"
+   ],
+   "methods": {}
+  },
+  "CheckError": {
+   "attrs": [
+    "add_note",
+    "args",
+    "with_traceback"
+   ],
+   "init": [
+    "code",
+    "message"
+   ],
+   "methods": {
+    "add_note": [
+     "note"
+    ],
+    "with_traceback": [
+     "tb"
+    ]
+   }
+  },
+  "CheckFailed": {
+   "attrs": [
+    "add_note",
+    "args",
+    "with_traceback"
+   ],
+   "init": [
+    "detail"
+   ],
+   "methods": {
+    "add_note": [
+     "note"
+    ],
+    "with_traceback": [
+     "tb"
+    ]
+   }
+  },
+  "CheckReport": {
+   "attr_types": {
+    "results": "CheckResult"
+   },
+   "attrs": [
+    "failed",
+    "passed",
+    "results",
+    "to_dict"
+   ],
+   "init": [
+    "passed",
+    "results"
+   ],
+   "methods": {
+    "to_dict": []
+   }
+  },
+  "CheckReportLike": {
+   "attrs": [
+    "passed",
+    "results"
+   ],
+   "init": null,
+   "methods": {}
+  },
+  "CheckResult": {
+   "attrs": [
+    "attempts",
+    "code",
+    "detail",
+    "duration",
+    "name",
+    "passed",
+    "to_dict",
+    "type"
+   ],
+   "init": [
+    "attempts",
+    "code",
+    "detail",
+    "duration",
+    "name",
+    "passed",
+    "type"
+   ],
+   "methods": {
+    "to_dict": []
+   }
+  },
+  "CheckRunner": {
+   "attrs": [],
+   "init": null,
+   "methods": {}
+  },
+  "CheckSpecError": {
+   "attrs": [
+    "add_note",
+    "args",
+    "with_traceback"
+   ],
+   "init": [
+    "code",
+    "message"
+   ],
+   "methods": {
+    "add_note": [
+     "note"
+    ],
+    "with_traceback": [
+     "tb"
+    ]
+   }
+  },
+  "Checks": {
+   "attrs": [
+    "exec",
+    "http",
+    "metric",
+    "python"
+   ],
+   "init": [],
+   "methods": {
+    "exec": null,
+    "http": null,
+    "metric": null,
+    "python": null
+   },
+   "returns": {
+    "exec": "ExecCheck",
+    "http": "HttpCheck",
+    "metric": "MetricCheck",
+    "python": "PythonCheck"
+   }
+  },
+  "ClaimTemplate": {
+   "attrs": [
+    "access_modes",
+    "kind",
+    "name",
+    "read_only",
+    "size",
+    "source",
+    "storage_class",
+    "template",
+    "volume_name"
+   ],
+   "init": [
+    "access_modes",
+    "kind",
+    "name",
+    "read_only",
+    "size",
+    "storage_class"
+   ],
+   "methods": {
+    "source": [],
+    "template": [],
+    "volume_name": [
+     "mount_path"
+    ]
+   },
+   "pydantic": true
+  },
+  "CombinedPlan": {
+   "attrs": [
+    "combined_hash",
+    "hashed",
+    "stages",
+    "to_dict",
+    "until",
+    "work"
+   ],
+   "init": [
+    "combined_hash",
+    "hashed",
+    "stages",
+    "until",
+    "work"
+   ],
+   "methods": {
+    "to_dict": []
+   }
+  },
+  "Config": {
+   "attrs": [
+    "component",
+    "component_name",
+    "data",
+    "key",
+    "name"
+   ],
+   "init": [
+    "component",
+    "data",
+    "name"
+   ],
+   "methods": {
+    "key": [
+     "key"
+    ]
+   },
+   "pydantic": true,
+   "returns": {
+    "key": "ConfigKey"
+   }
+  },
+  "ConfigKey": {
+   "attrs": [
+    "config",
+    "key",
+    "manifest",
+    "optional"
+   ],
+   "init": [
+    "config",
+    "key",
+    "optional"
+   ],
+   "methods": {
+    "manifest": []
+   },
+   "pydantic": true
+  },
+  "ConfigVolume": {
+   "attrs": [
+    "config",
+    "default_mode",
+    "items",
+    "kind",
+    "name",
+    "source",
+    "volume_name"
+   ],
+   "init": [
+    "config",
+    "default_mode",
+    "items",
+    "kind",
+    "name"
+   ],
+   "methods": {
+    "source": [],
+    "volume_name": [
+     "mount_path"
+    ]
+   },
+   "pydantic": true
+  },
+  "Container": {
+   "attr_types": {
+    "env": "SecretKey",
+    "live": "Probe",
+    "ready": "Probe",
+    "resources": "Resources",
+    "startup": "Probe",
+    "volumes": "ConfigVolume"
+   },
+   "attrs": [
+    "args",
+    "command",
+    "env",
+    "has_probes",
+    "image",
+    "live",
+    "manifest",
+    "mounts",
+    "name",
+    "ports",
+    "pull_policy",
+    "ready",
+    "references",
+    "resources",
+    "startup",
+    "volumes",
+    "working_dir"
+   ],
+   "init": [
+    "args",
+    "command",
+    "env",
+    "image",
+    "live",
+    "name",
+    "ports",
+    "pull_policy",
+    "ready",
+    "resources",
+    "startup",
+    "volumes",
+    "working_dir"
+   ],
+   "methods": {
+    "manifest": [],
+    "mounts": [],
+    "references": []
+   },
+   "pydantic": true
+  },
+  "ContainerPort": {
+   "attrs": [
+    "manifest",
+    "name",
+    "port",
+    "protocol"
+   ],
+   "init": [
+    "name",
+    "port",
+    "protocol"
+   ],
+   "methods": {
+    "manifest": []
+   },
+   "pydantic": true
+  },
+  "CronJob": {
+   "attr_types": {
+    "security": "Security"
+   },
+   "attrs": [
+    "accepts_claim_templates",
+    "active_deadline_seconds",
+    "all_containers",
+    "automount_token",
+    "backoff_limit",
+    "check_defaults",
+    "claim_templates",
+    "completions",
+    "component",
+    "component_name",
+    "concurrency",
+    "containers",
+    "existing_claims",
+    "failed_jobs_history",
+    "init_containers",
+    "job_spec",
+    "kind",
+    "label",
+    "labels",
+    "manifest",
+    "name",
+    "node",
+    "node_labels",
+    "node_selector",
+    "parallelism",
+    "pod_labels",
+    "pod_spec",
+    "references",
+    "restart_policy",
+    "schedule",
+    "security",
+    "selector",
+    "selector_labels",
+    "service_account",
+    "share_process_namespace",
+    "starting_deadline_seconds",
+    "successful_jobs_history",
+    "suspend",
+    "termination_grace_seconds",
+    "time_zone",
+    "ttl_seconds_after_finished",
+    "volumes"
+   ],
+   "init": [
+    "active_deadline_seconds",
+    "automount_token",
+    "backoff_limit",
+    "completions",
+    "component",
+    "concurrency",
+    "containers",
+    "failed_jobs_history",
+    "init_containers",
+    "labels",
+    "name",
+    "node",
+    "node_selector",
+    "parallelism",
+    "restart_policy",
+    "schedule",
+    "security",
+    "selector",
+    "service_account",
+    "share_process_namespace",
+    "starting_deadline_seconds",
+    "successful_jobs_history",
+    "suspend",
+    "termination_grace_seconds",
+    "time_zone",
+    "ttl_seconds_after_finished"
+   ],
+   "methods": {
+    "accepts_claim_templates": [],
+    "check_defaults": [
+     "defaults"
+    ],
+    "claim_templates": [],
+    "existing_claims": [],
+    "job_spec": [
+     "app_labels",
+     "automount_token",
+     "defaults",
+     "node_name"
+    ],
+    "manifest": [
+     "app_labels",
+     "automount_token",
+     "defaults",
+     "namespace",
+     "node_name",
+     "scaled"
+    ],
+    "node_labels": [
+     "defaults"
+    ],
+    "pod_labels": [
+     "app_labels"
+    ],
+    "pod_spec": [
+     "automount_token",
+     "defaults",
+     "node_name",
+     "restart_policy"
+    ],
+    "references": [],
+    "volumes": []
+   },
+   "pydantic": true,
+   "returns": {
+    "claim_templates": "ClaimTemplate"
+   }
+  },
+  "DaemonSet": {
+   "attr_types": {
+    "security": "Security"
+   },
+   "attrs": [
+    "accepts_claim_templates",
+    "all_containers",
+    "automount_token",
+    "check_defaults",
+    "claim_templates",
+    "component",
+    "component_name",
+    "containers",
+    "existing_claims",
+    "init_containers",
+    "kind",
+    "label",
+    "labels",
+    "manifest",
+    "min_ready_seconds",
+    "name",
+    "node",
+    "node_labels",
+    "node_selector",
+    "pod_labels",
+    "pod_spec",
+    "references",
+    "security",
+    "selector",
+    "selector_labels",
+    "service_account",
+    "share_process_namespace",
+    "termination_grace_seconds",
+    "update_strategy",
+    "volumes"
+   ],
+   "init": [
+    "automount_token",
+    "component",
+    "containers",
+    "init_containers",
+    "labels",
+    "min_ready_seconds",
+    "name",
+    "node",
+    "node_selector",
+    "security",
+    "selector",
+    "service_account",
+    "share_process_namespace",
+    "termination_grace_seconds",
+    "update_strategy"
+   ],
+   "methods": {
+    "accepts_claim_templates": [],
+    "check_defaults": [
+     "defaults"
+    ],
+    "claim_templates": [],
+    "existing_claims": [],
+    "manifest": [
+     "app_labels",
+     "automount_token",
+     "defaults",
+     "namespace",
+     "node_name",
+     "scaled"
+    ],
+    "node_labels": [
+     "defaults"
+    ],
+    "pod_labels": [
+     "app_labels"
+    ],
+    "pod_spec": [
+     "automount_token",
+     "defaults",
+     "node_name",
+     "restart_policy"
+    ],
+    "references": [],
+    "volumes": []
+   },
+   "pydantic": true,
+   "returns": {
+    "claim_templates": "ClaimTemplate"
+   }
+  },
+  "Deployment": {
+   "attr_types": {
+    "access": "Forward",
+    "security": "Security"
+   },
+   "attrs": [
+    "accepts_claim_templates",
+    "access",
+    "access_port",
+    "all_containers",
+    "automount_token",
+    "check_defaults",
+    "claim_templates",
+    "component",
+    "component_name",
+    "containers",
+    "existing_claims",
+    "init_containers",
+    "kind",
+    "label",
+    "labels",
+    "manifest",
+    "name",
+    "node",
+    "node_labels",
+    "node_selector",
+    "pod_labels",
+    "pod_spec",
+    "references",
+    "replicas",
+    "security",
+    "selector",
+    "selector_labels",
+    "service_account",
+    "share_process_namespace",
+    "strategy",
+    "termination_grace_seconds",
+    "volumes"
+   ],
+   "init": [
+    "access",
+    "automount_token",
+    "component",
+    "containers",
+    "init_containers",
+    "labels",
+    "name",
+    "node",
+    "node_selector",
+    "replicas",
+    "security",
+    "selector",
+    "service_account",
+    "share_process_namespace",
+    "strategy",
+    "termination_grace_seconds"
+   ],
+   "methods": {
+    "accepts_claim_templates": [],
+    "access_port": [],
+    "check_defaults": [
+     "defaults"
+    ],
+    "claim_templates": [],
+    "existing_claims": [],
+    "manifest": [
+     "app_labels",
+     "automount_token",
+     "defaults",
+     "namespace",
+     "node_name",
+     "scaled"
+    ],
+    "node_labels": [
+     "defaults"
+    ],
+    "pod_labels": [
+     "app_labels"
+    ],
+    "pod_spec": [
+     "automount_token",
+     "defaults",
+     "node_name",
+     "restart_policy"
+    ],
+    "references": [],
+    "volumes": []
+   },
+   "pydantic": true,
+   "returns": {
+    "claim_templates": "ClaimTemplate"
+   }
+  },
+  "DeploymentComponent": {
+   "attrs": [
+    "dependencies",
+    "name",
+    "resources"
+   ],
+   "init": [
+    "dependencies",
+    "name",
+    "resources"
+   ],
+   "methods": {}
+  },
+  "DeploymentComposition": {
+   "attrs": [
+    "components"
+   ],
+   "init": [
+    "components"
+   ],
+   "methods": {}
+  },
+  "DiscoveredResource": {
+   "attr_types": {
+    "identity": "ResourceIdentity",
+    "ownership": "Ownership"
+   },
+   "attrs": [
+    "content_complete",
+    "from_manifest",
+    "from_public_dict",
+    "identity",
+    "manifest",
+    "ownership",
+    "public_dict",
+    "retained"
+   ],
+   "init": [
+    "_manifest_json",
+    "content_complete",
+    "identity",
+    "ownership",
+    "retained"
+   ],
+   "methods": {
+    "from_manifest": [
+     "content_complete",
+     "manifest",
+     "ownership",
+     "retained",
+     "scope"
+    ],
+    "from_public_dict": [
+     "value"
+    ],
+    "public_dict": []
+   },
+   "returns": {
+    "from_manifest": "DiscoveredResource",
+    "from_public_dict": "DiscoveredResource"
+   }
+  },
+  "DiscoveryFailureKind": {
+   "attrs": [
+    "API_UNAVAILABLE",
+    "DEADLINE_EXCEEDED",
+    "INVALID_PAGE",
+    "LIMIT_EXCEEDED",
+    "PROVIDER_ERROR",
+    "RBAC_DENIED",
+    "capitalize",
+    "casefold",
+    "center",
+    "count",
+    "encode",
+    "endswith",
+    "expandtabs",
+    "find",
+    "format",
+    "format_map",
+    "index",
+    "isalnum",
+    "isalpha",
+    "isascii",
+    "isdecimal",
+    "isdigit",
+    "isidentifier",
+    "islower",
+    "isnumeric",
+    "isprintable",
+    "isspace",
+    "istitle",
+    "isupper",
+    "join",
+    "ljust",
+    "lower",
+    "lstrip",
+    "maketrans",
+    "partition",
+    "removeprefix",
+    "removesuffix",
+    "replace",
+    "rfind",
+    "rindex",
+    "rjust",
+    "rpartition",
+    "rsplit",
+    "rstrip",
+    "split",
+    "splitlines",
+    "startswith",
+    "strip",
+    "swapcase",
+    "title",
+    "translate",
+    "upper",
+    "zfill"
+   ],
+   "init": [],
+   "methods": {
+    "capitalize": [],
+    "casefold": [],
+    "center": [
+     "fillchar",
+     "width"
+    ],
+    "count": null,
+    "encode": [
+     "encoding",
+     "errors"
+    ],
+    "endswith": null,
+    "expandtabs": [
+     "tabsize"
+    ],
+    "find": null,
+    "format": null,
+    "format_map": [
+     "mapping"
+    ],
+    "index": null,
+    "isalnum": [],
+    "isalpha": [],
+    "isascii": [],
+    "isdecimal": [],
+    "isdigit": [],
+    "isidentifier": [],
+    "islower": [],
+    "isnumeric": [],
+    "isprintable": [],
+    "isspace": [],
+    "istitle": [],
+    "isupper": [],
+    "join": [
+     "iterable"
+    ],
+    "ljust": [
+     "fillchar",
+     "width"
+    ],
+    "lower": [],
+    "lstrip": [
+     "chars"
+    ],
+    "maketrans": null,
+    "partition": [
+     "sep"
+    ],
+    "removeprefix": [
+     "prefix"
+    ],
+    "removesuffix": [
+     "suffix"
+    ],
+    "replace": [
+     "count",
+     "new",
+     "old"
+    ],
+    "rfind": null,
+    "rindex": null,
+    "rjust": [
+     "fillchar",
+     "width"
+    ],
+    "rpartition": [
+     "sep"
+    ],
+    "rsplit": [
+     "maxsplit",
+     "sep"
+    ],
+    "rstrip": [
+     "chars"
+    ],
+    "split": [
+     "maxsplit",
+     "sep"
+    ],
+    "splitlines": [
+     "keepends"
+    ],
+    "startswith": null,
+    "strip": [
+     "chars"
+    ],
+    "swapcase": [],
+    "title": [],
+    "translate": [
+     "table"
+    ],
+    "upper": [],
+    "zfill": [
+     "width"
+    ]
+   }
+  },
+  "DiscoveryPage": {
+   "attr_types": {
+    "api_resource": "ApiResource",
+    "failure": "DiscoveryFailureKind",
+    "target": "PlanTarget"
+   },
+   "attrs": [
+    "api_resource",
+    "continuation",
+    "defaulted_fields",
+    "failure",
+    "list_resource_version",
+    "resources",
+    "target"
+   ],
+   "init": [
+    "api_resource",
+    "continuation",
+    "defaulted_fields",
+    "failure",
+    "list_resource_version",
+    "resources",
+    "target"
+   ],
+   "methods": {}
+  },
+  "DiscoverySpec": {
+   "attrs": [
+    "call_seconds",
+    "kinds",
+    "max_seconds"
+   ],
+   "init": [
+    "call_seconds",
+    "kinds",
+    "max_seconds"
+   ],
+   "methods": {},
+   "pydantic": true
+  },
+  "DisruptionBudget": {
+   "attrs": [
+    "component",
+    "component_name",
+    "manifest",
+    "max_unavailable",
+    "min_available",
+    "name",
+    "selector",
+    "unhealthy_pod_eviction"
+   ],
+   "init": [
+    "component",
+    "max_unavailable",
+    "min_available",
+    "name",
+    "selector",
+    "unhealthy_pod_eviction"
+   ],
+   "methods": {
+    "manifest": [
+     "labels",
+     "namespace"
+    ]
+   },
+   "pydantic": true
+  },
+  "Environment": {
+   "attr_types": {
+    "autoscalers": "Scaling",
+    "resources": "Resources"
+   },
+   "attrs": [
+    "autoscalers",
+    "config",
+    "enabled",
+    "hosts",
+    "identity",
+    "images",
+    "name",
+    "namespace",
+    "node_selector",
+    "replicas",
+    "resources",
+    "specs",
+    "values"
+   ],
+   "init": [
+    "autoscalers",
+    "config",
+    "enabled",
+    "hosts",
+    "images",
+    "name",
+    "namespace",
+    "node_selector",
+    "replicas",
+    "resources",
+    "specs"
+   ],
+   "methods": {
+    "identity": [],
+    "values": []
+   },
+   "pydantic": true
+  },
+  "ExecCheck": {
+   "attrs": [
+    "command",
+    "container",
+    "expect_exit",
+    "interval",
+    "label",
+    "name",
+    "output_contains",
+    "public_dict",
+    "retries",
+    "target",
+    "timeout",
+    "type"
+   ],
+   "init": [
+    "command",
+    "container",
+    "expect_exit",
+    "interval",
+    "name",
+    "output_contains",
+    "retries",
+    "target",
+    "timeout",
+    "type"
+   ],
+   "methods": {
+    "public_dict": []
+   },
+   "pydantic": true
+  },
+  "ExecPolicy": {
+   "attrs": [
+    "allow",
+    "pass_env",
+    "sha256",
+    "timeout_seconds"
+   ],
+   "init": [
+    "allow",
+    "pass_env",
+    "sha256",
+    "timeout_seconds"
+   ],
+   "methods": {}
+  },
+  "ExecResult": {
+   "attrs": [
+    "exit_code",
+    "stderr",
+    "stdout"
+   ],
+   "init": [
+    "exit_code",
+    "stderr",
+    "stdout"
+   ],
+   "methods": {}
+  },
+  "ExecutionSpec": {
+   "attrs": [
+    "max_actions",
+    "max_polls",
+    "max_seconds",
+    "poll_seconds",
+    "readiness_seconds",
+    "write_settle_seconds"
+   ],
+   "init": [
+    "max_actions",
+    "max_polls",
+    "max_seconds",
+    "poll_seconds",
+    "readiness_seconds",
+    "write_settle_seconds"
+   ],
+   "methods": {},
+   "pydantic": true
+  },
+  "ExistingClaim": {
+   "attrs": [
+    "claim",
+    "kind",
+    "name",
+    "read_only",
+    "source",
+    "volume_name"
+   ],
+   "init": [
+    "claim",
+    "kind",
+    "name",
+    "read_only"
+   ],
+   "methods": {
+    "source": [],
+    "volume_name": [
+     "mount_path"
+    ]
+   },
+   "pydantic": true
+  },
+  "FakeAPI": {
+   "attrs": [
+    "add_node",
+    "handler",
+    "inject",
+    "managers",
+    "put",
+    "route",
+    "scale"
+   ],
+   "init": [
+    "types"
+   ],
+   "methods": {
+    "add_node": [
+     "architecture",
+     "name",
+     "uid"
+    ],
+    "handler": [],
+    "inject": null,
+    "managers": [
+     "kind",
+     "name"
+    ],
+    "put": [
+     "managers",
+     "owned",
+     "uid",
+     "value"
+    ],
+    "route": [
+     "request"
+    ],
+    "scale": [
+     "kind",
+     "manager",
+     "name",
+     "replicas"
+    ]
+   }
+  },
+  "FakeCluster": {
+   "attr_types": {
+    "api": "FakeAPI",
+    "provider": "KubernetesProvider"
+   },
+   "attrs": [
+    "api",
+    "kubeconfig",
+    "namespace",
+    "provider",
+    "url"
+   ],
+   "init": [
+    "api",
+    "provider",
+    "url"
+   ],
+   "methods": {
+    "kubeconfig": [
+     "context",
+     "path"
+    ]
+   }
+  },
+  "FieldRef": {
+   "attrs": [
+    "field_path",
+    "manifest"
+   ],
+   "init": [
+    "field_path"
+   ],
+   "methods": {
+    "manifest": []
+   },
+   "pydantic": true
+  },
+  "Forward": {
+   "attr_types": {
+    "health": "HealthProbe",
+    "restart": "RestartPolicy"
+   },
+   "attrs": [
+    "description",
+    "health",
+    "label",
+    "local",
+    "name",
+    "path",
+    "port",
+    "required",
+    "restart",
+    "shortcut"
+   ],
+   "init": [
+    "description",
+    "health",
+    "label",
+    "local",
+    "name",
+    "path",
+    "port",
+    "required",
+    "restart"
+   ],
+   "methods": {
+    "shortcut": [
+     "default_id",
+     "namespace",
+     "remote_port",
+     "target"
+    ]
+   },
+   "pydantic": true,
+   "returns": {
+    "shortcut": "UiShortcut"
+   }
+  },
+  "GatewayRef": {
+   "attrs": [
+    "manifest",
+    "name",
+    "namespace",
+    "section"
+   ],
+   "init": [
+    "name",
+    "namespace",
+    "section"
+   ],
+   "methods": {
+    "manifest": []
+   },
+   "pydantic": true
+  },
+  "HealthProbe": {
+   "attrs": [
+    "expect_status",
+    "failure_threshold",
+    "interval",
+    "path",
+    "public_dict",
+    "settle",
+    "startup_grace",
+    "timeout",
+    "type"
+   ],
+   "init": [
+    "expect_status",
+    "failure_threshold",
+    "interval",
+    "path",
+    "settle",
+    "startup_grace",
+    "timeout",
+    "type"
+   ],
+   "methods": {
+    "public_dict": []
+   },
+   "pydantic": true
+  },
+  "HttpCheck": {
+   "attrs": [
+    "body_contains",
+    "expect",
+    "interval",
+    "label",
+    "name",
+    "path",
+    "port",
+    "public_dict",
+    "retries",
+    "target",
+    "timeout",
+    "type"
+   ],
+   "init": [
+    "body_contains",
+    "expect",
+    "interval",
+    "name",
+    "path",
+    "port",
+    "retries",
+    "target",
+    "timeout",
+    "type"
+   ],
+   "methods": {
+    "public_dict": []
+   },
+   "pydantic": true
+  },
+  "HttpResponse": {
+   "attrs": [
+    "body",
+    "status",
+    "text"
+   ],
+   "init": [
+    "body",
+    "status"
+   ],
+   "methods": {}
+  },
+  "HttpRoute": {
+   "attrs": [
+    "component",
+    "component_name",
+    "gateways",
+    "hosts",
+    "manifest",
+    "name",
+    "routes"
+   ],
+   "init": [
+    "component",
+    "gateways",
+    "hosts",
+    "name",
+    "routes"
+   ],
+   "methods": {
+    "manifest": [
+     "labels",
+     "namespace"
+    ]
+   },
+   "pydantic": true
+  },
+  "ImageHandle": {
+   "attrs": [
+    "capitalize",
+    "casefold",
+    "center",
+    "count",
+    "encode",
+    "endswith",
+    "expandtabs",
+    "find",
+    "format",
+    "format_map",
+    "image",
+    "index",
+    "isalnum",
+    "isalpha",
+    "isascii",
+    "isdecimal",
+    "isdigit",
+    "isidentifier",
+    "islower",
+    "isnumeric",
+    "isprintable",
+    "isspace",
+    "istitle",
+    "isupper",
+    "join",
+    "ljust",
+    "lower",
+    "lstrip",
+    "maketrans",
+    "partition",
+    "removeprefix",
+    "removesuffix",
+    "replace",
+    "rfind",
+    "rindex",
+    "rjust",
+    "rpartition",
+    "rsplit",
+    "rstrip",
+    "split",
+    "splitlines",
+    "startswith",
+    "strip",
+    "swapcase",
+    "title",
+    "translate",
+    "upper",
+    "zfill"
+   ],
+   "init": [
+    "image"
+   ],
+   "methods": {
+    "capitalize": [],
+    "casefold": [],
+    "center": [
+     "fillchar",
+     "width"
+    ],
+    "count": null,
+    "encode": [
+     "encoding",
+     "errors"
+    ],
+    "endswith": null,
+    "expandtabs": [
+     "tabsize"
+    ],
+    "find": null,
+    "format": null,
+    "format_map": [
+     "mapping"
+    ],
+    "index": null,
+    "isalnum": [],
+    "isalpha": [],
+    "isascii": [],
+    "isdecimal": [],
+    "isdigit": [],
+    "isidentifier": [],
+    "islower": [],
+    "isnumeric": [],
+    "isprintable": [],
+    "isspace": [],
+    "istitle": [],
+    "isupper": [],
+    "join": [
+     "iterable"
+    ],
+    "ljust": [
+     "fillchar",
+     "width"
+    ],
+    "lower": [],
+    "lstrip": [
+     "chars"
+    ],
+    "maketrans": null,
+    "partition": [
+     "sep"
+    ],
+    "removeprefix": [
+     "prefix"
+    ],
+    "removesuffix": [
+     "suffix"
+    ],
+    "replace": [
+     "count",
+     "new",
+     "old"
+    ],
+    "rfind": null,
+    "rindex": null,
+    "rjust": [
+     "fillchar",
+     "width"
+    ],
+    "rpartition": [
+     "sep"
+    ],
+    "rsplit": [
+     "maxsplit",
+     "sep"
+    ],
+    "rstrip": [
+     "chars"
+    ],
+    "split": [
+     "maxsplit",
+     "sep"
+    ],
+    "splitlines": [
+     "keepends"
+    ],
+    "startswith": null,
+    "strip": [
+     "chars"
+    ],
+    "swapcase": [],
+    "title": [],
+    "translate": [
+     "table"
+    ],
+    "upper": [],
+    "zfill": [
+     "width"
+    ]
+   }
+  },
+  "ImageHandoffError": {
+   "attrs": [
+    "add_note",
+    "args",
+    "code",
+    "with_traceback"
+   ],
+   "init": [
+    "code",
+    "message"
+   ],
+   "methods": {
+    "add_note": [
+     "note"
+    ],
+    "with_traceback": [
+     "tb"
+    ]
+   }
+  },
+  "ImageRef": {
+   "attrs": [
+    "digest",
+    "identity",
+    "image_id",
+    "immutable",
+    "name",
+    "platform",
+    "ref",
+    "reference",
+    "repository",
+    "source",
+    "tag",
+    "to_dict"
+   ],
+   "init": [
+    "digest",
+    "identity",
+    "image_id",
+    "name",
+    "platform",
+    "ref",
+    "repository",
+    "source",
+    "tag"
+   ],
+   "methods": {
+    "to_dict": []
+   }
+  },
+  "ImageSpec": {
+   "attrs": [
+    "digest",
+    "receipt",
+    "ref"
+   ],
+   "init": [
+    "digest",
+    "receipt",
+    "ref"
+   ],
+   "methods": {},
+   "pydantic": true
+  },
+  "ImportSecretSpec": {
+   "attr_types": {
+    "secret": "LiveSecretKey"
+   },
+   "attrs": [
+    "bytes",
+    "encoding",
+    "env",
+    "file",
+    "rotate",
+    "secret",
+    "source",
+    "trim_newline",
+    "type"
+   ],
+   "init": [
+    "bytes",
+    "encoding",
+    "env",
+    "file",
+    "rotate",
+    "secret",
+    "trim_newline",
+    "type"
+   ],
+   "methods": {
+    "source": []
+   },
+   "pydantic": true
+  },
+  "Ingress": {
+   "attrs": [
+    "class_name",
+    "component",
+    "component_name",
+    "hosts",
+    "manifest",
+    "name",
+    "routes",
+    "tls_secret"
+   ],
+   "init": [
+    "class_name",
+    "component",
+    "hosts",
+    "name",
+    "routes",
+    "tls_secret"
+   ],
+   "methods": {
+    "manifest": [
+     "labels",
+     "namespace"
+    ]
+   },
+   "pydantic": true
+  },
+  "Job": {
+   "attr_types": {
+    "security": "Security"
+   },
+   "attrs": [
+    "accepts_claim_templates",
+    "active_deadline_seconds",
+    "all_containers",
+    "automount_token",
+    "backoff_limit",
+    "check_defaults",
+    "claim_templates",
+    "completions",
+    "component",
+    "component_name",
+    "containers",
+    "existing_claims",
+    "init_containers",
+    "job_spec",
+    "kind",
+    "label",
+    "labels",
+    "manifest",
+    "name",
+    "node",
+    "node_labels",
+    "node_selector",
+    "parallelism",
+    "pod_labels",
+    "pod_spec",
+    "references",
+    "restart_policy",
+    "security",
+    "selector",
+    "selector_labels",
+    "service_account",
+    "share_process_namespace",
+    "termination_grace_seconds",
+    "ttl_seconds_after_finished",
+    "volumes"
+   ],
+   "init": [
+    "active_deadline_seconds",
+    "automount_token",
+    "backoff_limit",
+    "completions",
+    "component",
+    "containers",
+    "init_containers",
+    "labels",
+    "name",
+    "node",
+    "node_selector",
+    "parallelism",
+    "restart_policy",
+    "security",
+    "selector",
+    "service_account",
+    "share_process_namespace",
+    "termination_grace_seconds",
+    "ttl_seconds_after_finished"
+   ],
+   "methods": {
+    "accepts_claim_templates": [],
+    "check_defaults": [
+     "defaults"
+    ],
+    "claim_templates": [],
+    "existing_claims": [],
+    "job_spec": [
+     "app_labels",
+     "automount_token",
+     "defaults",
+     "node_name"
+    ],
+    "manifest": [
+     "app_labels",
+     "automount_token",
+     "defaults",
+     "namespace",
+     "node_name",
+     "scaled"
+    ],
+    "node_labels": [
+     "defaults"
+    ],
+    "pod_labels": [
+     "app_labels"
+    ],
+    "pod_spec": [
+     "automount_token",
+     "defaults",
+     "node_name",
+     "restart_policy"
+    ],
+    "references": [],
+    "volumes": []
+   },
+   "pydantic": true,
+   "returns": {
+    "claim_templates": "ClaimTemplate"
+   }
+  },
+  "KubeconfigTarget": {
+   "attr_types": {
+    "nodes": "NodeExpectation"
+   },
+   "attrs": [
+    "allow_exec",
+    "cluster_uid",
+    "context",
+    "exec_pass_env",
+    "exec_policy",
+    "exec_sha256",
+    "exec_timeout_seconds",
+    "kubeconfig",
+    "namespace",
+    "namespace_uid",
+    "nodes",
+    "request_seconds",
+    "transport"
+   ],
+   "init": [
+    "allow_exec",
+    "cluster_uid",
+    "context",
+    "exec_pass_env",
+    "exec_sha256",
+    "exec_timeout_seconds",
+    "kubeconfig",
+    "namespace",
+    "namespace_uid",
+    "nodes",
+    "request_seconds",
+    "transport"
+   ],
+   "methods": {}
+  },
+  "KubernetesProvider": {
+   "attrs": [
+    "adopt_metadata",
+    "api_for",
+    "converge_takeover",
+    "delete",
+    "discover_api_resource",
+    "get",
+    "list_resources",
+    "preview_update",
+    "probe_readiness",
+    "probe_server_side_apply",
+    "provider_id",
+    "read_secret_key",
+    "readiness",
+    "take_over",
+    "update_owned",
+    "verify_target",
+    "write"
+   ],
+   "init": [
+    "api_client",
+    "cluster_uid",
+    "field_manager",
+    "inherited_owner_ids",
+    "max_response_bytes",
+    "namespace_uid",
+    "owner_id",
+    "request_seconds",
+    "source",
+    "target"
+   ],
+   "methods": {
+    "adopt_metadata": [
+     "annotations",
+     "current",
+     "deadline",
+     "dry_run",
+     "labels",
+     "operation_id"
+    ],
+    "api_for": [
+     "deadline",
+     "identity"
+    ],
+    "converge_takeover": [
+     "attempts",
+     "current",
+     "deadline",
+     "manifest",
+     "transferred_managers"
+    ],
+    "delete": [
+     "deadline",
+     "dry_run",
+     "identity",
+     "propagation",
+     "resource_version",
+     "uid"
+    ],
+    "discover_api_resource": [
+     "deadline",
+     "resource_type",
+     "target"
+    ],
+    "get": [
+     "deadline",
+     "identity"
+    ],
+    "list_resources": [
+     "request"
+    ],
+    "preview_update": [
+     "current",
+     "deadline",
+     "manifest"
+    ],
+    "probe_readiness": [
+     "resource",
+     "target"
+    ],
+    "probe_server_side_apply": [
+     "resource",
+     "target"
+    ],
+    "read_secret_key": [
+     "deadline",
+     "key",
+     "name"
+    ],
+    "readiness": [
+     "resource"
+    ],
+    "take_over": [
+     "current",
+     "deadline",
+     "dry_run",
+     "manifest",
+     "transferred_managers"
+    ],
+    "update_owned": [
+     "current",
+     "deadline",
+     "dry_run",
+     "manifest"
+    ],
+    "verify_target": [
+     "deadline"
+    ],
+    "write": [
+     "create",
+     "deadline",
+     "dry_run",
+     "identity",
+     "manifest"
+    ]
+   },
+   "returns": {
+    "adopt_metadata": "DiscoveredResource",
+    "api_for": "ApiResource",
+    "discover_api_resource": "ApiResource",
+    "get": "DiscoveredResource",
+    "list_resources": "DiscoveryPage",
+    "probe_readiness": "ReadinessProbeResult",
+    "probe_server_side_apply": "ApplyProbeResult",
+    "readiness": "ReadinessProbeResult",
+    "update_owned": "DiscoveredResource",
+    "write": "DiscoveredResource"
+   }
+  },
+  "LiveSecretKey": {
+   "attrs": [
+    "key",
+    "name"
+   ],
+   "init": [
+    "key",
+    "name"
+   ],
+   "methods": {},
+   "pydantic": true
+  },
+  "MemoryVolume": {
+   "attrs": [
+    "kind",
+    "name",
+    "size_limit",
+    "source",
+    "volume_name"
+   ],
+   "init": [
+    "kind",
+    "name",
+    "size_limit"
+   ],
+   "methods": {
+    "source": [],
+    "volume_name": [
+     "mount_path"
+    ]
+   },
+   "pydantic": true
+  },
+  "MetricCheck": {
+   "attrs": [
+    "empty",
+    "interval",
+    "label",
+    "name",
+    "op",
+    "path",
+    "port",
+    "public_dict",
+    "query",
+    "retries",
+    "target",
+    "threshold",
+    "timeout",
+    "type"
+   ],
+   "init": [
+    "empty",
+    "interval",
+    "name",
+    "op",
+    "path",
+    "port",
+    "query",
+    "retries",
+    "target",
+    "threshold",
+    "timeout",
+    "type"
+   ],
+   "methods": {
+    "public_dict": []
+   },
+   "pydantic": true
+  },
+  "Mount": {
+   "attr_types": {
+    "volume": "ConfigVolume"
+   },
+   "attrs": [
+    "read_only",
+    "sub_path",
+    "volume"
+   ],
+   "init": [
+    "read_only",
+    "sub_path",
+    "volume"
+   ],
+   "methods": {},
+   "pydantic": true
+  },
+  "NetworkPolicy": {
+   "attrs": [
+    "allow_from",
+    "component",
+    "component_name",
+    "manifest",
+    "name",
+    "pod_selector",
+    "ports"
+   ],
+   "init": [
+    "allow_from",
+    "component",
+    "name",
+    "pod_selector",
+    "ports"
+   ],
+   "methods": {
+    "manifest": [
+     "labels",
+     "namespace"
+    ]
+   },
+   "pydantic": true
+  },
+  "NodeExpectation": {
+   "attrs": [
+    "name",
+    "uid"
+   ],
+   "init": [
+    "name",
+    "uid"
+   ],
+   "methods": {}
+  },
+  "NodeImport": {
+   "attrs": [
+    "describe",
+    "kind",
+    "node",
+    "target"
+   ],
+   "init": [
+    "node",
+    "target"
+   ],
+   "methods": {
+    "describe": []
+   }
+  },
+  "NodeLoopbackRegistry": {
+   "attrs": [
+    "adopt",
+    "describe",
+    "existing_claim",
+    "host_path",
+    "image",
+    "inherited_owners",
+    "kind",
+    "mirror",
+    "mirror_credentials",
+    "name",
+    "node",
+    "port",
+    "registry_name",
+    "replace",
+    "repository",
+    "storage"
+   ],
+   "init": [
+    "adopt",
+    "existing_claim",
+    "host_path",
+    "image",
+    "inherited_owners",
+    "mirror",
+    "mirror_credentials",
+    "name",
+    "node",
+    "port",
+    "replace",
+    "repository",
+    "storage"
+   ],
+   "methods": {
+    "describe": []
+   }
+  },
+  "NodeRef": {
+   "attrs": [
+    "name",
+    "uid"
+   ],
+   "init": [
+    "name",
+    "uid"
+   ],
+   "methods": {}
+  },
+  "NodeSpec": {
+   "attrs": [
+    "name",
+    "uid"
+   ],
+   "init": [
+    "name",
+    "uid"
+   ],
+   "methods": {},
+   "pydantic": true
+  },
+  "Ownership": {
+   "attrs": [
+    "MANAGED",
+    "UNMANAGED",
+    "capitalize",
+    "casefold",
+    "center",
+    "count",
+    "encode",
+    "endswith",
+    "expandtabs",
+    "find",
+    "format",
+    "format_map",
+    "index",
+    "isalnum",
+    "isalpha",
+    "isascii",
+    "isdecimal",
+    "isdigit",
+    "isidentifier",
+    "islower",
+    "isnumeric",
+    "isprintable",
+    "isspace",
+    "istitle",
+    "isupper",
+    "join",
+    "ljust",
+    "lower",
+    "lstrip",
+    "maketrans",
+    "partition",
+    "removeprefix",
+    "removesuffix",
+    "replace",
+    "rfind",
+    "rindex",
+    "rjust",
+    "rpartition",
+    "rsplit",
+    "rstrip",
+    "split",
+    "splitlines",
+    "startswith",
+    "strip",
+    "swapcase",
+    "title",
+    "translate",
+    "upper",
+    "zfill"
+   ],
+   "init": [],
+   "methods": {
+    "capitalize": [],
+    "casefold": [],
+    "center": [
+     "fillchar",
+     "width"
+    ],
+    "count": null,
+    "encode": [
+     "encoding",
+     "errors"
+    ],
+    "endswith": null,
+    "expandtabs": [
+     "tabsize"
+    ],
+    "find": null,
+    "format": null,
+    "format_map": [
+     "mapping"
+    ],
+    "index": null,
+    "isalnum": [],
+    "isalpha": [],
+    "isascii": [],
+    "isdecimal": [],
+    "isdigit": [],
+    "isidentifier": [],
+    "islower": [],
+    "isnumeric": [],
+    "isprintable": [],
+    "isspace": [],
+    "istitle": [],
+    "isupper": [],
+    "join": [
+     "iterable"
+    ],
+    "ljust": [
+     "fillchar",
+     "width"
+    ],
+    "lower": [],
+    "lstrip": [
+     "chars"
+    ],
+    "maketrans": null,
+    "partition": [
+     "sep"
+    ],
+    "removeprefix": [
+     "prefix"
+    ],
+    "removesuffix": [
+     "suffix"
+    ],
+    "replace": [
+     "count",
+     "new",
+     "old"
+    ],
+    "rfind": null,
+    "rindex": null,
+    "rjust": [
+     "fillchar",
+     "width"
+    ],
+    "rpartition": [
+     "sep"
+    ],
+    "rsplit": [
+     "maxsplit",
+     "sep"
+    ],
+    "rstrip": [
+     "chars"
+    ],
+    "split": [
+     "maxsplit",
+     "sep"
+    ],
+    "splitlines": [
+     "keepends"
+    ],
+    "startswith": null,
+    "strip": [
+     "chars"
+    ],
+    "swapcase": [],
+    "title": [],
+    "translate": [
+     "table"
+    ],
+    "upper": [],
+    "zfill": [
+     "width"
+    ]
+   }
+  },
+  "Pipeline": {
+   "attrs": [
+    "for_environment",
+    "handles",
+    "name",
+    "needs_environment",
+    "target"
+   ],
+   "init": [
+    "adopt",
+    "app",
+    "approval_window_seconds",
+    "build",
+    "checks",
+    "deliver",
+    "execution",
+    "field_manager",
+    "inherited_owners",
+    "owner",
+    "replace",
+    "rollback_on_failed_checks",
+    "secrets",
+    "state",
+    "state_dir",
+    "state_lease_seconds",
+    "target"
+   ],
+   "methods": {
+    "for_environment": [
+     "name"
+    ],
+    "handles": []
+   },
+   "returns": {
+    "for_environment": "Pipeline"
+   }
+  },
+  "PipelineError": {
+   "attrs": [
+    "add_note",
+    "args",
+    "with_traceback"
+   ],
+   "init": [
+    "code",
+    "details",
+    "failed",
+    "message"
+   ],
+   "methods": {
+    "add_note": [
+     "note"
+    ],
+    "with_traceback": [
+     "tb"
+    ]
+   }
+  },
+  "PipelineRunner": {
+   "attrs": [
+    "adopt_plan_file",
+    "execute",
+    "identity",
+    "locked",
+    "plan",
+    "result",
+    "resume",
+    "sources"
+   ],
+   "init": [
+    "backend",
+    "check_runner",
+    "on_event",
+    "pipeline",
+    "refs",
+    "say"
+   ],
+   "methods": {
+    "adopt_plan_file": [
+     "document"
+    ],
+    "execute": [
+     "approval",
+     "plan",
+     "reapply"
+    ],
+    "identity": [],
+    "locked": [],
+    "plan": [
+     "reapply",
+     "until"
+    ],
+    "result": [
+     "state"
+    ],
+    "resume": [],
+    "sources": []
+   },
+   "returns": {
+    "plan": "CombinedPlan"
+   }
+  },
+  "PlanTarget": {
+   "attrs": [
+    "cluster_id",
+    "namespace"
+   ],
+   "init": [
+    "cluster_id",
+    "namespace"
+   ],
+   "methods": {}
+  },
+  "PodDefaults": {
+   "attr_types": {
+    "security": "Security"
+   },
+   "attrs": [
+    "automount_token",
+    "node_selector",
+    "security",
+    "termination_grace_seconds"
+   ],
+   "init": [
+    "automount_token",
+    "node_selector",
+    "security",
+    "termination_grace_seconds"
+   ],
+   "methods": {},
+   "pydantic": true
+  },
+  "Probe": {
+   "attrs": [
+    "action",
+    "command",
+    "exec",
+    "failure_threshold",
+    "http",
+    "initial_delay_seconds",
+    "manifest",
+    "path",
+    "period_seconds",
+    "port",
+    "scheme",
+    "success_threshold",
+    "tcp",
+    "timeout_seconds"
+   ],
+   "init": [
+    "action",
+    "command",
+    "failure_threshold",
+    "initial_delay_seconds",
+    "path",
+    "period_seconds",
+    "port",
+    "scheme",
+    "success_threshold",
+    "timeout_seconds"
+   ],
+   "methods": {
+    "exec": null,
+    "http": null,
+    "manifest": [],
+    "tcp": null
+   },
+   "pydantic": true,
+   "returns": {
+    "exec": "Probe",
+    "http": "Probe",
+    "tcp": "Probe"
+   }
+  },
+  "PythonCheck": {
+   "attrs": [
+    "call",
+    "entry",
+    "interval",
+    "label",
+    "name",
+    "public_dict",
+    "resolve",
+    "retries",
+    "timeout",
+    "type"
+   ],
+   "init": [
+    "call",
+    "interval",
+    "name",
+    "retries",
+    "timeout",
+    "type"
+   ],
+   "methods": {
+    "public_dict": [],
+    "resolve": [
+     "base"
+    ]
+   },
+   "pydantic": true
+  },
+  "RandomSecretSpec": {
+   "attrs": [
+    "bytes",
+    "encoding",
+    "type"
+   ],
+   "init": [
+    "bytes",
+    "encoding",
+    "type"
+   ],
+   "methods": {},
+   "pydantic": true
+  },
+  "ReadinessProbeResult": {
+   "attr_types": {
+    "resource": "ResourceIdentity",
+    "status": "ReadinessStatus"
+   },
+   "attrs": [
+    "observed_generation",
+    "resource",
+    "status"
+   ],
+   "init": [
+    "observed_generation",
+    "resource",
+    "status"
+   ],
+   "methods": {}
+  },
+  "ReadinessStatus": {
+   "attrs": [
+    "DENIED",
+    "NOT_READY",
+    "READY",
+    "UNSUPPORTED",
+    "capitalize",
+    "casefold",
+    "center",
+    "count",
+    "encode",
+    "endswith",
+    "expandtabs",
+    "find",
+    "format",
+    "format_map",
+    "index",
+    "isalnum",
+    "isalpha",
+    "isascii",
+    "isdecimal",
+    "isdigit",
+    "isidentifier",
+    "islower",
+    "isnumeric",
+    "isprintable",
+    "isspace",
+    "istitle",
+    "isupper",
+    "join",
+    "ljust",
+    "lower",
+    "lstrip",
+    "maketrans",
+    "partition",
+    "removeprefix",
+    "removesuffix",
+    "replace",
+    "rfind",
+    "rindex",
+    "rjust",
+    "rpartition",
+    "rsplit",
+    "rstrip",
+    "split",
+    "splitlines",
+    "startswith",
+    "strip",
+    "swapcase",
+    "title",
+    "translate",
+    "upper",
+    "zfill"
+   ],
+   "init": [],
+   "methods": {
+    "capitalize": [],
+    "casefold": [],
+    "center": [
+     "fillchar",
+     "width"
+    ],
+    "count": null,
+    "encode": [
+     "encoding",
+     "errors"
+    ],
+    "endswith": null,
+    "expandtabs": [
+     "tabsize"
+    ],
+    "find": null,
+    "format": null,
+    "format_map": [
+     "mapping"
+    ],
+    "index": null,
+    "isalnum": [],
+    "isalpha": [],
+    "isascii": [],
+    "isdecimal": [],
+    "isdigit": [],
+    "isidentifier": [],
+    "islower": [],
+    "isnumeric": [],
+    "isprintable": [],
+    "isspace": [],
+    "istitle": [],
+    "isupper": [],
+    "join": [
+     "iterable"
+    ],
+    "ljust": [
+     "fillchar",
+     "width"
+    ],
+    "lower": [],
+    "lstrip": [
+     "chars"
+    ],
+    "maketrans": null,
+    "partition": [
+     "sep"
+    ],
+    "removeprefix": [
+     "prefix"
+    ],
+    "removesuffix": [
+     "suffix"
+    ],
+    "replace": [
+     "count",
+     "new",
+     "old"
+    ],
+    "rfind": null,
+    "rindex": null,
+    "rjust": [
+     "fillchar",
+     "width"
+    ],
+    "rpartition": [
+     "sep"
+    ],
+    "rsplit": [
+     "maxsplit",
+     "sep"
+    ],
+    "rstrip": [
+     "chars"
+    ],
+    "split": [
+     "maxsplit",
+     "sep"
+    ],
+    "splitlines": [
+     "keepends"
+    ],
+    "startswith": null,
+    "strip": [
+     "chars"
+    ],
+    "swapcase": [],
+    "title": [],
+    "translate": [
+     "table"
+    ],
+    "upper": [],
+    "zfill": [
+     "width"
+    ]
+   }
+  },
+  "Registry": {
+   "attrs": [
+    "ca_file",
+    "credentials",
+    "describe",
+    "kind",
+    "mirror",
+    "mirror_credentials",
+    "node_registry",
+    "url"
+   ],
+   "init": [
+    "ca_file",
+    "credentials",
+    "mirror",
+    "mirror_credentials",
+    "node_registry",
+    "url"
+   ],
+   "methods": {
+    "describe": []
+   }
+  },
+  "ReleaseContext": {
+   "attr_types": {
+    "images": "ImageRef",
+    "nodes": "NodeRef",
+    "secrets": "SecretVersionRef"
+   },
+   "attrs": [
+    "image",
+    "images",
+    "namespace",
+    "nodes",
+    "secret",
+    "secrets",
+    "values"
+   ],
+   "init": [
+    "images",
+    "namespace",
+    "nodes",
+    "secrets",
+    "values"
+   ],
+   "methods": {
+    "image": [
+     "name"
+    ],
+    "secret": [
+     "name"
+    ]
+   },
+   "returns": {
+    "secret": "SecretVersionRef"
+   }
+  },
+  "ReleaseSettings": {
+   "attrs": [
+    "adopt",
+    "approval_window_seconds",
+    "catalog",
+    "composition",
+    "field_manager",
+    "inherited_owners",
+    "journal",
+    "name",
+    "owner",
+    "prune",
+    "replace",
+    "rollback_on_failed_checks",
+    "secret_store",
+    "state",
+    "state_dir",
+    "state_lease_seconds"
+   ],
+   "init": [
+    "adopt",
+    "approval_window_seconds",
+    "catalog",
+    "composition",
+    "field_manager",
+    "inherited_owners",
+    "journal",
+    "name",
+    "owner",
+    "prune",
+    "replace",
+    "rollback_on_failed_checks",
+    "secret_store",
+    "state",
+    "state_dir",
+    "state_lease_seconds"
+   ],
+   "methods": {},
+   "pydantic": true
+  },
+  "ReleaseSpec": {
+   "attr_types": {
+    "model": "ReleaseSpecModel"
+   },
+   "attrs": [
+    "base",
+    "catalog_path",
+    "context",
+    "from_dict",
+    "from_toml",
+    "images",
+    "journal_path",
+    "kubeconfig_target",
+    "load_composition",
+    "model",
+    "path",
+    "resolve",
+    "secret_store_path",
+    "state_dir"
+   ],
+   "init": [
+    "base",
+    "model",
+    "path"
+   ],
+   "methods": {
+    "context": [
+     "images",
+     "nodes",
+     "secrets"
+    ],
+    "from_dict": [
+     "base",
+     "value"
+    ],
+    "from_toml": [
+     "path"
+    ],
+    "images": [],
+    "kubeconfig_target": [],
+    "load_composition": [],
+    "resolve": [
+     "path"
+    ]
+   },
+   "returns": {
+    "context": "ReleaseContext",
+    "from_dict": "ReleaseSpec",
+    "from_toml": "ReleaseSpec",
+    "images": "ImageRef",
+    "kubeconfig_target": "KubeconfigTarget"
+   }
+  },
+  "ReleaseSpecError": {
+   "attrs": [
+    "add_note",
+    "args",
+    "code",
+    "with_traceback"
+   ],
+   "init": [
+    "code",
+    "message"
+   ],
+   "methods": {
+    "add_note": [
+     "note"
+    ],
+    "with_traceback": [
+     "tb"
+    ]
+   }
+  },
+  "ReleaseSpecModel": {
+   "attr_types": {
+    "discovery": "DiscoverySpec",
+    "execution": "ExecutionSpec",
+    "images": "ImageSpec",
+    "release": "ReleaseSettings",
+    "secrets": "RandomSecretSpec",
+    "target": "TargetSpec"
+   },
+   "attrs": [
+    "checks",
+    "discovery",
+    "execution",
+    "images",
+    "images_from",
+    "release",
+    "secrets",
+    "target",
+    "values"
+   ],
+   "init": [
+    "checks",
+    "discovery",
+    "execution",
+    "images",
+    "images_from",
+    "release",
+    "secrets",
+    "target",
+    "values"
+   ],
+   "methods": {},
+   "pydantic": true
+  },
+  "Resource": {
+   "attrs": [
+    "annotations",
+    "api_version",
+    "cluster_scoped",
+    "component",
+    "component_name",
+    "fields",
+    "kind",
+    "labels",
+    "manifest",
+    "name",
+    "public",
+    "scope",
+    "spec",
+    "spec_json"
+   ],
+   "init": [
+    "annotations",
+    "api_version",
+    "component",
+    "fields",
+    "kind",
+    "labels",
+    "name",
+    "public",
+    "scope",
+    "spec"
+   ],
+   "methods": {
+    "manifest": [
+     "app_labels",
+     "namespace",
+     "namespace_annotation"
+    ],
+    "spec_json": []
+   },
+   "pydantic": true
+  },
+  "ResourceIdentity": {
+   "attrs": [
+    "api_version",
+    "kind",
+    "name",
+    "namespace"
+   ],
+   "init": [
+    "api_version",
+    "kind",
+    "name",
+    "namespace"
+   ],
+   "methods": {}
+  },
+  "ResourceIntent": {
+   "attr_types": {
+    "ref": "ResourceRef"
+   },
+   "attrs": [
+    "artifact_digest",
+    "dependencies",
+    "digest",
+    "from_k8s_object",
+    "from_manifest",
+    "manifest",
+    "redacted_manifest",
+    "ref",
+    "secret_bindings",
+    "with_secret"
+   ],
+   "init": [
+    "_manifest_json",
+    "dependencies",
+    "ref",
+    "secret_bindings"
+   ],
+   "methods": {
+    "from_k8s_object": [
+     "dependencies",
+     "resource"
+    ],
+    "from_manifest": [
+     "dependencies",
+     "manifest",
+     "scope"
+    ],
+    "redacted_manifest": [],
+    "with_secret": [
+     "json_pointer",
+     "reference"
+    ]
+   },
+   "returns": {
+    "from_k8s_object": "ResourceIntent",
+    "from_manifest": "ResourceIntent",
+    "with_secret": "ResourceIntent"
+   }
+  },
+  "ResourceRef": {
+   "attrs": [
+    "api_version",
+    "from_manifest",
+    "kind",
+    "name",
+    "namespace"
+   ],
+   "init": [
+    "api_version",
+    "kind",
+    "name",
+    "namespace"
+   ],
+   "methods": {
+    "from_manifest": [
+     "manifest",
+     "scope"
+    ]
+   },
+   "returns": {
+    "from_manifest": "ResourceRef"
+   }
+  },
+  "ResourceScope": {
+   "attrs": [
+    "CLUSTER",
+    "NAMESPACED",
+    "capitalize",
+    "casefold",
+    "center",
+    "count",
+    "encode",
+    "endswith",
+    "expandtabs",
+    "find",
+    "format",
+    "format_map",
+    "index",
+    "isalnum",
+    "isalpha",
+    "isascii",
+    "isdecimal",
+    "isdigit",
+    "isidentifier",
+    "islower",
+    "isnumeric",
+    "isprintable",
+    "isspace",
+    "istitle",
+    "isupper",
+    "join",
+    "ljust",
+    "lower",
+    "lstrip",
+    "maketrans",
+    "partition",
+    "removeprefix",
+    "removesuffix",
+    "replace",
+    "rfind",
+    "rindex",
+    "rjust",
+    "rpartition",
+    "rsplit",
+    "rstrip",
+    "split",
+    "splitlines",
+    "startswith",
+    "strip",
+    "swapcase",
+    "title",
+    "translate",
+    "upper",
+    "zfill"
+   ],
+   "init": [],
+   "methods": {
+    "capitalize": [],
+    "casefold": [],
+    "center": [
+     "fillchar",
+     "width"
+    ],
+    "count": null,
+    "encode": [
+     "encoding",
+     "errors"
+    ],
+    "endswith": null,
+    "expandtabs": [
+     "tabsize"
+    ],
+    "find": null,
+    "format": null,
+    "format_map": [
+     "mapping"
+    ],
+    "index": null,
+    "isalnum": [],
+    "isalpha": [],
+    "isascii": [],
+    "isdecimal": [],
+    "isdigit": [],
+    "isidentifier": [],
+    "islower": [],
+    "isnumeric": [],
+    "isprintable": [],
+    "isspace": [],
+    "istitle": [],
+    "isupper": [],
+    "join": [
+     "iterable"
+    ],
+    "ljust": [
+     "fillchar",
+     "width"
+    ],
+    "lower": [],
+    "lstrip": [
+     "chars"
+    ],
+    "maketrans": null,
+    "partition": [
+     "sep"
+    ],
+    "removeprefix": [
+     "prefix"
+    ],
+    "removesuffix": [
+     "suffix"
+    ],
+    "replace": [
+     "count",
+     "new",
+     "old"
+    ],
+    "rfind": null,
+    "rindex": null,
+    "rjust": [
+     "fillchar",
+     "width"
+    ],
+    "rpartition": [
+     "sep"
+    ],
+    "rsplit": [
+     "maxsplit",
+     "sep"
+    ],
+    "rstrip": [
+     "chars"
+    ],
+    "split": [
+     "maxsplit",
+     "sep"
+    ],
+    "splitlines": [
+     "keepends"
+    ],
+    "startswith": null,
+    "strip": [
+     "chars"
+    ],
+    "swapcase": [],
+    "title": [],
+    "translate": [
+     "table"
+    ],
+    "upper": [],
+    "zfill": [
+     "width"
+    ]
+   }
+  },
+  "ResourceType": {
+   "attrs": [
+    "api_version",
+    "kind"
+   ],
+   "init": [
+    "api_version",
+    "kind"
+   ],
+   "methods": {}
+  },
+  "Resources": {
+   "attrs": [
+    "cpu",
+    "cpu_limit",
+    "ephemeral_storage",
+    "ephemeral_storage_limit",
+    "manifest",
+    "memory",
+    "memory_limit"
+   ],
+   "init": [
+    "cpu",
+    "cpu_limit",
+    "ephemeral_storage",
+    "ephemeral_storage_limit",
+    "memory",
+    "memory_limit"
+   ],
+   "methods": {
+    "manifest": []
+   },
+   "pydantic": true
+  },
+  "RestartPolicy": {
+   "attrs": [
+    "backoff_initial",
+    "backoff_max",
+    "delay",
+    "max_restarts"
+   ],
+   "init": [
+    "backoff_initial",
+    "backoff_max",
+    "max_restarts"
+   ],
+   "methods": {
+    "delay": [
+     "attempt"
+    ]
+   },
+   "pydantic": true
+  },
+  "Route": {
+   "attrs": [
+    "match",
+    "path",
+    "port",
+    "service"
+   ],
+   "init": [
+    "match",
+    "path",
+    "port",
+    "service"
+   ],
+   "methods": {},
+   "pydantic": true
+  },
+  "Rule": {
+   "attrs": [
+    "allow_wildcard",
+    "api_groups",
+    "manifest",
+    "resource_names",
+    "resources",
+    "verbs"
+   ],
+   "init": [
+    "allow_wildcard",
+    "api_groups",
+    "resource_names",
+    "resources",
+    "verbs"
+   ],
+   "methods": {
+    "manifest": []
+   },
+   "pydantic": true
+  },
+  "Scaling": {
+   "attrs": [
+    "changes",
+    "cpu",
+    "max_replicas",
+    "memory",
+    "min_replicas"
+   ],
+   "init": [
+    "cpu",
+    "max_replicas",
+    "memory",
+    "min_replicas"
+   ],
+   "methods": {
+    "changes": []
+   },
+   "pydantic": true
+  },
+  "Secret": {
+   "attr_types": {
+    "data": "SecretVersionRef"
+   },
+   "attrs": [
+    "component",
+    "component_name",
+    "data",
+    "key",
+    "name",
+    "type"
+   ],
+   "init": [
+    "component",
+    "data",
+    "name",
+    "type"
+   ],
+   "methods": {
+    "key": [
+     "key"
+    ]
+   },
+   "pydantic": true,
+   "returns": {
+    "key": "SecretKey"
+   }
+  },
+  "SecretBinding": {
+   "attr_types": {
+    "reference": "SecretVersionRef"
+   },
+   "attrs": [
+    "json_pointer",
+    "reference"
+   ],
+   "init": [
+    "json_pointer",
+    "reference"
+   ],
+   "methods": {}
+  },
+  "SecretKey": {
+   "attrs": [
+    "key",
+    "manifest",
+    "optional",
+    "secret"
+   ],
+   "init": [
+    "key",
+    "optional",
+    "secret"
+   ],
+   "methods": {
+    "manifest": []
+   },
+   "pydantic": true
+  },
+  "SecretVersionRef": {
+   "attrs": [
+    "store_id",
+    "version"
+   ],
+   "init": [
+    "store_id",
+    "version"
+   ],
+   "methods": {}
+  },
+  "SecretVolume": {
+   "attrs": [
+    "default_mode",
+    "items",
+    "kind",
+    "name",
+    "secret",
+    "source",
+    "volume_name"
+   ],
+   "init": [
+    "default_mode",
+    "items",
+    "kind",
+    "name",
+    "secret"
+   ],
+   "methods": {
+    "source": [],
+    "volume_name": [
+     "mount_path"
+    ]
+   },
+   "pydantic": true
+  },
+  "Secrets": {
+   "attrs": [
+    "inputs",
+    "ref"
+   ],
+   "init": null,
+   "methods": {
+    "inputs": [],
+    "ref": [
+     "name"
+    ]
+   },
+   "returns": {
+    "ref": "SecretVersionRef"
+   }
+  },
+  "Security": {
+   "attrs": [
+    "add_capabilities",
+    "allow_privilege_escalation",
+    "container_manifest",
+    "drop_capabilities",
+    "fs_group",
+    "layered",
+    "pod_manifest",
+    "read_only_root_filesystem",
+    "restricted",
+    "run_as_group",
+    "run_as_non_root",
+    "run_as_user",
+    "seccomp",
+    "seccomp_localhost_profile"
+   ],
+   "init": [
+    "add_capabilities",
+    "allow_privilege_escalation",
+    "drop_capabilities",
+    "fs_group",
+    "read_only_root_filesystem",
+    "run_as_group",
+    "run_as_non_root",
+    "run_as_user",
+    "seccomp",
+    "seccomp_localhost_profile"
+   ],
+   "methods": {
+    "container_manifest": [],
+    "layered": [
+     "base",
+     "top"
+    ],
+    "pod_manifest": [],
+    "restricted": [
+     "fs_group",
+     "group",
+     "read_only_root_filesystem",
+     "user"
+    ]
+   },
+   "pydantic": true,
+   "returns": {
+    "layered": "Security",
+    "restricted": "Security"
+   }
+  },
+  "Service": {
+   "attr_types": {
+    "access": "Forward"
+   },
+   "attrs": [
+    "access",
+    "access_port",
+    "component",
+    "component_name",
+    "headless",
+    "manifest",
+    "name",
+    "ports",
+    "selector",
+    "type"
+   ],
+   "init": [
+    "access",
+    "component",
+    "headless",
+    "name",
+    "ports",
+    "selector",
+    "type"
+   ],
+   "methods": {
+    "access_port": [],
+    "manifest": [
+     "labels",
+     "namespace"
+    ]
+   },
+   "pydantic": true
+  },
+  "ServiceAccount": {
+   "attrs": [
+    "cluster_name",
+    "cluster_rules",
+    "component",
+    "component_name",
+    "manifests",
+    "name",
+    "rules"
+   ],
+   "init": [
+    "cluster_rules",
+    "component",
+    "name",
+    "rules"
+   ],
+   "methods": {
+    "cluster_name": [
+     "app",
+     "namespace"
+    ],
+    "manifests": [
+     "app",
+     "labels",
+     "namespace",
+     "namespace_annotation"
+    ]
+   },
+   "pydantic": true
+  },
+  "ServicePort": {
+   "attrs": [
+    "manifest",
+    "name",
+    "port",
+    "protocol",
+    "target_port"
+   ],
+   "init": [
+    "name",
+    "port",
+    "protocol",
+    "target_port"
+   ],
+   "methods": {
+    "manifest": []
+   },
+   "pydantic": true
+  },
+  "Smoke": {
+   "attrs": [
+    "command",
+    "entrypoint",
+    "env",
+    "expect_exit",
+    "expect_stderr",
+    "expect_stdout",
+    "timeout_seconds",
+    "to_table"
+   ],
+   "init": [
+    "command",
+    "entrypoint",
+    "env",
+    "expect_exit",
+    "expect_stderr",
+    "expect_stdout",
+    "timeout_seconds"
+   ],
+   "methods": {
+    "to_table": []
+   }
+  },
+  "SopsSecretSpec": {
+   "attrs": [
+    "encoding",
+    "file",
+    "format",
+    "key",
+    "pass_env",
+    "sops",
+    "sops_sha256",
+    "source",
+    "timeout_seconds",
+    "type"
+   ],
+   "init": [
+    "encoding",
+    "file",
+    "format",
+    "key",
+    "pass_env",
+    "sops",
+    "sops_sha256",
+    "timeout_seconds",
+    "type"
+   ],
+   "methods": {
+    "source": []
+   },
+   "pydantic": true
+  },
+  "StatefulSet": {
+   "attr_types": {
+    "security": "Security"
+   },
+   "attrs": [
+    "accepts_claim_templates",
+    "all_containers",
+    "automount_token",
+    "check_defaults",
+    "claim_templates",
+    "component",
+    "component_name",
+    "containers",
+    "existing_claims",
+    "init_containers",
+    "kind",
+    "label",
+    "labels",
+    "manifest",
+    "min_ready_seconds",
+    "name",
+    "node",
+    "node_labels",
+    "node_selector",
+    "pod_labels",
+    "pod_management",
+    "pod_spec",
+    "references",
+    "replicas",
+    "security",
+    "selector",
+    "selector_labels",
+    "service_account",
+    "service_name",
+    "share_process_namespace",
+    "termination_grace_seconds",
+    "update_strategy",
+    "volumes"
+   ],
+   "init": [
+    "automount_token",
+    "component",
+    "containers",
+    "init_containers",
+    "labels",
+    "min_ready_seconds",
+    "name",
+    "node",
+    "node_selector",
+    "pod_management",
+    "replicas",
+    "security",
+    "selector",
+    "service_account",
+    "service_name",
+    "share_process_namespace",
+    "termination_grace_seconds",
+    "update_strategy"
+   ],
+   "methods": {
+    "accepts_claim_templates": [],
+    "check_defaults": [
+     "defaults"
+    ],
+    "claim_templates": [],
+    "existing_claims": [],
+    "manifest": [
+     "app_labels",
+     "automount_token",
+     "defaults",
+     "namespace",
+     "node_name",
+     "scaled"
+    ],
+    "node_labels": [
+     "defaults"
+    ],
+    "pod_labels": [
+     "app_labels"
+    ],
+    "pod_spec": [
+     "automount_token",
+     "defaults",
+     "node_name",
+     "restart_policy"
+    ],
+    "references": [],
+    "volumes": []
+   },
+   "pydantic": true,
+   "returns": {
+    "claim_templates": "ClaimTemplate"
+   }
+  },
+  "StaticSecretSpec": {
+   "attrs": [
+    "encoding",
+    "type",
+    "value"
+   ],
+   "init": [
+    "encoding",
+    "type",
+    "value"
+   ],
+   "methods": {},
+   "pydantic": true
+  },
+  "Target": {
+   "attr_types": {
+    "nodes": "TargetNode"
+   },
+   "attrs": [
+    "allow_exec",
+    "cluster_uid",
+    "context",
+    "exec_pass_env",
+    "exec_policy",
+    "exec_sha256",
+    "exec_table",
+    "exec_timeout_seconds",
+    "from_kubeconfig",
+    "identity",
+    "kubeconfig",
+    "namespace",
+    "namespace_uid",
+    "node",
+    "nodes",
+    "request_seconds",
+    "transport"
+   ],
+   "init": [
+    "allow_exec",
+    "base",
+    "cluster_uid",
+    "context",
+    "exec_pass_env",
+    "exec_sha256",
+    "exec_timeout_seconds",
+    "kubeconfig",
+    "namespace",
+    "namespace_uid",
+    "nodes",
+    "request_seconds",
+    "transport"
+   ],
+   "methods": {
+    "exec_policy": [],
+    "exec_table": [],
+    "from_kubeconfig": [
+     "allow_exec",
+     "cluster_uid",
+     "context",
+     "exec_pass_env",
+     "exec_sha256",
+     "exec_timeout_seconds",
+     "kubeconfig",
+     "namespace",
+     "namespace_uid",
+     "nodes",
+     "request_seconds",
+     "transport"
+    ],
+    "identity": [],
+    "kubeconfig": [
+     "allow_exec",
+     "cluster_uid",
+     "context",
+     "exec_pass_env",
+     "exec_sha256",
+     "exec_timeout_seconds",
+     "kubeconfig",
+     "namespace",
+     "namespace_uid",
+     "nodes",
+     "request_seconds",
+     "transport"
+    ],
+    "node": [
+     "alias"
+    ]
+   },
+   "returns": {
+    "exec_policy": "ExecPolicy",
+    "from_kubeconfig": "Target",
+    "kubeconfig": "Target"
+   }
+  },
+  "TargetNode": {
+   "attrs": [
+    "count",
+    "index",
+    "name",
+    "uid"
+   ],
+   "init": [
+    "name",
+    "uid"
+   ],
+   "methods": {
+    "count": [
+     "value"
+    ],
+    "index": [
+     "start",
+     "stop",
+     "value"
+    ]
+   }
+  },
+  "TargetSpec": {
+   "attr_types": {
+    "nodes": "NodeSpec"
+   },
+   "attrs": [
+    "allow_exec",
+    "cluster_uid",
+    "context",
+    "exec_pass_env",
+    "exec_sha256",
+    "exec_timeout_seconds",
+    "kubeconfig",
+    "namespace",
+    "namespace_uid",
+    "nodes",
+    "request_seconds",
+    "transport"
+   ],
+   "init": [
+    "allow_exec",
+    "cluster_uid",
+    "context",
+    "exec_pass_env",
+    "exec_sha256",
+    "exec_timeout_seconds",
+    "kubeconfig",
+    "namespace",
+    "namespace_uid",
+    "nodes",
+    "request_seconds",
+    "transport"
+   ],
+   "methods": {},
+   "pydantic": true
+  },
+  "TemplateSecretSpec": {
+   "attrs": [
+    "encoding",
+    "template",
+    "type"
+   ],
+   "init": [
+    "encoding",
+    "template",
+    "type"
+   ],
+   "methods": {},
+   "pydantic": true
+  },
+  "TlsCaSpec": {
+   "attr_types": {
+    "leaves": "TlsLeafSpec"
+   },
+   "attrs": [
+    "ca_days",
+    "common_name",
+    "days",
+    "encoding",
+    "leaves",
+    "openssl",
+    "openssl_sha256",
+    "rsa_bits",
+    "type"
+   ],
+   "init": [
+    "ca_days",
+    "common_name",
+    "days",
+    "encoding",
+    "leaves",
+    "openssl",
+    "openssl_sha256",
+    "rsa_bits",
+    "type"
+   ],
+   "methods": {},
+   "pydantic": true
+  },
+  "TlsLeafSpec": {
+   "attrs": [
+    "dns_names",
+    "ip_addresses"
+   ],
+   "init": [
+    "dns_names",
+    "ip_addresses"
+   ],
+   "methods": {},
+   "pydantic": true
+  },
+  "TlsSelfSignedSpec": {
+   "attrs": [
+    "days",
+    "dns_names",
+    "encoding",
+    "ip_addresses",
+    "openssl",
+    "openssl_sha256",
+    "rsa_bits",
+    "type"
+   ],
+   "init": [
+    "days",
+    "dns_names",
+    "encoding",
+    "ip_addresses",
+    "openssl",
+    "openssl_sha256",
+    "rsa_bits",
+    "type"
+   ],
+   "methods": {},
+   "pydantic": true
+  },
+  "UiShortcut": {
+   "attr_types": {
+    "health": "HealthProbe",
+    "restart": "RestartPolicy"
+   },
+   "attrs": [
+    "description",
+    "health",
+    "health_path",
+    "id",
+    "label",
+    "local_port",
+    "namespace",
+    "path",
+    "probe",
+    "remote_port",
+    "required",
+    "restart",
+    "target",
+    "url"
+   ],
+   "init": [
+    "description",
+    "health",
+    "health_path",
+    "id",
+    "label",
+    "local_port",
+    "namespace",
+    "path",
+    "remote_port",
+    "required",
+    "restart",
+    "target"
+   ],
+   "methods": {},
+   "pydantic": true
+  },
+  "VaultSecretSpec": {
+   "attrs": [
+    "address",
+    "ca_file",
+    "encoding",
+    "key",
+    "mount",
+    "namespace",
+    "path",
+    "source",
+    "timeout_seconds",
+    "token_env",
+    "token_file",
+    "type",
+    "version"
+   ],
+   "init": [
+    "address",
+    "ca_file",
+    "encoding",
+    "key",
+    "mount",
+    "namespace",
+    "path",
+    "timeout_seconds",
+    "token_env",
+    "token_file",
+    "type",
+    "version"
+   ],
+   "methods": {
+    "source": []
+   },
+   "pydantic": true
+  },
+  "Workload": {
+   "attr_types": {
+    "security": "Security"
+   },
+   "attrs": [
+    "accepts_claim_templates",
+    "all_containers",
+    "automount_token",
+    "check_defaults",
+    "claim_templates",
+    "component",
+    "component_name",
+    "containers",
+    "existing_claims",
+    "init_containers",
+    "kind",
+    "label",
+    "labels",
+    "manifest",
+    "name",
+    "node",
+    "node_labels",
+    "node_selector",
+    "pod_labels",
+    "pod_spec",
+    "references",
+    "security",
+    "selector",
+    "selector_labels",
+    "service_account",
+    "share_process_namespace",
+    "termination_grace_seconds",
+    "volumes"
+   ],
+   "init": [
+    "automount_token",
+    "component",
+    "containers",
+    "init_containers",
+    "labels",
+    "name",
+    "node",
+    "node_selector",
+    "security",
+    "selector",
+    "service_account",
+    "share_process_namespace",
+    "termination_grace_seconds"
+   ],
+   "methods": {
+    "accepts_claim_templates": [],
+    "check_defaults": [
+     "defaults"
+    ],
+    "claim_templates": [],
+    "existing_claims": [],
+    "manifest": [
+     "app_labels",
+     "automount_token",
+     "defaults",
+     "namespace",
+     "node_name",
+     "scaled"
+    ],
+    "node_labels": [
+     "defaults"
+    ],
+    "pod_labels": [
+     "app_labels"
+    ],
+    "pod_spec": [
+     "automount_token",
+     "defaults",
+     "node_name",
+     "restart_policy"
+    ],
+    "references": [],
+    "volumes": []
+   },
+   "pydantic": true,
+   "returns": {
+    "claim_templates": "ClaimTemplate"
+   }
+  }
+ },
+ "cli": {
+  "commands": {
+   "": {
+    "arguments": [],
+    "flags": [
+     "--version"
+    ],
+    "subcommands": [
+     "access",
+     "artifacts",
+     "codegen",
+     "deploy",
+     "explain",
+     "help-json",
+     "import",
+     "inputs",
+     "observe",
+     "operator",
+     "release",
+     "render",
+     "state",
+     "status"
+    ]
+   },
+   "access": {
+    "arguments": [
+     "target"
+    ],
+    "flags": [
+     "--dashboard",
+     "--json",
+     "--kubectl",
+     "--only",
+     "--poll",
+     "--ui-config"
+    ],
+    "subcommands": []
+   },
+   "artifacts": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "build",
+     "build-spec",
+     "deliver",
+     "execute-command",
+     "import-local",
+     "inspect",
+     "pin",
+     "preview",
+     "preview-command"
+    ]
+   },
+   "artifacts build": {
+    "arguments": [],
+    "flags": [
+     "--output",
+     "--plan",
+     "--source-root"
+    ],
+    "subcommands": []
+   },
+   "artifacts build-spec": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "preview",
+     "run"
+    ]
+   },
+   "artifacts build-spec preview": {
+    "arguments": [],
+    "flags": [
+     "--inputs",
+     "--spec"
+    ],
+    "subcommands": []
+   },
+   "artifacts build-spec run": {
+    "arguments": [],
+    "flags": [
+     "--allow-network",
+     "--approve-builder",
+     "--approve-plan",
+     "--docker",
+     "--docker-sha256",
+     "--inputs",
+     "--lock",
+     "--log",
+     "--max-seconds",
+     "--out",
+     "--output-dir",
+     "--progress",
+     "--spec"
+    ],
+    "subcommands": []
+   },
+   "artifacts deliver": {
+    "arguments": [],
+    "flags": [
+     "--approve-digest",
+     "--archive",
+     "--ca-file",
+     "--context",
+     "--credentials",
+     "--docker",
+     "--docker-sha256",
+     "--docker-socket",
+     "--forward-remote-port",
+     "--image",
+     "--journal",
+     "--kubeconfig",
+     "--kubectl",
+     "--kubectl-sha256",
+     "--namespace",
+     "--node-registry",
+     "--receipt",
+     "--ref",
+     "--ssh",
+     "--ssh-agent-socket",
+     "--ssh-sha256",
+     "--timeout",
+     "--to",
+     "--via-forward"
+    ],
+    "subcommands": []
+   },
+   "artifacts execute-command": {
+    "arguments": [],
+    "flags": [
+     "--allow-code-execution",
+     "--allow-network",
+     "--approve-plan",
+     "--source-root",
+     "--spec",
+     "--timeout"
+    ],
+    "subcommands": []
+   },
+   "artifacts import-local": {
+    "arguments": [],
+    "flags": [
+     "--approve-digest",
+     "--docker",
+     "--docker-sha256",
+     "--layout",
+     "--socket"
+    ],
+    "subcommands": []
+   },
+   "artifacts inspect": {
+    "arguments": [],
+    "flags": [
+     "--layout"
+    ],
+    "subcommands": []
+   },
+   "artifacts pin": {
+    "arguments": [],
+    "flags": [
+     "--public-file",
+     "--source-root"
+    ],
+    "subcommands": []
+   },
+   "artifacts preview": {
+    "arguments": [],
+    "flags": [
+     "--plan"
+    ],
+    "subcommands": []
+   },
+   "artifacts preview-command": {
+    "arguments": [],
+    "flags": [
+     "--spec"
+    ],
+    "subcommands": []
+   },
+   "codegen": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "crd"
+    ]
+   },
+   "codegen crd": {
+    "arguments": [
+     "file"
+    ],
+    "flags": [
+     "--allow-exec",
+     "--context",
+     "--crd",
+     "--exec-sha256",
+     "--force",
+     "--from-cluster",
+     "--json",
+     "--kubeconfig",
+     "--out",
+     "--transport",
+     "--version"
+    ],
+    "subcommands": []
+   },
+   "deploy": {
+    "arguments": [
+     "target"
+    ],
+    "flags": [
+     "--apply",
+     "--approve",
+     "--auto-approve",
+     "--env",
+     "--json",
+     "--out",
+     "--plan",
+     "--reapply",
+     "--ref",
+     "--resume",
+     "--until"
+    ],
+    "subcommands": []
+   },
+   "explain": {
+    "arguments": [
+     "code"
+    ],
+    "flags": [
+     "--json"
+    ],
+    "subcommands": []
+   },
+   "help-json": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": []
+   },
+   "import": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "live",
+     "yaml"
+    ]
+   },
+   "import live": {
+    "arguments": [],
+    "flags": [
+     "--context",
+     "--force",
+     "--json",
+     "--kubeconfig",
+     "--name",
+     "--namespace",
+     "--out",
+     "--select",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "import yaml": {
+    "arguments": [
+     "directory"
+    ],
+    "flags": [
+     "--force",
+     "--json",
+     "--name",
+     "--namespace",
+     "--out",
+     "--select"
+    ],
+    "subcommands": []
+   },
+   "inputs": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "record",
+     "verify"
+    ]
+   },
+   "inputs record": {
+    "arguments": [],
+    "flags": [
+     "--only",
+     "--out",
+     "--spec",
+     "--timeout"
+    ],
+    "subcommands": []
+   },
+   "inputs verify": {
+    "arguments": [],
+    "flags": [
+     "--lock",
+     "--only",
+     "--spec",
+     "--timeout"
+    ],
+    "subcommands": []
+   },
+   "observe": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "forward-command",
+     "forward-list",
+     "forward-run",
+     "forward-save",
+     "forwards",
+     "logs-command",
+     "logs-run",
+     "serve",
+     "status"
+    ]
+   },
+   "observe forward-command": {
+    "arguments": [],
+    "flags": [
+     "--context",
+     "--kubeconfig",
+     "--kubectl",
+     "--name",
+     "--preferences",
+     "--user"
+    ],
+    "subcommands": []
+   },
+   "observe forward-list": {
+    "arguments": [],
+    "flags": [
+     "--preferences",
+     "--user"
+    ],
+    "subcommands": []
+   },
+   "observe forward-run": {
+    "arguments": [],
+    "flags": [
+     "--allow-exec",
+     "--context",
+     "--exec-sha256",
+     "--kubeconfig",
+     "--kubectl",
+     "--name",
+     "--preferences",
+     "--user"
+    ],
+    "subcommands": []
+   },
+   "observe forward-save": {
+    "arguments": [],
+    "flags": [
+     "--context",
+     "--kubeconfig",
+     "--local-port",
+     "--name",
+     "--namespace",
+     "--preferences",
+     "--remote-port",
+     "--target",
+     "--user"
+    ],
+    "subcommands": []
+   },
+   "observe forwards": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "apply",
+     "status"
+    ]
+   },
+   "observe forwards apply": {
+    "arguments": [],
+    "flags": [
+     "--allow-exec",
+     "--context",
+     "--exec-sha256",
+     "--kubeconfig",
+     "--kubectl",
+     "--namespace",
+     "--only",
+     "--poll",
+     "--profile"
+    ],
+    "subcommands": []
+   },
+   "observe forwards status": {
+    "arguments": [],
+    "flags": [
+     "--only",
+     "--profile"
+    ],
+    "subcommands": []
+   },
+   "observe logs-command": {
+    "arguments": [],
+    "flags": [
+     "--container",
+     "--context",
+     "--kubeconfig",
+     "--kubectl",
+     "--namespace",
+     "--no-previous",
+     "--previous",
+     "--tail",
+     "--target"
+    ],
+    "subcommands": []
+   },
+   "observe logs-run": {
+    "arguments": [],
+    "flags": [
+     "--allow-exec",
+     "--container",
+     "--context",
+     "--exec-sha256",
+     "--kubeconfig",
+     "--kubectl",
+     "--namespace",
+     "--no-previous",
+     "--previous",
+     "--tail",
+     "--target"
+    ],
+    "subcommands": []
+   },
+   "observe serve": {
+    "arguments": [],
+    "flags": [
+     "--allow-exec",
+     "--archive",
+     "--context",
+     "--exec-sha256",
+     "--kubeconfig",
+     "--namespace",
+     "--no-start-shortcuts",
+     "--port",
+     "--preferences",
+     "--restore-forwards",
+     "--start-shortcuts",
+     "--ui-config",
+     "--user"
+    ],
+    "subcommands": []
+   },
+   "observe status": {
+    "arguments": [],
+    "flags": [
+     "--allow-exec",
+     "--archive",
+     "--context",
+     "--exec-sha256",
+     "--include-common-types",
+     "--kubeconfig",
+     "--no-include-common-types"
+    ],
+    "subcommands": []
+   },
+   "operator": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "approve",
+     "backup",
+     "promote",
+     "restore",
+     "serve",
+     "status"
+    ]
+   },
+   "operator approve": {
+    "arguments": [],
+    "flags": [
+     "--approved-by",
+     "--commit",
+     "--namespace",
+     "--pr-id",
+     "--state-dir"
+    ],
+    "subcommands": []
+   },
+   "operator backup": {
+    "arguments": [],
+    "flags": [
+     "--output",
+     "--state-dir"
+    ],
+    "subcommands": []
+   },
+   "operator promote": {
+    "arguments": [],
+    "flags": [
+     "--catalog",
+     "--source",
+     "--target"
+    ],
+    "subcommands": []
+   },
+   "operator restore": {
+    "arguments": [],
+    "flags": [
+     "--archive-file",
+     "--destination"
+    ],
+    "subcommands": []
+   },
+   "operator serve": {
+    "arguments": [],
+    "flags": [
+     "--access",
+     "--allow-exec",
+     "--archive",
+     "--catalog",
+     "--context",
+     "--exec-sha256",
+     "--kubeconfig",
+     "--namespace",
+     "--no-start-access",
+     "--port",
+     "--preferences",
+     "--restore-forwards",
+     "--start-access",
+     "--state-dir",
+     "--ui-config",
+     "--user"
+    ],
+    "subcommands": []
+   },
+   "operator status": {
+    "arguments": [],
+    "flags": [
+     "--allow-exec",
+     "--archive",
+     "--catalog",
+     "--context",
+     "--exec-sha256",
+     "--include-common-types",
+     "--kubeconfig",
+     "--namespace",
+     "--no-include-common-types"
+    ],
+    "subcommands": []
+   },
+   "release": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "apply",
+     "check",
+     "diff",
+     "plan",
+     "preview",
+     "resume",
+     "rollback",
+     "secret",
+     "status",
+     "stop"
+    ]
+   },
+   "release apply": {
+    "arguments": [],
+    "flags": [
+     "--adopt",
+     "--adopt-all-desired",
+     "--approve",
+     "--auto-approve",
+     "--env",
+     "--replace",
+     "--rotate",
+     "--skip-checks",
+     "--spec"
+    ],
+    "subcommands": []
+   },
+   "release check": {
+    "arguments": [],
+    "flags": [
+     "--env",
+     "--release",
+     "--spec"
+    ],
+    "subcommands": []
+   },
+   "release diff": {
+    "arguments": [],
+    "flags": [
+     "--adopt",
+     "--adopt-all-desired",
+     "--env",
+     "--exit-code",
+     "--replace",
+     "--spec"
+    ],
+    "subcommands": []
+   },
+   "release plan": {
+    "arguments": [],
+    "flags": [
+     "--adopt",
+     "--adopt-all-desired",
+     "--env",
+     "--out",
+     "--replace",
+     "--rotate",
+     "--spec"
+    ],
+    "subcommands": []
+   },
+   "release preview": {
+    "arguments": [],
+    "flags": [
+     "--adopt",
+     "--adopt-all-desired",
+     "--env",
+     "--out",
+     "--replace",
+     "--rotate",
+     "--spec"
+    ],
+    "subcommands": []
+   },
+   "release resume": {
+    "arguments": [],
+    "flags": [
+     "--env",
+     "--release",
+     "--skip-checks",
+     "--spec"
+    ],
+    "subcommands": []
+   },
+   "release rollback": {
+    "arguments": [
+     "target"
+    ],
+    "flags": [
+     "--adopt",
+     "--adopt-all-desired",
+     "--approve",
+     "--auto-approve",
+     "--env",
+     "--replace",
+     "--skip-checks",
+     "--spec"
+    ],
+    "subcommands": []
+   },
+   "release secret": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "show"
+    ]
+   },
+   "release secret show": {
+    "arguments": [
+     "name"
+    ],
+    "flags": [
+     "--env",
+     "--json",
+     "--key",
+     "--release",
+     "--reveal",
+     "--spec"
+    ],
+    "subcommands": []
+   },
+   "release status": {
+    "arguments": [],
+    "flags": [
+     "--env",
+     "--spec"
+    ],
+    "subcommands": []
+   },
+   "release stop": {
+    "arguments": [],
+    "flags": [
+     "--env",
+     "--release",
+     "--spec"
+    ],
+    "subcommands": []
+   },
+   "render": {
+    "arguments": [
+     "target"
+    ],
+    "flags": [
+     "--diff-env",
+     "--env",
+     "--format",
+     "--namespace",
+     "--spec"
+    ],
+    "subcommands": []
+   },
+   "state": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "export",
+     "import",
+     "pull",
+     "show"
+    ]
+   },
+   "state export": {
+    "arguments": [],
+    "flags": [
+     "--force",
+     "--include-secrets",
+     "--key-file",
+     "--out",
+     "--spec"
+    ],
+    "subcommands": []
+   },
+   "state import": {
+    "arguments": [],
+    "flags": [
+     "--allow-partial",
+     "--approve",
+     "--in",
+     "--key-file",
+     "--spec"
+    ],
+    "subcommands": []
+   },
+   "state pull": {
+    "arguments": [],
+    "flags": [
+     "--spec"
+    ],
+    "subcommands": []
+   },
+   "state show": {
+    "arguments": [],
+    "flags": [
+     "--spec"
+    ],
+    "subcommands": []
+   },
+   "status": {
+    "arguments": [
+     "target"
+    ],
+    "flags": [
+     "--json",
+     "--timeout"
+    ],
+    "subcommands": []
+   }
+  },
+  "error_codes": [
+   "absence-precondition-failed",
+   "access-forwards-failed",
+   "access-kubeconfig-invalid",
+   "access-kubectl-missing",
+   "access-none-declared",
+   "access-port-conflict",
+   "access-target-invalid",
+   "access-unknown-forward",
+   "adopt-and-replace",
+   "adopt-entry-not-declared",
+   "ambiguous-content-blocked",
+   "ambiguous-delete-blocked",
+   "ambiguous-write-blocked",
+   "api-unavailable",
+   "applied-resource-drift",
+   "approve-with-planning-flags",
+   "auth-provider-refused",
+   "authorization-expired",
+   "backup-refused",
+   "blob-digest-mismatch",
+   "blob-not-found",
+   "blob-source-truncated",
+   "build-failed",
+   "build-timed-out",
+   "builder-not-approved",
+   "cancelled",
+   "check-api-unavailable",
+   "check-callable-invalid",
+   "check-exec-unavailable",
+   "check-failed",
+   "check-forward-unavailable",
+   "check-invalid",
+   "check-metric-invalid",
+   "check-port-unknown",
+   "check-raised",
+   "check-target-not-found",
+   "check-timed-out",
+   "checks-rollback-failed",
+   "checks-rollback-unavailable",
+   "cluster-identity-changed",
+   "cluster-identity-unreadable",
+   "codegen-cluster-read-failed",
+   "codegen-flags-conflict",
+   "codegen-output-refused",
+   "command-cancelled",
+   "command-failed",
+   "command-output-limit",
+   "command-timed-out",
+   "compensation-already-started",
+   "conflict",
+   "context-budget-exceeded",
+   "context-changed",
+   "context-empty",
+   "context-missing",
+   "context-symlink",
+   "crd-invalid",
+   "crd-not-found",
+   "credentials-file-not-private",
+   "cross-origin-location-refused",
+   "deadline-exceeded",
+   "deleted-resource-reappeared",
+   "delivery-not-succeeded",
+   "deploy-flags-conflict",
+   "deploy-plan-file-invalid",
+   "deploy-plan-file-mismatch",
+   "deploy-plan-target-mismatch",
+   "deploy-ref-ambiguous",
+   "deploy-ref-checkout-failed",
+   "deploy-ref-invalid",
+   "deploy-ref-model-differs",
+   "deploy-ref-source-unknown",
+   "deploy-ref-unknown",
+   "deploy-stage-unknown",
+   "digest-mismatch",
+   "discovery-incomplete",
+   "docker-socket-required",
+   "docker-tool-required",
+   "docker-unavailable",
+   "dockerfile-unpinned",
+   "dry-run-limit-exceeded",
+   "dry-run-placeholder-image",
+   "environment-invalid",
+   "environment-required",
+   "environment-unknown",
+   "environment-unsupported",
+   "exec-auth-not-allowed",
+   "exec-command-not-found",
+   "exec-command-unsafe",
+   "exec-config-invalid",
+   "exec-credential-invalid",
+   "exec-interactive-required",
+   "exec-pin-mismatch",
+   "exec-plugin-failed",
+   "exec-plugin-timed-out",
+   "execution-not-ready",
+   "execution-not-started",
+   "execution-other-owner",
+   "execution-other-target",
+   "execution-refused",
+   "field-owner-precondition-failed",
+   "forward-options-incomplete",
+   "forward-options-without-forward",
+   "forward-port-conflict",
+   "forward-port-in-use",
+   "forward-target-not-loopback",
+   "forward-unavailable",
+   "forward-unhealthy",
+   "generation-precondition-failed",
+   "git-timed-out",
+   "git-unavailable",
+   "grant-expired",
+   "grant-mismatch",
+   "identity-mismatch",
+   "image-declared-twice",
+   "image-digest-mismatch",
+   "image-invalid",
+   "image-mismatch",
+   "image-not-immutable",
+   "immutable-field-changed",
+   "import-cancelled",
+   "import-discovery-failed",
+   "import-failed",
+   "import-manifests-invalid",
+   "import-name-invalid",
+   "import-nothing-selected",
+   "import-output-limit",
+   "import-output-refused",
+   "import-roundtrip-mismatch",
+   "import-select-invalid",
+   "import-target-invalid",
+   "import-timed-out",
+   "inputs-io-error",
+   "inputs-lock-invalid",
+   "invalid-access-profile",
+   "invalid-adopt-entry",
+   "invalid-approved-digest",
+   "invalid-archive",
+   "invalid-blob-redirect",
+   "invalid-ca-file",
+   "invalid-composition",
+   "invalid-credentials-file",
+   "invalid-delivery-input",
+   "invalid-dry-run-response",
+   "invalid-field-ownership-evidence",
+   "invalid-force",
+   "invalid-forward",
+   "invalid-forward-preference",
+   "invalid-grant",
+   "invalid-image-stream",
+   "invalid-inputs",
+   "invalid-inputs-spec",
+   "invalid-log-request",
+   "invalid-metadata-change",
+   "invalid-node-registry",
+   "invalid-or-unavailable-artifact-input",
+   "invalid-or-unavailable-build-input",
+   "invalid-page",
+   "invalid-plan-hash",
+   "invalid-preference-store",
+   "invalid-propagation",
+   "invalid-receipt",
+   "invalid-reference",
+   "invalid-release-catalog",
+   "invalid-release-spec",
+   "invalid-request",
+   "invalid-secret-data",
+   "invalid-session-archive",
+   "invalid-source",
+   "invalid-spec",
+   "invalid-ssh-agent-socket",
+   "invalid-target",
+   "invalid-timeout",
+   "invalid-token-realm",
+   "invalid-tool",
+   "invalid-write-response",
+   "kubeconfig-rejected",
+   "kubectl-tool-required",
+   "limit-exceeded",
+   "local-port-in-use",
+   "manifest-not-found",
+   "manifest-rejected",
+   "mirror-digest-mismatch",
+   "mirror-manifest-invalid",
+   "mirror-platform-unavailable",
+   "missing-precondition",
+   "namespace-not-found",
+   "network-not-granted",
+   "no-execution-recorded",
+   "no-op-content-mismatch",
+   "no-previous-release",
+   "no-release-applied",
+   "no-saved-forwards",
+   "node-identity-mismatch",
+   "node-not-found",
+   "node-options-on-registry-target",
+   "node-query-failed",
+   "node-registry-required",
+   "not-found",
+   "not-resumable",
+   "not-retained",
+   "nothing-to-stop",
+   "operation-identity-mismatch",
+   "operator-state-unavailable",
+   "output-invalid",
+   "ownership-precondition-failed",
+   "pipeline-apply-not-ready",
+   "pipeline-checks-failed",
+   "pipeline-checks-unavailable",
+   "pipeline-delivery-failed",
+   "pipeline-image-not-pinned",
+   "pipeline-image-unknown",
+   "pipeline-invalid",
+   "pipeline-load-failed",
+   "pipeline-locked",
+   "pipeline-mirror-failed",
+   "pipeline-mirror-not-pinned",
+   "pipeline-not-delivered",
+   "pipeline-not-found",
+   "pipeline-nothing-to-resume",
+   "pipeline-plan-changed",
+   "pipeline-preview-changed",
+   "pipeline-preview-not-approvable",
+   "pipeline-registry-incompatible",
+   "pipeline-registry-not-ready",
+   "pipeline-registry-takeover-required",
+   "pipeline-registry-unreadable",
+   "pipeline-release-refused",
+   "pipeline-resume-changed",
+   "pipeline-stage-error",
+   "plain-http-not-loopback",
+   "plain-http-refused",
+   "plan-blocked",
+   "plan-expired",
+   "plan-intent-mismatch",
+   "plan-not-approved",
+   "plan-not-found",
+   "plan-release-mismatch",
+   "promote-refused",
+   "provider-error",
+   "rbac-denied",
+   "readiness-timeout",
+   "readiness-unsupported",
+   "receipt-invalid",
+   "receipt-unmatched",
+   "recreated-object",
+   "reference-required",
+   "registry-digest-mismatch",
+   "registry-error",
+   "registry-forbidden",
+   "registry-not-oci-v2",
+   "registry-options-on-node-target",
+   "registry-response-too-large",
+   "registry-unauthorized",
+   "registry-unreachable",
+   "release-changes-pending",
+   "release-history-malformed",
+   "release-locked",
+   "release-owner-mismatch",
+   "release-refused",
+   "release-state-unavailable",
+   "render-model-invalid",
+   "render-target-invalid",
+   "replace-backup-failed",
+   "replace-delete-not-observed",
+   "replace-delete-timeout",
+   "replace-entry-not-declared",
+   "replace-precondition-failed",
+   "replace-recreated-by-another-writer",
+   "replace-refused",
+   "request-byte-limit",
+   "resource-content-precondition-failed",
+   "resource-requires-adoption",
+   "resource-scope-mismatch",
+   "response-byte-limit",
+   "restore-refused",
+   "resume-refused",
+   "retained-adoption-precondition-failed",
+   "retained-content-differs",
+   "retained-content-precondition-failed",
+   "retained-resource",
+   "rotate-not-valid-for-rollback",
+   "scope-mismatch",
+   "secret-dependency-cycle",
+   "secret-generator-failed",
+   "secret-import-unavailable",
+   "secret-key-missing",
+   "secret-key-required",
+   "secret-not-found",
+   "secret-not-text",
+   "secret-reveal-required",
+   "secret-rotation-refused",
+   "secret-source-auth-failed",
+   "secret-source-failed",
+   "secret-source-not-found",
+   "secret-source-timeout",
+   "secret-source-tool-missing",
+   "secret-template-invalid",
+   "secret-unknown-reference",
+   "server-target-identity-mismatch",
+   "smoke-env-secret",
+   "smoke-failed",
+   "smoke-output-mismatch",
+   "smoke-timed-out",
+   "source-capture-failed",
+   "source-changed",
+   "source-dirty",
+   "source-drift",
+   "source-has-no-commit",
+   "source-identity",
+   "source-not-git",
+   "source-ref-mismatch",
+   "source-ref-not-found",
+   "source-subpath-missing",
+   "source-unavailable",
+   "spec-changed",
+   "spec-unreadable",
+   "ssh-tool-required",
+   "state-access-denied",
+   "state-corrupt",
+   "state-crypto-unavailable",
+   "state-export-invalid",
+   "state-import-changed",
+   "state-import-partial",
+   "state-key-required",
+   "state-layout-mismatch",
+   "state-lock-lost",
+   "state-locked",
+   "state-output-exists",
+   "state-too-large",
+   "state-unavailable",
+   "status-checks-unreadable",
+   "status-cluster-unreadable",
+   "status-port-occupied",
+   "status-release-unreadable",
+   "stored-discovery-missing",
+   "stored-evidence-mismatch",
+   "stored-release-mismatch",
+   "takeover-conflict",
+   "target-mismatch",
+   "target-refused",
+   "timed-out",
+   "too-many-redirects",
+   "tool-pin-mismatch",
+   "transport-error",
+   "uid-version-precondition-failed",
+   "undiscovered-api",
+   "unknown-error-code",
+   "unknown-forward",
+   "unknown-release",
+   "unknown-rotate-secret",
+   "unknown-shortcut",
+   "unknown-source",
+   "upload-rejected",
+   "verification-failed"
+  ]
+ },
+ "exports": {
+  "piceli": {
+   "Access": {
+    "class": "Access"
+   },
+   "Any": {
+    "class": "Any"
+   },
+   "App": {
+    "class": "App"
+   },
+   "Autoscaler": {
+    "class": "Autoscaler"
+   },
+   "AwsSecret": {
+    "params": [
+     "encoding",
+     "endpoint_url",
+     "key",
+     "profile",
+     "region",
+     "secret_id",
+     "timeout_seconds",
+     "version_id",
+     "version_stage"
+    ],
+    "returns": "AwsSecretSpec"
+   },
+   "Build": {
+    "class": "Build"
+   },
+   "Checks": {
+    "class": "Checks"
+   },
+   "ClaimTemplate": {
+    "class": "ClaimTemplate"
+   },
+   "Config": {
+    "class": "Config"
+   },
+   "ConfigKey": {
+    "class": "ConfigKey"
+   },
+   "ConfigVolume": {
+    "class": "ConfigVolume"
+   },
+   "Container": {
+    "class": "Container"
+   },
+   "ContainerPort": {
+    "class": "ContainerPort"
+   },
+   "CronJob": {
+    "class": "CronJob"
+   },
+   "DaemonSet": {
+    "class": "DaemonSet"
+   },
+   "Deployment": {
+    "class": "Deployment"
+   },
+   "DisruptionBudget": {
+    "class": "DisruptionBudget"
+   },
+   "Environment": {
+    "class": "Environment"
+   },
+   "ExistingClaim": {
+    "class": "ExistingClaim"
+   },
+   "FieldRef": {
+    "class": "FieldRef"
+   },
+   "Forward": {
+    "class": "Forward"
+   },
+   "GatewayRef": {
+    "class": "GatewayRef"
+   },
+   "HealthProbe": {
+    "class": "HealthProbe"
+   },
+   "HttpRoute": {
+    "class": "HttpRoute"
+   },
+   "Ingress": {
+    "class": "Ingress"
+   },
+   "Job": {
+    "class": "Job"
+   },
+   "MemoryVolume": {
+    "class": "MemoryVolume"
+   },
+   "Mount": {
+    "class": "Mount"
+   },
+   "NetworkPolicy": {
+    "class": "NetworkPolicy"
+   },
+   "NodeImport": {
+    "class": "NodeImport"
+   },
+   "NodeLoopbackRegistry": {
+    "class": "NodeLoopbackRegistry"
+   },
+   "Pipeline": {
+    "class": "Pipeline"
+   },
+   "PodDefaults": {
+    "class": "PodDefaults"
+   },
+   "Probe": {
+    "class": "Probe"
+   },
+   "Random": {
+    "params": [
+     "bytes",
+     "encoding"
+    ],
+    "returns": "RandomSecretSpec"
+   },
+   "Registry": {
+    "class": "Registry"
+   },
+   "Resource": {
+    "class": "Resource"
+   },
+   "Resources": {
+    "class": "Resources"
+   },
+   "Route": {
+    "class": "Route"
+   },
+   "Rule": {
+    "class": "Rule"
+   },
+   "Scaling": {
+    "class": "Scaling"
+   },
+   "Secret": {
+    "class": "Secret"
+   },
+   "SecretKey": {
+    "class": "SecretKey"
+   },
+   "SecretVolume": {
+    "class": "SecretVolume"
+   },
+   "Secrets": {
+    "class": "Secrets"
+   },
+   "Security": {
+    "class": "Security"
+   },
+   "Service": {
+    "class": "Service"
+   },
+   "ServiceAccount": {
+    "class": "ServiceAccount"
+   },
+   "ServicePort": {
+    "class": "ServicePort"
+   },
+   "Smoke": {
+    "class": "Smoke"
+   },
+   "Sops": {
+    "params": [
+     "encoding",
+     "file",
+     "format",
+     "key",
+     "pass_env",
+     "sops",
+     "sops_sha256",
+     "timeout_seconds"
+    ],
+    "returns": "SopsSecretSpec"
+   },
+   "StatefulSet": {
+    "class": "StatefulSet"
+   },
+   "Static": {
+    "params": [
+     "encoding",
+     "value"
+    ],
+    "returns": "StaticSecretSpec"
+   },
+   "TYPE_CHECKING": {},
+   "Target": {
+    "class": "Target"
+   },
+   "Template": {
+    "params": [
+     "encoding",
+     "text"
+    ],
+    "returns": "TemplateSecretSpec"
+   },
+   "TlsCa": {
+    "params": [
+     "ca_days",
+     "common_name",
+     "days",
+     "leaves"
+    ],
+    "returns": "TlsCaSpec"
+   },
+   "Vault": {
+    "params": [
+     "address",
+     "ca_file",
+     "encoding",
+     "key",
+     "mount",
+     "namespace",
+     "path",
+     "timeout_seconds",
+     "token_env",
+     "token_file",
+     "version"
+    ],
+    "returns": "VaultSecretSpec"
+   },
+   "Workload": {
+    "class": "Workload"
+   },
+   "app": {},
+   "artifacts": {},
+   "bounds": {},
+   "checks": {},
+   "cli_contract": {},
+   "codegen": {},
+   "errors": {},
+   "gcp": {},
+   "importing": {},
+   "k8s": {},
+   "pipeline": {},
+   "process_group": {},
+   "state": {},
+   "telemetry": {},
+   "testing": {},
+   "utils": {},
+   "version": {
+    "params": [
+     "distribution_name"
+    ]
+   }
+  },
+  "piceli.app": {
+   "Access": {
+    "class": "Access"
+   },
+   "App": {
+    "class": "App"
+   },
+   "Autoscaler": {
+    "class": "Autoscaler"
+   },
+   "ClaimTemplate": {
+    "class": "ClaimTemplate"
+   },
+   "Config": {
+    "class": "Config"
+   },
+   "ConfigKey": {
+    "class": "ConfigKey"
+   },
+   "ConfigVolume": {
+    "class": "ConfigVolume"
+   },
+   "Container": {
+    "class": "Container"
+   },
+   "ContainerPort": {
+    "class": "ContainerPort"
+   },
+   "CronJob": {
+    "class": "CronJob"
+   },
+   "DaemonSet": {
+    "class": "DaemonSet"
+   },
+   "Deployment": {
+    "class": "Deployment"
+   },
+   "DisruptionBudget": {
+    "class": "DisruptionBudget"
+   },
+   "Environment": {
+    "class": "Environment"
+   },
+   "ExistingClaim": {
+    "class": "ExistingClaim"
+   },
+   "FieldRef": {
+    "class": "FieldRef"
+   },
+   "Forward": {
+    "class": "Forward"
+   },
+   "GatewayRef": {
+    "class": "GatewayRef"
+   },
+   "HealthProbe": {
+    "class": "HealthProbe"
+   },
+   "HttpRoute": {
+    "class": "HttpRoute"
+   },
+   "Ingress": {
+    "class": "Ingress"
+   },
+   "Job": {
+    "class": "Job"
+   },
+   "MemoryVolume": {
+    "class": "MemoryVolume"
+   },
+   "Mount": {
+    "class": "Mount"
+   },
+   "NetworkPolicy": {
+    "class": "NetworkPolicy"
+   },
+   "PodDefaults": {
+    "class": "PodDefaults"
+   },
+   "Probe": {
+    "class": "Probe"
+   },
+   "Resource": {
+    "class": "Resource"
+   },
+   "Resources": {
+    "class": "Resources"
+   },
+   "Route": {
+    "class": "Route"
+   },
+   "Rule": {
+    "class": "Rule"
+   },
+   "Scaling": {
+    "class": "Scaling"
+   },
+   "Secret": {
+    "class": "Secret"
+   },
+   "SecretKey": {
+    "class": "SecretKey"
+   },
+   "SecretVolume": {
+    "class": "SecretVolume"
+   },
+   "Security": {
+    "class": "Security"
+   },
+   "Service": {
+    "class": "Service"
+   },
+   "ServiceAccount": {
+    "class": "ServiceAccount"
+   },
+   "ServicePort": {
+    "class": "ServicePort"
+   },
+   "StatefulSet": {
+    "class": "StatefulSet"
+   },
+   "Workload": {
+    "class": "Workload"
+   }
+  },
+  "piceli.checks": {
+   "Check": {
+    "params": null
+   },
+   "CheckContext": {
+    "class": "CheckContext"
+   },
+   "CheckError": {
+    "class": "CheckError"
+   },
+   "CheckFailed": {
+    "class": "CheckFailed"
+   },
+   "CheckReport": {
+    "class": "CheckReport"
+   },
+   "CheckResult": {
+    "class": "CheckResult"
+   },
+   "CheckSpecError": {
+    "class": "CheckSpecError"
+   },
+   "Checks": {
+    "class": "Checks"
+   },
+   "ExecCheck": {
+    "class": "ExecCheck"
+   },
+   "ExecResult": {
+    "class": "ExecResult"
+   },
+   "HttpCheck": {
+    "class": "HttpCheck"
+   },
+   "HttpResponse": {
+    "class": "HttpResponse"
+   },
+   "MetricCheck": {
+    "class": "MetricCheck"
+   },
+   "PythonCheck": {
+    "class": "PythonCheck"
+   },
+   "parse_checks": {
+    "params": [
+     "items"
+    ]
+   },
+   "run_check": {
+    "params": [
+     "check",
+     "context",
+     "sleep"
+    ],
+    "returns": "CheckResult"
+   },
+   "run_checks": {
+    "params": [
+     "checks",
+     "context",
+     "fail_fast",
+     "sleep"
+    ],
+    "returns": "CheckReport"
+   }
+  },
+  "piceli.k8s.release_spec": {
+   "Any": {
+    "class": "Any"
+   },
+   "AwsSecretSpec": {
+    "class": "AwsSecretSpec"
+   },
+   "BUILD_RECEIPT_REVISION": {},
+   "BaseModel": {
+    "class": "BaseModel"
+   },
+   "Callable": {
+    "class": "Callable"
+   },
+   "Check": {
+    "params": null
+   },
+   "CompositionFunction": {
+    "params": null
+   },
+   "ConfigDict": {
+    "class": "ConfigDict"
+   },
+   "DELIVERY_RECEIPT_SCHEMA": {},
+   "DELIVERY_SCHEMAS": {},
+   "DeploymentComposition": {
+    "class": "DeploymentComposition"
+   },
+   "DiscoverySpec": {
+    "class": "DiscoverySpec"
+   },
+   "ExecPolicy": {
+    "class": "ExecPolicy"
+   },
+   "ExecutionSpec": {
+    "class": "ExecutionSpec"
+   },
+   "Field": {
+    "params": null
+   },
+   "GeneratorSpec": {},
+   "ImageHandoffError": {
+    "class": "ImageHandoffError"
+   },
+   "ImageRef": {
+    "class": "ImageRef"
+   },
+   "ImageSpec": {
+    "class": "ImageSpec"
+   },
+   "ImportSecretSpec": {
+    "class": "ImportSecretSpec"
+   },
+   "KubeconfigTarget": {
+    "class": "KubeconfigTarget"
+   },
+   "Literal": {
+    "params": null
+   },
+   "Mapping": {
+    "class": "Mapping"
+   },
+   "MappingProxyType": {
+    "class": "mappingproxy"
+   },
+   "NODE_DELIVERY_SCHEMA": {},
+   "NodeExpectation": {
+    "class": "NodeExpectation"
+   },
+   "NodeRef": {
+    "class": "NodeRef"
+   },
+   "NodeSpec": {
+    "class": "NodeSpec"
+   },
+   "Path": {
+    "class": "Path"
+   },
+   "REGISTRY_DELIVERY_SCHEMA": {},
+   "RandomSecretSpec": {
+    "class": "RandomSecretSpec"
+   },
+   "ReleaseContext": {
+    "class": "ReleaseContext"
+   },
+   "ReleaseSettings": {
+    "class": "ReleaseSettings"
+   },
+   "ReleaseSpec": {
+    "class": "ReleaseSpec"
+   },
+   "ReleaseSpecError": {
+    "class": "ReleaseSpecError"
+   },
+   "ReleaseSpecModel": {
+    "class": "ReleaseSpecModel"
+   },
+   "SecretSpec": {
+    "params": null
+   },
+   "SecretVersionRef": {
+    "class": "SecretVersionRef"
+   },
+   "Sequence": {
+    "class": "Sequence"
+   },
+   "SopsSecretSpec": {
+    "class": "SopsSecretSpec"
+   },
+   "StaticSecretSpec": {
+    "class": "StaticSecretSpec"
+   },
+   "TargetSpec": {
+    "class": "TargetSpec"
+   },
+   "TemplateSecretSpec": {
+    "class": "TemplateSecretSpec"
+   },
+   "TlsCaSpec": {
+    "class": "TlsCaSpec"
+   },
+   "TlsSelfSignedSpec": {
+    "class": "TlsSelfSignedSpec"
+   },
+   "ValidationError": {
+    "class": "ValidationError"
+   },
+   "VaultSecretSpec": {
+    "class": "VaultSecretSpec"
+   },
+   "annotations": {},
+   "check_secrets": {
+    "params": [
+     "secrets"
+    ]
+   },
+   "content_tag": {
+    "params": [
+     "config_digest",
+     "length"
+    ]
+   },
+   "dataclass": {
+    "params": [
+     "eq",
+     "frozen",
+     "init",
+     "kw_only",
+     "match_args",
+     "order",
+     "repr",
+     "slots",
+     "unsafe_hash",
+     "weakref_slot"
+    ]
+   },
+   "field": {
+    "params": [
+     "compare",
+     "default",
+     "default_factory",
+     "doc",
+     "hash",
+     "init",
+     "kw_only",
+     "metadata",
+     "repr"
+    ]
+   },
+   "field_validator": {
+    "params": [
+     "check_fields",
+     "field",
+     "json_schema_input_type",
+     "mode"
+    ]
+   },
+   "hashlib": {},
+   "importlib": {},
+   "json": {},
+   "load_build_receipt": {
+    "params": [
+     "path"
+    ],
+    "returns": "ImageRef"
+   },
+   "load_delivery_receipt": {
+    "params": [
+     "name",
+     "path",
+     "pin"
+    ],
+    "returns": "ImageRef"
+   },
+   "load_images_from": {
+    "params": [
+     "paths"
+    ],
+    "returns": "ImageRef"
+   },
+   "model_validator": {
+    "params": [
+     "mode"
+    ]
+   },
+   "parse_adopt_entry": {
+    "params": [
+     "value",
+     "what"
+    ]
+   },
+   "re": {},
+   "replace": {
+    "params": null
+   },
+   "sys": {},
+   "tomllib": {},
+   "unique_names": {
+    "params": [
+     "checks"
+    ]
+   },
+   "valid_resource_name": {
+    "params": [
+     "api_version",
+     "kind",
+     "name"
+    ]
+   }
+  },
+  "piceli.pipeline": {
+   "AwsSecret": {
+    "params": [
+     "encoding",
+     "endpoint_url",
+     "key",
+     "profile",
+     "region",
+     "secret_id",
+     "timeout_seconds",
+     "version_id",
+     "version_stage"
+    ],
+    "returns": "AwsSecretSpec"
+   },
+   "Build": {
+    "class": "Build"
+   },
+   "CheckContext": {
+    "class": "CheckContext"
+   },
+   "CheckReportLike": {
+    "class": "CheckReportLike"
+   },
+   "CheckRunner": {
+    "class": "CheckRunner"
+   },
+   "CombinedPlan": {
+    "class": "CombinedPlan"
+   },
+   "ImageHandle": {
+    "class": "ImageHandle"
+   },
+   "NodeImport": {
+    "class": "NodeImport"
+   },
+   "NodeLoopbackRegistry": {
+    "class": "NodeLoopbackRegistry"
+   },
+   "Pipeline": {
+    "class": "Pipeline"
+   },
+   "PipelineError": {
+    "class": "PipelineError"
+   },
+   "PipelineRunner": {
+    "class": "PipelineRunner"
+   },
+   "Random": {
+    "params": [
+     "bytes",
+     "encoding"
+    ],
+    "returns": "RandomSecretSpec"
+   },
+   "Registry": {
+    "class": "Registry"
+   },
+   "STAGES": {},
+   "Secrets": {
+    "class": "Secrets"
+   },
+   "Smoke": {
+    "class": "Smoke"
+   },
+   "Sops": {
+    "params": [
+     "encoding",
+     "file",
+     "format",
+     "key",
+     "pass_env",
+     "sops",
+     "sops_sha256",
+     "timeout_seconds"
+    ],
+    "returns": "SopsSecretSpec"
+   },
+   "Static": {
+    "params": [
+     "encoding",
+     "value"
+    ],
+    "returns": "StaticSecretSpec"
+   },
+   "Target": {
+    "class": "Target"
+   },
+   "TargetNode": {
+    "class": "TargetNode"
+   },
+   "Template": {
+    "params": [
+     "encoding",
+     "text"
+    ],
+    "returns": "TemplateSecretSpec"
+   },
+   "TlsCa": {
+    "params": [
+     "ca_days",
+     "common_name",
+     "days",
+     "leaves"
+    ],
+    "returns": "TlsCaSpec"
+   },
+   "Vault": {
+    "params": [
+     "address",
+     "ca_file",
+     "encoding",
+     "key",
+     "mount",
+     "namespace",
+     "path",
+     "timeout_seconds",
+     "token_env",
+     "token_file",
+     "version"
+    ],
+    "returns": "VaultSecretSpec"
+   }
+  },
+  "piceli.testing": {
+   "FakeAPI": {
+    "class": "FakeAPI"
+   },
+   "FakeCluster": {
+    "class": "FakeCluster"
+   },
+   "TARGET": {},
+   "TYPES": {},
+   "fake_cluster": {
+    "params": null,
+    "returns": "FakeCluster"
+   },
+   "field_paths": {
+    "params": [
+     "manifest"
+    ]
+   },
+   "fields_v1": {
+    "params": [
+     "paths"
+    ]
+   },
+   "manifest": {
+    "params": [
+     "kind",
+     "name",
+     "value"
+    ]
+   },
+   "paths_of": {
+    "params": [
+     "fields",
+     "prefix"
+    ]
+   },
+   "provider_at": {
+    "params": null,
+    "returns": "KubernetesProvider"
+   },
+   "serve": {
+    "params": [
+     "api"
+    ]
+   },
+   "value_at": {
+    "params": [
+     "manifest",
+     "path"
+    ]
+   },
+   "write_kubeconfig": {
+    "params": [
+     "context",
+     "path",
+     "url"
+    ]
+   }
+  }
+ },
+ "modules": [
+  "piceli",
+  "piceli.__main__",
+  "piceli.app",
+  "piceli.app.access",
+  "piceli.app.app",
+  "piceli.app.environment",
+  "piceli.app.kinds",
+  "piceli.app.model",
+  "piceli.app.render",
+  "piceli.app.resource",
+  "piceli.artifacts",
+  "piceli.artifacts.base_image",
+  "piceli.artifacts.build_context",
+  "piceli.artifacts.build_dockerfile",
+  "piceli.artifacts.build_spec",
+  "piceli.artifacts.cli",
+  "piceli.artifacts.delivery",
+  "piceli.artifacts.delivery_inputs",
+  "piceli.artifacts.gc",
+  "piceli.artifacts.image_manifest",
+  "piceli.artifacts.local_import",
+  "piceli.artifacts.mirror",
+  "piceli.artifacts.node_transport",
+  "piceli.artifacts.oci",
+  "piceli.artifacts.plan",
+  "piceli.artifacts.process",
+  "piceli.artifacts.registry",
+  "piceli.artifacts.registry_delivery",
+  "piceli.artifacts.runnable",
+  "piceli.artifacts.source_identity",
+  "piceli.bounds",
+  "piceli.checks",
+  "piceli.checks.context",
+  "piceli.checks.model",
+  "piceli.checks.runner",
+  "piceli.cli_contract",
+  "piceli.codegen",
+  "piceli.codegen.crd",
+  "piceli.errors",
+  "piceli.gcp",
+  "piceli.gcp.credentials",
+  "piceli.gcp.gke",
+  "piceli.importing",
+  "piceli.importing.clean",
+  "piceli.importing.codegen",
+  "piceli.importing.generate",
+  "piceli.importing.sources",
+  "piceli.k8s",
+  "piceli.k8s.access",
+  "piceli.k8s.automation",
+  "piceli.k8s.cli",
+  "piceli.k8s.cli.access",
+  "piceli.k8s.cli.cluster_access",
+  "piceli.k8s.cli.codegen",
+  "piceli.k8s.cli.contract",
+  "piceli.k8s.cli.deploy_pipeline",
+  "piceli.k8s.cli.importing",
+  "piceli.k8s.cli.inputs",
+  "piceli.k8s.cli.observe",
+  "piceli.k8s.cli.operator",
+  "piceli.k8s.cli.release",
+  "piceli.k8s.cli.render",
+  "piceli.k8s.cli.state",
+  "piceli.k8s.config",
+  "piceli.k8s.config.kubeconfig",
+  "piceli.k8s.constants",
+  "piceli.k8s.constants.gke_compute_classes",
+  "piceli.k8s.constants.policies",
+  "piceli.k8s.constants.secret_type",
+  "piceli.k8s.constants.strategies",
+  "piceli.k8s.constants.verbs",
+  "piceli.k8s.observe",
+  "piceli.k8s.observe_server",
+  "piceli.k8s.operator",
+  "piceli.k8s.operator_state",
+  "piceli.k8s.ops",
+  "piceli.k8s.ops.bounds",
+  "piceli.k8s.ops.discovery",
+  "piceli.k8s.ops.dry_run",
+  "piceli.k8s.ops.exec_credentials",
+  "piceli.k8s.ops.execution_journal",
+  "piceli.k8s.ops.executor",
+  "piceli.k8s.ops.field_diff",
+  "piceli.k8s.ops.kubernetes_provider",
+  "piceli.k8s.ops.legacy_execution",
+  "piceli.k8s.ops.loader",
+  "piceli.k8s.ops.plan",
+  "piceli.k8s.ops.provider_factory",
+  "piceli.k8s.ops.replace_backup",
+  "piceli.k8s.ops.revision",
+  "piceli.k8s.ops.secret_versions",
+  "piceli.k8s.ops.session",
+  "piceli.k8s.port_owner",
+  "piceli.k8s.release",
+  "piceli.k8s.release_runner",
+  "piceli.k8s.release_secret_spec",
+  "piceli.k8s.release_secrets",
+  "piceli.k8s.release_spec",
+  "piceli.k8s.secret_sources",
+  "piceli.k8s.templates",
+  "piceli.k8s.templates.auxiliary",
+  "piceli.k8s.templates.auxiliary.container",
+  "piceli.k8s.templates.auxiliary.crontab",
+  "piceli.k8s.templates.auxiliary.env_vars",
+  "piceli.k8s.templates.auxiliary.labels",
+  "piceli.k8s.templates.auxiliary.names",
+  "piceli.k8s.templates.auxiliary.pod",
+  "piceli.k8s.templates.auxiliary.pod_security_context",
+  "piceli.k8s.templates.auxiliary.port",
+  "piceli.k8s.templates.auxiliary.quantity",
+  "piceli.k8s.templates.auxiliary.replica_manager",
+  "piceli.k8s.templates.auxiliary.resource_request",
+  "piceli.k8s.templates.deployable",
+  "piceli.k8s.templates.deployable.autoscaler",
+  "piceli.k8s.templates.deployable.base",
+  "piceli.k8s.templates.deployable.configmap",
+  "piceli.k8s.templates.deployable.cronjob",
+  "piceli.k8s.templates.deployable.deployment",
+  "piceli.k8s.templates.deployable.job",
+  "piceli.k8s.templates.deployable.node_local_registry",
+  "piceli.k8s.templates.deployable.role",
+  "piceli.k8s.templates.deployable.role_binding",
+  "piceli.k8s.templates.deployable.secret",
+  "piceli.k8s.templates.deployable.service",
+  "piceli.k8s.templates.deployable.service_account",
+  "piceli.k8s.templates.deployable.stateful_set",
+  "piceli.k8s.templates.deployable.volume",
+  "piceli.k8s.ui_config",
+  "piceli.k8s.utils",
+  "piceli.k8s.utils.utils_object",
+  "piceli.pipeline",
+  "piceli.pipeline.backend",
+  "piceli.pipeline.checks",
+  "piceli.pipeline.compose",
+  "piceli.pipeline.errors",
+  "piceli.pipeline.journal",
+  "piceli.pipeline.model",
+  "piceli.pipeline.operate",
+  "piceli.pipeline.planfile",
+  "piceli.pipeline.refs",
+  "piceli.pipeline.registry_takeover",
+  "piceli.pipeline.runner",
+  "piceli.pipeline.secrets",
+  "piceli.process_group",
+  "piceli.reference_docs",
+  "piceli.settings",
+  "piceli.state",
+  "piceli.state.archive",
+  "piceli.state.backend",
+  "piceli.state.cluster",
+  "piceli.state.errors",
+  "piceli.state.scopes",
+  "piceli.state.snapshot",
+  "piceli.telemetry",
+  "piceli.testing",
+  "piceli.testing.fake_api",
+  "piceli.testing.pytest_plugin",
+  "piceli.utils"
+ ],
+ "pydantic_attrs": [
+  "construct",
+  "copy",
+  "dict",
+  "from_orm",
+  "json",
+  "model_computed_fields",
+  "model_config",
+  "model_construct",
+  "model_copy",
+  "model_dump",
+  "model_dump_json",
+  "model_extra",
+  "model_fields",
+  "model_fields_set",
+  "model_json_schema",
+  "model_parametrized_name",
+  "model_post_init",
+  "model_rebuild",
+  "model_validate",
+  "model_validate_json",
+  "model_validate_strings",
+  "parse_file",
+  "parse_obj",
+  "parse_raw",
+  "schema",
+  "schema_json",
+  "update_forward_refs",
+  "validate"
+ ],
+ "version": "0.7.0"
+}

@@ -40,6 +40,10 @@ test-integration: ## Integration tests on the kind cluster named by PICELI_KIND_
 skill-check: ## Fresh-agent check: run the agent skill's walkthrough from a copy of skills/piceli (fake API)
 	uv run python scripts/skill_check.py
 
+.PHONY: evals-check
+evals-check: ## Self-tests of the cross-model eval harness (mock models, no keys, no network)
+	uv run --frozen pytest evals/tests
+
 .PHONY: coverage
 coverage: ## Unit + acceptance tests with an HTML coverage report
 	uv run pytest --cov --cov-report=term --cov-report=html
