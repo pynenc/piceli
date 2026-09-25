@@ -355,14 +355,14 @@ Deploy a pipeline: inputs → build → deliver → plan → apply → checks.
 
 **Contract**
 
-- **Reads:** pipeline module, build specs and sources, git (source identity; --ref commits), docker, kubeconfig, state_dir
+- **Reads:** pipeline module, build specs and sources, git (source identity; --ref commits), docker, kubeconfig, state_dir, source registries of mirror= images (pull only), mirror_credentials files
 - **Writes:** state_dir (run journal, receipts, release catalog, secret store), local Docker image store, registry or node image store, temporary git worktrees with --ref (removed on exit)
 - **Cluster:** writes
 - **Approval required:** yes
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** --plan never changes the cluster, a registry or a node; before the images exist it previews the release with placeholder images (never approvable, never sent to the cluster) and refuses with the blocking objects when it needs adoption or replacement; --approve HASH executes exactly the combined plan, and a release planned after delivery may not adopt, replace or delete more than the approved preview; --resume continues the latest interrupted run without a new approval. Unchanged stages are skipped. --ref [SOURCE=]REV builds the sources from commits in temporary worktrees; the combined hash covers the resolved SHAs, --approve needs the same --ref, and --resume reuses the run's SHAs.
+- **Notes:** --plan never changes the cluster, a registry or a node (it reads the namespace's Deployments and the registry node for a NodeLoopbackRegistry); before the images exist it previews the release with placeholder images (never approvable, never sent to the cluster) and refuses with the blocking objects when it needs adoption or replacement; --approve HASH executes exactly the combined plan, including mirror= copies and a registry adopt=/replace=, and a release planned after delivery may not adopt, replace or delete more than the approved preview; --resume continues the latest interrupted run without a new approval. Unchanged stages are skipped. --ref [SOURCE=]REV builds the sources from commits in temporary worktrees; the combined hash covers the resolved SHAs, --approve needs the same --ref, and --resume reuses the run's SHAs.
 
 (cli-explain)=
 ### `piceli explain`

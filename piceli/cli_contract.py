@@ -619,6 +619,8 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
                 "docker",
                 "kubeconfig",
                 "state_dir",
+                "source registries of mirror= images (pull only)",
+                "mirror_credentials files",
             ),
             writes=(
                 "state_dir (run journal, receipts, release catalog, secret store)",
@@ -632,17 +634,20 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             long_running=True,
             contract="conforms",
             exit_codes=(0, 1, 2, 3),
-            notes="--plan never changes the cluster, a registry or a node; "
-            "before the images exist it previews the release with placeholder "
-            "images (never approvable, never sent to the cluster) and refuses "
-            "with the blocking objects when it needs adoption or replacement; "
-            "--approve HASH executes exactly the combined plan, and a release "
-            "planned after delivery may not adopt, replace or delete more than "
-            "the approved preview; --resume continues "
-            "the latest interrupted run without a new approval. Unchanged stages "
-            "are skipped. --ref [SOURCE=]REV builds the sources from commits in "
-            "temporary worktrees; the combined hash covers the resolved SHAs, "
-            "--approve needs the same --ref, and --resume reuses the run's SHAs.",
+            notes="--plan never changes the cluster, a registry or a node (it "
+            "reads the namespace's Deployments and the registry node for a "
+            "NodeLoopbackRegistry); before the images exist it previews the "
+            "release with placeholder images (never approvable, never sent to "
+            "the cluster) and refuses with the blocking objects when it needs "
+            "adoption or replacement; --approve HASH executes exactly the "
+            "combined plan, including mirror= copies and a registry "
+            "adopt=/replace=, and a release planned after delivery may not "
+            "adopt, replace or delete more than the approved preview; --resume "
+            "continues the latest interrupted run without a new approval. "
+            "Unchanged stages are skipped. --ref [SOURCE=]REV builds the "
+            "sources from commits in temporary worktrees; the combined hash "
+            "covers the resolved SHAs, --approve needs the same --ref, and "
+            "--resume reuses the run's SHAs.",
         ),
     }
 )

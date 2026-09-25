@@ -66,6 +66,21 @@ class NodeLocalRegistry(base.Deployable):
     :param storage: Size of the retained PVC.
     :param storage_class: StorageClass of the PVC; ``None`` uses the default.
     :param host_path: Use this node directory instead of a PVC.
+    :param existing_claim: Use this existing PersistentVolumeClaim (never
+        created, changed or deleted) instead of creating ``<name>-storage``.
+    :param selector: Deployment selector labels. Kubernetes never changes a
+        Deployment's selector, so a registry taken over from another owner
+        keeps its own; default ``app.kubernetes.io/name``/``instance`` labels.
+    :param rolling_update: Use ``RollingUpdate`` with ``maxSurge: 0`` and
+        ``maxUnavailable: 1`` instead of ``Recreate``: with one replica the old
+        pod still stops (and frees the port) before the new one starts. For a
+        registry taken over from a Deployment whose strategy is
+        ``RollingUpdate``: Kubernetes refuses to switch it to ``Recreate``
+        while another manager owns its ``rollingUpdate`` settings.
+    :param index_platforms: Accept image indexes that hold only these
+        platforms' manifests (``os/arch``), as a mirror of a multi-arch image
+        copies only the node's platform. ``None`` (default) keeps the
+        registry's rule: every platform of an index must be present.
     :param read_only: Maintenance mode: pulls work, pushes and deletes are refused.
     :param stopped: Scale to zero replicas (maintenance, e.g. garbage collection).
     :param run_as_user: Non-root UID/GID/fsGroup; ``None`` keeps the image user (root).
@@ -85,6 +100,10 @@ class NodeLocalRegistry(base.Deployable):
     storage: quantity.Quantity = "10Gi"
     storage_class: str | None = None
     host_path: str | None = None
+    existing_claim: names.Name | None = None
+    selector: dict[str, str] | None = None
+    index_platforms: list[str] | None = None
+    rolling_update: bool = False
     read_only: bool = False
     stopped: bool = False
     run_as_user: int | None = Field(default=65532, ge=1)
@@ -110,6 +129,31 @@ class NodeLocalRegistry(base.Deployable):
             raise ValueError(f"host_path must be an absolute directory: {value!r}")
         return value
 
+    @field_validator("index_platforms")
+    @classmethod
+    def _platforms(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        if not value:
+            raise ValueError("index_platforms needs at least one os/arch platform")
+        for item in value:
+            if not re.fullmatch(r"[a-z0-9_.-]{1,32}/[a-z0-9_.-]{1,32}", item):
+                raise ValueError(f"index platform must be os/arch: {item!r}")
+        return sorted(set(value))
+
+    @field_validator("selector")
+    @classmethod
+    def _selector(cls, value: dict[str, str] | None) -> dict[str, str] | None:
+        if value is not None and not value:
+            raise ValueError("selector needs at least one label")
+        return value
+
+    @model_validator(mode="after")
+    def _one_storage(self) -> NodeLocalRegistry:
+        if self.host_path and self.existing_claim:
+            raise ValueError("give host_path or existing_claim, not both")
+        return self
+
     @model_validator(mode="after")
     def _name_fits_suffixes(self) -> NodeLocalRegistry:
         if len(self.name) > _MAX_NAME:
@@ -126,18 +170,26 @@ class NodeLocalRegistry(base.Deployable):
 
     @property
     def claim_name(self) -> str:
-        return f"{self.name}-storage"
+        return self.existing_claim or f"{self.name}-storage"
 
     @property
-    def selector_labels(self) -> dict[str, str]:
+    def default_selector_labels(self) -> dict[str, str]:
         return {
             "app.kubernetes.io/name": "node-local-registry",
             "app.kubernetes.io/instance": self.name,
         }
 
     @property
+    def selector_labels(self) -> dict[str, str]:
+        return dict(self.selector) if self.selector else self.default_selector_labels
+
+    @property
     def object_labels(self) -> dict[str, str]:
-        return {**(self.labels or {}), **self.selector_labels}
+        return {
+            **(self.labels or {}),
+            **self.default_selector_labels,
+            **self.selector_labels,
+        }
 
     # -- pull references ---------------------------------------------------------------
 
@@ -182,6 +234,26 @@ class NodeLocalRegistry(base.Deployable):
             "health": {
                 "storagedriver": {"enabled": True, "interval": "10s", "threshold": 3}
             },
+            **(
+                {
+                    "validation": {
+                        "manifests": {
+                            "indexes": {
+                                "platforms": "list",
+                                "platformlist": [
+                                    {
+                                        "os": item.split("/")[0],
+                                        "architecture": item.split("/")[1],
+                                    }
+                                    for item in self.index_platforms
+                                ],
+                            }
+                        }
+                    }
+                }
+                if self.index_platforms
+                else {}
+            ),
         }
 
     def config_yaml(self) -> str:
@@ -334,7 +406,7 @@ class NodeLocalRegistry(base.Deployable):
         )
 
     def get_claim(self) -> client.V1PersistentVolumeClaim | None:
-        if self.host_path:
+        if self.host_path or self.existing_claim:
             return None
         return client.V1PersistentVolumeClaim(
             api_version="v1",
@@ -375,8 +447,18 @@ class NodeLocalRegistry(base.Deployable):
             spec=client.V1DeploymentSpec(
                 replicas=0 if self.stopped else 1,
                 # Recreate: the old pod releases the loopback port (and the
-                # storage) before the new one starts.
-                strategy=client.V1DeploymentStrategy(type="Recreate"),
+                # storage) before the new one starts. A one-replica rolling
+                # update with no surge does the same.
+                strategy=(
+                    client.V1DeploymentStrategy(
+                        type="RollingUpdate",
+                        rolling_update=client.V1RollingUpdateDeployment(
+                            max_surge=0, max_unavailable=1
+                        ),
+                    )
+                    if self.rolling_update
+                    else client.V1DeploymentStrategy(type="Recreate")
+                ),
                 selector=client.V1LabelSelector(match_labels=self.selector_labels),
                 template=client.V1PodTemplateSpec(
                     metadata=client.V1ObjectMeta(

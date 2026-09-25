@@ -34,6 +34,7 @@ import stat
 import threading
 import urllib.parse
 from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO
@@ -290,8 +291,12 @@ class StreamedOciRegistryClient:
         *,
         chunk_size: int = _CHUNK,
         monolithic_max: int = _MONOLITHIC_MAX,
+        actions: str = "pull,push",
     ) -> None:
+        if actions not in {"pull", "pull,push"}:
+            raise ValueError("registry scope actions must be 'pull' or 'pull,push'")
         self.endpoint = endpoint
+        self.actions = actions
         self.chunk_size = chunk_size
         self.monolithic_max = monolithic_max
         self._authorization: str | None = None
@@ -446,7 +451,7 @@ class StreamedOciRegistryClient:
             raise RegistryError("invalid-token-realm")
         query = [("service", params["service"])] if "service" in params else []
         if repository is not None:
-            query.append(("scope", f"repository:{repository}:pull,push"))
+            query.append(("scope", f"repository:{repository}:{self.actions}"))
         path = realm.path or "/"
         encoded = urllib.parse.urlencode(query)
         if realm.query:
@@ -479,7 +484,7 @@ class StreamedOciRegistryClient:
         return token
 
     def authenticate(self, repository: str) -> None:
-        """Probe ``/v2/`` and answer its challenge for ``repository`` push scope."""
+        """Probe ``/v2/`` and answer its challenge for ``repository`` (``actions`` scope)."""
         self._scoped.add(repository)
         response = self._send("GET", "/v2/")
         if response.status == 401 and self._answer(response, repository):
@@ -514,6 +519,96 @@ class StreamedOciRegistryClient:
     def has_blob(self, repository: str, digest: str) -> bool:
         """Check if a layer or config blob already exists in the repository."""
         return self.blob_size(repository, digest) is not None
+
+    @contextmanager
+    def open_blob(
+        self, repository: str, digest: str, *, max_redirects: int = 5
+    ) -> Iterator[BinaryIO]:
+        """Stream a blob's bytes (``GET``), following registry redirects.
+
+        Registries often answer a blob ``GET`` with a redirect to object
+        storage on another origin. A redirect to the same origin keeps the
+        ``Authorization`` header; one to another origin is followed **without**
+        it (credentials never leave the registry's origin) and must use HTTPS
+        unless it is a loopback address. The caller hashes what it reads: the
+        bytes are not verified here.
+        """
+        import http.client
+
+        validate_digest(digest)
+        if repository not in self._scoped:
+            self.authenticate(repository)
+        base = urllib.parse.urlsplit(self.endpoint.base_url)
+        origin = (base.scheme, base.hostname, self.endpoint.port)
+        scheme, host, port = origin
+        path = f"/v2/{repository}/blobs/{digest}"
+        answered = False
+        for _ in range(max_redirects + 1):
+            assert host is not None
+            same = (scheme, host, port) == origin
+            if same:
+                connection = self._connection(scheme, host, port)
+            elif scheme == "https":
+                import ssl
+
+                connection = http.client.HTTPSConnection(
+                    host,
+                    port,
+                    timeout=self.endpoint.timeout,
+                    context=ssl.create_default_context(),
+                )
+            else:
+                connection = self._connection(scheme, host, port)
+            try:
+                headers = {}
+                if same and self._authorization is not None:
+                    headers["Authorization"] = self._authorization
+                connection.request("GET", path, headers=headers)
+                response = connection.getresponse()
+            except (OSError, http.client.HTTPException) as error:
+                connection.close()
+                raise RegistryError("registry-unreachable") from error
+            status = response.status
+            if status in {301, 302, 303, 307, 308}:
+                location = response.getheader("location") or ""
+                response.read(_MAX_RESPONSE)
+                connection.close()
+                current = f"{scheme}://{host_port(host, port)}{path}"
+                parts = urllib.parse.urlsplit(urllib.parse.urljoin(current, location))
+                if parts.scheme not in {"http", "https"} or not parts.hostname:
+                    raise RegistryError("invalid-blob-redirect")
+                if parts.scheme == "http" and not is_loopback(parts.hostname):
+                    raise RegistryError("plain-http-refused")
+                scheme, host = parts.scheme, parts.hostname
+                port = parts.port or _default_port(parts.scheme)
+                path = (parts.path or "/") + ("?" + parts.query if parts.query else "")
+                continue
+            if status == 401 and same and not answered:
+                challenge = Response(
+                    status, {k.lower(): v for k, v in response.getheaders()}, b""
+                )
+                response.read(_MAX_RESPONSE)
+                connection.close()
+                answered = True
+                if self._answer(challenge, repository):
+                    continue
+                raise RegistryError("registry-unauthorized", 401)
+            if status != 200:
+                response.read(_MAX_RESPONSE)
+                connection.close()
+                if status == 401:
+                    raise RegistryError("registry-unauthorized", 401)
+                if status == 403:
+                    raise RegistryError("registry-forbidden", 403)
+                if status == 404:
+                    raise RegistryError("blob-not-found", 404)
+                raise RegistryError("registry-error", status)
+            try:
+                yield response  # type: ignore[misc]
+            finally:
+                connection.close()
+            return
+        raise RegistryError("too-many-redirects")
 
     def _start_upload(self, repository: str) -> str:
         response = self._call("POST", f"/v2/{repository}/blobs/uploads/", repository)

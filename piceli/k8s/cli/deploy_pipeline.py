@@ -122,11 +122,26 @@ def _describe(plan: Any, entry: str) -> None:
             else changes or "apply"
         )
         _say_wrapped(f"  deliver  registry {registry['release']}: ", note)
+        existing = registry.get("existing")
+        if existing and existing.get("action") in {"adopt", "replace"}:
+            storage = existing.get("storage") or {}
+            where = storage.get("host_path") or storage.get("claim") or "none"
+            say(
+                f"  deliver  registry {existing['action']}s live Deployment/"
+                f"{existing['name']} (data on {where}: {existing['data']})"
+            )
     for name, image in deliver.get("images", {}).items():
         config = image["config_digest"]
         say(
             f"  deliver  {name}: {image['action']}"
             + (f" ({config[7:19]})" if config else "")
+        )
+    for key, mirror in deliver.get("mirrors", {}).items():
+        name, _, digest = key.partition("@")
+        unused = "" if mirror["used"] else ", not used by the app"
+        say(
+            f"  deliver  mirror {name}@{digest[:19]}: {mirror['action']} "
+            f"({mirror['platform']}{unused})"
         )
     release = stages["plan"]
     if release.get("state") == "planned":

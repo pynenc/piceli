@@ -58,6 +58,23 @@ python -m piceli artifacts import-local --layout OCI --docker /abs/docker \
 also requires `--approve-plan`, `--allow-code-execution` and `--allow-network`.
 Failures return fixed JSON and never echo paths, tool output, manifests or tokens.
 
+## Mirror an image by digest
+
+`piceli.artifacts.mirror` copies a third-party image from its registry into
+another one over the OCI distribution API, without a container engine:
+`MirrorSource.parse("docker.io/library/redis@sha256:…")` accepts only
+digest-pinned references (normalized like `docker pull`), and
+`mirror_image(source, source_client, target_client, repository, platform=…)`
+reads the manifest by digest, verifies that its bytes hash to it, copies the
+missing blobs (streamed and hashed), keeps an image index with the manifests
+of `platform` (or all of them with `platform=None`), and returns a
+`piceli.mirror-delivery.v1` receipt with digests and blob counts, never
+credentials. Source clients use `StreamedOciRegistryClient(endpoint,
+actions="pull")`; a blob redirect to another origin is followed without the
+`Authorization` header. `piceli deploy` uses it for
+`NodeLoopbackRegistry(mirror=[…])` and `Registry(url, mirror=[…])`; see
+{ref}`deploy-mirror`.
+
 ## Deployment telemetry
 
 Pass `OperationTelemetry(OtlpOptions(endpoint, token, ...))` to `PlanExecutor`.

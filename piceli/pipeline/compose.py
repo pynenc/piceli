@@ -42,6 +42,7 @@ from piceli.pipeline.errors import PipelineError
 from piceli.pipeline.model import (
     NodeImport,
     NodeLoopbackRegistry,
+    Registry,
     handle_image,
     pinned,
 )
@@ -167,6 +168,7 @@ def pinned_images(pipeline: Pipeline, built: Mapping[str, Any]) -> dict[str, Ima
     refused: a release never references a tag another push can move.
     """
     result: dict[str, ImageRef] = {}
+    table = mirror_references(pipeline)
     composition = render_app(pipeline, preview_context(pipeline))
     for resource in _resources(composition):
         for pod in pod_specs(resource.manifest):
@@ -181,6 +183,7 @@ def pinned_images(pipeline: Pipeline, built: Mapping[str, Any]) -> dict[str, Ima
                         f"{container.get('name')!r} uses {image!r}, which is not "
                         "pinned by digest; use repository@sha256:… or a build handle",
                     )
+                image = mirrored(image, table) or image
                 key = _image_key(str(container.get("name", "")), resource.ref.name)
                 ref = _pinned_ref(key, image)
                 if key in built or (key in result and result[key].ref != image):
@@ -258,6 +261,91 @@ def uses_pending_image(resource: ResourceIntent) -> bool:
     )
 
 
+# --------------------------------------------------------------- mirrors
+
+
+def registry_prefix(url: str) -> str:
+    """The repository prefix of a ``Registry`` URL (``oci://host/prefix``)."""
+    from piceli.artifacts.registry import RegistryTarget
+
+    return RegistryTarget.parse(url + "/x").repository[: -len("/x")]
+
+
+def mirror_repository(pipeline: Pipeline, key: str) -> str:
+    """The repository a mirrored image is copied to in the delivery registry."""
+    from piceli.artifacts.mirror import MirrorSource
+
+    source = MirrorSource.parse(key)
+    strategy = pipeline.deliver
+    if isinstance(strategy, Registry):
+        prefix = registry_prefix(strategy.url)
+        return source.mirrored_repository(f"{prefix}/mirror" if prefix else "mirror")
+    return source.mirrored_repository("mirror")
+
+
+def mirror_node_registry(pipeline: Pipeline) -> str:
+    """``host[:port]`` the nodes pull mirrored images from."""
+    strategy = pipeline.deliver
+    if isinstance(strategy, NodeLoopbackRegistry):
+        return f"127.0.0.1:{strategy.port}"
+    assert isinstance(strategy, Registry)
+    from piceli.artifacts.registry import RegistryTarget
+
+    return strategy.node_registry or RegistryTarget.parse(strategy.url + "/x").registry
+
+
+def mirrors(pipeline: Pipeline) -> tuple[str, ...]:
+    """The canonical references of the delivery's ``mirror=`` list."""
+    strategy = pipeline.deliver
+    if isinstance(strategy, NodeLoopbackRegistry | Registry):
+        return tuple(strategy.mirror)
+    return ()
+
+
+def mirror_references(pipeline: Pipeline) -> dict[str, str]:
+    """Canonical source reference → the mirrored pull reference (same digest)."""
+    host = mirror_node_registry(pipeline) if mirrors(pipeline) else ""
+    return {
+        key: f"{host}/{mirror_repository(pipeline, key)}@{key.rpartition('@')[2]}"
+        for key in mirrors(pipeline)
+    }
+
+
+def used_mirrors(pipeline: Pipeline) -> set[str]:
+    """Canonical references of ``mirror=`` entries the app's containers use."""
+    keys = set(mirrors(pipeline))
+    if not keys:
+        return set()
+    from piceli.artifacts.mirror import MirrorError, MirrorSource
+
+    found: set[str] = set()
+    for resource in _resources(render_app(pipeline, preview_context(pipeline))):
+        for pod in pod_specs(resource.manifest):
+            for container in containers(pod):
+                image = container.get("image")
+                if not isinstance(image, str) or "@" not in image:
+                    continue
+                try:
+                    key = MirrorSource.parse(image).key
+                except MirrorError:
+                    continue
+                if key in keys:
+                    found.add(key)
+    return found
+
+
+def mirrored(reference: str, table: Mapping[str, str]) -> str | None:
+    """The mirrored reference of an app image reference, if it is mirrored."""
+    if not table or "@" not in reference:
+        return None
+    from piceli.artifacts.mirror import MirrorError, MirrorSource
+
+    try:
+        return table.get(MirrorSource.parse(reference).key)
+    except MirrorError:
+        return None
+
+
 # ------------------------------------------------------------ resolution
 
 
@@ -267,12 +355,17 @@ def resolve(
     images: Mapping[str, ImageRef] | None,
     secrets: Mapping[str, SecretVersionRef],
     pin_node: str | None,
+    mirrors: Mapping[str, str] | None = None,
 ) -> DeploymentComposition:
-    """Delivered references for handles, node pins, and real secret versions.
+    """Delivered references for handles and mirrors, node pins, real secret versions.
 
     With ``images=None`` build handles stay placeholders (offline rendering)
-    and only the node pin is applied.
+    and only the node pin is applied. ``mirrors`` maps a canonical source
+    reference to its mirrored pull reference; a container using a mirrored
+    image pulls the copy (same digest) and is pinned like one using a built
+    image.
     """
+    table = dict(mirrors or {})
     rebind = {placeholder(name): ref for name, ref in secrets.items()}
     components = []
     for component in composition.components:
@@ -285,6 +378,10 @@ def resolve(
                 for container in containers(pod):
                     name = handle_image(container.get("image"))
                     if name is None:
+                        copy = mirrored(str(container.get("image") or ""), table)
+                        if copy is not None:
+                            container["image"] = copy
+                            uses_handle = changed = True
                         continue
                     uses_handle = changed = True
                     if images is None:
@@ -358,6 +455,7 @@ def composition_function(
     pipeline: Pipeline,
 ) -> Callable[[ReleaseContext], DeploymentComposition]:
     alias = pin_alias(pipeline)
+    table = mirror_references(pipeline)
 
     def compose(ctx: ReleaseContext) -> DeploymentComposition:
         node = ctx.nodes.get(alias) if alias is not None else None
@@ -366,6 +464,7 @@ def composition_function(
             images=ctx.images,
             secrets=ctx.secrets,
             pin_node=node.name if node is not None else None,
+            mirrors=table,
         )
 
     return compose
@@ -522,8 +621,29 @@ def release_spec(
     )
 
 
-def registry_release_spec(pipeline: Pipeline) -> PipelineReleaseSpec:
-    """The node-loopback registry's own release (its own name and owner)."""
+@dataclass(frozen=True)
+class RegistryTakeover:
+    """How the registry release takes over a live registry (see ``registry_takeover``)."""
+
+    adopt: tuple[str, ...] = ()
+    replace: tuple[str, ...] = ()
+    selector: Mapping[str, str] | None = None
+    rolling_update: bool = False
+
+
+def registry_release_spec(
+    pipeline: Pipeline,
+    *,
+    platforms: tuple[str, ...] = (),
+    takeover: RegistryTakeover | None = None,
+) -> PipelineReleaseSpec:
+    """The node-loopback registry's own release (its own name and owner).
+
+    :param platforms: ``os/arch`` platforms whose manifests an image index
+        may hold alone (the node's, when the delivery mirrors images).
+    :param takeover: Objects of a live registry the release adopts or
+        replaces, and the live Deployment selector it keeps.
+    """
     from piceli.k8s.templates.deployable.node_local_registry import (
         DEFAULT_REGISTRY_IMAGE,
         NodeLocalRegistry,
@@ -537,18 +657,28 @@ def registry_release_spec(pipeline: Pipeline) -> PipelineReleaseSpec:
         raise PipelineError(
             "pipeline-image-not-pinned", "the registry image must be pinned by digest"
         )
+    takeover = takeover or RegistryTakeover()
+    selector = dict(takeover.selector) if takeover.selector else None
 
     def compose(ctx: ReleaseContext) -> DeploymentComposition:
-        registry = NodeLocalRegistry(
-            node_name=ctx.nodes[alias].name,
-            name=strategy.name,
-            port=strategy.port,
-            storage=strategy.storage,
-            image=ctx.image("registry"),
-        )
+        try:
+            registry = NodeLocalRegistry(
+                node_name=ctx.nodes[alias].name,
+                name=strategy.registry_name,
+                port=strategy.port,
+                storage=strategy.storage,
+                image=ctx.image("registry"),
+                host_path=strategy.host_path,
+                existing_claim=strategy.existing_claim,
+                selector=selector,
+                index_platforms=list(platforms) or None,
+                rolling_update=takeover.rolling_update,
+            )
+        except ValueError as error:
+            raise PipelineError("pipeline-invalid", str(error)) from None
         return DeploymentComposition((registry.component(ctx.namespace),))
 
-    owner = f"{pipeline.owner}-registry"[:128]
+    owner = registry_owner(pipeline)
     return _spec(
         pipeline,
         name=f"{pipeline.app.name[:33]}-registry",
@@ -558,4 +688,12 @@ def registry_release_spec(pipeline: Pipeline) -> PipelineReleaseSpec:
         images={"registry": _pinned_ref("registry", image)},
         function=compose,
         secrets={},
+        adopt=takeover.adopt,
+        replace=takeover.replace,
+        inherited=tuple(strategy.inherited_owners),
     )
+
+
+def registry_owner(pipeline: Pipeline) -> str:
+    """The owner of the node-loopback registry's release."""
+    return f"{pipeline.owner}-registry"[:128]

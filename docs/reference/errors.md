@@ -35,6 +35,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`authorization-expired`](#error-authorization-expired) | execution | no |
 | [`backup-refused`](#error-backup-refused) | observe | no |
 | [`blob-digest-mismatch`](#error-blob-digest-mismatch) | artifacts-registry | yes |
+| [`blob-not-found`](#error-blob-not-found) | artifacts-registry | no |
 | [`blob-source-truncated`](#error-blob-source-truncated) | artifacts-registry | yes |
 | [`build-failed`](#error-build-failed) | build-spec | no |
 | [`build-timed-out`](#error-build-timed-out) | build-spec | yes |
@@ -138,6 +139,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`invalid-adopt-entry`](#error-invalid-adopt-entry) | release | no |
 | [`invalid-approved-digest`](#error-invalid-approved-digest) | artifacts-input | no |
 | [`invalid-archive`](#error-invalid-archive) | artifacts-delivery | no |
+| [`invalid-blob-redirect`](#error-invalid-blob-redirect) | artifacts-registry | no |
 | [`invalid-ca-file`](#error-invalid-ca-file) | artifacts-input | no |
 | [`invalid-composition`](#error-invalid-composition) | release | no |
 | [`invalid-credentials-file`](#error-invalid-credentials-file) | artifacts-input | no |
@@ -181,6 +183,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`local-port-in-use`](#error-local-port-in-use) | observe | yes |
 | [`manifest-not-found`](#error-manifest-not-found) | artifacts-registry | yes |
 | [`manifest-rejected`](#error-manifest-rejected) | artifacts-registry | no |
+| [`mirror-digest-mismatch`](#error-mirror-digest-mismatch) | artifacts-registry | no |
+| [`mirror-manifest-invalid`](#error-mirror-manifest-invalid) | artifacts-registry | no |
+| [`mirror-platform-unavailable`](#error-mirror-platform-unavailable) | artifacts-registry | no |
 | [`missing-precondition`](#error-missing-precondition) | kubernetes | no |
 | [`namespace-not-found`](#error-namespace-not-found) | kubernetes | no |
 | [`network-not-granted`](#error-network-not-granted) | build-spec | no |
@@ -211,13 +216,18 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`pipeline-invalid`](#error-pipeline-invalid) | pipeline | no |
 | [`pipeline-load-failed`](#error-pipeline-load-failed) | pipeline | no |
 | [`pipeline-locked`](#error-pipeline-locked) | pipeline | yes |
+| [`pipeline-mirror-failed`](#error-pipeline-mirror-failed) | pipeline | yes |
+| [`pipeline-mirror-not-pinned`](#error-pipeline-mirror-not-pinned) | pipeline | no |
 | [`pipeline-not-delivered`](#error-pipeline-not-delivered) | pipeline | no |
 | [`pipeline-not-found`](#error-pipeline-not-found) | pipeline | no |
 | [`pipeline-nothing-to-resume`](#error-pipeline-nothing-to-resume) | pipeline | no |
 | [`pipeline-plan-changed`](#error-pipeline-plan-changed) | pipeline | no |
 | [`pipeline-preview-changed`](#error-pipeline-preview-changed) | pipeline | no |
 | [`pipeline-preview-not-approvable`](#error-pipeline-preview-not-approvable) | pipeline | no |
+| [`pipeline-registry-incompatible`](#error-pipeline-registry-incompatible) | pipeline | no |
 | [`pipeline-registry-not-ready`](#error-pipeline-registry-not-ready) | pipeline | yes |
+| [`pipeline-registry-takeover-required`](#error-pipeline-registry-takeover-required) | pipeline | no |
+| [`pipeline-registry-unreadable`](#error-pipeline-registry-unreadable) | pipeline | yes |
 | [`pipeline-release-refused`](#error-pipeline-release-refused) | pipeline | no |
 | [`pipeline-resume-changed`](#error-pipeline-resume-changed) | pipeline | no |
 | [`pipeline-stage-error`](#error-pipeline-stage-error) | pipeline | yes |
@@ -313,6 +323,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`target-mismatch`](#error-target-mismatch) | kubernetes | no |
 | [`target-refused`](#error-target-refused) | target | no |
 | [`timed-out`](#error-timed-out) | artifacts-delivery | yes |
+| [`too-many-redirects`](#error-too-many-redirects) | artifacts-registry | yes |
 | [`tool-pin-mismatch`](#error-tool-pin-mismatch) | artifacts-input | no |
 | [`transport-error`](#error-transport-error) | kubernetes | yes |
 | [`uid-version-precondition-failed`](#error-uid-version-precondition-failed) | execution | no |
@@ -737,6 +748,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Retry; if it persists, the registry or a proxy is altering content.
 - **Retry-safe:** yes
 
+(error-blob-not-found)=
+### `blob-not-found`
+
+**Blob not found.** The source registry has no blob for a digest its manifest references (404).
+
+- **Fix:** Check the reference and the registry; mirror another digest if the registry pruned this one.
+- **Retry-safe:** no
+
 (error-blob-source-truncated)=
 ### `blob-source-truncated`
 
@@ -751,6 +770,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Cross-origin redirect refused.** The registry redirected an upload to another origin.
 
 - **Fix:** Configure the registry to accept uploads on its own address.
+- **Retry-safe:** no
+
+(error-invalid-blob-redirect)=
+### `invalid-blob-redirect`
+
+**Invalid blob redirect.** The registry redirected a blob download to an address that is not an http(s) URL.
+
+- **Fix:** Check the registry; a proxy in between may rewrite redirects.
 - **Retry-safe:** no
 
 (error-invalid-token-realm)=
@@ -775,6 +802,30 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Manifest rejected.** The registry refused the image manifest.
 
 - **Fix:** Check that the registry accepts OCI or Docker v2 manifests of this type.
+- **Retry-safe:** no
+
+(error-mirror-digest-mismatch)=
+### `mirror-digest-mismatch`
+
+**Mirrored image does not match its digest.** The source (or delivery) registry served manifest or config bytes whose sha256 is not the pinned digest; nothing unverified is pushed.
+
+- **Fix:** Check that the reference names the image you meant and that the registry is trustworthy; do not retry against the same source unchanged.
+- **Retry-safe:** no
+
+(error-mirror-manifest-invalid)=
+### `mirror-manifest-invalid`
+
+**Mirrored manifest not understood.** The pinned digest names a document that is not an OCI or Docker image manifest or index (or one that is too large).
+
+- **Fix:** Pin the digest of an image manifest or image index (`docker buildx imagetools inspect IMAGE`).
+- **Retry-safe:** no
+
+(error-mirror-platform-unavailable)=
+### `mirror-platform-unavailable`
+
+**Image has no manifest for the node platform.** The mirrored image index holds no manifest for the registry node's `os/architecture`, or a single-platform image was built for another platform.
+
+- **Fix:** Pin an image (or index) that supports the node's platform (see `kubectl get node NODE -o jsonpath='{.status.nodeInfo.architecture}'`).
 - **Retry-safe:** no
 
 (error-plain-http-refused)=
@@ -839,6 +890,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Registry unreachable.** The registry could not be contacted (DNS, TCP or TLS failure).
 
 - **Fix:** Check the address, network and TLS settings (`--ca-file`), then retry.
+- **Retry-safe:** yes
+
+(error-too-many-redirects)=
+### `too-many-redirects`
+
+**Too many blob redirects.** A blob download was redirected more than five times.
+
+- **Fix:** Check the registry and any proxy in between, then retry.
 - **Retry-safe:** yes
 
 (error-upload-rejected)=
@@ -2779,6 +2838,22 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Wait for the other run to finish, then run the command again.
 - **Retry-safe:** yes
 
+(error-pipeline-mirror-failed)=
+### `pipeline-mirror-failed`
+
+**Image mirror failed.** Copying a `mirror=` image did not succeed and its receipt carries no more specific code.
+
+- **Fix:** Check the source and delivery registries, then continue with `piceli deploy MODULE:ATTR --resume`.
+- **Retry-safe:** yes
+
+(error-pipeline-mirror-not-pinned)=
+### `pipeline-mirror-not-pinned`
+
+**Mirror not pinned by digest.** A `mirror=` entry of `NodeLoopbackRegistry` or `Registry` has no `@sha256:` digest. A tag can move, so only digest-pinned images are copied.
+
+- **Fix:** Pin the image, for example `docker.io/library/redis@sha256:<digest>` (find the digest with `docker buildx imagetools inspect IMAGE:TAG`).
+- **Retry-safe:** no
+
 (error-pipeline-not-delivered)=
 ### `pipeline-not-delivered`
 
@@ -2827,12 +2902,36 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Approve the `combined_hash` from `piceli deploy MODULE:ATTR --plan` instead. It approves the build, the delivery and a release that adopts, replaces or deletes at most what the preview showed. To review the real release plan first, run `--until deliver`, then `--plan` again.
 - **Retry-safe:** no
 
+(error-pipeline-registry-incompatible)=
+### `pipeline-registry-incompatible`
+
+**Existing registry cannot be adopted.** `NodeLoopbackRegistry(adopt=NAME)` names a live Deployment that is not a compatible loopback registry: not on the host network, another port or node, data on other storage than the declared `host_path=`/`existing_claim=`, or a selector with match expressions.
+
+- **Fix:** Declare matching `port=`, `host_path=` or `existing_claim=`, or use `replace=NAME` to recreate the Deployment (the plan shows whether its data carries over).
+- **Retry-safe:** no
+
 (error-pipeline-registry-not-ready)=
 ### `pipeline-registry-not-ready`
 
-**Node-loopback registry not ready.** The registry release of `NodeLoopbackRegistry` was applied but did not become ready (image pull, volume or node problem).
+**Node-loopback registry not ready.** The registry release of `NodeLoopbackRegistry` was applied but did not become ready (image pull, volume or node problem, or its port is held by a process outside the namespace).
 
-- **Fix:** Inspect the registry pod with a read-only tool, fix it, then run `piceli deploy MODULE:ATTR --resume`.
+- **Fix:** Inspect the registry pod with a read-only tool, fix it, then run `piceli deploy MODULE:ATTR --resume`. A registry that already runs in the namespace is detected at plan time (`pipeline-registry-takeover-required`).
+- **Retry-safe:** yes
+
+(error-pipeline-registry-takeover-required)=
+### `pipeline-registry-takeover-required`
+
+**Existing registry needs takeover.** Another Deployment in the namespace already holds the node-loopback registry's port on its node, or a Deployment with the registry's name exists and is not managed by the registry release; a second registry could never start.
+
+- **Fix:** Take the live registry over with `NodeLoopbackRegistry(port=PORT, adopt="NAME")` (its objects and data are kept) or `replace="NAME"` (its Deployment is backed up and recreated), or choose another `port=`/`name=`.
+- **Retry-safe:** no
+
+(error-pipeline-registry-unreadable)=
+### `pipeline-registry-unreadable`
+
+**Registry state unreadable.** Planning the node-loopback registry could not list the namespace's Deployments or read the registry node (to find a live registry and the node platform).
+
+- **Fix:** Check that the kubeconfig user may list Deployments in the namespace and get the node, then plan again.
 - **Retry-safe:** yes
 
 (error-pipeline-release-refused)=

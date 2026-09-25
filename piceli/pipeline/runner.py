@@ -55,12 +55,17 @@ from piceli.pipeline.checks import CheckContext, describe_check, describe_result
 from piceli.pipeline.compose import (
     canonical,
     digest,
+    mirror_node_registry,
+    mirror_repository,
+    mirrors,
     model_fingerprint,
     pending_image,
     pinned_images,
+    registry_owner,
     registry_release_spec,
     release_spec,
     used_handles,
+    used_mirrors,
     uses_pending_image,
 )
 from piceli.pipeline.errors import PipelineError
@@ -73,7 +78,12 @@ from piceli.pipeline.model import (
     Pipeline,
     Registry,
 )
-from piceli.pipeline.operate import delivery_path, delivery_receipt
+from piceli.pipeline.operate import (
+    delivery_path,
+    delivery_receipt,
+    mirror_path,
+    mirror_receipt,
+)
 from piceli.pipeline.refs import (
     RefRequest,
     SourceCheckouts,
@@ -86,6 +96,8 @@ if TYPE_CHECKING:
     from piceli.artifacts.source_identity import InputsLock, InputsSpec
     from piceli.k8s.release_runner import PlanResult, ReleaseRunner
     from piceli.k8s.release_spec import ImageRef
+    from piceli.pipeline.compose import PipelineReleaseSpec
+    from piceli.pipeline.registry_takeover import Takeover
 
 PLAN_SCHEMA = "piceli.deploy-plan.v1"
 EVENT_SCHEMA = "piceli.deploy-event.v1"
@@ -132,6 +144,9 @@ class _Work:
     release_images: dict[str, str] = field(default_factory=dict)
     noop: bool = False
     provenance: dict[str, Any] = field(default_factory=dict)
+    takeover: Takeover | None = None
+    platforms: tuple[str, ...] | None = None
+    mirrors: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass
@@ -372,7 +387,7 @@ class PipelineRunner:
             return RegistryRoute(
                 push=None,
                 node_registry=f"127.0.0.1:{strategy.port}",
-                forward=f"deployment/{strategy.name}",
+                forward=f"deployment/{strategy.registry_name}",
                 namespace=target.namespace,
                 remote_port=strategy.port,
                 kubeconfig=target.kubeconfig,
@@ -396,9 +411,9 @@ class PipelineRunner:
             prefix = strategy.repository or self.pipeline.app.name
             return f"{prefix}/{image}"
         if isinstance(strategy, Registry):
-            from piceli.artifacts.registry import RegistryTarget
+            from piceli.pipeline.compose import registry_prefix
 
-            prefix = RegistryTarget.parse(strategy.url + "/x").repository[: -len("/x")]
+            prefix = registry_prefix(strategy.url)
             return f"{prefix}/{image}" if prefix else image
         work = self._work_producer(image)
         ref = work.images.get(image, {}).get("ref") or ""
@@ -582,14 +597,15 @@ class PipelineRunner:
         self, work: _Work, _reapply: bool
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         strategy = self.pipeline.deliver
-        if not work.used:
+        mirrored = mirrors(self.pipeline)
+        if not work.used and not mirrored:
             return {"action": "none"}, {"action": "none"}
         assert strategy is not None
         stage: dict[str, Any] = {"strategy": strategy.describe()}
         hashed: dict[str, Any] = {"strategy": strategy.describe()}
         registry_ready = True
         if isinstance(strategy, NodeLoopbackRegistry):
-            spec = registry_release_spec(self.pipeline)
+            spec = self._registry_spec(work)
             runner = self.backend.release_runner(spec)
             try:
                 result = runner.plan()
@@ -611,6 +627,13 @@ class PipelineRunner:
                 "release": result.release,
                 "actions": _hex(_compact(result)),
             }
+            assert work.takeover is not None
+            if work.takeover.existing is not None:
+                stage["registry"]["existing"] = work.takeover.existing
+                hashed["registry"]["existing"] = work.takeover.existing
+            if work.platforms:
+                stage["registry"]["index_platforms"] = list(work.platforms)
+                hashed["registry"]["index_platforms"] = list(work.platforms)
         images: dict[str, Any] = {}
         for name in work.used:
             config = work.producer[name].images.get(name, {}).get("image_id")
@@ -629,6 +652,99 @@ class PipelineRunner:
             name: value["config_digest"] or "pending-build"
             for name, value in images.items()
         }
+        if mirrored:
+            stage["mirrors"], hashed["mirrors"] = self._plan_mirrors(
+                work, registry_ready
+            )
+        return stage, hashed
+
+    def _registry_inputs(self, work: _Work) -> None:
+        """Read the live registry and the node platform (read-only, once per run)."""
+        from piceli.pipeline.registry_takeover import decide
+
+        if work.takeover is not None and work.platforms is not None:
+            return
+        strategy = self.pipeline.deliver
+        assert isinstance(strategy, NodeLoopbackRegistry)
+        target = self.pipeline.target
+        _, node = target.node(strategy.node)
+        try:
+            deployments = self.backend.list_deployments(target)
+            platform = (
+                self.backend.node_platform(target, node.name)
+                if strategy.mirror
+                else None
+            )
+        except PipelineError:
+            raise
+        except Exception as error:
+            raise PipelineError(
+                "pipeline-registry-unreadable",
+                "could not read the namespace's Deployments or the registry node "
+                f"({type(error).__name__}); check access with a read-only tool",
+            ) from None
+        if platform is not None and (
+            platform.count("/") != 1 or platform.endswith(("/None", "/"))
+        ):
+            raise PipelineError(
+                "pipeline-registry-unreadable",
+                f"node {node.name} reports no architecture",
+            )
+        work.takeover = decide(
+            strategy,
+            node=node.name,
+            owner=registry_owner(self.pipeline),
+            deployments=deployments,
+        )
+        work.platforms = (platform,) if platform else ()
+
+    def _registry_spec(self, work: _Work) -> PipelineReleaseSpec:
+        self._registry_inputs(work)
+        assert work.takeover is not None and work.platforms is not None
+        return registry_release_spec(
+            self.pipeline, platforms=work.platforms, takeover=work.takeover.takeover
+        )
+
+    def _mirror_platform(self, work: _Work) -> str | None:
+        """The platform copied from a multi-arch index (``None``: every one)."""
+        if not isinstance(self.pipeline.deliver, NodeLoopbackRegistry):
+            return None
+        self._registry_inputs(work)
+        return work.platforms[0] if work.platforms else None
+
+    def _plan_mirrors(
+        self, work: _Work, registry_ready: bool
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        pipeline = self.pipeline
+        keys = mirrors(pipeline)
+        platform = self._mirror_platform(work)
+        used = used_mirrors(pipeline)
+        host = mirror_node_registry(pipeline)
+        repositories = {key: mirror_repository(pipeline, key) for key in keys}
+        present = [False] * len(keys)
+        if registry_ready:
+            present = self.backend.registry_present(
+                self._route(),
+                [(repositories[key], key.rpartition("@")[2]) for key in keys],
+            )
+        stage: dict[str, Any] = {}
+        hashed: list[dict[str, Any]] = []
+        for key, found in zip(keys, present, strict=True):
+            repository = repositories[key]
+            found = bool(found) and (
+                mirror_receipt(pipeline.state_dir, key, repository) is not None
+            )
+            work.mirrors[key] = {"repository": repository, "present": found}
+            stage[key] = {
+                "action": "present" if found else "mirror",
+                "repository": repository,
+                "reference": f"{host}/{repository}@{key.rpartition('@')[2]}",
+                "platform": platform or "all",
+                "used": key in used,
+            }
+            hashed.append(
+                {"source": key, "repository": repository, "platform": platform or "all"}
+            )
         return stage, hashed
 
     def _receipt(self, name: str, config: str) -> tuple[Path, dict[str, Any]] | None:
@@ -1069,7 +1185,8 @@ class PipelineRunner:
 
         work = self._work
         assert work is not None
-        if not work.used:
+        mirrored = mirrors(self.pipeline)
+        if not work.used and not mirrored:
             return "skipped", {"why": "no built image is used"}
         strategy = self.pipeline.deliver
         output: dict[str, Any] = {"strategy": strategy.kind if strategy else None}
@@ -1112,7 +1229,71 @@ class PipelineRunner:
                 f"{_short_reference(delivered.reference)}"
             )
         output["images"] = images
+        if mirrored:
+            output["mirrors"], copied = self._run_mirrors(work)
+            acted = acted or copied
         return ("done" if acted else "skipped"), output
+
+    def _run_mirrors(self, work: _Work) -> tuple[dict[str, Any], bool]:
+        """Copy each ``mirror=`` image that is not present yet (content-addressed)."""
+        from piceli.artifacts.mirror import MirrorSource, public
+
+        pipeline = self.pipeline
+        strategy = pipeline.deliver
+        assert isinstance(strategy, NodeLoopbackRegistry | Registry)
+        platform = self._mirror_platform(work)
+        output: dict[str, Any] = {}
+        acted = False
+        for key in mirrors(pipeline):
+            repository = mirror_repository(pipeline, key)
+            path = mirror_path(pipeline.state_dir, key, repository)
+            known = work.mirrors.get(key, {})
+            if known.get("present") and mirror_receipt(
+                pipeline.state_dir, key, repository
+            ):
+                receipt = json.loads(path.read_text())
+                action = "present"
+            else:
+                self.say(f"[deliver] mirror {_short_reference(key)}: copying")
+                domain = MirrorSource.parse(key).domain
+                receipt = self.backend.mirror_deliver(
+                    self._route(),
+                    key,
+                    repository,
+                    platform=platform,
+                    credentials=(strategy.mirror_credentials or {}).get(domain),
+                )
+                write_private(
+                    path, json.dumps(receipt, sort_keys=True, indent=2) + "\n"
+                )
+                if receipt.get("state") != "succeeded":
+                    from piceli.errors import ERRORS
+
+                    reason = receipt.get("reason")
+                    failed = receipt.get("state") == "failed"
+                    details = {"output": {"mirrors": {key: public(receipt)}}}
+                    message = f"mirror of {key!r} did not succeed ({reason})"
+                    if not (isinstance(reason, str) and reason in ERRORS):
+                        raise PipelineError(
+                            "pipeline-mirror-failed",
+                            message,
+                            failed=failed,
+                            details=details,
+                        )
+                    raise PipelineError(reason, message, failed=failed, details=details)
+                action = str(receipt.get("result") or "mirrored")
+                acted = acted or action == "mirrored"
+            work.mirrors[key] = {"repository": repository, "present": True}
+            reference = str(receipt.get("pull_ref"))
+            output[key] = {
+                "action": action,
+                "reference": reference,
+                "digest": key.rpartition("@")[2],
+                "platform": receipt.get("platform"),
+                "receipt": str(path),
+            }
+            self.say(f"[deliver] mirror {_short_reference(key)}: {action}")
+        return output, acted
 
     def _ensure_registry(
         self, work: _Work, resuming: bool
@@ -1120,7 +1301,7 @@ class PipelineRunner:
         """Apply the node-loopback registry's release when its plan changes anything."""
         runner, result = work.registry_runner, work.registry_plan
         if runner is None or result is None or resuming:
-            runner = self.backend.release_runner(registry_release_spec(self.pipeline))
+            runner = self.backend.release_runner(self._registry_spec(work))
             result = runner.plan()
             work.registry_runner, work.registry_plan = runner, result
         info: dict[str, Any] = {"release": result.release, "summary": result.counts}

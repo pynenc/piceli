@@ -633,6 +633,45 @@ class Build:
 # ---------------------------------------------------------------- delivery
 
 
+def _mirrors(value: Any) -> tuple[str, ...]:
+    """Validate ``mirror=`` entries: digest-pinned references, canonical, unique."""
+    from piceli.artifacts.mirror import MirrorError, MirrorSource
+
+    if isinstance(value, str):
+        raise PipelineError(
+            "pipeline-invalid", "mirror must be a list of image references"
+        )
+    keys: dict[str, None] = {}
+    for item in value or ():
+        try:
+            keys[MirrorSource.parse(item).key] = None
+        except MirrorError as error:
+            raise PipelineError(error.code, str(error)) from None
+    return tuple(keys)
+
+
+def _mirror_credentials(value: Any, base: Path | None) -> dict[str, Path]:
+    """``{registry: credentials file}``; files resolve from the declaring file."""
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise PipelineError(
+            "pipeline-invalid",
+            "mirror_credentials maps a registry (docker.io, ghcr.io:443 …) to a "
+            "private credentials file",
+        )
+    result: dict[str, Path] = {}
+    for registry, path in value.items():
+        if not isinstance(registry, str) or not re.fullmatch(
+            r"[A-Za-z0-9.-]+(?::[0-9]{1,5})?", registry
+        ):
+            raise PipelineError(
+                "pipeline-invalid", f"invalid mirror_credentials registry {registry!r}"
+            )
+        result[registry.lower()] = _resolve(path, base)
+    return dict(sorted(result.items()))
+
+
 @dataclass(frozen=True)
 class NodeLoopbackRegistry:
     """Deliver built images to a registry on one node's loopback (no public registry).
@@ -642,7 +681,8 @@ class NodeLoopbackRegistry:
     owner, never part of the app's release), pushes each image through a
     supervised ``kubectl port-forward``, and the app pulls
     ``127.0.0.1:<port>/<repository>@sha256:…``. Workloads that use a built
-    image and have no node selection of their own are pinned to that node.
+    or mirrored image and have no node selection of their own are pinned to
+    that node.
 
     :param port: Registry port on the node loopback.
     :param node: Target node alias; default the only declared node.
@@ -650,6 +690,25 @@ class NodeLoopbackRegistry:
     :param storage: Size of the registry's retained volume claim.
     :param image: Registry image pinned by digest; default the template's.
     :param repository: Repository prefix; default the app name.
+    :param host_path: Keep the registry data in this node directory instead
+        of a volume claim.
+    :param existing_claim: Keep the registry data on this existing claim
+        (never created, changed or deleted) instead of ``<name>-storage``.
+    :param mirror: Third-party images to copy by digest into the registry
+        (``docker.io/library/redis@sha256:…``); the app's references to them
+        are rewritten to ``127.0.0.1:<port>/mirror/<registry>/<repository>``
+        with the same digest. A tag without a digest is refused.
+    :param mirror_credentials: ``{registry: credentials file}`` for mirror
+        sources that need a login (private ``0600`` JSON file, as for
+        :class:`Registry`); other sources are pulled anonymously.
+    :param adopt: Name of an existing loopback registry Deployment in the
+        namespace to take over (its objects are adopted by the registry
+        release; its data stays). The registry objects take this name.
+    :param replace: Like ``adopt``, but the existing Deployment is deleted
+        and recreated (a backup is written first); for a registry whose
+        selector, port or storage cannot be taken over in place.
+    :param inherited_owners: Earlier owners of the registry objects whose
+        retained objects (the claim) this registry release may take over.
     """
 
     port: int = 5000
@@ -658,19 +717,84 @@ class NodeLoopbackRegistry:
     storage: str = "10Gi"
     image: str | None = None
     repository: str | None = None
+    host_path: str | None = None
+    existing_claim: str | None = None
+    mirror: Sequence[str] = ()
+    mirror_credentials: Mapping[str, Path] | None = field(default=None, repr=False)
+    adopt: str | None = None
+    replace: str | None = None
+    inherited_owners: Sequence[str] = ()
 
     kind = "node-loopback-registry"
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "mirror", _mirrors(self.mirror))
+        object.__setattr__(
+            self,
+            "mirror_credentials",
+            _mirror_credentials(self.mirror_credentials, _caller_dir()),
+        )
+        if isinstance(self.inherited_owners, str):
+            raise PipelineError(
+                "pipeline-invalid", "inherited_owners must be a list of owners"
+            )
+        object.__setattr__(self, "inherited_owners", tuple(self.inherited_owners))
+        if self.adopt is not None and self.replace is not None:
+            raise PipelineError(
+                "pipeline-invalid", "give adopt= or replace= for the registry, not both"
+            )
+        existing = self.adopt or self.replace
+        if existing is not None:
+            if not isinstance(existing, str) or not _LABEL.fullmatch(existing):
+                raise PipelineError(
+                    "pipeline-invalid", f"invalid registry name {existing!r}"
+                )
+            if self.name not in ("registry", existing):
+                raise PipelineError(
+                    "pipeline-invalid",
+                    "adopt=/replace= name the registry objects; drop name= or "
+                    "set it to the same value",
+                )
+        if self.host_path is not None and self.existing_claim is not None:
+            raise PipelineError(
+                "pipeline-invalid", "give host_path or existing_claim, not both"
+            )
+        if self.host_path is not None and (
+            not isinstance(self.host_path, str)
+            or not self.host_path.startswith("/")
+            or self.host_path == "/"
+        ):
+            raise PipelineError(
+                "pipeline-invalid", "host_path must be an absolute node directory"
+            )
+
+    @property
+    def registry_name(self) -> str:
+        """The registry objects' base name (``adopt``/``replace`` when given)."""
+        return self.adopt or self.replace or self.name
+
     def describe(self) -> dict[str, Any]:
-        return {
+        described: dict[str, Any] = {
             "strategy": self.kind,
             "port": self.port,
             "node": self.node,
-            "name": self.name,
+            "name": self.registry_name,
             "storage": self.storage,
             "image": self.image,
             "repository": self.repository,
         }
+        # Keys added in 0.5.0 appear only when used, so earlier plans keep
+        # their hashes.
+        for key in ("host_path", "existing_claim", "adopt", "replace"):
+            if getattr(self, key) is not None:
+                described[key] = getattr(self, key)
+        if self.inherited_owners:
+            described["inherited_owners"] = list(self.inherited_owners)
+        if self.mirror:
+            described["mirror"] = list(self.mirror)
+        if self.mirror_credentials:
+            described["mirror_credentials"] = sorted(self.mirror_credentials)
+        return described
 
 
 @dataclass(frozen=True)
@@ -705,12 +829,19 @@ class Registry:
     :param node_registry: ``host[:port]`` the nodes pull from, when it differs.
     :param credentials: A private (``0600``) credentials file.
     :param ca_file: A CA bundle for the registry's TLS certificate.
+    :param mirror: Third-party images to copy by digest into
+        ``prefix/mirror/<registry>/<repository>`` (every platform of a
+        multi-arch index); the app's references are rewritten to the copy.
+    :param mirror_credentials: ``{registry: credentials file}`` for mirror
+        sources that need a login.
     """
 
     url: str
     node_registry: str | None = None
     credentials: Path | None = field(default=None, repr=False)
     ca_file: Path | None = field(default=None, repr=False)
+    mirror: Sequence[str] = ()
+    mirror_credentials: Mapping[str, Path] | None = field(default=None, repr=False)
 
     kind = "registry"
 
@@ -724,13 +855,24 @@ class Registry:
             value = getattr(self, name)
             if value is not None:
                 object.__setattr__(self, name, _resolve(value, base))
+        object.__setattr__(self, "mirror", _mirrors(self.mirror))
+        object.__setattr__(
+            self,
+            "mirror_credentials",
+            _mirror_credentials(self.mirror_credentials, base),
+        )
 
     def describe(self) -> dict[str, Any]:
-        return {
+        described: dict[str, Any] = {
             "strategy": self.kind,
             "url": self.url,
             "node_registry": self.node_registry,
         }
+        if self.mirror:
+            described["mirror"] = list(self.mirror)
+        if self.mirror_credentials:
+            described["mirror_credentials"] = sorted(self.mirror_credentials)
+        return described
 
 
 Delivery = NodeLoopbackRegistry | NodeImport | Registry

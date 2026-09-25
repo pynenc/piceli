@@ -6,6 +6,41 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ## Version 0.5.0
 
+- **Mirror third-party images (preview):** `NodeLoopbackRegistry(mirror=[…])`
+  and `Registry(url, mirror=[…])` copy digest-pinned images the app does not
+  build (`docker.io/library/redis@sha256:…`) into the delivery registry in the
+  deliver stage, over the OCI distribution API on the machine running Piceli
+  (anonymous, or `mirror_credentials={"registry": "file.json"}`). The app's
+  references are rewritten to the copy with the same digest, and workloads
+  using it are pinned to the registry node. For a multi-arch index the index
+  keeps its digest and the node registry holds only the node's platform
+  (`NodeLocalRegistry(index_platforms=…)`); `Registry` copies every platform.
+  Copies are verified by digest, skipped when present, recorded in
+  `state_dir/mirrors/` (`piceli.mirror-delivery.v1`) and part of the combined
+  plan hash. New codes: `pipeline-mirror-not-pinned`, `pipeline-mirror-failed`,
+  `mirror-digest-mismatch`, `mirror-manifest-invalid`,
+  `mirror-platform-unavailable`, `blob-not-found`, `invalid-blob-redirect`,
+  `too-many-redirects`. `piceli release plan|diff|apply --spec` refuse with
+  `pipeline-not-delivered` until the mirrors are copied.
+- **Take over a live node-loopback registry (preview):**
+  `NodeLoopbackRegistry(adopt="NAME")` adopts a registry Deployment that
+  already runs on the node (and its ConfigMap and claim) by ownership transfer,
+  keeping its selector and its data, after checking that it is compatible
+  (host network, port, node, storage), else `pipeline-registry-incompatible`.
+  `replace="NAME"` backs it up, deletes and recreates it; storage is never
+  deleted, and the plan says whether the data carries over. A registry that
+  holds the port without either flag is refused at plan time with
+  `pipeline-registry-takeover-required` instead of failing later with
+  `pipeline-registry-not-ready`. New options `host_path=`, `existing_claim=`
+  and `inherited_owners=` on `NodeLoopbackRegistry`, and `existing_claim=`,
+  `selector=` on `NodeLocalRegistry`; new code `pipeline-registry-unreadable`.
+- `StreamedOciRegistryClient` gains `open_blob()` (streamed blob downloads
+  that follow a redirect to another origin without credentials) and
+  `actions="pull"` for pull-only token scopes. `piceli.testing.FakeAPI` serves
+  Nodes (`add_node`).
+- The deploy plan's `deliver` stage adds `mirrors` and `registry.existing` /
+  `registry.index_platforms` only when used, so earlier pipelines keep their
+  combined hashes.
 - **Deploy a commit, not the working tree (preview):**
   `piceli deploy TARGET --ref [SOURCE=]REV` (repeatable; a bare `REV` when
   every source is one repository) resolves each revision to its commit SHA,
