@@ -1280,7 +1280,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 **Invalid write response.** The API server's answer to a write did not confirm the requested object and ownership.
 
-- **Fix:** Inspect the object with a read-only tool; when it matches the release, run `piceli release resume --spec release.toml`, otherwise plan again.
+- **Fix:** Inspect the object with a read-only tool; when it matches the release, run `piceli release resume --spec release.toml`, otherwise plan again. A write that never reached the object (still absent, or unchanged) is sent again by a resume once `[execution] write_settle_seconds` (60 s) have passed.
 - **Retry-safe:** no
 
 (error-kubeconfig-rejected)=
@@ -1443,7 +1443,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 **Ambiguous write content differs.** A previous write's result is unknown and the live content differs from the plan.
 
-- **Fix:** Inspect the object with a read-only tool; when it matches the release, run `piceli release resume --spec release.toml`, otherwise plan again.
+- **Fix:** Inspect the object with a read-only tool; when it matches the release, run `piceli release resume --spec release.toml`, otherwise plan again. A write that never reached the object (still absent, or unchanged) is sent again by a resume once `[execution] write_settle_seconds` (60 s) have passed.
 - **Retry-safe:** no
 
 (error-ambiguous-delete-blocked)=
@@ -1451,7 +1451,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 **Ambiguous delete blocked.** A previous delete's result is unknown and the object still exists.
 
-- **Fix:** Inspect the object with a read-only tool; when it matches the release, run `piceli release resume --spec release.toml`, otherwise plan again.
+- **Fix:** Inspect the object with a read-only tool; when it matches the release, run `piceli release resume --spec release.toml`, otherwise plan again. A write that never reached the object (still absent, or unchanged) is sent again by a resume once `[execution] write_settle_seconds` (60 s) have passed.
 - **Retry-safe:** no
 
 (error-ambiguous-write-blocked)=
@@ -1459,7 +1459,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 **Ambiguous write blocked.** A previous write's result is unknown and the live object does not prove it was ours.
 
-- **Fix:** Inspect the object with a read-only tool; when it matches the release, run `piceli release resume --spec release.toml`, otherwise plan again.
+- **Fix:** Inspect the object with a read-only tool; when it matches the release, run `piceli release resume --spec release.toml`, otherwise plan again. A write that never reached the object (still absent, or unchanged) is sent again by a resume once `[execution] write_settle_seconds` (60 s) have passed.
 - **Retry-safe:** no
 
 (error-applied-resource-drift)=
@@ -1553,9 +1553,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-readiness-unsupported)=
 ### `readiness-unsupported`
 
-**Readiness unsupported.** Piceli cannot evaluate readiness for this kind.
+**Readiness unsupported.** The applied object's `status` is malformed (not an object, or `conditions` is not a list of objects), so its readiness cannot be evaluated.
 
-- **Fix:** Report the kind; meanwhile verify it by hand.
+- **Fix:** Check the object's controller (`kubectl get -o yaml`); verify it by hand and plan again.
 - **Retry-safe:** no
 
 (error-recreated-object)=

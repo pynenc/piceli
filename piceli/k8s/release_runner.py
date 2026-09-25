@@ -82,6 +82,7 @@ from piceli.k8s.ops.plan import (
     PrivateEvidence,
     ResourceIntent,
     ResourceRef,
+    autoscaled_replicas,
     build_plan,
     declared_union,
     field_drift,
@@ -145,6 +146,10 @@ class ReleaseError(ValueError):
         super().__init__(message)
         self.code = code
         self.details = dict(details or {})
+
+
+#: Discovery and dry runs are captured at most this many times per plan.
+OBSERVE_ATTEMPTS = 3
 
 
 def _canonical(value: Any) -> str:
@@ -605,6 +610,14 @@ def _drift(
     ]
 
 
+def _autoscaled(
+    composition: DeploymentComposition, snapshot: ObservedSnapshot, field_manager: str
+) -> list[dict[str, Any]]:
+    """What the plan does with autoscaled ``spec.replicas`` (see the plan module)."""
+    _, report = autoscaled_replicas(composition, snapshot, field_manager)
+    return [item.to_dict() for item in report]
+
+
 def _summary(plan: Mapping[str, Any]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for action in plan["actions"]:
@@ -755,6 +768,9 @@ class PlanResult:
     # and the objects the server dry run could not cover.
     diffs: list[dict[str, Any]] = field(default_factory=list)
     dry_run_unavailable: list[dict[str, Any]] = field(default_factory=list)
+    # Workloads whose ``spec.replicas`` an autoscaler owns (see
+    # ``autoscaled_replicas``); informational, bound through the actions.
+    autoscaled: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def plan_hash(self) -> str:
@@ -786,6 +802,7 @@ class PlanResult:
             "checks": self.checks,
             "diffs": self.diffs,
             "dry_run_unavailable": self.dry_run_unavailable,
+            "autoscaled": self.autoscaled,
             **({"plan": self.plan} if full else {}),
         }
 
@@ -1106,6 +1123,30 @@ class ReleaseRunner:
         )
         return artifact, [item.to_dict() for item in unavailable]
 
+    def _observe(
+        self,
+        binding: ProviderBinding,
+        composition: DeploymentComposition,
+        kinds: set[ResourceType],
+    ) -> tuple[DiscoveryArtifact, list[dict[str, Any]]]:
+        """Discovery plus the server dry runs, consistent with each other.
+
+        A dry run is preconditioned on the discovered resourceVersion, so an
+        object written in between (a controller's status update while a
+        rollout finishes) answers ``conflict``. Discovery and the dry runs are
+        then captured again, a few times, before planning without evidence.
+        """
+        for attempt in range(OBSERVE_ATTEMPTS):
+            artifact, unavailable = self._dry_runs(
+                binding, composition, self._discover(binding, kinds)
+            )
+            if attempt + 1 == OBSERVE_ATTEMPTS or not any(
+                item["reason"] == "conflict" for item in unavailable
+            ):
+                break
+            time.sleep(0.5 * (attempt + 1))
+        return artifact, unavailable
+
     # -------------------------------------------------------------- secrets
     def _private_inputs(
         self,
@@ -1315,9 +1356,7 @@ class ReleaseRunner:
             if settings.prune:
                 for record in records.values():
                     kinds |= self._kinds(composition_from_archive(record.archive))
-            artifact, unavailable = self._dry_runs(
-                binding, composition, self._discover(binding, kinds)
-            )
+            artifact, unavailable = self._observe(binding, composition, kinds)
             snapshot = ObservedSnapshot.from_discovery(artifact)
             inherited = list(settings.inherited_owners)
             resolved = requested.resolve(
@@ -1355,6 +1394,7 @@ class ReleaseRunner:
             "actions": _compact_actions(summary),
             "diffs": plan_diffs(plan, snapshot),
             "dry_run_unavailable": unavailable,
+            "autoscaled": _autoscaled(composition, snapshot, settings.field_manager),
         }
 
     def placeholder_preview(
@@ -1483,9 +1523,7 @@ class ReleaseRunner:
         if settings.prune:
             for record in catalog.records():
                 kinds |= self._kinds(composition_from_archive(record.archive))
-        artifact, unavailable = self._dry_runs(
-            binding, composition, self._discover(binding, kinds)
-        )
+        artifact, unavailable = self._observe(binding, composition, kinds)
         snapshot = ObservedSnapshot.from_discovery(artifact)
         inherited = list(settings.inherited_owners)
         resolved = requested.resolve(
@@ -1640,6 +1678,7 @@ class ReleaseRunner:
             self._checks_policy(),
             plan_diffs(planned, snapshot),
             unavailable,
+            _autoscaled(stored, snapshot, settings.field_manager),
         )
         self._persist_plan(result, prune=settings.prune)
         return result
@@ -1660,9 +1699,7 @@ class ReleaseRunner:
         if settings.prune:
             for other in catalog.records():
                 kinds |= self._kinds(composition_from_archive(other.archive))
-        artifact, unavailable = self._dry_runs(
-            binding, composition, self._discover(binding, kinds)
-        )
+        artifact, unavailable = self._observe(binding, composition, kinds)
         snapshot = ObservedSnapshot.from_discovery(artifact)
         inherited = list(settings.inherited_owners)
         resolved = requested.resolve(
@@ -1703,6 +1740,7 @@ class ReleaseRunner:
             self._checks_policy(),
             plan_diffs(plan, snapshot),
             unavailable,
+            _autoscaled(composition, snapshot, settings.field_manager),
         )
         self._persist_plan(
             result,
@@ -1784,6 +1822,7 @@ class ReleaseRunner:
             readiness_seconds=min(execution.readiness_seconds, execution.max_seconds),
             poll_seconds=min(execution.poll_seconds, execution.readiness_seconds),
             max_polls=execution.max_polls,
+            write_settle_seconds=execution.write_settle_seconds,
         )
 
     def _session_workflow(

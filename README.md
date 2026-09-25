@@ -190,6 +190,9 @@ change Piceli itself, read [AGENTS.md](https://github.com/pynenc/piceli/blob/mai
 ## Requirements
 
 - Python 3.12 or later.
+- Kubernetes 1.34 to 1.37 (the four most recent minor versions, each tested
+  on kind; see
+  [Supported Kubernetes versions](https://docs.pynenc.org/projects/piceli/en/latest/compatibility.html#supported-kubernetes-versions)).
 - A kubeconfig file with a context for the target cluster. Piceli never uses
   `~/.kube/config`, `KUBECONFIG` or the current context implicitly: the file and
   context are named in the pipeline, the release spec or on the command line.

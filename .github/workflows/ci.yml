@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Nightly: the integration suite on every supported Kubernetes minor.
+  schedule:
+    - cron: "23 3 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -55,8 +59,37 @@ jobs:
           path: .coverage
           include-hidden-files: true
 
-  integration:
+  kind-nodes:
+    # The supported Kubernetes minors (.github/kind-nodes.json, newest first,
+    # pinned by digest). Pull requests and pushes test the newest; the nightly
+    # schedule and manual runs test all of them.
     runs-on: ubuntu-latest
+    outputs:
+      kind: ${{ steps.pick.outputs.kind }}
+      nodes: ${{ steps.pick.outputs.nodes }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: pick
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" = schedule ] || [ "$EVENT" = workflow_dispatch ]; then
+            select='.nodes'
+          else
+            select='[.nodes[0]]'
+          fi
+          echo "kind=$(jq -r .kind .github/kind-nodes.json)" >> "$GITHUB_OUTPUT"
+          echo "nodes=$(jq -c "$select" .github/kind-nodes.json)" >> "$GITHUB_OUTPUT"
+
+  integration:
+    name: integration (k8s ${{ matrix.node.minor }})
+    needs: kind-nodes
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ${{ fromJSON(needs.kind-nodes.outputs.nodes) }}
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v7
@@ -66,17 +99,47 @@ jobs:
       - name: Create kind cluster
         uses: helm/kind-action@v1
         with:
-          node_image: kindest/node:v1.33.1
+          version: ${{ needs.kind-nodes.outputs.kind }}
+          node_image: ${{ matrix.node.image }}
+          kubectl_version: ${{ matrix.node.kubectl }}
           cluster_name: piceli-ci
+      - name: Name the cluster explicitly for the tests
+        # The tests never use the current context: they read these variables.
+        run: |
+          kind get kubeconfig --name piceli-ci > "$RUNNER_TEMP/kind.kubeconfig"
+          {
+            echo "PICELI_KIND_KUBECONFIG=$RUNNER_TEMP/kind.kubeconfig"
+            echo "PICELI_KIND_CONTEXT=kind-piceli-ci"
+            echo "PICELI_KIND_NODE=piceli-ci-control-plane"
+          } >> "$GITHUB_ENV"
       - run: uv sync --all-extras --python 3.12
+      - name: Pull the images the registry tests push from the local engine
+        run: |
+          docker pull busybox:1.36
+          docker pull "$(uv run python -c 'from piceli.k8s.templates.deployable.node_local_registry import DEFAULT_REGISTRY_IMAGE as i; print(i)')"
       - name: Integration tests
         run: uv run pytest tests/integration --cov --cov-report=term
       - name: Store coverage data
         uses: actions/upload-artifact@v6
         with:
-          name: coverage-data-integration
+          name: coverage-data-integration-${{ matrix.node.minor }}
           path: .coverage
           include-hidden-files: true
+
+  kubernetes-client-floor:
+    # The lowest `kubernetes` Python client pyproject.toml allows still runs
+    # the unit and acceptance tests (nightly and manual runs).
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --all-extras --python 3.12
+      - run: uv pip install "kubernetes==$(grep -oP '"kubernetes>=\K[0-9.]+' pyproject.toml)"
+      - run: uv run --no-sync pytest -q
 
   package:
     # The wheel must work without optional extras (gcp, telemetry).
@@ -211,7 +274,7 @@ jobs:
         with:
           pattern: coverage-data-*
       - run: |
-          uv run coverage combine coverage-data-unit/.coverage coverage-data-integration/.coverage
+          uv run coverage combine coverage-data-*/.coverage
           uv run coverage report
           uv run coverage html --show-contexts --title "Combined coverage"
       - uses: actions/upload-artifact@v6

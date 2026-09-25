@@ -27,7 +27,7 @@ Other targets (`make help` lists them all):
 | `make lint` | Every pre-commit hook on all files (ruff lint + format, uv lock check, YAML/TOML) |
 | `make typecheck` | mypy on the `piceli` package |
 | `make test-unit` / `make test-acceptance` | One test suite |
-| `make test-integration` | Integration tests against your **current kubeconfig context**. Use a disposable cluster, e.g. `kind create cluster` |
+| `make test-integration` | Integration tests against the disposable cluster named by `PICELI_KIND_KUBECONFIG`, `PICELI_KIND_CONTEXT` (and `PICELI_KIND_NODE`); skipped without them, never the current context |
 | `make coverage` | Tests with an HTML coverage report in `htmlcov/` |
 | `make docs` | Build the documentation with warnings treated as errors |
 | `make build` | Build the sdist and wheel into `dist/` |
@@ -36,7 +36,9 @@ Add dependencies with `uv add <package>` (or `uv add --group test <package>` for
 development-only tools) so that `pyproject.toml` and `uv.lock` stay in sync.
 
 CI runs the same commands on Python 3.12, 3.13 and 3.14, plus the integration
-tests on a [kind](https://kind.sigs.k8s.io/) cluster and a strict docs build.
+tests on a [kind](https://kind.sigs.k8s.io/) cluster of the newest supported
+Kubernetes minor (nightly: all four, see {doc}`../compatibility`) and a strict
+docs build.
 
 ## Releases
 

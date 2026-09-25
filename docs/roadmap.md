@@ -58,6 +58,7 @@ Every feature page starts with its maturity, and this table lists them all:
 | Releases from a spec (`piceli release`) | {doc}`release_cli` | preview |
 | Post-deploy checks and automatic rollback (`[[checks]]`, `piceli.checks`, `release check`) | {doc}`checks` | preview |
 | Field-level diffs and no-op detection (`release plan`, `release diff`) | {doc}`plans_and_diffs` | preview |
+| Supported Kubernetes versions (last four minors, kind matrix) and shared ownership (autoscalers, operators, webhooks) | {doc}`compatibility` | preview |
 | Managed-cluster credentials: exec plugins for GKE, EKS, AKS, OIDC (`[target] allow_exec`) | {doc}`managed_clusters` | preview |
 | Source identity (`piceli inputs`) | {doc}`source_identity` | preview |
 | Containerized builds (`piceli artifacts build-spec`) | {doc}`containerized_builds` | preview |

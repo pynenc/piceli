@@ -51,6 +51,55 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 - The CI recipe (`examples/ci/github-actions-deploy.yml`, {doc}`ci`) runs
   plan, apply and resume on any runner: no persistent state directory, the
   plan file travels as the `deploy-plan` artifact.
+- **Supported Kubernetes versions:** the four most recent minors, 1.34 to
+  1.37, each tested on kind with node images pinned by digest
+  (`.github/kind-nodes.json`, kind v0.33.0). Pull requests run the
+  integration suite on the newest; a nightly job runs it on all four and the
+  unit and acceptance tests with the lowest allowed `kubernetes` client
+  (`>=29.0.0`). CI now passes the cluster to the integration tests
+  explicitly, so they run instead of being skipped. See {doc}`compatibility`.
+- **Autoscalers own `spec.replicas`:** for a workload a
+  HorizontalPodAutoscaler targets (declared in the release, or live and
+  discovered), plans no longer declare `spec.replicas` once the autoscaler
+  owns it, and declare the live value while Piceli still does. Before, a
+  re-plan showed a perpetual `replicas` diff and drift, and applying it reset
+  the count and failed with `applied-resource-drift`. `release plan --json`
+  and `release diff` (JSON on stdout) add `autoscaled` (mode `initial`, `held` or
+  `yielded` per workload).
+- **Controllers writing status during a plan or an apply** (found by the
+  kind matrix, most often on 1.37): a status update between discovery and a
+  server dry run made the dry run conflict, and an unchanged release planned
+  `apply` from a literal comparison; `plan`, `diff` and `rollback` now
+  capture discovery and the dry runs again (up to three times) when a dry
+  run conflicts. A status update between the executor's read and its merge
+  patch failed the apply with `conflict`; the patch is now sent again at the
+  new `resourceVersion` when only the status or bookkeeping changed (content
+  and field ownership unchanged). An autoscaler scaling a workload through
+  the `scale` subresource while Piceli waits for readiness is no longer
+  `applied-resource-drift`.
+- **Readiness of other kinds:** HorizontalPodAutoscalers, custom resources,
+  PodDisruptionBudgets and other kinds without a dedicated rule follow the
+  common status conventions (`observedGeneration`, `Ready`, `Reconciling`,
+  `Stalled`) and are ready once written when they have none. Before, a
+  release containing any of them failed with `readiness-unsupported`, which
+  now only means a malformed `status`.
+- **Interrupted executions:** `release resume` after a kill before a write
+  reached the cluster (a create whose object is absent, a write or delete
+  whose object still has the recorded version) sends the write again, once
+  the new `[execution] write_settle_seconds` (default 60) have passed since
+  it was sent, instead of stopping with `ambiguous-write-blocked`,
+  `ambiguous-content-blocked` or `ambiguous-delete-blocked` for good.
+  Kill tests stop `release apply` and `release rollback` at every write
+  (before it, after the server applied it, at the next request) and on kind
+  mid-rollout; {doc}`plans_and_diffs` documents the recovery and the rollback
+  boundary (what a rollback restores, and that it cannot restore data,
+  external side effects or what others own).
+- **Ownership tests on kind:** an autoscaler owning `replicas`, an
+  operator-like writer sharing a custom resource, a mutating admission
+  webhook, and adoption and pruning with a third field manager.
+- `piceli.testing.FakeAPI` adds `scale()` (an autoscaler's `scale`
+  subresource write) and `intercept` (stop a client at an exact request
+  phase).
 
 ## Version 0.5.1
 
