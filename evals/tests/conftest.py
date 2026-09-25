@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from tests.conftest import (  # noqa: E402,F401
+from tests.conftest import (  # noqa: F401
     _no_foreign_process_groups,
     _no_leftover_temporary_files,
     _no_leftover_temporary_files_per_test,
