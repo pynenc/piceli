@@ -298,7 +298,8 @@ id, and its badges and tiers are kept.
 :alt: The Port Forwards and Shortcuts tab of the local dashboard for the shop namespace. The api shortcut forwards service/api to 127.0.0.1:13080 and the web shortcut forwards service/web to 127.0.0.1:13000; both are running and healthy. The supervised forwards table lists the same two forwards with their local and remote ports, live links, health and process state.
 :width: 100%
 
-The shop example's two declared forwards (`access=app.access.forward(...)`
-on `api` and `web`, see {doc}`deploy`) as dashboard shortcuts, each probed
-and supervised on loopback.
+`piceli access examples/shop/app.py:pipeline --dashboard 9876`: the shop
+example's two declared forwards (`access=app.access.forward(...)` on `api`
+and `web`, see {doc}`deploy`) as dashboard shortcuts, each probed and
+supervised on loopback.
 ```

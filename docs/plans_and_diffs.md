@@ -152,7 +152,7 @@ evidence and must reproduce the approved hash.
 ## Reading a diff
 
 ```{figure} _static/img/release-plan-diff.png
-:alt: A terminal shows piceli release plan for the example release after three edits. It lists 2 apply and 2 no-op; under apply ConfigMap/web-config the field /data/greeting changes from "hello from piceli" to "hello again from piceli", and under apply Deployment/web /spec/replicas changes from 1 to 2 and the container image digest changes. The secrets are carried over and a plan hash is printed. Below, piceli release diff prints the same changes as unified YAML diffs between the live objects and the release, with server defaults such as revisionHistoryLimit and imagePullPolicy on both sides.
+:alt: A terminal shows piceli release plan for the example release after three edits. It lists 2 apply and 2 no-op; under apply ConfigMap/web-config the field /data/greeting changes from "hello from piceli" to "hello again from piceli", and under apply Deployment/web /spec/replicas changes from 1 to 2 and the container image changes between two shortened nginx digests, shown before and after on separate lines. The secrets are carried over and a plan hash is printed. Below, piceli release diff prints the same changes as unified YAML diffs between the live objects and the release, with server defaults such as revisionHistoryLimit and imagePullPolicy on both sides.
 :width: 100%
 
 `release plan` summarizes the changed fields of each `apply`; `release diff`

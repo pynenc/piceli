@@ -103,14 +103,14 @@ piceli observe serve --archive ./session.archive.json \
 ```
 
 ```{figure} _static/img/dashboard-overview.webp
-:alt: The Piceli Operator dashboard for the shop namespace. Two forwarding shortcuts, api on 127.0.0.1:13080 and web on 127.0.0.1:13000, are running and healthy. Below, tiles show 7 managed workloads, 10 unmanaged visible objects, 0 unknown or failed, and the active release shop-318322668422, followed by the desired-versus-live table listing api, cache and web as no-op.
+:alt: The Piceli Operator dashboard for the shop namespace. Two forwarding shortcuts, api on 127.0.0.1:13080 and web on 127.0.0.1:13000, are running and healthy. Below, tiles show 13 managed objects, 8 unmanaged visible objects, 0 unknown or failed, and the active release shop-318322668422. The desired-versus-live table lists the Deployments api, cache and web as no-op with shortened image digests, then their ReplicaSets and Pods as derived ("created by Deployment/api" and so on), then the Secret cache-credentials as no-op.
 :width: 100%
 
-The operator dashboard after deploying the shop example ({doc}`deploy`),
-served with `piceli operator serve --access examples/shop/app.py:pipeline`
-and the pipeline's release catalog (`--catalog`, `--state-dir`): the
-model's forwards as one-click shortcuts, the active release, and each
-declared object compared with the cluster.
+The dashboard after deploying the shop example ({doc}`deploy`), served with
+`piceli access examples/shop/app.py:pipeline --dashboard 9876`: the model's
+forwards as one-click shortcuts, the active release, and each declared
+object compared with the cluster (ReplicaSets and Pods of a managed
+Deployment are shown as derived).
 ```
 
 Open `http://127.0.0.1:9876/`. `--user` names whose saved forwards the

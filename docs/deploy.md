@@ -15,7 +15,7 @@ release (always with a changelog entry).
 ```
 
 ```{figure} _static/img/deploy-flow.gif
-:alt: A terminal runs piceli deploy on the shop example with --plan and prints the planned stages and a combined hash. It then runs piceli deploy with --approve and that hash, streaming the build, deliver, plan, apply and checks stages until "deploy ready", and finally piceli status reports that shop is up with its three Deployments ready.
+:alt: A terminal runs piceli deploy on the shop example with --plan and prints the planned stages, a combined hash and the approve command. It then runs piceli deploy with --approve and that hash, streaming the build, deliver (with registry progress), plan, apply (with readiness progress) and checks stages until the checks pass and "deploy ready" is printed. Finally piceli status reports that shop is up, its release ready and its three Deployments ready, with both declared forwards still down.
 :width: 100%
 
 Plan, approve, check: `piceli deploy --plan`, `piceli deploy --approve`
@@ -120,20 +120,29 @@ New to Piceli? Start with {doc}`getting_started/index`.
    piceli deploy examples/shop/app.py:pipeline --approve <combined hash>
    ```
 
-   Expected output:
+   Expected output, after the plan summary is printed again (`running` lines
+   and repeated `waiting` lines omitted):
 
    ```text
    [inputs] done
-   [build] rust-hello: building (log: …/.piceli-deploy/builds/rust-hello/build.log)
-   [build] rust-hello: [piceli] 3/3 linux/arm64 smoke:rust-hello: succeeded in 0.324s
+   [build] rust-hello: building (log: examples/shop/.piceli-deploy/builds/rust-hello/build.log)
+   [build] rust-hello: [piceli] 1/3 linux/arm64 files: succeeded in 4.904s
+   [build] rust-hello: [piceli] 2/3 linux/arm64 image:rust-hello: succeeded in 3.613s
+   [build] rust-hello: [piceli] 3/3 linux/arm64 smoke:rust-hello: succeeded in 2.855s
+   [build] rust-hello: [piceli] drift check: 3 staged file(s) unchanged
    [build] done
    [deliver] registry shop-registry-d0c1b1b7947f: applying
+   [deliver] registry: applying 1/3: ConfigMap/registry-config
+   [deliver] registry: waiting for PersistentVolumeClaim/registry-storage to be ready (1s)
+   [deliver] registry: waiting for Deployment/registry to be ready (1s)
    [deliver] rust-hello: pushing to shop/rust-hello
    [deliver] rust-hello: pushed 127.0.0.1:5000/shop/rust-hello@sha256:9b2fbdad…
    [deliver] done
    [plan] release shop-fbcc92695da7 (create): 7 create
    [plan] done
    [apply] shop-fbcc92695da7: applying
+   [apply] shop-fbcc92695da7: applying 1/7: Secret/cache-credentials
+   [apply] shop-fbcc92695da7: waiting for Deployment/cache to be ready (1s)
    [apply] done
    [checks] shop-fbcc92695da7: passed
    [checks] done
@@ -163,6 +172,22 @@ New to Piceli? Start with {doc}`getting_started/index`.
    ```sh
    piceli status examples/shop/app.py:pipeline
    piceli access examples/shop/app.py:pipeline --dashboard 9876
+   ```
+
+   `status` prints (exit code `0`; the forwards are `down` until `access`
+   runs):
+
+   ```text
+   shop is UP  (namespace shop, context kind-shop)
+   release    shop-fbcc92695da7  ready, apply at 2026-09-25T06:46:30+00:00
+   workloads
+     ready        Deployment/api    1/1  api=9b2fbdad15e1
+     ready        Deployment/cache  1/1  cache=a7cee7c8178f
+     ready        Deployment/web    1/1  web=9b2fbdad15e1
+   access     down
+     down      api          http://127.0.0.1:13080/  -> service/api:8080
+     down      web          http://127.0.0.1:13000/  -> service/web:3000
+   Start the forwards with: piceli access examples/shop/app.py:pipeline
    ```
 
 7. **Change the source and deploy again.** Only what changed moves: a new
