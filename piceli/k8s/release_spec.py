@@ -32,6 +32,7 @@ from pydantic import (
 )
 
 from piceli.checks.model import Check, unique_names
+from piceli.k8s.ops.discovery import valid_resource_name
 from piceli.k8s.ops.exec_credentials import ExecPolicy
 from piceli.k8s.ops.plan import DeploymentComposition
 from piceli.k8s.ops.provider_factory import KubeconfigTarget, NodeExpectation
@@ -72,16 +73,35 @@ class ReleaseSpecError(ValueError):
 
 _ADOPT_ENTRY = re.compile(
     r"(?:(?P<api>(?:[a-z0-9.-]+/)?v[0-9][a-z0-9]*)/)?"
-    r"(?P<kind>[A-Z][A-Za-z0-9]*)/(?P<name>[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?)"
+    r"(?P<kind>[A-Z][A-Za-z0-9]*)/(?P<name>[^/\s%]+)"
 )
+_RBAC_KINDS = frozenset({"Role", "RoleBinding", "ClusterRole", "ClusterRoleBinding"})
 
 
 def parse_adopt_entry(
     value: str, *, what: str = "adopt"
 ) -> tuple[str | None, str, str]:
-    """``Kind/name`` or ``apiVersion/Kind/name`` → (api_version, kind, name)."""
+    """``Kind/name`` or ``apiVersion/Kind/name`` → (api_version, kind, name).
+
+    Names are DNS subdomains, except for RBAC kinds, whose names may also
+    hold ``:`` and upper-case letters (``ClusterRole/staging:shop:watcher``).
+    """
     match = _ADOPT_ENTRY.fullmatch(value) if isinstance(value, str) else None
-    if match is None or len(match["name"]) > 253:
+    if match is not None:
+        api, kind = match["api"], match["kind"]
+        rbac = kind in _RBAC_KINDS and (
+            api is None or api.startswith("rbac.authorization.k8s.io/")
+        )
+        if (
+            not valid_resource_name(
+                "rbac.authorization.k8s.io/v1" if rbac else (api or "v1"),
+                kind,
+                match["name"],
+            )
+            or len(match["name"]) > 253
+        ):
+            match = None
+    if match is None:
         raise ReleaseSpecError(
             f"{what} entry must be 'Kind/name' or 'apiVersion/Kind/name', got {value!r}",
             code="invalid-adopt-entry",

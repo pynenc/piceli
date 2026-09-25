@@ -23,7 +23,7 @@ Minimal workflow: `piceli render app.py:pipeline` (no cluster; the target's name
 ## Docs
 
 - [Overview and architecture](https://docs.pynenc.org/projects/piceli/en/latest/overview.html): model, plan, execute, observe; the engine; design principles; glossary
-- [Describe an app in typed Python](https://docs.pynenc.org/projects/piceli/en/latest/typed_apps.html): `piceli.App` deployments, services, config, secrets, volumes, network policies, dependencies; `piceli render`
+- [Describe an app in typed Python](https://docs.pynenc.org/projects/piceli/en/latest/typed_apps.html): `piceli.App` deployments, services, config, secrets, volumes, pod defaults (`PodDefaults`, `Security`), service accounts with typed RBAC (`Rule`; cluster-scoped objects are per namespace and flagged `cluster_scoped` in plans), label-selected network policies, dependencies; `piceli render`
 - [Deploy an app from source](https://docs.pynenc.org/projects/piceli/en/latest/deploy.html): `piceli deploy MODULE:ATTR`, one journaled run of inputs, build, deliver, plan, apply and checks; `--plan` (with a placeholder-image release preview and blocking objects before any build), `--approve`, `--resume`, `--until`, `--json` events (`piceli.deploy-event.v1`); `piceli render MODULE:pipeline`
 - [Releases from a spec](https://docs.pynenc.org/projects/piceli/en/latest/release_cli.html): `piceli release` plan, apply, adopt, replace, roll back, resume, stop, status (`--spec release.toml`, or `--spec module.py:pipeline` for a pipeline's release); "If plan refuses"
 - [Check a release and roll back automatically](https://docs.pynenc.org/projects/piceli/en/latest/checks.html): `[[checks]]` and `piceli.checks` (http, exec, metric, Python), `rollback_on_failed_checks`, `piceli release check`

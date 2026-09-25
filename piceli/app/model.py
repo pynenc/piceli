@@ -641,6 +641,190 @@ class Container(_Model):
         )
 
 
+# -------------------------------------------------------------------- security
+
+#: The node label a ``node=`` pin renders; see :class:`PodDefaults`.
+HOSTNAME_LABEL = "kubernetes.io/hostname"
+
+
+def _capability(value: str) -> str:
+    if not re.fullmatch(r"[A-Z][A-Z0-9_]*", value):
+        raise ValueError(
+            f"capability {value!r}: capabilities are upper-case names such as "
+            "'ALL' or 'NET_BIND_SERVICE'"
+        )
+    return value
+
+
+Capability = Annotated[str, AfterValidator(_capability)]
+
+
+class Security(_Model):
+    """Pod and container security settings of a workload.
+
+    Pod-level fields render to the pod's ``securityContext``; container-level
+    fields render to the ``securityContext`` of **every** container of the pod
+    (init containers and sidecars included). Unset (``None``) fields are not
+    rendered, and when settings are layered (``PodDefaults(security=...)``
+    under a workload's ``security=``) each set field of the upper layer wins
+    field by field.
+
+    Pod level:
+
+    :param run_as_non_root: Refuse to start a container that would run as UID 0.
+    :param run_as_user: UID of every container process.
+    :param run_as_group: Primary GID of every container process.
+    :param fs_group: GID that owns mounted volumes.
+    :param seccomp: Seccomp profile type: ``RuntimeDefault``, ``Unconfined``
+        or ``Localhost`` (with ``seccomp_localhost_profile``).
+    :param seccomp_localhost_profile: Profile path for ``seccomp="Localhost"``.
+
+    Container level:
+
+    :param allow_privilege_escalation: ``False`` blocks setuid binaries and
+        similar privilege gains.
+    :param read_only_root_filesystem: Mount the image's root filesystem
+        read-only (mount a volume where the process must write).
+    :param drop_capabilities: Linux capabilities to drop, such as ``("ALL",)``.
+        An empty tuple drops nothing (it clears an inherited default).
+    :param add_capabilities: Capabilities to add back, such as
+        ``("NET_BIND_SERVICE",)``.
+
+    Invariants: ``run_as_non_root=True`` cannot be combined with
+    ``run_as_user=0``; a ``Localhost`` seccomp profile needs its path, and
+    only ``Localhost`` takes one.
+
+    Example::
+
+        Security.restricted(user=10001, fs_group=10001)
+        Security(run_as_user=2000, read_only_root_filesystem=True)
+    """
+
+    run_as_non_root: bool | None = None
+    run_as_user: NonNegativeInt | None = None
+    run_as_group: NonNegativeInt | None = None
+    fs_group: NonNegativeInt | None = None
+    seccomp: Literal["RuntimeDefault", "Unconfined", "Localhost"] | None = None
+    seccomp_localhost_profile: str | None = Field(default=None, min_length=1)
+    allow_privilege_escalation: bool | None = None
+    read_only_root_filesystem: bool | None = None
+    drop_capabilities: tuple[Capability, ...] | None = None
+    add_capabilities: tuple[Capability, ...] | None = None
+
+    @model_validator(mode="after")
+    def _consistent(self) -> Security:
+        if self.run_as_non_root and self.run_as_user == 0:
+            raise ValueError("run_as_non_root=True cannot run as run_as_user=0")
+        if self.seccomp == "Localhost" and not self.seccomp_localhost_profile:
+            raise ValueError(
+                "seccomp='Localhost' needs seccomp_localhost_profile (a profile path)"
+            )
+        if self.seccomp_localhost_profile and self.seccomp != "Localhost":
+            raise ValueError("seccomp_localhost_profile needs seccomp='Localhost'")
+        return self
+
+    @classmethod
+    def restricted(
+        cls,
+        *,
+        user: int = 10001,
+        group: int | None = None,
+        fs_group: int | None = None,
+        read_only_root_filesystem: bool | None = None,
+    ) -> Security:
+        """Settings that pass the Kubernetes ``restricted`` Pod Security Standard.
+
+        Non-root ``user`` (and ``group``, defaulting to ``user``), the
+        runtime's default seccomp profile, no privilege escalation and every
+        capability dropped.
+        """
+        return cls(
+            run_as_non_root=True,
+            run_as_user=user,
+            run_as_group=user if group is None else group,
+            fs_group=fs_group,
+            seccomp="RuntimeDefault",
+            allow_privilege_escalation=False,
+            read_only_root_filesystem=read_only_root_filesystem,
+            drop_capabilities=("ALL",),
+        )
+
+    @staticmethod
+    def layered(base: Security | None, top: Security | None) -> Security | None:
+        """``top`` over ``base``, field by field (unset fields inherit)."""
+        if base is None or top is None:
+            return top if base is None else base
+        return Security.model_validate(
+            {**base.model_dump(exclude_none=True), **top.model_dump(exclude_none=True)}
+        )
+
+    def pod_manifest(self) -> dict[str, Any]:
+        seccomp = (
+            _compact(type=self.seccomp, localhostProfile=self.seccomp_localhost_profile)
+            if self.seccomp
+            else None
+        )
+        return _compact(
+            runAsNonRoot=self.run_as_non_root,
+            runAsUser=self.run_as_user,
+            runAsGroup=self.run_as_group,
+            fsGroup=self.fs_group,
+            seccompProfile=seccomp,
+        )
+
+    def container_manifest(self) -> dict[str, Any]:
+        capabilities = _compact(
+            add=list(self.add_capabilities) if self.add_capabilities else None,
+            drop=list(self.drop_capabilities) if self.drop_capabilities else None,
+        )
+        return _compact(
+            allowPrivilegeEscalation=self.allow_privilege_escalation,
+            readOnlyRootFilesystem=self.read_only_root_filesystem,
+            capabilities=capabilities or None,
+        )
+
+
+class PodDefaults(_Model):
+    """Pod settings an :class:`~piceli.app.App` applies to every workload it declares.
+
+    Pass it as ``App(..., pod_defaults=PodDefaults(...))``. Every Deployment
+    declared on the app gets these settings; a workload's own typed argument
+    wins (``security=`` field by field, ``node_selector=`` key by key,
+    ``termination_grace_seconds=`` and ``automount_token=`` as a whole), and
+    :meth:`App.override <piceli.app.App.override>` still patches the rendered
+    manifest afterwards. Components added with ``app.add(...)`` are not
+    changed. With no defaults, rendering is unchanged.
+
+    :param security: Pod and container security settings (:class:`Security`).
+    :param node_selector: Extra node labels every pod must match, such as
+        ``{"kubernetes.io/arch": "amd64"}``. Merged with a workload's
+        ``node=`` pin (which renders ``kubernetes.io/hostname``).
+    :param termination_grace_seconds: ``terminationGracePeriodSeconds``.
+    :param automount_token: ``automountServiceAccountToken`` for pods that
+        are not bound to a service account declared with
+        ``app.service_account`` (those get a token; see
+        :meth:`App.service_account <piceli.app.App.service_account>`).
+        ``False`` keeps API credentials out of every other pod.
+
+    Invariants: a ``node_selector`` that sets ``kubernetes.io/hostname`` is
+    refused on a workload that also has a ``node=`` pin (the two would
+    disagree or repeat each other).
+
+    Example::
+
+        App("shop", pod_defaults=PodDefaults(
+            security=Security.restricted(user=10001, fs_group=10001),
+            node_selector={"kubernetes.io/arch": "amd64"},
+            termination_grace_seconds=30,
+        ))
+    """
+
+    security: Security | None = None
+    node_selector: Labels | None = None
+    termination_grace_seconds: NonNegativeInt | None = None
+    automount_token: bool | None = None
+
+
 # ------------------------------------------------------------------- workloads
 
 
@@ -658,6 +842,14 @@ class Deployment(_Model):
     :param share_process_namespace: Containers see each other's processes.
     :param strategy: ``RollingUpdate`` or ``Recreate``.
     :param service_account: ``serviceAccountName``.
+    :param security: Pod and container security settings; layered field by
+        field over the app's ``PodDefaults.security``.
+    :param node_selector: Extra node labels the pods must match; merged key by
+        key over the app's ``PodDefaults.node_selector`` and with ``node``.
+    :param termination_grace_seconds: ``terminationGracePeriodSeconds``.
+    :param automount_token: ``automountServiceAccountToken`` of the pods. Unset,
+        a pod bound to a service account declared on the app gets ``True``;
+        any other pod gets the app's ``PodDefaults.automount_token``.
     :param component: Deployment component; defaults to ``name``.
     :param access: A loopback forward to the pods (``app.access.forward``);
         never rendered into the manifest.
@@ -678,12 +870,17 @@ class Deployment(_Model):
     node: str | None = Field(default=None, min_length=1)
     share_process_namespace: bool = False
     strategy: Literal["RollingUpdate", "Recreate"] | None = None
-    service_account: Name | None = None
+    service_account: ObjectName | None = None
+    security: Security | None = None
+    node_selector: Labels | None = None
+    termination_grace_seconds: NonNegativeInt | None = None
+    automount_token: bool | None = None
     component: Name | None = None
     access: Forward | None = None
 
     @model_validator(mode="after")
     def _pod(self) -> Deployment:
+        self.check_defaults(None)
         names = [item.name for item in (*self.init_containers, *self.containers)]
         duplicates = sorted({name for name in names if names.count(name) > 1})
         if duplicates:
@@ -703,6 +900,31 @@ class Deployment(_Model):
         if self.access is not None:
             self.access_port()
         return self
+
+    def node_labels(self, defaults: PodDefaults | None) -> dict[str, str]:
+        """The extra node selector: the app's defaults, then this workload's."""
+        return {
+            **((defaults.node_selector or {}) if defaults else {}),
+            **(self.node_selector or {}),
+        }
+
+    def check_defaults(self, defaults: PodDefaults | None) -> None:
+        """Refuse settings that conflict once ``defaults`` are applied.
+
+        :raises ValueError: when a ``kubernetes.io/hostname`` node selector
+            meets a ``node=`` pin.
+        """
+        if self.node is not None and HOSTNAME_LABEL in self.node_labels(defaults):
+            source = (
+                "its node_selector"
+                if HOSTNAME_LABEL in (self.node_selector or {})
+                else "the app's pod_defaults.node_selector"
+            )
+            raise ValueError(
+                f"deployment {self.name!r}: {source} sets {HOSTNAME_LABEL}, which "
+                f"conflicts with node={self.node!r}; pin with node= or select the "
+                "host by label, not both"
+            )
 
     def access_port(self) -> int:
         """The container port the ``access`` forward reaches (main container).
@@ -756,21 +978,63 @@ class Deployment(_Model):
         }
 
     def references(self) -> set[tuple[str, str]]:
-        return {ref for item in self.all_containers for ref in item.references()}
+        """``(kind, name)`` of the configs, secrets and service account it uses."""
+        refs = {ref for item in self.all_containers for ref in item.references()}
+        if self.service_account is not None:
+            refs.add(("ServiceAccount", self.service_account))
+        return refs
 
     def manifest(
         self,
         namespace: str,
         app_labels: Mapping[str, str],
         node_name: str | None,
+        defaults: PodDefaults | None = None,
+        automount_token: bool | None = None,
     ) -> dict[str, Any]:
+        """The Deployment manifest.
+
+        :param defaults: The app's pod defaults, under this workload's fields.
+        :param automount_token: ``automountServiceAccountToken`` when this
+            workload sets none (the app decides it; see ``automount_token``).
+        """
+        self.check_defaults(defaults)
         labels = {**app_labels, **self.labels, **self.selector_labels}
+        security = Security.layered(
+            defaults.security if defaults else None, self.security
+        )
+        container_security = security.container_manifest() if security else {}
+
+        def container(item: Container) -> dict[str, Any]:
+            rendered = item.manifest()
+            if container_security:
+                rendered["securityContext"] = dict(container_security)
+            return rendered
+
+        node_selector = self.node_labels(defaults)
+        if node_name:
+            node_selector[HOSTNAME_LABEL] = node_name
+        grace = (
+            self.termination_grace_seconds
+            if self.termination_grace_seconds is not None
+            else defaults.termination_grace_seconds
+            if defaults
+            else None
+        )
+        automount = (
+            self.automount_token
+            if self.automount_token is not None
+            else automount_token
+        )
         pod = _compact(
             shareProcessNamespace=True if self.share_process_namespace else None,
             serviceAccountName=self.service_account,
-            nodeSelector={"kubernetes.io/hostname": node_name} if node_name else None,
-            initContainers=[item.manifest() for item in self.init_containers] or None,
-            containers=[item.manifest() for item in self.containers],
+            automountServiceAccountToken=automount,
+            securityContext=(security.pod_manifest() or None) if security else None,
+            terminationGracePeriodSeconds=grace,
+            nodeSelector=node_selector or None,
+            initContainers=[container(item) for item in self.init_containers] or None,
+            containers=[container(item) for item in self.containers],
             volumes=[
                 {"name": name, **volume.source()}
                 for name, volume in self.volumes().items()
@@ -881,11 +1145,14 @@ class Service(_Model):
 
 
 class NetworkPolicy(_Model):
-    """Ingress rules for a Deployment's pods, declared with ``app.network_policy``.
+    """Ingress rules for selected pods, declared with ``app.network_policy``.
 
+    ``pod_selector`` picks the protected pods (one Deployment's selector, or
+    any labels, such as ``app.release_selector`` for every pod of the app).
     With no ``allow_from`` and no ``ports`` all ingress is denied. With
-    ``allow_from``, only those Deployments' pods may connect (on ``ports``, or
-    any port). With only ``ports``, any source may connect on those ports.
+    ``allow_from`` (pod label sets in the same namespace), only matching pods
+    may connect (on ``ports``, or any port). With only ``ports``, any source
+    may connect on those ports.
     """
 
     name: Name
@@ -926,3 +1193,190 @@ class NetworkPolicy(_Model):
                 "ingress": rules,
             },
         }
+
+
+# ------------------------------------------------------------------------ rbac
+
+_RBAC = "rbac.authorization.k8s.io"
+_VERB = re.compile(r"[a-z][a-zA-Z]*")
+_RESOURCE = re.compile(r"[a-z][a-z0-9.-]*(/[a-z][a-z0-9-]*)?")
+# Kubernetes cannot restrict these verbs to named objects.
+_UNNAMEABLE_VERBS = frozenset({"create", "deletecollection"})
+
+
+class Rule(_Model):
+    """One RBAC permission: ``verbs`` on ``resources`` of ``api_groups``.
+
+    Used by :meth:`App.service_account <piceli.app.App.service_account>` as a
+    namespaced rule (a Role) or a cluster rule (a ClusterRole).
+
+    :param resources: Resource plurals, such as ``("pods",)`` or
+        ``("pods/log",)`` for a subresource.
+    :param verbs: Verbs, such as ``("get", "list", "watch")``.
+    :param api_groups: API groups; ``""`` is the core group (the default).
+    :param resource_names: Only these object names.
+    :param allow_wildcard: Required to use ``"*"`` in any list: a wildcard
+        grants everything, including verbs and resources added later.
+
+    Invariants: ``resources``, ``verbs`` and ``api_groups`` are non-empty;
+    ``"*"`` needs ``allow_wildcard=True``; ``resource_names`` cannot be
+    combined with ``create`` or ``deletecollection``, which Kubernetes cannot
+    restrict by name.
+
+    Example::
+
+        Rule(resources=["pods"], verbs=["get", "list", "watch"])
+        Rule(api_groups=["apps"], resources=["deployments"], verbs=["get"],
+             resource_names=["api"])
+    """
+
+    resources: tuple[str, ...] = Field(min_length=1)
+    verbs: tuple[str, ...] = Field(min_length=1)
+    api_groups: tuple[str, ...] = Field(default=("",), min_length=1)
+    resource_names: tuple[str, ...] = ()
+    allow_wildcard: bool = False
+
+    @model_validator(mode="after")
+    def _shape(self) -> Rule:
+        wildcards = [
+            field
+            for field, values in (
+                ("api_groups", self.api_groups),
+                ("resources", self.resources),
+                ("verbs", self.verbs),
+                ("resource_names", self.resource_names),
+            )
+            if "*" in values
+        ]
+        if wildcards and not self.allow_wildcard:
+            raise ValueError(
+                f"'*' in {', '.join(wildcards)} grants everything, including "
+                "what Kubernetes adds later; list what the workload needs, or "
+                "pass allow_wildcard=True to mean it"
+            )
+        for verb in self.verbs:
+            if verb != "*" and not _VERB.fullmatch(verb):
+                raise ValueError(f"verb {verb!r}: verbs are words such as 'get'")
+        for resource in self.resources:
+            if resource != "*" and not _RESOURCE.fullmatch(resource):
+                raise ValueError(
+                    f"resource {resource!r}: resources are lower-case plurals such "
+                    "as 'pods' or 'pods/log'"
+                )
+        for group in self.api_groups:
+            if group not in {"", "*"} and not _DNS_SUBDOMAIN.fullmatch(group):
+                raise ValueError(
+                    f"api group {group!r}: use '' for the core group or a group "
+                    "name such as 'apps'"
+                )
+        for name in self.resource_names:
+            if not name or name in {".", ".."} or any(c in name for c in "/%"):
+                raise ValueError(f"resource name {name!r} is not a valid object name")
+        if self.resource_names and _UNNAMEABLE_VERBS & set(self.verbs):
+            raise ValueError(
+                "resource_names cannot restrict 'create' or 'deletecollection'; "
+                "put those verbs in a rule without resource_names"
+            )
+        return self
+
+    def manifest(self) -> dict[str, Any]:
+        return _compact(
+            apiGroups=list(self.api_groups),
+            resources=list(self.resources),
+            verbs=list(self.verbs),
+            resourceNames=list(self.resource_names) or None,
+        )
+
+
+class ServiceAccount(_Model):
+    """A service account with its permissions, declared with ``app.service_account``.
+
+    Renders a ServiceAccount, and a Role and RoleBinding (named after it) when
+    it has ``rules``, and a ClusterRole and ClusterRoleBinding when it has
+    ``cluster_rules``. Cluster-scoped objects are shared by the whole cluster,
+    so they are named ``<namespace>:<app>:<name>`` and annotated with
+    ``piceli.io/namespace``: releases in two namespaces never collide, and a
+    release manages, changes and prunes only its own.
+
+    The ServiceAccount renders ``automountServiceAccountToken: false``, so a
+    pod gets its token only when it is bound with ``service_account=`` on a
+    workload of the app (which renders ``true`` on the pod).
+
+    :param name: ServiceAccount name (also of the Role and RoleBinding).
+    :param rules: Namespaced permissions (:class:`Rule`), in the release
+        namespace.
+    :param cluster_rules: Cluster-wide permissions (:class:`Rule`), such as
+        reading nodes.
+    :param component: Deployment component; defaults to ``name``.
+    """
+
+    name: Name
+    rules: tuple[Rule, ...] = ()
+    cluster_rules: tuple[Rule, ...] = ()
+    component: Name | None = None
+
+    @property
+    def component_name(self) -> str:
+        return self.component or self.name
+
+    def cluster_name(self, namespace: str, app: str) -> str:
+        """The ClusterRole and ClusterRoleBinding name in ``namespace``."""
+        return f"{namespace}:{app}:{self.name}"
+
+    def manifests(
+        self,
+        namespace: str,
+        app: str,
+        labels: Mapping[str, str],
+        namespace_annotation: str,
+    ) -> list[dict[str, Any]]:
+        """ServiceAccount first, then the Role pair and the ClusterRole pair."""
+
+        def metadata(name: str, *, cluster: bool = False) -> dict[str, Any]:
+            return _compact(
+                name=name,
+                namespace=None if cluster else namespace,
+                labels=dict(labels) or None,
+                annotations={namespace_annotation: namespace} if cluster else None,
+            )
+
+        subject = {"kind": "ServiceAccount", "name": self.name, "namespace": namespace}
+        result: list[dict[str, Any]] = [
+            {
+                "apiVersion": "v1",
+                "kind": "ServiceAccount",
+                "metadata": metadata(self.name),
+                "automountServiceAccountToken": False,
+            }
+        ]
+        pairs = (
+            (self.rules, "Role", "RoleBinding", self.name, False),
+            (
+                self.cluster_rules,
+                "ClusterRole",
+                "ClusterRoleBinding",
+                self.cluster_name(namespace, app),
+                True,
+            ),
+        )
+        for rules, role, binding, name, cluster in pairs:
+            if not rules:
+                continue
+            result.append(
+                {
+                    "apiVersion": f"{_RBAC}/v1",
+                    "kind": role,
+                    "metadata": metadata(name, cluster=cluster),
+                    "rules": [rule.manifest() for rule in rules],
+                }
+            )
+            result.append(
+                {
+                    "apiVersion": f"{_RBAC}/v1",
+                    "kind": binding,
+                    "metadata": metadata(name, cluster=cluster),
+                    "roleRef": {"apiGroup": _RBAC, "kind": role, "name": name},
+                    "subjects": [subject],
+                }
+            )
+        return result

@@ -14,7 +14,7 @@ Priorities may change. Progress is tracked in
 | Capability | Status |
 | --- | --- |
 | Define resources in Python, YAML or JSON | ✅ Available |
-| Typed apps (`App`, `piceli render`) that render to release intents | 🟡 Preview: Deployments, Services, ConfigMaps, Secrets, NetworkPolicies |
+| Typed apps (`App`, `piceli render`) that render to release intents | 🟡 Preview: Deployments, Services, ConfigMaps, Secrets, NetworkPolicies (per workload or by label), ServiceAccounts with typed RBAC (ClusterRole/ClusterRoleBinding scoped per namespace), app-level pod defaults |
 | Typed templates for common workloads | 🟡 Core kinds only; no Ingress/Gateway, NetworkPolicy, DaemonSet, PDB, Namespace or cluster-scoped RBAC yet |
 | Dependency-ordered plan and apply | ✅ Available |
 | Image handoff by digest (build → deliver → release, immutable references only) | 🟡 Preview |

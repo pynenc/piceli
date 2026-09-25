@@ -1,7 +1,8 @@
 # Describe an app in typed Python
 
 This page shows how to describe an application's Deployments, Services,
-configuration, secrets and network policies with typed Python objects, and
+configuration, secrets, service accounts with their permissions, pod security
+defaults and network policies with typed Python objects, and
 how to render them to manifests or release them, with no manifest dicts or YAML.
 
 ```{admonition} Maturity: preview
@@ -129,10 +130,13 @@ become ready before the next. Every declaration belongs to a component:
 | `app.deployment(name, …)` | `name` |
 | `app.config(name, …)`, `app.secret(name, …)` | `name` |
 | `app.service(workload, …)`, `app.network_policy(workload, …)` | the workload's component |
+| `app.service_account(name, …)` | `name` (with its Role and ClusterRole objects) |
+| `app.network_policy(selector=…, name=…)` | `component=`, else `name` |
 
 Pass `component=` to group objects, as the example does with `config`. A
 Deployment automatically depends on the component of every config and secret
-of the app that it reads through env or volumes. `app.depends(a, on=b)` adds
+of the app that it reads through env or volumes, and of the service account it
+is bound to. `app.depends(a, on=b)` adds
 other edges. It accepts declared objects or component names.
 
 ### Selector labels are chosen once
@@ -187,6 +191,161 @@ nothing to the manifests; `piceli status` and `piceli access` use it (see
 {doc}`access`). For them to see it, the composition function returns the App
 itself, as `examples/typed_app/app.py` does; a release renders a returned App.
 
+## Apply pod defaults to every workload
+
+Settings that every pod of an app shares (a non-root user, a seccomp profile,
+an extra node selector, a grace period) are declared once on the App:
+
+```python
+from piceli import App, PodDefaults, Security
+
+app = App(
+    "shop",
+    pod_defaults=PodDefaults(
+        security=Security.restricted(user=10001, fs_group=10001),
+        node_selector={"kubernetes.io/arch": "amd64"},
+        termination_grace_seconds=30,
+    ),
+)
+api = app.deployment("api", image=ctx.image("api"))
+web = app.deployment(
+    "web",
+    image=ctx.image("web"),
+    node="primary",
+    security=Security(read_only_root_filesystem=True),
+)
+```
+
+Every Deployment declared on the app renders:
+
+| Setting | Rendered as |
+| --- | --- |
+| `Security` pod fields (`run_as_non_root`, `run_as_user`, `run_as_group`, `fs_group`, `seccomp`) | the pod's `securityContext` |
+| `Security` container fields (`allow_privilege_escalation`, `read_only_root_filesystem`, `drop_capabilities`, `add_capabilities`) | the `securityContext` of **every** container, init containers and sidecars included |
+| `node_selector` | `nodeSelector`, merged with a `node=` pin (`kubernetes.io/hostname`) |
+| `termination_grace_seconds` | `terminationGracePeriodSeconds` |
+| `automount_token` | `automountServiceAccountToken` of pods not bound to a declared service account |
+
+`Security.restricted(...)` passes the Kubernetes `restricted` Pod Security
+Standard: non-root user and group, the runtime's default seccomp profile, no
+privilege escalation and every capability dropped.
+
+Layering, from lowest to highest:
+
+1. `pod_defaults`;
+2. the workload's own `security=`, `node_selector=`,
+   `termination_grace_seconds=` and `automount_token=`. `security` wins field
+   by field (a workload's `Security(run_as_user=2000)` keeps the default
+   `fs_group`), `node_selector` key by key, the others as a whole;
+3. `app.override(workload, patch)`, applied to the rendered manifest last (a
+   `None` in the patch removes a default).
+
+Rules:
+
+- A `node_selector` (from the defaults or the workload) that sets
+  `kubernetes.io/hostname` is refused on a workload with `node=`: pin with
+  `node=` or select the host by label, not both. The error names the
+  workload and where the key came from.
+- `Security(run_as_non_root=True, run_as_user=0)` is refused, and a
+  `Localhost` seccomp profile needs `seccomp_localhost_profile`.
+- Without `pod_defaults` and the new workload arguments, rendering is exactly
+  what it was.
+- Components added with `app.add(...)` are not changed.
+
+## Give a workload API permissions
+
+A workload that reads the Kubernetes API (a watcher, an operator) needs a
+ServiceAccount and RBAC objects. Declare them with typed rules and bind the
+account to the workload:
+
+```python
+from piceli import Rule
+
+watcher = app.service_account(
+    "watcher",
+    rules=[Rule(resources=["pods", "pods/log"], verbs=["get", "list", "watch"])],
+    cluster_rules=[Rule(resources=["nodes"], verbs=["get", "list"])],
+)
+app.deployment("watcher", image=ctx.image("watcher"), service_account=watcher)
+```
+
+This renders:
+
+| Object | Name | When |
+| --- | --- | --- |
+| ServiceAccount | `watcher` | always |
+| Role and RoleBinding | `watcher` | with `rules` |
+| ClusterRole and ClusterRoleBinding | `<namespace>:<app>:watcher`, annotated `piceli.io/namespace: <namespace>` | with `cluster_rules` |
+
+`Rule(resources=…, verbs=…, api_groups=("",), resource_names=())` is checked
+when it is declared: `resources`, `verbs` and `api_groups` must not be empty,
+verbs and resources must be well-formed, and `resource_names` cannot be
+combined with `create` or `deletecollection` (Kubernetes cannot restrict those
+by name). A `"*"` anywhere is refused unless the rule says
+`allow_wildcard=True`, because a wildcard also grants whatever Kubernetes adds
+later.
+
+Tokens: the ServiceAccount renders `automountServiceAccountToken: false`, and
+a pod bound to it with `service_account=` renders `true`. Only the pods you
+bind get API credentials, even if another pod names the account. A pod bound
+to an account the app does not declare (`service_account="name"`) keeps the
+Kubernetes default. Set `PodDefaults(automount_token=False)` to keep tokens out
+of every pod that is not bound to a declared account, and
+`automount_token=` on a workload to decide for that workload alone.
+
+`app.override(watcher, patch)` patches the ServiceAccount; the Role and
+binding objects follow from the rules.
+
+### Cluster-scoped objects in a release
+
+A ClusterRole and a ClusterRoleBinding are not in any namespace: every
+release in the cluster sees them. `piceli release` handles them like this:
+
+- **Names are unique per namespace.** `<namespace>:<app>:<account>` cannot
+  collide between two namespaces (RBAC names accept `:`).
+- **Ownership is per namespace.** An object counts as this release's only
+  when it carries this release's owner (`piceli.io/owner`) **and**
+  `piceli.io/namespace: <release namespace>`. The same owner released in
+  another namespace is someone else: its objects are never changed or pruned,
+  and one with a conflicting name must be adopted explicitly
+  (`--adopt ClusterRole/<name>`, which a takeover restamps).
+- **Plans show them.** Each such action carries `"cluster_scoped": true` in
+  the JSON plan and `[cluster-scoped]` in the text; approving the plan hash
+  approves them like any other action.
+- **Prune and rollback clean them up.** With `[release] prune = true`,
+  dropping `cluster_rules` (or the account) deletes exactly this release's
+  ClusterRole and ClusterRoleBinding; a rollback to a release that had them
+  recreates them.
+- **Only RBAC.** A release refuses other cluster-scoped kinds (Namespace,
+  PersistentVolume, CustomResourceDefinition, …) with `invalid-composition`.
+  A hand-built ClusterRole or ClusterRoleBinding in a composition is stamped
+  with `piceli.io/namespace`; one that names another namespace is refused.
+- **The deployer needs cluster rights.** Planning lists ClusterRoles and
+  ClusterRoleBindings cluster-wide, and applying writes them, so the
+  kubeconfig user needs those permissions (and Kubernetes only lets it grant
+  permissions it holds). Without them, discovery is incomplete and the plan
+  is refused.
+
+## Restrict traffic with network policies
+
+`app.network_policy(workload, allow_from=[…], ports=[…])` protects one
+workload's pods. To select pods by label instead, pass `selector=` and a
+`name=`; `allow_from_selector=` adds sources by label (one mapping or a list):
+
+```python
+app.network_policy(
+    selector=app.release_selector,
+    allow_from_selector=app.release_selector,
+    name="shop-internal",
+)
+app.network_policy(api, allow_from_selector={"role": "gateway"}, ports=[8080])
+```
+
+`app.release_selector` is the set of labels every pod of the app carries (the
+app's object labels, `{"app.kubernetes.io/part-of": <app name>}` by default),
+so the first policy lets only this app's pods reach its pods. An empty
+selector is refused: it would match every pod in the namespace.
+
 ## Reusing templates
 
 `app.add(...)` includes a component built elsewhere: a `DeploymentComponent`,
@@ -205,12 +364,14 @@ documented in the API docs.
 
 | Task | Types |
 | --- | --- |
-| Collect and render an app | {py:class}`~piceli.app.app.App` (`deployment`, `service`, `config`, `secret`, `network_policy`, `depends`, `add`, `override`, `composition`, `render`) |
+| Collect and render an app | {py:class}`~piceli.app.app.App` (`deployment`, `service`, `config`, `secret`, `service_account`, `network_policy`, `release_selector`, `depends`, `add`, `override`, `composition`, `render`) |
+| Pod settings | {py:class}`~piceli.app.model.PodDefaults`, {py:class}`~piceli.app.model.Security` |
+| Permissions | {py:class}`~piceli.app.model.Rule`, {py:class}`~piceli.app.model.ServiceAccount` |
 | Containers | {py:class}`~piceli.app.model.Container`, {py:class}`~piceli.app.model.ContainerPort`, {py:class}`~piceli.app.model.Resources` |
 | Health checks | {py:class}`~piceli.app.model.Probe` (`http`, `tcp`, `exec`; also `app.probe`) |
 | Environment | `str`, {py:class}`~piceli.app.model.SecretKey`, {py:class}`~piceli.app.model.ConfigKey`, {py:class}`~piceli.app.model.FieldRef` |
 | Volumes | {py:class}`~piceli.app.model.ConfigVolume`, {py:class}`~piceli.app.model.SecretVolume`, {py:class}`~piceli.app.model.MemoryVolume`, {py:class}`~piceli.app.model.ExistingClaim`, {py:class}`~piceli.app.model.Mount` |
-| Declared objects (returned handles) | {py:class}`~piceli.app.model.Deployment`, {py:class}`~piceli.app.model.Service`, {py:class}`~piceli.app.model.ServicePort`, {py:class}`~piceli.app.model.Config`, {py:class}`~piceli.app.model.Secret`, {py:class}`~piceli.app.model.NetworkPolicy` |
+| Declared objects (returned handles) | {py:class}`~piceli.app.model.Deployment`, {py:class}`~piceli.app.model.Service`, {py:class}`~piceli.app.model.ServicePort`, {py:class}`~piceli.app.model.Config`, {py:class}`~piceli.app.model.Secret`, {py:class}`~piceli.app.model.ServiceAccount`, {py:class}`~piceli.app.model.NetworkPolicy` |
 
 Everything above is importable from `piceli` directly (`from piceli import
 App, ExistingClaim`). The exports are lazy, so `import piceli` stays cheap and
@@ -236,8 +397,8 @@ piceli render [TARGET] [--spec release.toml] [--namespace NS] [--format yaml|jso
 
 ## Not typed yet
 
-Security contexts, ServiceAccounts and RBAC, StatefulSets, Jobs, Ingress and
-PodDisruptionBudgets are not part of `App` yet. In the meantime:
+StatefulSets, Jobs, Ingress, PodDisruptionBudgets, tolerations and affinity are
+not part of `App` yet. In the meantime:
 
 - set a field of a declared object with `app.override(obj, patch)`: the patch
   is merged into the rendered manifest (mappings key by key, `None` removes a
@@ -252,7 +413,7 @@ PodDisruptionBudgets are not part of `App` yet. In the meantime:
           "spec": {
               "template": {
                   "spec": {
-                      "securityContext": {"runAsNonRoot": True},
+                      "tolerations": [{"key": "dedicated", "operator": "Exists"}],
                   }
               }
           }

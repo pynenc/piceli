@@ -29,6 +29,19 @@ DISCOVERY_SCHEMA_VERSION = 2
 RETAINED_KINDS = frozenset(
     {"Namespace", "PersistentVolume", "PersistentVolumeClaim", "Secret"}
 )
+#: On a cluster-scoped object, the namespace of the release that manages it.
+#: A provider classifies a cluster-scoped object as managed only when this
+#: annotation names its target namespace (besides the owner annotation), so
+#: releases of one owner in two namespaces never adopt, change or prune each
+#: other's cluster-scoped objects.
+RELEASE_NAMESPACE_ANNOTATION = "piceli.io/namespace"
+#: Cluster-scoped kinds a release may manage (see ``docs/typed_apps.md``).
+RELEASE_CLUSTER_KINDS = frozenset(
+    {
+        ("rbac.authorization.k8s.io/v1", "ClusterRole"),
+        ("rbac.authorization.k8s.io/v1", "ClusterRoleBinding"),
+    }
+)
 
 _SENSITIVE_KEY = re.compile(
     r"(^|_)(authorization|credential|password|private_key|secret|token)(_|$)", re.I

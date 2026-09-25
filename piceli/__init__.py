@@ -22,12 +22,16 @@ _APP_EXPORTS = frozenset(
         "MemoryVolume",
         "Mount",
         "NetworkPolicy",
+        "PodDefaults",
         "Probe",
         "Resources",
+        "Rule",
         "Secret",
         "SecretKey",
         "SecretVolume",
+        "Security",
         "Service",
+        "ServiceAccount",
         "ServicePort",
     }
 )
@@ -72,12 +76,16 @@ if TYPE_CHECKING:
         MemoryVolume,
         Mount,
         NetworkPolicy,
+        PodDefaults,
         Probe,
         Resources,
+        Rule,
         Secret,
         SecretKey,
         SecretVolume,
+        Security,
         Service,
+        ServiceAccount,
         ServicePort,
     )
     from piceli.checks import Checks  # noqa: F401

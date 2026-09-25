@@ -44,7 +44,7 @@ from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path as FilePath
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from piceli.k8s.ops.discovery import EvidenceSource, PlanTarget
 from piceli.k8s.ops.kubernetes_provider import KubernetesProvider
@@ -78,6 +78,15 @@ TYPES: Mapping[str, tuple[str, str, bool]] = {
     "namespaces": ("v1", "Namespace", False),
     "deployments": ("apps/v1", "Deployment", True),
     "networkpolicies": ("networking.k8s.io/v1", "NetworkPolicy", True),
+    "serviceaccounts": ("v1", "ServiceAccount", True),
+    "roles": ("rbac.authorization.k8s.io/v1", "Role", True),
+    "rolebindings": ("rbac.authorization.k8s.io/v1", "RoleBinding", True),
+    "clusterroles": ("rbac.authorization.k8s.io/v1", "ClusterRole", False),
+    "clusterrolebindings": (
+        "rbac.authorization.k8s.io/v1",
+        "ClusterRoleBinding",
+        False,
+    ),
     "widgets": ("example.test/v1", "Widget", False),
 }
 
@@ -367,7 +376,11 @@ class FakeAPI:
     - ``ready``: whether Deployments report ready replicas;
     - ``wait_for_first_consumer``: claim names that stay ``Pending`` until a
       workload mounts them;
-    - ``types``: the served resources (default :data:`TYPES`).
+    - ``types``: the served resources (default :data:`TYPES`);
+    - ``terminating_reads``: when above ``0``, an ``Orphan`` delete keeps the
+      object (with a ``deletionTimestamp`` and the ``orphan`` finalizer) for
+      that many more reads of it, as a real API server does until its
+      garbage collector removes the finalizer.
 
     Use :meth:`put` to seed objects and :meth:`inject` to add faults.
     """
@@ -386,6 +399,8 @@ class FakeAPI:
         self.lock = threading.RLock()
         self.ready = True
         self.wait_for_first_consumer: set[str] = set()
+        self.terminating_reads = 0
+        self._terminating: dict[tuple[str, str], int] = {}
         self.version = 1
         self.put(manifest("Namespace", "kube-system"), uid="cluster-uid")
         self.put(manifest("Namespace", TARGET.namespace), uid="namespace-uid")
@@ -671,7 +686,9 @@ class FakeAPI:
                         if api == version
                     ],
                 }
-        parts = path.split("/")
+        # Like the API server, decode each path segment: RBAC names may hold
+        # ':' (sent as %3A).
+        parts = [unquote(part) for part in path.split("/")]
         found = [
             (index, self.types[part])
             for index, part in enumerate(parts)
@@ -686,6 +703,15 @@ class FakeAPI:
         current = self.objects.get((kind, name))
         if method == "GET":
             if name:
+                remaining = self._terminating.get((kind, name))
+                if remaining is not None:
+                    if remaining <= 0:
+                        del self._terminating[(kind, name)]
+                        del self.objects[(kind, name)]
+                        self.version += 1
+                        current = None
+                    else:
+                        self._terminating[(kind, name)] = remaining - 1
                 if current is None:
                     return 404, {}
                 self._readiness(current)
@@ -723,6 +749,17 @@ class FakeAPI:
             # body only (a dryRun query parameter alone would delete).
             if body.get("dryRun") == ["All"]:
                 return 200, {"kind": "Status", "status": "Success"}
+            if self.terminating_reads > 0 and body["propagationPolicy"] == "Orphan":
+                self.version += 1
+                current["metadata"].update(
+                    {
+                        "deletionTimestamp": "2026-01-01T00:00:00Z",
+                        "finalizers": ["orphan"],
+                        "resourceVersion": str(self.version),
+                    }
+                )
+                self._terminating[(kind, name)] = self.terminating_reads
+                return 200, copy.deepcopy(current)
             del self.objects[(kind, name)]
             self.version += 1
             return 200, {"kind": "Status", "status": "Success"}
