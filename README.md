@@ -37,7 +37,9 @@
 
 ---
 
-<!-- hero-image -->
+<p align="center">
+  <img src="https://raw.githubusercontent.com/pynenc/piceli/main/docs/_static/img/deploy-flow.gif" alt="piceli deploy: plan, approve the plan hash, stream each stage to ready, then piceli status" width="720">
+</p>
 
 Piceli describes a Kubernetes application in typed Python, shows you exactly
 what would change in the cluster, and applies only the plan you approved. Every

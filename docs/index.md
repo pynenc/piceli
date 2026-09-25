@@ -2,7 +2,11 @@
 
 **Kubernetes infrastructure as typed Python: model it, plan it, apply it safely, and observe it.**
 
-<!-- hero-image -->
+```{image} _static/img/deploy-flow.gif
+:alt: piceli deploy: plan, approve the plan hash, stream each stage to ready, then piceli status
+:width: 720px
+:align: center
+```
 
 Piceli lets you describe a Kubernetes application in typed Python (a typed
 `App`, Piceli templates, the official `kubernetes` client models, or plain
