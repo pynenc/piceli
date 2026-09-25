@@ -239,6 +239,12 @@ never build. The approval rules above apply unchanged:
   never on the command line or in logs.
 - Error codes never contain secrets or private paths, so they are safe to
   report.
+- Never put a secret in a build's smoke check (`smoke.env`, `command`,
+  `entrypoint`): the smoke table is printed by `preview` and recorded in the
+  receipt and the plan hash. Values that look like secret references are
+  refused (`smoke-env-secret`). A `smoke-output-mismatch` excerpt appears on
+  stderr and in the build log only; report the code and the `unmatched`
+  streams, and quote the excerpt only if the owner asks.
 
 ## Cluster access
 

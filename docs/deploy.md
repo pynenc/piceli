@@ -68,7 +68,12 @@ New to Piceli? Start with {doc}`getting_started/index`.
      paths (the kubeconfig, the build spec, `state_dir`) resolve from the
      directory of the file that declares them.
    - `Build.spec(...)` wraps a `build.toml` (see {doc}`containerized_builds`);
-     `Build.dockerfile(...)` builds one image per Dockerfile target stage.
+     `Build.dockerfile(...)` builds one image per Dockerfile target stage;
+     its `smoke={"api": Smoke(["--version"], expect_stdout=r"^api ")}` runs
+     an isolated check in a built image (arguments, plain `env`, an
+     `entrypoint` override, output patterns; see {ref}`build-smoke`) before
+     the build counts as done. Smoke checks are part of the build's plan hash,
+     so changing one changes the combined hash.
      `images["rust-hello"]` is a *handle*: a placeholder that `piceli deploy`
      replaces with the delivered, digest-pinned reference. Every other image
      must be pinned by digest.
@@ -343,7 +348,7 @@ The policy is used by `piceli deploy` (plan, apply, checks), `piceli status`,
 | `pipeline-plan-changed` | Something changed since `--plan` | Plan again and approve the new hash |
 | `pipeline-image-not-pinned` | An image is a movable tag | Pin it by digest or build it |
 | `pipeline-release-refused` with `blocking` objects | The release needs adoption or replacement of existing objects | Add `adopt=["Kind/name"]` (or `replace=`) to the `Pipeline`; see {doc}`release_cli` |
-| `build-failed`, `smoke-failed` (exit `1`) | The build or its smoke check failed | Read `state_dir/builds/<name>/build.log`, fix, deploy again |
+| `build-failed`, `smoke-failed`, `smoke-output-mismatch` (exit `1`) | The build or its smoke check failed (for a mismatch, stderr shows an excerpt of the unmatched output) | Read `state_dir/builds/<name>/build.log`, fix, deploy again |
 | `pipeline-registry-not-ready` | The node-loopback registry did not start (often its port is taken on the node) | Choose another `port=` or free it, then `--resume` |
 | `pipeline-apply-not-ready` (exit `1`) | The release did not become ready | Fix the workload (image, probe, claim), then `--resume` |
 | `pipeline-checks-failed` (exit `1`) | A check failed; see `checks.results` and `checks.rollback` in the run | Fix the app and deploy again |

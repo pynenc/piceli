@@ -274,7 +274,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`secret-template-invalid`](#error-secret-template-invalid) | secrets | no |
 | [`secret-unknown-reference`](#error-secret-unknown-reference) | secrets | no |
 | [`server-target-identity-mismatch`](#error-server-target-identity-mismatch) | kubernetes | no |
+| [`smoke-env-secret`](#error-smoke-env-secret) | build-spec | no |
 | [`smoke-failed`](#error-smoke-failed) | build-spec | no |
+| [`smoke-output-mismatch`](#error-smoke-output-mismatch) | build-spec | no |
 | [`smoke-timed-out`](#error-smoke-timed-out) | build-spec | no |
 | [`source-capture-failed`](#error-source-capture-failed) | inputs | no |
 | [`source-changed`](#error-source-changed) | artifacts-delivery | yes |
@@ -1017,12 +1019,28 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Run `build-spec preview` again and approve the new plan hash.
 - **Retry-safe:** no
 
+(error-smoke-env-secret)=
+### `smoke-env-secret`
+
+**Smoke env looks like a secret reference.** A smoke env value looks like a reference to secret material (for example `secret://` or `vault://`). Smoke env is recorded in previews, plans and receipts, so it may hold plain, non-secret values only.
+
+- **Fix:** Give the smoke check a plain value (or a self-test mode that needs no secret); keep secrets in the release's secret store.
+- **Retry-safe:** no
+
 (error-smoke-failed)=
 ### `smoke-failed`
 
 **Smoke check failed.** An image's smoke command exited with an unexpected code; no receipt was written.
 
 - **Fix:** Inspect the build log (`--log`), fix the image or the smoke declaration, rebuild.
+- **Retry-safe:** no
+
+(error-smoke-output-mismatch)=
+### `smoke-output-mismatch`
+
+**Smoke output did not match.** An image's smoke command exited as expected, but expect_stdout or expect_stderr was not found in the first 256 KiB of that stream; no receipt was written. The failed step lists the streams under `unmatched`.
+
+- **Fix:** Read the excerpt on stderr or the build log (`--log`), then fix the image or the smoke pattern (a Python regular expression, searched per line with re.MULTILINE), rebuild.
 - **Retry-safe:** no
 
 (error-smoke-timed-out)=

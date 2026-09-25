@@ -344,6 +344,98 @@ def handle_image(value: Any) -> str | None:
     return match[1] if match else None
 
 
+@dataclass(frozen=True, init=False)
+class Smoke:
+    r"""A smoke check run in a built image before its receipt is written.
+
+    The same fields as a ``smoke = {…}`` table in ``build.toml`` (see
+    :doc:`containerized_builds`). The container is isolated: no network, a
+    read-only root filesystem, no capabilities, bounded memory, processes and
+    time.
+
+    :param command: Arguments after the image (replace ``CMD``); empty runs the
+        image's default command.
+    :param env: Plain environment values for the check. They are part of the
+        plan hash and are recorded in previews and receipts, so they must not
+        be secrets (values that look like secret references are refused).
+    :param entrypoint: Replaces the image's entrypoint (``["/bin/sh", "-c"]``
+        for a shell check); the image's ``CMD`` is then not used.
+    :param expect_exit: The exit code that passes (default 0).
+    :param expect_stdout: A regular expression searched (``re.MULTILINE``) in
+        the first 256 KiB of stdout.
+    :param expect_stderr: The same for stderr.
+    :param timeout_seconds: Time limit, at most 600 (default 60).
+
+    Invalid values raise :class:`PipelineError` when the check is declared.
+
+    Example::
+
+        Smoke(["--version"], expect_stdout=r"^api \d+\.\d+")
+    """
+
+    command: tuple[str, ...]
+    env: Mapping[str, str]
+    entrypoint: tuple[str, ...] | None
+    expect_exit: int
+    expect_stdout: str | None
+    expect_stderr: str | None
+    timeout_seconds: float
+
+    def __init__(
+        self,
+        command: Sequence[str] = (),
+        *,
+        env: Mapping[str, str] | None = None,
+        entrypoint: Sequence[str] | None = None,
+        expect_exit: int = 0,
+        expect_stdout: str | None = None,
+        expect_stderr: str | None = None,
+        timeout_seconds: float = 60,
+    ) -> None:
+        if isinstance(command, str) or isinstance(entrypoint, str):
+            raise PipelineError(
+                "invalid-spec", "smoke command and entrypoint are lists of strings"
+            )
+        values = {
+            "command": tuple(command),
+            "env": dict(env or {}),
+            "entrypoint": tuple(entrypoint) if entrypoint is not None else None,
+            "expect_exit": expect_exit,
+            "expect_stdout": expect_stdout,
+            "expect_stderr": expect_stderr,
+            "timeout_seconds": timeout_seconds,
+        }
+        for key, value in values.items():
+            object.__setattr__(self, key, value)
+        _check_smoke(self.to_table())
+
+    def to_table(self) -> dict[str, Any]:
+        """The ``smoke`` table of a build spec (only the fields that are set)."""
+        table: dict[str, Any] = {
+            "command": list(self.command),
+            "expect_exit": self.expect_exit,
+            "timeout_seconds": self.timeout_seconds,
+        }
+        if self.env:
+            table["env"] = dict(self.env)
+        if self.entrypoint is not None:
+            table["entrypoint"] = list(self.entrypoint)
+        if self.expect_stdout is not None:
+            table["expect_stdout"] = self.expect_stdout
+        if self.expect_stderr is not None:
+            table["expect_stderr"] = self.expect_stderr
+        return table
+
+
+def _check_smoke(table: Mapping[str, Any]) -> None:
+    from piceli.artifacts.build_spec import BuildSpecError, parse_smoke
+
+    try:
+        parse_smoke(dict(table))
+    except BuildSpecError as error:
+        raise PipelineError(error.code, str(error)) from None
+
+
 class Build:
     """A containerized build (``piceli artifacts build-spec``) whose images a pipeline deploys.
 
@@ -409,6 +501,7 @@ class Build:
         name: str | None = None,
         network: str = "none",
         timeout_seconds: float = 1800,
+        smoke: Mapping[str, Smoke | Mapping[str, Any]] | None = None,
     ) -> Build:
         """One image per Dockerfile target stage, built in a pinned builder.
 
@@ -430,11 +523,23 @@ class Build:
         :param name: Build name; default the first target.
         :param network: ``none`` (default) or ``default``.
         :param timeout_seconds: Build time limit.
+        :param smoke: Smoke checks by target name, each a :class:`Smoke` (or a
+            mapping with the ``build.toml`` smoke keys). A failing check fails
+            the build; the checks are part of the build's plan hash.
         """
         from piceli.artifacts.build_spec import BUILD_SPEC_REVISION
 
         if not targets:
             raise PipelineError("pipeline-invalid", "declare at least one target")
+        smoke_tables: dict[str, dict[str, Any]] = {}
+        for target, check in (smoke or {}).items():
+            if target not in targets:
+                raise PipelineError(
+                    "pipeline-invalid", f"smoke names unknown target {target!r}"
+                )
+            table = check.to_table() if isinstance(check, Smoke) else dict(check)
+            _check_smoke(table)
+            smoke_tables[target] = table
         builder_image, sep, digest = builder.partition("@")
         if not sep or not digest.startswith("sha256:"):
             raise PipelineError(
@@ -471,6 +576,11 @@ class Build:
                         "repository": f"{prefix}/{target}",
                         "tag": "{image_id:12}",
                         "target": target,
+                        **(
+                            {"smoke": smoke_tables[target]}
+                            if target in smoke_tables
+                            else {}
+                        ),
                     }
                     for target in targets
                 ]

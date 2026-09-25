@@ -4,6 +4,21 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.5.0
+
+- **Build smoke checks match output and take an environment**
+  (experimental): a smoke table (`build.toml`, and the new `Smoke` for
+  `Build.dockerfile(..., smoke={...})`) adds `env` (plain, non-secret
+  values), `entrypoint` (overrides the image's entrypoint) and
+  `expect_stdout`/`expect_stderr` (regular expressions searched in the first
+  256 KiB of each stream). A pattern that is not found fails the build with
+  `smoke-output-mismatch` (exit `1`); the step lists the streams under
+  `unmatched`, and stderr and the build log show a short escaped excerpt.
+  Smoke env values that look like secret references are refused
+  (`smoke-env-secret`). The smoke table is part of the plan hash and is
+  recorded in the receipt under `smoke`. Existing smoke checks keep their
+  argv, isolation flags and spec digest.
+
 ## Version 0.4.1
 
 - **Fix (safety):** Piceli signals a child's process group only when the id

@@ -34,7 +34,7 @@ Minimal workflow: `piceli render app.py:app --namespace NS` (no cluster) → `pi
 - [From kubectl scripts to Piceli](https://docs.pynenc.org/projects/piceli/en/latest/migrate_from_kubectl.html): `piceli import live|yaml` generates a typed module from existing objects; adopt them with `--adopt-all-desired`; `App.override`
 - [Test against a fake Kubernetes API](https://docs.pynenc.org/projects/piceli/en/latest/testing.html): `piceli.testing` for consumers' own tests, no cluster needed
 - [Source identity](https://docs.pynenc.org/projects/piceli/en/latest/source_identity.html): `piceli inputs record/verify` and source drift
-- [Containerized builds](https://docs.pynenc.org/projects/piceli/en/latest/containerized_builds.html): `build.toml`, pinned builders, build receipts, `piceli artifacts build-spec`
+- [Containerized builds](https://docs.pynenc.org/projects/piceli/en/latest/containerized_builds.html): `build.toml`, pinned builders, build receipts, `piceli artifacts build-spec`; isolated per-image smoke checks with exit code, plain `env`, `entrypoint`, `expect_stdout`/`expect_stderr` regexes (`smoke-output-mismatch`)
 - [Image delivery](https://docs.pynenc.org/projects/piceli/en/latest/node_delivery.html): `piceli artifacts deliver` to a registry (default) or a node, approved by config digest
 - [Node-local registry](https://docs.pynenc.org/projects/piceli/en/latest/node_local_registry.html): a registry one node pulls from without configuration
 - [Roadmap and feature status](https://docs.pynenc.org/projects/piceli/en/latest/roadmap.html): maturity of every feature

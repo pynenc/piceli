@@ -1156,6 +1156,29 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "build-spec",
     ),
     _E(
+        "smoke-output-mismatch",
+        "Smoke output did not match",
+        "An image's smoke command exited as expected, but expect_stdout or "
+        "expect_stderr was not found in the first 256 KiB of that stream; no "
+        "receipt was written. The failed step lists the streams under `unmatched`.",
+        "Read the excerpt on stderr or the build log (`--log`), then fix the image "
+        "or the smoke pattern (a Python regular expression, searched per line with "
+        "re.MULTILINE), rebuild.",
+        False,
+        "build-spec",
+    ),
+    _E(
+        "smoke-env-secret",
+        "Smoke env looks like a secret reference",
+        "A smoke env value looks like a reference to secret material (for example "
+        "`secret://` or `vault://`). Smoke env is recorded in previews, plans and "
+        "receipts, so it may hold plain, non-secret values only.",
+        "Give the smoke check a plain value (or a self-test mode that needs no "
+        "secret); keep secrets in the release's secret store.",
+        False,
+        "build-spec",
+    ),
+    _E(
         "unknown-source",
         "Unknown source name",
         "`--only NAME` named a source that inputs.toml does not declare.",
