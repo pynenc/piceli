@@ -124,12 +124,6 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   `Stalled`; ready once applied when it reports none). See
   {ref}`readiness-rules`. HTTPRoutes are applied with Ingresses, after
   Services.
-- **Throttled reads are sent again:** a read the API server answers with
-  `429` (API priority and fairness, or a watch cache still initializing, as
-  for a CRD installed a moment before on Kubernetes 1.37) is sent again after
-  its `Retry-After` (at most five times, within the deadline), as client-go
-  does. Before, a plan right after installing a CRD could fail with
-  `discovery-incomplete` (`api-unavailable`). Writes are never retried.
 - Portable plan files (`deploy --plan --out`) record `--env`, and `--apply`
   deploys that environment (`deploy-plan-file-mismatch` for another `--env`).
 - `piceli.testing`: the fake API serves StatefulSets, DaemonSets, Jobs,
