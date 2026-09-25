@@ -874,6 +874,9 @@ class ReleaseRunner:
         self.progress = progress
         self.provider_factory = provider_factory
         self.check_context_factory = check_context_factory
+        #: Called after every execution journal commit (before the IO it
+        #: records): shared state writes the state through here.
+        self.checkpoint: Callable[[], None] | None = None
         self.state = spec.state_dir
         self.history = _History(self.state / "history.json")
         # Restorable copies of objects deleted by ``replace`` (owner-only).
@@ -882,9 +885,11 @@ class ReleaseRunner:
     # ------------------------------------------------------------------ state
     def _open(self) -> tuple[ReleaseCatalog, ExecutionJournal, SecretVersionStore]:
         private_directory(self.state)
+        journal = ExecutionJournal(self.spec.journal_path)
+        journal.on_commit = self.checkpoint
         return (
             ReleaseCatalog(self.spec.catalog_path),
-            ExecutionJournal(self.spec.journal_path),
+            journal,
             SecretVersionStore(self.spec.secret_store_path),
         )
 

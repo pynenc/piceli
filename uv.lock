@@ -1532,6 +1532,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+crypto = [
+    { name = "cryptography" },
+]
 gcp = [
     { name = "google-api-core" },
     { name = "google-auth" },
@@ -1581,6 +1584,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "cron-validator", specifier = ">=1.0.8" },
+    { name = "cryptography", marker = "extra == 'crypto'", specifier = ">=42" },
     { name = "google-api-core", marker = "extra == 'gcp'", specifier = ">=2.17" },
     { name = "google-auth", marker = "extra == 'gcp'", specifier = ">=2.27" },
     { name = "google-cloud-container", marker = "extra == 'gcp'", specifier = ">=2.40" },
@@ -1593,7 +1597,7 @@ requires-dist = [
     { name = "tenacity", marker = "extra == 'gcp'", specifier = ">=8.2.3" },
     { name = "typer", specifier = ">=0.12" },
 ]
-provides-extras = ["gcp", "telemetry"]
+provides-extras = ["gcp", "telemetry", "crypto"]
 
 [package.metadata.requires-dev]
 dev = [

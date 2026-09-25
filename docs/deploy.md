@@ -234,7 +234,7 @@ stage's outputs.
 | Stage | Content identity | Skipped when |
 | --- | --- | --- |
 | `inputs` | The build plan hash over every staged file, plus the sources' git identity (provenance only) and, with `--ref`, the pinned commits | Never; it is the cheap scan the other stages key on |
-| `build` | The build plan hash (spec, staged files, Dockerfiles, invocations) | The last receipt has the same plan hash and its images are still in the local engine |
+| `build` | The build plan hash (spec, staged files, Dockerfiles, invocations) | The last receipt has the same plan hash and each image the app uses is still in the local engine, or already delivered (its delivery receipt's digest is in the registry or node: built by another runner) |
 | `deliver` | The image's config digest and the target repository | The registry serves the receipt's manifest digest (`HEAD`), or the node holds the config digest behind the content tag |
 | `plan` | The release name: a fingerprint of the delivered digests, the rendered objects and the secret settings | Never; it reads live discovery |
 | `apply` | The release name | That release is deployed and ready, the plan creates, deletes, adopts and replaces nothing, and no other field manager owns a desired field (drift) |
@@ -533,6 +533,33 @@ release; the rollback is journaled in the run and the result's state is
 `rolled-back`. `Checks` is importable from `piceli` next to `Pipeline`
 (`from piceli import Checks`); see {doc}`checks` for every check type.
 
+## Plan here, apply there
+
+`--plan --out FILE` also writes a portable plan file
+(`piceli.deploy-plan-file.v1`): the combined hash, every stage's plan, the
+`--ref` commits, the pipeline and observed target identity, and the build,
+delivery and mirror receipts it used. Another runner applies it with no
+checkout of the state and no build cache:
+
+```sh
+piceli deploy examples/shop/app.py:pipeline --ref main --plan --out deploy-plan.json
+piceli deploy --apply deploy-plan.json --approve <combined hash>   # on any runner
+```
+
+`--apply` takes the pipeline, stages, commits and `--reapply` from the file
+and plans again against live state; it runs only when the hash is still the
+approved one, and refuses a file for another pipeline or cluster. Across
+runners, use shared state (below): the release catalog and secret store of
+the plan runner are needed to compute the same plan.
+
+## Share the state between runners
+
+`Pipeline(..., state="cluster")` keeps the run journal, receipts, release
+catalog, execution journal and secret store in the release namespace, behind
+a release lock (a Lease with fencing and stale-owner takeover), so any runner
+can plan, apply, resume or roll back, and two deployers of one release never
+interleave. `state_dir` becomes a working copy. See {doc}`state`.
+
 ## Resume an interrupted run
 
 A run is journaled under `state_dir/runs/` after every stage change. When a
@@ -547,7 +574,9 @@ approved plan: finished stages keep their receipts, an interrupted release
 execution is resumed with the same grant, and a build whose staged files
 changed since the approval is refused (`pipeline-resume-changed`). A run
 planned with `--ref` is resumed from the same commits (checked out again),
-never from a branch's newer head. A run that
+never from a branch's newer head. With `state="cluster"` any runner resumes
+it (the journal is in the namespace); a build that finished elsewhere but
+was not delivered is built again first. A run that
 finished, rolled back or stopped at `--until` has nothing to resume: plan a
 new run, and unchanged stages are skipped.
 
@@ -580,7 +609,8 @@ generators and the composition. They never build or deliver:
   changed.
 - `apply`, `rollback`, `resume` and `stop` hold the pipeline's run lock, so
   they are refused with `pipeline-locked` while a `piceli deploy` of the same
-  state directory runs.
+  state directory runs (with `state="cluster"`: of the same release, on any
+  runner); since 0.6.0 `plan` and `check` hold it too.
 - The pipeline's `checks=` (`piceli.checks` declarations) run after readiness
   of an `apply`, `rollback` or `resume`, and `release check` runs them now;
   `rollback_on_failed_checks=True` applies as for `piceli deploy`.
@@ -632,7 +662,8 @@ The policy is used by `piceli deploy` (plan, apply, checks), `piceli status`,
 | `registry-unauthorized` at `deliver` | A mirror source needs a login | Add `mirror_credentials={"registry": "file.json"}` |
 | `pipeline-apply-not-ready` (exit `1`) | The release did not become ready | Fix the workload (image, probe, claim), then `--resume` |
 | `pipeline-checks-failed` (exit `1`) | A check failed; see `checks.results` and `checks.rollback` in the run | Fix the app and deploy again |
-| `pipeline-locked` | Another run uses the state directory | Wait, then retry |
+| `pipeline-locked` | Another run uses the state directory (with `state="cluster"`: the release, see `lock.holder`) | Wait, then retry |
+| `deploy-plan-file-mismatch`, `deploy-plan-target-mismatch` | `--apply`: the hash, pipeline or cluster is not the plan file's | Approve the file's hash with its pipeline and kubeconfig |
 | `deploy-ref-unknown` | `--ref` names no local commit | `git fetch`, or pass a full SHA |
 | `deploy-ref-source-unknown`, `deploy-ref-ambiguous`, `deploy-ref-invalid` | `--ref` names no declared source, is bare with several repositories, or is malformed | `--ref SOURCE=REV` with a name from `inputs.toml` |
 | `deploy-ref-model-differs` | With `--ref`, the pipeline's Python files differ from the pinned commit | Commit them, or deploy from a checkout of that commit |
@@ -645,12 +676,16 @@ Every code is explained by `piceli explain <code>` and in
 
 ## Command contract
 
-`piceli deploy TARGET [--ref [SOURCE=]REV]... [--plan] [--until STAGE] [--resume] [--approve HASH | --auto-approve] [--reapply] [--json]`
+`piceli deploy TARGET [--ref [SOURCE=]REV]... [--plan [--out FILE]] [--until STAGE] [--resume] [--approve HASH | --auto-approve] [--reapply] [--json]`
+
+`piceli deploy [TARGET] --apply FILE --approve HASH [--json]`
 
 | Argument | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `TARGET` | text | required | `path/to/file.py:ATTR` or `package.module:ATTR` naming a `Pipeline` |
 | `--plan` | flag | off | Plan every stage, print the combined hash, execute nothing |
+| `--out FILE` | path | none | With `--plan`: also write the portable plan file (new in 0.6.0) |
+| `--apply FILE` | path | none | Apply a plan file (with `--approve` its hash); `TARGET` defaults to the file's (new in 0.6.0) |
 | `--until STAGE` | text | `checks` | Stop after `inputs`, `build`, `deliver`, `plan`, `apply` or `checks` (bound to the hash) |
 | `--resume` | flag | off | Continue the latest unfinished run; takes no other planning flag |
 | `--approve HASH` | text | none | Execute exactly this combined plan |
@@ -689,7 +724,9 @@ Every code is explained by `piceli explain <code>` and in
   Stage states: `planned`, `running`, `done`, `skipped`, `failed`,
   `rejected`, `interrupted`. Result states: `planned`, `approval-required`,
   `ready`, `stopped`, `failed`, `rolled-back`, `interrupted`, `rejected`
-  (with `reason`, the failed `stage` and any `blocking` objects).
+  (with `reason`, the failed `stage` and any `blocking` objects). New in
+  0.6.0: a planned result written with `--out` adds `plan_file`, and a
+  `pipeline-locked` rejection adds `lock` (`holder`, `expires_in`).
 
   While the images are not delivered, `stages.plan` keeps
   `"state": "pending"` and adds `preview` (new in 0.5.0): `approvable`

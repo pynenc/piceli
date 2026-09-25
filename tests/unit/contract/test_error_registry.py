@@ -35,6 +35,7 @@ FIRST_ARGUMENT = {
     "ImportFailure",
     "PipelineError",
     "MirrorError",
+    "StateError",
 }
 # ``_Failure(result, reason)`` in the delivery modules; ``reject_error(error, default)``;
 # ``DryRunUnavailable(resource, reason)`` in ``k8s/ops/dry_run.py``.
@@ -98,6 +99,8 @@ DYNAMIC = {
     "status-release-unreadable",
     "status-checks-unreadable",
     "status-port-occupied",
+    # state/scopes.py: the lock code of a release.toml scope (lock_code=...)
+    "release-locked",
 }
 # Registered for the CLI contract itself (piceli/cli_contract.py users).
 CONTRACT = {"unknown-error-code"}

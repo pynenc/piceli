@@ -915,7 +915,15 @@ class Pipeline:
     :param owner: Release owner; default ``app.owner`` or the app name.
     :param field_manager: Server-side apply field manager; default the owner.
     :param state_dir: Local state (journal, receipts, release catalog),
-        relative to the declaring file.
+        relative to the declaring file. With ``state="cluster"`` it is the
+        runner's working copy of the shared state.
+    :param state: ``"local"`` (default): the state directory is the state;
+        ``"cluster"``: the state lives in the release namespace behind a
+        release-scoped Lease lock, so any runner can plan and any other can
+        apply or resume (see ``docs/state.md``).
+    :param state_lease_seconds: With ``state="cluster"``, how long a runner
+        that stopped renewing its lock keeps it before another may take it
+        over (5-3600, default 60).
     :param execution: ``[execution]`` limits of the release engine
         (``max_seconds``, ``readiness_seconds``, ``poll_seconds`` …).
     :param approval_window_seconds: How long a release plan stays valid.
@@ -947,6 +955,8 @@ class Pipeline:
         owner: str | None = None,
         field_manager: str | None = None,
         state_dir: str | Path = ".piceli-deploy",
+        state: str = "local",
+        state_lease_seconds: int = 60,
         execution: Mapping[str, Any] | None = None,
         approval_window_seconds: int = 900,
         inherited_owners: Sequence[str] = (),
@@ -1000,6 +1010,12 @@ class Pipeline:
         self.field_manager = field_manager or self.owner
         self.base = _caller_dir()
         self.state_dir = _resolve(state_dir, self.base)
+        from piceli.state.backend import StateSettings
+
+        try:
+            self.state = StateSettings(state, state_lease_seconds)
+        except ValueError as error:
+            raise PipelineError("pipeline-invalid", str(error)) from None
         self.execution = dict(execution or {})
         self.approval_window_seconds = approval_window_seconds
         self.inherited_owners = tuple(inherited_owners)

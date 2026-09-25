@@ -72,7 +72,18 @@
         "reason": {"type": "string", "description": "Error code (piceli explain <code>)."},
         "stage": {"$ref": "#/$defs/stageName"},
         "blocking": {"type": "array", "items": {"type": "object"}},
-        "preview": {"$ref": "#/$defs/previewMarker"}
+        "preview": {"$ref": "#/$defs/previewMarker"},
+        "plan_file": {"type": "string", "description": "With --plan --out FILE (planned): the portable plan file written (piceli.deploy-plan-file.v1)."},
+        "lock": {"$ref": "#/$defs/lock"}
+      }
+    },
+    "lock": {
+      "type": "object",
+      "description": "With pipeline-locked: who holds the release lock and in how many seconds its lease expires unless renewed.",
+      "required": ["holder"],
+      "properties": {
+        "holder": {"type": "string"},
+        "expires_in": {"type": "integer", "minimum": 0}
       }
     },
     "rejection": {
@@ -83,7 +94,8 @@
         "reason": {"type": "string"},
         "stage": {"$ref": "#/$defs/stageName"},
         "blocking": {"type": "array", "items": {"type": "object"}},
-        "preview": {"$ref": "#/$defs/previewMarker"}
+        "preview": {"$ref": "#/$defs/previewMarker"},
+        "lock": {"$ref": "#/$defs/lock"}
       }
     },
     "previewMarker": {

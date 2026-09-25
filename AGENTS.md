@@ -98,7 +98,8 @@ These are enforced by tests or review. Do not weaken them.
 | Templates (typed object model) | `piceli/k8s/templates/` |
 | Discovery, plans, executor, journal, sessions | `piceli/k8s/ops/` |
 | Releases from a spec | `piceli/k8s/release_spec.py`, `release_runner.py`, `release_secrets.py`, `piceli/k8s/cli/release.py` |
-| Deploy from source (`Pipeline`, `piceli deploy`) | `piceli/pipeline/` |
+| Deploy from source (`Pipeline`, `piceli deploy`, plan files) | `piceli/pipeline/` |
+| Shared state, release lock, `piceli state` | `piceli/state/`, `piceli/k8s/cli/state.py` |
 | Post-deploy checks (`Checks`, `release check`) | `piceli/checks/` |
 | Builds, source identity, image delivery | `piceli/artifacts/` |
 | Typed apps (`App`, `app.override`) | `piceli/app/` |

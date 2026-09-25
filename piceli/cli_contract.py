@@ -403,6 +403,57 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "Show catalogued releases, executions and history.",
             contract="conforms",
             reads=("release.toml or pipeline module (--spec MODULE:ATTR)", "state_dir"),
+            notes='With state = "cluster" it first refreshes the working copy '
+            "from the cluster (reads only, no lock).",
+        ),
+        # -------------------------------------------------------- state
+        "state show": _C(
+            "Show where a release's state lives, its generation and the lock holder.",
+            contract="conforms",
+            reads=("release.toml or pipeline module (--spec MODULE:ATTR)", "state_dir"),
+            cluster="reads",
+            notes="Read-only; never prints state content. With local state it "
+            "does not contact the cluster.",
+        ),
+        "state pull": _C(
+            "Refresh the local working copy of a release's shared state.",
+            contract="conforms",
+            reads=("release.toml or pipeline module (--spec MODULE:ATTR)",),
+            writes=("state_dir (replaced by the shared snapshot)",),
+            cluster="reads",
+            notes="Takes no release lock; skipped while a run on this machine "
+            "holds the state directory. A no-op with local state.",
+        ),
+        "state export": _C(
+            "Write a release's state to one file; secret material only encrypted.",
+            contract="conforms",
+            reads=(
+                "release.toml or pipeline module (--spec MODULE:ATTR)",
+                "state_dir",
+                "--key-file",
+            ),
+            writes=("--out file",),
+            cluster="reads",
+            notes="Secret store, stored discovery, journals, pending plans and "
+            "backups are left out unless --include-secrets --key-file (AES-256-GCM, "
+            "scrypt key); refuses an existing --out without --force.",
+        ),
+        "state import": _C(
+            "Replace a release's state with an export (approval by digest).",
+            contract="conforms",
+            reads=(
+                "release.toml or pipeline module (--spec MODULE:ATTR)",
+                "--in file",
+                "--key-file",
+            ),
+            writes=("state_dir", 'shared state Secrets and Lease (state = "cluster")'),
+            cluster="writes",
+            approval_required=True,
+            safe_to_retry=True,
+            exit_codes=(0, 2, 3),
+            notes="Without --approve it prints the import digest and exits 3; "
+            "with it, it holds the release lock and replaces the state. An "
+            "export without secret material needs --allow-partial.",
         ),
         # ------------------------------------------------------- inputs
         "inputs record": _C(
@@ -624,6 +675,8 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             ),
             writes=(
                 "state_dir (run journal, receipts, release catalog, secret store)",
+                'shared state Secrets and release Lease (state="cluster")',
+                "--out plan file",
                 "local Docker image store",
                 "registry or node image store",
                 "temporary git worktrees with --ref (removed on exit)",
@@ -647,7 +700,13 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "Unchanged stages are skipped. --ref [SOURCE=]REV builds the "
             "sources from commits in temporary worktrees; the combined hash "
             "covers the resolved SHAs, --approve needs the same --ref, and "
-            "--resume reuses the run's SHAs.",
+            "--resume reuses the run's SHAs. --plan --out FILE writes a "
+            "portable plan; --apply FILE --approve HASH applies it on any "
+            "runner (it re-plans and refuses any difference; no build cache "
+            'needed for images already delivered). With state="cluster" '
+            "every command holds the release's Lease (pipeline-locked when "
+            "another runner holds it; a stale lease is taken over) and "
+            "--plan writes its state to the cluster too.",
         ),
     }
 )

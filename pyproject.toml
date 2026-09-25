@@ -42,6 +42,10 @@ telemetry = [
     "opentelemetry-api>=1.41.1",
     "opentelemetry-proto>=1.27.0",
 ]
+# Encrypted secret material in `piceli state export --include-secrets`.
+crypto = [
+    "cryptography>=42",
+]
 
 [project.urls]
 Homepage = "https://pynenc.org"

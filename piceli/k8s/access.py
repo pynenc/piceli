@@ -196,6 +196,16 @@ def _pipeline_release_spec(value: Any) -> Any:
         return None
     from piceli.pipeline.operate import operations_spec
 
+    if value.state.backend == "cluster":
+        # Shared state: refresh the working copy first (reads only, no lock).
+        from piceli.state import StateError, session
+        from piceli.state.scopes import pipeline_scope
+
+        try:
+            with session(pipeline_scope(value), write=False):
+                pass
+        except (StateError, ValueError, OSError):
+            pass  # best effort: the working copy as it is
     try:
         return operations_spec(value, current=False)
     except (PipelineError, ValueError, OSError):

@@ -75,6 +75,24 @@ CASES: dict[str, tuple[Argv, str]] = {
             "secret show",
         )
     },
+    **{
+        f"state {command}": (
+            lambda p, command=command, extra=extra: [
+                "state",
+                command,
+                "--spec",
+                str(p / "bad-release.toml"),
+                *[str(p / item) if item.endswith(".json") else item for item in extra],
+            ],
+            "invalid-release-spec",
+        )
+        for command, extra in (
+            ("show", []),
+            ("pull", []),
+            ("export", ["--out", "export.json"]),
+            ("import", ["--in", "export.json"]),
+        )
+    },
     "status": (
         lambda p: ["status", str(p / "missing-release.toml")],
         "access-target-invalid",

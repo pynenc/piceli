@@ -4,6 +4,54 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.6.0
+
+- **Shared deployment state (preview):** `Pipeline(state="cluster")` and
+  `[release] state = "cluster"` keep the run journal, receipts, release
+  catalog, execution journal and secret store in the release namespace
+  (gzip snapshot in `piceli.io/state` Secrets, chunked, never in ConfigMaps),
+  and `state_dir` becomes a working copy. Every command holds a
+  release-scoped lock, a `Lease piceli-lock-<release>` renewed by the holder,
+  taken over when its holder stopped renewing (`state_lease_seconds`,
+  default 60), and fenced: each state write proves the holder and
+  `leaseTransitions` first. State is written at every journaled stage change
+  and after every execution journal commit, before the change it records, so
+  a deploy interrupted or killed on one runner resumes on another. The first
+  `state="cluster"` run moves an existing local state to the cluster. The
+  default stays `local`. See {doc}`state`.
+- **Portable approved plans:** `piceli deploy … --plan --out FILE` writes a
+  `piceli.deploy-plan-file.v1` document (combined hash, stages, `--ref`
+  commits, pipeline and observed target identity, build/delivery/mirror
+  receipts); `piceli deploy --apply FILE --approve HASH` applies it on any
+  runner: it refuses another hash, pipeline or cluster, plans again against
+  live state and runs only when the combined hash is unchanged. A build whose
+  images are already delivered by digest is not rebuilt, so no build cache is
+  needed; a resumed run whose build happened on another runner rebuilds
+  before delivering.
+- **`piceli state show|pull|export|import`:** where a release's state lives,
+  who holds its lock, refresh the working copy, export it to one file (secret
+  material excluded, or AES-256-GCM encrypted with `--include-secrets
+  --key-file`; new extra `piceli[crypto]`) and import it back after
+  approving the import digest (exit `3` without `--approve`).
+- `pipeline-locked` now covers the release lock and adds `lock` (`holder`,
+  `expires_in`) to the rejection; the deploy result adds `plan_file`. New
+  codes: `release-locked`, `state-lock-lost`, `state-unavailable`,
+  `state-access-denied`, `state-corrupt`, `state-layout-mismatch`,
+  `state-too-large`, `state-export-invalid`, `state-key-required`,
+  `state-crypto-unavailable`, `state-import-partial`, `state-import-changed`,
+  `state-output-exists`, `deploy-plan-file-invalid`,
+  `deploy-plan-file-mismatch`, `deploy-plan-target-mismatch`.
+- `piceli release plan|check --spec MODULE:ATTR` now hold the pipeline's run
+  lock like `apply` (refused with `pipeline-locked` while a deploy runs);
+  `release status|diff|secret show` and `piceli status` refresh a shared
+  state's working copy first (reads only).
+- Discovery lists with the label selector `!piceli.io/state`, so plans,
+  pruning and `piceli import live` never see the state objects.
+  `piceli.testing` serves Leases and equality/existence label selectors.
+- The CI recipe (`examples/ci/github-actions-deploy.yml`, {doc}`ci`) runs
+  plan, apply and resume on any runner: no persistent state directory, the
+  plan file travels as the `deploy-plan` artifact.
+
 ## Version 0.5.0
 
 - **Mirror third-party images (preview):** `NodeLoopbackRegistry(mirror=[…])`
