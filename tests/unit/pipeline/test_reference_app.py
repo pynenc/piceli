@@ -104,11 +104,12 @@ def test_environment_values(rendered) -> None:
         for env in ENVIRONMENTS
     }
     assert replicas == {"dev": 1, "staging": 1, "prod": 3}
-    # The autoscaler owns web's replica count in every environment.
-    assert all(
-        "replicas" not in rendered[env][("Deployment", "web")]["spec"]
+    # The autoscaler owns web's replica count in every environment: web
+    # renders its min_replicas as the initial size only.
+    assert {
+        env: rendered[env][("Deployment", "web")]["spec"]["replicas"]
         for env in ENVIRONMENTS
-    )
+    } == {"dev": 1, "staging": 2, "prod": 3}
     levels = {
         env: rendered[env][("ConfigMap", "settings")]["data"]["LOG_LEVEL"]
         for env in ENVIRONMENTS

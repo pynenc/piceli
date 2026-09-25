@@ -65,6 +65,19 @@ or live and covered by discovery), the plan chooses one mode:
 | `held` | it exists and no autoscaler has written the field yet | the **live** value: nothing changes and the field is never removed |
 | `yielded` | the autoscaler (a `scale` subresource or controller entry) owns the field | nothing: `replicas` is left out of the write |
 
+In every mode a plan also never removes `/spec/replicas` from an autoscaled
+workload, even when an earlier release declared it and Piceli still co-owns
+it: removing it would reset the count to the server default.
+
+This is the one rule for typed apps and for plain manifests. `app.autoscaler`
+cooperates with it: the targeted workload refuses `replicas=` and renders the
+autoscaler's `min_replicas` as its `spec.replicas`, which is only the
+`initial` size (a new workload starts at the autoscaler's minimum instead of
+one pod). An environment that changes `min_replicas` changes that initial
+size; for a workload that exists the plan keeps the live count and the
+autoscaler applies its new minimum. A plain manifest without `replicas`
+starts at the server default (1).
+
 `release plan --json` lists them under `autoscaled`:
 
 ```json
@@ -100,12 +113,32 @@ plan writes the declared value back (it is the release's field), so an
 operator that keeps writing it will write it back too. Do not declare fields
 a controller manages; leave them out of the release.
 
-Readiness of kinds without a dedicated rule (custom resources, autoscalers,
-disruption budgets, …) follows the common status conventions: an object is
-not ready while `status.observedGeneration` is behind `metadata.generation`,
-while a `Reconciling` or `Stalled` condition is `True`, or while a `Ready`
-condition is not `True`; an object without such status is ready once
-written.
+(readiness-rules)=
+### When an object is ready
+
+A release waits for every object it writes to be ready, in dependency order,
+with one rule per kind:
+
+1. **Kinds with a specific rule**: Deployments, StatefulSets and DaemonSets
+   (rolled out, observed generation, updated and available pods), Jobs
+   (complete), Services (a LoadBalancer needs an ingress address),
+   PersistentVolumeClaims (bound), and so on.
+2. **Kinds that need another controller to act are ready once they exist**:
+   ConfigMaps, Secrets, ServiceAccounts, RBAC, NetworkPolicies and CronJobs,
+   and HorizontalPodAutoscalers (they need metrics), PodDisruptionBudgets,
+   Ingresses and HTTPRoutes (they need an ingress or Gateway controller).
+   Their status is not waited for, so a cluster without a metrics server or
+   an ingress controller still completes the release.
+3. **Every other kind**, custom resources and built-in kinds alike, follows
+   the common status conventions (as in `kstatus`): not ready while
+   `status.observedGeneration` is behind `metadata.generation`, while a
+   `Reconciling` or `Stalled` condition is `True`, or while a `Ready`
+   condition is not `True`. An object that reports no such status is ready
+   once applied; a malformed `status` is `readiness-unsupported`.
+
+A custom resource whose controller can never make it ready (a Certificate
+that cannot be issued) therefore fails the release after
+`readiness_seconds`, like a Deployment that never becomes ready.
 
 Tested by `tests/integration/test_ownership_operator_kind.py` (a CRD, and an
 operator-like writer with its own field manager for `spec` and `status`).

@@ -879,10 +879,11 @@ class App(BaseModel):
         request that resource (``resources=Resources(cpu=...)``).
 
         Replicas rule: the HPA owns the replica count. The workload must not
-        set ``replicas=`` (refused), renders no ``spec.replicas``, and a plan
-        never removes or resets the live value. A workload that had
-        ``replicas`` in an earlier release keeps its live count until the HPA
-        changes it.
+        set ``replicas=`` (refused); it renders ``min_replicas`` as its
+        initial size, used only when the plan creates it. Once it exists a
+        plan never removes or resets the live value: it declares the live
+        count while Piceli still owns the field and leaves it out once the HPA
+        took it over (see ``docs/compatibility.md``).
 
         Named after the workload unless ``name`` is given; joins its component.
 
@@ -1595,10 +1596,14 @@ class App(BaseModel):
                 node_name,
                 self.pod_defaults,
                 self._automount(item),
-                scaled=any(
-                    isinstance(other, Autoscaler)
-                    and (other.target_kind, other.target) == (item.kind, item.name)
-                    for other in self._objects
+                scaled=next(
+                    (
+                        other.min_replicas
+                        for other in self._objects
+                        if isinstance(other, Autoscaler)
+                        and (other.target_kind, other.target) == (item.kind, item.name)
+                    ),
+                    None,
                 ),
             )
         elif isinstance(item, ServiceAccount):

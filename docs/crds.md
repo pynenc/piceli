@@ -204,11 +204,14 @@ belong in `app.secret(...)` and are referenced by name.
 
 ### Readiness
 
-A release waits for each object to be ready. A custom resource is ready when
-its `Ready` condition is `True` for the current generation; one whose
-controller reports no `Ready` condition is ready once applied. A Certificate
-that cannot be issued therefore fails the release after
-`readiness_seconds`, like a Deployment that never becomes ready.
+A release waits for each object to be ready. A custom resource follows the
+common status conventions: it is not ready while its `observedGeneration` is
+behind its `generation`, while a `Reconciling` or `Stalled` condition is
+`True`, or while a `Ready` condition is not `True`; one whose controller
+reports none of these is ready once applied. A Certificate that cannot be
+issued therefore fails the release after `readiness_seconds`, like a
+Deployment that never becomes ready. The same rule applies to every kind
+without a specific one; see {ref}`readiness-rules`.
 
 ### Overrides and environments
 

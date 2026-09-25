@@ -84,9 +84,6 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   them, so custom resources that reference Secrets can be applied; the
   `piceli.io/public-fields` annotation (`app.resource(..., public=[...])`)
   declares other sensitive-looking fields public. Values stay redacted.
-- Custom resources without a readiness rule are ready when their `Ready`
-  condition is `True` for the current generation, or once applied when they
-  report none (previously `readiness-unsupported`).
 - A file target (`piceli render path/app.py:app`, a pipeline, a release
   composition file) can import the modules next to it (such as generated CRD
   models); its directory is appended to `sys.path`.
@@ -101,10 +98,13 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   `pod_defaults`, `service_account=`, `node=` pins, images, secrets, config
   dependencies and `override` work the same. Workload names are now unique
   across kinds. `Service(headless=True)` renders `clusterIP: None`.
-- **Autoscaled replicas:** a workload targeted by `app.autoscaler` renders no
-  `spec.replicas` (setting `replicas=` on it is refused), and a plan never
-  removes `/spec/replicas` from a workload an HPA of the same composition
-  targets, so a release never resets the HPA's count.
+- **Autoscaled replicas, one rule:** a workload targeted by `app.autoscaler`
+  refuses `replicas=` and renders the autoscaler's `min_replicas` as its
+  initial `spec.replicas`; the plan's autoscaled-replicas rule of 0.6.0
+  (`initial`, `held`, `yielded`) decides what is written for typed apps and
+  plain manifests alike, and a plan never removes `/spec/replicas` from a
+  workload an autoscaler targets, whether the autoscaler is in the release
+  or only live. See {doc}`compatibility`.
 - **Claims are never pruned:** StatefulSets render
   `persistentVolumeClaimRetentionPolicy` `Retain`/`Retain`, and prune and
   replace delete them with `Orphan` propagation; the claims their templates
@@ -116,10 +116,16 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   `--replace Kind/name` now also accepts a **managed** Job or StatefulSet and
   recreates it (Jobs with `Background`, StatefulSets with `Orphan`
   propagation); every other managed object is still refused.
-- Readiness: a release treats HorizontalPodAutoscaler, PodDisruptionBudget,
-  Ingress and HTTPRoute objects as ready once they exist (no more
-  `readiness-unsupported`). HTTPRoutes are applied with Ingresses, after
+- **Readiness, one rule:** HorizontalPodAutoscalers, PodDisruptionBudgets,
+  Ingresses and HTTPRoutes are ready once they exist (they need metrics or
+  another controller; in 0.6.0 they followed the status conventions); every
+  other kind without a specific rule, custom or built in, follows the status
+  conventions of 0.6.0 (`observedGeneration`, `Ready`, `Reconciling`,
+  `Stalled`; ready once applied when it reports none). See
+  {ref}`readiness-rules`. HTTPRoutes are applied with Ingresses, after
   Services.
+- Portable plan files (`deploy --plan --out`) record `--env`, and `--apply`
+  deploys that environment (`deploy-plan-file-mismatch` for another `--env`).
 - `piceli.testing`: the fake API serves StatefulSets, DaemonSets, Jobs,
   CronJobs, HorizontalPodAutoscalers, PodDisruptionBudgets, Ingresses and
   HTTPRoutes (added to `TYPES`), reports their readiness, and refuses updates

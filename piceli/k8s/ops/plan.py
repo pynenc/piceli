@@ -1744,7 +1744,7 @@ class AutoscaledReplicas:
 
 
 def _autoscaler_targets(
-    composition: DeploymentComposition, snapshot: ObservedSnapshot
+    composition: DeploymentComposition, snapshot: ObservedSnapshot | None
 ) -> dict[tuple[str, str, str, str], set[str]]:
     """``(group, kind, namespace, name)`` of each autoscaled workload -> HPAs.
 
@@ -1754,7 +1754,7 @@ def _autoscaler_targets(
     """
     autoscalers: dict[ResourceRef, dict[str, Any]] = {
         resource.intent.ref: resource.intent.manifest
-        for resource in snapshot.resources
+        for resource in (snapshot.resources if snapshot is not None else ())
         if (_group(resource.intent.ref.api_version), resource.intent.ref.kind)
         in AUTOSCALER_KINDS
     }
@@ -1887,35 +1887,28 @@ def field_drift(
     return sorted(report, key=lambda item: ResourceRef(**item["resource"]))
 
 
-_SCALABLE_KINDS = frozenset({"Deployment", "StatefulSet", "ReplicaSet"})
+def autoscaled(
+    composition: DeploymentComposition, snapshot: ObservedSnapshot | None = None
+) -> frozenset[ResourceRef]:
+    """Workloads of ``composition`` a HorizontalPodAutoscaler targets.
 
-
-def autoscaled(composition: DeploymentComposition) -> frozenset[ResourceRef]:
-    """Workloads a HorizontalPodAutoscaler of ``composition`` targets.
-
-    Their ``spec.replicas`` belongs to the autoscaler: a plan never removes
-    it (see :func:`build_plan`). Targets are matched by kind and name in the
-    autoscaler's namespace.
+    Autoscalers come from the composition and, with ``snapshot``, from the
+    live objects (see :func:`autoscaled_replicas`, which uses the same
+    targets). Their ``spec.replicas`` belongs to the autoscaler: a plan never
+    removes it (see :func:`build_plan`).
     """
-    resources = [
-        resource
-        for component in composition.components
-        for resource in component.resources
-    ]
-    targets = set()
-    for resource in resources:
-        if resource.ref.kind != "HorizontalPodAutoscaler":
-            continue
-        target = resource.manifest.get("spec", {}).get("scaleTargetRef")
-        if isinstance(target, dict):
-            targets.add(
-                (target.get("kind"), target.get("name"), resource.ref.namespace)
-            )
+    targets = _autoscaler_targets(composition, snapshot)
     return frozenset(
         resource.ref
-        for resource in resources
-        if resource.ref.kind in _SCALABLE_KINDS
-        and (resource.ref.kind, resource.ref.name, resource.ref.namespace) in targets
+        for component in composition.components
+        for resource in component.resources
+        if (
+            _group(resource.ref.api_version),
+            resource.ref.kind,
+            resource.ref.namespace,
+            resource.ref.name,
+        )
+        in targets
     )
 
 
@@ -1971,7 +1964,7 @@ def build_plan(
             raise ValueError(f"cannot replace {ref}: retained descendants exist")
     dependencies = _desired_dependencies(composition)
     levels = _topological_levels(dependencies)
-    scaled = autoscaled(composition)
+    scaled = autoscaled(composition, snapshot)
     actions: list[PlanAction] = []
     changes: tuple[str, ...]
     previous = {intent.ref: intent for intent in authorization.previous}

@@ -159,7 +159,21 @@ def test_every_kind_plans_applies_and_replans_as_no_op(kinds_env):
     assert sts["volumeClaimTemplates"][0]["metadata"]["name"] == "data"
     assert sts["persistentVolumeClaimRetentionPolicy"]["whenDeleted"] == "Retain"
     assert api.objects[("Service", "db")]["spec"]["clusterIP"] == "None"
-    assert "replicas" not in api.objects[("Deployment", "api")]["spec"]
+    # Autoscaled: created at the autoscaler's min_replicas (the initial size).
+    assert api.objects[("Deployment", "api")]["spec"]["replicas"] == 1
+    assert planned["autoscaled"] == [
+        {
+            "resource": {
+                "api_version": "apps/v1",
+                "kind": "Deployment",
+                "namespace": NS,
+                "name": "api",
+            },
+            "field": "/spec/replicas",
+            "autoscalers": ["HorizontalPodAutoscaler/api"],
+            "mode": "initial",
+        }
+    ]
     for kind, name in (
         ("StatefulSet", "db"),
         ("DaemonSet", "agent"),

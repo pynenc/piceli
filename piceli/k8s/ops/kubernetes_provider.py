@@ -1191,7 +1191,11 @@ class KubernetesProvider:
         manifest = resource.manifest
         kind = resource.identity.kind
         metadata = manifest["metadata"]
-        status = manifest.get("status", {})
+        status = manifest.get("status") or {}
+        if not isinstance(status, dict):
+            # Malformed: the specific rules see no status (not ready); the
+            # generic rule reports it as unsupported.
+            status = {}
         generation = metadata.get("generation", 0)
         observed = status.get("observedGeneration")
         ready = False

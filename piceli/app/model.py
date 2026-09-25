@@ -1139,11 +1139,13 @@ class Workload(_Model):
         defaults: PodDefaults | None = None,
         automount_token: bool | None = None,
         *,
-        scaled: bool = False,
+        scaled: int | None = None,
     ) -> dict[str, Any]:
         """The rendered object (see each kind).
 
-        :param scaled: An autoscaler owns ``spec.replicas`` (not rendered).
+        :param scaled: The ``min_replicas`` of the autoscaler that owns
+            ``spec.replicas``: rendered as the initial size instead of
+            ``replicas`` (see :class:`~piceli.app.kinds.Autoscaler`).
         """
         raise NotImplementedError
 
@@ -1153,8 +1155,9 @@ class Deployment(Workload):
 
     Pod fields are those of :class:`Workload`; in addition:
 
-    :param replicas: Desired pods. Not rendered when an autoscaler targets
-        the Deployment (``app.autoscaler``), which then owns the count.
+    :param replicas: Desired pods. When an autoscaler targets the Deployment
+        (``app.autoscaler``) it owns the count: ``replicas=`` is refused and
+        the autoscaler's ``min_replicas`` is rendered as the initial size.
     :param strategy: ``RollingUpdate`` or ``Recreate``.
     :param access: A loopback forward to the pods (``app.access.forward``);
         never rendered into the manifest.
@@ -1199,19 +1202,21 @@ class Deployment(Workload):
         defaults: PodDefaults | None = None,
         automount_token: bool | None = None,
         *,
-        scaled: bool = False,
+        scaled: int | None = None,
     ) -> dict[str, Any]:
         """The Deployment manifest.
 
         :param defaults: The app's pod defaults, under this workload's fields.
         :param automount_token: ``automountServiceAccountToken`` when this
             workload sets none (the app decides it; see ``automount_token``).
-        :param scaled: An autoscaler owns ``spec.replicas`` (not rendered).
+        :param scaled: The ``min_replicas`` of the autoscaler that owns
+            ``spec.replicas``: rendered as the initial size instead of
+            ``replicas`` (see :class:`~piceli.app.kinds.Autoscaler`).
         """
         labels = self.pod_labels(app_labels)
         pod = self.pod_spec(node_name, defaults, automount_token)
         spec = _compact(
-            replicas=None if scaled else self.replicas,
+            replicas=self.replicas if scaled is None else scaled,
             strategy={"type": self.strategy} if self.strategy else None,
             selector={"matchLabels": self.selector_labels},
             template={"metadata": {"labels": labels}, "spec": pod},

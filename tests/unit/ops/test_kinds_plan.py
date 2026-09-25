@@ -285,6 +285,21 @@ def test_autoscaled_replicas_are_never_removed():
     assert actions["Deployment"].removals == ()
 
 
+def test_a_live_autoscaler_counts_too():
+    """One target rule for the model and the engine: an HPA that is only live
+    (created by another tool) protects its workload's replicas as well."""
+    previous = (ResourceIntent.from_manifest(deployment(3)),)
+    other = hpa()
+    other["metadata"]["name"] = "api-scaler"
+    live = [served(deployment(3)), served(other, ownership=Ownership.UNMANAGED)]
+    assert autoscaled(composition(deployment()), snapshot(*live)) == {ref(deployment())}
+    assert autoscaled(composition(deployment())) == frozenset()
+    (action,) = plan([deployment()], live, previous=previous).actions
+    assert action.removals == ()
+    # The live count is declared while Piceli still owns it (held).
+    assert action.operation is PlanOperation.NOOP
+
+
 def test_http_route_is_applied_after_services():
     service = {
         "apiVersion": "v1",

@@ -187,9 +187,10 @@ def test_autoscaler_owns_replicas():
         db, max_replicas=3, cpu=80, memory=75, scale_down_stabilization_seconds=60
     )
     manifests = _manifests(app)
-    # The targeted workloads render no replicas: the HPA sets them.
-    assert "replicas" not in manifests[("Deployment", "api")]["spec"]
-    assert "replicas" not in manifests[("StatefulSet", "db")]["spec"]
+    # The targeted workloads render min_replicas as their initial size; the
+    # plan keeps the live count once they exist (autoscaled_replicas).
+    assert manifests[("Deployment", "api")]["spec"]["replicas"] == 2
+    assert manifests[("StatefulSet", "db")]["spec"]["replicas"] == 1
     hpa = manifests[("HorizontalPodAutoscaler", "api")]
     assert hpa["apiVersion"] == "autoscaling/v2"
     assert hpa["spec"] == {

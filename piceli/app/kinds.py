@@ -56,8 +56,9 @@ class StatefulSet(Workload):
 
     Pod fields are those of :class:`~piceli.app.model.Workload`; in addition:
 
-    :param replicas: Desired pods. Not rendered when an autoscaler targets
-        the StatefulSet (``app.autoscaler``), which then owns the count.
+    :param replicas: Desired pods. When an autoscaler targets the
+        StatefulSet (``app.autoscaler``) it owns the count: ``replicas=`` is
+        refused and the autoscaler's ``min_replicas`` is the initial size.
     :param service_name: ``serviceName``: the governing (headless) Service.
     :param pod_management: ``OrderedReady`` (one pod at a time, in order; the
         Kubernetes default) or ``Parallel``.
@@ -92,13 +93,13 @@ class StatefulSet(Workload):
         defaults: PodDefaults | None = None,
         automount_token: bool | None = None,
         *,
-        scaled: bool = False,
+        scaled: int | None = None,
     ) -> dict[str, Any]:
         labels = self.pod_labels(app_labels)
         pod = self.pod_spec(node_name, defaults, automount_token)
         claims = [item.template() for item in self.claim_templates().values()]
         spec = _compact(
-            replicas=None if scaled else self.replicas,
+            replicas=self.replicas if scaled is None else scaled,
             serviceName=self.service_name,
             podManagementPolicy=self.pod_management,
             updateStrategy=(
@@ -146,9 +147,9 @@ class DaemonSet(Workload):
         defaults: PodDefaults | None = None,
         automount_token: bool | None = None,
         *,
-        scaled: bool = False,
+        scaled: int | None = None,
     ) -> dict[str, Any]:
-        if scaled:
+        if scaled is not None:
             raise ValueError("a DaemonSet cannot be autoscaled")
         labels = self.pod_labels(app_labels)
         pod = self.pod_spec(node_name, defaults, automount_token)
@@ -245,9 +246,9 @@ class Job(_Run):
         defaults: PodDefaults | None = None,
         automount_token: bool | None = None,
         *,
-        scaled: bool = False,
+        scaled: int | None = None,
     ) -> dict[str, Any]:
-        if scaled:
+        if scaled is not None:
             raise ValueError("a Job cannot be autoscaled")
         return {
             "apiVersion": "batch/v1",
@@ -315,9 +316,9 @@ class CronJob(_Run):
         defaults: PodDefaults | None = None,
         automount_token: bool | None = None,
         *,
-        scaled: bool = False,
+        scaled: int | None = None,
     ) -> dict[str, Any]:
-        if scaled:
+        if scaled is not None:
             raise ValueError("a CronJob cannot be autoscaled")
         labels = self.pod_labels(app_labels)
         job = self.job_spec(app_labels, node_name, defaults, automount_token)
@@ -355,10 +356,12 @@ class Autoscaler(_Model):
         must hold before scaling down (``behavior.scaleDown``).
     :param component: The workload's component.
 
-    Replicas rule: the targeted workload renders **no** ``spec.replicas``, so
-    the HPA alone sets it and a release never resets it. A plan also never
-    removes ``spec.replicas`` from a workload that an HPA of the same
-    composition targets.
+    Replicas rule: the targeted workload renders ``min_replicas`` as its
+    ``spec.replicas``, which is only its initial size: once the workload
+    exists, a plan declares the live count while Piceli still owns the field
+    and leaves it out once the HPA took it over (``autoscaled`` in the plan:
+    ``initial``, ``held``, ``yielded``), and never removes it. A release
+    therefore never resets the HPA's count (see ``docs/compatibility.md``).
     """
 
     name: Name

@@ -491,13 +491,19 @@ of the workload must request that resource (checked when declared).
 
 **Replicas rule: the autoscaler owns the replica count.**
 
-- The workload must not set `replicas=` (refused when declared), and it
-  renders no `spec.replicas`, so a release never writes the count.
-- A plan never removes `/spec/replicas` from a workload that an HPA of the
-  same composition targets, even when an earlier release declared it; a
-  workload that had `replicas` before keeps its live count until the HPA
-  changes it.
+- The workload must not set `replicas=` (refused when declared). It renders
+  the autoscaler's `min_replicas` as `spec.replicas`, which is only its
+  initial size: a new workload starts at the minimum.
+- Once the workload exists, the plan declares the live count while Piceli
+  still owns the field (`held`), and leaves the field out once the HPA has
+  scaled it (`yielded`); it never removes `/spec/replicas`. A release
+  therefore never resets the HPA's count, and a workload that had `replicas`
+  in an earlier release keeps its live count.
 - The HPA's changes are not a difference: the next plan is a no-op.
+  `release plan --json` reports the mode under `autoscaled`.
+
+The same rule applies to an HPA in plain manifests or created by another
+tool; see {doc}`compatibility`.
 
 Only one autoscaler per workload. Metrics need a metrics server in the
 cluster; without one the HPA still enforces `min_replicas`. An environment

@@ -125,10 +125,48 @@ def test_custom_resources_follow_the_ready_condition(status, generation, expecte
     assert result.status.value == expected
 
 
-def test_core_kinds_without_a_rule_stay_unsupported():
+def test_every_kind_without_a_rule_follows_the_same_conventions():
+    """One rule for kinds without a specific one, built in or custom.
+
+    (Before 0.7.0 a core kind without a rule, such as a ResourceQuota, was
+    ``unsupported``; it now follows the status conventions like a custom
+    resource.)
+    """
     quota = {
         "apiVersion": "v1",
         "kind": "ResourceQuota",
-        "metadata": {"name": "api", "namespace": "shop"},
+        "metadata": {"name": "api", "namespace": "shop", "generation": 2},
     }
+    assert provider([]).readiness(_discovered(quota)).status.value == "ready"
+    quota["status"] = {"observedGeneration": 1}
+    assert provider([]).readiness(_discovered(quota)).status.value == "not-ready"
+    quota["status"] = {"conditions": [{"type": "Stalled", "status": "True"}]}
+    assert provider([]).readiness(_discovered(quota)).status.value == "not-ready"
+    quota["status"] = "malformed"
     assert provider([]).readiness(_discovered(quota)).status.value == "unsupported"
+
+
+@pytest.mark.parametrize(
+    ("api_version", "kind"),
+    [
+        ("autoscaling/v2", "HorizontalPodAutoscaler"),
+        ("policy/v1", "PodDisruptionBudget"),
+        ("networking.k8s.io/v1", "Ingress"),
+        ("gateway.networking.k8s.io/v1", "HTTPRoute"),
+    ],
+)
+def test_kinds_that_need_another_controller_are_ready_once_they_exist(
+    api_version, kind
+):
+    """An HPA needs metrics, an Ingress or HTTPRoute a controller: accepted
+    by the API server is all a release waits for, whatever their status says."""
+    manifest = {
+        "apiVersion": api_version,
+        "kind": kind,
+        "metadata": {"name": "api", "namespace": "shop", "generation": 2},
+        "status": {
+            "observedGeneration": 1,
+            "conditions": [{"type": "Ready", "status": "False"}],
+        },
+    }
+    assert provider([]).readiness(_discovered(manifest)).status.value == "ready"
