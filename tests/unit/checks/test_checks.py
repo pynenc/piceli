@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from piceli.app import App
 from piceli.checks import (
@@ -666,3 +667,20 @@ def test_checks_example_parses_and_renders(tmp_path: Path) -> None:
         for resource in component.resources
     )
     assert kinds == ["Deployment", "Service"]
+
+
+def test_stateful_set_and_daemon_set_handles_keep_their_kind() -> None:
+    # Regression: every workload handle became "deployment/<name>", so an
+    # exec check on a StatefulSet looked for a Deployment and failed.
+    app = App("shop")
+    image = f"registry.test/db@{DIGEST}"
+    store = app.stateful_set("store", image=image, ports=[6379])
+    agent = app.daemon_set("agent", image=image, ports=[9100])
+    assert Checks.exec(store, ["true"]).target == "statefulset/store"
+    assert Checks.exec(agent, ["true"]).target == "daemonset/agent"
+    # A StatefulSet cannot be an HTTP target: refused, not silently retargeted.
+    with pytest.raises(ValidationError, match="target must be one of"):
+        Checks.http(store, "/")
+    job = app.job("migrate", image=image)
+    with pytest.raises(ValidationError, match="target must be one of"):
+        Checks.exec(job, ["true"])
