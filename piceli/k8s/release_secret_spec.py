@@ -11,6 +11,10 @@ Each table declares one generator; its ``type`` picks the model:
   Secret key.
 * ``static``: a public, non-secret value (a user name, a port) that templates
   and compositions can reference like any other input.
+* ``sops``, ``vault``, ``aws-secrets-manager``: **external sources**, read at
+  every plan (a SOPS-encrypted file through the ``sops`` binary, a HashiCorp
+  Vault KV v2 key, an AWS Secrets Manager secret). A new version is stored only
+  when the value changed; see :mod:`piceli.k8s.secret_sources`.
 
 A generator produces named **outputs** (``Output``). Exposed outputs are what
 ``ReleaseContext.secret(name)`` returns references for; internal outputs (the
@@ -22,10 +26,11 @@ from __future__ import annotations
 
 import ipaddress
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -37,6 +42,12 @@ _LEAF = re.compile(r"[a-z][a-z0-9_-]{0,62}")
 _ENV = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
 _K8S_NAME = re.compile(r"[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?")
 _DATA_KEY = re.compile(r"[-._a-zA-Z0-9]{1,253}")
+_VAULT_PATH = re.compile(r"[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*")
+_AWS_SECRET_ID = re.compile(r"[A-Za-z0-9/_+=.@:-]{1,2048}")
+_AWS_REGION = re.compile(r"[a-z]{2}(?:-[a-z]+)+-[0-9]{1,2}")
+_AWS_VERSION = re.compile(r"[A-Za-z0-9_-]{1,128}")
+_TOOL_NAME = re.compile(r"[A-Za-z0-9._+-]{1,128}")
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 # ``{name}``, ``{name.key}`` or ``{secret:name.key}``; ``{{``/``}}`` are literals.
 _TOKEN = re.compile(r"\{\{|\}\}|\{(?:secret:)?([a-z][a-z0-9_.-]{0,190})\}|[{}]")
 
@@ -258,6 +269,247 @@ class StaticSecretSpec(_Strict):
     encoding: Encoding = "base64"
 
 
+def _endpoint(value: str, what: str) -> str:
+    """``https://host[:port]``, or ``http://`` for a loopback test/dev server."""
+    try:
+        parts = urlsplit(value)
+        parts.port  # noqa: B018 (validates the port)
+    except ValueError:
+        raise ValueError(f"{what} must be an https:// URL") from None
+    loopback = parts.hostname in _LOOPBACK_HOSTS
+    if (
+        parts.scheme not in ("https", "http")
+        or (parts.scheme == "http" and not loopback)
+        or not parts.hostname
+        or parts.username is not None
+        or parts.password is not None
+        or parts.path not in ("", "/")
+        or parts.query
+        or parts.fragment
+    ):
+        raise ValueError(
+            f"{what} must be https://host[:port] (http:// only for a loopback "
+            "host), without credentials, path or query"
+        )
+    return value.rstrip("/")
+
+
+def _pass_env(value: tuple[str, ...]) -> tuple[str, ...]:
+    for name in value:
+        if not _ENV.fullmatch(name):
+            raise ValueError(f"invalid environment variable name {name!r}")
+    return value
+
+
+class SopsSecretSpec(_Strict):
+    """One value of a SOPS-encrypted file, decrypted by the ``sops`` binary.
+
+    ``key`` is the path of the value in the decrypted document
+    (``"db.password"``, or ``["db", "password.v2"]`` when a segment has a
+    dot); ``format = "binary"`` takes the whole decrypted file and needs no
+    key. ``sops`` is a bare name looked up in ``PATH`` or an absolute path;
+    ``sops_sha256`` pins its content. The process gets ``PATH``, ``HOME`` and
+    only the variables named in ``pass_env`` (for example
+    ``SOPS_AGE_KEY_FILE``), no stdin, and ``timeout_seconds``.
+    """
+
+    type: Literal["sops"]
+    file: Path
+    key: tuple[str, ...] = Field(default=(), max_length=64)
+    format: Literal["yaml", "json", "dotenv", "ini", "binary"] | None = None
+    sops: Path = Path("sops")
+    sops_sha256: str | None = None
+    pass_env: tuple[str, ...] = Field(default=(), max_length=32)
+    timeout_seconds: float = Field(default=30, gt=0, le=300)
+    encoding: Encoding = "base64"
+
+    @field_validator("key", mode="before")
+    @classmethod
+    def _key_path(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return tuple(value.split("."))
+        return value
+
+    @field_validator("key")
+    @classmethod
+    def _key_segments(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if any(not item or len(item) > 256 for item in value):
+            raise ValueError("key segments must be 1 to 256 characters")
+        return value
+
+    @field_validator("sops")
+    @classmethod
+    def _tool(cls, value: Path) -> Path:
+        if not value.is_absolute() and not _TOOL_NAME.fullmatch(str(value)):
+            raise ValueError("sops must be a bare command name or an absolute path")
+        return value
+
+    @field_validator("sops_sha256")
+    @classmethod
+    def _tool_digest(cls, value: str | None) -> str | None:
+        if value is not None and not _DIGEST.fullmatch(value):
+            raise ValueError("sops_sha256 must be sha256:<64 hex>")
+        return value
+
+    @field_validator("pass_env")
+    @classmethod
+    def _env_names(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return _pass_env(value)
+
+    @model_validator(mode="after")
+    def _key_or_binary(self) -> SopsSecretSpec:
+        if self.format == "binary" and self.key:
+            raise ValueError('format = "binary" takes the whole file; drop key')
+        if self.format != "binary" and not self.key:
+            raise ValueError('key is required (or format = "binary")')
+        return self
+
+    def source(self) -> str:
+        """Public description of where the value comes from (never the value)."""
+        where = f"sops:{self.file}"
+        return f"{where}#{'.'.join(self.key)}" if self.key else where
+
+
+class VaultSecretSpec(_Strict):
+    """One key of a HashiCorp Vault KV version 2 secret.
+
+    The token comes from ``token_file`` or the environment variable named by
+    ``token_env`` (exactly one), never from the spec or a command line. TLS is
+    always verified (``ca_file`` adds a private CA); ``http://`` is accepted
+    only for a loopback address (``vault server -dev``). ``namespace`` sets
+    ``X-Vault-Namespace`` (Vault Enterprise / HCP). ``version`` pins a KV
+    version; without it the latest version is read at every plan.
+    """
+
+    type: Literal["vault"]
+    address: str
+    mount: str = "secret"
+    path: str
+    key: str = Field(min_length=1, max_length=256)
+    version: int | None = Field(default=None, ge=1)
+    namespace: str | None = None
+    token_file: Path | None = None
+    token_env: str | None = None
+    ca_file: Path | None = None
+    timeout_seconds: float = Field(default=10, gt=0, le=120)
+    encoding: Encoding = "base64"
+
+    @field_validator("address")
+    @classmethod
+    def _address(cls, value: str) -> str:
+        return _endpoint(value, "address")
+
+    @field_validator("mount", "path", "namespace")
+    @classmethod
+    def _segments(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        value = value.strip("/")
+        if (
+            len(value) > 512
+            or not _VAULT_PATH.fullmatch(value)
+            or any(part in {".", ".."} for part in value.split("/"))
+        ):
+            raise ValueError(f"invalid Vault path {value!r}")
+        return value
+
+    @field_validator("token_env")
+    @classmethod
+    def _env(cls, value: str | None) -> str | None:
+        if value is not None and not _ENV.fullmatch(value):
+            raise ValueError(f"invalid environment variable name {value!r}")
+        return value
+
+    @model_validator(mode="after")
+    def _one_token(self) -> VaultSecretSpec:
+        if (self.token_file is None) == (self.token_env is None):
+            raise ValueError("declare exactly one of token_file or token_env")
+        return self
+
+    def source(self) -> str:
+        """Public description of where the value comes from (never the value)."""
+        where = f"vault:{self.address}/{self.mount}/{self.path}#{self.key}"
+        options = [f"namespace={self.namespace}"] if self.namespace else []
+        if self.version is not None:
+            options.append(f"version={self.version}")
+        return f"{where}?{'&'.join(options)}" if options else where
+
+
+class AwsSecretSpec(_Strict):
+    """An AWS Secrets Manager secret, or one field of its JSON ``SecretString``.
+
+    Credentials come from botocore's standard chain (environment, ``profile``,
+    SSO, web identity, instance or task role); none are ever part of the spec.
+    Needs the ``piceli[aws]`` extra. ``endpoint_url`` points at a compatible
+    endpoint (a VPC endpoint, a local emulator).
+    """
+
+    type: Literal["aws-secrets-manager"]
+    secret_id: str
+    region: str
+    key: str | None = Field(default=None, min_length=1, max_length=256)
+    version_stage: str | None = None
+    version_id: str | None = None
+    profile: str | None = Field(default=None, min_length=1, max_length=128)
+    endpoint_url: str | None = None
+    timeout_seconds: float = Field(default=10, gt=0, le=120)
+    encoding: Encoding = "base64"
+
+    @field_validator("secret_id")
+    @classmethod
+    def _secret_id(cls, value: str) -> str:
+        if not _AWS_SECRET_ID.fullmatch(value):
+            raise ValueError(f"invalid secret_id {value!r} (a name or an ARN)")
+        return value
+
+    @field_validator("region")
+    @classmethod
+    def _region(cls, value: str) -> str:
+        if not _AWS_REGION.fullmatch(value):
+            raise ValueError(f"invalid AWS region {value!r}")
+        return value
+
+    @field_validator("version_stage", "version_id")
+    @classmethod
+    def _version(cls, value: str | None) -> str | None:
+        if value is not None and not _AWS_VERSION.fullmatch(value):
+            raise ValueError(f"invalid version {value!r}")
+        return value
+
+    @field_validator("profile")
+    @classmethod
+    def _profile(cls, value: str | None) -> str | None:
+        if value is not None and not re.fullmatch(r"[A-Za-z0-9._@+-]+", value):
+            raise ValueError(f"invalid profile name {value!r}")
+        return value
+
+    @field_validator("endpoint_url")
+    @classmethod
+    def _endpoint_url(cls, value: str | None) -> str | None:
+        return None if value is None else _endpoint(value, "endpoint_url")
+
+    @model_validator(mode="after")
+    def _one_version(self) -> AwsSecretSpec:
+        if self.version_stage is not None and self.version_id is not None:
+            raise ValueError("declare at most one of version_stage or version_id")
+        return self
+
+    def source(self) -> str:
+        """Public description of where the value comes from (never the value)."""
+        where = f"aws-secrets-manager:{self.region}/{self.secret_id}"
+        return f"{where}#{self.key}" if self.key else where
+
+
+ExternalSpec = SopsSecretSpec | VaultSecretSpec | AwsSecretSpec
+#: Generator types whose value comes from an external source at every plan.
+EXTERNAL_TYPES = (SopsSecretSpec, VaultSecretSpec, AwsSecretSpec)
+
+
+def is_external(spec: object) -> bool:
+    """Whether ``spec`` reads its value from an external source."""
+    return isinstance(spec, EXTERNAL_TYPES)
+
+
 GeneratorSpec = (
     RandomSecretSpec
     | TlsSelfSignedSpec
@@ -265,6 +517,9 @@ GeneratorSpec = (
     | TemplateSecretSpec
     | ImportSecretSpec
     | StaticSecretSpec
+    | SopsSecretSpec
+    | VaultSecretSpec
+    | AwsSecretSpec
 )
 SecretSpec = Annotated[GeneratorSpec, Field(discriminator="type")]
 
@@ -409,6 +664,24 @@ def consumed_outputs(secrets: Mapping[str, GeneratorSpec]) -> set[str]:
         for mapping in template_dependencies(secrets).values()
         for item in mapping.values()
     }
+
+
+def check_rotation(secrets: Mapping[str, GeneratorSpec], rotate: Sequence[str]) -> None:
+    """Refuse ``--rotate`` of values Piceli does not produce itself."""
+    for name in rotate:
+        spec = secrets.get(name)
+        if isinstance(spec, TemplateSecretSpec | StaticSecretSpec):
+            raise SecretError(
+                "secret-rotation-refused",
+                f"secret {name!r} is a {spec.type}; rotate what it is made of, "
+                "or change its value in the spec",
+            )
+        if spec is not None and is_external(spec):
+            raise SecretError(
+                "secret-rotation-refused",
+                f"secret {name!r} comes from {spec.type}; rotate it at its source "
+                "and plan again (a changed value becomes a new version)",
+            )
 
 
 def check_secrets(secrets: Mapping[str, GeneratorSpec]) -> None:

@@ -301,6 +301,11 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`secret-not-text`](#error-secret-not-text) | secrets | no |
 | [`secret-reveal-required`](#error-secret-reveal-required) | secrets | no |
 | [`secret-rotation-refused`](#error-secret-rotation-refused) | secrets | no |
+| [`secret-source-auth-failed`](#error-secret-source-auth-failed) | secrets | no |
+| [`secret-source-failed`](#error-secret-source-failed) | secrets | yes |
+| [`secret-source-not-found`](#error-secret-source-not-found) | secrets | no |
+| [`secret-source-timeout`](#error-secret-source-timeout) | secrets | yes |
+| [`secret-source-tool-missing`](#error-secret-source-tool-missing) | secrets | no |
 | [`secret-template-invalid`](#error-secret-template-invalid) | secrets | no |
 | [`secret-unknown-reference`](#error-secret-unknown-reference) | secrets | no |
 | [`server-target-identity-mismatch`](#error-server-target-identity-mismatch) | kubernetes | no |
@@ -1825,9 +1830,49 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-secret-rotation-refused)=
 ### `secret-rotation-refused`
 
-**Secret rotation refused.** --rotate named a template or static generator.
+**Secret rotation refused.** --rotate named a template, static or external-source (sops, vault, aws-secrets-manager) generator.
 
-- **Fix:** Rotate the values the template uses, or edit the spec.
+- **Fix:** Rotate the values the template uses, edit the spec, or rotate an external value at its source and plan again.
+- **Retry-safe:** no
+
+(error-secret-source-auth-failed)=
+### `secret-source-auth-failed`
+
+**Secret source refused the credentials.** An external secret source refused access: Vault answered 401/403 or the token file/variable is missing, AWS denied the request or found no credentials, or sops could not decrypt the file's data key (exit code 128).
+
+- **Fix:** Provide a valid Vault token (token_file or token_env), AWS credentials or profile, or the age/PGP/KMS key sops needs (pass_env), then plan again.
+- **Retry-safe:** no
+
+(error-secret-source-failed)=
+### `secret-source-failed`
+
+**Secret source read failed.** An external secret source failed: a network or TLS verification error, an unexpected HTTP status or AWS error, sops failed or does not match sops_sha256, or the response was malformed or too large.
+
+- **Fix:** Read the category in the message (for example tls-verify-failed: set ca_file); retrying is safe once the source is reachable.
+- **Retry-safe:** yes
+
+(error-secret-source-not-found)=
+### `secret-source-not-found`
+
+**Secret source has no such value.** The SOPS file, the Vault path, the AWS secret or the key inside it does not exist, is empty or is not a scalar value.
+
+- **Fix:** Fix file, path, secret_id or key in the spec (the message names the source, never the value).
+- **Retry-safe:** no
+
+(error-secret-source-timeout)=
+### `secret-source-timeout`
+
+**Secret source timed out.** sops, Vault or AWS did not answer within timeout_seconds.
+
+- **Fix:** Check connectivity to the source or raise timeout_seconds; retrying is safe.
+- **Retry-safe:** yes
+
+(error-secret-source-tool-missing)=
+### `secret-source-tool-missing`
+
+**Secret source tool not installed.** The sops binary is not found or not executable, or botocore is missing for an aws-secrets-manager secret.
+
+- **Fix:** Install sops (or set sops = "/absolute/path"), or install the extra: pip install 'piceli[aws]'.
 - **Retry-safe:** no
 
 (error-secret-template-invalid)=

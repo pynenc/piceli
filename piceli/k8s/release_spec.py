@@ -38,14 +38,17 @@ from piceli.k8s.ops.plan import DeploymentComposition
 from piceli.k8s.ops.provider_factory import KubeconfigTarget, NodeExpectation
 from piceli.k8s.ops.secret_versions import SecretVersionRef
 from piceli.k8s.release_secret_spec import (  # noqa: F401 (re-exported)
+    AwsSecretSpec,
     GeneratorSpec,
     ImportSecretSpec,
     RandomSecretSpec,
     SecretSpec,
+    SopsSecretSpec,
     StaticSecretSpec,
     TemplateSecretSpec,
     TlsCaSpec,
     TlsSelfSignedSpec,
+    VaultSecretSpec,
     check_secrets,
 )
 

@@ -40,7 +40,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from piceli.checks import (
     Check,
@@ -107,7 +107,11 @@ from piceli.k8s.release import (
     ReleaseSource,
     ReleaseWorkflow,
 )
-from piceli.k8s.release_secret_spec import SecretError, consumed_outputs
+from piceli.k8s.release_secret_spec import (
+    SecretError,
+    check_rotation,
+    consumed_outputs,
+)
 from piceli.k8s.release_secrets import (
     ImportSources,
     Materialized,
@@ -124,6 +128,9 @@ from piceli.k8s.release_spec import (
     ReleaseSpecError,
     parse_adopt_entry,
 )
+
+if TYPE_CHECKING:
+    from piceli.k8s.secret_sources import Fetched
 
 POLICY_REVISION = "piceli.release-cli/v1"
 _HASH = re.compile(r"[0-9a-f]{64}")
@@ -1186,11 +1193,13 @@ class ReleaseRunner:
         store: SecretVersionStore,
         binding: ProviderBinding,
         rotate: Sequence[str],
+        external: Mapping[str, Fetched] | None = None,
     ) -> Materialized:
         """Carry values over from earlier releases unless rotated or reconfigured.
 
         Called only after the plan was validated; imports read their source
-        here (a live Secret through the release's own provider).
+        here (a live Secret through the release's own provider). External
+        sources were read before the release was named (``external``).
         """
         records = sorted(
             catalog.records(),
@@ -1227,6 +1236,39 @@ class ReleaseRunner:
             rotate=rotate,
             carry=carry,
             sources=ImportSources(self.spec.resolve, read_secret),
+            external=external,
+        )
+
+    def _external_sources(self, *, create: bool) -> dict[str, Fetched]:
+        """Read every external secret source now (values stay in memory).
+
+        The keyed digests name the release, so a changed value makes a new
+        release and an unchanged one re-plans the existing release. ``create``
+        creates the private digest key when missing (``plan``); without it
+        (``diff``, read-only) a missing key means no release can match.
+        """
+        from secrets import token_bytes
+
+        from piceli.k8s.release_secret_spec import is_external
+        from piceli.k8s.secret_sources import (
+            KEY_FILE,
+            ExternalSources,
+            fetch_all,
+            source_key,
+        )
+
+        specs = {
+            name: spec
+            for name, spec in self.spec.model.secrets.items()
+            if is_external(spec)
+        }
+        if not specs:
+            return {}
+        key = source_key(self.state / KEY_FILE, create=create)
+        return fetch_all(
+            specs,
+            key if key is not None else token_bytes(32),
+            ExternalSources(self.spec.resolve),
         )
 
     @staticmethod
@@ -1287,7 +1329,12 @@ class ReleaseRunner:
                 factory = self._factory(function, images, self._nodes(binding))
                 if rollback_to is None:
                     composition, material = self._preview_composition(factory)
-                    fingerprint = self._fingerprint(images, material, rotate)
+                    if rotate:
+                        # Refuse --rotate of a template, static or external
+                        # value before any source is read.
+                        check_rotation(spec.secrets, rotate)
+                    external = self._external_sources(create=True)
+                    fingerprint = self._fingerprint(images, material, rotate, external)
                     name = f"{spec.release.name}-{fingerprint[:12]}"
                     existing = {record.name for record in catalog.records()}
                     if name not in existing:
@@ -1303,6 +1350,7 @@ class ReleaseRunner:
                             store,
                             rotate,
                             requested,
+                            external,
                         )
                     intent = "apply"
                 else:
@@ -1327,20 +1375,24 @@ class ReleaseRunner:
         images: Mapping[str, ImageRef],
         material: list[dict[str, Any]],
         rotate: Sequence[str] = (),
+        external: Mapping[str, Fetched] | None = None,
     ) -> str:
-        """The release fingerprint; its first 12 characters name the release."""
-        return hashlib.sha256(
-            _canonical(
-                {
-                    "images": {n: i.identity for n, i in images.items()},
-                    "composition": material,
-                    "secrets": {
-                        n: config_digest(g) for n, g in self.spec.model.secrets.items()
-                    },
-                    "rotation": uuid.uuid4().hex if rotate else None,
-                }
-            ).encode()
-        ).hexdigest()
+        """The release fingerprint; its first 12 characters name the release.
+
+        External secret values contribute their keyed digests (only when the
+        spec has external sources, so other fingerprints are unchanged).
+        """
+        document: dict[str, Any] = {
+            "images": {n: i.identity for n, i in images.items()},
+            "composition": material,
+            "secrets": {
+                n: config_digest(g) for n, g in self.spec.model.secrets.items()
+            },
+            "rotation": uuid.uuid4().hex if rotate else None,
+        }
+        if external:
+            document["sources"] = {n: item.digest for n, item in external.items()}
+        return hashlib.sha256(_canonical(document).encode()).hexdigest()
 
     def diff(
         self,
@@ -1378,7 +1430,9 @@ class ReleaseRunner:
             factory = self._factory(function, images, self._nodes(binding))
             composition, material = self._preview_composition(factory)
             records = {record.name: record for record in catalog.records()}
-            name = f"{settings.name}-{self._fingerprint(images, material)[:12]}"
+            external = self._external_sources(create=False)
+            fingerprint = self._fingerprint(images, material, external=external)
+            name = f"{settings.name}-{fingerprint[:12]}"
             existing = records.get(name)
             if existing is not None:
                 # An unchanged release: its archived composition carries the
@@ -1550,6 +1604,7 @@ class ReleaseRunner:
         store: SecretVersionStore,
         rotate: Sequence[str],
         requested: _Ownership,
+        external: Mapping[str, Fetched] | None = None,
     ) -> PlanResult:
         settings = self.spec.model.release
         kinds = self._kinds(composition)
@@ -1597,7 +1652,7 @@ class ReleaseRunner:
         # first: a refused plan must not generate, import or store any secret.
         preview = build_plan(composition, snapshot, plan_authorization)
         grant(preview, snapshot)
-        secrets = self._private_inputs(catalog, store, binding, rotate)
+        secrets = self._private_inputs(catalog, store, binding, rotate, external)
         origin = secrets.origin
         placeholders = self._placeholders()
         bound_refs = {
