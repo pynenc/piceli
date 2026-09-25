@@ -23,7 +23,11 @@ fn handle(mut stream: TcpStream) -> std::io::Result<()> {
 
 fn serve(listener: TcpListener, limit: Option<usize>) -> std::io::Result<()> {
     for (count, stream) in listener.incoming().enumerate() {
-        handle(stream?)?;
+        // A client that hangs up early (a TCP health probe, a port-forward
+        // check) must not stop the server: report it and keep serving.
+        if let Err(error) = stream.and_then(handle) {
+            eprintln!("rust-hello: connection error: {error}");
+        }
         if limit.is_some_and(|max| count + 1 >= max) {
             break;
         }
