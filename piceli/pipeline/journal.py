@@ -130,6 +130,7 @@ class Journal:
         until: str,
         approval: str,
         plan: Mapping[str, Any],
+        refs: Mapping[str, Any] | None = None,
     ) -> Run:
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
         run_id = f"{stamp}-{uuid.uuid4().hex[:8]}"
@@ -145,6 +146,9 @@ class Journal:
             "plan": dict(plan),
             "stages": {name: {"state": "pending"} for name in STAGES},
         }
+        if refs:
+            # ``--ref``: source → {ref, commit}; --resume re-opens these commits.
+            data["refs"] = {name: dict(value) for name, value in refs.items()}
         run = Run(self.directory / f"{run_id}.json", data)
         run.save()
         return run

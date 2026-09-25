@@ -388,6 +388,9 @@ class PipelineReleaseSpec(ReleaseSpec):
         default=None, compare=False
     )
     resolved: Mapping[str, ImageRef] = field(default_factory=dict, compare=False)
+    provenance: Mapping[str, Any] = field(default_factory=dict, compare=False)
+    """Where the release's images came from (``{"sources": {name: {commit,
+    dirty, ref?}}}``); recorded beside a new release, never in its hash."""
 
     def images(self) -> dict[str, ImageRef]:
         return dict(sorted(self.resolved.items()))
@@ -430,6 +433,7 @@ def _spec(
     inherited: tuple[str, ...] = (),
     checks: tuple[Any, ...] = (),
     rollback_on_failed_checks: bool = False,
+    provenance: Mapping[str, Any] | None = None,
 ) -> PipelineReleaseSpec:
     from pydantic import ValidationError
 
@@ -467,7 +471,12 @@ def _spec(
     check_secrets(model.secrets)
     base = pipeline.base or Path.cwd()
     return PipelineReleaseSpec(
-        model, base.resolve(), None, function=function, resolved=dict(images)
+        model,
+        base.resolve(),
+        None,
+        function=function,
+        resolved=dict(images),
+        provenance=dict(provenance or {}),
     )
 
 
@@ -484,13 +493,15 @@ def release_spec(
     images: Mapping[str, ImageRef],
     *,
     with_checks: bool = False,
+    provenance: Mapping[str, Any] | None = None,
 ) -> PipelineReleaseSpec:
     """The app's release: delivered images plus the app's pinned images.
 
     ``piceli deploy`` runs the checks itself (its checks stage). With
     ``with_checks`` the spec also carries them and ``rollback_on_failed_checks``
     so the release commands (``piceli release … --spec MODULE:ATTR``) run
-    them after readiness, as they do for a ``release.toml``.
+    them after readiness, as they do for a ``release.toml``. ``provenance``
+    (the sources' commits) is stored beside a release the plan creates.
     """
     checks = release_checks(pipeline) if with_checks else ()
     return _spec(
@@ -507,6 +518,7 @@ def release_spec(
         inherited=pipeline.inherited_owners,
         checks=checks,
         rollback_on_failed_checks=bool(checks) and pipeline.rollback_on_failed_checks,
+        provenance=provenance,
     )
 
 

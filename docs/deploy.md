@@ -233,7 +233,7 @@ stage's outputs.
 
 | Stage | Content identity | Skipped when |
 | --- | --- | --- |
-| `inputs` | The build plan hash over every staged file, plus the sources' git identity (provenance only) | Never; it is the cheap scan the other stages key on |
+| `inputs` | The build plan hash over every staged file, plus the sources' git identity (provenance only) and, with `--ref`, the pinned commits | Never; it is the cheap scan the other stages key on |
 | `build` | The build plan hash (spec, staged files, Dockerfiles, invocations) | The last receipt has the same plan hash and its images are still in the local engine |
 | `deliver` | The image's config digest and the target repository | The registry serves the receipt's manifest digest (`HEAD`), or the node holds the config digest behind the content tag |
 | `plan` | The release name: a fingerprint of the delivered digests, the rendered objects and the secret settings | Never; it reads live discovery |
@@ -253,8 +253,8 @@ re-applied. `--reapply` forces the apply.
 builders and network access, the delivery strategy and the known image
 digests, the registry release's actions, the release's actions (or, while the
 images are not built yet, the fingerprint of the rendered app and the
-preview's adopt/replace/delete set), the checks, `--until` and the target
-identity. `--approve HASH` re-plans and runs only when the hash is
+preview's adopt/replace/delete set), the checks, `--until`, the target
+identity and, with `--ref`, the resolved commit of each pinned source. `--approve HASH` re-plans and runs only when the hash is
 unchanged; otherwise it is refused with `pipeline-plan-changed` and nothing
 runs. Stages whose plan depends on earlier outputs (the release plan after a
 build) run under that approval, within the limits of the preview below.
@@ -301,6 +301,72 @@ To review the real release plan before anything is applied, approve
 `--until deliver` first, then plan again: the release plan is then computed
 with the delivered digests.
 
+(deploy-ref)=
+
+## Deploy a commit, not the working tree
+
+Without `--ref`, `piceli deploy` builds from the checkouts on disk, dirty or
+not (a dirty source is refused unless its `inputs.toml` sets
+`allow_dirty = true`). With `--ref` it builds the committed state instead, so
+a shared or half-edited tree never leaks into a release:
+
+```sh
+piceli deploy deploy/app.py:pipeline --ref main --plan            # one source, or all in one repository
+piceli deploy deploy/app.py:pipeline --ref api=v1.4.0 --ref web=main --plan
+```
+
+`--ref [SOURCE=]REV` names a source from the builds' `inputs.toml` and a
+branch, tag or commit. A bare `--ref REV` pins every source when they are all
+one repository. For each pinned source Piceli:
+
+1. **resolves** `REV` in the source's repository to the full commit SHA
+   (`deploy-ref-unknown` when it is not a local commit: fetch first);
+2. **checks it out** with `git worktree add --detach` into a private
+   temporary directory. A worktree is a real checkout: the repository's
+   filters run (Git LFS files have their content), `export-ignore` attributes
+   drop nothing, and hooks are disabled. Submodules are not checked out;
+   declare each one as its own source;
+3. **reads every build input inside that repository from the commit**: the
+   source contexts, `build.toml`, `inputs.toml`, an inputs lock, the
+   Dockerfile and contexts relative to the pipeline module. Sources without a
+   `--ref` are read from disk as before;
+4. **removes the worktrees** when the command ends, also after a failure,
+   `Ctrl-C` or `SIGTERM` (a cancelled CI job). A process killed with
+   `SIGKILL` leaves a directory that `git worktree prune` cleans up.
+
+**The model runs from the working tree.** The pipeline module is imported
+from disk, because its kubeconfig, state directory and secrets are local
+files that are not in the commit. When the module's directory is inside a
+pinned repository, its tracked Python files (the module and the `.py` files
+beside it) must equal the pinned commit, or the deploy is refused with
+`deploy-ref-model-differs`; so a release is exactly the commit's model built
+from the commit's sources. Keep the pipeline in its own directory (such as
+`deploy/`); other files the model reads at render time come from disk.
+
+What the plan and the records show:
+
+- `--plan` lists `inputs   ref <source>: <REV> = commit <sha>` and whether
+  the model was checked. The JSON result has `refs` (source → SHA), and
+  `stages.inputs` has `refs` (`{"ref", "commit"}` per source), `model`
+  (`checked_against`) and the sources' identity (`dirty: false`).
+- **The combined hash covers the SHAs, not `REV`.** The printed approval
+  command pins them (`--ref api=<sha> --approve <hash>`). Approving with
+  `--ref main` after `main` moved, or without `--ref`, is refused with
+  `pipeline-plan-changed`: a plan for commit X never applies commit Y.
+- The run journal records `refs`; `--resume` re-opens exactly those commits
+  (it takes no `--ref`). A fresh build's receipt records the sources' commit
+  and `refs`; a build whose staged files are unchanged is reused as a cache
+  hit, whichever checkout produced it.
+- A release created by the run records `provenance.sources` (commit, dirty,
+  `ref`) next to its image set; `piceli release status` shows it. Deploys
+  without `--ref` record the working tree's commit and `dirty` flag.
+
+`piceli release plan|diff|apply --spec MODULE:ATTR` still compare with the
+working tree's build inputs: after a `--ref` deploy of a commit the working
+tree differs from, they refuse with `pipeline-not-delivered`. The commands on
+catalogued releases (`status`, `rollback`, `check`, `secret show`) work
+unchanged. For CI, see {doc}`ci`.
+
 (delivery)=
 
 ## Delivery
@@ -344,7 +410,9 @@ piceli deploy examples/shop/app.py:pipeline --resume
 It continues the latest unfinished run at its first unfinished stage with the
 approved plan: finished stages keep their receipts, an interrupted release
 execution is resumed with the same grant, and a build whose staged files
-changed since the approval is refused (`pipeline-resume-changed`). A run that
+changed since the approval is refused (`pipeline-resume-changed`). A run
+planned with `--ref` is resumed from the same commits (checked out again),
+never from a branch's newer head. A run that
 finished, rolled back or stopped at `--until` has nothing to resume: plan a
 new run, and unchanged stages are skipped.
 
@@ -425,6 +493,10 @@ The policy is used by `piceli deploy` (plan, apply, checks), `piceli status`,
 | `pipeline-apply-not-ready` (exit `1`) | The release did not become ready | Fix the workload (image, probe, claim), then `--resume` |
 | `pipeline-checks-failed` (exit `1`) | A check failed; see `checks.results` and `checks.rollback` in the run | Fix the app and deploy again |
 | `pipeline-locked` | Another run uses the state directory | Wait, then retry |
+| `deploy-ref-unknown` | `--ref` names no local commit | `git fetch`, or pass a full SHA |
+| `deploy-ref-source-unknown`, `deploy-ref-ambiguous`, `deploy-ref-invalid` | `--ref` names no declared source, is bare with several repositories, or is malformed | `--ref SOURCE=REV` with a name from `inputs.toml` |
+| `deploy-ref-model-differs` | With `--ref`, the pipeline's Python files differ from the pinned commit | Commit them, or deploy from a checkout of that commit |
+| `deploy-ref-checkout-failed` | `git worktree add` failed (disk, LFS objects, permissions) | Fix the cause on stderr, retry |
 | `pipeline-not-delivered` | `piceli release plan/diff/apply --spec MODULE:ATTR` needs images of the current sources | Run `piceli deploy` |
 | `exec-auth-not-allowed` | The kubeconfig user runs an exec plugin and the `Target` does not allow it | Review the plugin, then `Target.kubeconfig(…, allow_exec=True)` |
 
@@ -433,7 +505,7 @@ Every code is explained by `piceli explain <code>` and in
 
 ## Command contract
 
-`piceli deploy TARGET [--plan] [--until STAGE] [--resume] [--approve HASH | --auto-approve] [--reapply] [--json]`
+`piceli deploy TARGET [--ref [SOURCE=]REV]... [--plan] [--until STAGE] [--resume] [--approve HASH | --auto-approve] [--reapply] [--json]`
 
 | Argument | Type | Default | Meaning |
 | --- | --- | --- | --- |
@@ -444,10 +516,13 @@ Every code is explained by `piceli explain <code>` and in
 | `--approve HASH` | text | none | Execute exactly this combined plan |
 | `--auto-approve` | flag | off | Plan and execute without confirmation (CI) |
 | `--reapply` | flag | off | Apply even when the release is deployed, ready and not drifted |
+| `--ref [SOURCE=]REV` | text, repeatable | none | Build SOURCE from commit REV in a temporary worktree ({ref}`deploy-ref`); bound to the hash by SHA |
 | `--json` | flag | off | Stream one JSON event per stage change on stdout |
 
 - **Side effects.** Reads the pipeline module, build specs and sources, the
-  local Docker engine and the cluster (explicit kubeconfig). `--plan` writes
+  local Docker engine and the cluster (explicit kubeconfig). With `--ref`,
+  runs `git` in the sources' repositories and adds temporary worktrees
+  (removed on exit). `--plan` writes
   only the pipeline's `state_dir` (pending release plans, as
   `piceli release plan` does); before the images exist its release preview
   sends the cluster only reads and `dryRun=All` patches of objects without a

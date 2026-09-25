@@ -6,12 +6,20 @@ contract: machine output on stdout (with ``--json``, one JSON event per stage
 change, then the result; without it, only the result object), human text on
 stderr. Exit codes: ``0`` ready (or planned/stopped as asked), ``1`` a stage
 ran but did not succeed, ``2`` rejected, ``3`` approval required.
+
+``--ref [SOURCE=]REV`` reads the sources from commits instead of the working
+tree (:mod:`piceli.pipeline.refs`); the printed approval command pins the
+resolved commit SHAs.
 """
 
 from __future__ import annotations
 
+import signal
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from types import FrameType
 from typing import Annotated, Any
 
 import typer
@@ -84,6 +92,18 @@ def _describe(plan: Any, entry: str) -> None:
         for name, source in inputs.get("sources", {}).items():
             dirty = " (dirty)" if source["dirty"] else ""
             say(f"  inputs   source {name}: {source['commit'][:12]}{dirty}")
+        for name, pinned in inputs.get("refs", {}).items():
+            say(f"  inputs   ref {name}: {pinned['ref']} = commit {pinned['commit']}")
+        if "refs" in inputs:
+            checked = inputs.get("model", {}).get("checked_against")
+            say(
+                "  inputs   model: working tree"
+                + (
+                    f" (Python files match source {checked})"
+                    if checked
+                    else " (not in a pinned repository)"
+                )
+            )
     for name, build in stages["build"].get("builds", {}).items():
         say(
             f"  build    {name}: {build['action']} ({build['platform']}, "
@@ -184,6 +204,31 @@ def _confirm(combined_hash: str) -> bool:
     return bool(answer) and len(answer) >= 12 and combined_hash.startswith(answer)
 
 
+def _approve_command(target: str, combined: Any) -> str:
+    """The approval command; ``--ref`` values are pinned to the planned SHAs."""
+    refs = combined.stages.get("inputs", {}).get("refs", {})
+    pinned = "".join(f" --ref {name}={value['commit']}" for name, value in refs.items())
+    return f"piceli deploy {target}{pinned} --approve {combined.combined_hash}"
+
+
+@contextmanager
+def _terminate_as_interrupt() -> Iterator[None]:
+    """Turn SIGTERM (a cancelled CI job) into KeyboardInterrupt so cleanup runs."""
+
+    def interrupt(_signal: int, _frame: FrameType | None) -> None:
+        raise KeyboardInterrupt
+
+    try:
+        previous = signal.signal(signal.SIGTERM, interrupt)
+    except ValueError:  # not the main thread: leave signals alone
+        yield
+        return
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
 def _human(event: dict[str, Any]) -> None:
     if event.get("event") != "stage" or event["state"] in {"planned", "running"}:
         return
@@ -241,14 +286,26 @@ def deploy(
         bool,
         typer.Option("--json", help="Stream one JSON event per stage change on stdout"),
     ] = False,
+    ref: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--ref",
+            metavar="[SOURCE=]REV",
+            help="Build SOURCE from commit REV (branch, tag or SHA) in a temporary "
+            "worktree instead of the working tree; repeatable. A bare REV pins "
+            "every source when they are one repository",
+        ),
+    ] = None,
 ) -> None:
     """Deploy a pipeline: inputs → build → deliver → plan → apply → checks.
 
     Every stage is journaled and skipped when its content is unchanged. Plan
-    first (--plan), then approve the combined hash (--approve HASH).
+    first (--plan), then approve the combined hash (--approve HASH). With
+    --ref the sources are read from commits, and the hash covers the commits.
     """
     from piceli.pipeline import PipelineError, PipelineRunner
     from piceli.pipeline.runner import preview_hash
+    from piceli.pipeline.refs import parse_refs
 
     if until not in STAGE_NAMES:
         say(f"--until must be one of {', '.join(STAGE_NAMES)}")
@@ -262,12 +319,20 @@ def deploy(
     if plan and auto_approve:
         say("--plan executes nothing; drop --auto-approve")
         reject("deploy-flags-conflict")
+    if resume and ref:
+        say("--resume reuses the commits the run was approved with; drop --ref")
+        reject("deploy-flags-conflict")
+    try:
+        refs = parse_refs(ref or ())
+    except PipelineError as error:
+        say(str(error))
+        reject(error.code)
     pipeline = load_pipeline(target)
     runner = PipelineRunner(
-        pipeline, on_event=emit_json if as_json else _human, say=say
+        pipeline, on_event=emit_json if as_json else _human, say=say, refs=refs
     )
     try:
-        with runner.locked():
+        with _terminate_as_interrupt(), runner.locked(), runner.sources():
             if resume:
                 result = runner.resume()
             else:
@@ -278,10 +343,13 @@ def deploy(
                     "event": "result",
                     **combined.to_dict(),
                 }
+                refs_planned = combined.stages["inputs"].get("refs")
+                if refs_planned:
+                    body["refs"] = {n: v["commit"] for n, v in refs_planned.items()}
                 if plan:
                     # The command stays on one line so it can be copied.
                     say("approve with:")
-                    say(f"  piceli deploy {target} --approve {combined.combined_hash}")
+                    say(f"  {_approve_command(target, combined)}")
                     emit_json({**body, "state": "planned"})
                     raise typer.Exit(EXIT_OK)
                 if approve is not None:
@@ -295,11 +363,16 @@ def deploy(
                         say(
                             "the plan changed since it was approved (or the hash is "
                             "wrong); review the new plan above"
+                            + (
+                                ""
+                                if refs
+                                else " (a plan made with --ref needs the same --ref)"
+                            )
                         )
                         reject("pipeline-plan-changed")
                 elif not auto_approve and not _confirm(combined.combined_hash):
                     say("approve with:")
-                    say(f"  piceli deploy {target} --approve {combined.combined_hash}")
+                    say(f"  {_approve_command(target, combined)}")
                     emit_json({**body, "state": "approval-required"})
                     raise typer.Exit(EXIT_APPROVAL)
                 result = runner.execute(

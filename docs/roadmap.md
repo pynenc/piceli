@@ -51,6 +51,8 @@ Every feature page starts with its maturity, and this table lists them all:
 | Typed apps (`piceli.App`, `piceli render`) | {doc}`typed_apps` | preview |
 | Engine: discovery, plans, executor, journals (Python API) | {doc}`deployment_planning` | preview |
 | Deploy from source (`piceli deploy`, `piceli.pipeline`) | {doc}`deploy` | preview |
+| Deploy a commit (`piceli deploy --ref`) | {ref}`deploy-ref` | preview |
+| Deploy from CI with an approval step (GitHub Actions recipe) | {doc}`ci` | preview |
 | Releases from a spec (`piceli release`) | {doc}`release_cli` | preview |
 | Post-deploy checks and automatic rollback (`[[checks]]`, `piceli.checks`, `release check`) | {doc}`checks` | preview |
 | Field-level diffs and no-op detection (`release plan`, `release diff`) | {doc}`plans_and_diffs` | preview |

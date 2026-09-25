@@ -72,6 +72,12 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`deleted-resource-reappeared`](#error-deleted-resource-reappeared) | execution | no |
 | [`delivery-not-succeeded`](#error-delivery-not-succeeded) | images | no |
 | [`deploy-flags-conflict`](#error-deploy-flags-conflict) | cli | no |
+| [`deploy-ref-ambiguous`](#error-deploy-ref-ambiguous) | pipeline | no |
+| [`deploy-ref-checkout-failed`](#error-deploy-ref-checkout-failed) | pipeline | yes |
+| [`deploy-ref-invalid`](#error-deploy-ref-invalid) | pipeline | no |
+| [`deploy-ref-model-differs`](#error-deploy-ref-model-differs) | pipeline | no |
+| [`deploy-ref-source-unknown`](#error-deploy-ref-source-unknown) | pipeline | no |
+| [`deploy-ref-unknown`](#error-deploy-ref-unknown) | pipeline | yes |
 | [`deploy-stage-unknown`](#error-deploy-stage-unknown) | cli | no |
 | [`digest-mismatch`](#error-digest-mismatch) | artifacts-delivery | no |
 | [`discovery-incomplete`](#error-discovery-incomplete) | release | yes |
@@ -325,9 +331,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-deploy-flags-conflict)=
 ### `deploy-flags-conflict`
 
-**Conflicting deploy flags.** `piceli deploy` got flags that cannot be combined (`--resume` with planning flags, `--approve` with `--plan` or `--auto-approve`, or `--plan` with `--auto-approve`).
+**Conflicting deploy flags.** `piceli deploy` got flags that cannot be combined (`--resume` with planning flags or `--ref`, `--approve` with `--plan` or `--auto-approve`, or `--plan` with `--auto-approve`).
 
-- **Fix:** Use `--plan`, then `--approve HASH`; or `--auto-approve` alone; or `--resume` alone.
+- **Fix:** Use `--plan`, then `--approve HASH` (with the same `--ref`); or `--auto-approve` alone; or `--resume` alone (it reuses the run's commits).
 - **Retry-safe:** no
 
 (error-deploy-stage-unknown)=
@@ -2652,6 +2658,54 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 
 ## Deploying a pipeline from source (`piceli deploy`)
+
+(error-deploy-ref-ambiguous)=
+### `deploy-ref-ambiguous`
+
+**Ambiguous --ref.** A bare `--ref REV` needs a pipeline whose declared sources are all one repository, and cannot be combined with other `--ref` values; or two builds declare the same source name at different paths.
+
+- **Fix:** Name each source: `--ref SOURCE=REV` (repeat the option per source).
+- **Retry-safe:** no
+
+(error-deploy-ref-checkout-failed)=
+### `deploy-ref-checkout-failed`
+
+**Checking out the revision failed.** `git worktree add` could not check the pinned commit out into a temporary directory (disk space, a checkout filter such as Git LFS without its objects, or file permissions).
+
+- **Fix:** Fix the cause git reports on stderr (for example `git lfs fetch`) and run the command again.
+- **Retry-safe:** yes
+
+(error-deploy-ref-invalid)=
+### `deploy-ref-invalid`
+
+**Invalid --ref value.** A `--ref` value is not `SOURCE=REV` or `REV` (a source name of [A-Za-z0-9._-], a revision without spaces, ranges or a leading `-`), or it names the same source twice.
+
+- **Fix:** Pass `--ref SOURCE=REV` once per source, for example `--ref app=main` or `--ref app=$GITHUB_SHA`.
+- **Retry-safe:** no
+
+(error-deploy-ref-model-differs)=
+### `deploy-ref-model-differs`
+
+**Pipeline module differs from the commit.** With `--ref` the pipeline module is imported from the working tree, and its Python files (the module and the `.py` files beside it) must equal the pinned commit so the release is exactly that commit; they differ.
+
+- **Fix:** Commit (or stash) the module's changes and plan again, or run the deploy from a checkout of that commit (as CI does).
+- **Retry-safe:** no
+
+(error-deploy-ref-source-unknown)=
+### `deploy-ref-source-unknown`
+
+**--ref names an unknown source.** `--ref SOURCE=REV` names a source that no build of the pipeline declares in its `inputs.toml`.
+
+- **Fix:** Use a source name from the builds' `inputs.toml` (`piceli deploy … --plan --json` lists them under `stages.inputs.sources`).
+- **Retry-safe:** no
+
+(error-deploy-ref-unknown)=
+### `deploy-ref-unknown`
+
+**Unknown revision.** The revision given to `--ref` is not a commit in the source's local repository (a typo, or a branch, tag or commit that was not fetched).
+
+- **Fix:** Fetch it (`git fetch`) or pass an existing branch, tag or full commit SHA.
+- **Retry-safe:** yes
 
 (error-pipeline-apply-not-ready)=
 ### `pipeline-apply-not-ready`
