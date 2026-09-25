@@ -113,6 +113,19 @@ def test_help_json_covers_every_command_with_a_contract() -> None:
                 assert param.get("choices"), param
 
 
+def test_version_option_prints_the_package_version() -> None:
+    import importlib.metadata
+
+    result = runner.invoke(app, ["--version"])
+    assert result.exit_code == 0
+    assert result.stdout == f"piceli {importlib.metadata.version('piceli')}\n"
+    root = _tree()["root"]
+    assert "--version" in {
+        flag for param in root["params"] for flag in param.get("flags", ())
+    }
+    assert root["help"].startswith("Kubernetes infrastructure as typed Python")
+
+
 def test_help_json_describes_options() -> None:
     leaves = {leaf["path"]: leaf for leaf in leaf_commands(_tree()["root"])}
     apply = leaves["release apply"]
@@ -122,11 +135,14 @@ def test_help_json_describes_options() -> None:
     assert params["spec"] == {
         "name": "spec",
         "kind": "option",
-        "type": "path",
+        "type": "text",
         "required": True,
         "multiple": False,
         "flags": ["--spec"],
-        "help": "release.toml describing the release",
+        "help": (
+            "path/to/release.toml, or MODULE:ATTR (path/to/file.py:ATTR) naming "
+            "a piceli Pipeline: the release `piceli deploy` manages"
+        ),
     }
     assert params["adopt"]["multiple"] is True
     deliver = leaves["artifacts deliver"]

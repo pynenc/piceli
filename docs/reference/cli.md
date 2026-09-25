@@ -904,7 +904,7 @@ Execute an approved plan (``--approve HASH``), or plan and confirm.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--spec` | path | required | release.toml describing the release |
+| `--spec` | text | required | path/to/release.toml, or MODULE:ATTR (path/to/file.py:ATTR) naming a piceli Pipeline: the release `piceli deploy` manages |
 | `--approve` | text |  | Plan hash to execute (from a previous `plan`/`rollback` output) |
 | `--auto-approve` | boolean | `False` | Plan and execute without confirmation (CI) |
 | `--rotate` | text (repeatable) |  | Regenerate this secret generator's values in the new release (repeatable) |
@@ -915,7 +915,7 @@ Execute an approved plan (``--approve HASH``), or plan and confirm.
 
 **Contract**
 
-- **Reads:** release.toml, composition, state_dir, kubeconfig
+- **Reads:** release.toml or pipeline module (--spec MODULE:ATTR), composition, state_dir, kubeconfig
 - **Writes:** state_dir (catalog, journal, secret store, check reports)
 - **Cluster:** writes
 - **Approval required:** yes
@@ -931,12 +931,12 @@ Run the spec's [[checks]] now against a release; changes nothing.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--spec` | path | required | release.toml describing the release |
+| `--spec` | text | required | path/to/release.toml, or MODULE:ATTR (path/to/file.py:ATTR) naming a piceli Pipeline: the release `piceli deploy` manages |
 | `--release` | text |  | Release to check (default: the selected one) |
 
 **Contract**
 
-- **Reads:** release.toml, composition, state_dir, kubeconfig
+- **Reads:** release.toml or pipeline module (--spec MODULE:ATTR), composition, state_dir, kubeconfig
 - **Writes:** nothing (read-only)
 - **Cluster:** reads
 - **Approval required:** no
@@ -952,7 +952,7 @@ Show what `plan` would change, field by field (read-only, nothing stored).
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--spec` | path | required | release.toml describing the release |
+| `--spec` | text | required | path/to/release.toml, or MODULE:ATTR (path/to/file.py:ATTR) naming a piceli Pipeline: the release `piceli deploy` manages |
 | `--adopt` | text (repeatable) |  | Authorize adopting this existing object, as Kind/name or apiVersion/Kind/name (repeatable; adds to [release] adopt) |
 | `--replace` | text (repeatable) |  | Authorize deleting this existing unmanaged object and creating it from the release, after writing a restorable backup (repeatable; adds to [release] replace; never retained or managed objects) |
 | `--adopt-all-desired` | boolean | `False` | Authorize adopting every existing unmanaged object the composition declares (each is listed in the plan and bound to its hash) |
@@ -960,7 +960,7 @@ Show what `plan` would change, field by field (read-only, nothing stored).
 
 **Contract**
 
-- **Reads:** release.toml, composition, state_dir, kubeconfig
+- **Reads:** release.toml or pipeline module (--spec MODULE:ATTR), composition, state_dir, kubeconfig
 - **Writes:** nothing (read-only)
 - **Cluster:** reads
 - **Approval required:** no
@@ -976,7 +976,7 @@ Capture live discovery and persist an approvable plan (prints its hash).
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--spec` | path | required | release.toml describing the release |
+| `--spec` | text | required | path/to/release.toml, or MODULE:ATTR (path/to/file.py:ATTR) naming a piceli Pipeline: the release `piceli deploy` manages |
 | `--rotate` | text (repeatable) |  | Regenerate this secret generator's values in the new release (repeatable) |
 | `--adopt` | text (repeatable) |  | Authorize adopting this existing object, as Kind/name or apiVersion/Kind/name (repeatable; adds to [release] adopt) |
 | `--replace` | text (repeatable) |  | Authorize deleting this existing unmanaged object and creating it from the release, after writing a restorable backup (repeatable; adds to [release] replace; never retained or managed objects) |
@@ -985,7 +985,7 @@ Capture live discovery and persist an approvable plan (prints its hash).
 
 **Contract**
 
-- **Reads:** release.toml, composition, state_dir, kubeconfig
+- **Reads:** release.toml or pipeline module (--spec MODULE:ATTR), composition, state_dir, kubeconfig
 - **Writes:** state_dir (pending plan, secret candidates), --out file
 - **Cluster:** reads
 - **Approval required:** no
@@ -1001,7 +1001,7 @@ Alias of `plan`.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--spec` | path | required | release.toml describing the release |
+| `--spec` | text | required | path/to/release.toml, or MODULE:ATTR (path/to/file.py:ATTR) naming a piceli Pipeline: the release `piceli deploy` manages |
 | `--rotate` | text (repeatable) |  | Regenerate this secret generator's values in the new release (repeatable) |
 | `--adopt` | text (repeatable) |  | Authorize adopting this existing object, as Kind/name or apiVersion/Kind/name (repeatable; adds to [release] adopt) |
 | `--replace` | text (repeatable) |  | Authorize deleting this existing unmanaged object and creating it from the release, after writing a restorable backup (repeatable; adds to [release] replace; never retained or managed objects) |
@@ -1010,7 +1010,7 @@ Alias of `plan`.
 
 **Contract**
 
-- **Reads:** release.toml, composition, state_dir, kubeconfig
+- **Reads:** release.toml or pipeline module (--spec MODULE:ATTR), composition, state_dir, kubeconfig
 - **Writes:** state_dir (pending plan, secret candidates), --out file
 - **Cluster:** reads
 - **Approval required:** no
@@ -1025,13 +1025,13 @@ Resume an interrupted apply of a created release (same grant and ids).
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--spec` | path | required | release.toml describing the release |
+| `--spec` | text | required | path/to/release.toml, or MODULE:ATTR (path/to/file.py:ATTR) naming a piceli Pipeline: the release `piceli deploy` manages |
 | `--release` | text |  | Release name (default: the latest execution) |
 | `--skip-checks` | boolean | `False` | Do not run the spec's [[checks]] after readiness (emergencies only; recorded in the release history) |
 
 **Contract**
 
-- **Reads:** release.toml, composition, state_dir, kubeconfig
+- **Reads:** release.toml or pipeline module (--spec MODULE:ATTR), composition, state_dir, kubeconfig
 - **Writes:** state_dir (journal, check reports)
 - **Cluster:** writes
 - **Approval required:** no
@@ -1048,7 +1048,7 @@ Re-plan and re-apply an earlier release against current cluster state.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `TARGET` | text | required |  |
-| `--spec` | path | required | release.toml describing the release |
+| `--spec` | text | required | path/to/release.toml, or MODULE:ATTR (path/to/file.py:ATTR) naming a piceli Pipeline: the release `piceli deploy` manages |
 | `--approve` | text |  | Plan hash to execute (from a previous `plan`/`rollback` output) |
 | `--auto-approve` | boolean | `False` | Plan and execute without confirmation (CI) |
 | `--adopt` | text (repeatable) |  | Authorize adopting this existing object, as Kind/name or apiVersion/Kind/name (repeatable; adds to [release] adopt) |
@@ -1058,7 +1058,7 @@ Re-plan and re-apply an earlier release against current cluster state.
 
 **Contract**
 
-- **Reads:** release.toml, composition, state_dir, kubeconfig
+- **Reads:** release.toml or pipeline module (--spec MODULE:ATTR), composition, state_dir, kubeconfig
 - **Writes:** state_dir (catalog, journal, check reports)
 - **Cluster:** writes
 - **Approval required:** yes
@@ -1075,7 +1075,7 @@ Show a secret's metadata, and its value with --reveal (never logged).
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `NAME` | text | required |  |
-| `--spec` | path | required | release.toml describing the release |
+| `--spec` | text | required | path/to/release.toml, or MODULE:ATTR (path/to/file.py:ATTR) naming a piceli Pipeline: the release `piceli deploy` manages |
 | `--key` | text |  | One output, e.g. crt, key, ca.crt, cache.crt |
 | `--release` | text |  | Release name (default: the latest execution) |
 | `--reveal` | boolean | `False` | Print the value (otherwise asks on a terminal) |
@@ -1083,7 +1083,7 @@ Show a secret's metadata, and its value with --reveal (never logged).
 
 **Contract**
 
-- **Reads:** release.toml, state_dir (secret store)
+- **Reads:** release.toml or pipeline module (--spec MODULE:ATTR), state_dir (secret store)
 - **Writes:** nothing (read-only)
 - **Cluster:** none
 - **Approval required:** no
@@ -1099,11 +1099,11 @@ Show catalogued releases, their executions and history (no cluster access).
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--spec` | path | required | release.toml describing the release |
+| `--spec` | text | required | path/to/release.toml, or MODULE:ATTR (path/to/file.py:ATTR) naming a piceli Pipeline: the release `piceli deploy` manages |
 
 **Contract**
 
-- **Reads:** release.toml, state_dir
+- **Reads:** release.toml or pipeline module (--spec MODULE:ATTR), state_dir
 - **Writes:** nothing (read-only)
 - **Cluster:** none
 - **Approval required:** no
@@ -1118,12 +1118,12 @@ Cancel the latest execution of a release (exact owner only).
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--spec` | path | required | release.toml describing the release |
+| `--spec` | text | required | path/to/release.toml, or MODULE:ATTR (path/to/file.py:ATTR) naming a piceli Pipeline: the release `piceli deploy` manages |
 | `--release` | text |  | Release name (default: the latest execution) |
 
 **Contract**
 
-- **Reads:** release.toml, composition, state_dir, kubeconfig
+- **Reads:** release.toml or pipeline module (--spec MODULE:ATTR), composition, state_dir, kubeconfig
 - **Writes:** state_dir (journal)
 - **Cluster:** reads
 - **Approval required:** no

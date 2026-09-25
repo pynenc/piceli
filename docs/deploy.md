@@ -195,8 +195,10 @@ receipts. The release records the whole image set as its source identity
 
 `checks=` takes one check or a list, run after a successful apply through the
 `piceli.checks` runner (`run_checks(checks, context)` returning an object with
-`passed` and `results`). The context is a `piceli.pipeline.CheckContext`
-(target, kubeconfig, context, namespace, release, delivered image references).
+`passed` and `results`). The checks get a `piceli.checks.CheckContext` built
+from the pipeline's target (kubeconfig, context, namespace, transport, exec
+policy), the release and the delivered image references; a custom
+`check_runner` receives the `piceli.pipeline.CheckContext` itself.
 A run is `ready` only when the checks pass. With
 `rollback_on_failed_checks=True` a failed check re-applies the previous
 release; the rollback is journaled in the run and the result's state is
@@ -219,6 +221,67 @@ changed since the approval is refused (`pipeline-resume-changed`). A run that
 finished, rolled back or stopped at `--until` has nothing to resume: plan a
 new run, and unchanged stages are skipped.
 
+## Operate the release: rollback, status and secrets
+
+`piceli deploy` never writes a `release.toml`; every `piceli release`
+subcommand takes the pipeline instead, as `--spec MODULE:ATTR` (the same
+target syntax as `piceli deploy`, `piceli status` and `piceli access`):
+
+```sh
+piceli release status --spec examples/shop/app.py:pipeline
+piceli release rollback previous --spec examples/shop/app.py:pipeline       # plan; prints the hash
+piceli release rollback previous --spec examples/shop/app.py:pipeline --approve <plan hash>
+piceli release secret show cache_password --spec examples/shop/app.py:pipeline --reveal
+```
+
+The commands resolve exactly what `piceli deploy` uses: the release state in
+`state_dir/release`, the release name (the app's name), owner and field
+manager, the target (kubeconfig, context, namespace, exec policy), the secret
+generators and the composition. They never build or deliver:
+
+- `rollback`, `resume`, `stop`, `check`, `status` and `secret show` work on
+  the catalogued releases. A rollback re-applies the archived composition
+  with the image digests recorded in it (the `oci-set` source).
+- `plan`, `preview`, `diff` and `apply` plan a release from the pipeline's
+  current model with the images `piceli deploy` last built from the
+  **current** build inputs and delivered. When a build input changed since,
+  or an image was never delivered, they are refused with
+  `pipeline-not-delivered`: run `piceli deploy`, which builds only what
+  changed.
+- `apply`, `rollback`, `resume` and `stop` hold the pipeline's run lock, so
+  they are refused with `pipeline-locked` while a `piceli deploy` of the same
+  state directory runs.
+- The pipeline's `checks=` (`piceli.checks` declarations) run after readiness
+  of an `apply`, `rollback` or `resume`, and `release check` runs them now;
+  `rollback_on_failed_checks=True` applies as for `piceli deploy`.
+
+The node-loopback registry is a separate release in `state_dir/registry`
+that `piceli deploy` manages; the release commands operate on the app's
+release only. After a manual rollback, the next `piceli deploy` re-applies
+the pipeline's current release (it converges on the model).
+
+## Managed clusters
+
+A target whose kubeconfig user runs an exec credential plugin (GKE, EKS,
+AKS, OIDC) is refused with `exec-auth-not-allowed` unless the `Target` opts
+in, with the same keys and semantics as `[target]` in a `release.toml`:
+
+```python
+target = Target.kubeconfig(
+    "gke.kubeconfig",
+    context="gke_proj_zone_prod",
+    namespace="shop",
+    allow_exec=True,
+    exec_sha256="sha256:…",  # optional pin of the resolved plugin
+    exec_pass_env=["CLOUDSDK_CONFIG"],  # optional extra variables
+    exec_timeout_seconds=60,  # optional, at most 300
+)
+```
+
+The policy is used by `piceli deploy` (plan, apply, checks), `piceli status`,
+`piceli access` and the `piceli release … --spec MODULE:ATTR` commands. See
+{doc}`managed_clusters`.
+
 ## If it fails
 
 | Output | Meaning | Next step |
@@ -232,6 +295,8 @@ new run, and unchanged stages are skipped.
 | `pipeline-apply-not-ready` (exit `1`) | The release did not become ready | Fix the workload (image, probe, claim), then `--resume` |
 | `pipeline-checks-failed` (exit `1`) | A check failed; see `checks.results` and `checks.rollback` in the run | Fix the app and deploy again |
 | `pipeline-locked` | Another run uses the state directory | Wait, then retry |
+| `pipeline-not-delivered` | `piceli release plan/diff/apply --spec MODULE:ATTR` needs images of the current sources | Run `piceli deploy` |
+| `exec-auth-not-allowed` | The kubeconfig user runs an exec plugin and the `Target` does not allow it | Review the plugin, then `Target.kubeconfig(…, allow_exec=True)` |
 
 Every code is explained by `piceli explain <code>` and in
 {doc}`reference/errors`.

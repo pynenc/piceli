@@ -336,6 +336,7 @@ def _target_table(pipeline: Pipeline) -> dict[str, Any]:
             alias: {"name": node.name, "uid": node.uid}
             for alias, node in target.nodes.items()
         },
+        **target.exec_table(),
     }
 
 
@@ -352,6 +353,8 @@ def _spec(
     adopt: tuple[str, ...] = (),
     replace: tuple[str, ...] = (),
     inherited: tuple[str, ...] = (),
+    checks: tuple[Any, ...] = (),
+    rollback_on_failed_checks: bool = False,
 ) -> PipelineReleaseSpec:
     from pydantic import ValidationError
 
@@ -371,8 +374,10 @@ def _spec(
             "inherited_owners": list(inherited),
             "adopt": list(adopt),
             "replace": list(replace),
+            "rollback_on_failed_checks": rollback_on_failed_checks,
         },
         "execution": dict(pipeline.execution),
+        "checks": list(checks),
         "images": {key: {"digest": ref.identity} for key, ref in images.items()},
         "secrets": dict(secrets),
     }
@@ -391,10 +396,28 @@ def _spec(
     )
 
 
+def release_checks(pipeline: Pipeline) -> tuple[Any, ...]:
+    """The pipeline's checks the release engine can run (``piceli.checks`` models)."""
+    from piceli.checks.model import ExecCheck, HttpCheck, MetricCheck, PythonCheck
+
+    kinds = (HttpCheck, ExecCheck, MetricCheck, PythonCheck)
+    return tuple(check for check in pipeline.checks if isinstance(check, kinds))
+
+
 def release_spec(
-    pipeline: Pipeline, images: Mapping[str, ImageRef]
+    pipeline: Pipeline,
+    images: Mapping[str, ImageRef],
+    *,
+    with_checks: bool = False,
 ) -> PipelineReleaseSpec:
-    """The app's release: delivered images plus the app's pinned images."""
+    """The app's release: delivered images plus the app's pinned images.
+
+    ``piceli deploy`` runs the checks itself (its checks stage). With
+    ``with_checks`` the spec also carries them and ``rollback_on_failed_checks``
+    so the release commands (``piceli release … --spec MODULE:ATTR``) run
+    them after readiness, as they do for a ``release.toml``.
+    """
+    checks = release_checks(pipeline) if with_checks else ()
     return _spec(
         pipeline,
         name=pipeline.app.name,
@@ -407,6 +430,8 @@ def release_spec(
         adopt=pipeline.adopt,
         replace=pipeline.replace,
         inherited=pipeline.inherited_owners,
+        checks=checks,
+        rollback_on_failed_checks=bool(checks) and pipeline.rollback_on_failed_checks,
     )
 
 

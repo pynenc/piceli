@@ -4,6 +4,48 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.4.1
+
+- **Release commands for pipeline releases:** every `piceli release`
+  subcommand (`plan`, `preview`, `diff`, `apply`, `rollback`, `resume`,
+  `stop`, `check`, `status`, `secret show`) now takes `--spec MODULE:ATTR`
+  naming a `Pipeline`, as `piceli status` and `piceli access` do, and
+  operates the release `piceli deploy` manages: same state directory,
+  release name, target and composition. Nothing is built: a rollback
+  re-applies the recorded image digests (`oci-set`), and `plan`/`diff`/`apply`
+  use the images delivered from the current sources or refuse with the new
+  code `pipeline-not-delivered`. Commands that change the cluster hold the
+  pipeline's run lock (`pipeline-locked`).
+- **Exec credential plugins for pipelines:** `Target.kubeconfig(...)` takes
+  `allow_exec`, `exec_sha256`, `exec_pass_env` and `exec_timeout_seconds`
+  with the semantics of `[target]` in `release.toml`. They apply to
+  `piceli deploy`, `piceli status`, `piceli access` and the release commands.
+  `piceli status` and `piceli access` now also honour `[target] allow_exec`
+  of a `release.toml`, and refuse an exec user without it
+  (`exec-auth-not-allowed`); post-deploy checks use the target's policy.
+- **Fix:** checks declared on a `Pipeline` (`Checks.http`, `exec`, `metric`,
+  `python`) now run with a `piceli.checks.CheckContext` built from the
+  target; in 0.4.0 the default runner got the pipeline's context and every
+  check failed with `check-raised`.
+- **Fix:** `piceli deploy --resume` of a run that failed at its checks stage
+  with `rollback_on_failed_checks` no longer fails with
+  `pipeline-stage-error`; it rolls back to the previous release.
+- **Fix:** `piceli deploy` prints the build log as a path relative to the
+  working directory or `<state_dir>/…`, never an absolute local path.
+- **Fix:** `piceli status` and `piceli access --dashboard` with a pipeline
+  target now read the pipeline's release state: `status` shows the release
+  line and the dashboard its catalog (active release, managed workloads).
+  The human `status` workload columns line up.
+- **Fix (output contract):** a pipeline's automatic rollback reports
+  `{"state": "rejected", "reason": "<code>", "message": …}` or
+  `{"state": "unavailable", "reason": "checks-rollback-unavailable",
+  "message": …}` instead of `"state": "refused"` or a free-text `reason`. A
+  release execution refused by the executor is recorded in the history as
+  `"state": "rejected"` with `"reason": "execution-refused"` (was
+  `"refused"`).
+- **`piceli --version`** prints `piceli <version>`; the top-level help has a
+  real description.
+
 ## Version 0.4.0
 
 - **Removed:** the legacy delete-and-recreate engine and its CLI

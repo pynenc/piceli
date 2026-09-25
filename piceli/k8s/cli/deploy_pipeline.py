@@ -29,7 +29,8 @@ from piceli.cli_contract import (
 STAGE_NAMES = ("inputs", "build", "deliver", "plan", "apply", "checks")
 
 
-def _load(entry: str) -> Any:
+def load_pipeline(entry: str) -> Any:
+    """Import `MODULE:ATTR` and return its Pipeline; rejects (exit 2) otherwise."""
     from piceli.app.render import RenderError, load_target
     from piceli.pipeline import Pipeline, PipelineError
 
@@ -208,7 +209,7 @@ def deploy(
     if plan and auto_approve:
         say("--plan executes nothing; drop --auto-approve")
         reject("deploy-flags-conflict")
-    pipeline = _load(target)
+    pipeline = load_pipeline(target)
     runner = PipelineRunner(
         pipeline, on_event=emit_json if as_json else _human, say=say
     )
