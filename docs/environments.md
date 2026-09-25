@@ -120,7 +120,7 @@ rendered object. `piceli deploy --env NAME --plan --json` adds
 | Override | Keys | Effect |
 | --- | --- | --- |
 | `namespace` | – | Namespace for `piceli render --env` without `--namespace` or a spec. |
-| `replicas` | workload | Replaces `replicas`. |
+| `replicas` | workload | Replaces `replicas`. Refused for a workload an autoscaler targets: change the autoscaler instead. |
 | `images` | workload | Replaces the image of the main (first) container. In a pipeline it must still be a build handle or pinned by digest. |
 | `resources` | workload | Replaces the main container's `Resources`. |
 | `config` | config | Merges values into its data; `None` removes a key. |
