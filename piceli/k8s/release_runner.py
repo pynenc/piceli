@@ -60,7 +60,7 @@ from piceli.k8s.ops.discovery import (
     ResourceType,
     capture_discovery,
 )
-from piceli.k8s.ops.dry_run import capture_server_dry_runs
+from piceli.k8s.ops.dry_run import capture_server_dry_runs, probe_candidates
 from piceli.k8s.ops.execution_journal import ExecutionJournal
 from piceli.k8s.ops.executor import (
     ActionGrant,
@@ -1287,6 +1287,90 @@ class ReleaseRunner:
             "actions": _compact_actions(summary),
             "diffs": plan_diffs(plan, snapshot),
             "dry_run_unavailable": unavailable,
+        }
+
+    def placeholder_preview(
+        self, *, skip_dry_run: Callable[[ResourceIntent], bool]
+    ) -> dict[str, Any]:
+        """The structure and ownership of a release whose images do not exist yet.
+
+        The spec's images are placeholders, so the result is evidence only:
+        nothing is persisted (no plan, release, secret or discovery file), no
+        secret is generated, imported or read, and the cluster receives only
+        reads plus ``dryRun=All`` patches of managed objects for which
+        ``skip_dry_run`` is false (objects carrying a placeholder are never
+        sent). Ownership is resolved exactly as :meth:`plan` does, so an
+        object that needs adoption or replacement raises the same
+        :class:`ReleaseError` with its ``blocking`` list.
+        """
+        spec = self.spec.model
+        settings = spec.release
+        requested = _Ownership(
+            tuple(dict.fromkeys(settings.adopt)),
+            tuple(dict.fromkeys(settings.replace)),
+        )
+        images = self.spec.images()
+        function = self.spec.load_composition()
+        binding = self.provider_factory(self.spec)
+        try:
+            catalog = ReleaseCatalog(self.spec.catalog_path)
+            self._check_target(catalog, binding.target)
+            factory = self._factory(function, images, self._nodes(binding))
+            composition, _material = self._preview_composition(factory)
+            records = sorted(record.name for record in catalog.records())
+            kinds = self._kinds(composition)
+            if settings.prune:
+                for record in catalog.records():
+                    kinds |= self._kinds(composition_from_archive(record.archive))
+            artifact = self._discover(binding, kinds)
+            skipped = sorted(
+                {
+                    (resource.ref.kind, resource.ref.name)
+                    for resource, _current in probe_candidates(composition, artifact)
+                    if skip_dry_run(resource)
+                }
+            )
+            artifact, unavailable = capture_server_dry_runs(
+                binding.provider,
+                artifact,
+                composition,
+                deadline=time.monotonic() + spec.discovery.max_seconds,
+                exclude=skip_dry_run,
+            )
+            snapshot = ObservedSnapshot.from_discovery(artifact)
+            inherited = list(settings.inherited_owners)
+            resolved = requested.resolve(
+                composition, snapshot, inherited, settings.field_manager
+            )
+            plan = build_plan(
+                composition,
+                snapshot,
+                _plan_authorization(
+                    binding.target,
+                    prune=settings.prune,
+                    adopt=resolved.adopt,
+                    inherited=inherited,
+                    field_manager=settings.field_manager,
+                    replace=resolved.replace,
+                    previous=_previous_declared(catalog, records),
+                ),
+            )
+        finally:
+            binding.close()
+        summary = plan.summary()
+        return {
+            "summary": _summary(summary),
+            "actions": _compact_actions(summary),
+            "drift": _drift(
+                composition, snapshot, settings.field_manager, resolved.adopt
+            ),
+            "authorized": requested.report(resolved),
+            "adopt_not_needed": resolved.adopt_not_needed,
+            "dry_run_skipped": [
+                {"kind": kind, "name": name, "reason": "dry-run-placeholder-image"}
+                for kind, name in skipped
+            ],
+            "dry_run_unavailable": [item.to_dict() for item in unavailable],
         }
 
     def resolve_rollback_target(

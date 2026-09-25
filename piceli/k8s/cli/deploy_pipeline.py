@@ -124,7 +124,11 @@ def _describe(plan: Any, entry: str) -> None:
                 f"{', '.join(item['managers'])} (re-applied)",
             )
     elif release.get("state") == "pending":
-        say("  plan     after delivery (the release plan needs the image digests)")
+        preview = release.get("preview")
+        if isinstance(preview, dict):
+            _describe_preview(preview)
+        else:
+            say("  plan     after delivery (the release plan needs the image digests)")
     apply = stages["apply"]
     if apply.get("action") == "skip":
         say(
@@ -140,6 +144,33 @@ def _describe(plan: Any, entry: str) -> None:
         )
         say(f"  checks   {len(checks['checks'])} check(s){rollback}")
     say(f"combined hash: {plan.combined_hash}")
+
+
+def _placeholder_note(preview: dict[str, Any]) -> str:
+    return ", ".join(
+        f"{name}={state}" for name, state in preview.get("placeholders", {}).items()
+    )
+
+
+def _describe_preview(preview: dict[str, Any]) -> None:
+    """The placeholder preview: structure and ownership only, never approvable."""
+    say(
+        "  plan     preview with placeholder images ("
+        + _placeholder_note(preview)
+        + "), not approvable:"
+    )
+    changes = ", ".join(
+        f"{c['operation']} {c['kind']}/{c['name']}" for c in preview["changes"]
+    )
+    _say_wrapped("  plan     preview: ", changes or "no changes")
+    for item in preview.get("drift", ()):
+        _say_wrapped(
+            f"  plan     drift {item['kind']}/{item['name']}: desired fields "
+            "also managed by ",
+            f"{', '.join(item['managers'])} (re-applied)",
+        )
+    say("  plan     the real release plan follows delivery; it may not adopt,")
+    say(_INDENT + "replace or delete more than this preview")
 
 
 def _confirm(combined_hash: str) -> bool:
@@ -217,6 +248,7 @@ def deploy(
     first (--plan), then approve the combined hash (--approve HASH).
     """
     from piceli.pipeline import PipelineError, PipelineRunner
+    from piceli.pipeline.runner import preview_hash
 
     if until not in STAGE_NAMES:
         say(f"--until must be one of {', '.join(STAGE_NAMES)}")
@@ -253,6 +285,12 @@ def deploy(
                     emit_json({**body, "state": "planned"})
                     raise typer.Exit(EXIT_OK)
                 if approve is not None:
+                    if approve == preview_hash(combined):
+                        say(
+                            "that is the hash of the placeholder preview, which "
+                            "is never approvable; approve the combined hash"
+                        )
+                        reject("pipeline-preview-not-approvable")
                     if approve != combined.combined_hash:
                         say(
                             "the plan changed since it was approved (or the hash is "
@@ -292,6 +330,13 @@ def _fail(runner: Any, error: Any) -> None:
             f"  blocking {item['kind']}/{item['name']}: {item['message']}"
             + (f" -> {suggest}" if suggest else "")
         )
+    preview = error.details.get("preview")
+    if isinstance(preview, dict):
+        say(
+            "  (release preview with placeholder images: "
+            + _placeholder_note(preview)
+            + "; nothing was built or delivered)"
+        )
     say(f"explain with: piceli explain {error.code}")
     if runner.run is not None:
         body = runner.result(runner.run.state)
@@ -308,10 +353,17 @@ def _fail(runner: Any, error: Any) -> None:
         )
         if stage:
             body["stage"] = stage
-            say(f"continue after fixing it with: --resume (stage {stage})")
+            if error.code == "pipeline-preview-changed":
+                say("plan again (finished stages are skipped) and approve the new hash")
+            else:
+                say(f"continue after fixing it with: --resume (stage {stage})")
     else:
         body = {"state": "rejected", "reason": error.code}
+        if "stage" in error.details:
+            body["stage"] = error.details["stage"]
     if error.details.get("blocking"):
         body["blocking"] = error.details["blocking"]
+    if isinstance(preview, dict):
+        body["preview"] = preview
     emit_json(body)
     raise typer.Exit(EXIT_FAILED if error.failed else EXIT_REJECTED)
