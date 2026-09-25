@@ -138,6 +138,10 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   to immutable Job and StatefulSet fields with `422`.
 ## Version 0.6.0
 
+- **Fix:** reads the API server throttles with 429 (for example while the
+  watch cache of a just-installed CRD initializes) are retried after
+  `Retry-After` (bounded, within the deadline); writes are never retried.
+
 - **Shared deployment state (preview):** `Pipeline(state="cluster")` and
   `[release] state = "cluster"` keep the run journal, receipts, release
   catalog, execution journal and secret store in the release namespace
