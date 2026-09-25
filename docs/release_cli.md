@@ -468,7 +468,8 @@ diffs on stderr and `{"state": "diffed", "summary", "changes", "actions",
 "diffs", "dry_run_unavailable"}` on stdout. It stores no plan and no local
 state and sends the cluster only reads and `dryRun=All` requests, so it is
 safe to run at any time. With `--exit-code` it exits `1` when the release
-would change something.
+would change something, and the object also carries
+`"reason": "release-changes-pending"`.
 
 ## Adopting existing objects
 

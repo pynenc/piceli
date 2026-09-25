@@ -7,10 +7,9 @@ the errors, how to resume, and what never to print.
 ```{admonition} Maturity: preview
 :class: note
 
-The output contract below is new in 0.3.0 and, since 0.4.0, covers every
-command (marked `conforms` in {doc}`reference/cli`) except `render`,
-`release check` and `release diff`, which are still `partial`. See the
-{doc}`roadmap` for every feature's status.
+The output contract below is new in 0.3.0 and, since 0.5.1, covers every
+command (all marked `conforms` in {doc}`reference/cli`; none is `partial`).
+See the {doc}`roadmap` for every feature's status.
 ```
 
 ## Start here
@@ -32,7 +31,8 @@ interruption is harmless.
 
 - **stdout** carries machine output: one JSON object per command, or JSON lines
   for streaming commands (`observe forwards apply`). Parse it; do not scrape
-  stderr.
+  stderr. `render` prints YAML manifests unless you pass `--format json`, but
+  its refusals are always the JSON rejection object below.
 - **stderr** carries human text: summaries, hints and the plan hash to approve.
   It never carries a JSON object.
 - A refusal prints
@@ -44,9 +44,10 @@ interruption is harmless.
   apply` adds `preflight`.
 - An operation that ran but did not succeed exits `1` and its result names
   the code in `reason`: `{"state": "failed", "reason": …}` for `release
-  apply|rollback|resume` and `artifacts build-spec run`, `"state": "drift"`
-  for `inputs verify`, a receipt with `state` `failed`/`rejected` for
-  `artifacts deliver`.
+  apply|rollback|resume`, `release check` (`check-failed`) and `artifacts
+  build-spec run`, `{"state": "diffed", "reason": "release-changes-pending"}`
+  for `release diff --exit-code`, `"state": "drift"` for `inputs verify`, a
+  receipt with `state` `failed`/`rejected` for `artifacts deliver`.
 
 | Exit code | Meaning | What to do |
 | --- | --- | --- |

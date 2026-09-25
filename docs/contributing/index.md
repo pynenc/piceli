@@ -38,6 +38,18 @@ development-only tools) so that `pyproject.toml` and `uv.lock` stay in sync.
 CI runs the same commands on Python 3.12, 3.13 and 3.14, plus the integration
 tests on a [kind](https://kind.sigs.k8s.io/) cluster and a strict docs build.
 
+## Releases
+
+Releases are cut from `main` by `.github/workflows/release.yml` after CI
+passes. PyPI, not the git tag, decides whether a version is released
+(`scripts/release_state.py`, unit-tested in `tests/unit/release/`): the
+workflow uploads the files PyPI does not list yet, with PEP 740 attestations
+through trusted publishing, waits until PyPI lists every file, then pushes the
+`v<version>` tag and publishes the release notes. Any run can be re-run, and a
+new run finishes an interrupted one; a tag is never moved. To release a
+version, bump it in `pyproject.toml` and add its changelog section. Pull
+requests from this repository publish a pre-release to TestPyPI.
+
 ## Guidelines
 
 - Keep imports and planning side-effect free: no clients, kubeconfig access or

@@ -1853,6 +1853,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "release",
     ),
     _E(
+        "release-changes-pending",
+        "Release would change objects",
+        "`piceli release diff --exit-code` found objects the release would change (the diff is in the output); nothing was changed.",
+        "Review the diff. If it is expected, plan and apply it (`piceli release plan`); otherwise fix the model or the cluster.",
+        False,
+        "release",
+    ),
+    _E(
         "kubeconfig-rejected",
         "Kubeconfig rejected",
         "The kubeconfig or context is missing, unreadable or uses a feature Piceli refuses (exec credentials, proxies, disabled TLS verification, a non-https server).",

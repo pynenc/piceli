@@ -102,10 +102,11 @@ With `--format json`, it prints one object:
   is also created by the composition, for example by an added template. Remove
   one of them.
 
-`piceli render` exits with `2` for every rejection. With `--format json` it
-also prints `{"state": "rejected", "reason": …, "message": …}` to stdout. The
-reason is `render-target-invalid` (the target or the spec could not be loaded)
-or `render-model-invalid` (the model failed to render).
+`piceli render` exits with `2` for every rejection and prints
+`{"state": "rejected", "reason": …, "message": …}` to stdout, whatever
+`--format` says (the explanation goes to stderr). The reason is
+`render-target-invalid` (the target or the spec could not be loaded) or
+`render-model-invalid` (the model failed to render).
 
 ## A complete example
 

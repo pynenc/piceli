@@ -256,6 +256,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`registry-response-too-large`](#error-registry-response-too-large) | artifacts-registry | no |
 | [`registry-unauthorized`](#error-registry-unauthorized) | artifacts-registry | no |
 | [`registry-unreachable`](#error-registry-unreachable) | artifacts-registry | yes |
+| [`release-changes-pending`](#error-release-changes-pending) | release | no |
 | [`release-history-malformed`](#error-release-history-malformed) | release | no |
 | [`release-owner-mismatch`](#error-release-owner-mismatch) | release | no |
 | [`release-refused`](#error-release-refused) | release | no |
@@ -2098,6 +2099,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Plan release mismatch.** The hash approves a plan for another release than the rollback target.
 
 - **Fix:** Run `piceli release rollback <target> --spec release.toml` and approve the hash it prints.
+- **Retry-safe:** no
+
+(error-release-changes-pending)=
+### `release-changes-pending`
+
+**Release would change objects.** `piceli release diff --exit-code` found objects the release would change (the diff is in the output); nothing was changed.
+
+- **Fix:** Review the diff. If it is expected, plan and apply it (`piceli release plan`); otherwise fix the model or the cluster.
 - **Retry-safe:** no
 
 (error-release-history-malformed)=

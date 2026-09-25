@@ -316,8 +316,15 @@ def test_release_diff_is_read_only(release_env):
     assert "release/Deployment/worker" in result.stderr
     assert f"+      - image: registry.example/app/api@{DIGEST_2}" in result.stderr
 
-    code, _, _ = _run(tmp_path, "diff", "--exit-code")
+    assert "reason" not in value
+
+    code, pending, result = _run(tmp_path, "diff", "--exit-code")
     assert code == 1
+    # Exit 1 names its registered code, like every "ran but did not succeed".
+    assert pending["state"] == "diffed"
+    assert pending["reason"] == "release-changes-pending"
+    assert pending["summary"] == value["summary"]
+    assert "[release-changes-pending]" in result.stderr
     assert {
         path: path.read_bytes() for path in state.rglob("*") if path.is_file()
     } == files

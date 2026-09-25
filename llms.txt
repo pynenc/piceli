@@ -17,7 +17,7 @@ Minimal workflow: `piceli render app.py:pipeline` (no cluster; the target's name
 ## Start here
 
 - [Using Piceli from an agent](https://docs.pynenc.org/projects/piceli/en/latest/agents.html): commands safe to run without asking, commands that need approval, the output contract, errors, resume, secrets and cluster access
-- [Command reference](https://docs.pynenc.org/projects/piceli/en/latest/reference/cli.html): every command with options and its contract (generated from `piceli help-json`)
+- [Command reference](https://docs.pynenc.org/projects/piceli/en/latest/reference/cli.html): every command with options and its output contract, which every command follows (generated from `piceli help-json`)
 - [Error codes](https://docs.pynenc.org/projects/piceli/en/latest/reference/errors.html): every refusal code with cause, fix and whether a retry can succeed (same as `piceli explain`)
 - [Getting started](https://docs.pynenc.org/projects/piceli/en/latest/getting_started/index.html): a typed app and `Pipeline` in one file, rendered, planned, approved, checked and reached on a disposable `kind` cluster
 

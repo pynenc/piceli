@@ -157,11 +157,30 @@ jobs:
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
       - run: uv build
+      # Re-running this job reuses the version (same run number): files an
+      # earlier attempt uploaded are skipped, and one retry covers transient
+      # index failures. The comment is posted only once TestPyPI lists them.
       - name: Publish to TestPyPI
+        id: upload-1
+        continue-on-error: true
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          attestations: true
+          skip-existing: true
+      - if: steps.upload-1.outcome == 'failure'
+        run: rm -f dist/*.publish.attestation && sleep 60
+      - name: Publish to TestPyPI (retry)
+        if: steps.upload-1.outcome == 'failure'
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          attestations: true
+          skip-existing: true
+      - name: Wait until TestPyPI lists every file
         run: >-
-          uv publish --trusted-publishing always
-          --publish-url https://test.pypi.org/legacy/
-          --check-url https://test.pypi.org/simple/
+          uv run --no-project --python 3.12 scripts/release_state.py verify
+          --dist dist --index https://test.pypi.org --attempts 10
       - name: Comment the install command on the PR
         uses: actions/github-script@v8
         with:

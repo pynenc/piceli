@@ -6,10 +6,10 @@ Every `piceli` command with its options and its contract: what it reads and writ
 
 ## Conventions
 
-- **stdout** is for machine output: one JSON object (JSON lines for streaming commands).
+- **stdout** is for machine output: one JSON object (JSON lines for streaming commands; `render` prints YAML manifests unless `--format json`).
 - **stderr** is for human text: summaries and hints.
-- A refusal prints `{"state": "rejected", "reason": "<code>"}` and exits `2`; see {doc}`errors` or run `piceli explain <code>`.
-- **Output contract** `conforms` means the command follows these rules exactly; `partial` means it prints JSON but its refusals do not yet use the rejection shape above.
+- A refusal prints `{"state": "rejected", "reason": "<code>", "message": "<text>"}` and exits `2`; see {doc}`errors` or run `piceli explain <code>`.
+- **Output contract** `conforms` means the command follows these rules exactly; `partial` (no command since 0.5.1) means it prints JSON but its refusals do not yet use the rejection shape above.
 
 | Exit code | Meaning |
 | --- | --- |
@@ -948,8 +948,8 @@ Run the spec's [[checks]] now against a release; changes nothing.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
-- **Notes:** Writes no state and never rolls back. Checks open temporary loopback port forwards, may exec declared commands in pods and run declared Python check functions.
+- **Output contract:** conforms
+- **Notes:** Writes no state and never rolls back. Checks open temporary loopback port forwards, may exec declared commands in pods and run declared Python check functions. Exit 1 when a check failed (state failed, reason check-failed).
 
 (cli-release-diff)=
 ### `piceli release diff`
@@ -972,8 +972,8 @@ Show what `plan` would change, field by field (read-only, nothing stored).
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
-- **Notes:** Read-only: stores no plan and no local state. Sends only reads and dryRun=All requests (server dry runs of the writes). Exit 1 with --exit-code when something would change.
+- **Output contract:** conforms
+- **Notes:** Read-only: stores no plan and no local state. Sends only reads and dryRun=All requests (server dry runs of the writes). Exit 1 with --exit-code when something would change (reason release-changes-pending).
 
 (cli-release-plan)=
 ### `piceli release plan`
@@ -1158,8 +1158,8 @@ Print the manifests of a typed app, composition or pipeline. Never contacts a cl
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
-- **Notes:** Never contacts a cluster; secret values are placeholders. A Pipeline renders with its target's namespace and declared nodes, build images as placeholders, and reads no kubeconfig, build spec or state.
+- **Output contract:** conforms
+- **Notes:** Never contacts a cluster; secret values are placeholders. A Pipeline renders with its target's namespace and declared nodes, build images as placeholders, and reads no kubeconfig, build spec or state. stdout carries the manifests (YAML, or one JSON object with --format json); a refusal is always the JSON rejection object.
 
 (cli-status)=
 ### `piceli status`

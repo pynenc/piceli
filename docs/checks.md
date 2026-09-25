@@ -123,6 +123,12 @@ anything:
 piceli release check --spec release.toml [--release NAME]
 ```
 
+It prints `{"state": "succeeded", "release", "intent": "check", "checks"}` and
+exits `0` when every check passed, or `{"state": "failed", "reason":
+"check-failed", …}` and exits `1` when one failed (`checks.failed` names
+them). A refusal (invalid spec, unknown release) is the usual
+`{"state": "rejected", …}` with exit `2`.
+
 ## Check types
 
 Every check has `name` (unique; derived from the check when omitted),

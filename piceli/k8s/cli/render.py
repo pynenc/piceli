@@ -9,25 +9,24 @@ Contract:
   nodes (``node="alias"`` pins resolve), build images as placeholders and
   the delivery node's pin; it reads no kubeconfig, build spec or state and
   takes no ``--spec``.
-- stdout: the manifests (YAML documents, or one JSON object with
-  ``--format json``). stderr: errors.
+- stdout: the manifests (YAML documents, or one JSON object
+  ``{"state": "rendered", …}`` with ``--format json``). stderr: human text.
 - Exit codes: ``0`` rendered, ``2`` rejected (the target or spec cannot be
-  loaded, or the model is invalid). With ``--format json`` a rejection prints
-  ``{"state": "rejected", "reason": "render-target-invalid" |
-  "render-model-invalid", "message": …}``.
+  loaded, or the model is invalid). A rejection always prints one JSON object
+  on stdout, whatever ``--format`` says: ``{"state": "rejected", "reason":
+  "render-target-invalid" | "render-model-invalid", "message": …}``
+  (:func:`piceli.cli_contract.reject`).
 """
 
 from __future__ import annotations
 
-import json
-from collections.abc import Callable
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any
 
 import typer
 
-EXIT_REJECTED = 2
+from piceli.cli_contract import reject
 
 
 class OutputFormat(StrEnum):
@@ -56,8 +55,6 @@ def render(
                 "release.toml providing the namespace, images, secret inputs "
                 "(as placeholders), [values] and declared nodes"
             ),
-            exists=True,
-            dir_okay=False,
         ),
     ] = None,
     namespace: Annotated[
@@ -79,18 +76,6 @@ def render(
 
     from piceli.app import render as rendering
     from piceli.k8s.release_spec import ReleaseSpecError
-
-    def reject(reason: str, message: str) -> None:
-        if output is OutputFormat.json:
-            typer.echo(
-                json.dumps(
-                    {"state": "rejected", "reason": reason, "message": message},
-                    sort_keys=True,
-                )
-            )
-        typer.echo(f"render rejected ({reason}): {message}", err=True)
-        raise typer.Exit(EXIT_REJECTED)
-
     from piceli.pipeline import Pipeline, PipelineError
 
     inputs = {}
@@ -98,14 +83,14 @@ def render(
         if spec is None and target:
             value = rendering.load_target(target, Path.cwd())
             if isinstance(value, Pipeline):
-                _render_pipeline(value, namespace, output, reject)
+                _render_pipeline(value, namespace, output)
                 return
     except rendering.RenderError as error:
         reject("render-target-invalid", str(error))
-        return
     except PipelineError as error:
         reject("render-target-invalid", str(error))
-        return
+    if spec is not None and not spec.is_file():
+        reject("render-target-invalid", f"release spec not found: {spec}")
     try:
         if spec is not None:
             loaded, context = rendering.spec_context(spec, namespace)
@@ -119,24 +104,19 @@ def render(
             context = rendering.empty_context(namespace or "default")
         else:
             reject("render-target-invalid", "pass a TARGET, --spec, or both")
-            return
-    except (rendering.RenderError, ReleaseSpecError) as error:
+    except (rendering.RenderError, ReleaseSpecError, OSError) as error:
         reject("render-target-invalid", str(error))
-        return
     if isinstance(value, Pipeline):
         reject(
             "render-target-invalid",
             "a Pipeline renders with its target; drop --spec",
         )
-        return
     try:
         composition = rendering.render_target(value, context)
     except rendering.RenderError as error:
         reject("render-target-invalid", str(error))
-        return
     except (ValidationError, ValueError) as error:
         reject("render-model-invalid", str(error))
-        return
     components = rendering.rendered(composition, inputs)
     if output is OutputFormat.json:
         typer.echo(rendering.to_json(context.namespace, components))
@@ -148,7 +128,6 @@ def _render_pipeline(
     pipeline: Any,
     namespace: str | None,
     output: OutputFormat,
-    reject: Callable[[str, str], None],
 ) -> None:
     """Render a Pipeline offline: its target's namespace and declared nodes."""
     from pydantic import ValidationError
@@ -163,16 +142,13 @@ def _render_pipeline(
             f"the pipeline's target namespace is {pipeline.target.namespace!r}; "
             "a Pipeline renders into its target's namespace",
         )
-        return
     try:
         context, composition = offline_composition(pipeline)
     except PipelineError as error:
         model = error.code == "render-model-invalid"
         reject("render-model-invalid" if model else "render-target-invalid", str(error))
-        return
     except (ValidationError, ValueError) as error:
         reject("render-model-invalid", str(error))
-        return
     components = rendering.rendered(composition, dict(context.secrets))
     if output is OutputFormat.json:
         typer.echo(rendering.to_json(context.namespace, components))

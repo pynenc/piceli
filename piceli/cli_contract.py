@@ -241,10 +241,12 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
         "render": _C(
             "Print the manifests of a typed app, composition or pipeline (YAML or JSON).",
             reads=("module/app file", "release.toml (optional)", "local receipts"),
+            contract="conforms",
             notes="Never contacts a cluster; secret values are placeholders. A "
             "Pipeline renders with its target's namespace and declared nodes, "
             "build images as placeholders, and reads no kubeconfig, build spec "
-            "or state.",
+            "or state. stdout carries the manifests (YAML, or one JSON object "
+            "with --format json); a refusal is always the JSON rejection object.",
         ),
         # ------------------------------------------------------- import
         "import live": _C(
@@ -325,13 +327,15 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
         ),
         "release diff": _C(
             "Show what `release plan` would change, field by field.",
+            contract="conforms",
             reads=_RELEASE_READS,
             cluster="reads",
             exit_codes=(0, 1, 2),
             notes=(
                 "Read-only: stores no plan and no local state. Sends only reads "
                 "and dryRun=All requests (server dry runs of the writes). "
-                "Exit 1 with --exit-code when something would change."
+                "Exit 1 with --exit-code when something would change (reason "
+                "release-changes-pending)."
             ),
         ),
         "release apply": _C(
@@ -362,12 +366,14 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
         ),
         "release check": _C(
             "Run the spec's [[checks]] now against a release.",
+            contract="conforms",
             reads=_RELEASE_READS,
             cluster="reads",
             exit_codes=(0, 1, 2),
             notes="Writes no state and never rolls back. Checks open temporary "
             "loopback port forwards, may exec declared commands in pods and "
-            "run declared Python check functions.",
+            "run declared Python check functions. Exit 1 when a check failed "
+            "(state failed, reason check-failed).",
         ),
         "release resume": _C(
             "Resume an interrupted apply with the same grant and ids.",

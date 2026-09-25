@@ -533,9 +533,12 @@ def diff(
             _say("secret-bound values not shown: " + ", ".join(item["not_compared"]))
     counts = ", ".join(f"{n} {op}" for op, n in value["summary"].items())
     _say(f"release {value['release']}: {counts or 'no actions'}")
-    _emit({"state": "diffed", **value})
     if exit_code and value["changes"]:
+        # Exit 1 names its code, as every "ran but did not succeed" result does.
+        _emit({**value, "state": "diffed", "reason": "release-changes-pending"})
+        _say("changes pending [release-changes-pending]")
         raise typer.Exit(EXIT_NOT_READY)
+    _emit({**value, "state": "diffed"})
 
 
 @app.command("apply")
@@ -638,17 +641,24 @@ def check(
 ) -> None:
     """Run the spec's [[checks]] now against a release; changes nothing.
 
-    Exit code ``0`` when every check passed, ``1`` when one failed.
+    Exit code ``0`` when every check passed (``"state": "succeeded"``), ``1``
+    when one failed (``"state": "failed", "reason": "check-failed"``).
     """
     try:
         outcome = _runner(spec).check(release)
     except _refusals() as error:
         _refuse(error)
         return
-    _emit(outcome)
-    _describe_checks(outcome["checks"])
     passed = outcome["checks"]["passed"]
-    _say(f"check {outcome['release']}: {'passed' if passed else 'checks-failed'}")
+    if passed:
+        _emit({**outcome, "state": "succeeded"})
+    else:
+        _emit({**outcome, "state": "failed", "reason": "check-failed"})
+    _describe_checks(outcome["checks"])
+    _say(
+        f"check {outcome['release']}: "
+        + ("passed" if passed else "checks-failed [check-failed]")
+    )
     if not passed:
         raise typer.Exit(EXIT_NOT_READY)
 

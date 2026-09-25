@@ -73,8 +73,14 @@ CASES: dict[str, tuple[Argv, str]] = {
             "stop",
             "status",
             "secret show",
+            "diff",
+            "check",
         )
     },
+    "render": (
+        lambda p: ["render", str(p / "missing.py") + ":app"],
+        "render-target-invalid",
+    ),
     "status": (
         lambda p: ["status", str(p / "missing-release.toml")],
         "access-target-invalid",
@@ -319,6 +325,30 @@ def test_every_conforming_command_has_a_rejection_case() -> None:
     }
     # help-json has no rejection path: it takes no input.
     assert conforming - {"help-json"} == set(CASES)
+
+
+def test_no_command_is_partial() -> None:
+    assert [
+        path for path, item in COMMANDS.items() if item.contract != "conforms"
+    ] == []
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["render", "--spec", "{p}/missing-release.toml"],
+        ["render", "--spec", "{p}/junk"],
+        ["render"],
+    ],
+)
+def test_render_refuses_with_json_in_any_format(argv: list[str], files: Path) -> None:
+    for extra in ([], ["--format", "yaml"], ["--format", "json"]):
+        status, stdout, stderr = _invoke([arg.format(p=files) for arg in argv] + extra)
+        assert status == 2, (stdout, stderr)
+        body = json.loads(stdout)
+        assert body["state"] == "rejected"
+        assert body["reason"] == "render-target-invalid"
+        assert "[render-target-invalid]" in stderr
 
 
 @pytest.mark.parametrize("path", sorted(CASES))

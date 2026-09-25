@@ -4,6 +4,26 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.5.1
+
+- **Every command follows the output contract:** `render`, `release diff` and
+  `release check` are now `conforms` (none is `partial`). `piceli render`
+  prints its rejection object on stdout for every `--format` (it did only with
+  `--format json`), and a missing `--spec` file is a `render-target-invalid`
+  rejection instead of a usage error. `release check` adds `"state":
+  "succeeded"`, or `"state": "failed"` with `"reason": "check-failed"` when it
+  exits `1`. `release diff --exit-code` adds `"reason":
+  "release-changes-pending"` (new code) when it exits `1`. Existing fields are
+  unchanged.
+- **Retry-safe releases:** the release workflow asks PyPI whether the version
+  is released instead of trusting the git tag, uploads only what is missing
+  (retrying transient index failures), verifies every file on PyPI and only
+  then pushes the tag, which is never moved. An interrupted release finishes
+  on re-run. TestPyPI pre-releases from pull requests are retried and
+  verified the same way.
+- **Provenance:** wheels and sdists are published with PEP 740 attestations
+  (Sigstore, trusted publishing); see `SECURITY.md`.
+
 ## Version 0.5.0
 
 - **Mirror third-party images (preview):** `NodeLoopbackRegistry(mirror=[…])`
