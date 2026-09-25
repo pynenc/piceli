@@ -4,6 +4,51 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.5.0
+
+- **App-level pod defaults (preview):** `App(..., pod_defaults=PodDefaults(...))`
+  applies typed settings to every Deployment of the app: `security=Security(...)`
+  (pod `securityContext`: `run_as_non_root`, `run_as_user`, `run_as_group`,
+  `fs_group`, `seccomp`; container `securityContext` on every container:
+  `allow_privilege_escalation`, `read_only_root_filesystem`,
+  `drop_capabilities`, `add_capabilities`; `Security.restricted(...)` for the
+  `restricted` Pod Security Standard), an extra `node_selector` merged with
+  `node=` pins, `termination_grace_seconds` and `automount_token`. Workloads
+  take the same typed arguments, which win (`security` field by field,
+  `node_selector` key by key); `app.override` still patches last. A
+  `kubernetes.io/hostname` selector together with `node=` is refused.
+  Rendering is unchanged when none of this is used.
+- **Typed RBAC (preview):** `app.service_account(name, rules=[Rule(...)],
+  cluster_rules=[Rule(...)])` renders a ServiceAccount, a Role and
+  RoleBinding, and a ClusterRole and ClusterRoleBinding named
+  `<namespace>:<app>:<name>`; bind it with `app.deployment(...,
+  service_account=sa)`. `Rule` refuses empty lists, malformed verbs, resources
+  and groups, `resource_names` with `create`/`deletecollection`, and `"*"`
+  unless `allow_wildcard=True`. The ServiceAccount renders
+  `automountServiceAccountToken: false` and only pods bound to it get `true`.
+- **Cluster-scoped RBAC in releases:** a release may now manage ClusterRole
+  and ClusterRoleBinding objects (other cluster-scoped kinds are still
+  refused with `invalid-composition`). They carry `piceli.io/namespace`, and
+  a provider treats a cluster-scoped object as managed only when it names the
+  release's namespace as well as its owner, so one owner's releases in two
+  namespaces never change, adopt or prune each other's. Plans flag them with
+  `"cluster_scoped": true` (additive) and `[cluster-scoped]`; prune and
+  rollback create and delete them like namespaced objects.
+- **Label-selected network policies:** `app.network_policy(selector=...,
+  allow_from_selector=..., name=...)` and `app.release_selector` (the labels
+  every pod of the app carries) express "only this app's pods may connect".
+- `--adopt`/`--replace` and `[release] adopt`/`replace` accept RBAC names with
+  `:` (`ClusterRole/staging:shop:watcher`).
+- **Fix:** a pruning delete no longer fails with
+  `deleted-resource-reappeared` on a real cluster. An `Orphan` delete keeps
+  the object (with a `deletionTimestamp`) until the garbage collector removes
+  its finalizer; the executor now waits for the same object to disappear, and
+  still refuses an object recreated with another UID.
+- `piceli.testing`: the fake API also serves ServiceAccount, Role,
+  RoleBinding, ClusterRole and ClusterRoleBinding, decodes percent-encoded
+  names, and `FakeAPI.terminating_reads` keeps an `Orphan`-deleted object
+  terminating for a few reads, like a real API server.
+
 ## Version 0.4.1
 
 - **Fix (safety):** Piceli signals a child's process group only when the id

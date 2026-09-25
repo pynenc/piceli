@@ -2,8 +2,8 @@
 
 Maturity: **preview** (the API may change before 1.0).
 
-``App`` collects Deployments, Services, ConfigMaps, Secrets and NetworkPolicies
-declared with typed models and renders them to the ``ResourceIntent`` objects
+``App`` collects Deployments, Services, ConfigMaps, Secrets, ServiceAccounts
+(with their RBAC rules) and NetworkPolicies declared with typed models and renders them to the ``ResourceIntent`` objects
 of a ``DeploymentComposition``, which ``piceli release`` plans and applies.
 Services may also declare how to reach them from a laptop
 (``app.access.forward``), which ``piceli access`` and ``piceli status`` use.
@@ -24,12 +24,16 @@ from piceli.app.model import (
     MemoryVolume,
     Mount,
     NetworkPolicy,
+    PodDefaults,
     Probe,
     Resources,
+    Rule,
     Secret,
     SecretKey,
     SecretVolume,
+    Security,
     Service,
+    ServiceAccount,
     ServicePort,
 )
 from piceli.k8s.ui_config import HealthProbe
@@ -50,11 +54,15 @@ __all__ = [
     "MemoryVolume",
     "Mount",
     "NetworkPolicy",
+    "PodDefaults",
     "Probe",
     "Resources",
+    "Rule",
     "Secret",
     "SecretKey",
     "SecretVolume",
+    "Security",
     "Service",
+    "ServiceAccount",
     "ServicePort",
 ]

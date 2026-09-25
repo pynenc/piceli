@@ -175,6 +175,20 @@ class ExecutionLimits:
             raise ValueError("this executor supports one ordered action at a time")
 
 
+def _terminating(current: DiscoveredResource, action: PlanAction) -> bool:
+    """The object this DELETE removed, still finishing its deletion.
+
+    An ``Orphan`` delete adds the ``orphan`` finalizer, so the API server
+    keeps the object (with a ``deletionTimestamp``) until the garbage
+    collector removes the finalizer. The same UID with a deletion timestamp is
+    that object on its way out, never a new one.
+    """
+    metadata = current.manifest.get("metadata", {})
+    return bool(metadata.get("deletionTimestamp")) and (
+        metadata.get("uid") == action.precondition.uid
+    )
+
+
 def _identity(ref: ResourceRef) -> ResourceIdentity:
     return ResourceIdentity(**ref.__dict__)
 
@@ -983,7 +997,10 @@ class PlanExecutor:
     ) -> tuple[DiscoveredResource | None, bool]:
         current = self.provider.get(_identity(action.resource.ref), deadline=deadline)
         if action.operation is PlanOperation.DELETE:
-            if current is None:
+            if current is None or _terminating(current, action):
+                # Gone, or the delete was accepted and the API server is
+                # finishing it (an ``Orphan`` delete waits for the garbage
+                # collector to remove its finalizer).
                 return None, False
             raise ProviderError("ambiguous-delete-blocked", ambiguous=True)
         if current is None:
@@ -1046,7 +1063,7 @@ class PlanExecutor:
     ) -> None:
         payload = row["payload"]
         if action.operation is PlanOperation.DELETE:
-            if current is not None:
+            if current is not None and not _terminating(current, action):
                 raise ProviderError("deleted-resource-reappeared")
             return
         if current is None or current.manifest["metadata"]["uid"] != payload["uid"]:
@@ -1149,8 +1166,9 @@ class PlanExecutor:
                 )
             current = self.provider.get(_identity(action.resource.ref), deadline=end)
             self._verify_receipt(row, action, current)
-            if action.operation is PlanOperation.DELETE or (
-                current is not None
+            if (action.operation is PlanOperation.DELETE and current is None) or (
+                action.operation is not PlanOperation.DELETE
+                and current is not None
                 and self.provider.readiness(current).status is ReadinessStatus.READY
             ):
                 payload = (
@@ -1162,6 +1180,7 @@ class PlanExecutor:
                 return
             if (
                 current is not None
+                and action.operation is not PlanOperation.DELETE
                 and self.provider.readiness(current).status
                 is ReadinessStatus.UNSUPPORTED
             ):

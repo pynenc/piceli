@@ -150,8 +150,10 @@ unattended CI job for this exact spec.
 2. Show the owner the summary from stderr: every `create`, `adopt`, `delete`
    and `drift` line, the changed fields under each `apply` (all of them are in
    `diffs` in the JSON), and the adoption notes (a takeover removes fields
-   other clients wrote). A plan whose `summary` has only `no-op` changes
-   nothing.
+   other clients wrote). Point out every action with `"cluster_scoped": true`
+   (`[cluster-scoped]` in the text): a ClusterRole or ClusterRoleBinding
+   grants permissions across the whole cluster. A plan whose `summary` has
+   only `no-op` changes nothing.
 3. Wait for the owner to approve **that plan hash**. A plan expires after
    `approval_window_seconds`; if it did, plan again and ask again.
 4. Run `piceli release apply --spec release.toml --approve <hash>`.
@@ -250,6 +252,11 @@ accepted (`observe`, `operator`, `artifacts deliver --via-forward`), and a
 missing context is a usage error (exit `2`), never a fallback to the file's
 `current-context`. Do not change the kubeconfig or context an owner has set
 in a spec, and do not pick a context yourself: ask the owner which one to use.
+
+An app with `cluster_rules` (typed RBAC, {doc}`typed_apps`) needs a
+kubeconfig user that may list and write ClusterRoles and ClusterRoleBindings.
+When planning fails because that discovery is denied, report it to the owner;
+do not switch to a more privileged context yourself.
 
 Never add or change `allow_exec`, `exec_sha256` or `exec_pass_env` in a spec
 or in a pipeline's `Target`, or pass `--allow-exec`/`--exec-sha256`, yourself: allowing an exec credential plugin runs a program with the owner's

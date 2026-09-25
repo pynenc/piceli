@@ -52,6 +52,8 @@ from piceli.checks import (
 )
 from piceli.k8s.ops.bounds import timestamp
 from piceli.k8s.ops.discovery import (
+    RELEASE_CLUSTER_KINDS,
+    RELEASE_NAMESPACE_ANNOTATION,
     RETAINED_KINDS,
     DiscoveryArtifact,
     DiscoveryLimits,
@@ -71,6 +73,7 @@ from piceli.k8s.ops.executor import (
 from piceli.k8s.ops.field_diff import plan_diffs
 from piceli.k8s.ops.kubernetes_provider import ProviderError
 from piceli.k8s.ops.plan import (
+    DeploymentComponent,
     DeploymentComposition,
     DeploymentPlan,
     ObservedSnapshot,
@@ -232,6 +235,13 @@ def _grant(
         owner_id,
         tuple(ActionGrant.for_action(action) for action in plan.actions),
         expires_at,
+        # The approved plan hash covers every action, cluster-scoped ones
+        # included (each is listed with ``cluster_scoped`` in the plan).
+        cluster_resources=tuple(
+            action.resource.ref
+            for action in plan.actions
+            if not action.resource.ref.namespace
+        ),
         compensation_resources=tuple(
             action.resource.ref
             for action in plan.actions
@@ -317,6 +327,72 @@ def _declared_match(
 
 def _label(ref: ResourceRef) -> str:
     return f"{ref.kind}/{ref.name}"
+
+
+def scoped_composition(
+    composition: DeploymentComposition, namespace: str
+) -> DeploymentComposition:
+    """Check a release composition's scope; stamp its cluster-scoped objects.
+
+    Namespaced objects must target ``namespace``. Cluster-scoped objects must
+    be of a kind in :data:`~piceli.k8s.ops.discovery.RELEASE_CLUSTER_KINDS`
+    (ClusterRole, ClusterRoleBinding); each gets the
+    ``piceli.io/namespace: <namespace>`` annotation (typed apps render it)
+    so that only this namespace's release manages it. An object that already
+    names another namespace is refused.
+
+    :raises ReleaseSpecError: ``invalid-composition``.
+    """
+    components = []
+    for component in composition.components:
+        resources = []
+        for resource in component.resources:
+            ref = resource.ref
+            if ref.namespace:
+                if ref.namespace != namespace:
+                    raise ReleaseSpecError(
+                        f"{ref.kind}/{ref.name} targets namespace {ref.namespace!r}",
+                        code="invalid-composition",
+                    )
+                resources.append(resource)
+                continue
+            if (ref.api_version, ref.kind) not in RELEASE_CLUSTER_KINDS:
+                raise ReleaseSpecError(
+                    "cluster-scoped resources other than rbac.authorization.k8s.io/v1 "
+                    "ClusterRole and ClusterRoleBinding are not supported by "
+                    f"releases: {ref.kind}/{ref.name}",
+                    code="invalid-composition",
+                )
+            manifest = resource.manifest
+            metadata = manifest.setdefault("metadata", {})
+            annotations = metadata.get("annotations") or {}
+            declared = annotations.get(RELEASE_NAMESPACE_ANNOTATION)
+            if declared is not None and declared != namespace:
+                raise ReleaseSpecError(
+                    f"{ref.kind}/{ref.name} is annotated "
+                    f"{RELEASE_NAMESPACE_ANNOTATION}={declared!r}, but the release "
+                    f"namespace is {namespace!r}",
+                    code="invalid-composition",
+                )
+            if declared is None:
+                if resource.secret_bindings:
+                    raise ReleaseSpecError(
+                        f"{ref.kind}/{ref.name}: cluster-scoped objects cannot "
+                        "bind secret values",
+                        code="invalid-composition",
+                    )
+                metadata["annotations"] = {
+                    **annotations,
+                    RELEASE_NAMESPACE_ANNOTATION: namespace,
+                }
+                resource = ResourceIntent.from_manifest(manifest, resource.dependencies)
+            resources.append(resource)
+        components.append(
+            DeploymentComponent(
+                component.name, tuple(resources), component.dependencies
+            )
+        )
+    return DeploymentComposition(tuple(components))
 
 
 @dataclass(frozen=True)
@@ -551,6 +627,7 @@ def _compact_actions(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
             ),
             **({"replace": action["replace"]} if "replace" in action else {}),
             **({"removes": action["removes"]} if "removes" in action else {}),
+            **({"cluster_scoped": True} if not action["resource"]["namespace"] else {}),
         }
         for action in plan["actions"]
     ]
@@ -886,21 +963,7 @@ class ReleaseRunner:
                     "the composition function must return an App or a DeploymentComposition",
                     code="invalid-composition",
                 )
-            for component in composition.components:
-                for resource in component.resources:
-                    if not resource.ref.namespace:
-                        raise ReleaseSpecError(
-                            "cluster-scoped resources are not supported by "
-                            f"releases: {resource.ref.kind}/{resource.ref.name}",
-                            code="invalid-composition",
-                        )
-                    if resource.ref.namespace != self.spec.model.target.namespace:
-                        raise ReleaseSpecError(
-                            f"{resource.ref.kind}/{resource.ref.name} targets "
-                            f"namespace {resource.ref.namespace!r}",
-                            code="invalid-composition",
-                        )
-            return composition
+            return scoped_composition(composition, self.spec.model.target.namespace)
 
         return factory
 

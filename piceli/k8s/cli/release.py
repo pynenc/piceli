@@ -253,6 +253,7 @@ def _describe_plan(result: Any, spec: str, command: str) -> None:
                 f"  {action['operation']:>7} {action['kind']}/{action['name']}"
                 + _adoption_note(action.get("adoption"))
                 + _write_note(action)
+                + ("  [cluster-scoped]" if action.get("cluster_scoped") else "")
             )
             _say_changes(diffs.get((action["kind"], action["name"])), MAX_CHANGE_LINES)
     for item in report["drift"]:

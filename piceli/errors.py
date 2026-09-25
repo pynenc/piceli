@@ -1520,7 +1520,7 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
     _E(
         "invalid-composition",
         "Invalid composition",
-        "The composition entry point could not be loaded, did not return a DeploymentComposition, declared a cluster-scoped object or another namespace, or its secret bindings do not match the declared secret inputs.",
+        "The composition entry point could not be loaded, did not return a DeploymentComposition, declared a cluster-scoped object other than a ClusterRole or ClusterRoleBinding (or one annotated `piceli.io/namespace` with another namespace), targeted another namespace, or its secret bindings do not match the declared secret inputs.",
         "Fix the composition function named by `[release] composition`, then plan again.",
         False,
         "release",
@@ -1528,7 +1528,7 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
     _E(
         "invalid-adopt-entry",
         "Invalid adopt or replace entry",
-        "An `--adopt`/`--replace` flag or a `[release] adopt`/`replace` entry is not `Kind/name` or `apiVersion/Kind/name`.",
+        "An `--adopt`/`--replace` flag or a `[release] adopt`/`replace` entry is not `Kind/name` or `apiVersion/Kind/name`, or its name is not valid for the kind (a DNS subdomain; RBAC kinds also allow `:`).",
         "Write the entry as `Kind/name`, e.g. `--adopt Deployment/web`.",
         False,
         "release",
@@ -1560,7 +1560,7 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
     _E(
         "resource-requires-adoption",
         "Existing object requires adoption",
-        "An object the composition declares already exists and is not managed by this release's owner (see `blocking` for each object and the flags that unblock it).",
+        "An object the composition declares already exists and is not managed by this release's owner (see `blocking` for each object and the flags that unblock it). A cluster-scoped object (ClusterRole, ClusterRoleBinding) is managed only when it also carries `piceli.io/namespace` with this release's namespace.",
         "Plan again with `--adopt Kind/name` (or `--replace Kind/name` for non-retained objects), `[release] adopt`/`replace`, or `--adopt-all-desired`; or delete the object.",
         False,
         "release",

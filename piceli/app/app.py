@@ -20,13 +20,18 @@ from piceli.app.model import (
     Mount,
     Name,
     NetworkPolicy,
+    PodDefaults,
     Probe,
     Resources,
+    Rule,
     Secret,
+    Security,
     Service,
+    ServiceAccount,
     ServicePort,
     Volume,
 )
+from piceli.k8s.ops.discovery import RELEASE_NAMESPACE_ANNOTATION
 from piceli.k8s.ops.plan import (
     DeploymentComponent,
     DeploymentComposition,
@@ -63,7 +68,7 @@ class ComponentSource(Protocol):
     def component(self, namespace: str) -> DeploymentComponent: ...
 
 
-Declared = Config | Secret | Deployment | Service | NetworkPolicy
+Declared = Config | Secret | Deployment | Service | NetworkPolicy | ServiceAccount
 Handle = Declared | str
 
 
@@ -75,10 +80,10 @@ class App(BaseModel):
     """A typed application: workloads, configuration and policies in one namespace.
 
     Declare objects with :meth:`deployment`, :meth:`service`, :meth:`config`,
-    :meth:`secret` and :meth:`network_policy`, order components with
-    :meth:`depends`, and render with :meth:`composition` (from a release
-    context) or :meth:`render` (from a namespace). Rendering is pure: it never
-    contacts a cluster.
+    :meth:`secret`, :meth:`service_account` and :meth:`network_policy`, order
+    components with :meth:`depends`, and render with :meth:`composition` (from
+    a release context) or :meth:`render` (from a namespace). Rendering is
+    pure: it never contacts a cluster.
 
     :param name: Application name, a DNS label.
     :param owner: The release owner expected to manage this app. It is
@@ -86,7 +91,11 @@ class App(BaseModel):
         ``piceli.io/owner`` from ``release.toml`` at apply time.
     :param labels: Labels on every object. Defaults to
         ``{"app.kubernetes.io/part-of": name}``. Workloads add their selector
-        labels on top.
+        labels on top, and every pod carries them (see :attr:`release_selector`).
+    :param pod_defaults: Pod settings applied to every Deployment declared on
+        this app (:class:`~piceli.app.model.PodDefaults`): security, an extra
+        node selector, the termination grace period and token automounting.
+        A workload's own typed arguments win; ``override`` still patches last.
 
     Components: every object belongs to a component (the unit of ordering and
     readiness in a release). A Deployment's default component is its own name;
@@ -116,6 +125,7 @@ class App(BaseModel):
     name: Name
     owner: str | None = Field(default=None, min_length=1, max_length=253)
     labels: Labels | None = None
+    pod_defaults: PodDefaults | None = None
 
     _objects: list[Declared] = PrivateAttr(default_factory=list)
     _extra: list[DeploymentComponent | ComponentSource] = PrivateAttr(
@@ -139,6 +149,24 @@ class App(BaseModel):
         return dict(self.labels)
 
     @property
+    def release_selector(self) -> dict[str, str]:
+        """Labels every pod of this app carries: a selector for "the whole app".
+
+        Use it with :meth:`network_policy`, for example to let only this app's
+        pods connect to each other. These are :attr:`object_labels`, so they
+        are stable as long as the app ``name`` and ``labels`` are.
+
+        :raises ValueError: when the app was declared with ``labels={}``.
+        """
+        labels = self.object_labels
+        if not labels:
+            raise ValueError(
+                f"app {self.name!r} has no labels (labels={{}}), so no selector "
+                "matches all its pods; declare labels= on the App"
+            )
+        return labels
+
+    @property
     def objects(self) -> tuple[Declared, ...]:
         """Everything declared so far, in declaration order."""
         return tuple(self._objects)
@@ -148,6 +176,8 @@ class App(BaseModel):
         for existing in self._objects:
             if type(existing) is type(item) and existing.name == item.name:
                 raise ValueError(f"{kind} {item.name!r} is already declared")
+        if isinstance(item, Deployment):
+            item.check_defaults(self.pod_defaults)
         forward = _forward(item)
         if forward is not None:
             ident = forward.name or item.name
@@ -235,7 +265,11 @@ class App(BaseModel):
         share_process_namespace: bool = False,
         node: str | None = None,
         strategy: str | None = None,
-        service_account: str | None = None,
+        service_account: ServiceAccount | str | None = None,
+        security: Security | None = None,
+        node_selector: Mapping[str, str] | None = None,
+        termination_grace_seconds: int | None = None,
+        automount_token: bool | None = None,
         selector: Mapping[str, str] | None = None,
         labels: Mapping[str, str] | None = None,
         component: str | None = None,
@@ -249,7 +283,20 @@ class App(BaseModel):
         run next to it and ``init`` containers run first. The remaining
         arguments are :class:`~piceli.app.model.Deployment` fields; ``access``
         declares a loopback forward to the pods (prefer a Service's ``access``).
+
+        ``service_account`` is a :class:`~piceli.app.model.ServiceAccount`
+        from :meth:`service_account` (its pods get a token and its
+        permissions) or the name of one the app does not manage.
+        ``security``, ``node_selector`` and ``termination_grace_seconds`` are
+        layered over the app's ``pod_defaults``.
         """
+        if isinstance(service_account, ServiceAccount):
+            if not any(existing is service_account for existing in self._objects):
+                raise ValueError(
+                    f"service_account={service_account.name!r} is not declared on "
+                    "this app; declare it with app.service_account(...) first"
+                )
+            service_account = service_account.name
         main = Container.model_validate(
             {
                 "name": name if container is None else container,
@@ -278,6 +325,12 @@ class App(BaseModel):
                     "node": node,
                     "strategy": strategy,
                     "service_account": service_account,
+                    "security": security,
+                    "node_selector": (
+                        dict(node_selector) if node_selector is not None else None
+                    ),
+                    "termination_grace_seconds": termination_grace_seconds,
+                    "automount_token": automount_token,
                     "selector": dict(selector) if selector is not None else None,
                     "labels": dict(labels or {}),
                     "component": component,
@@ -324,26 +377,116 @@ class App(BaseModel):
             )
         )
 
+    def service_account(
+        self,
+        name: str,
+        *,
+        rules: Sequence[Rule] = (),
+        cluster_rules: Sequence[Rule] = (),
+        component: str | None = None,
+    ) -> ServiceAccount:
+        """Declare a ServiceAccount and the permissions its pods get.
+
+        Bind it to a workload with ``app.deployment(..., service_account=sa)``.
+
+        :param name: ServiceAccount name; the Role and RoleBinding share it.
+        :param rules: Namespaced permissions (:class:`~piceli.app.model.Rule`):
+            a Role and RoleBinding in the release namespace.
+        :param cluster_rules: Cluster-wide permissions: a ClusterRole and
+            ClusterRoleBinding named ``<namespace>:<app>:<name>``, annotated
+            ``piceli.io/namespace: <namespace>``. Only the release in that
+            namespace manages them; the deployer needs cluster RBAC rights.
+        :param component: Deployment component; defaults to ``name``.
+
+        Tokens: the ServiceAccount renders
+        ``automountServiceAccountToken: false``; a pod bound to it with
+        ``service_account=`` renders ``true`` (unless the workload sets
+        ``automount_token``), so only the pods you bind get API credentials.
+
+        Example::
+
+            watcher = app.service_account(
+                "watcher",
+                rules=[Rule(resources=["pods"], verbs=["get", "list", "watch"])],
+                cluster_rules=[Rule(resources=["nodes"], verbs=["get", "list"])],
+            )
+            app.deployment("watcher", image=..., service_account=watcher)
+        """
+        return self._declare(
+            ServiceAccount.model_validate(
+                {
+                    "name": name,
+                    "rules": tuple(rules),
+                    "cluster_rules": tuple(cluster_rules),
+                    "component": component,
+                }
+            )
+        )
+
     def network_policy(
         self,
-        workload: Deployment,
+        workload: Deployment | None = None,
         *,
+        selector: Mapping[str, str] | None = None,
         allow_from: Sequence[Deployment] = (),
+        allow_from_selector: Mapping[str, str]
+        | Sequence[Mapping[str, str]]
+        | None = None,
         ports: Sequence[int] = (),
         name: str | None = None,
+        component: str | None = None,
     ) -> NetworkPolicy:
-        """Restrict ingress to ``workload``'s pods (see :class:`~piceli.app.model.NetworkPolicy`).
+        """Restrict ingress to selected pods (see :class:`~piceli.app.model.NetworkPolicy`).
 
-        Named ``<workload>-ingress`` unless ``name`` is given.
+        Select the protected pods with ``workload`` (its selector) or with
+        ``selector`` (any pod labels, such as :attr:`release_selector` for
+        every pod of this app). Sources are ``allow_from`` workloads and
+        ``allow_from_selector`` label sets (one mapping or several), in the
+        same namespace.
+
+        Named ``<workload>-ingress`` for a workload; a ``selector`` policy
+        needs ``name``. Its component is the workload's, else ``component``,
+        else ``name``.
+
+        Example, only this app's pods may connect to its pods::
+
+            app.network_policy(
+                selector=app.release_selector,
+                allow_from_selector=app.release_selector,
+                name="shop-internal",
+            )
         """
+        if (workload is None) == (selector is None):
+            raise ValueError("pass either a workload or selector=")
+        if workload is None and name is None:
+            raise ValueError("a network policy with selector= needs name=")
+        if allow_from_selector is None:
+            peers: list[Mapping[str, str]] = []
+        elif isinstance(allow_from_selector, Mapping):
+            peers = [allow_from_selector]
+        else:
+            peers = list(allow_from_selector)
+        for peer in peers:
+            if not peer:
+                raise ValueError(
+                    "allow_from_selector needs labels; an empty selector would "
+                    "allow every pod in the namespace"
+                )
+        pod_selector = workload.selector_labels if workload else dict(selector or {})
+        policy_name = name or f"{workload.name}-ingress"  # type: ignore[union-attr]
         return self._declare(
             NetworkPolicy.model_validate(
                 {
-                    "name": name or f"{workload.name}-ingress",
-                    "pod_selector": workload.selector_labels,
-                    "allow_from": tuple(peer.selector_labels for peer in allow_from),
+                    "name": policy_name,
+                    "pod_selector": pod_selector,
+                    "allow_from": (
+                        *(peer.selector_labels for peer in allow_from),
+                        *(dict(peer) for peer in peers),
+                    ),
                     "ports": tuple(ports),
-                    "component": workload.component_name,
+                    "component": workload.component_name
+                    if workload
+                    else component or policy_name,
                 }
             )
         )
@@ -351,10 +494,10 @@ class App(BaseModel):
     def override(self, item: Declared, patch: Mapping[str, Any]) -> None:
         """Set fields of ``item``'s rendered manifest that the typed model lacks.
 
-        The escape hatch for fields with no typed argument yet (a security
-        context, tolerations, an annotation, a list the model orders
-        differently). ``patch`` is merged into the manifest when the app is
-        rendered, after the typed fields, in call order:
+        The escape hatch for fields with no typed argument yet (tolerations,
+        an annotation, a list the model orders differently). ``patch`` is
+        merged into the manifest when the app is rendered, after the typed
+        fields and the app's ``pod_defaults``, in call order:
 
         * a mapping merges key by key, and ``None`` removes a key;
         * a list of objects that all have a unique ``name`` (containers, env,
@@ -370,10 +513,13 @@ class App(BaseModel):
         Secret's ``data`` and ``stringData`` cannot be overridden (secret
         values never appear in the model).
 
+        For a ServiceAccount, the patch applies to the ServiceAccount object
+        (its Role and binding objects follow from its rules).
+
         Example::
 
             app.override(api, {"spec": {"template": {"spec": {
-                "securityContext": {"runAsNonRoot": True},
+                "tolerations": [{"key": "dedicated", "operator": "Exists"}],
             }}}})
         """
         if not any(existing is item for existing in self._objects):
@@ -438,7 +584,11 @@ class App(BaseModel):
         owners = {
             (kind, item.name): item.component_name
             for item in self._objects
-            for kind, cls in (("ConfigMap", Config), ("Secret", Secret))
+            for kind, cls in (
+                ("ConfigMap", Config),
+                ("Secret", Secret),
+                ("ServiceAccount", ServiceAccount),
+            )
             if isinstance(item, cls)
         }
         resources: dict[str, list[ResourceIntent]] = {}
@@ -446,8 +596,8 @@ class App(BaseModel):
         claims: set[str] = set()
         for item in self._objects:
             component = item.component_name
-            resources.setdefault(component, []).append(
-                self._intent(item, namespace, labels, nodes)
+            resources.setdefault(component, []).extend(
+                self._intents(item, namespace, labels, nodes)
             )
             if isinstance(item, Deployment):
                 claims |= item.existing_claims()
@@ -495,17 +645,18 @@ class App(BaseModel):
                     )
         return DeploymentComposition(tuple(components))
 
-    def _intent(
+    def _intents(
         self,
         item: Declared,
         namespace: str,
         labels: Mapping[str, str],
         nodes: Mapping[str, NodeLike],
-    ) -> ResourceIntent:
+    ) -> list[ResourceIntent]:
         metadata: dict[str, Any] = {"name": item.name, "namespace": namespace}
         if labels:
             metadata["labels"] = dict(labels)
         manifest: dict[str, Any]
+        extra: list[dict[str, Any]] = []
         if isinstance(item, Config):
             manifest = {
                 "apiVersion": "v1",
@@ -531,7 +682,17 @@ class App(BaseModel):
                         f"{sorted(nodes)}"
                     )
                 node_name = nodes[item.node].name
-            manifest = item.manifest(namespace, labels, node_name)
+            manifest = item.manifest(
+                namespace,
+                labels,
+                node_name,
+                self.pod_defaults,
+                self._automount(item),
+            )
+        elif isinstance(item, ServiceAccount):
+            manifest, *extra = item.manifests(
+                namespace, self.name, labels, RELEASE_NAMESPACE_ANNOTATION
+            )
         else:
             manifest = item.manifest(namespace, labels)
         kind = _KINDS[type(item)]
@@ -542,7 +703,16 @@ class App(BaseModel):
         if isinstance(item, Secret):
             for key, reference in item.data.items():
                 intent = intent.with_secret(_pointer(key), reference)
-        return intent
+        return [intent, *(ResourceIntent.from_manifest(value) for value in extra)]
+
+    def _automount(self, item: Deployment) -> bool | None:
+        """Token automounting when the workload sets none (see ``service_account``)."""
+        if item.service_account is not None and any(
+            isinstance(other, ServiceAccount) and other.name == item.service_account
+            for other in self._objects
+        ):
+            return True
+        return self.pod_defaults.automount_token if self.pod_defaults else None
 
 
 _KINDS: dict[type, str] = {
@@ -551,6 +721,7 @@ _KINDS: dict[type, str] = {
     Deployment: "Deployment",
     Service: "Service",
     NetworkPolicy: "NetworkPolicy",
+    ServiceAccount: "ServiceAccount",
 }
 
 

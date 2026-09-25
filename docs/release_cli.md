@@ -318,7 +318,13 @@ def build(ctx: ReleaseContext) -> DeploymentComposition:
 reference), `values`, verified `nodes` and opaque `secrets` references.
 Secret values never reach the function. Every declared secret input must be
 bound, except outputs that a `template` generator uses. Resources must be
-namespaced and in the target namespace.
+namespaced and in the target namespace, except `ClusterRole` and
+`ClusterRoleBinding` (`rbac.authorization.k8s.io/v1`). Those are stamped with
+`piceli.io/namespace: <target namespace>`, and the release manages only the
+ones that carry both its owner and its namespace, so releases of one owner in
+two namespaces never touch each other's (see "Cluster-scoped objects in a
+release" in {doc}`typed_apps`). Other cluster-scoped kinds are refused with
+`invalid-composition`.
 
 ### Secret generators
 
@@ -405,7 +411,9 @@ apply web-716dfe62698b: ready
 Each object gets one operation: `create`, `adopt`, `replace`, `apply`,
 `no-op` or `delete`. An object that exists and that the release already
 manages is `no-op` when applying it would change nothing, and `apply`
-otherwise. {doc}`plans_and_diffs` explains how that is decided (a server-side
+otherwise. Actions on cluster-scoped objects (ClusterRole,
+ClusterRoleBinding) carry `"cluster_scoped": true` in the JSON and
+`[cluster-scoped]` in the text. {doc}`plans_and_diffs` explains how that is decided (a server-side
 dry run of the write, so server defaults never make an unchanged object look
 changed).
 
@@ -467,7 +475,8 @@ would change something.
 Objects that already exist in the namespace without this release's
 `piceli.io/owner` (for example created by `kubectl`) are refused at plan
 time, with the list of objects to adopt. Authorize each one with
-`--adopt Kind/name` (or `apiVersion/Kind/name`; repeatable) on `plan`,
+`--adopt Kind/name` (or `apiVersion/Kind/name`; repeatable; RBAC names may
+hold `:`, as in `--adopt ClusterRole/shop:shop:watcher`) on `plan`,
 `apply` or `rollback`, or list them in `[release] adopt`. An entry must name
 a resource the composition declares; entries for objects that are absent, or
 already managed with nothing to reclaim, are reported as `adopt_not_needed`
@@ -689,7 +698,7 @@ Other refusals:
 | `cluster-identity-changed` | The kubeconfig/context points at another cluster than the one this `state_dir` deployed to. Fix `[target]`; never reuse a `state_dir` across clusters. |
 | `unknown-rotate-secret` | `--rotate` names must be `[secrets.<name>]` entries of the spec. |
 | `invalid-release-spec` | Fix the key named in `message`. `images_from` is a top-level key (before the first `[table]`), not part of `[images]`. |
-| `invalid-composition` | Fix the composition function (it must return a `DeploymentComposition` in the target namespace and bind every declared secret input). |
+| `invalid-composition` | Fix the composition function (it must return a `DeploymentComposition` in the target namespace, with no cluster-scoped objects other than ClusterRole and ClusterRoleBinding, and bind every declared secret input). |
 | `kubeconfig-rejected`, `namespace-not-found`, `server-target-identity-mismatch`, `rbac-denied`, … | Run `piceli explain <code>`, or see {doc}`reference/errors`. |
 | `target-refused`, a code starting with `exec-`, or `auth-provider-refused` | The kubeconfig/context was refused, or the target's exec credential plugin was not allowed, not pinned, or failed. See "If it fails" in {doc}`managed_clusters`. |
 
