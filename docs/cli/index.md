@@ -9,16 +9,17 @@ through an explicit kubeconfig file and context. See the {doc}`../roadmap` for
 each feature's maturity.
 ```
 
-The `piceli` command (also available as `python -m piceli`) has six command groups, the `render`, `deploy`, `status` and `access` commands and two contract commands:
+The `piceli` command (also available as `python -m piceli`) has seven command groups, the `render`, `deploy`, `status` and `access` commands and two contract commands:
 
 | Group | Purpose | Cluster access | Output |
 | --- | --- | --- | --- |
-| `render` | Print the manifests of a typed app or composition (preview). See {doc}`../typed_apps` | None | YAML or JSON |
+| `render` | Print the manifests of a typed app or composition (preview); `--env` renders one environment, `--diff-env` compares two. See {doc}`../typed_apps` and {doc}`../environments` | None | YAML or JSON |
 | `deploy` | Run the whole pipeline for a typed app: verify inputs, build, deliver, plan, apply and run checks, skipping unchanged stages. See {doc}`../deploy` | Explicit kubeconfig file + context from the target | JSON + summary on stderr |
 | `release` | Plan, apply, roll back, resume and stop releases from a `release.toml` spec; `release check` runs the spec's `[[checks]]` ({doc}`../checks`); `release secret show` inspects secret values (owner, `--reveal`). See {doc}`../release_cli` and {doc}`../secrets` | Explicit kubeconfig file + context from the spec | JSON + summary on stderr |
 | `observe` | Reconcile a session archive, logs, port forwards, local UI | Explicit `--kubeconfig/--context` | JSON |
 | `operator` | Inventory, releases, approvals, backups, local UI | Explicit `--kubeconfig` | JSON |
 | `import` | Generate a typed app module from live objects (`import live`) or manifest files (`import yaml`) (preview). See {doc}`../migrate_from_kubectl` | Explicit `--kubeconfig/--context` for `live` (reads only); none for `yaml` | Python module + JSON |
+| `codegen` | Generate typed models from a CRD's schema (`codegen crd`, preview). See {doc}`../crds` | None, or explicit `--kubeconfig/--context` with `--from-cluster` (reads one CRD) | Python module + JSON |
 | `artifacts` | Deterministic OCI builds, image delivery and explicit local import | None, or an explicit target for `deliver` | JSON |
 | `inputs` | Record and verify the git identity of build sources | None (local git only) | JSON |
 | `status` | Whether the app is up and how to reach it: release, image digests, health, URLs (preview). See {doc}`../access` | Explicit kubeconfig file + context from the target (reads only) | Text, or JSON with `--json` |

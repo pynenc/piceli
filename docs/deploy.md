@@ -256,7 +256,9 @@ the registry release's actions and any live registry it adopts or replaces,
 the release's actions (or, while the
 images are not built yet, the fingerprint of the rendered app and the
 preview's adopt/replace/delete set), the checks, `--until`, the target
-identity and, with `--ref`, the resolved commit of each pinned source. `--approve HASH` re-plans and runs only when the hash is
+identity, with `--ref`, the resolved commit of each pinned source and, with
+`--env`, the environment's name and resolved override values (see
+{doc}`environments`). `--approve HASH` re-plans and runs only when the hash is
 unchanged; otherwise it is refused with `pipeline-plan-changed` and nothing
 runs. Stages whose plan depends on earlier outputs (the release plan after a
 build) run under that approval, within the limits of the preview below.

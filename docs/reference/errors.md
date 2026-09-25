@@ -56,6 +56,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`checks-rollback-unavailable`](#error-checks-rollback-unavailable) | checks | no |
 | [`cluster-identity-changed`](#error-cluster-identity-changed) | release | no |
 | [`cluster-identity-unreadable`](#error-cluster-identity-unreadable) | kubernetes | yes |
+| [`codegen-cluster-read-failed`](#error-codegen-cluster-read-failed) | codegen | yes |
+| [`codegen-flags-conflict`](#error-codegen-flags-conflict) | codegen | no |
+| [`codegen-output-refused`](#error-codegen-output-refused) | codegen | no |
 | [`command-cancelled`](#error-command-cancelled) | artifacts-delivery | yes |
 | [`command-failed`](#error-command-failed) | artifacts-delivery | no |
 | [`command-output-limit`](#error-command-output-limit) | artifacts-delivery | no |
@@ -67,6 +70,8 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`context-empty`](#error-context-empty) | build-spec | no |
 | [`context-missing`](#error-context-missing) | build-spec | no |
 | [`context-symlink`](#error-context-symlink) | build-spec | no |
+| [`crd-invalid`](#error-crd-invalid) | codegen | no |
+| [`crd-not-found`](#error-crd-not-found) | codegen | no |
 | [`credentials-file-not-private`](#error-credentials-file-not-private) | artifacts-input | no |
 | [`cross-origin-location-refused`](#error-cross-origin-location-refused) | artifacts-registry | no |
 | [`deadline-exceeded`](#error-deadline-exceeded) | kubernetes | yes |
@@ -88,6 +93,10 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`dockerfile-unpinned`](#error-dockerfile-unpinned) | build-spec | no |
 | [`dry-run-limit-exceeded`](#error-dry-run-limit-exceeded) | kubernetes | no |
 | [`dry-run-placeholder-image`](#error-dry-run-placeholder-image) | kubernetes | no |
+| [`environment-invalid`](#error-environment-invalid) | environments | no |
+| [`environment-required`](#error-environment-required) | environments | no |
+| [`environment-unknown`](#error-environment-unknown) | environments | no |
+| [`environment-unsupported`](#error-environment-unsupported) | environments | no |
 | [`exec-auth-not-allowed`](#error-exec-auth-not-allowed) | target | no |
 | [`exec-command-not-found`](#error-exec-command-not-found) | target | no |
 | [`exec-command-unsafe`](#error-exec-command-unsafe) | target | no |
@@ -272,6 +281,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`request-byte-limit`](#error-request-byte-limit) | kubernetes | no |
 | [`resource-content-precondition-failed`](#error-resource-content-precondition-failed) | execution | no |
 | [`resource-requires-adoption`](#error-resource-requires-adoption) | release | no |
+| [`resource-scope-mismatch`](#error-resource-scope-mismatch) | release | no |
 | [`response-byte-limit`](#error-response-byte-limit) | kubernetes | no |
 | [`restore-refused`](#error-restore-refused) | observe | no |
 | [`resume-refused`](#error-resume-refused) | release | no |
@@ -2156,6 +2166,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Plan again with `--adopt Kind/name` (or `--replace Kind/name` for non-retained objects), `[release] adopt`/`replace`, or `--adopt-all-desired`; or delete the object.
 - **Retry-safe:** no
 
+(error-resource-scope-mismatch)=
+### `resource-scope-mismatch`
+
+**Declared scope contradicts discovery.** An object is declared namespaced but the API server serves its kind cluster-scoped, or the reverse (for example `app.resource(..., scope=...)` for a custom resource whose CRD says otherwise). Nothing was planned.
+
+- **Fix:** Declare the scope the CRD states (`scope="cluster"` or `"namespaced"`); `piceli codegen crd` records it in the generated module's `SCOPE`.
+- **Retry-safe:** no
+
 (error-resume-refused)=
 ### `resume-refused`
 
@@ -2957,3 +2975,81 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Fix the local problem, then continue with `piceli deploy MODULE:ATTR --resume`.
 - **Retry-safe:** yes
+
+
+## Typed models from CRDs (`piceli codegen crd`)
+
+(error-codegen-cluster-read-failed)=
+### `codegen-cluster-read-failed`
+
+**Reading the CRD from the cluster failed.** The API server refused or failed the read of the CRD (an HTTP error such as 403, or a transport error). Details are withheld because they could contain credentials.
+
+- **Fix:** Check that the kubeconfig user may `get customresourcedefinitions` and that the cluster is reachable, then run the command again.
+- **Retry-safe:** yes
+
+(error-codegen-flags-conflict)=
+### `codegen-flags-conflict`
+
+**Code generation options conflict.** Pass either a CRD file or `--from-cluster`; `--from-cluster` needs `--kubeconfig`, `--context` and `--crd`, and the cluster options only apply with it.
+
+- **Fix:** Run `piceli codegen crd FILE` or `piceli codegen crd --from-cluster --kubeconfig F --context C --crd NAME`.
+- **Retry-safe:** no
+
+(error-codegen-output-refused)=
+### `codegen-output-refused`
+
+**Code generation output refused.** The `--out` directory does not exist, or the file exists and was not generated by Piceli.
+
+- **Fix:** Choose another path, create the directory, or pass `--force` to overwrite the file.
+- **Retry-safe:** no
+
+(error-crd-invalid)=
+### `crd-invalid`
+
+**CRD invalid.** The input is not an apiextensions.k8s.io/v1 CustomResourceDefinition with a structural schema for the requested version (unparsable YAML/JSON, no CRD, no group or kind, an unknown --version, or no openAPIV3Schema).
+
+- **Fix:** Pass the CRD manifest the operator publishes (for example its release's CRD file) and, if needed, `--version` with a version the CRD lists.
+- **Retry-safe:** no
+
+(error-crd-not-found)=
+### `crd-not-found`
+
+**CRD not found.** `--crd NAME` names no CRD in the file or the cluster, or the file holds several CRDs and `--crd` was not given.
+
+- **Fix:** Pass `--crd` with the CRD's name (`plural.group`, such as `certificates.cert-manager.io`) or its kind; `kubectl get crd` lists them.
+- **Retry-safe:** no
+
+
+## Environments (`App.environment`, `--env`, `--diff-env`)
+
+(error-environment-invalid)=
+### `environment-invalid`
+
+**Environment override invalid.** An environment override names no suitable declared object (a typo, or an override the object cannot take, such as replicas on a ConfigMap), is ambiguous, disables a component another workload still reads, or holds a value the object refuses.
+
+- **Fix:** Fix the override as the message says; `piceli render MODULE:ATTR --env NAME` shows the result without a cluster.
+- **Retry-safe:** no
+
+(error-environment-required)=
+### `environment-required`
+
+**Environment required.** The pipeline declares one target per environment, so the command must say which one (`--env`); or `--diff-env` was given without `--env`.
+
+- **Fix:** Add `--env NAME` (one of the pipeline's environments).
+- **Retry-safe:** no
+
+(error-environment-unknown)=
+### `environment-unknown`
+
+**Unknown environment.** `--env` (or `--diff-env`) names an environment the app does not declare, or, for a pipeline, one it has no target for.
+
+- **Fix:** Use a declared name (`app.environment(name, ...)`); a pipeline needs `target={name: Target...}` for each environment it deploys.
+- **Retry-safe:** no
+
+(error-environment-unsupported)=
+### `environment-unsupported`
+
+**Environment not supported here.** `--env` selects an environment of an `App`; the target is a `DeploymentComposition`, a composition function that does not return an App, or a release.toml spec.
+
+- **Fix:** Return the App from the composition function, or use a pipeline (`--spec MODULE:ATTR`) whose app declares the environment.
+- **Retry-safe:** no

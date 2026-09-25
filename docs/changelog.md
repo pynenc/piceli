@@ -4,6 +4,56 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.7.0
+
+- **Custom resources and any other kind (preview):** `app.resource(api_version,
+  kind, name, spec, *, fields=, scope=, public=, labels=, annotations=,
+  component=)` declares one object of any kind with a typed spec (a pydantic
+  model, validated at declaration) or a JSON mapping; it renders by alias with
+  only the fields that were set, joins components, `depends` and `override`
+  like other declarations. Cluster-scoped resources follow the per-namespace
+  ownership rules of ClusterRoles (no namespace, `piceli.io/namespace`
+  annotation, never another namespace's objects); a release now manages any
+  such annotated cluster-scoped kind except Namespace,
+  CustomResourceDefinition and PersistentVolume. A declared scope that the
+  server's discovery contradicts is refused at plan time
+  (`resource-scope-mismatch`). See `docs/crds.md`.
+- **`piceli codegen crd` (preview):** generates a deterministic module of
+  frozen pydantic models (`<Kind>Spec` with `API_VERSION`, `KIND`, `SCOPE`)
+  from a CRD's structural OpenAPI v3 schema, from a file or with
+  `--from-cluster --kubeconfig F --context C --crd NAME`; `--out` replaces
+  only files it generated. A small in-house generator (no new dependency; it
+  understands `x-kubernetes-int-or-string` and preserve-unknown-fields). New
+  codes: `crd-invalid`, `crd-not-found`, `codegen-flags-conflict`,
+  `codegen-output-refused`, `codegen-cluster-read-failed`. Pinned
+  cert-manager `Certificate` and Prometheus-operator `ServiceMonitor` CRDs are
+  vendored in `tests/fixtures/crds/` with their source and licence.
+- **Environments (preview):** `app.environment(name, ...)` declares typed
+  overrides (replicas, images, container resources, config values, hosts,
+  node selectors, resource specs, enabled components) checked against the
+  declared objects; `app.for_environment(name)` returns the derived App.
+  `piceli render --env NAME` renders one environment and `--diff-env OTHER`
+  prints their typed difference (text, or JSON with `--format json`).
+  `Pipeline(app, {"dev": Target…, "prod": Target…})` deploys each environment
+  to its own target with its own state (`state_dir/environments/NAME`);
+  `piceli deploy --env` and `piceli release … --spec MODULE:ATTR --env` select
+  one, and the combined hash covers the environment's name and resolved
+  values. JSON adds `environment` (render, deploy result) only with `--env`.
+  New codes: `environment-unknown`, `environment-required`,
+  `environment-invalid`, `environment-unsupported`. See `docs/environments.md`.
+- Plans show Secret *references* in any kind (`secretName`, `*File`/`*Path`
+  strings, `{name, key}` selectors, `secretTemplate`) instead of redacting
+  them, so custom resources that reference Secrets can be applied; the
+  `piceli.io/public-fields` annotation (`app.resource(..., public=[...])`)
+  declares other sensitive-looking fields public. Values stay redacted.
+- Custom resources without a readiness rule are ready when their `Ready`
+  condition is `True` for the current generation, or once applied when they
+  report none (previously `readiness-unsupported`).
+- A file target (`piceli render path/app.py:app`, a pipeline, a release
+  composition file) can import the modules next to it (such as generated CRD
+  models); its directory is appended to `sys.path`.
+- `piceli` and `piceli.app` export `Environment` and `Resource`.
+
 ## Version 0.5.0
 
 - **Mirror third-party images (preview):** `NodeLoopbackRegistry(mirror=[…])`

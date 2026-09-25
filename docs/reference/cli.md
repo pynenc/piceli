@@ -33,6 +33,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli artifacts pin`](#cli-artifacts-pin) | Pin one public source file by digest. | none | no |
 | [`piceli artifacts preview`](#cli-artifacts-preview) | Preview a deterministic OCI build plan (no tools run). | none | no |
 | [`piceli artifacts preview-command`](#cli-artifacts-preview-command) | Preview a pinned external build command. | none | no |
+| [`piceli codegen crd`](#cli-codegen-crd) | Generate pydantic models for one CRD version, from a file or a cluster. | reads | no |
 | [`piceli deploy`](#cli-deploy) | Deploy a pipeline: inputs → build → deliver → plan → apply → checks. | writes | yes |
 | [`piceli explain`](#cli-explain) | Explain an error code: cause, fix and whether a retry can succeed. | none | no |
 | [`piceli help-json`](#cli-help-json) | Print the whole CLI tree (commands, options, contracts) as JSON. | none | no |
@@ -336,6 +337,37 @@ Preview a pinned external build command.
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 
+(cli-codegen-crd)=
+### `piceli codegen crd`
+
+Generate pydantic models for one CRD version, from a file or a cluster.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `FILE` | path |  |  |
+| `--crd` | text |  | CRD name (plural.group) or kind; required with --from-cluster or when the file holds several CRDs |
+| `--version` | text |  | CRD version to generate (default: the storage version) |
+| `--from-cluster` | boolean | `False` | Read the CRD from a cluster (--kubeconfig, --context, --crd) |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Explicit context (never current-context) |
+| `--transport` | choice | `https` | https, or loopback-http for a local test API server only |
+| `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
+| `--exec-sha256` | text |  | Expected sha256:<hex> of the resolved exec plugin file |
+| `--out` | path |  | Write the module here (stdout: a JSON summary) |
+| `--force` | boolean | `False` | Overwrite an --out file that piceli did not generate |
+| `--json` | boolean | `False` | Without --out: print one JSON object with the module |
+
+**Contract**
+
+- **Reads:** CRD file, kubeconfig (with --from-cluster)
+- **Writes:** --out file
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** A file never contacts a cluster; --from-cluster sends one GET of the CRD through an explicit --kubeconfig and --context (exec plugins only with --allow-exec). Deterministic: the same schema always generates the same module. --out replaces only a file piceli generated, unless --force.
+
 (cli-deploy)=
 ### `piceli deploy`
 
@@ -352,6 +384,7 @@ Deploy a pipeline: inputs → build → deliver → plan → apply → checks.
 | `--reapply` | boolean | `False` | Apply even when the release is unchanged and already deployed |
 | `--json` | boolean | `False` | Stream one JSON event per stage change on stdout |
 | `--ref` | text (repeatable) |  | Build SOURCE from commit REV (branch, tag or SHA) in a temporary worktree instead of the working tree; repeatable. A bare REV pins every source when they are one repository |
+| `--env` | text |  | Environment to deploy: the app's overrides and the pipeline's target for it (required when the pipeline has one target per environment); the combined hash covers its name and values |
 
 **Contract**
 
@@ -362,7 +395,7 @@ Deploy a pipeline: inputs → build → deliver → plan → apply → checks.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** --plan never changes the cluster, a registry or a node (it reads the namespace's Deployments and the registry node for a NodeLoopbackRegistry); before the images exist it previews the release with placeholder images (never approvable, never sent to the cluster) and refuses with the blocking objects when it needs adoption or replacement; --approve HASH executes exactly the combined plan, including mirror= copies and a registry adopt=/replace=, and a release planned after delivery may not adopt, replace or delete more than the approved preview; --resume continues the latest interrupted run without a new approval. Unchanged stages are skipped. --ref [SOURCE=]REV builds the sources from commits in temporary worktrees; the combined hash covers the resolved SHAs, --approve needs the same --ref, and --resume reuses the run's SHAs.
+- **Notes:** --plan never changes the cluster, a registry or a node (it reads the namespace's Deployments and the registry node for a NodeLoopbackRegistry); before the images exist it previews the release with placeholder images (never approvable, never sent to the cluster) and refuses with the blocking objects when it needs adoption or replacement; --approve HASH executes exactly the combined plan, including mirror= copies and a registry adopt=/replace=, and a release planned after delivery may not adopt, replace or delete more than the approved preview; --resume continues the latest interrupted run without a new approval. Unchanged stages are skipped. --ref [SOURCE=]REV builds the sources from commits in temporary worktrees; the combined hash covers the resolved SHAs, --approve needs the same --ref, and --resume reuses the run's SHAs. --env NAME deploys one environment (the app's overrides and the pipeline's target for it, state under <state_dir>/environments/NAME); the combined hash covers the environment's name and resolved values, so --approve and --resume need the same --env.
 
 (cli-explain)=
 ### `piceli explain`
@@ -918,6 +951,7 @@ Execute an approved plan (``--approve HASH``), or plan and confirm.
 | `--replace` | text (repeatable) |  | Authorize deleting this existing unmanaged object and creating it from the release, after writing a restorable backup (repeatable; adds to [release] replace; never retained or managed objects) |
 | `--adopt-all-desired` | boolean | `False` | Authorize adopting every existing unmanaged object the composition declares (each is listed in the plan and bound to its hash) |
 | `--skip-checks` | boolean | `False` | Do not run the spec's [[checks]] after readiness (emergencies only; recorded in the release history) |
+| `--env` | text |  | Environment of a pipeline (--spec MODULE:ATTR): its app overrides, target and state (required when the pipeline has one target per environment) |
 
 **Contract**
 
@@ -928,7 +962,7 @@ Execute an approved plan (``--approve HASH``), or plan and confirm.
 - **Safe to retry:** no
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** After an interruption use `release resume`, not apply. Runs [[checks]] after readiness (exit 1 with release_state checks-failed); with rollback_on_failed_checks it re-applies the previous ready release without a further approval. --skip-checks is recorded.
+- **Notes:** After an interruption use `release resume`, not apply. Runs [[checks]] after readiness (exit 1 with release_state checks-failed); with rollback_on_failed_checks it re-applies the previous ready release without a further approval. --skip-checks is recorded. With a pipeline, --env NAME selects one environment (its target, overrides and state).
 
 (cli-release-check)=
 ### `piceli release check`
@@ -939,6 +973,7 @@ Run the spec's [[checks]] now against a release; changes nothing.
 | --- | --- | --- | --- |
 | `--spec` | text | required | path/to/release.toml, or MODULE:ATTR (path/to/file.py:ATTR) naming a piceli Pipeline: the release `piceli deploy` manages |
 | `--release` | text |  | Release to check (default: the selected one) |
+| `--env` | text |  | Environment of a pipeline (--spec MODULE:ATTR): its app overrides, target and state (required when the pipeline has one target per environment) |
 
 **Contract**
 
@@ -963,6 +998,7 @@ Show what `plan` would change, field by field (read-only, nothing stored).
 | `--replace` | text (repeatable) |  | Authorize deleting this existing unmanaged object and creating it from the release, after writing a restorable backup (repeatable; adds to [release] replace; never retained or managed objects) |
 | `--adopt-all-desired` | boolean | `False` | Authorize adopting every existing unmanaged object the composition declares (each is listed in the plan and bound to its hash) |
 | `--exit-code` | boolean | `False` | Exit 1 when the release would change something |
+| `--env` | text |  | Environment of a pipeline (--spec MODULE:ATTR): its app overrides, target and state (required when the pipeline has one target per environment) |
 
 **Contract**
 
@@ -988,6 +1024,7 @@ Capture live discovery and persist an approvable plan (prints its hash).
 | `--replace` | text (repeatable) |  | Authorize deleting this existing unmanaged object and creating it from the release, after writing a restorable backup (repeatable; adds to [release] replace; never retained or managed objects) |
 | `--adopt-all-desired` | boolean | `False` | Authorize adopting every existing unmanaged object the composition declares (each is listed in the plan and bound to its hash) |
 | `--out` | path |  | Also write the full redacted plan JSON here |
+| `--env` | text |  | Environment of a pipeline (--spec MODULE:ATTR): its app overrides, target and state (required when the pipeline has one target per environment) |
 
 **Contract**
 
@@ -998,7 +1035,7 @@ Capture live discovery and persist an approvable plan (prints its hash).
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** Never changes the cluster: reads plus dryRun=All requests (server dry runs of the writes). Prints the plan hash to approve.
+- **Notes:** Never changes the cluster: reads plus dryRun=All requests (server dry runs of the writes). Prints the plan hash to approve. With a pipeline, --env NAME selects one environment (its target, overrides and state).
 
 (cli-release-preview)=
 ### `piceli release preview`
@@ -1013,6 +1050,7 @@ Alias of `plan`.
 | `--replace` | text (repeatable) |  | Authorize deleting this existing unmanaged object and creating it from the release, after writing a restorable backup (repeatable; adds to [release] replace; never retained or managed objects) |
 | `--adopt-all-desired` | boolean | `False` | Authorize adopting every existing unmanaged object the composition declares (each is listed in the plan and bound to its hash) |
 | `--out` | path |  | Also write the full redacted plan JSON here |
+| `--env` | text |  | Environment of a pipeline (--spec MODULE:ATTR): its app overrides, target and state (required when the pipeline has one target per environment) |
 
 **Contract**
 
@@ -1034,6 +1072,7 @@ Resume an interrupted apply of a created release (same grant and ids).
 | `--spec` | text | required | path/to/release.toml, or MODULE:ATTR (path/to/file.py:ATTR) naming a piceli Pipeline: the release `piceli deploy` manages |
 | `--release` | text |  | Release name (default: the latest execution) |
 | `--skip-checks` | boolean | `False` | Do not run the spec's [[checks]] after readiness (emergencies only; recorded in the release history) |
+| `--env` | text |  | Environment of a pipeline (--spec MODULE:ATTR): its app overrides, target and state (required when the pipeline has one target per environment) |
 
 **Contract**
 
@@ -1061,6 +1100,7 @@ Re-plan and re-apply an earlier release against current cluster state.
 | `--replace` | text (repeatable) |  | Authorize deleting this existing unmanaged object and creating it from the release, after writing a restorable backup (repeatable; adds to [release] replace; never retained or managed objects) |
 | `--adopt-all-desired` | boolean | `False` | Authorize adopting every existing unmanaged object the composition declares (each is listed in the plan and bound to its hash) |
 | `--skip-checks` | boolean | `False` | Do not run the spec's [[checks]] after readiness (emergencies only; recorded in the release history) |
+| `--env` | text |  | Environment of a pipeline (--spec MODULE:ATTR): its app overrides, target and state (required when the pipeline has one target per environment) |
 
 **Contract**
 
@@ -1086,6 +1126,7 @@ Show a secret's metadata, and its value with --reveal (never logged).
 | `--release` | text |  | Release name (default: the latest execution) |
 | `--reveal` | boolean | `False` | Print the value (otherwise asks on a terminal) |
 | `--json` | boolean | `False` | Print JSON: metadata only unless --reveal |
+| `--env` | text |  | Environment of a pipeline (--spec MODULE:ATTR): its app overrides, target and state (required when the pipeline has one target per environment) |
 
 **Contract**
 
@@ -1106,6 +1147,7 @@ Show catalogued releases, their executions and history (no cluster access).
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--spec` | text | required | path/to/release.toml, or MODULE:ATTR (path/to/file.py:ATTR) naming a piceli Pipeline: the release `piceli deploy` manages |
+| `--env` | text |  | Environment of a pipeline (--spec MODULE:ATTR): its app overrides, target and state (required when the pipeline has one target per environment) |
 
 **Contract**
 
@@ -1126,6 +1168,7 @@ Cancel the latest execution of a release (exact owner only).
 | --- | --- | --- | --- |
 | `--spec` | text | required | path/to/release.toml, or MODULE:ATTR (path/to/file.py:ATTR) naming a piceli Pipeline: the release `piceli deploy` manages |
 | `--release` | text |  | Release name (default: the latest execution) |
+| `--env` | text |  | Environment of a pipeline (--spec MODULE:ATTR): its app overrides, target and state (required when the pipeline has one target per environment) |
 
 **Contract**
 
@@ -1147,8 +1190,10 @@ Print the manifests of a typed app, composition or pipeline. Never contacts a cl
 | --- | --- | --- | --- |
 | `TARGET` | text |  |  |
 | `--spec` | path |  | release.toml providing the namespace, images, secret inputs (as placeholders), [values] and declared nodes |
-| `--namespace` | text |  | Namespace to render into (default: the spec's or the pipeline target's, else 'default') |
+| `--namespace` | text |  | Namespace to render into (default: the spec's, the pipeline target's or the environment's, else 'default') |
 | `--format` | choice | `yaml` | Output format |
+| `--env` | text |  | Render this environment of the App (app.environment(...)); a pipeline also uses its target for it |
+| `--diff-env` | text |  | Print the typed difference between --env and this environment instead of manifests |
 
 **Contract**
 
@@ -1159,7 +1204,7 @@ Print the manifests of a typed app, composition or pipeline. Never contacts a cl
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** partial
-- **Notes:** Never contacts a cluster; secret values are placeholders. A Pipeline renders with its target's namespace and declared nodes, build images as placeholders, and reads no kubeconfig, build spec or state.
+- **Notes:** Never contacts a cluster; secret values are placeholders. A Pipeline renders with its target's namespace and declared nodes, build images as placeholders, and reads no kubeconfig, build spec or state. --env NAME renders one environment of the App (a pipeline's target for it); --diff-env OTHER prints the typed difference between the two environments instead (JSON with --format json).
 
 (cli-status)=
 ### `piceli status`

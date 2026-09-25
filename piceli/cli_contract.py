@@ -234,6 +234,10 @@ _RELEASE_READS = (
     "kubeconfig",
 )
 _RELEASE_EXIT = (0, 1, 2, 3)
+_ENV_NOTE = (
+    " With a pipeline, --env NAME selects one environment (its target, "
+    "overrides and state)."
+)
 
 COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
     {
@@ -244,7 +248,25 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             notes="Never contacts a cluster; secret values are placeholders. A "
             "Pipeline renders with its target's namespace and declared nodes, "
             "build images as placeholders, and reads no kubeconfig, build spec "
-            "or state.",
+            "or state. --env NAME renders one environment of the App (a "
+            "pipeline's target for it); --diff-env OTHER prints the typed "
+            "difference between the two environments instead (JSON with "
+            "--format json).",
+        ),
+        # ------------------------------------------------------ codegen
+        "codegen crd": _C(
+            "Generate pydantic models from a CustomResourceDefinition's schema.",
+            reads=("CRD file", "kubeconfig (with --from-cluster)"),
+            writes=("--out file",),
+            cluster="reads",
+            contract="conforms",
+            notes=(
+                "A file never contacts a cluster; --from-cluster sends one GET "
+                "of the CRD through an explicit --kubeconfig and --context "
+                "(exec plugins only with --allow-exec). Deterministic: the same "
+                "schema always generates the same module. --out replaces only a "
+                "file piceli generated, unless --force."
+            ),
         ),
         # ------------------------------------------------------- import
         "import live": _C(
@@ -314,6 +336,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             notes=(
                 "Never changes the cluster: reads plus dryRun=All requests "
                 "(server dry runs of the writes). Prints the plan hash to approve."
+                + _ENV_NOTE
             ),
         ),
         "release preview": _C(
@@ -347,7 +370,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "[[checks]] after readiness (exit 1 with release_state "
             "checks-failed); with rollback_on_failed_checks it re-applies the "
             "previous ready release without a further approval. --skip-checks "
-            "is recorded.",
+            "is recorded." + _ENV_NOTE,
         ),
         "release rollback": _C(
             "Re-plan and re-apply an earlier release.",
@@ -647,7 +670,11 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "Unchanged stages are skipped. --ref [SOURCE=]REV builds the "
             "sources from commits in temporary worktrees; the combined hash "
             "covers the resolved SHAs, --approve needs the same --ref, and "
-            "--resume reuses the run's SHAs.",
+            "--resume reuses the run's SHAs. --env NAME deploys one "
+            "environment (the app's overrides and the pipeline's target for it, "
+            "state under <state_dir>/environments/NAME); the combined hash "
+            "covers the environment's name and resolved values, so --approve "
+            "and --resume need the same --env.",
         ),
     }
 )

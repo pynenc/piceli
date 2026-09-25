@@ -18,6 +18,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from piceli.k8s.ops.discovery import (
+    RELEASE_NAMESPACE_ANNOTATION,
     DiscoveryArtifact,
     DiscoveryCoverage,
     DiscoveryProvenance,
@@ -345,9 +346,18 @@ class ResourceRef:
             raise ValueError("resource apiVersion is required")
         if not isinstance(kind, str) or not kind:
             raise ValueError("resource kind is required")
+        annotations = metadata.get("annotations")
         resolved_scope = scope or (
             ResourceScope.CLUSTER
             if kind in _CLUSTER_SCOPED_KINDS
+            # Any other kind is cluster-scoped when it names its release's
+            # namespace in the annotation instead of in metadata.namespace
+            # (how ``App.resource(..., scope="cluster")`` renders it).
+            or (
+                not metadata.get("namespace")
+                and isinstance(annotations, Mapping)
+                and RELEASE_NAMESPACE_ANNOTATION in annotations
+            )
             else ResourceScope.NAMESPACED
         )
         namespace = (
