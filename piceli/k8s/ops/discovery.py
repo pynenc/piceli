@@ -171,6 +171,28 @@ class ResourceType:
             raise ValueError("invalid resource type")
 
 
+_DNS_SUBDOMAIN = re.compile(r"[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?")
+# Kinds whose API server validation only requires a valid path segment
+# (``path.IsValidPathSegmentName``), not a DNS subdomain.  Bootstrap RBAC
+# objects such as ``system:controller:token-cleaner`` rely on this.
+_PATH_SEGMENT_NAME_KINDS = frozenset(
+    ("rbac.authorization.k8s.io", kind)
+    for kind in ("ClusterRole", "ClusterRoleBinding", "Role", "RoleBinding")
+)
+
+
+def valid_resource_name(api_version: str, kind: str, name: str) -> bool:
+    """Whether Kubernetes accepts ``name`` as ``metadata.name`` for this kind.
+
+    Most kinds require an RFC 1123 DNS subdomain.  RBAC kinds accept any path
+    segment: not ``.`` or ``..`` and without ``/`` or ``%``.  Control
+    characters are always refused by the caller's ``text`` bound.
+    """
+    if (api_version.rpartition("/")[0], kind) in _PATH_SEGMENT_NAME_KINDS:
+        return name not in {".", ".."} and not any(c in name for c in "/%")
+    return _DNS_SUBDOMAIN.fullmatch(name) is not None
+
+
 @dataclass(frozen=True, order=True)
 class ResourceIdentity:
     api_version: str
@@ -182,7 +204,7 @@ class ResourceIdentity:
         ResourceType(self.api_version, self.kind)
         text(self.namespace, "namespace", empty=True)
         text(self.name, "name")
-        if not re.fullmatch(r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?", self.name):
+        if not valid_resource_name(self.api_version, self.kind, self.name):
             raise ValueError("invalid resource name")
 
 
@@ -432,6 +454,80 @@ class ApiDefaultedField:
             )
 
 
+@dataclass(frozen=True, order=True)
+class ServerDryRun:
+    """What the API server would store for one desired write (private evidence).
+
+    ``manifest_json`` is the object the server returned for a ``dryRun=All``
+    request of exactly the write the executor sends for the desired manifest
+    whose digest is ``desired_digest``, against the observed
+    ``resource_version``. Server defaults, quantity canonicalization and
+    allocated values (a Service's ``clusterIP``) are therefore included, so the
+    planner can compare it with the live object faithfully.
+
+    It can hold the same content as the live object, so it only appears in
+    the private artifact (:meth:`DiscoveryArtifact.to_private_json`), never in
+    the public one.
+    """
+
+    resource: ResourceIdentity
+    desired_digest: str
+    resource_version: str
+    manifest_json: str = field(repr=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.resource, ResourceIdentity):
+            raise ValueError("dry-run resource must be an identity")
+        if not isinstance(self.desired_digest, str) or not re.fullmatch(
+            r"[0-9a-f]{64}", self.desired_digest
+        ):
+            raise ValueError("dry-run desired digest must be a SHA-256 hex digest")
+        text(self.resource_version, "dry-run resource version")
+        manifest = strict_json(self.manifest_json)
+        metadata = manifest.get("metadata") if isinstance(manifest, dict) else None
+        if not isinstance(metadata, dict) or (
+            manifest.get("apiVersion"),
+            manifest.get("kind"),
+            metadata.get("namespace", ""),
+            metadata.get("name"),
+        ) != (
+            self.resource.api_version,
+            self.resource.kind,
+            self.resource.namespace,
+            self.resource.name,
+        ):
+            raise ValueError("dry-run manifest does not match its resource")
+        object.__setattr__(self, "manifest_json", _canonical_json(manifest))
+
+    @property
+    def manifest(self) -> dict[str, Any]:
+        return json.loads(self.manifest_json)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "resource": self.resource.__dict__,
+            "desired_digest": self.desired_digest,
+            "resource_version": self.resource_version,
+            "manifest": self.manifest,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> ServerDryRun:
+        object_keys(
+            value, {"resource", "desired_digest", "resource_version", "manifest"}
+        )
+        resource = value["resource"]
+        object_keys(resource, {"api_version", "kind", "namespace", "name"})
+        if not isinstance(value["manifest"], Mapping):
+            raise ValueError("dry-run manifest must be an object")
+        return cls(
+            ResourceIdentity(**resource),
+            value["desired_digest"],
+            value["resource_version"],
+            _canonical_json(value["manifest"]),
+        )
+
+
 @dataclass(frozen=True)
 class DiscoveryPage:
     target: PlanTarget
@@ -663,6 +759,8 @@ class DiscoveryArtifact:
     defaulted_fields: tuple[ApiDefaultedField, ...] = ()
     schema_version: int = DISCOVERY_SCHEMA_VERSION
     provenance: DiscoveryProvenance = DiscoveryProvenance()
+    # Private plan evidence (see ServerDryRun); absent from the public form.
+    server_dry_runs: tuple[ServerDryRun, ...] = ()
 
     def __post_init__(self) -> None:
         if (
@@ -723,10 +821,26 @@ class DiscoveryArtifact:
         object.__setattr__(
             self, "defaulted_fields", tuple(sorted(set(self.defaulted_fields)))
         )
+        dry_runs = tuple(sorted(self.server_dry_runs))
+        versions = {
+            resource.identity: resource.manifest["metadata"]["resourceVersion"]
+            for resource in resources
+        }
+        if any(not isinstance(item, ServerDryRun) for item in dry_runs):
+            raise ValueError("invalid server dry-run evidence")
+        if len({item.resource for item in dry_runs}) != len(dry_runs):
+            raise ValueError("duplicate server dry-run evidence")
+        if any(
+            versions.get(item.resource) != item.resource_version for item in dry_runs
+        ):
+            raise ValueError("server dry-run evidence does not match discovery")
+        object.__setattr__(self, "server_dry_runs", dry_runs)
         # Count private input as well as the public redacted encoding.
         private = self.to_dict()
         for item, resource in zip(private["resources"], resources, strict=True):
             item["manifest"] = resource.manifest
+        if dry_runs:
+            private["server_dry_runs"] = [item.to_dict() for item in dry_runs]
         if len(_canonical_json(private).encode()) > self.limits.max_artifact_bytes:
             raise ValueError("discovery artifact exceeds byte limit")
 
@@ -774,6 +888,8 @@ class DiscoveryArtifact:
         for encoded, resource in zip(value["resources"], self.resources, strict=True):
             encoded["manifest"] = resource.manifest
             encoded["content_complete"] = resource.content_complete
+        if self.server_dry_runs:
+            value["server_dry_runs"] = [item.to_dict() for item in self.server_dry_runs]
         result = _canonical_json(value)
         if len(result.encode()) > self.limits.max_artifact_bytes:
             raise ValueError("private discovery artifact exceeds byte limit")
@@ -806,6 +922,7 @@ class DiscoveryArtifact:
                 "defaulted_fields",
                 "provenance",
             },
+            frozenset({"server_dry_runs"}),
         )
         if (
             not isinstance(value["schema_version"], int)
@@ -845,6 +962,11 @@ class DiscoveryArtifact:
             )
             for item in value.get("defaulted_fields", ())
         )
+        dry_runs = value.get("server_dry_runs", [])
+        if not isinstance(dry_runs, list) or (
+            not dry_runs and "server_dry_runs" in value
+        ):
+            raise ValueError("server dry-run evidence must be a non-empty array")
         artifact = cls(
             target,
             value["captured_at"],
@@ -858,6 +980,7 @@ class DiscoveryArtifact:
                     | {"source": EvidenceSource(value["provenance"]["source"])}
                 )
             ),
+            server_dry_runs=tuple(ServerDryRun.from_dict(item) for item in dry_runs),
         )
         artifact.to_json()
         return artifact

@@ -1,105 +1,48 @@
 # Piceli Command Line Interface (CLI) Guide
 
-```{admonition} Maturity: experimental
-:class: warning
+```{admonition} Maturity: preview
+:class: note
 
-The `model` and `deploy` commands use the legacy CLI engine (delete and recreate, current kube context). They will be replaced by the recoverable engine; prefer `piceli release`. See the {doc}`../roadmap` for every feature's status.
+Every command here uses one engine: live discovery, a pure plan, server-side
+apply with preconditions, and a durable journal. Commands only reach a cluster
+through an explicit kubeconfig file and context. See the {doc}`../roadmap` for
+each feature's maturity.
 ```
 
-The `piceli` command (also available as `python -m piceli`) has seven command groups, the `render` command and two contract commands:
+The `piceli` command (also available as `python -m piceli`) has six command groups, the `render`, `deploy`, `status` and `access` commands and two contract commands:
 
 | Group | Purpose | Cluster access | Output |
 | --- | --- | --- | --- |
-| `model` | Show what Piceli loaded from your modules and folders | None | Rich tables |
-| `deploy` | Plan, diff and apply the model (CLI engine) | Current kubeconfig context | Rich tables |
+| `render` | Print the manifests of a typed app or composition (preview). See {doc}`../typed_apps` | None | YAML or JSON |
+| `deploy` | Run the whole pipeline for a typed app: verify inputs, build, deliver, plan, apply and run checks, skipping unchanged stages. See {doc}`../deploy` | Explicit kubeconfig file + context from the target | JSON + summary on stderr |
+| `release` | Plan, apply, roll back, resume and stop releases from a `release.toml` spec; `release check` runs the spec's `[[checks]]` ({doc}`../checks`); `release secret show` inspects secret values (owner, `--reveal`). See {doc}`../release_cli` and {doc}`../secrets` | Explicit kubeconfig file + context from the spec | JSON + summary on stderr |
 | `observe` | Reconcile a session archive, logs, port forwards, local UI | Explicit `--kubeconfig/--context` | JSON |
 | `operator` | Inventory, releases, approvals, backups, local UI | Explicit `--kubeconfig` | JSON |
-| `artifacts` | Deterministic OCI builds and explicit local import | None (local tools only) | JSON |
+| `import` | Generate a typed app module from live objects (`import live`) or manifest files (`import yaml`) (preview). See {doc}`../migrate_from_kubectl` | Explicit `--kubeconfig/--context` for `live` (reads only); none for `yaml` | Python module + JSON |
+| `artifacts` | Deterministic OCI builds, image delivery and explicit local import | None, or an explicit target for `deliver` | JSON |
 | `inputs` | Record and verify the git identity of build sources | None (local git only) | JSON |
-| `render` | Print the manifests of a typed app or composition (preview). See {doc}`../typed_apps` | None | YAML or JSON |
-| `release` | Plan, apply, roll back, resume and stop releases from a `release.toml` spec (recoverable engine); `release secret show` inspects secret values (owner, `--reveal`). See {doc}`../release_cli` and {doc}`../secrets` | Explicit kubeconfig file + context from the spec | JSON + summary on stderr |
+| `status` | Whether the app is up and how to reach it: release, image digests, health, URLs (preview). See {doc}`../access` | Explicit kubeconfig file + context from the target (reads only) | Text, or JSON with `--json` |
+| `access` | Forward the ports the model declares to `127.0.0.1` and keep them healthy (preview). See {doc}`../access` | Explicit kubeconfig file + context from the target (port forwards) | Text, or JSON lines with `--json` |
 | `explain` | Explain an error code: cause, fix, whether a retry can succeed | None | Text, or JSON with `--json` |
 | `help-json` | The whole command tree with options, side effects and approval rules | None | JSON |
+
+`piceli deploy` runs the whole pipeline (verify inputs, build, deliver, plan,
+apply, checks) as one resumable command; see {doc}`../deploy`.
 
 Every command, option and contract is listed in {doc}`../reference/cli`,
 generated from `piceli help-json`. Refusal codes are explained in
 {doc}`../reference/errors`. Agents should start with {doc}`../agents`.
 
-The global options below (`--namespace`, `--module-*`, `--folder-path`) apply to
-`model` and `deploy`. The `observe`, `operator` and `artifacts` groups take their
-own explicit options.
+There are no global options: each command takes its own explicit options.
 
-```{toctree}
-:hidden:
-:maxdepth: 2
-:caption: CLI Commands
-
-./model_list
-./deploy_detail
-./deploy_plan
-./deploy_run
+```{note}
+Upgrading from 0.3.x: the `model list` and `deploy run/plan/detail` commands
+and the global `--namespace`, `--module-name`, `--module-path`,
+`--folder-path` and `--sub-elements` options (`PICELI__*` environment
+variables, `[tool.piceli]` in `pyproject.toml`) were removed in 0.4.0. Use
+`piceli render` to see what a model contains, `piceli import` to turn existing
+objects into a typed app, and `piceli release` or `piceli deploy` to apply it.
 ```
-
-## Global Options
-
-Piceli CLI supports several global options that can be used across all commands. These options allow you to specify common settings like namespace, path to Kubernetes object specifications, and more.
-
-```bash
-python -m piceli --help
-
-Usage: python -m piceli [OPTIONS] COMMAND [ARGS]...
-
-Piceli kubernetes commands
-
-╭─ Options ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ --namespace           -n       TEXT  Namespace on the kubernetes cluster [env var: PICELI__NAMESPACE] [default: default]                                               │
-│ --module-name         -mn      TEXT  Folder containing Kubernetes objects specifications. [env var: PICELI__MODULE_NAME]                                               │
-│ --module-path         -mp      TEXT  Folder containing Kubernetes objects specifications. [env var: PICELI__MODULE_PATH]                                               │
-│ --folder-path         -fp      TEXT  Folder containing Kubernetes objects specifications. [env var: PICELI__FOLDER_PATH]                                               │
-│ --sub-elements        -se            Should load kubernetes objects from sub folders/modules [env var: PICELI__SUB_ELEMENTS] [default: True]                           │
-│ --install-completion                 Install completion for the current shell.                                                                                         │
-│ --show-completion                    Show completion for the current shell, to copy it or customize the installation.                                                  │
-│ --help                               Show this message and exit.                                                                                                       │
-╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-╭─ Commands ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ deploy                                                                                                                                                                 │
-│ model                                                                                                                                                                  │
-╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-```
-
-## Deploy Command
-
-The `deploy` command is utilized for actions related to the deployment process, such as planning, running, and detailing deployments.
-
-```bash
-python -m piceli deploy --help
-
-Usage: python -m piceli deploy [OPTIONS] COMMAND [ARGS]...
-```
-
-### Deploy Subcommands
-
-- **Detail**: Analyzes the required changes to deploy the specified Kubernetes object model. {doc}`deploy_detail`
-- **Plan**: Generates a deployment plan for the Kubernetes object model. {doc}`deploy_plan`
-- **Run**: Deploys the Kubernetes Object Model to the current cluster. {doc}`deploy_run`
-
-For detailed information about each subcommand, refer to the respective documentation pages.
-
-## Model Command
-
-The `model` command is related to actions involving the Kubernetes object model that the CLI considers, such as listing the Kubernetes objects.
-
-```bash
-python -m piceli model --help
-
-Usage: python -m piceli model [OPTIONS] COMMAND [ARGS]...
-```
-
-### Model Subcommands
-
-- **List**: Lists Kubernetes objects based on the command options. {doc}`model_list`
-
-For more information on the `list` command, visit the documentation page linked above.
 
 ## Observe Command
 

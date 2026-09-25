@@ -1,16 +1,17 @@
 """A typed app: a cache on an existing claim, an API in front of it.
 
 piceli render examples/typed_app/app.py:build --spec examples/typed_app/release.toml
+piceli status examples/typed_app/release.toml   # is it up, and how to reach it
+piceli access examples/typed_app/release.toml   # forward the declared ports
 """
 
 from __future__ import annotations
 
 from piceli import App, ExistingClaim, Resources
-from piceli.k8s.ops.plan import DeploymentComposition
 from piceli.k8s.release_spec import ReleaseContext
 
 
-def build(ctx: ReleaseContext) -> DeploymentComposition:
+def build(ctx: ReleaseContext) -> App:
     app = App("shop")
     password = app.secret("cache-password", {"password": ctx.secret("cache-password")})
     cache = app.deployment(
@@ -32,7 +33,15 @@ def build(ctx: ReleaseContext) -> DeploymentComposition:
         env={"CACHE_PASSWORD": password.key("password")},
     )
     app.service(cache, port=6379)
-    app.service(api, port=80, target_port=8080)
+    app.service(
+        api,
+        port=80,
+        target_port=8080,
+        # How to reach it from a laptop; renders to no Kubernetes object.
+        access=app.access.forward(local=18080, health="/healthz"),
+    )
     app.network_policy(cache, allow_from=[api], ports=[6379])
     app.depends(api, on=cache)
-    return app.composition(ctx)
+    # Return the App (not app.composition(ctx)) so `piceli access` and
+    # `piceli status` can read its access declarations.
+    return app

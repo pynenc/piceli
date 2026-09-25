@@ -75,9 +75,9 @@ def test_plan_names_unadopted_objects_and_refuses(release_env):
     kubectl_objects(api)
     code, refused, _ = _run(tmp_path, "plan")
     assert code == 2
-    assert "Deployment/worker" in refused["reason"]
-    assert "ConfigMap/settings" in refused["reason"]
-    assert "--adopt" in refused["reason"]
+    assert "Deployment/worker" in refused["message"]
+    assert "ConfigMap/settings" in refused["message"]
+    assert "--adopt" in refused["message"]
     assert mutations(api) == []
 
 
@@ -128,7 +128,7 @@ def test_cli_adoption_is_planned_bound_and_applied(release_env):
         "--adopt",
         "Deployment/worker",
     )
-    assert code == 2 and "planning flags" in refused["reason"]
+    assert code == 2 and "planning flags" in refused["message"]
 
     code, applied, result = _run(tmp_path, "apply", "--approve", planned["plan_hash"])
     assert code == 0, result.output
@@ -266,8 +266,8 @@ def test_secret_with_another_value_is_refused_before_any_write(release_env):
     assert secret["adoption"]["mode"] == "metadata-only"
     code, refused, _ = _run(tmp_path, "apply", "--approve", planned["plan_hash"])
     assert code == 2
-    assert "contain the desired manifest" in refused["reason"]
-    assert "a3ViZWN0bA" not in refused["reason"]
+    assert "contain the desired manifest" in refused["message"]
+    assert "a3ViZWN0bA" not in refused["message"]
     assert mutations(api) == []
 
 
@@ -275,9 +275,9 @@ def test_adopt_entries_must_name_declared_resources(release_env):
     api, tmp_path = release_env
     kubectl_objects(api)
     code, refused, _ = _run(tmp_path, "plan", "--adopt", "Deployment/wroker")
-    assert code == 2 and "does not name exactly one resource" in refused["reason"]
+    assert code == 2 and "does not name exactly one resource" in refused["message"]
     code, refused, _ = _run(tmp_path, "plan", "--adopt", "deployment/worker")
-    assert code == 2 and "Kind/name" in refused["reason"]
+    assert code == 2 and "Kind/name" in refused["message"]
     assert mutations(api) == []
 
 
@@ -312,7 +312,7 @@ def test_plan_lists_every_blocking_object_with_suggested_flags(release_env):
             "suggest": ["--adopt Secret/credential"],
         },
     ]
-    assert "Secret/credential (--adopt Secret/credential)" in refused["reason"]
+    assert "Secret/credential (--adopt Secret/credential)" in refused["message"]
     assert (
         "blocking Deployment/worker: exists and is not managed by this release's "
         "owner -> --adopt Deployment/worker or --replace Deployment/worker"
@@ -345,7 +345,7 @@ def test_adopt_all_desired_adopts_every_unmanaged_declared_object(release_env):
     code, refused, _ = _run(
         tmp_path, "apply", "--approve", planned["plan_hash"], "--adopt-all-desired"
     )
-    assert code == 2 and "planning flags" in refused["reason"]
+    assert code == 2 and "planning flags" in refused["message"]
     assert mutations(api) == []
     code, applied, result = _run(tmp_path, "apply", "--approve", planned["plan_hash"])
     assert code == 0, result.output
@@ -364,7 +364,7 @@ def test_adopt_all_desired_keeps_retained_objects_metadata_only(release_env):
     assert secret["adoption"]["mode"] == "metadata-only"
     # The generated value differs from the live one: refused before writes.
     code, refused, _ = _run(tmp_path, "apply", "--approve", planned["plan_hash"])
-    assert code == 2 and "contain the desired manifest" in refused["reason"]
+    assert code == 2 and "contain the desired manifest" in refused["message"]
     assert mutations(api) == []
 
 
@@ -408,7 +408,7 @@ def test_cli_replace_writes_a_backup_then_recreates(release_env):
     # Once managed, a replace is refused (nothing is deleted).
     code, refused, _ = _run(tmp_path, "plan", "--replace", "Deployment/worker")
     assert code == 2 and refused["code"] == "replace-refused"
-    assert "already managed" in refused["reason"]
+    assert "already managed" in refused["message"]
 
 
 def test_cli_replace_refusals_happen_before_any_write(release_env):
@@ -444,7 +444,7 @@ def test_cli_replace_refusals_happen_before_any_write(release_env):
     code, refused, _ = _run(tmp_path, "plan", "--replace", "Deployment/wroker")
     assert code == 2 and refused["code"] == "replace-entry-not-declared"
     code, refused, _ = _run(tmp_path, "plan", "--replace", "deployment/worker")
-    assert code == 2 and "replace entry must be" in refused["reason"]
+    assert code == 2 and "replace entry must be" in refused["message"]
     assert mutations(api) == []
 
 

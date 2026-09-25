@@ -159,17 +159,11 @@ def render_cli(tree: Mapping[str, Any] | None = None) -> str:
         "exits `2`; see {doc}`errors` or run `piceli explain <code>`.",
         "- **Output contract** `conforms` means the command follows these rules "
         "exactly; `partial` means it prints JSON but its refusals do not yet use "
-        "the rejection shape above; `legacy` means human-oriented output.",
+        "the rejection shape above.",
         "",
         "| Exit code | Meaning |",
         "| --- | --- |",
         *(f"| `{code}` | {_cell(text)} |" for code, text in EXIT_CODES.items()),
-        "",
-        "## Global options",
-        "",
-        "These apply to `model` and `deploy` (the legacy CLI engine).",
-        "",
-        *_params_table(root["params"]),
         "",
         "## Commands",
         "",

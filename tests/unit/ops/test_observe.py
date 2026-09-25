@@ -24,6 +24,7 @@ from piceli.k8s.observe import (
     run_port_forward,
 )
 from piceli.k8s.observe_server import LocalObserveServer
+from piceli.k8s.port_owner import PortOwner
 from piceli.k8s.ui_config import UiConfig
 
 
@@ -156,15 +157,24 @@ def test_port_forward_runner_rejects_non_loopback_commands() -> None:
         )
 
 
+def _free_port() -> int:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
 def test_forward_supervisor_owns_only_saved_loopback_processes(tmp_path: Path) -> None:
     store = PreferenceStore(tmp_path / "observe.json")
     store.replace_user(
-        UserPreferences("jose", (PortForward("api", "demo", "service/api", 18080, 80),))
+        UserPreferences(
+            "jose", (PortForward("api", "demo", "service/api", _free_port(), 80),)
+        )
     )
     supervisor = ForwardSupervisor(
         preferences=store,
         user="jose",
         kubeconfig=tmp_path / "kubeconfig",
+        context="lab",
         kubectl="definitely-not-kubectl",
     )
     supervisor.restore()
@@ -199,15 +209,29 @@ def test_forward_supervisor_leaves_an_external_port_owner_untouched(
             preferences=store,
             user="jose",
             kubeconfig=tmp_path / "kubeconfig",
+            context="lab",
         )
-        with patch("piceli.k8s.observe.subprocess.Popen") as spawn:
+        owner = PortOwner(port=port, pid=4242, command="other-dashboard --serve")
+        with (
+            patch("piceli.k8s.observe.subprocess.Popen") as spawn,
+            patch("piceli.k8s.observe.port_owner", return_value=owner),
+        ):
             supervisor.restore()
             try:
                 status = supervisor.statuses()[0]
-                assert status.state == "backoff"
-                assert (
-                    status.error == "loopback port is occupied by an external process"
+                assert status.owner == owner.to_dict()
+                assert "pid 4242 (other-dashboard --serve)" in (status.error or "")
+                assert status.state == "failed"
+                assert status.health == "conflict"
+                assert (status.error or "").startswith(
+                    "loopback port is occupied by an external process"
                 )
+                spawn.assert_not_called()
+                # The conflict is final: once the owner frees the port, the
+                # supervisor does not silently take it back.
+                listener.close()
+                supervisor.tick()
+                assert supervisor.statuses()[0].state == "failed"
                 spawn.assert_not_called()
             finally:
                 supervisor.close()
@@ -369,6 +393,7 @@ def test_forward_supervisor_has_no_shortcuts_without_config(tmp_path: Path) -> N
         preferences=PreferenceStore(tmp_path / "observe.json"),
         user="tester",
         kubeconfig=tmp_path / "kubeconfig",
+        context="lab",
     )
     assert supervisor.shortcuts_status(namespace="test-ns") == []
     with pytest.raises(ValueError, match="unknown shortcut"):
@@ -383,6 +408,7 @@ def test_forward_supervisor_shortcuts_and_dynamic_management(
         preferences=store,
         user="tester",
         kubeconfig=tmp_path / "kubeconfig",
+        context="lab",
         kubectl="definitely-not-kubectl",
         shortcuts=ui_config.shortcuts,
         namespace="served-ns",

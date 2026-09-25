@@ -23,7 +23,18 @@ The lens runs **on the operator's own machine**, not inside the cluster.
 
 - It serves on loopback only (`127.0.0.1`); binding to another address is refused.
 - It uses the kubeconfig and context you pass explicitly and never falls back to
-  ambient credentials.
+  ambient credentials. `--context` is **required** on every command that takes
+  `--kubeconfig`: the file's `current-context` is never used, neither by the
+  lens nor by the `kubectl` processes it starts (they always get `--context`).
+- The kubeconfig goes through the same checks as `piceli release`: proxies,
+  `insecure-skip-tls-verify`, non-https servers and legacy `auth-provider`
+  users are refused (`target-refused`, `auth-provider-refused`). A context
+  whose user runs an exec credential plugin (GKE, EKS, AKS, OIDC) needs
+  `--allow-exec`, optionally with `--exec-sha256 sha256:…`; see
+  {doc}`managed_clusters`. For commands that run `kubectl` (`forward-run`,
+  `logs-run`, `forwards apply`, the UI's pods and logs) the plugin is resolved
+  and pinned first, but `kubectl` runs it with your environment.
+- Refusals print `{"state": "refused", "reason": …, "code": …}` and exit `2`.
 - Port forwards are `kubectl port-forward` processes it starts and supervises
   itself. They bind to loopback, and it never adopts or kills processes it did
   not start.
@@ -112,7 +123,11 @@ driven by browser automation and AI agents.
 ## Dashboard configuration
 
 Without configuration the dashboard shows no shortcuts and groups live workloads
-by their `app.kubernetes.io/component` label (falling back to `app`). To add
+by their `app.kubernetes.io/component` label (falling back to `app`). An app
+declared with the typed model can supply the shortcuts itself
+(`app.access.forward`, see {doc}`access`): run `piceli access TARGET
+--dashboard PORT`, or pass `--access TARGET` to `operator serve`; the TOML file
+below then only adds badges, tiers or extra shortcuts. To add
 one-click shortcuts, topology tiers and header badges, pass a TOML file with
 `--ui-config` (or set `PICELI__UI_CONFIG`) on `observe serve` or `operator serve`:
 
@@ -196,8 +211,11 @@ piceli observe forwards apply --profile ./access.toml \
 ```
 
 Before it starts anything, `apply` runs a port-conflict preflight. If another
-process already serves a required shortcut's local port, it prints the
-conflicts and exits with code 2 without starting any forward. An optional
+process already serves a required shortcut's local port, it prints
+`{"state": "rejected", "reason": "forward-port-conflict", "message": "…",
+"ok": false, "preflight": {…}}` on stdout and exits with code 2 without
+starting any forward (before 0.4.0 this object went to stderr, without
+`state`/`reason`). An optional
 shortcut (`required = false`) on an occupied port is listed as `external` and
 skipped. While running, it prints one JSON line per status change and stops
 every forward it owns on Ctrl-C, `SIGTERM` or `SIGHUP`. Use `--only ID`
@@ -205,7 +223,17 @@ every forward it owns on Ctrl-C, `SIGTERM` or `SIGHUP`. Use `--only ID`
 
 To check the declared endpoints once and print JSON, run
 `piceli observe forwards status --profile ./access.toml`. It probes loopback
-only and exits with code 1 if a required forward is unhealthy.
+only and exits with code 1 if a required forward is unhealthy
+(`"state": "failed"`, `"reason": "forward-unhealthy"`; otherwise
+`"state": "healthy"`).
+
+Every `observe` and `operator` command prints machine JSON on stdout and human
+text on stderr. A rejection prints `{"state": "rejected", "reason": "<code>",
+"message": "…"}` on stdout and exits 2, for example `invalid-session-archive`,
+`invalid-access-profile`, `unknown-shortcut`, `local-port-in-use`,
+`no-saved-forwards`, `unknown-forward`, `invalid-log-request` or
+`kubeconfig-rejected` (`piceli explain <code>` for each). Before 0.4.0 some
+of these were usage errors or tracebacks.
 
 To get the dashboard with the same forwards, pass the profile as `--ui-config`
 and add `--start-shortcuts` to `observe serve`.
@@ -221,9 +249,15 @@ these fields:
 | `consecutive_failures` | Probe failures since the last healthy probe |
 | `last_error`, `last_probe_at` | Last failure reason and last probe time (UTC) |
 | `probe` | The effective probe settings |
+| `owner` | On a `conflict`: the process holding the port (`pid`, `command`, `parent`), or `null` |
 
-A local port that another process already serves is reported as `conflict`.
-The supervisor never kills that process and never spawns a forward on the port.
+A local port that another process already serves is reported as `conflict`,
+with the owning process in `owner` and in the error text. The supervisor never
+kills that process and never spawns a forward on the port. A conflict is final
+(state `failed`) until the forward is started again explicitly: the supervisor
+does not wait for the port to free up and then silently take it back, so two
+dashboards (or a dashboard and `piceli access`) never trade a declared port
+behind your back.
 
 The broader operator features (releases, promotion, backups) are described in
 {doc}`operator_workflow`.

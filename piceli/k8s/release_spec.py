@@ -31,6 +31,8 @@ from pydantic import (
     model_validator,
 )
 
+from piceli.checks.model import Check, unique_names
+from piceli.k8s.ops.exec_credentials import ExecPolicy
 from piceli.k8s.ops.plan import DeploymentComposition
 from piceli.k8s.ops.provider_factory import KubeconfigTarget, NodeExpectation
 from piceli.k8s.ops.secret_versions import SecretVersionRef
@@ -55,7 +57,17 @@ _KIND = re.compile(r"(?:[a-z0-9.-]+/)?[a-z][a-z0-9]*/[A-Za-z][A-Za-z0-9]*")
 
 
 class ReleaseSpecError(ValueError):
-    """The release spec, build receipt or composition entry point is invalid."""
+    """The release spec, build receipt or composition entry point is invalid.
+
+    ``code`` is the registered error code the CLI prints (``piceli explain``).
+    """
+
+    code = "invalid-release-spec"
+
+    def __init__(self, message: str, *, code: str | None = None) -> None:
+        super().__init__(message)
+        if code is not None:
+            self.code = code
 
 
 _ADOPT_ENTRY = re.compile(
@@ -71,7 +83,8 @@ def parse_adopt_entry(
     match = _ADOPT_ENTRY.fullmatch(value) if isinstance(value, str) else None
     if match is None or len(match["name"]) > 253:
         raise ReleaseSpecError(
-            f"{what} entry must be 'Kind/name' or 'apiVersion/Kind/name', got {value!r}"
+            f"{what} entry must be 'Kind/name' or 'apiVersion/Kind/name', got {value!r}",
+            code="invalid-adopt-entry",
         )
     return match["api"], match["kind"], match["name"]
 
@@ -94,6 +107,28 @@ class TargetSpec(_Strict):
     transport: Literal["https", "loopback-http"] = "https"
     request_seconds: float = Field(default=10.0, gt=0, le=60)
     nodes: dict[str, NodeSpec] = Field(default_factory=dict)
+    # Exec credential plugins (GKE/EKS/AKS/OIDC). Off unless explicitly allowed;
+    # see docs/managed_clusters.md.
+    allow_exec: bool = Field(default=False, strict=True)
+    exec_sha256: str | None = None
+    exec_pass_env: tuple[str, ...] = ()
+    exec_timeout_seconds: float = Field(default=60.0, gt=0, le=300)
+
+    @model_validator(mode="after")
+    def _exec(self) -> TargetSpec:
+        if not self.allow_exec and self.model_fields_set & {
+            "exec_sha256",
+            "exec_pass_env",
+            "exec_timeout_seconds",
+        }:
+            raise ValueError("exec_* keys require allow_exec = true")
+        ExecPolicy(
+            self.allow_exec,
+            self.exec_sha256,
+            self.exec_pass_env,
+            self.exec_timeout_seconds,
+        )
+        return self
 
 
 class ReleaseSettings(_Strict):
@@ -114,6 +149,9 @@ class ReleaseSettings(_Strict):
     # Existing unmanaged objects this release may delete and recreate (with a
     # backup first), same entry syntax. Never retained or managed objects.
     replace: tuple[str, ...] = ()
+    # After a release's checks fail, re-apply the previous ready release
+    # automatically (journaled like any rollback). See docs/checks.md.
+    rollback_on_failed_checks: bool = False
 
     @field_validator("adopt")
     @classmethod
@@ -210,9 +248,12 @@ class ReleaseSpecModel(_Strict):
     images_from: Path | tuple[Path, ...] | None = None
     secrets: dict[str, SecretSpec] = Field(default_factory=dict)
     values: dict[str, Any] = Field(default_factory=dict)
+    # [[checks]]: post-deploy checks run after readiness (piceli.checks).
+    checks: tuple[Check, ...] = ()
 
     @model_validator(mode="after")
     def _names(self) -> ReleaseSpecModel:
+        unique_names(self.checks)
         for name in self.images:
             if not _IMAGE_NAME.fullmatch(name):
                 raise ValueError(f"invalid image name {name!r}")
@@ -763,6 +804,10 @@ class ReleaseSpec:
             namespace_uid=target.namespace_uid,
             transport=target.transport,
             request_seconds=target.request_seconds,
+            allow_exec=target.allow_exec,
+            exec_sha256=target.exec_sha256,
+            exec_pass_env=target.exec_pass_env,
+            exec_timeout_seconds=target.exec_timeout_seconds,
             nodes={
                 alias: NodeExpectation(node.name, node.uid)
                 for alias, node in target.nodes.items()
@@ -808,14 +853,19 @@ class ReleaseSpec:
         if target.endswith(".py") or "/" in target:
             path = self.resolve(Path(target))
             if not path.is_file():
-                raise ReleaseSpecError(f"composition file not found: {path}")
+                raise ReleaseSpecError(
+                    f"composition file not found: {path}", code="invalid-composition"
+                )
             digest = hashlib.sha256(str(path).encode()).hexdigest()[:16]
             module_name = f"_piceli_release_composition_{digest}"
             module = sys.modules.get(module_name)
             if module is None:
                 loader_spec = importlib.util.spec_from_file_location(module_name, path)
                 if loader_spec is None or loader_spec.loader is None:
-                    raise ReleaseSpecError(f"cannot import composition file {path}")
+                    raise ReleaseSpecError(
+                        f"cannot import composition file {path}",
+                        code="invalid-composition",
+                    )
                 module = importlib.util.module_from_spec(loader_spec)
                 sys.modules[module_name] = module
                 try:
@@ -828,11 +878,15 @@ class ReleaseSpec:
                 module = importlib.import_module(target)
             except ImportError as error:
                 raise ReleaseSpecError(
-                    f"cannot import composition module {target!r}: {error}"
+                    f"cannot import composition module {target!r}: {error}",
+                    code="invalid-composition",
                 ) from None
         function = getattr(module, attribute, None)
         if not callable(function):
-            raise ReleaseSpecError(f"composition entry {entry!r} is not callable")
+            raise ReleaseSpecError(
+                f"composition entry {entry!r} is not callable",
+                code="invalid-composition",
+            )
         return function  # type: ignore[no-any-return]
 
     def context(

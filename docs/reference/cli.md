@@ -9,7 +9,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 - **stdout** is for machine output: one JSON object (JSON lines for streaming commands).
 - **stderr** is for human text: summaries and hints.
 - A refusal prints `{"state": "rejected", "reason": "<code>"}` and exits `2`; see {doc}`errors` or run `piceli explain <code>`.
-- **Output contract** `conforms` means the command follows these rules exactly; `partial` means it prints JSON but its refusals do not yet use the rejection shape above; `legacy` means human-oriented output.
+- **Output contract** `conforms` means the command follows these rules exactly; `partial` means it prints JSON but its refusals do not yet use the rejection shape above.
 
 | Exit code | Meaning |
 | --- | --- |
@@ -18,22 +18,11 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | `2` | rejected before any change (stdout: the rejection object) |
 | `3` | approval required; nothing was executed |
 
-## Global options
-
-These apply to `model` and `deploy` (the legacy CLI engine).
-
-| Option | Type | Default | Description |
-| --- | --- | --- | --- |
-| `--namespace`, `-n` | text | env `PICELI__NAMESPACE` | Namespace on the kubernetes cluster |
-| `--module-name`, `-mn` | text | env `PICELI__MODULE_NAME` | Folder containing Kubernetes objects specifications. |
-| `--module-path`, `-mp` | text | env `PICELI__MODULE_PATH` | Folder containing Kubernetes objects specifications. |
-| `--folder-path`, `-fp` | text | env `PICELI__FOLDER_PATH` | Folder containing Kubernetes objects specifications. |
-| `--sub-elements`, `-se` | boolean | env `PICELI__SUB_ELEMENTS` | Should load kubernetes objects from sub folders/modules |
-
 ## Commands
 
 | Command | Summary | Cluster | Approval |
 | --- | --- | --- | --- |
+| [`piceli access`](#cli-access) | Forward the app's declared ports to 127.0.0.1 and keep them healthy. | reads | no |
 | [`piceli artifacts build`](#cli-artifacts-build) | Assemble an OCI image layout from a plan without running code. | none | no |
 | [`piceli artifacts build-spec preview`](#cli-artifacts-build-spec-preview) | Preview a containerized build and its plan hash. | none | no |
 | [`piceli artifacts build-spec run`](#cli-artifacts-build-spec-run) | Run an approved containerized build and write a receipt. | none | yes |
@@ -44,14 +33,13 @@ These apply to `model` and `deploy` (the legacy CLI engine).
 | [`piceli artifacts pin`](#cli-artifacts-pin) | Pin one public source file by digest. | none | no |
 | [`piceli artifacts preview`](#cli-artifacts-preview) | Preview a deterministic OCI build plan (no tools run). | none | no |
 | [`piceli artifacts preview-command`](#cli-artifacts-preview-command) | Preview a pinned external build command. | none | no |
-| [`piceli deploy detail`](#cli-deploy-detail) | Analyze the required changes to deploy the specified kubernetes object model | ambient-reads | no |
-| [`piceli deploy plan`](#cli-deploy-plan) | Deployment plan for the kubernetes object model. | none | no |
-| [`piceli deploy run`](#cli-deploy-run) | Deploy Kubernetes Object Model to the current cluster. | ambient-writes | no |
+| [`piceli deploy`](#cli-deploy) | Deploy a pipeline: inputs → build → deliver → plan → apply → checks. | writes | yes |
 | [`piceli explain`](#cli-explain) | Explain an error code: cause, fix and whether a retry can succeed. | none | no |
 | [`piceli help-json`](#cli-help-json) | Print the whole CLI tree (commands, options, contracts) as JSON. | none | no |
+| [`piceli import live`](#cli-import-live) | Generate a typed module from the objects of a live namespace (read-only). | reads | no |
+| [`piceli import yaml`](#cli-import-yaml) | Generate a typed module from a directory of manifests (no cluster). | none | no |
 | [`piceli inputs record`](#cli-inputs-record) | Capture each declared source (or the ``--only`` ones) and write a lock. | none | no |
 | [`piceli inputs verify`](#cli-inputs-verify) | Recapture the sources and compare them with the lock (exit 1 on drift). | none | no |
-| [`piceli model list`](#cli-model-list) | Lists Kubernetes objects based on the command options. | none | no |
 | [`piceli observe forward-command`](#cli-observe-forward-command) | Print a JSON argv array for one explicit loopback-only port forward. | none | no |
 | [`piceli observe forward-list`](#cli-observe-forward-list) | List a user's saved port-forward preferences without starting a process. | none | no |
 | [`piceli observe forward-run`](#cli-observe-forward-run) | Run one saved loopback-only port forward until the caller interrupts it. | reads | no |
@@ -69,6 +57,8 @@ These apply to `model` and `deploy` (the legacy CLI engine).
 | [`piceli operator serve`](#cli-operator-serve) | Launch the Piceli Operator dashboard and unified REST API. | reads | no |
 | [`piceli operator status`](#cli-operator-status) | Print classified operator inventory: managed, unmanaged, unknown, and releases. | reads | no |
 | [`piceli release apply`](#cli-release-apply) | Execute an approved plan (``--approve HASH``), or plan and confirm. | writes | yes |
+| [`piceli release check`](#cli-release-check) | Run the spec's [[checks]] now against a release; changes nothing. | reads | no |
+| [`piceli release diff`](#cli-release-diff) | Show what `plan` would change, field by field (read-only, nothing stored). | reads | no |
 | [`piceli release plan`](#cli-release-plan) | Capture live discovery and persist an approvable plan (prints its hash). | reads | no |
 | [`piceli release preview`](#cli-release-preview) | Alias of `plan`. | reads | no |
 | [`piceli release resume`](#cli-release-resume) | Resume an interrupted apply of a created release (same grant and ids). | writes | no |
@@ -77,6 +67,33 @@ These apply to `model` and `deploy` (the legacy CLI engine).
 | [`piceli release status`](#cli-release-status) | Show catalogued releases, their executions and history (no cluster access). | none | no |
 | [`piceli release stop`](#cli-release-stop) | Cancel the latest execution of a release (exact owner only). | reads | no |
 | [`piceli render`](#cli-render) | Print the manifests of a typed app or composition. Never contacts a cluster. | none | no |
+| [`piceli status`](#cli-status) | Say whether the app is up and how to reach it. Read-only. | reads | no |
+
+(cli-access)=
+### `piceli access`
+
+Forward the app's declared ports to 127.0.0.1 and keep them healthy.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `TARGET` | text | required |  |
+| `--only` | text (repeatable) |  | Supervise only this forward id (repeatable) |
+| `--json` | boolean | `False` | Print JSON lines: started, status, stopped |
+| `--kubectl` | text | `kubectl` | kubectl executable |
+| `--poll` | float | `1.0` | Status report cadence (seconds) |
+| `--dashboard` | integer |  | Also serve the local dashboard on this loopback port, with these forwards as its shortcuts |
+| `--ui-config` | path | env `PICELI__UI_CONFIG` | Optional dashboard TOML (badges, tiers, extra shortcuts) |
+
+**Contract**
+
+- **Reads:** release.toml or module:attr, kubeconfig, kubectl
+- **Writes:** loopback ports (kubectl port-forward processes it owns)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Refuses (access-port-conflict) when a declared local port is held by another process and names its pid and command; never takes a port over. Stops every forward it started on Ctrl-C/SIGTERM/SIGHUP. Exit 1 only when every forward gave up.
 
 (cli-artifacts-build)=
 ### `piceli artifacts build`
@@ -97,7 +114,7 @@ Assemble an OCI image layout from a plan without running code.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-artifacts-build-spec-preview)=
 ### `piceli artifacts build-spec preview`
@@ -117,7 +134,7 @@ Preview a containerized build and its plan hash.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-artifacts-build-spec-run)=
 ### `piceli artifacts build-spec run`
@@ -148,7 +165,7 @@ Run an approved containerized build and write a receipt.
 - **Approval required:** yes
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-artifacts-deliver)=
 ### `piceli artifacts deliver`
@@ -192,7 +209,7 @@ Mutually exclusive: `archive` / `image`.
 - **Approval required:** yes
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 - **Notes:** Registry pushes are content-addressed and idempotent. Contacts the cluster only for --via-forward (port-forward).
 
 (cli-artifacts-execute-command)=
@@ -217,7 +234,7 @@ Run a pinned external build command under an approved plan.
 - **Approval required:** yes
 - **Safe to retry:** no
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-artifacts-import-local)=
 ### `piceli artifacts import-local`
@@ -239,8 +256,8 @@ Import an OCI layout into the local Docker daemon.
 - **Cluster:** none
 - **Approval required:** yes
 - **Safe to retry:** yes
-- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
 
 (cli-artifacts-inspect)=
 ### `piceli artifacts inspect`
@@ -259,7 +276,7 @@ Recheck an OCI layout and print its summary.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-artifacts-pin)=
 ### `piceli artifacts pin`
@@ -279,7 +296,7 @@ Pin one public source file by digest.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-artifacts-preview)=
 ### `piceli artifacts preview`
@@ -298,7 +315,7 @@ Preview a deterministic OCI build plan (no tools run).
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-artifacts-preview-command)=
 ### `piceli artifacts preview-command`
@@ -317,66 +334,34 @@ Preview a pinned external build command.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
-(cli-deploy-detail)=
-### `piceli deploy detail`
+(cli-deploy)=
+### `piceli deploy`
 
-Analyze the required changes to deploy the specified kubernetes object model
+Deploy a pipeline: inputs → build → deliver → plan → apply → checks.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--hide-no-action`, `-hna` | boolean | `False` | Hide the comparison details when no action is needed. |
+| `TARGET` | text | required |  |
+| `--plan` | boolean | `False` | Plan every stage and print the combined hash; execute nothing |
+| `--until` | text | `checks` | Stop after this stage: inputs, build, deliver, plan, apply or checks |
+| `--resume` | boolean | `False` | Continue the latest interrupted or failed run at its failed stage |
+| `--approve` | text |  | Combined hash to execute (from --plan) |
+| `--auto-approve` | boolean | `False` | Plan and execute without confirmation (CI) |
+| `--reapply` | boolean | `False` | Apply even when the release is unchanged and already deployed |
+| `--json` | boolean | `False` | Stream one JSON event per stage change on stdout |
 
 **Contract**
 
-- **Reads:** model modules/folders
-- **Writes:** nothing (read-only)
-- **Cluster:** ambient-reads
-- **Approval required:** no
+- **Reads:** pipeline module, build specs and sources, docker, kubeconfig, state_dir
+- **Writes:** state_dir (run journal, receipts, release catalog, secret store), local Docker image store, registry or node image store
+- **Cluster:** writes
+- **Approval required:** yes
 - **Safe to retry:** yes
-- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** legacy
-
-(cli-deploy-plan)=
-### `piceli deploy plan`
-
-Deployment plan for the kubernetes object model.
-
-| Option | Type | Default | Description |
-| --- | --- | --- | --- |
-| `--cluster-id` | text | required | Stable cluster identity to bind into this offline plan. |
-| `--validate`, `-v` | boolean | `False` | Validate the deployment graph for cycles and errors before showing the plan. |
-
-**Contract**
-
-- **Reads:** model modules/folders
-- **Writes:** nothing (read-only)
-- **Cluster:** none
-- **Approval required:** no
-- **Safe to retry:** yes
-- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** legacy
-
-(cli-deploy-run)=
-### `piceli deploy run`
-
-Deploy Kubernetes Object Model to the current cluster.
-
-| Option | Type | Default | Description |
-| --- | --- | --- | --- |
-| `--create-namespace`, `-c` | boolean | `True` | Create the namespace if it does not exist. |
-
-**Contract**
-
-- **Reads:** model modules/folders
-- **Writes:** nothing (read-only)
-- **Cluster:** ambient-writes
-- **Approval required:** no
-- **Safe to retry:** no
-- **Exit codes:** `0` success
-- **Output contract:** legacy
-- **Notes:** Legacy engine: uses the current kube context and has no approval step.
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** --plan never changes the cluster, a registry or a node; --approve HASH executes exactly the combined plan; --resume continues the latest interrupted run without a new approval. Unchanged stages are skipped.
 
 (cli-explain)=
 ### `piceli explain`
@@ -415,6 +400,60 @@ No options.
 - **Exit codes:** `0` success
 - **Output contract:** conforms
 
+(cli-import-live)=
+### `piceli import live`
+
+Generate a typed module from the objects of a live namespace (read-only).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--kubeconfig` | path | required | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text | required | Explicit context (never current-context) |
+| `--namespace` | text | required | Namespace to import |
+| `--select` | text (repeatable) |  | Kind/name or label=value; import only matching objects (repeatable) |
+| `--out` | path |  | Write the module here (stdout: a JSON summary) |
+| `--force` | boolean | `False` | Overwrite an existing --out file |
+| `--name` | text |  | App name (default: the namespace) |
+| `--json` | boolean | `False` | Without --out: print one JSON object with the module |
+| `--transport` | choice | `https` | https, or loopback-http for a local test API server only |
+
+**Contract**
+
+- **Reads:** kubeconfig
+- **Writes:** --out file
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Read-only on the cluster: lists ConfigMaps, Secrets, Services, PersistentVolumeClaims, Deployments, NetworkPolicies and Pods. Secret values are never written; --out refuses to overwrite without --force.
+
+(cli-import-yaml)=
+### `piceli import yaml`
+
+Generate a typed module from a directory of manifests (no cluster).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `DIRECTORY` | path | required |  |
+| `--namespace` | text |  | Namespace to render into (default: the one the files name, else 'default') |
+| `--select` | text (repeatable) |  | Kind/name or label=value; import only matching objects (repeatable) |
+| `--out` | path |  | Write the module here (stdout: a JSON summary) |
+| `--force` | boolean | `False` | Overwrite an existing --out file |
+| `--name` | text |  | App name (default: the namespace) |
+| `--json` | boolean | `False` | Without --out: print one JSON object with the module |
+
+**Contract**
+
+- **Reads:** manifest directory
+- **Writes:** --out file
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Never contacts a cluster. Secret values are never written; --out refuses to overwrite without --force.
+
 (cli-inputs-record)=
 ### `piceli inputs record`
 
@@ -435,8 +474,7 @@ Capture each declared source (or the ``--only`` ones) and write a lock.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
-- **Notes:** Refusal reasons are free text today (D0b).
+- **Output contract:** conforms
 
 (cli-inputs-verify)=
 ### `piceli inputs verify`
@@ -458,25 +496,7 @@ Recapture the sources and compare them with the lock (exit 1 on drift).
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
-- **Notes:** Refusal reasons are free text today (D0b).
-
-(cli-model-list)=
-### `piceli model list`
-
-Lists Kubernetes objects based on the command options.
-
-No options.
-
-**Contract**
-
-- **Reads:** model modules/folders
-- **Writes:** nothing (read-only)
-- **Cluster:** none
-- **Approval required:** no
-- **Safe to retry:** yes
-- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** legacy
+- **Output contract:** conforms
 
 (cli-observe-forward-command)=
 ### `piceli observe forward-command`
@@ -488,7 +508,7 @@ Print a JSON argv array for one explicit loopback-only port forward.
 | `--user` | text | required |  |
 | `--name` | text | required |  |
 | `--kubeconfig` | path | required |  |
-| `--context` | text |  |  |
+| `--context` | text | required | Kubeconfig context to use (required; current-context is never used) |
 | `--kubectl` | text | `kubectl` |  |
 | `--preferences` | path |  |  |
 
@@ -500,7 +520,8 @@ Print a JSON argv array for one explicit loopback-only port forward.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
+- **Notes:** `--context` is required; the argv always carries it.
 
 (cli-observe-forward-list)=
 ### `piceli observe forward-list`
@@ -520,7 +541,7 @@ List a user's saved port-forward preferences without starting a process.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-observe-forward-run)=
 ### `piceli observe forward-run`
@@ -532,9 +553,11 @@ Run one saved loopback-only port forward until the caller interrupts it.
 | `--user` | text | required |  |
 | `--name` | text | required |  |
 | `--kubeconfig` | path | required |  |
-| `--context` | text |  |  |
+| `--context` | text | required | Kubeconfig context to use (required; current-context is never used) |
 | `--kubectl` | text | `kubectl` |  |
 | `--preferences` | path |  |  |
+| `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
+| `--exec-sha256` | text |  | Expected sha256:<hex> of the resolved exec plugin file |
 
 **Contract**
 
@@ -544,7 +567,8 @@ Run one saved loopback-only port forward until the caller interrupts it.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
+- **Notes:** `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`). After the checks, output and exit status are kubectl's own.
 
 (cli-observe-forward-save)=
 ### `piceli observe forward-save`
@@ -569,7 +593,7 @@ Persist one harmless port-forward preference for a local user.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-observe-forwards-apply)=
 ### `piceli observe forwards apply`
@@ -580,11 +604,13 @@ Start every declared forward and supervise it in the foreground.
 | --- | --- | --- | --- |
 | `--profile` | path | required | Access profile: the --ui-config TOML format ([[shortcuts]] with optional [shortcuts.health] and [shortcuts.restart]) |
 | `--kubeconfig` | path | required |  |
-| `--context` | text |  |  |
+| `--context` | text | required | Kubeconfig context to use (required; current-context is never used) |
 | `--namespace` | text |  | Namespace for shortcuts that pin none |
 | `--only` | text (repeatable) |  | Supervise only these shortcut ids |
 | `--kubectl` | text | `kubectl` |  |
 | `--poll` | float | `1.0` | Status report cadence (seconds) |
+| `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
+| `--exec-sha256` | text |  | Expected sha256:<hex> of the resolved exec plugin file |
 
 **Contract**
 
@@ -594,7 +620,8 @@ Start every declared forward and supervise it in the foreground.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
+- **Notes:** `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`).
 
 (cli-observe-forwards-status)=
 ### `piceli observe forwards status`
@@ -613,8 +640,8 @@ Probe each declared forward's loopback endpoint once and print JSON.
 - **Cluster:** none
 - **Approval required:** no
 - **Safe to retry:** yes
-- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed)
-- **Output contract:** partial
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
 
 (cli-observe-logs-command)=
 ### `piceli observe logs-command`
@@ -626,7 +653,7 @@ Print JSON argv for a bounded, explicit workload-log request.
 | `--namespace` | text | required |  |
 | `--target` | text | required | pod/NAME, deployment/NAME, or another workload |
 | `--kubeconfig` | path | required |  |
-| `--context` | text |  |  |
+| `--context` | text | required | Kubeconfig context to use (required; current-context is never used) |
 | `--tail` | integer | `200` |  |
 | `--container` | text |  |  |
 | `--previous`, `--no-previous` | boolean | `False` |  |
@@ -640,7 +667,8 @@ Print JSON argv for a bounded, explicit workload-log request.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
+- **Notes:** `--context` is required; the argv always carries it.
 
 (cli-observe-logs-run)=
 ### `piceli observe logs-run`
@@ -652,11 +680,13 @@ Run a bounded workload-log request in the caller's foreground terminal.
 | `--namespace` | text | required |  |
 | `--target` | text | required | pod/NAME, deployment/NAME, or another workload |
 | `--kubeconfig` | path | required |  |
-| `--context` | text |  |  |
+| `--context` | text | required | Kubeconfig context to use (required; current-context is never used) |
 | `--tail` | integer | `200` |  |
 | `--container` | text |  |  |
 | `--previous`, `--no-previous` | boolean | `False` |  |
 | `--kubectl` | text | `kubectl` |  |
+| `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
+| `--exec-sha256` | text |  | Expected sha256:<hex> of the resolved exec plugin file |
 
 **Contract**
 
@@ -666,7 +696,8 @@ Run a bounded workload-log request in the caller's foreground terminal.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
+- **Notes:** `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`). After the checks, output and exit status are kubectl's own.
 
 (cli-observe-serve)=
 ### `piceli observe serve`
@@ -677,13 +708,15 @@ Open the local operations dashboard and optionally restore saved forwards.
 | --- | --- | --- | --- |
 | `--archive` | path | required |  |
 | `--kubeconfig` | path | required |  |
-| `--context` | text |  |  |
+| `--context` | text | required | Kubeconfig context to use (required; current-context is never used) |
 | `--namespace` | text |  | Namespace for shortcuts and pods (default: the archive's) |
 | `--preferences` | path |  |  |
 | `--user` | text |  | Restore this user's saved forwards |
 | `--port` | integer | `9876` |  |
 | `--ui-config` | path | env `PICELI__UI_CONFIG` | TOML file with dashboard shortcuts, topology tiers, and badges (also $PICELI__UI_CONFIG) |
 | `--start-shortcuts`, `--no-start-shortcuts` | boolean | `False` | Start and health-supervise every configured shortcut (port-conflict preflight first) |
+| `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
+| `--exec-sha256` | text |  | Expected sha256:<hex> of the resolved exec plugin file |
 
 **Contract**
 
@@ -693,7 +726,8 @@ Open the local operations dashboard and optionally restore saved forwards.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
+- **Notes:** `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`).
 
 (cli-observe-status)=
 ### `piceli observe status`
@@ -704,8 +738,10 @@ Print declared resources, live state, and objects absent from the archive.
 | --- | --- | --- | --- |
 | `--archive` | path | required |  |
 | `--kubeconfig` | path | required |  |
-| `--context` | text |  |  |
+| `--context` | text | required | Kubeconfig context to use (required; current-context is never used) |
 | `--include-common-types`, `--no-include-common-types` | boolean | `True` |  |
+| `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
+| `--exec-sha256` | text |  | Expected sha256:<hex> of the resolved exec plugin file |
 
 **Contract**
 
@@ -715,7 +751,8 @@ Print declared resources, live state, and objects absent from the archive.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
+- **Notes:** `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`).
 
 (cli-operator-approve)=
 ### `piceli operator approve`
@@ -738,7 +775,7 @@ Record an explicit operator approval for a pull request rollout.
 - **Approval required:** yes
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-operator-backup)=
 ### `piceli operator backup`
@@ -758,7 +795,7 @@ Create a verified, mode-restricted backup archive of operator state.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-operator-promote)=
 ### `piceli operator promote`
@@ -779,7 +816,7 @@ Promote an existing built digest to a new tag without rebuilding.
 - **Approval required:** no
 - **Safe to retry:** no
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-operator-restore)=
 ### `piceli operator restore`
@@ -799,7 +836,7 @@ Safely verify and restore operator state into empty destination.
 - **Approval required:** no
 - **Safe to retry:** no
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-operator-serve)=
 ### `piceli operator serve`
@@ -809,8 +846,8 @@ Launch the Piceli Operator dashboard and unified REST API.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--kubeconfig` | path | required |  |
+| `--context` | text | required | Kubeconfig context to use (required; current-context is never used) |
 | `--namespace` | text | `default` |  |
-| `--context` | text |  |  |
 | `--archive` | path |  |  |
 | `--catalog` | path |  |  |
 | `--preferences` | path |  |  |
@@ -818,6 +855,9 @@ Launch the Piceli Operator dashboard and unified REST API.
 | `--user` | text |  |  |
 | `--port` | integer | `9876` |  |
 | `--ui-config` | path | env `PICELI__UI_CONFIG` | TOML file with dashboard shortcuts, topology tiers, and badges (also $PICELI__UI_CONFIG) |
+| `--access` | text |  | release.toml or module:attr whose model access declarations become the dashboard shortcuts (--ui-config entries win by id) |
+| `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
+| `--exec-sha256` | text |  | Expected sha256:<hex> of the resolved exec plugin file |
 
 **Contract**
 
@@ -827,7 +867,8 @@ Launch the Piceli Operator dashboard and unified REST API.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
+- **Notes:** `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`).
 
 (cli-operator-status)=
 ### `piceli operator status`
@@ -837,11 +878,13 @@ Print classified operator inventory: managed, unmanaged, unknown, and releases.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--kubeconfig` | path | required |  |
+| `--context` | text | required | Kubeconfig context to use (required; current-context is never used) |
 | `--namespace` | text | `default` |  |
-| `--context` | text |  |  |
 | `--archive` | path |  |  |
 | `--catalog` | path |  |  |
 | `--include-common-types`, `--no-include-common-types` | boolean | `True` |  |
+| `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
+| `--exec-sha256` | text |  | Expected sha256:<hex> of the resolved exec plugin file |
 
 **Contract**
 
@@ -851,7 +894,8 @@ Print classified operator inventory: managed, unmanaged, unknown, and releases.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
+- **Notes:** `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`).
 
 (cli-release-apply)=
 ### `piceli release apply`
@@ -867,17 +911,63 @@ Execute an approved plan (``--approve HASH``), or plan and confirm.
 | `--adopt` | text (repeatable) |  | Authorize adopting this existing object, as Kind/name or apiVersion/Kind/name (repeatable; adds to [release] adopt) |
 | `--replace` | text (repeatable) |  | Authorize deleting this existing unmanaged object and creating it from the release, after writing a restorable backup (repeatable; adds to [release] replace; never retained or managed objects) |
 | `--adopt-all-desired` | boolean | `False` | Authorize adopting every existing unmanaged object the composition declares (each is listed in the plan and bound to its hash) |
+| `--skip-checks` | boolean | `False` | Do not run the spec's [[checks]] after readiness (emergencies only; recorded in the release history) |
 
 **Contract**
 
 - **Reads:** release.toml, composition, state_dir, kubeconfig
-- **Writes:** state_dir (catalog, journal, secret store)
+- **Writes:** state_dir (catalog, journal, secret store, check reports)
 - **Cluster:** writes
 - **Approval required:** yes
 - **Safe to retry:** no
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** After an interruption use `release resume`, not apply. Runs [[checks]] after readiness (exit 1 with release_state checks-failed); with rollback_on_failed_checks it re-applies the previous ready release without a further approval. --skip-checks is recorded.
+
+(cli-release-check)=
+### `piceli release check`
+
+Run the spec's [[checks]] now against a release; changes nothing.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--spec` | path | required | release.toml describing the release |
+| `--release` | text |  | Release to check (default: the selected one) |
+
+**Contract**
+
+- **Reads:** release.toml, composition, state_dir, kubeconfig
+- **Writes:** nothing (read-only)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** partial
-- **Notes:** After an interruption use `release resume`, not apply.
+- **Notes:** Writes no state and never rolls back. Checks open temporary loopback port forwards, may exec declared commands in pods and run declared Python check functions.
+
+(cli-release-diff)=
+### `piceli release diff`
+
+Show what `plan` would change, field by field (read-only, nothing stored).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--spec` | path | required | release.toml describing the release |
+| `--adopt` | text (repeatable) |  | Authorize adopting this existing object, as Kind/name or apiVersion/Kind/name (repeatable; adds to [release] adopt) |
+| `--replace` | text (repeatable) |  | Authorize deleting this existing unmanaged object and creating it from the release, after writing a restorable backup (repeatable; adds to [release] replace; never retained or managed objects) |
+| `--adopt-all-desired` | boolean | `False` | Authorize adopting every existing unmanaged object the composition declares (each is listed in the plan and bound to its hash) |
+| `--exit-code` | boolean | `False` | Exit 1 when the release would change something |
+
+**Contract**
+
+- **Reads:** release.toml, composition, state_dir, kubeconfig
+- **Writes:** nothing (read-only)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** partial
+- **Notes:** Read-only: stores no plan and no local state. Sends only reads and dryRun=All requests (server dry runs of the writes). Exit 1 with --exit-code when something would change.
 
 (cli-release-plan)=
 ### `piceli release plan`
@@ -901,8 +991,8 @@ Capture live discovery and persist an approvable plan (prints its hash).
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
-- **Notes:** Never changes the cluster. Prints the plan hash to approve.
+- **Output contract:** conforms
+- **Notes:** Never changes the cluster: reads plus dryRun=All requests (server dry runs of the writes). Prints the plan hash to approve.
 
 (cli-release-preview)=
 ### `piceli release preview`
@@ -926,7 +1016,7 @@ Alias of `plan`.
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-release-resume)=
 ### `piceli release resume`
@@ -937,17 +1027,18 @@ Resume an interrupted apply of a created release (same grant and ids).
 | --- | --- | --- | --- |
 | `--spec` | path | required | release.toml describing the release |
 | `--release` | text |  | Release name (default: the latest execution) |
+| `--skip-checks` | boolean | `False` | Do not run the spec's [[checks]] after readiness (emergencies only; recorded in the release history) |
 
 **Contract**
 
 - **Reads:** release.toml, composition, state_dir, kubeconfig
-- **Writes:** state_dir (journal)
+- **Writes:** state_dir (journal, check reports)
 - **Cluster:** writes
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
-- **Notes:** Continues an already approved execution; needs no new approval.
+- **Output contract:** conforms
+- **Notes:** Continues an already approved execution; needs no new approval. Runs [[checks]] when it becomes ready, as apply does.
 
 (cli-release-rollback)=
 ### `piceli release rollback`
@@ -963,16 +1054,18 @@ Re-plan and re-apply an earlier release against current cluster state.
 | `--adopt` | text (repeatable) |  | Authorize adopting this existing object, as Kind/name or apiVersion/Kind/name (repeatable; adds to [release] adopt) |
 | `--replace` | text (repeatable) |  | Authorize deleting this existing unmanaged object and creating it from the release, after writing a restorable backup (repeatable; adds to [release] replace; never retained or managed objects) |
 | `--adopt-all-desired` | boolean | `False` | Authorize adopting every existing unmanaged object the composition declares (each is listed in the plan and bound to its hash) |
+| `--skip-checks` | boolean | `False` | Do not run the spec's [[checks]] after readiness (emergencies only; recorded in the release history) |
 
 **Contract**
 
 - **Reads:** release.toml, composition, state_dir, kubeconfig
-- **Writes:** state_dir (catalog, journal)
+- **Writes:** state_dir (catalog, journal, check reports)
 - **Cluster:** writes
 - **Approval required:** yes
 - **Safe to retry:** no
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
-- **Output contract:** partial
+- **Output contract:** conforms
+- **Notes:** Runs [[checks]] after readiness, as apply does.
 
 (cli-release-secret-show)=
 ### `piceli release secret show`
@@ -996,7 +1089,7 @@ Show a secret's metadata, and its value with --reveal (never logged).
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 - **Notes:** Owner only. Never contacts the cluster; values print only with --reveal or a terminal confirmation.
 
 (cli-release-status)=
@@ -1016,7 +1109,7 @@ Show catalogued releases, their executions and history (no cluster access).
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 
 (cli-release-stop)=
 ### `piceli release stop`
@@ -1036,7 +1129,7 @@ Cancel the latest execution of a release (exact owner only).
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
+- **Output contract:** conforms
 - **Notes:** Checks the cluster identity; records the cancellation locally.
 
 (cli-render)=
@@ -1061,3 +1154,25 @@ Print the manifests of a typed app or composition. Never contacts a cluster.
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** partial
 - **Notes:** Never contacts a cluster; secret values are placeholders.
+
+(cli-status)=
+### `piceli status`
+
+Say whether the app is up and how to reach it. Read-only.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `TARGET` | text | required |  |
+| `--json` | boolean | `False` | Print one piceli.status.v1 JSON object |
+| `--timeout` | float | `10.0` | Per-request API timeout (seconds) |
+
+**Contract**
+
+- **Reads:** release.toml or module:attr, state_dir, kubeconfig
+- **Writes:** nothing (read-only)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Read-only. Exit 0 when every workload is ready, 1 otherwise (including an unreadable cluster). Probes forwards on 127.0.0.1 only. JSON schema: docs/schemas/piceli-status-v1.schema.json.

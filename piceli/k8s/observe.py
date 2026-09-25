@@ -23,11 +23,15 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from piceli.k8s.ops.discovery import ResourceIdentity
 from piceli.k8s.ops.session import DeploymentSessionArchive
+from piceli.k8s.port_owner import PortOwner, port_owner
 from piceli.k8s.ui_config import HealthProbe, RestartPolicy, UiShortcut, legacy_health
+
+if TYPE_CHECKING:
+    from piceli.k8s.ops.exec_credentials import ExecPolicy
 
 _NAME = re.compile(r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?")
 _FORWARD_TARGET = re.compile(
@@ -233,6 +237,7 @@ def observe_session(
                 errors.append(f"{api_version}/{kind}: {type(error).__name__}")
                 continue
             undeclared.update(item for item in objects if item.ref not in declared)
+    errors.extend(reader_warnings(reader))
     return InventoryReport(
         session_id=archive.session_id,
         declared=tuple(entries),
@@ -241,16 +246,35 @@ def observe_session(
     )
 
 
-class KubernetesDynamicInventoryReader:
-    """Lazy Kubernetes-client adapter for explicit local kubeconfig observation."""
+def reader_warnings(reader: object) -> tuple[str, ...]:
+    """Drain skip warnings from readers that tolerate unmodellable objects."""
+    drain = getattr(reader, "drain_warnings", None)
+    return tuple(drain()) if callable(drain) else ()
 
-    def __init__(self, *, kubeconfig: Path, context: str | None = None) -> None:
-        from kubernetes import config
+
+class KubernetesDynamicInventoryReader:
+    """Lazy Kubernetes-client adapter for explicit local kubeconfig observation.
+
+    The client comes from the provider factory: an explicit kubeconfig file and
+    named context (never ``current-context``), the factory's refusals (proxy,
+    insecure TLS, auth-provider), and exec plugins only with ``exec_policy``.
+    """
+
+    def __init__(
+        self,
+        *,
+        kubeconfig: Path,
+        context: str,
+        exec_policy: ExecPolicy | None = None,
+    ) -> None:
         from kubernetes.dynamic import DynamicClient
 
+        from piceli.k8s.ops.provider_factory import api_client_from_kubeconfig
+
         self._client = DynamicClient(
-            config.new_client_from_config(config_file=str(kubeconfig), context=context)
+            api_client_from_kubeconfig(kubeconfig, context, exec_policy=exec_policy)
         )
+        self._warnings: list[str] = []
 
     @staticmethod
     def _resource(api_version: str, kind: str, client: Any) -> Any:
@@ -310,14 +334,30 @@ class KubernetesDynamicInventoryReader:
         resource = self._resource(api_version, kind, self._client)
         result = resource.get(namespace=namespace)
         items = result.to_dict().get("items", [])
+        skipped = 0
         for value in items:
             metadata = value.get("metadata", {})
             name = metadata.get("name")
-            if isinstance(name, str):
-                yield self._summary(
-                    value,
-                    ObservationRef(api_version, kind, namespace, name),
-                )
+            if not isinstance(name, str):
+                continue
+            try:
+                ref = ObservationRef(api_version, kind, namespace, name)
+            except ValueError:
+                # A live object Piceli cannot model must never abort the whole
+                # scan; it is surfaced as a scan warning instead.
+                skipped += 1
+                continue
+            yield self._summary(value, ref)
+        if skipped:
+            self._warnings.append(
+                f"{api_version}/{kind}: skipped {skipped} object(s) "
+                "with names Piceli cannot model"
+            )
+
+    def drain_warnings(self) -> tuple[str, ...]:
+        """Return and clear warnings about live objects skipped during listing."""
+        warnings, self._warnings = tuple(self._warnings), []
+        return warnings
 
 
 def _string(value: Any) -> str | None:
@@ -364,9 +404,7 @@ class PortForward:
         self, *, kubectl: str, kubeconfig: Path, context: str | None
     ) -> list[str]:
         """Build the explicit, shell-free kubectl command for this preference."""
-        result = [kubectl, "--kubeconfig", str(kubeconfig)]
-        if context:
-            result.extend(["--context", context])
+        result = kubectl_target(kubectl, kubeconfig, context)
         return [
             *result,
             "--namespace",
@@ -582,6 +620,8 @@ class ForwardStatus:
     last_probe_at: str | None = None
     consecutive_failures: int = 0
     probe: dict[str, Any] | None = None
+    #: The process holding the local port on a ``conflict`` (pid, command).
+    owner: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if self.state not in _FORWARD_STATES:
@@ -610,6 +650,7 @@ class _ManagedForward:
     next_probe: float = 0.0
     given_up: bool = False
     stopped: bool = False
+    owner: PortOwner | None = None
 
     def reset(self) -> None:
         """Clear failure bookkeeping before an explicit (re)start."""
@@ -618,6 +659,7 @@ class _ManagedForward:
         self.attempts = 0
         self.given_up = False
         self.stopped = False
+        self.owner = None
 
 
 class ForwardSupervisor:
@@ -630,8 +672,11 @@ class ForwardSupervisor:
     fails ``failure_threshold`` consecutive times, with exponential backoff and
     a bounded number of consecutive restarts
     (:class:`~piceli.k8s.ui_config.RestartPolicy`). A local port that is
-    already served by another process is reported as a ``conflict`` and never
-    spawns a process.
+    already served by another process is reported as a ``conflict`` with the
+    owning process (pid and command) and never spawns a process. A conflict
+    is final until the forward is started again explicitly: the supervisor
+    never waits for a declared port to become free and silently takes it back
+    from whoever holds it (for example another dashboard or ``piceli access``).
     """
 
     def __init__(
@@ -645,6 +690,9 @@ class ForwardSupervisor:
         shortcuts: Iterable[UiShortcut] = (),
         namespace: str | None = None,
     ) -> None:
+        if not context:
+            # kubectl would otherwise fall back to the file's current-context.
+            raise ValueError("an explicit kubeconfig context is required")
         self._preferences = preferences
         self._user = user
         self._kubeconfig = kubeconfig
@@ -737,6 +785,7 @@ class ForwardSupervisor:
             last_probe_at=_iso(managed.last_probe_at),
             consecutive_failures=managed.consecutive_failures,
             probe=managed.probe.public_dict(),
+            owner=managed.owner.to_dict() if managed.owner is not None else None,
         )
 
     def statuses(self) -> tuple[ForwardStatus, ...]:
@@ -870,6 +919,7 @@ class ForwardSupervisor:
                         "probe": status.probe,
                         "required": sc.required,
                         "url": sc.url,
+                        "owner": status.owner,
                     }
                 )
             return results
@@ -1012,13 +1062,22 @@ class ForwardSupervisor:
         if managed.process is not None and managed.process.poll() is None:
             return
         if not self._port_available(managed.forward.local_port):
-            # An ambient loopback listener is not ours to inspect, adopt, or
-            # terminate. Leave it alone, spawn nothing, and make the conflict
-            # visible while periodically re-checking in case its owner stops.
+            # An ambient loopback listener is not ours to adopt or terminate.
+            # Leave it alone, spawn nothing, name its owner, and stop trying:
+            # re-checking until the port frees up would silently take a
+            # declared port back from whoever owns it now (another dashboard,
+            # or ``piceli access`` restarting its forward). Only an explicit
+            # start retries.
+            owner = self._owner(managed.forward.local_port)
+            reason = _OCCUPIED
+            if owner is not None:
+                reason = f"{_OCCUPIED}: {owner.describe()}"
+            managed.owner = owner
             managed.health = "conflict"
-            managed.error = _OCCUPIED
-            managed.last_error = _OCCUPIED
-            managed.next_start = time.monotonic() + 1.0
+            managed.error = reason
+            managed.last_error = reason
+            managed.given_up = True
+            managed.next_start = float("inf")
             return
         command = managed.forward.command(
             kubectl=self._kubectl, kubeconfig=self._kubeconfig, context=self._context
@@ -1050,6 +1109,7 @@ class ForwardSupervisor:
         managed.process = None
         managed.next_start = float("inf")
         managed.stopped = True
+        managed.given_up = False
         managed.health = "stopped"
         if process is not None and process.poll() is None:
             self._stop_process(process)
@@ -1080,6 +1140,11 @@ class ForwardSupervisor:
         """Return whether a loopback port can be safely owned by this supervisor."""
         return not local_port_in_use(port)
 
+    @staticmethod
+    def _owner(port: int) -> PortOwner | None:
+        """The local process holding ``port``, when it can be determined."""
+        return port_owner(port)
+
 
 @dataclass(frozen=True)
 class AccessPlan:
@@ -1102,12 +1167,14 @@ def preflight_shortcuts(
     *,
     namespace: str | None = None,
     in_use: Callable[[int], bool] = local_port_in_use,
+    owner: Callable[[int], PortOwner | None] = port_owner,
 ) -> AccessPlan:
     """Check that every declared forward can be owned before starting any.
 
     A required shortcut whose local port is already served by another process,
     or that has no namespace, is an error. An optional (``required = false``)
     shortcut on an occupied port is reported as ``external`` and not started.
+    A conflict names the owning process (pid and command) when it can be found.
     """
     start: list[str] = []
     external: list[str] = []
@@ -1126,9 +1193,11 @@ def preflight_shortcuts(
             continue
         if in_use(shortcut.local_port):
             if shortcut.required:
+                holder = owner(shortcut.local_port)
+                by = f" ({holder.describe()})" if holder is not None else ""
                 errors.append(
                     f"{shortcut.id}: local port {shortcut.local_port} is already in "
-                    "use by another process; stop it or change local_port"
+                    f"use by another process{by}; stop it or change local_port"
                 )
             else:
                 external.append(shortcut.id)
@@ -1152,6 +1221,16 @@ def run_port_forward(command: list[str]) -> int:
     return subprocess.run(command, check=False).returncode
 
 
+def kubectl_target(kubectl: str, kubeconfig: Path, context: str | None) -> list[str]:
+    """``kubectl --kubeconfig FILE --context NAME``; the context is required.
+
+    kubectl would otherwise fall back to the file's ``current-context``.
+    """
+    if not context:
+        raise ValueError("an explicit kubeconfig context is required")
+    return [kubectl, "--kubeconfig", str(kubeconfig), "--context", context]
+
+
 def kubectl_logs_command(
     *,
     kubectl: str,
@@ -1168,9 +1247,7 @@ def kubectl_logs_command(
         raise ValueError("invalid log namespace or target")
     if not isinstance(tail, int) or isinstance(tail, bool) or not 1 <= tail <= 10_000:
         raise ValueError("log tail must be between 1 and 10000")
-    result = [kubectl, "--kubeconfig", str(kubeconfig)]
-    if context:
-        result.extend(["--context", context])
+    result = kubectl_target(kubectl, kubeconfig, context)
     result.extend(["--namespace", namespace, "logs", target, f"--tail={tail}"])
     if container:
         if not _NAME.fullmatch(container):

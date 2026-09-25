@@ -4,6 +4,88 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.4.0
+
+- **Removed:** the legacy delete-and-recreate engine and its CLI
+  (`piceli model …`, `piceli deploy plan/detail/run`). There is one engine:
+  `piceli release`, driven by typed apps or a `release.toml`. `piceli deploy`
+  is now the pipeline command below.
+- **`piceli deploy` (preview):** a `piceli.pipeline.Pipeline` declares the
+  app, its image builds, how the images reach the cluster (registry,
+  node-loopback registry or node import) and the target. `piceli deploy
+  module.py:pipeline` builds, delivers by digest, plans, applies and checks in
+  one journaled run. Unchanged stages are skipped, an interrupted run resumes,
+  approval covers the combined hash of every stage, and `--json` streams one
+  event per stage. A multi-image release records its source as an `oci-set`
+  image map.
+- **Post-deploy checks and automatic rollback (preview):** `[[checks]]` in
+  `release.toml` (or `piceli.checks` in Python) declares `http`, `exec`,
+  `metric` and `python` checks. A release is `ready` only when they pass;
+  with `rollback_on_failed_checks = true` a failed check re-applies the
+  previous ready release. New `piceli release check` and `--skip-checks`.
+  A failed check ends `apply` with `reason: check-failed` and exit 3.
+- **Field-level diffs and true no-op plans:** `release plan` compares the
+  desired object with a server-side dry run of it instead of with the raw
+  live object, so API-server defaults no longer show up as changes. Unchanged
+  objects plan `no-op`, and every `apply` shows the fields it changes.
+  New `piceli release diff`.
+- **Secret no-op plans and three-way removal:** an unchanged Secret (or
+  other secret-bound object) now plans `no-op`; its resolved values are
+  compared in-process with keyed digests and are never shown or stored. An
+  `apply` now removes labels, annotations and map keys (such as ConfigMap
+  keys) that an earlier release declared and the composition dropped, unless
+  another field manager owns them (`removes` in the plan, `remove` changes in
+  the diff).
+- **Access and status from the model (preview):** `app.access.forward(…)`
+  declares how each service is reached from your laptop (it renders no
+  Kubernetes object). `piceli access TARGET` runs supervised loopback port
+  forwards, and `piceli status TARGET [--json]` (`piceli.status.v1`) says
+  whether the app is up and lists its URLs.
+- **Import existing apps (preview):** `piceli import live` (a namespace) and
+  `piceli import yaml` (manifest files) generate a typed app module that
+  adopts the existing objects on its first release.
+  `App.override(obj, patch)` sets fields the typed model does not cover.
+- **`piceli.testing` (public):** the in-process fake Kubernetes API used by
+  Piceli's own acceptance suite, with a `fake_cluster()` context manager and a
+  pytest fixture, for testing your deployment code without a cluster.
+- **Managed clusters (preview):** kubeconfigs that authenticate through an
+  exec credential plugin (GKE, EKS, AKS, OIDC) are refused
+  (`exec-auth-not-allowed`) unless `[target] allow_exec = true`. The plugin is
+  resolved to an absolute path, hashed before every run (optional
+  `exec_sha256` pin) and run with a minimal environment
+  (`exec_pass_env`) and a timeout; Piceli refreshes the credential itself.
+- **Changed (machine output):** every preview command now follows the output
+  contract: a refusal is `{"state": "rejected", "reason": "<code>",
+  "message": "<sentence>"}` on stdout, and exit codes are unchanged. See
+  {ref}`the contract changes <agents-contract-changes>` for each command.
+  Release refusals keep `code` as an alias of `reason` for 0.4.x only; it
+  will be removed in 0.5.0. Results of `release apply/rollback/resume/stop`
+  add `state` (`succeeded`, or `failed` with `reason`).
+- **Changed (safety):** `observe` and `operator` commands need an explicit
+  `--context`, build their clients through the same checks as `release`
+  (a refused target is `target-refused`) and keep static client certificates
+  in memory instead of temporary files.
+- **Fixed:** the `rust-hello` build example could ship a stale binary after
+  a source edit: staged sources carry the fixed `source_date_epoch` mtime, so
+  Cargo treated the cached `target/` artifact as fresh. The example now runs
+  `cargo clean --release --package rust-hello` before `cargo build`, keeping
+  dependencies cached and builds reproducible. {doc}`containerized_builds`
+  documents the pitfall.
+- **Fixed:** `operator status`, `observe` and release plan observation no
+  longer fail on RBAC objects whose names contain `:` (such as
+  `system:controller:*` in `kube-system`). RBAC names are validated as
+  Kubernetes path segments, and live objects Piceli cannot model are skipped
+  with a scan warning instead of crashing.
+- **Fixed:** `exec` checks failed TLS verification (`check-exec-unavailable`)
+  with clients built from an explicit kubeconfig; they now use the client's
+  own verified TLS context and credentials.
+- `Checks` is exported from the top-level package
+  (`from piceli import Checks, Pipeline`).
+- Help text shows `[[…]]` TOML names literally instead of dropping them as
+  terminal markup.
+- Two flaky tests fixed (git identity under redirected `GIT_DIR`, process
+  limit timing).
+
 ## Version 0.3.0
 
 - **Safety fix:** the dry-run admission check before a delete really deleted

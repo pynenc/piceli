@@ -27,6 +27,7 @@ from pydantic import (
     model_validator,
 )
 
+from piceli.app.access import Forward
 from piceli.k8s.ops.secret_versions import SecretVersionRef
 
 # ----------------------------------------------------------------- field types
@@ -658,6 +659,8 @@ class Deployment(_Model):
     :param strategy: ``RollingUpdate`` or ``Recreate``.
     :param service_account: ``serviceAccountName``.
     :param component: Deployment component; defaults to ``name``.
+    :param access: A loopback forward to the pods (``app.access.forward``);
+        never rendered into the manifest.
 
     Selector rule: the selector is ``{"app.kubernetes.io/name": <name>}`` unless
     ``selector`` is given. It never depends on the app name, the component or
@@ -677,6 +680,7 @@ class Deployment(_Model):
     strategy: Literal["RollingUpdate", "Recreate"] | None = None
     service_account: Name | None = None
     component: Name | None = None
+    access: Forward | None = None
 
     @model_validator(mode="after")
     def _pod(self) -> Deployment:
@@ -696,7 +700,27 @@ class Deployment(_Model):
                     f"label {key!r} conflicts with the selector label {value!r}"
                 )
         self.volumes()  # conflicting volume definitions fail at declaration
+        if self.access is not None:
+            self.access_port()
         return self
+
+    def access_port(self) -> int:
+        """The container port the ``access`` forward reaches (main container).
+
+        :raises ValueError: when there is no access declaration, the main
+            container has no ports, or the named port does not exist.
+        """
+        if self.access is None:
+            raise ValueError(f"deployment {self.name!r} declares no access")
+        ports = [
+            item if isinstance(item, ContainerPort) else ContainerPort(port=item)
+            for item in self.containers[0].ports
+        ]
+        return _access_port(
+            f"deployment {self.name!r}",
+            self.access.port,
+            [(item.port, item.name) for item in ports],
+        )
 
     @property
     def selector_labels(self) -> dict[str, str]:
@@ -767,6 +791,22 @@ class Deployment(_Model):
         }
 
 
+def _access_port(
+    what: str, wanted: int | str | None, ports: Sequence[tuple[int, str | None]]
+) -> int:
+    if not ports:
+        raise ValueError(f"{what} has no port to forward to; declare ports=")
+    if wanted is None:
+        return ports[0][0]
+    for number, name in ports:
+        if wanted in (number, name):
+            return number
+    raise ValueError(
+        f"{what}: access port {wanted!r} is not one of its ports "
+        f"{[name or number for number, name in ports]}"
+    )
+
+
 class ServicePort(_Model):
     """One Service port. ``target_port`` defaults to ``port``."""
 
@@ -788,7 +828,8 @@ class Service(_Model):
     """A Service in front of a Deployment, declared with ``app.service(...)``.
 
     It selects the Deployment's immutable selector labels. Several ports need
-    names.
+    names. ``access`` (``app.access.forward``) declares how to reach it from a
+    laptop; it is never rendered into the manifest.
     """
 
     name: Name
@@ -796,12 +837,29 @@ class Service(_Model):
     ports: tuple[ServicePort, ...] = Field(min_length=1)
     type: Literal["ClusterIP", "NodePort", "LoadBalancer"] | None = None
     component: Name
+    access: Forward | None = None
 
     @model_validator(mode="after")
     def _names(self) -> Service:
         if len(self.ports) > 1 and any(port.name is None for port in self.ports):
             raise ValueError("a Service with several ports needs a name on each")
+        if self.access is not None:
+            self.access_port()
         return self
+
+    def access_port(self) -> int:
+        """The Service port the ``access`` forward reaches.
+
+        :raises ValueError: when there is no access declaration or the port
+            does not exist on the Service.
+        """
+        if self.access is None:
+            raise ValueError(f"service {self.name!r} declares no access")
+        return _access_port(
+            f"service {self.name!r}",
+            self.access.port,
+            [(item.port, item.name) for item in self.ports],
+        )
 
     @property
     def component_name(self) -> str:

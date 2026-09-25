@@ -94,8 +94,8 @@ def test_identity_mismatches_are_refused(tmp_path, kwargs, message):
 @pytest.mark.parametrize(
     ("user", "extra", "transport", "message"),
     [
-        ("{exec: {command: gcloud}}", "", "https", "exec/auth-provider"),
-        ("{auth-provider: {name: oidc}}", "", "https", "exec/auth-provider"),
+        ("{exec: {command: gcloud}}", "", "https", "allow_exec"),
+        ("{auth-provider: {name: oidc}}", "", "https", "auth-provider"),
         ("{username: a, password: b}", "", "https", "unsupported"),
         ("{}", ", proxy-url: 'http://proxy'", "https", "proxied"),
         ("{}", ", insecure-skip-tls-verify: true", "https", "insecure"),

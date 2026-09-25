@@ -11,14 +11,15 @@ Every Piceli workflow goes through four stages:
 ```text
   MODEL                 PLAN                    EXECUTE                 OBSERVE
   ─────                 ────                    ───────                 ───────
-  templates,            desired state vs.       ordered, authorized     live inventory,
-  k8s client objects,   observed cluster  ──►   writes with a      ──►  logs, forwards,
-  YAML / JSON           state → actions         durable journal         releases
+  typed App,            desired state vs.       ordered, authorized     live inventory,
+  templates, client     observed cluster  ──►   writes with a      ──►  logs, forwards,
+  objects, YAML / JSON  state → actions         durable journal         releases
 ```
 
-1. **Model**: declare the resources you want. Use Piceli templates (typed Pydantic
-   models with sensible defaults), official `kubernetes.client` objects, or YAML/JSON
-   manifests. All three can be mixed in one project.
+1. **Model**: declare the resources you want. Use a typed `App` (see
+   {doc}`typed_apps`), Piceli templates (typed Pydantic models with sensible
+   defaults), official `kubernetes.client` objects, or YAML/JSON manifests. They
+   can be mixed in one composition.
 2. **Plan**: compare the model with what the cluster reports. The result is a
    list of `create`, `adopt`, `apply`, `no-op` and `delete` actions, grouped in
    dependency order (for example ServiceAccounts and Secrets before the Deployments
@@ -27,32 +28,18 @@ Every Piceli workflow goes through four stages:
 4. **Observe**: compare what was declared with what is running, read logs, and
    reach services through local port forwards.
 
-## Two execution engines
+## One engine
 
-Piceli currently ships two implementations of *plan* and *execute*. Knowing which
-one you are using avoids surprises.
+Every command that changes a cluster (`piceli release`, and `piceli deploy`,
+which adds build and delivery in front of it) runs the same engine: live
+discovery, a pure and hashable plan, server-side apply with UID and
+resourceVersion preconditions, and a durable SQLite journal that supports
+cancel, resume and conservative compensation. It only reaches a cluster through
+an explicit kubeconfig file and context, never the current kube context.
 
-| | CLI engine | Recoverable engine |
-| --- | --- | --- |
-| Entry point | `piceli deploy detail` / `piceli deploy run` | `DeploymentSession`, `PlanExecutor` (Python API) |
-| Input | Templates, client objects, YAML/JSON loaded from a module or folder | `DeploymentComposition` of `ResourceIntent` manifests |
-| Cluster access | The current kubeconfig context | An explicit `ApiClient` and explicit target identity |
-| Update strategy | Deletes and recreates existing objects | Server-side apply with UID/resourceVersion preconditions |
-| Ordering | Fixed level per kind; kinds outside the table are skipped | Kind levels plus explicit component dependencies |
-| Failure handling | Rolls back to the previous objects | Durable SQLite journal: cancel, resume and conservative compensation |
-| Pruning | No | Opt-in, and only with complete discovery coverage |
-| Secrets | Inline in the manifest | Private versioned store; plans and journals hold only references |
-
-The CLI engine is the quickest way to try Piceli against a disposable cluster.
-The recoverable engine is the long-term foundation. The {doc}`roadmap` describes
-how the CLI will be moved onto it.
-
-```{warning}
-Because the CLI engine replaces existing objects, running `piceli deploy run`
-against a namespace with live traffic causes a brief outage for every changed
-object. Use `piceli deploy detail` first, and prefer the recoverable engine for
-anything long-lived.
-```
+Existing objects are patched, not recreated. Deleting and recreating an object
+(for example to change an immutable field) happens only when you name that
+object with `--replace` or `replace = [...]` in the spec; see {doc}`release_cli`.
 
 ## Building blocks
 
@@ -62,10 +49,15 @@ anything long-lived.
   `CronJob`, `Service`, `ConfigMap`, `Secret`, `ServiceAccount`, `Role`,
   `RoleBinding`, autoscalers and volumes, plus helpers such as `Container`,
   `Port`, `Resources` and `crontab`. See {doc}`kubernetes_model/piceli_templates/index`.
-- **Loader**: finds every template, `kubernetes.client` model and YAML/JSON document
-  under a module or folder (`--module-name`, `--module-path`, `--folder-path`).
+- **Typed apps** (`piceli.App`): Deployments, Services, config, secrets and
+  network policies declared in Python and rendered to a composition. See
+  {doc}`typed_apps`.
+- **Loader** (`piceli.k8s.ops.loader`): finds every template, `kubernetes.client`
+  model and YAML/JSON document under a module or folder. Combine it with
+  `component_from_objects` to put existing manifests in a composition (see
+  {doc}`faq`).
 
-### Plan (recoverable engine)
+### Plan
 
 - **`ResourceIntent`**: one immutable desired manifest. `with_secret()` binds a
   JSON pointer inside it to a private secret version.
@@ -81,7 +73,7 @@ anything long-lived.
   to a deterministic, hashable plan. It has no side effects and makes no network
   calls.
 
-### Execute (recoverable engine)
+### Execute
 
 - **`KubernetesProvider`**: the only component that talks to the API server. It is
   constructed explicitly from a caller-supplied `ApiClient`.
@@ -96,7 +88,10 @@ anything long-lived.
 
 ### Durable workflow
 
-- **`DeploymentSession`**: the recommended entry point. It combines composition,
+- **`piceli release`**: the command-line entry point. It plans, applies, rolls
+  back, resumes and stops releases described by a `release.toml` spec. See
+  {doc}`release_cli`.
+- **`DeploymentSession`**: the Python entry point. It combines composition,
   snapshot, authorization, journal and secret store into one recoverable unit
   with `preview()`, `apply()`, `resume()` and `stop()`.
 - **`DeploymentRevision` / `ExecutionBundle`**: canonical JSON identities used for

@@ -18,13 +18,17 @@ Priorities may change. Progress is tracked in
 | Typed templates for common workloads | 🟡 Core kinds only; no Ingress/Gateway, NetworkPolicy, DaemonSet, PDB, Namespace or cluster-scoped RBAC yet |
 | Dependency-ordered plan and apply | ✅ Available |
 | Image handoff by digest (build → deliver → release, immutable references only) | 🟡 Preview |
-| Server-side apply with preconditions, journal and resume | 🟡 Python API only; not yet used by the CLI |
-| Field-level diff | 🟡 `deploy detail` (CLI engine) only |
-| Safe pruning of removed resources | 🟡 Recoverable engine only, opt-in |
+| One command from source to a verified release (`piceli deploy`) | 🟡 Preview: journaled, resumable, skips unchanged stages |
+| Server-side apply with preconditions, journal and resume | ✅ The only engine: `piceli release` and the Python API |
+| Field-level diff and true no-op plans | 🟡 Preview: `release plan`/`release diff` (server dry runs) |
+| Safe pruning of removed resources | 🟡 Opt-in (`prune = true`) |
 | Adopt or replace objects created by other tools (`release --adopt`, `--adopt-all-desired`, `--replace`) | 🟡 Preview |
+| Post-deploy checks (http, exec, metric, Python) with automatic rollback | 🟡 Preview |
+| Import a live namespace or manifest files as a typed app module (`piceli import live`, `piceli import yaml`) | 🟡 Preview |
+| Public fake Kubernetes API for consumers' tests (`piceli.testing`) | 🟡 Preview |
 | Environments and overlays (Kustomize equivalent) | ❌ Not yet: plain Python functions for now |
 | Reusable, versioned packages (Helm equivalent) | ❌ Not yet |
-| Custom resources (CRDs) | 🟡 As raw manifests in the recoverable engine |
+| Custom resources (CRDs) | 🟡 As raw manifests in a composition |
 | Local operations UI and JSON API | 🟡 Early preview |
 | Continuous reconciliation from Git (Argo CD equivalent) | ❌ Not yet |
 | Cloud infrastructure lifecycle (Terraform/OpenTofu equivalent) | ❌ Not yet; GKE cluster helpers only |
@@ -42,18 +46,26 @@ Every feature page starts with its maturity, and this table lists them all:
 
 | Feature | Page | Maturity |
 | --- | --- | --- |
-| Object model: templates, `kubernetes` client models, YAML/JSON | {doc}`kubernetes_model/index` | stable |
-| Recoverable engine: discovery, plans, executor, journals (Python API) | {doc}`deployment_planning` | preview |
+| Object model: templates, `kubernetes` client models, YAML/JSON (loader) | {doc}`kubernetes_model/index` | stable |
+| CLI overview | {doc}`cli/index` | preview |
+| Typed apps (`piceli.App`, `piceli render`) | {doc}`typed_apps` | preview |
+| Engine: discovery, plans, executor, journals (Python API) | {doc}`deployment_planning` | preview |
+| Deploy from source (`piceli deploy`, `piceli.pipeline`) | {doc}`deploy` | preview |
 | Releases from a spec (`piceli release`) | {doc}`release_cli` | preview |
+| Post-deploy checks and automatic rollback (`[[checks]]`, `piceli.checks`, `release check`) | {doc}`checks` | preview |
+| Field-level diffs and no-op detection (`release plan`, `release diff`) | {doc}`plans_and_diffs` | preview |
+| Managed-cluster credentials: exec plugins for GKE, EKS, AKS, OIDC (`[target] allow_exec`) | {doc}`managed_clusters` | preview |
 | Source identity (`piceli inputs`) | {doc}`source_identity` | preview |
 | Containerized builds (`piceli artifacts build-spec`) | {doc}`containerized_builds` | preview |
 | Deterministic OCI builds (artifact API) | {doc}`artifact_delivery` | preview |
 | Image delivery (`piceli artifacts deliver`) | {doc}`node_delivery` | preview |
 | Node-local registry template | {doc}`node_local_registry` | preview |
+| Access and status from the model (`app.access.forward`, `piceli access`, `piceli status`) | {doc}`access` | preview |
 | Operations lens (`piceli observe`) | {doc}`operations_lens` | preview |
 | CLI contract: `piceli explain`, `piceli help-json`, error codes | {doc}`agents` | preview |
+| Import and migration kit (`piceli import live`, `piceli import yaml`, `App.override`) | {doc}`migrate_from_kubectl` | preview |
+| Test double: fake Kubernetes API (`piceli.testing`) | {doc}`testing` | preview |
 | Operator workflow (`piceli operator`) | {doc}`operator_workflow` | experimental |
-| Legacy CLI engine (`piceli model`, `piceli deploy`) | {doc}`cli/index` | experimental |
 
 ## How Piceli compares
 
@@ -80,9 +92,12 @@ audience.
 
 ### 2. One engine
 
-- Move `piceli deploy` onto the recoverable engine: live discovery, server-side
-  apply, journal, resume, and field-level diff output.
-- Keep the old delete-and-recreate behaviour only as an explicit opt-in strategy.
+- ✅ One engine: the delete-and-recreate CLI engine (`piceli model`,
+  `piceli deploy run/plan/detail`) is removed. Every change goes through live
+  discovery, server-side apply, the journal and resume.
+- ✅ Delete-and-recreate only as an explicit per-object opt-in (`--replace`).
+- ✅ `piceli deploy`: build, delivery and release as one resumable command (preview; see {doc}`deploy`).
+- Field-level diff output in plans.
 - Support standard kubeconfig authentication (exec plugins for GKE, EKS and AKS).
 - Fix and fully test every template.
 

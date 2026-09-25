@@ -1,4 +1,10 @@
-"""Thin JSON CLI over artifact library calls. Preview does not instantiate clients."""
+"""Thin JSON CLI over artifact library calls. Preview does not instantiate clients.
+
+Machine JSON goes to stdout, human text to stderr. Refusals print
+``{"state": "rejected", "reason": "<code>", "message": <the code's title>}``
+and exit 2; a result whose ``state`` is not ``succeeded`` exits 1 and names
+its registered code in ``reason``. Messages never carry paths or tool output.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +14,7 @@ import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from piceli.artifacts import BuildPlan, OciBuilder, SourcePin, inspect_oci
 from piceli.artifacts.build_spec import (
@@ -40,6 +46,8 @@ from piceli.artifacts.process import (
 )
 from piceli.artifacts.registry import RegistryCredentials, RegistryTarget
 from piceli.artifacts.registry_delivery import RegistryDelivery, RegistryForward
+from piceli.cli_contract import Rejected, reject
+from piceli.errors import ERRORS
 from piceli.k8s.ops.bounds import strict_json
 
 
@@ -152,8 +160,7 @@ def main(arguments: list[str] | None = None) -> int:
                     ),
                     limits=ProcessLimits(args.timeout),
                 )
-        print(json.dumps(result, sort_keys=True))
-        return 0 if result.get("state", "succeeded") == "succeeded" else 1
+        return _finish(args.command, result)
     except (ValueError, KeyError, TypeError, OSError, InterruptedError) as error:
         # Only fixed codes: never private paths, process output, manifests or
         # attacker-controlled errors.
@@ -162,8 +169,40 @@ def main(arguments: list[str] | None = None) -> int:
             if isinstance(error, DeliveryInputError)
             else "invalid-or-unavailable-artifact-input"
         )
-        print(json.dumps({"state": "rejected", "reason": reason}), file=sys.stderr)
-        return 2
+        return rejection(reason)
+
+
+def rejection(reason: str, **fields: Any) -> int:
+    """Print the rejection for ``reason`` (stdout JSON, stderr text); return 2.
+
+    The message is the registry title: artifact errors never echo their detail.
+    """
+    try:
+        reject(reason, **fields)
+    except Rejected as rejected:
+        return int(rejected.code or 2)
+
+
+# Result states of a pinned command or a local import, and their codes.
+_RESULT_PREFIX = {"execute-command": "command-", "import-local": "import-"}
+
+
+def _finish(command: str, result: dict[str, object]) -> int:
+    """Print a command result; exit 1 (with ``reason``) unless it succeeded."""
+    state = result.get("state", "succeeded")
+    if state == "succeeded":
+        print(json.dumps(result, sort_keys=True))
+        return 0
+    if "reason" not in result or result["reason"] is None:
+        prefix = _RESULT_PREFIX.get(command)
+        code = f"{prefix}{state}" if prefix else ""
+        result = {
+            **result,
+            "reason": code if code in ERRORS else "invalid-delivery-input",
+        }
+    print(json.dumps(result, sort_keys=True))
+    print(f"{command}: {state} [{result['reason']}]", file=sys.stderr)
+    return 1
 
 
 _REGISTRY_ONLY = (
@@ -238,7 +277,7 @@ def _deliver_registry(
     target = _input("invalid-target", lambda: RegistryTarget.parse(args.to))
     forward = None
     if args.via_forward is not None:
-        if args.kubeconfig is None or args.namespace is None:
+        if args.kubeconfig is None or args.namespace is None or not args.context:
             raise DeliveryInputError("forward-options-incomplete")
         kubectl = discover_tool("kubectl", args.kubectl, args.kubectl_sha256)
         forward = _input(

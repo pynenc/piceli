@@ -1,12 +1,16 @@
-"""Record and verify the git identity of declared build sources."""
+"""Record and verify the git identity of declared build sources.
+
+Machine JSON goes to stdout, human text to stderr. Refusals print
+``{"state": "rejected", "reason": "<code>", "message": …}`` and exit 2
+(see ``piceli explain <code>``); drift exits 1.
+"""
 
 from __future__ import annotations
 
-import json
 import os
 import tempfile
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, NoReturn
 
 import typer
 
@@ -19,9 +23,11 @@ from piceli.artifacts.source_identity import (
     record_inputs,
     verify_inputs,
 )
+from piceli.cli_contract import EXIT_FAILED, emit_json, reject_error, say
 
 app = typer.Typer(
-    help="Record and verify source identities (commit, dirty flag, diff digest)."
+    rich_markup_mode=None,
+    help="Record and verify source identities (commit, dirty flag, diff digest).",
 )
 
 SpecOption = Annotated[
@@ -42,12 +48,24 @@ TimeoutOption = Annotated[
 ]
 
 
-def _reject(error: Exception) -> None:
-    body: dict[str, Any] = {"state": "rejected", "reason": str(error)}
+_ERRORS = (SourceIdentityError, ValueError, OSError)
+
+
+def _reject(error: Exception, default: str) -> NoReturn:
+    """Print the rejection for ``error`` (its own code, else ``default``); exit 2.
+
+    ``default`` names the phase that failed: reading the spec, reading the
+    lock, capturing the sources or writing the lock.
+    """
+    if default == "source-capture-failed" and not isinstance(
+        error, SourceIdentityError
+    ):
+        # Outside git, capture only raises for the --timeout bounds or I/O.
+        default = "inputs-io-error" if isinstance(error, OSError) else "invalid-timeout"
+    extra: dict[str, Any] = {}
     if isinstance(error, UnknownSourceError):
-        body = {"state": "rejected", "reason": error.code, "source": error.name}
-    typer.echo(json.dumps(body, sort_keys=True), err=True)
-    raise typer.Exit(2)
+        extra["source"] = error.name
+    reject_error(error, default, **extra)
 
 
 def _write_atomic(path: Path, content: str) -> None:
@@ -74,18 +92,23 @@ def record(
 ) -> None:
     """Capture each declared source (or the ``--only`` ones) and write a lock."""
     try:
-        lock = record_inputs(
-            InputsSpec.from_toml(spec), timeout=timeout, only=only or None
-        )
-        if out is not None:
+        declared = InputsSpec.from_toml(spec)
+    except _ERRORS as error:
+        _reject(error, "invalid-inputs-spec")
+    try:
+        lock = record_inputs(declared, timeout=timeout, only=only or None)
+    except _ERRORS as error:
+        _reject(error, "source-capture-failed")
+    if out is not None:
+        try:
             _write_atomic(out, lock.to_json())
-    except (SourceIdentityError, ValueError, OSError) as error:
-        _reject(error)
-        return
+        except OSError as error:
+            _reject(error, "inputs-io-error")
     result: dict[str, Any] = {"state": "recorded", **lock.to_dict()}
     if out is not None:
         result["lock"] = str(out)
-    typer.echo(json.dumps(result, sort_keys=True))
+    emit_json(result)
+    say(f"recorded {len(lock.sources)} source(s)" + (f" to {out}" if out else ""))
 
 
 @app.command("verify")
@@ -108,16 +131,23 @@ def verify(
     ``--only NAME`` checks just that source against the lock's entry for it.
     """
     try:
+        declared = InputsSpec.from_toml(spec)
+    except _ERRORS as error:
+        _reject(error, "invalid-inputs-spec")
+    try:
+        recorded = InputsLock.from_json(lock.read_text())
+    except _ERRORS as error:
+        _reject(error, "inputs-lock-invalid")
+    try:
         verification = verify_inputs(
-            InputsSpec.from_toml(spec),
-            InputsLock.from_json(lock.read_text()),
-            timeout=timeout,
-            only=only or None,
+            declared, recorded, timeout=timeout, only=only or None
         )
-    except (SourceIdentityError, ValueError, OSError) as error:
-        _reject(error)
-        return
-    typer.echo(json.dumps(verification.to_dict(), sort_keys=True))
+    except _ERRORS as error:
+        _reject(error, "source-capture-failed")
+    result = verification.to_dict()
     if not verification.ok:
-        typer.echo(f"source drift: {verification.summary()}", err=True)
-        raise typer.Exit(1)
+        emit_json({**result, "reason": "source-drift"})
+        say(f"source drift: {verification.summary()} [source-drift]")
+        raise typer.Exit(EXIT_FAILED)
+    emit_json(result)
+    say(f"verified {len(result['sources'])} source(s): no drift")

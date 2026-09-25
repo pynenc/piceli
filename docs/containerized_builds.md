@@ -47,8 +47,10 @@ digest = "sha256:8fa55b2f..."
 [build]
 platforms = ["linux/arm64"]        # one or more linux/<arch>
 workdir = "/work"
-command = ["cargo", "build", "--release", "--locked", "--offline"]
-# commands = [["cargo", "fetch"], ["cargo", "build", "--release"]]
+commands = [                       # or one `command = [...]`
+    ["cargo", "clean", "--release", "--locked", "--offline", "--package", "rust-hello"],
+    ["cargo", "build", "--release", "--locked", "--offline"],
+]
 network = "none"                   # "none" (default) or "default"
 source_date_epoch = 0              # default 0
 timeout_seconds = 1800             # per docker invocation, at most 3600
@@ -184,6 +186,16 @@ An offline build (`network = "none"`) needs its dependencies already in the
 cache. Either run once with `network = "default"` and `--allow-network`, or
 vendor the dependencies into the context.
 
+**Cached build outputs and fixed mtimes.** Staged files carry the
+`source_date_epoch` modification time, so every source file looks older than
+anything a previous build left in a cached `target/`. Tools that decide
+freshness by mtime, such as Cargo, then skip recompiling after a source edit
+and ship the stale artifact. When you cache a build-output directory, clean
+your own packages before building and keep only the dependencies cached. The
+`rust-hello` example runs `cargo clean --release --package rust-hello` before
+`cargo build`. Caching only the registry, or not caching `target/` at all,
+also works.
+
 ## Running
 
 Python API:
@@ -287,9 +299,10 @@ On stderr, `--progress` chooses what you see while the build runs:
 | `plain` | The step lines plus the raw build output as it arrives. |
 | `quiet` | Nothing until the result. |
 
-The machine-readable result is always the **last line**: the receipt JSON on
-stdout on success, or the `{"state", "reason", "steps"}` JSON on stderr on
-failure. Parse the last stderr line, not the whole stream.
+The machine-readable result is always the one JSON object on **stdout**: the
+receipt on success, or `{"state": "failed" | "rejected", "reason": "<code>",
+"message": "…", "steps": […]}` on failure. stderr is human text only (progress
+and a summary). Before 0.4.0 the failure object was the last stderr line.
 
 In Python, pass `log=Path(...)`, `progress=callable(str)` and
 `raw_output=callable(bytes)` to `BuildSpec.run`.
@@ -359,10 +372,11 @@ so you can inspect it.
 - `--max-seconds`: the grant lifetime.
 
 Exit codes: `0` success, `1` a build step or smoke check failed or timed out
-(stderr lists the steps, never their output), `2` rejected. The last stderr
-line is `{"state": "failed" | "rejected", "reason": "<code>"}` with a fixed
-code (each is explained in {doc}`reference/errors` and by
-`piceli explain <code>`). Paths are never echoed.
+(stderr lists the steps, never their output), `2` rejected. stdout is
+`{"state": "failed" | "rejected", "reason": "<code>", "message": "…"}` with a
+fixed code (each is explained in {doc}`reference/errors` and by
+`piceli explain <code>`); `message` is the code's title. Paths are never
+echoed.
 
 | Code | Exit | Cause | Fix |
 | --- | --- | --- | --- |

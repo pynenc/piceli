@@ -280,9 +280,12 @@ credentials, tool output or archive contents.
 | 1 | `rejected` or `failed`: a receipt is printed (and written), see `reason` |
 | 2 | Invalid or unavailable input: nothing ran and no receipt is written |
 
-For exit code 2 the CLI prints one line to stderr,
-`{"state": "rejected", "reason": "<code>"}`. The code is fixed text; paths,
-credentials and tool output are never echoed.
+Output follows the CLI contract ({doc}`agents`): the receipt (exit 0 or 1)
+or the rejection (exit 2) is the one JSON object on stdout, and stderr holds
+human text only. For exit code 2 stdout is
+`{"state": "rejected", "reason": "<code>", "message": "<the code's title>"}`.
+The code is fixed text; paths, credentials and tool output are never echoed.
+Before 0.4.0 the rejection was printed on stderr, without `message`.
 
 | Code | Meaning |
 | --- | --- |
@@ -295,7 +298,7 @@ credentials and tool output are never echoed.
 | `reference-required` | node import of an image ID without `--ref` |
 | `node-options-on-registry-target` | `--ref`/`--ssh*` given with an `oci://` target |
 | `registry-options-on-node-target` | registry or forward options given with a node target |
-| `forward-options-incomplete` | `--via-forward` without `--namespace` and `--kubeconfig` |
+| `forward-options-incomplete` | `--via-forward` without `--namespace`, `--kubeconfig` and `--context` |
 | `forward-options-without-forward` | forward options given without `--via-forward` |
 | `invalid-forward` | bad forward target, namespace, context or port |
 | `forward-target-not-loopback` | a forwarded push whose `--to` is not a loopback host with a port |

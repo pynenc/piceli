@@ -30,6 +30,7 @@ from piceli.k8s.ops.discovery import (
     ResourceScope,
     ResourceType,
 )
+from piceli.k8s.ops.exec_credentials import approved_refresh
 from piceli.k8s.ops.plan import (
     FieldManagerEntry,
     ResourceIntent,
@@ -152,9 +153,12 @@ class KubernetesProvider:
                 raise ValueError("live provider requires verified HTTPS")
         else:
             raise ValueError("provider source must be explicit loopback or live")
-        if (
+        # A refresh hook is accepted only when Piceli's exec credential source
+        # installed it on this very client (explicit allow_exec, pinned plugin);
+        # hooks from the SDK's loaders or any other callable are refused.
+        if api_client.configuration.proxy or (
             api_client.configuration.refresh_api_key_hook is not None
-            or api_client.configuration.proxy
+            and not approved_refresh(api_client)
         ):
             raise ValueError(
                 "provider requires explicit credentials and direct transport"
@@ -663,6 +667,54 @@ class KubernetesProvider:
         ):
             raise ProviderError("invalid-write-response", ambiguous=True)
         return result
+
+    def preview_update(
+        self,
+        current: DiscoveredResource,
+        manifest: dict[str, Any],
+        *,
+        deadline: float | None = None,
+    ) -> dict[str, Any]:
+        """The object the API server would store for :meth:`update_owned`.
+
+        Sends the same merge patch (same field manager, the observed UID and
+        resourceVersion in the body as preconditions) with ``dryRun=All``.
+        Patch options are query parameters, which the API server honours for
+        PATCH (unlike DELETE, whose body options override the query), so
+        nothing is persisted. The response is returned only after its identity
+        and UID are checked; server messages are never exposed.
+        """
+        identity = current.identity
+        if current.ownership is not Ownership.MANAGED:
+            raise ProviderError("ownership-precondition-failed")
+        observed = current.manifest["metadata"]
+        metadata = manifest.get("metadata", {})
+        if metadata.get("uid") != observed.get("uid") or metadata.get(
+            "resourceVersion"
+        ) != observed.get("resourceVersion"):
+            raise ProviderError("uid-version-precondition-failed")
+        raw = self._request(
+            "PATCH",
+            self._path(self.api_for(identity, deadline=deadline), identity.name),
+            body=manifest,
+            query={"fieldManager": self.field_manager, "dryRun": "All"},
+            deadline=deadline,
+            merge=True,
+        )
+        returned = raw.get("metadata")
+        if (
+            not isinstance(returned, dict)
+            or (
+                raw.get("apiVersion"),
+                raw.get("kind"),
+                returned.get("name"),
+                returned.get("namespace", ""),
+            )
+            != (identity.api_version, identity.kind, identity.name, identity.namespace)
+            or returned.get("uid", observed.get("uid")) != observed.get("uid")
+        ):
+            raise ProviderError("invalid-dry-run-response")
+        return raw
 
     def take_over(
         self,

@@ -1,24 +1,39 @@
 """Piceli Operator CLI: unified operations for status, releases, artifacts, automation, and backup.
 
 Enforces identical authorization and operations across Library, CLI, versioned REST, and UI.
+
+Machine JSON goes to stdout, human text to stderr. Refusals print
+``{"state": "rejected", "reason": "<code>", "message": …}`` and exit 2
+(see ``piceli explain <code>``).
 """
 
 from __future__ import annotations
 
 import json
 import os
+import tarfile
 from pathlib import Path
 from typing import Annotated, Any
 
 import typer
 
+from piceli.cli_contract import rejecting
 from piceli.k8s.automation import (
     ApprovalStore,
     PRApproval,
     promote_release,
 )
+from piceli.k8s.cli.cluster_access import (
+    AllowExecOption,
+    ContextOption,
+    ExecSha256Option,
+    exec_policy,
+)
 from piceli.k8s.cli.observe import (
     UI_CONFIG_HELP,
+    _archive,
+    _preferences,
+    _profile,
     bind_local_server,
     serve_until_interrupted,
 )
@@ -29,13 +44,14 @@ from piceli.k8s.observe import (
 )
 from piceli.k8s.observe_server import LocalObserveServer
 from piceli.k8s.operator import build_operator_report
-from piceli.k8s.operator_state import FileStateStore
-from piceli.k8s.ops.session import DeploymentSessionArchive
+from piceli.k8s.operator_state import ConcurrentWriterError, FileStateStore
+from piceli.k8s.ops.exec_credentials import ExecPolicy
 from piceli.k8s.release import ReleaseCatalog
-from piceli.k8s.ui_config import UI_CONFIG_ENV, load_ui_config
+from piceli.k8s.ui_config import UI_CONFIG_ENV
 
 app = typer.Typer(
-    help="Piceli Operator commands for reactive delivery, inventory, and artifacts."
+    rich_markup_mode=None,
+    help="Piceli Operator commands for reactive delivery, inventory, and artifacts.",
 )
 
 
@@ -43,22 +59,44 @@ MaybePath = Path | None
 MaybeString = str | None
 
 
-def _archive(path: Path) -> DeploymentSessionArchive:
-    return DeploymentSessionArchive.from_json(path.read_text())
+def _reader(
+    kubeconfig: Path, context: str, policy: ExecPolicy | None = None
+) -> KubernetesDynamicInventoryReader:
+    with rejecting((Exception, "kubeconfig-rejected")):
+        return KubernetesDynamicInventoryReader(
+            kubeconfig=kubeconfig, context=context, exec_policy=policy
+        )
+
+
+def _catalog(path: Path) -> ReleaseCatalog:
+    catalog = ReleaseCatalog(path)
+    with rejecting(
+        ((ValueError, OSError, KeyError, TypeError), "invalid-release-catalog")
+    ):
+        catalog.records()  # validate before any report or write
+    return catalog
+
+
+def _state(path: Path) -> FileStateStore:
+    with rejecting((ConcurrentWriterError, "state-locked")):
+        return FileStateStore(path)
 
 
 @app.command("status")
 def status(
     kubeconfig: Annotated[Path, typer.Option(exists=True, readable=True)],
+    context: ContextOption,
     namespace: Annotated[str, typer.Option()] = "default",
-    context: Annotated[MaybeString, typer.Option()] = None,
     archive: Annotated[MaybePath, typer.Option(exists=True, readable=True)] = None,
     catalog: Annotated[MaybePath, typer.Option(exists=True, readable=True)] = None,
     include_common_types: Annotated[bool, typer.Option()] = True,
+    allow_exec: AllowExecOption = False,
+    exec_sha256: ExecSha256Option = None,
 ) -> None:
     """Print classified operator inventory: managed, unmanaged, unknown, and releases."""
-    reader = KubernetesDynamicInventoryReader(kubeconfig=kubeconfig, context=context)
-    cat = ReleaseCatalog(catalog) if catalog else None
+    policy = exec_policy(allow_exec, exec_sha256)
+    reader = _reader(kubeconfig, context, policy)
+    cat = _catalog(catalog) if catalog else None
     arch = _archive(archive) if archive else None
 
     report = build_operator_report(
@@ -78,8 +116,9 @@ def promote(
     target: Annotated[str, typer.Option(help="Target tag/release name")],
 ) -> None:
     """Promote an existing built digest to a new tag without rebuilding."""
-    cat = ReleaseCatalog(catalog)
-    rec = promote_release(cat, source, target)
+    cat = _catalog(catalog)
+    with rejecting(((ValueError, KeyError, PermissionError), "promote-refused")):
+        rec = promote_release(cat, source, target)
     typer.echo(
         json.dumps(
             {
@@ -102,15 +141,19 @@ def approve(
     approved_by: Annotated[str, typer.Option()],
 ) -> None:
     """Record an explicit operator approval for a pull request rollout."""
-    store = FileStateStore(state_dir)
-    approvals = ApprovalStore(store)
-    approval = PRApproval(
-        pr_id=pr_id,
-        commit_hash=commit,
-        approved_by=approved_by,
-        target_namespace=namespace,
-    )
-    approvals.record_approval(approval)
+    with rejecting(
+        (ConcurrentWriterError, "state-locked"),
+        ((ValueError, OSError), "operator-state-unavailable"),
+    ):
+        store = FileStateStore(state_dir)
+        approvals = ApprovalStore(store)
+        approval = PRApproval(
+            pr_id=pr_id,
+            commit_hash=commit,
+            approved_by=approved_by,
+            target_namespace=namespace,
+        )
+        approvals.record_approval(approval)
     typer.echo(
         json.dumps(
             {
@@ -132,8 +175,11 @@ def backup(
     output: Annotated[Path, typer.Option(help="Target .tar.gz archive path")],
 ) -> None:
     """Create a verified, mode-restricted backup archive of operator state."""
-    store = FileStateStore(state_dir)
-    res = store.create_backup(output)
+    with rejecting(
+        (ConcurrentWriterError, "state-locked"),
+        ((ValueError, OSError, RuntimeError), "backup-refused"),
+    ):
+        res = FileStateStore(state_dir).create_backup(output)
     typer.echo(json.dumps({"backup_created": str(res)}, sort_keys=True))
 
 
@@ -143,16 +189,20 @@ def restore(
     destination: Annotated[Path, typer.Option(help="Target directory to restore into")],
 ) -> None:
     """Safely verify and restore operator state into empty destination."""
-    store = FileStateStore(destination)
-    store.restore_backup(archive_file, destination=destination)
+    with rejecting(
+        (ConcurrentWriterError, "state-locked"),
+        ((ValueError, OSError, RuntimeError, tarfile.TarError), "restore-refused"),
+    ):
+        store = FileStateStore(destination)
+        store.restore_backup(archive_file, destination=destination)
     typer.echo(json.dumps({"restored_to": str(destination)}, sort_keys=True))
 
 
 @app.command("serve")
 def serve(
     kubeconfig: Annotated[Path, typer.Option(exists=True, readable=True)],
+    context: ContextOption,
     namespace: Annotated[str, typer.Option()] = "default",
-    context: Annotated[MaybeString, typer.Option()] = None,
     archive: Annotated[MaybePath, typer.Option(exists=True, readable=True)] = None,
     catalog: Annotated[MaybePath, typer.Option(exists=True, readable=True)] = None,
     preferences: Annotated[MaybePath, typer.Option()] = None,
@@ -165,14 +215,30 @@ def serve(
             exists=True, readable=True, envvar=UI_CONFIG_ENV, help=UI_CONFIG_HELP
         ),
     ] = None,
+    access: Annotated[
+        MaybeString,
+        typer.Option(
+            help="release.toml or module:attr whose model access declarations "
+            "become the dashboard shortcuts (--ui-config entries win by id)"
+        ),
+    ] = None,
+    allow_exec: AllowExecOption = False,
+    exec_sha256: ExecSha256Option = None,
 ) -> None:
     """Launch the Piceli Operator dashboard and unified REST API."""
-    config = load_ui_config(ui_config)
-    reader = KubernetesDynamicInventoryReader(kubeconfig=kubeconfig, context=context)
-    cat = ReleaseCatalog(catalog) if catalog else None
+    config = _profile(ui_config)
+    if access is not None:
+        from piceli.k8s.access import access_ui_config
+        from piceli.k8s.cli.access import _resolve
+
+        config = access_ui_config(config, _resolve(access))
+    policy = exec_policy(allow_exec, exec_sha256)
+    reader = _reader(kubeconfig, context, policy)
+    cat = _catalog(catalog) if catalog else None
     arch = _archive(archive) if archive else None
     pref_store = PreferenceStore(preferences)
-    file_state = FileStateStore(state_dir) if state_dir else None
+    _preferences(pref_store)
+    file_state = _state(state_dir) if state_dir else None
 
     effective_user = user or os.environ.get("USER") or "operator"
     supervisor = ForwardSupervisor(
@@ -183,7 +249,8 @@ def serve(
         shortcuts=config.shortcuts,
         namespace=namespace,
     )
-    supervisor.restore()
+    with rejecting((ValueError, "invalid-preference-store")):
+        supervisor.restore()
 
     def report_fn() -> Any:
         return build_operator_report(

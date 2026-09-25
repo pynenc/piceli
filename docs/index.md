@@ -12,18 +12,11 @@ explicit authorization.
 ```{admonition} Project status: pre-alpha
 :class: warning
 
-Piceli is under active development and its APIs change between releases. Two
-execution paths exist today:
-
-- the **CLI path** (`piceli deploy detail/run`), which is simple and works with the
-  templates, but *replaces* existing objects (delete then create) instead of
-  patching them;
-- the **recoverable engine** (`DeploymentSession`, `PlanExecutor`), which uses
-  server-side apply, preconditions, journals and resume, but is currently a
-  Python API with no CLI command.
-
-See {doc}`overview` for how the two relate and {doc}`roadmap` for where the
-project is going.
+Piceli is under active development and its APIs change between releases. Every
+cluster change goes through one recoverable engine: server-side apply with
+preconditions, a durable journal and resume, always against an explicit
+kubeconfig file and context. See {doc}`overview` for the architecture and
+{doc}`roadmap` for the status of each feature.
 ```
 
 ## Where to start
@@ -35,7 +28,7 @@ project is going.
 :link: getting_started/index
 :link-type: doc
 
-Install Piceli, define your first objects and preview a deployment.
+Install Piceli, describe a typed app, render it and release it.
 :::
 
 :::{grid-item-card} Overview and architecture
@@ -78,29 +71,26 @@ Status and direction compared with Kustomize, Helm, OpenTofu/Terraform and Argo 
 ## A first taste
 
 ```python
-# myapp/infra.py
-from piceli.k8s import templates
+# infra.py
+from piceli import App
 
-settings = templates.ConfigMap(name="report-settings", data={"LOG_LEVEL": "info"})
 
-nightly_report = templates.CronJob(
-    name="nightly-report",
-    schedule=templates.crontab.daily_at_x(hour=2, minute=0),
-    containers=[
-        templates.Container(
-            name="report",
-            image="ghcr.io/example/report:1.4.2",
-            command=["python", "-m", "report"],
-        )
-    ],
-)
+def build(ctx):
+    app = App("hello")
+    web = app.deployment("web", image=ctx.image("web"), ports=[80])
+    app.service(web, port=80)
+    return app.composition(ctx)
 ```
 
 ```bash
-# List what Piceli loaded, then compare it with the cluster
-piceli --module-name myapp.infra model list
-piceli --module-name myapp.infra --namespace my-app deploy detail
+# Print the manifests without a cluster, then plan and apply a release
+piceli render --spec release.toml
+piceli release plan --spec release.toml
+piceli release apply --spec release.toml --approve <plan-hash>
 ```
+
+See {doc}`getting_started/index` for the `release.toml` that names the image,
+the target cluster and the namespace.
 
 ## Part of the Pynenc ecosystem
 
@@ -116,6 +106,7 @@ workload.
 getting_started/index
 overview
 kubernetes_model/index
+migrate_from_kubectl
 ```
 
 ```{toctree}
@@ -123,17 +114,23 @@ kubernetes_model/index
 :maxdepth: 2
 :caption: Guides
 
+deploy
 typed_apps
 deployment_planning
 release_cli
+checks
+plans_and_diffs
+managed_clusters
 secrets
 source_identity
 containerized_builds
 artifact_delivery
 node_delivery
 node_local_registry
+access
 operations_lens
 operator_workflow
+testing
 ```
 
 ```{toctree}

@@ -255,14 +255,11 @@ def test_importing_discovery_contract_does_not_import_or_create_kubernetes_clien
     probe = textwrap.dedent(
         """
         import sys
-        import types
 
-        class ClientTrap(types.ModuleType):
-            def __getattr__(self, name):
-                raise AssertionError(f"discovery imported Kubernetes client attribute {name}")
-
-        sys.modules["piceli.k8s.k8s_client.client"] = ClientTrap("client")
         import piceli.k8s.ops.discovery
+
+        loaded = sorted(name for name in sys.modules if name.startswith("kubernetes"))
+        assert not loaded, f"discovery imported the Kubernetes client: {loaded}"
         """
     )
     subprocess.run([sys.executable, "-c", probe], check=True)

@@ -31,6 +31,7 @@ from piceli.artifacts.build_spec import (
     run_build_spec_command,
 )
 from piceli.artifacts.process import ProcessLimits, ToolPin
+from piceli.errors import ERRORS
 
 ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE = ROOT / "examples/builds/rust-hello"
@@ -234,6 +235,19 @@ def test_example_spec_parses_and_previews() -> None:
     assert preview["contexts"]["app"]["bytes"] < 16 * 1024
     assert preview["requires_network_grant"] is False
     assert preview["builder"]["digest"].startswith("sha256:")
+
+
+def test_example_rebuilds_its_crate_despite_the_target_cache() -> None:
+    # Staged sources carry the fixed epoch mtime, so a cached `target/` would
+    # look fresh to cargo after a source edit. The example cleans its own
+    # crate (not the dependencies) before building, inside the cached step.
+    spec = BuildSpec.from_toml(EXAMPLE / "build.toml")
+    assert any(cache.target == "/work/target" for cache in spec.caches)
+    [text] = spec.plan().dockerfiles.values()
+    [run] = [line for line in text.splitlines() if line.startswith("RUN ")]
+    assert "target=/work/target" in run
+    clean = run.index("cargo clean --release --locked --offline --package rust-hello")
+    assert clean < run.index("cargo build --release")
 
 
 def test_preview_is_pure(tmp_path: Path) -> None:
@@ -930,16 +944,21 @@ def test_cli_rejections_use_fixed_codes(
         runner=FakeDocker(),
         docker=docker_tool,
     )
-    error = capsys.readouterr().err
+    captured = capsys.readouterr()
     assert code == 2
-    assert json.loads(error) == {"state": "rejected", "reason": "builder-not-approved"}
+    assert json.loads(captured.out) == {
+        "state": "rejected",
+        "reason": "builder-not-approved",
+        "message": ERRORS["builder-not-approved"].title,
+    }
+    assert "[builder-not-approved]" in captured.err
     assert not out.exists()
     code = run_build_spec_command(
         parse("preview", "--spec", str(tmp_path / "secret-dir" / "missing.toml"))
     )
-    error = capsys.readouterr().err
-    assert code == 2 and "secret-dir" not in error
-    assert json.loads(error)["reason"] == "spec-unreadable"
+    captured = capsys.readouterr()
+    assert code == 2 and "secret-dir" not in captured.out + captured.err
+    assert json.loads(captured.out)["reason"] == "spec-unreadable"
 
 
 def test_cli_build_failure_exit_code(
@@ -959,16 +978,18 @@ def test_cli_build_failure_exit_code(
         runner=FakeDocker(fail="piceli-files"),
         docker=docker_tool,
     )
-    error = capsys.readouterr().err
+    captured = capsys.readouterr()
+    error = captured.err
     assert code == 1
-    *progress, last = error.splitlines()
-    assert progress == [
+    assert error.splitlines()[:2] == [
         "[piceli] 1/2 linux/arm64 files: running",
         "[piceli] 1/2 linux/arm64 files: failed in 0.01s",
     ]
-    body = json.loads(last)
+    assert "failed: Build step failed [build-failed]" in error
+    body = json.loads(captured.out)
     assert body["state"] == "failed" and body["reason"] == "build-failed"
-    assert "secret-token" not in error and str(tmp_path) not in error
+    for text in (error, captured.out):
+        assert "secret-token" not in text and str(tmp_path) not in text
 
 
 # --- build log, tag templates, smoke ----------------------------------------------
@@ -1173,7 +1194,7 @@ def test_failing_smoke_check_rejects_the_receipt(
         runner=fake,
         docker=docker_tool,
     )
-    body = json.loads(capsys.readouterr().err.splitlines()[-1])
+    body = json.loads(capsys.readouterr().out)
     assert code == 1 and not out.exists()
     assert body["state"] == "failed" and body["reason"] == "smoke-failed"
     assert body["steps"][-1]["kind"] == "smoke:svc"
@@ -1290,3 +1311,36 @@ def test_rust_hello_example_is_reproducible(tmp_path: Path) -> None:
     with pytest.raises(BuildSpecError) as error:
         failing.run(BuildGrant(spec.builder.digest, time.time() + 1800), tmp_path / "c")
     assert error.value.code == "smoke-failed"
+
+
+@pytest.mark.skipif(
+    os.environ.get("PICELI_DOCKER_TESTS") != "1",
+    reason="set PICELI_DOCKER_TESTS=1 to run real docker buildx builds",
+)
+@pytest.mark.timeout(1800)
+def test_rust_hello_source_change_produces_a_new_binary(tmp_path: Path) -> None:
+    # A copy of the example without inputs.toml: the edit stays in tmp_path.
+    app = tmp_path / "app"
+    shutil.copytree(EXAMPLE, app, ignore=shutil.ignore_patterns("target"))
+    doc = tomllib.loads((app / "build.toml").read_text())
+    del doc["inputs"]
+    doc["context"]["app"] = {
+        key: value
+        for key, value in doc["context"]["app"].items()
+        if key not in {"source", "path"}
+    } | {"path": "."}
+    del doc["output"]["image"]
+
+    def build(out: str) -> bytes:
+        spec = BuildSpec.from_dict(doc, app)
+        spec.run(BuildGrant(spec.builder.digest, time.time() + 1800), tmp_path / out)
+        return (tmp_path / out / "bin/rust-hello").read_bytes()
+
+    first = build("a")
+    main = app / "src/main.rs"
+    main.write_text(
+        main.read_text().replace("hello from rust-hello", "edited rust-hello")
+    )
+    second = build("b")
+    assert second != first
+    assert b"edited rust-hello" in second and b"hello from rust-hello" not in second

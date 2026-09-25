@@ -15,10 +15,12 @@ resumed, stopped and rolled back.
 ```text
 piceli release plan     --spec release.toml [--rotate NAME] [OWNERSHIP…] [--out plan.json]
 piceli release preview  --spec release.toml          # alias of plan
-piceli release apply    --spec release.toml --approve <plan-hash> | --auto-approve [OWNERSHIP…]
-piceli release rollback <release|previous> --spec release.toml [--approve <hash> | --auto-approve [OWNERSHIP…]]
-piceli release resume   --spec release.toml [--release NAME]
+piceli release diff     --spec release.toml [OWNERSHIP…] [--exit-code]   # read-only
+piceli release apply    --spec release.toml --approve <plan-hash> | --auto-approve [OWNERSHIP…] [--skip-checks]
+piceli release rollback <release|previous> --spec release.toml [--approve <hash> | --auto-approve [OWNERSHIP…]] [--skip-checks]
+piceli release resume   --spec release.toml [--release NAME] [--skip-checks]
 piceli release stop     --spec release.toml [--release NAME]
+piceli release check    --spec release.toml [--release NAME]
 piceli release status   --spec release.toml
 piceli release secret show NAME --spec release.toml [--key KEY] [--release NAME] [--reveal] [--json]
 ```
@@ -32,9 +34,11 @@ objects: `--adopt Kind/name`, `--adopt-all-desired` and `--replace Kind/name`
 fields may still change before 1.0.
 
 JSON goes to stdout and a short summary to stderr. Exit codes: `0` success,
-`1` the execution did not become ready, `2` refused (invalid spec, identity
-mismatch, unknown or expired plan), `3` approval required. A refusal with a
-stable cause also carries a `code` (for example `secret-import-unavailable`).
+`1` the execution did not become ready or its `[[checks]]` failed (reason
+`check-failed`), `2` rejected (invalid spec, identity mismatch, unknown or
+expired plan), `3` approval required. See
+[Output and exit codes](#output-and-exit-codes) for the objects each case
+prints.
 
 ## The spec
 
@@ -49,6 +53,8 @@ namespace = "release-demo"          # must exist
 cluster_uid = "…"                   # optional: expected kube-system Namespace UID
 namespace_uid = "…"                 # optional: expected namespace UID
 # transport = "loopback-http"       # only for a literal loopback test API
+# allow_exec = true                 # GKE/EKS/AKS exec plugins, see "Target and credentials"
+# exec_sha256 = "sha256:…"          # optional pin of the resolved plugin file
 [target.nodes.primary]              # optional node pins, exposed as ctx.nodes
 name = "node-a"
 uid = "…"
@@ -64,6 +70,7 @@ prune = false                       # delete managed objects a release drops
 # inherited_owners = ["old-owner"]  # earlier owner ids whose objects count as ours
 # adopt = ["Deployment/web", "PersistentVolumeClaim/data"]   # see "Adopting existing objects"
 # replace = ["Deployment/legacy"]   # one-off delete-and-recreate, see "Replacing an object"
+# rollback_on_failed_checks = true  # re-apply the previous ready release when [[checks]] fail
 
 [execution]
 max_seconds = 300
@@ -86,11 +93,43 @@ openssl = "/usr/bin/openssl"        # absolute path; add openssl_sha256 to pin t
 
 [values]                            # free-form, passed to the composition
 greeting = "hello"
+
+[[checks]]                          # optional post-deploy checks, run after readiness
+type = "http"                       # http | exec | metric | python (see docs/checks.md)
+target = "service/web"
+path = "/"
+expect = 200
 ```
 
 Unknown keys are rejected everywhere except `[values]`. Relative paths
 resolve from the spec's directory. A complete example lives in
 `examples/release/`.
+
+### Target and credentials
+
+`[target]` names exactly one namespace of one cluster: an explicit kubeconfig
+file (`KUBECONFIG`, `~/.kube/config` and in-cluster files are never read), an
+explicit context (never `current-context`) and a namespace that must exist.
+`cluster_uid` and `namespace_uid` pin the kube-system and namespace UIDs, and
+`[target.nodes.<alias>]` pins nodes.
+
+Credentials may be a client certificate or a bearer token. Managed clusters
+(GKE, EKS, AKS, OIDC) use an **exec credential plugin** instead; Piceli runs
+it only with `allow_exec = true`, pins the resolved file (`exec_sha256`),
+passes it a minimal environment (`PATH`, `HOME`, `exec_pass_env` and the
+kubeconfig's `env`) and refreshes expiring credentials itself. See
+{doc}`managed_clusters` for the security model, the `exec_*` keys and the
+`exec-*` error codes. Legacy `auth-provider` users, proxies,
+`insecure-skip-tls-verify` and basic auth are always refused.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `kubeconfig`, `context`, `namespace` | required | The explicit target. |
+| `cluster_uid`, `namespace_uid` | none | Expected identities. |
+| `transport` | `https` | `loopback-http` only for a literal loopback test API. |
+| `request_seconds` | `10` | Limit for one API request, in (0, 60]. |
+| `allow_exec` | `false` | Run the context's exec plugin (preview). |
+| `exec_sha256`, `exec_pass_env`, `exec_timeout_seconds` | none, `[]`, `60` | Plugin pin, extra variables, run limit. |
 
 ### Images
 
@@ -130,6 +169,12 @@ Image sources:
 | `images_from`: build receipt entry with `digest: null` | **refused** (`image-not-immutable`) until a delivery receipt replaces it | `image_id` |
 | `{ receipt = "…" }` or `images_from`: `piceli.registry-delivery.v1` | its `pull_ref` (`<node registry>/<repo>@<manifest digest>`) | the manifest digest |
 | `{ receipt = "…" }` or `images_from`: `piceli.node-delivery.v1` | its node `image.reference`, which must be a content tag | the config digest |
+
+The release records its images as its source identity: with one image,
+`{"kind": "oci", "identity": <digest>}`; with several, the whole set,
+`{"kind": "oci-set", "images": {<name>: <digest>, …}, "identity": <digest of
+that map>}` (in `release status` and the catalog). The Python API builds the
+same with `ReleaseSource.image_set({...})` for `ReleaseWorkflow.create`.
 
 A build receipt (`revision = "piceli.build-receipt.v1"`, from
 `piceli artifacts build-spec run`) lists `outputs.images.<name>` with
@@ -177,7 +222,8 @@ images_from = ["build.receipt.json", "api.delivery.json", "worker.node.json"]
 #### Refusal codes
 
 A refused spec exits with `2` and prints
-`{"state": "refused", "code": "…", "reason": "…"}`. The image codes are fixed
+`{"state": "rejected", "reason": "<code>", "message": "…"}` (see
+[Output and exit codes](#output-and-exit-codes)). The image codes are fixed
 words (`piceli.k8s.release_spec.ImageHandoffError.code`):
 
 | Code | Meaning | Fix |
@@ -234,13 +280,9 @@ v1.33.1): after `alpha` was rebuilt and re-delivered (2 blobs uploaded, the
 shared base layer skipped), `alpha` went to generation 2 with the new digest
 and `beta` stayed at generation 1.
 
-```{note}
-The plan summary still lists an unchanged Deployment as `apply`, not
-`no-op`: the planner compares the desired manifest with the live object
-including server defaults. Applying it changes nothing (no new generation,
-no rollout). Compare `artifact_digest` of the plan actions to see which
-desired manifests changed.
-```
+The plan of the rebuilt release lists `Deployment/beta` as `no-op` and
+`Deployment/alpha` as `apply` with a single field change, its image (see
+[What a plan shows](#release-plan-output)).
 
 ### The composition function
 
@@ -350,6 +392,69 @@ plan hash: 4123ff6e…29b8e4 (valid until 2026-09-24T17:24:59+00:00)
 $ piceli release apply --spec release.toml --approve 4123ff6e…29b8e4
 apply web-716dfe62698b: ready
 ```
+
+(release-plan-output)=
+### What a plan shows
+
+Each object gets one operation: `create`, `adopt`, `replace`, `apply`,
+`no-op` or `delete`. An object that exists and that the release already
+manages is `no-op` when applying it would change nothing, and `apply`
+otherwise. {doc}`plans_and_diffs` explains how that is decided (a server-side
+dry run of the write, so server defaults never make an unchanged object look
+changed).
+
+Every `apply`, `adopt` and `replace` comes with a **field-level diff**. The
+human summary prints up to 12 changed fields per object; the JSON output has
+all of them under `diffs`:
+
+```console
+$ piceli release plan --spec release.toml
+release web-3c1d0a9e22f4 (create, apply): 1 apply, 3 no-op
+    apply Deployment/web
+            ~ /spec/template/spec/containers/0/image: "docker.io/library/nginx@sha256:6564…" -> "docker.io/library/nginx@sha256:1ead…"
+plan hash: 9b0f…c4d1 (valid until 2026-09-24T18:02:11+00:00)
+```
+
+```json
+"diffs": [
+  {
+    "resource": {"api_version": "apps/v1", "kind": "Deployment", "namespace": "shop", "name": "web"},
+    "operation": "apply",
+    "basis": "server-dry-run",
+    "changes": [
+      {"path": "/spec/template/spec/containers/0/image", "op": "replace",
+       "before": "docker.io/library/nginx@sha256:6564…", "after": "docker.io/library/nginx@sha256:1ead…"}
+    ],
+    "not_compared": [],
+    "unified": "--- live/Deployment/web\n+++ release/Deployment/web\n@@ …"
+  }
+],
+"dry_run_unavailable": []
+```
+
+* `path` is a JSON pointer into the object, `op` is `add`, `remove` or
+  `replace`, and `before`/`after` are `null` when absent. Secret values are
+  shown as `"<redacted>"`; values bound to secret versions are listed in
+  `not_compared` and never shown. They are compared privately (in-process,
+  see {doc}`plans_and_diffs`), so an unchanged Secret is `no-op`.
+* A `remove` change on a map key (a label, a ConfigMap key) is a three-way
+  removal: an earlier release declared the key and this one no longer does.
+  The action lists them under `removes`; see {doc}`plans_and_diffs`.
+* `basis` is `server-dry-run` when the "after" side is the API server's
+  answer to a dry run of the write, or `client` when no dry run was available
+  and the desired manifest was merged onto the live object locally (server
+  defaults are then missing from "after").
+* `dry_run_unavailable` lists managed objects without a dry run and why
+  (`rbac-denied`, `conflict`, `dry-run-limit-exceeded`, …). Such an object is
+  compared literally and may show as `apply` although unchanged.
+* The diff is evidence, not part of the plan: it is not in the plan hash.
+
+`piceli release diff --spec release.toml` prints only the diffs: unified
+diffs on stderr and `{"state": "diffed", "summary", "changes", "actions",
+"diffs", "dry_run_unavailable"}` on stdout. It stores no plan and no local
+state and sends the cluster only reads and `dryRun=All` requests, so it is
+safe to run at any time. With `--exit-code` it exits `1` when the release
+would change something.
 
 ## Adopting existing objects
 
@@ -536,10 +641,17 @@ unblock it, in the JSON `blocking` array and on stderr:
 
 ```console
 $ piceli release plan --spec release.toml
-refused: existing objects are not managed by this release's owner: Deployment/web (--adopt Deployment/web or --replace Deployment/web), PersistentVolumeClaim/cache (--adopt PersistentVolumeClaim/cache), Service/web (--adopt Service/web or --replace Service/web); …
+{"blocking": [{"code": "resource-requires-adoption", "kind": "Deployment", "message": "exists and is not managed by this release's owner", "name": "web", "suggest": ["--adopt Deployment/web", "--replace Deployment/web"]}, …], "code": "resource-requires-adoption", "message": "existing objects are not managed by this release's owner: …", "reason": "resource-requires-adoption", "state": "rejected"}
+```
+
+and on stderr:
+
+```text
+rejected: existing objects are not managed by this release's owner: Deployment/web (--adopt Deployment/web or --replace Deployment/web), PersistentVolumeClaim/cache (--adopt PersistentVolumeClaim/cache), Service/web (--adopt Service/web or --replace Service/web); … [resource-requires-adoption]
   blocking Deployment/web: exists and is not managed by this release's owner -> --adopt Deployment/web or --replace Deployment/web
   blocking PersistentVolumeClaim/cache: exists and is not managed by this release's owner; retained: replace is never allowed -> --adopt PersistentVolumeClaim/cache
   blocking Service/web: exists and is not managed by this release's owner -> --adopt Service/web or --replace Service/web
+  next: Plan again with `--adopt Kind/name` …
 ```
 
 Choosing between adopt and replace:
@@ -552,7 +664,7 @@ Choosing between adopt and replace:
 | An immutable field must change (selector, Service `clusterIP`…), or an adoption fails with `invalid-request` | `--replace Kind/name` | Backup, delete, create. New UID; workload pods restart. |
 | The object is not yours to change | neither | Rename the object in the composition, or remove it from the composition. |
 
-Refusal codes (`code` in the JSON, also per object in `blocking[].code`):
+Refusal codes (`reason` in the JSON, also per object in `blocking[].code`):
 
 | Code | Cause | Fix |
 | --- | --- | --- |
@@ -565,16 +677,18 @@ Refusal codes (`code` in the JSON, also per object in `blocking[].code`):
 
 Other refusals:
 
-| The reason says | What to do |
+| `reason` | What to do |
 | --- | --- |
-| `discovery is incomplete, refusing to plan (…)` | Each item names a resource type and a code: `rbac-denied` (grant list/get on it to the spec's identity), `limit-exceeded` (raise `[discovery]` limits), `api-unavailable` or `deadline-exceeded` (retry). |
-| `cluster identity differs from the one recorded in this state directory` | The kubeconfig/context points at another cluster than the one this `state_dir` deployed to. Fix `[target]`; never reuse a `state_dir` across clusters. |
-| `cannot rotate undeclared secrets: …` | `--rotate` names must be `[secrets.<name>]` entries of the spec. |
-| `invalid release spec: …` | Fix the named key. `images_from` is a top-level key (before the first `[table]`), not part of `[images]`. |
-| A single code such as `rbac-denied` or `server-target-identity-mismatch` | Run `piceli explain <code>`, or see {doc}`reference/errors`. |
+| `discovery-incomplete` | The `message` names each resource type and a code: `rbac-denied` (grant list/get on it to the spec's identity), `limit-exceeded` (raise `[discovery]` limits), `api-unavailable` or `deadline-exceeded` (retry). |
+| `cluster-identity-changed` | The kubeconfig/context points at another cluster than the one this `state_dir` deployed to. Fix `[target]`; never reuse a `state_dir` across clusters. |
+| `unknown-rotate-secret` | `--rotate` names must be `[secrets.<name>]` entries of the spec. |
+| `invalid-release-spec` | Fix the key named in `message`. `images_from` is a top-level key (before the first `[table]`), not part of `[images]`. |
+| `invalid-composition` | Fix the composition function (it must return a `DeploymentComposition` in the target namespace and bind every declared secret input). |
+| `kubeconfig-rejected`, `namespace-not-found`, `server-target-identity-mismatch`, `rbac-denied`, … | Run `piceli explain <code>`, or see {doc}`reference/errors`. |
+| `target-refused`, a code starting with `exec-`, or `auth-provider-refused` | The kubeconfig/context was refused, or the target's exec credential plugin was not allowed, not pinned, or failed. See "If it fails" in {doc}`managed_clusters`. |
 
 `apply --approve HASH` refuses a hash that is unknown, expired or already
-applied (`no pending plan with this hash`): run `plan` again and approve the
+applied (`plan-not-found`, `plan-expired`): run `plan` again and approve the
 new hash. Any code can be looked up with `piceli explain <code>` or in
 {doc}`reference/errors`.
 
@@ -590,6 +704,34 @@ Execution failures of these paths (`failure_category` of `apply`):
 | `invalid-metadata-change` | A metadata-only write was asked to set a non-string value or Piceli's own annotations. | Fix the composition's labels/annotations. |
 | `retained-content-precondition-failed` | A retained object's content (for example a private Secret value) differs from the composition at apply time. Nothing was written. | Use a new object name (see "Secret generators"). |
 
+## Post-deploy checks
+
+`[[checks]]` tables declare checks that run after an execution becomes ready
+(`apply`, `rollback` and `resume`). A release is `ready` only when every check
+passes; otherwise the result has `release_state = "checks-failed"`, the command
+exits `1` and the release is not selected. With
+`[release] rollback_on_failed_checks = true` the previous ready release is
+re-applied automatically and the result carries a `rollback` object.
+`--skip-checks` skips them (recorded in the history). `release check` runs the
+checks against a release without changing anything. The how-to, every check
+type and the state machine are in {doc}`checks`.
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `type` | `http`, `exec`, `metric`, `python` | required | The check type |
+| `name` | string | derived, e.g. `http-service-web-login` | Unique name in the spec |
+| `timeout` | seconds | `10` | Limit of one attempt |
+| `retries` | integer | `3` | Extra attempts after a failed one |
+| `interval` | seconds | `2` | Wait between attempts |
+| `target` | `kind/name` | required (not `python`) | `service`/`deployment`/`pod` for http and metric; `deployment`/`statefulset`/`daemonset`/`pod` for exec |
+| `path`, `port`, `expect`, `body_contains` | | `/`, target's first port, `[200, 299]`, none | `http` |
+| `command`, `container`, `expect_exit`, `output_contains` | | required, first container, `0`, none | `exec` |
+| `query`, `op`, `threshold`, `port`, `path`, `empty` | | required, `<=`, required, target's first port, `/api/v1/query`, `fail` | `metric` |
+| `call` | `module:function` or `file.py:function` | required | `python` |
+
+The checks and the rollback policy are stored with the plan, so `apply` runs
+exactly what was reviewed; the plan JSON shows them under `checks`.
+
 ## Rollback
 
 `rollback <release>` re-plans the named release's archived composition
@@ -598,7 +740,9 @@ against current discovery and, once approved, executes it as a new execution
 becomes ready. It reuses the release's own secret versions; nothing is
 regenerated. `previous` means what was running before the latest change: the
 last ready release other than the current one, or, when the latest execution
-did not become ready, the last ready release itself.
+did not become ready (including `checks-failed`), the last ready release
+itself. A rollback runs the spec's `[[checks]]` too; an automatic rollback
+after failed checks is described in {doc}`checks`.
 
 ## Resume, stop and status
 
@@ -608,14 +752,56 @@ did not become ready, the last ready release itself.
 * `stop` cancels the latest unfinished execution after checking the owner
   and target. A stopped execution is not resumed.
 * `status` reads the catalog, journal and history without contacting the
-  cluster: releases with their image identities and executions, the deployed
-  and previous release, pending plans and recent history.
+  cluster: releases with their image identities, executions and latest check
+  outcome (`checks`), the deployed and previous release, pending plans and
+  recent history.
+
+Their refusals: `no-execution-recorded`, `not-resumable`, `resume-refused`,
+`nothing-to-stop`, `execution-not-started`, `execution-other-owner` and
+`execution-other-target` (see {doc}`reference/errors`).
+
+## Output and exit codes
+
+Every `piceli release` command prints exactly one JSON object on stdout and
+human text (summaries, the plan hash to approve, hints) on stderr:
+
+| Exit | stdout | When |
+| --- | --- | --- |
+| `0` | `{"state": "planned", "plan_hash": …}` (`plan`), `{"state": "succeeded", "execution": {…}, …}` (`apply`, `rollback`, `resume`, `stop`), the status object (`status`), the metadata (`secret show --json`) | Success |
+| `1` | `{"state": "failed", "reason": "<code>", "execution": {…}, …}` | The execution ran but did not become ready. `reason` is `execution.failure_category` when it is a registered code, otherwise `execution-not-ready`. |
+| `2` | `{"state": "rejected", "reason": "<code>", "message": "<human text>", "code": "<code>", …}` | Rejected before any change. Extra fields such as `blocking` are kept. |
+| `3` | `{"state": "approval-required", "plan_hash": …, …}` | `apply`/`rollback` without `--approve` and without a terminal confirmation. Nothing was executed. |
+
+`reason` is always a registered error code: `piceli explain <reason> --json`
+prints its cause, fix and whether a retry can succeed. `message` is for
+people; do not parse it. `secret show NAME --reveal` without `--json` prints
+the raw value on stdout by design (see {doc}`secrets`).
+
+(release-contract-changes)=
+### Contract changes in 0.4.0
+
+The output of `piceli release` changed to follow the CLI contract
+({doc}`agents`); scripts that parsed the 0.3.0 output need these updates:
+
+| 0.3.0 | 0.4.0 |
+| --- | --- |
+| Refusal `{"state": "refused", "reason": "<sentence>", "code": "<code>"?}` | `{"state": "rejected", "reason": "<code>", "message": "<sentence>", "code": "<code>"}` |
+| `reason` was free text; `code` present only for some refusals | `reason` is always a registered code; the sentence moved to `message` |
+| `code` | Kept as an alias of `reason` for 0.4.x only; it will be removed in 0.5.0. Read `reason`. |
+| Refusal stderr started with `refused:` | Starts with `rejected:` and ends with `[<code>]`, then a `next:` hint |
+| `apply`/`rollback`/`resume`/`stop` result had no top-level `state` | Adds `"state": "succeeded"`, or `"state": "failed"` with `reason` on exit 1 |
+| Result JSON was indented | The same object; refusals are printed on one line |
+
+`blocking[]` items keep their fields (`kind`, `name`, `code`, `message`,
+`suggest`). Exit codes did not change.
 
 ## Safety model
 
-* The kubeconfig and context are explicit. Exec plugins and auth providers
-  are refused (token refresh is not supported yet), as are proxies,
-  `insecure-skip-tls-verify` and basic auth. `https` requires verified TLS.
+* The kubeconfig and context are explicit. Exec plugins run only with
+  `allow_exec = true`, pinned and with a minimal environment, and Piceli
+  refreshes their credentials itself ({doc}`managed_clusters`). Legacy auth
+  providers, proxies, `insecure-skip-tls-verify` and basic auth are refused.
+  `https` requires verified TLS.
 * A state directory serves one cluster and namespace: releases record the
   kube-system UID, and a later run against another cluster is refused.
 * Objects are owned by exact `owner` match. Objects created by other tools are
@@ -627,8 +813,14 @@ did not become ready, the last ready release itself.
   restorable backup before a delete guarded by UID and resourceVersion.
 * Plans, discovery evidence and secrets stay in the private state directory
   (owner-only). Reports and the catalog contain opaque references only.
+* `plan` and `diff` send server-side dry runs (`dryRun=All`) of the writes an
+  apply would make; the API server persists nothing for them. They need the
+  `patch` verb; without it objects are compared literally.
 
 ## Migrating from a custom deploy script
+
+To start from what is already running, `piceli import live` generates the
+typed module for you; see {doc}`migrate_from_kubectl`. By hand:
 
 1. Move the manifest-building code into a pure `build(ctx)` function. Replace
    hard-coded images with `ctx.image(...)` and inline secret values with

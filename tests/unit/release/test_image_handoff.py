@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import typer
 
+from piceli.cli_contract import Rejected
 from piceli.k8s.cli.release import _refuse
 from piceli.k8s.release_spec import (
     ImageHandoffError,
@@ -315,13 +315,13 @@ def test_refusal_json_carries_the_code(capsys: pytest.CaptureFixture[str]) -> No
     )
     with pytest.raises(ImageHandoffError) as refused:
         _ = image.reference
-    with pytest.raises(typer.Exit) as exited:
+    with pytest.raises(Rejected) as exited:
         _refuse(refused.value)
-    assert exited.value.exit_code == 2
+    assert exited.value.code == 2
     refusal = json.loads(capsys.readouterr().out)
-    assert refusal["state"] == "refused"
-    assert refusal["code"] == "image-not-immutable"
-    assert refusal["reason"].startswith("image-not-immutable: image 'api'")
+    assert refusal["state"] == "rejected"
+    assert refusal["reason"] == refusal["code"] == "image-not-immutable"
+    assert refusal["message"].startswith("image-not-immutable: image 'api'")
 
 
 def test_two_images_example(tmp_path: Path) -> None:

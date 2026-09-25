@@ -22,41 +22,12 @@ class Volume(ABC, BaseModel):
     storage: quantity.Quantity
     labels: Labels | None = None
 
-    # @abstractmethod
-    # def get_current_volume(self) -> Optional[Any]:
-    #     """gets the list of existing volumes"""
-
     @staticmethod
     @abstractmethod
     def get_volume_capacity(
         volume: client.V1PersistentVolume | client.V1PersistentVolumeClaim,
     ) -> str:
         """gets the capacity of the volume"""
-
-    # def apply(
-    #     self,
-    #     k8s: k8s_client.Kubernetes,
-    #     async_req: bool = False,
-    #     dry_run: k8s_client.DryRun = k8s_client.DryRun.OFF,
-    # ) -> Any | ApplyResult:
-    #     """Creates the volume or applies if previous volume had less storage"""
-    #     log.info("applying %s %s", _type := type(self).__name__, self.name)
-    #     if volume := self.get_current_volume(k8s):
-    #         current_storage = self.get_volume_capacity(volume)
-    #         log.info("%s %s already exists", _type, self.name)
-    #         if parse_quantity(current_storage) > parse_quantity(self.storage):
-    #             log.warning(
-    #                 "Not possible to apply: New storage:%s for %s is smaller than existing %s",
-    #                 self.storage,
-    #                 self.name,
-    #                 current_storage,
-    #             )
-    #         else:
-    #             log.info("patching %s %s", _type, self.name)
-    #             return self.patch(k8s, async_req, dry_run)
-    #         return volume
-    #     log.info("creating %s %s", _type, self.name)
-    #     return self.create(k8s, async_req, dry_run)
 
 
 class PersistentVolume(base.Deployable, Volume):
@@ -68,8 +39,6 @@ class PersistentVolume(base.Deployable, Volume):
     """
 
     disk_name: str
-    # API: ClassVar[str] = "core"
-    # API_FUNC: ClassVar[str] = "persistent_volume"
 
     def get(self) -> list[client.V1PersistentVolume]:
         obj = client.V1PersistentVolume(
@@ -87,61 +56,10 @@ class PersistentVolume(base.Deployable, Volume):
         )
         return [obj]
 
-    # def get_current_volume(self, k8s: k8s_client.Kubernetes) -> Optional[client.V1PersistentVolume]:
-    #     """gets the volume existing in the cluster if any"""
-    #     if items := k8s.core_api.list_persistent_volume(
-    #         field_selector=f"metadata.name={self.name}"
-    #     ).items:
-    #         return items[0]
-    #     return None
-
     @staticmethod
     def get_volume_capacity(volume: client.V1PersistentVolume) -> str:
         """gets the capacity of the volume"""
         return volume.spec.capacity["storage"]
-
-    # def read(self, k8s: k8s_client.Kubernetes) -> client.V1PersistentVolume:
-    #     return k8s.core_api.read_persistent_volume(self.name)
-
-    # def patch(
-    #     self,
-    #     k8s: k8s_client.Kubernetes,
-    #     async_req: bool = False,
-    #     dry_run: k8s_client.DryRun = k8s_client.DryRun.OFF,
-    # ) -> client.V1PersistentVolume | ApplyResult:
-    #     """modifies existing volume"""
-    #     return k8s.core_api.patch_persistent_volume(
-    #         self.name, self.get(k8s), async_req=async_req, dry_run=dry_run.value
-    #     )
-
-    # def create(
-    #     self,
-    #     k8s: k8s_client.Kubernetes,
-    #     async_req: bool = False,
-    #     dry_run: k8s_client.DryRun = k8s_client.DryRun.OFF,
-    # ) -> client.V1PersistentVolume | ApplyResult:
-    #     """modifies existing volume"""
-    #     return k8s.core_api.create_persistent_volume(
-    #         self.get(k8s), async_req=async_req, dry_run=dry_run.value
-    #     )
-
-    # def delete(
-    #     self,
-    #     k8s: k8s_client.Kubernetes,
-    #     async_req: bool = False,
-    #     dry_run: k8s_client.DryRun = k8s_client.DryRun.OFF,
-    # ) -> Any | ApplyResult:
-    #     del k8s, async_req, dry_run
-    #     raise RuntimeError("Not automatized, deleting the PV will remove all the data")
-    #     # return k8s.core_api.delete_persistent_volume(self.name, async_req=async_req)
-
-    # def wait(self, k8s: k8s_client.Kubernetes) -> None:
-    #     self._wait(
-    #         k8s=k8s,
-    #         func=k8s.core_api.list_persistent_volume,
-    #         args=tuple(),
-    #         phases=[k8s_client.PhaseVolume.AVAILABLE, k8s_client.PhaseVolume.BOUND],
-    #     )
 
 
 class PersistentVolumeClaim(Volume, base.Deployable):
@@ -150,9 +68,6 @@ class PersistentVolumeClaim(Volume, base.Deployable):
 
     Inherits :param name, :param storage, and :param labels from Volume.
     """
-
-    # API: ClassVar[str] = "core"
-    # API_FUNC: ClassVar[str] = "persistent_volume_claim"
 
     def get(self) -> list[client.V1PersistentVolumeClaim]:
         obj = client.V1PersistentVolumeClaim(
@@ -168,39 +83,10 @@ class PersistentVolumeClaim(Volume, base.Deployable):
         )
         return [obj]
 
-    # def get_current_volume(self, k8s: k8s_client.Kubernetes) -> Optional[Any]:
-    #     """gets the list of existing volumes"""
-    #     if items := k8s.core_api.list_namespaced_persistent_volume_claim(
-    #         DEFAULT_NAMESPACE, field_selector=f"metadata.name={self.name}"
-    #     ).items:
-    #         return items[0]
-    #     return None
-
     @staticmethod
     def get_volume_capacity(volume: client.V1PersistentVolumeClaim) -> str:
         """gets the capacity of the volume"""
         return volume.spec.resources.requests["storage"]
-
-    # def delete(
-    #     self,
-    #     k8s: k8s_client.Kubernetes,
-    #     async_req: bool = False,
-    #     dry_run: k8s_client.DryRun = k8s_client.DryRun.OFF,
-    # ) -> Any | ApplyResult:
-    #     raise RuntimeError("Not automatized, deleting the PVC will remove all the data")
-    #     # return k8s.core_api.delete_namespaced_persistent_volume_claim(self.name, DEFAULT_NAMESPACE, async_req=async_req)
-
-    # def wait(self, k8s: k8s_client.Kubernetes) -> None:
-    #     self._wait(
-    #         k8s=k8s,
-    #         func=k8s.core_api.list_namespaced_persistent_volume_claim,
-    #         args=(DEFAULT_NAMESPACE,),
-    #         phases=[
-    #             k8s_client.PhaseVolume.AVAILABLE,
-    #             k8s_client.PhasePVC.PENDING,
-    #             k8s_client.PhaseVolume.BOUND,
-    #         ],
-    #     )
 
 
 class PersistentVolumeClaimTemplate(BaseModel):

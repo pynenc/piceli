@@ -66,7 +66,18 @@ public hash. Existing unmanaged objects require exact adoption or replace
 grants (`PlanAuthorization(adopt_resources=..., replace_resources=...)`); see
 "Adoption by ownership transfer" and "Replace" below. Explicit
 desired values always participate in comparison, even when the API supplies a
-default.
+default. A managed object is `no-op` when it equals the desired manifest, or
+when the snapshot carries a server dry run of the executor's write for that
+exact manifest (`ServerDryRun`, captured by
+`piceli.k8s.ops.dry_run.capture_server_dry_runs`) that equals the live object.
+A secret-bound object is `no-op` only through
+`build_plan(..., private=private_evidence(composition, snapshot, resolve))`,
+which compares the resolved desired content with the live object in-process
+and keeps only the matching references. `PlanAuthorization.previous` (earlier
+declarations, merged with `declared_union`) enables three-way removal:
+`PlanAction.removals` lists the map keys the executor deletes with explicit
+nulls. `piceli.k8s.ops.field_diff.plan_diffs(plan, snapshot)` derives the
+field-level diffs. See {doc}`plans_and_diffs`.
 
 Namespace, PV, PVC and Secret retention cannot be disabled. Pruning protects
 retained/unmanaged descendants and orders allowed deletion child-first. Public
@@ -79,10 +90,8 @@ credential Secret followed by a worker Deployment. Its caller supplies an actual
 image and a private version reference. Acceptance executes
 it only against the fake API and verifies dependency order.
 
-`piceli deploy plan --cluster-id ID` remains an offline preview CLI using empty
-observed state. It neither discovers nor executes a live plan. The recoverable
-executor is an explicit Python library API; legacy deploy CLI commands are not
-automatically routed through it.
+From the command line, `piceli release` runs this engine from a spec; see
+{doc}`release_cli`.
 
 ## Execution API
 

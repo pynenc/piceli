@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, ClassVar, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
+from piceli.app.access import Access, Forward
 from piceli.app.model import (
     Config,
     Container,
@@ -33,6 +35,7 @@ from piceli.k8s.ops.plan import (
 
 if TYPE_CHECKING:
     from piceli.k8s.ops.secret_versions import SecretVersionRef
+    from piceli.k8s.ui_config import UiShortcut
 
 _NAMESPACE = re.compile(r"[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?")
 
@@ -107,6 +110,8 @@ class App(BaseModel):
 
     #: Probe factories: ``app.probe.http(...)``, ``.tcp(...)``, ``.exec(...)``.
     probe: ClassVar[type[Probe]] = Probe
+    #: Access factories: ``app.access.forward(local=..., path=..., health=...)``.
+    access: ClassVar[type[Access]] = Access
 
     name: Name
     owner: str | None = Field(default=None, min_length=1, max_length=253)
@@ -117,6 +122,9 @@ class App(BaseModel):
         default_factory=list
     )
     _edges: list[tuple[str, str]] = PrivateAttr(default_factory=list)
+    _overrides: list[tuple[str, str, dict[str, Any]]] = PrivateAttr(
+        default_factory=list
+    )
 
     def __init__(self, name: str, /, **data: Any) -> None:
         super().__init__(name=name, **data)
@@ -140,8 +148,50 @@ class App(BaseModel):
         for existing in self._objects:
             if type(existing) is type(item) and existing.name == item.name:
                 raise ValueError(f"{kind} {item.name!r} is already declared")
+        forward = _forward(item)
+        if forward is not None:
+            ident = forward.name or item.name
+            for other in self._objects:
+                declared = _forward(other)
+                if declared is None:
+                    continue
+                if (declared.name or other.name) == ident:
+                    raise ValueError(f"access forward {ident!r} is already declared")
+                if declared.local == forward.local:
+                    raise ValueError(
+                        f"access forward {ident!r}: local port {forward.local} is "
+                        f"already used by {declared.name or other.name!r}"
+                    )
         self._objects.append(item)
         return item
+
+    def shortcuts(self, namespace: str | None = None) -> tuple[UiShortcut, ...]:
+        """The declared access forwards as access-profile entries.
+
+        These are the same :class:`~piceli.k8s.ui_config.UiShortcut` objects an
+        ``--ui-config`` TOML file declares, so ``piceli access``, the forward
+        supervisor and the dashboard consume them unchanged. Pure: no cluster.
+
+        :param namespace: Pinned on every entry (``None`` leaves it to the caller).
+        """
+        result = []
+        for item in self._objects:
+            if isinstance(item, Service) and item.access is not None:
+                result.append(
+                    item.access.shortcut(
+                        item.name, f"service/{item.name}", item.access_port(), namespace
+                    )
+                )
+            elif isinstance(item, Deployment) and item.access is not None:
+                result.append(
+                    item.access.shortcut(
+                        item.name,
+                        f"deployment/{item.name}",
+                        item.access_port(),
+                        namespace,
+                    )
+                )
+        return tuple(result)
 
     def config(
         self, name: str, data: Mapping[str, str], *, component: str | None = None
@@ -178,6 +228,7 @@ class App(BaseModel):
         resources: Resources | None = None,
         volumes: Mapping[str, Volume | Mount] | None = None,
         pull_policy: str | None = None,
+        container: str | None = None,
         sidecars: Sequence[Container] = (),
         init: Sequence[Container] = (),
         replicas: int = 1,
@@ -188,17 +239,20 @@ class App(BaseModel):
         selector: Mapping[str, str] | None = None,
         labels: Mapping[str, str] | None = None,
         component: str | None = None,
+        access: Forward | None = None,
     ) -> Deployment:
         """Declare a Deployment whose main container is named after it.
 
         Container arguments (``image`` … ``pull_policy``) describe the main
-        container (see :class:`~piceli.app.model.Container`); ``sidecars`` run
-        next to it and ``init`` containers run first. The remaining arguments
-        are :class:`~piceli.app.model.Deployment` fields.
+        container (see :class:`~piceli.app.model.Container`); ``container``
+        names it when it must not be named after the Deployment. ``sidecars``
+        run next to it and ``init`` containers run first. The remaining
+        arguments are :class:`~piceli.app.model.Deployment` fields; ``access``
+        declares a loopback forward to the pods (prefer a Service's ``access``).
         """
         main = Container.model_validate(
             {
-                "name": name,
+                "name": name if container is None else container,
                 "image": image,
                 "command": command,
                 "args": args,
@@ -227,6 +281,7 @@ class App(BaseModel):
                     "selector": dict(selector) if selector is not None else None,
                     "labels": dict(labels or {}),
                     "component": component,
+                    "access": access,
                 }
             )
         )
@@ -240,12 +295,15 @@ class App(BaseModel):
         ports: Sequence[ServicePort] | None = None,
         name: str | None = None,
         type: str | None = None,
+        access: Forward | None = None,
     ) -> Service:
         """Declare a Service that selects ``workload``'s pods.
 
         Pass one ``port`` (and optionally ``target_port``) or several named
         :class:`~piceli.app.model.ServicePort` objects. The Service is named
-        after the workload unless ``name`` is given.
+        after the workload unless ``name`` is given. ``access`` declares how
+        to reach it from a laptop (``app.access.forward(local=...)``); it adds
+        nothing to the manifest.
         """
         if (port is None) == (ports is None):
             raise ValueError("pass either port= or ports=")
@@ -261,6 +319,7 @@ class App(BaseModel):
                     "ports": tuple(ports),
                     "type": type,
                     "component": workload.component_name,
+                    "access": access,
                 }
             )
         )
@@ -287,6 +346,44 @@ class App(BaseModel):
                     "component": workload.component_name,
                 }
             )
+        )
+
+    def override(self, item: Declared, patch: Mapping[str, Any]) -> None:
+        """Set fields of ``item``'s rendered manifest that the typed model lacks.
+
+        The escape hatch for fields with no typed argument yet (a security
+        context, tolerations, an annotation, a list the model orders
+        differently). ``patch`` is merged into the manifest when the app is
+        rendered, after the typed fields, in call order:
+
+        * a mapping merges key by key, and ``None`` removes a key;
+        * a list of objects that all have a unique ``name`` (containers, env,
+          volumes, ports) merges item by item on ``name``; items with a new
+          name are appended;
+        * any other value, including any other list, replaces the rendered one.
+
+        ``piceli import`` writes one ``override`` per imported object that has
+        untyped fields, with a comment naming each field.
+
+        Invariants: the object's identity (``apiVersion``, ``kind``,
+        ``metadata.name``, ``metadata.namespace``) cannot be overridden, and a
+        Secret's ``data`` and ``stringData`` cannot be overridden (secret
+        values never appear in the model).
+
+        Example::
+
+            app.override(api, {"spec": {"template": {"spec": {
+                "securityContext": {"runAsNonRoot": True},
+            }}}})
+        """
+        if not any(existing is item for existing in self._objects):
+            raise ValueError(
+                f"override() takes an object declared on this app, got "
+                f"{type(item).__name__} {getattr(item, 'name', '?')!r}"
+            )
+        _check_override(item, patch)
+        self._overrides.append(
+            (_KINDS[type(item)], item.name, json.loads(json.dumps(dict(patch))))
         )
 
     def add(self, component: DeploymentComponent | ComponentSource) -> None:
@@ -408,29 +505,23 @@ class App(BaseModel):
         metadata: dict[str, Any] = {"name": item.name, "namespace": namespace}
         if labels:
             metadata["labels"] = dict(labels)
+        manifest: dict[str, Any]
         if isinstance(item, Config):
-            return ResourceIntent.from_manifest(
-                {
-                    "apiVersion": "v1",
-                    "kind": "ConfigMap",
-                    "metadata": metadata,
-                    "data": dict(item.data),
-                }
-            )
-        if isinstance(item, Secret):
-            intent = ResourceIntent.from_manifest(
-                {
-                    "apiVersion": "v1",
-                    "kind": "Secret",
-                    "metadata": metadata,
-                    "type": item.type,
-                    "data": dict.fromkeys(item.data, "<private>"),
-                }
-            )
-            for key, reference in item.data.items():
-                intent = intent.with_secret(_pointer(key), reference)
-            return intent
-        if isinstance(item, Deployment):
+            manifest = {
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": metadata,
+                "data": dict(item.data),
+            }
+        elif isinstance(item, Secret):
+            manifest = {
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "metadata": metadata,
+                "type": item.type,
+                "data": dict.fromkeys(item.data, "<private>"),
+            }
+        elif isinstance(item, Deployment):
             node_name = None
             if item.node is not None:
                 if item.node not in nodes:
@@ -440,10 +531,92 @@ class App(BaseModel):
                         f"{sorted(nodes)}"
                     )
                 node_name = nodes[item.node].name
-            return ResourceIntent.from_manifest(
-                item.manifest(namespace, labels, node_name)
-            )
-        return ResourceIntent.from_manifest(item.manifest(namespace, labels))
+            manifest = item.manifest(namespace, labels, node_name)
+        else:
+            manifest = item.manifest(namespace, labels)
+        kind = _KINDS[type(item)]
+        for target_kind, name, patch in self._overrides:
+            if (target_kind, name) == (kind, item.name):
+                manifest = merge_override(manifest, patch)
+        intent = ResourceIntent.from_manifest(manifest)
+        if isinstance(item, Secret):
+            for key, reference in item.data.items():
+                intent = intent.with_secret(_pointer(key), reference)
+        return intent
+
+
+_KINDS: dict[type, str] = {
+    Config: "ConfigMap",
+    Secret: "Secret",
+    Deployment: "Deployment",
+    Service: "Service",
+    NetworkPolicy: "NetworkPolicy",
+}
+
+
+def _check_override(item: Declared, patch: Mapping[str, Any]) -> None:
+    if not isinstance(patch, Mapping):
+        raise ValueError("an override patch must be a mapping")
+    json.dumps(dict(patch), allow_nan=False)  # plain JSON values only
+    for key in ("apiVersion", "kind"):
+        if key in patch:
+            raise ValueError(f"an override cannot change {key}")
+    metadata = patch.get("metadata")
+    if metadata is not None:
+        if not isinstance(metadata, Mapping):
+            raise ValueError("an override's metadata must be a mapping")
+        for key in ("name", "namespace"):
+            if key in metadata:
+                raise ValueError(f"an override cannot change metadata.{key}")
+    if isinstance(item, Secret) and ({"data", "stringData"} & set(patch)):
+        raise ValueError(
+            "an override cannot set Secret data; secret values come from "
+            "ctx.secret(...) in app.secret(...)"
+        )
+
+
+def _named_items(value: Any) -> list[str] | None:
+    """The item names when ``value`` is a list of uniquely named objects."""
+    if not isinstance(value, list):
+        return None
+    names = [item.get("name") if isinstance(item, dict) else None for item in value]
+    if any(not isinstance(name, str) for name in names) or len(set(names)) != len(
+        names
+    ):
+        return None
+    return names  # type: ignore[return-value]
+
+
+def merge_override(base: Any, patch: Any) -> Any:
+    """Merge an :meth:`App.override` patch into ``base`` (see its rules).
+
+    Pure: returns a new value and never changes ``base`` or ``patch``.
+    """
+    if isinstance(patch, Mapping):
+        result = dict(base) if isinstance(base, Mapping) else {}
+        for key, value in patch.items():
+            if value is None:
+                result.pop(key, None)
+            else:
+                result[key] = merge_override(result.get(key), value)
+        return result
+    if _named_items(base) is not None and _named_items(patch) is not None:
+        merged = [dict(item) for item in base]
+        index = {item["name"]: position for position, item in enumerate(merged)}
+        for item in patch:
+            position = index.get(item["name"])
+            if position is None:
+                merged.append(merge_override({}, item))
+            else:
+                merged[position] = merge_override(merged[position], item)
+        return merged
+    return json.loads(json.dumps(patch))
+
+
+def _forward(item: Declared) -> Forward | None:
+    if isinstance(item, Service | Deployment):
+        return item.access
+    return None
 
 
 def _component(value: Handle) -> str:

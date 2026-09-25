@@ -1,8 +1,11 @@
 """``piceli release``: plan, apply, rollback, resume, stop and status from a spec.
 
 JSON goes to stdout; a short human summary goes to stderr. Exit codes:
-``0`` success, ``1`` the execution did not become ready, ``2`` refused
-(invalid spec, identity mismatch, unknown plan), ``3`` approval required.
+``0`` success, ``1`` the execution did not become ready
+(``{"state": "failed", "reason": "<code>", …}``), ``2`` rejected
+(``{"state": "rejected", "reason": "<code>", "message": …}``; invalid spec,
+identity mismatch, unknown plan), ``3`` approval required. Every ``reason`` is
+a registered error code (``piceli explain <code>``).
 """
 
 from __future__ import annotations
@@ -10,11 +13,12 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, NoReturn
 
 import typer
 
 app = typer.Typer(
+    rich_markup_mode=None,
     help="Plan, apply and roll back releases described by a release.toml spec.",
     no_args_is_help=True,
 )
@@ -77,6 +81,16 @@ AdoptAllOption = Annotated[
         ),
     ),
 ]
+SkipChecksOption = Annotated[
+    bool,
+    typer.Option(
+        "--skip-checks",
+        help=(
+            "Do not run the spec's [[checks]] after readiness (emergencies only; "
+            "recorded in the release history)"
+        ),
+    ),
+]
 ReleaseOption = Annotated[
     str | None,
     typer.Option("--release", help="Release name (default: the latest execution)"),
@@ -108,30 +122,70 @@ def _refusals() -> tuple[type[BaseException], ...]:
     return (ValueError, OSError, ProviderError)
 
 
-def _refuse(error: BaseException) -> None:
-    code = getattr(error, "code", None)
-    details = getattr(error, "details", None) or {}
-    _emit(
-        {
-            "state": "refused",
-            "reason": str(error) or type(error).__name__,
-            **({"code": code} if isinstance(code, str) else {}),
-            **details,
-        }
+def _refuse(error: BaseException) -> NoReturn:
+    """Print ``{"state": "rejected", "reason": <code>, …}`` and exit 2.
+
+    ``code`` repeats ``reason`` for one release (0.3.0 printed ``code`` next to
+    a free-text ``reason``); ``details`` (such as ``blocking``) are kept.
+    """
+    from piceli.cli_contract import error_code, reject
+
+    default = (
+        "release-state-unavailable" if isinstance(error, OSError) else "release-refused"
     )
-    _say(f"refused: {error}")
-    for item in details.get("blocking", ()):
+    reason = error_code(error, default)
+    details = dict(getattr(error, "details", None) or {})
+    hints = [
+        f"blocking {item['kind']}/{item['name']}: {item['message']}"
+        + (f" -> {' or '.join(item['suggest'])}" if item["suggest"] else "")
+        for item in details.get("blocking", ())
+    ]
+    reject(
+        reason,
+        str(error) or type(error).__name__,
+        hints=hints,
+        **details,
+        code=reason,
+    )
+
+
+#: Field changes printed per object in the human plan summary.
+MAX_CHANGE_LINES = 12
+
+
+def _say_changes(diff: dict[str, Any] | None, limit: int | None) -> None:
+    from piceli.k8s.ops.field_diff import describe_change
+
+    if diff is None:
+        return
+    changes = diff["changes"]
+    shown = changes if limit is None else changes[:limit]
+    for change in shown:
+        _say(f"            {describe_change(change)}")
+    if len(changes) > len(shown):
         _say(
-            f"  blocking {item['kind']}/{item['name']}: {item['message']}"
-            + (f" -> {' or '.join(item['suggest'])}" if item["suggest"] else "")
+            f"            ... {len(changes) - len(shown)} more "
+            "(`piceli release diff` prints them all)"
         )
-    raise typer.Exit(EXIT_REFUSED)
+    if diff["not_compared"]:
+        _say(
+            "            secret-bound values not shown: "
+            + ", ".join(diff["not_compared"])
+        )
+
+
+def _diff_index(report: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
+    return {
+        (item["resource"]["kind"], item["resource"]["name"]): item
+        for item in report.get("diffs", ())
+    }
 
 
 def _describe_plan(result: Any, spec: Path, command: str) -> None:
     counts = ", ".join(f"{n} {op}" for op, n in result.counts.items()) or "no actions"
     _say(f"release {result.release} ({result.mode}, {result.intent}): {counts}")
     report = result.to_dict()
+    diffs = _diff_index(report)
     for action in report["actions"]:
         if action["operation"] != "no-op":
             _say(
@@ -139,6 +193,7 @@ def _describe_plan(result: Any, spec: Path, command: str) -> None:
                 + _adoption_note(action.get("adoption"))
                 + _write_note(action)
             )
+            _say_changes(diffs.get((action["kind"], action["name"])), MAX_CHANGE_LINES)
     for item in report["drift"]:
         resource = item["resource"]
         _say(
@@ -151,6 +206,16 @@ def _describe_plan(result: Any, spec: Path, command: str) -> None:
         _say(f"  replace {entry}: not needed (absent)")
     for name, origin in result.secrets.items():
         _say(f"  secret {name}: {origin}")
+    checks = report.get("checks") or {}
+    if checks.get("names"):
+        _say(
+            f"  checks after readiness: {', '.join(checks['names'])}"
+            + (
+                "; on failure the previous ready release is re-applied automatically"
+                if checks.get("rollback_on_failed_checks")
+                else ""
+            )
+        )
     _say(f"plan hash: {result.plan_hash} (valid until {result.expires_at})")
     _say(
         f"approve with: piceli release {command} --spec {spec} --approve {result.plan_hash}"
@@ -190,6 +255,11 @@ def _write_note(action: dict[str, Any]) -> str:
             f"release; backup written first; dependents: "
             f"{'deleted' if replace['propagation'] == 'Background' else 'orphaned'}]"
         )
+    removes = action.get("removes")
+    if removes:
+        return (
+            "  [removes fields an earlier release declared: " + ", ".join(removes) + "]"
+        )
     return ""
 
 
@@ -202,8 +272,50 @@ def _confirm(result: Any) -> bool:
     return bool(answer) and len(answer) >= 12 and result.plan_hash.startswith(answer)
 
 
+def _describe_checks(checks: dict[str, Any] | None, indent: str = "  ") -> None:
+    if not checks:
+        return
+    if checks.get("skipped"):
+        _say(f"{indent}checks skipped ({checks.get('flag')})")
+        return
+    for item in checks["results"]:
+        _say(
+            f"{indent}check {item['name']}: {'passed' if item['passed'] else 'FAILED'}"
+            + (f" [{item['code']}]" if item.get("code") else "")
+            + f" {item['detail']}"
+        )
+
+
+def _describe_rollback(rollback: dict[str, Any] | None) -> None:
+    if not rollback:
+        return
+    if rollback["state"] == "rolled-back":
+        _say(f"  rolled back automatically to {rollback['target']}: ready")
+    else:
+        _say(
+            f"  automatic rollback {rollback['state']}"
+            + (f" ({rollback['reason']})" if rollback.get("reason") else "")
+            + (f": {rollback['detail']}" if rollback.get("detail") else "")
+        )
+    _describe_checks(rollback.get("checks"), "    ")
+
+
 def _finish(outcome: dict[str, Any]) -> None:
-    _emit(outcome)
+    from piceli.errors import ERRORS
+
+    execution = outcome["execution"]
+    # A ready execution whose post-deploy checks failed is still a failure.
+    state = outcome.get("release_state", execution["state"])
+    failed = state != "ready" and outcome["intent"] != "stop"
+    if failed:
+        category = execution.get("failure_category")
+        if state == "checks-failed":
+            reason = "check-failed"
+        else:
+            reason = category if category in ERRORS else "execution-not-ready"
+        _emit({**outcome, "state": "failed", "reason": reason})
+    else:
+        _emit({**outcome, "state": "succeeded"})
     for item in outcome.get("adopted", ()):
         if item["mode"] == "replace":
             _say(
@@ -219,16 +331,17 @@ def _finish(outcome: dict[str, Any]) -> None:
             + (f"; transferred field managers: {', '.join(moved)}" if moved else "")
             + ")"
         )
-    execution = outcome["execution"]
+    _describe_checks(outcome.get("checks"))
     _say(
-        f"{outcome['intent']} {outcome['release']}: {execution['state']}"
+        f"{outcome['intent']} {outcome['release']}: {state}"
         + (
             f" ({execution['failure_category']})"
             if "failure_category" in execution
             else ""
         )
     )
-    if execution["state"] != "ready" and outcome["intent"] != "stop":
+    _describe_rollback(outcome.get("rollback"))
+    if failed:
         raise typer.Exit(EXIT_NOT_READY)
 
 
@@ -243,12 +356,19 @@ def _plan_then_execute(
     adopt: list[str] | None = None,
     replace: list[str] | None = None,
     adopt_all_desired: bool = False,
+    skip_checks: bool = False,
 ) -> None:
     try:
         runner = _runner(spec)
         if approve is not None:
             if auto_approve or rotate or adopt or replace or adopt_all_desired:
-                raise ValueError("--approve cannot be combined with planning flags")
+                from piceli.cli_contract import reject
+
+                reject(
+                    "approve-with-planning-flags",
+                    "--approve cannot be combined with planning flags",
+                    code="approve-with-planning-flags",
+                )
             expected = None
             if rollback_to is not None:
                 expected = runner.resolve_rollback_target(rollback_to)
@@ -256,6 +376,7 @@ def _plan_then_execute(
                 approve,
                 expected_intent="rollback" if rollback_to is not None else None,
                 expected_release=expected,
+                skip_checks=skip_checks,
             )
         else:
             result = runner.plan(
@@ -269,7 +390,7 @@ def _plan_then_execute(
             if not auto_approve and not _confirm(result):
                 _emit({"state": "approval-required", **result.to_dict()})
                 raise typer.Exit(EXIT_APPROVAL)
-            outcome = runner.apply(result.plan_hash)
+            outcome = runner.apply(result.plan_hash, skip_checks=skip_checks)
     except _refusals() as error:
         _refuse(error)
         return
@@ -310,6 +431,48 @@ def plan(
 app.command("preview", help="Alias of `plan`.")(plan)
 
 
+@app.command("diff")
+def diff(
+    spec: SpecOption,
+    adopt: AdoptOption = None,
+    replace: ReplaceOption = None,
+    adopt_all_desired: AdoptAllOption = False,
+    exit_code: Annotated[
+        bool,
+        typer.Option(
+            "--exit-code", help="Exit 1 when the release would change something"
+        ),
+    ] = False,
+) -> None:
+    """Show what `plan` would change, field by field (read-only, nothing stored)."""
+    try:
+        value = _runner(spec).diff(
+            adopt=adopt or (),
+            replace=replace or (),
+            adopt_all_desired=adopt_all_desired,
+        )
+    except _refusals() as error:
+        _refuse(error)
+        return
+    diffs = _diff_index(value)
+    for action in value["actions"]:
+        if action["operation"] == "no-op":
+            continue
+        item = diffs.get((action["kind"], action["name"]))
+        _say(f"{action['operation']} {action['kind']}/{action['name']}")
+        if item is None:
+            continue
+        if item["unified"]:
+            _say(item["unified"].rstrip("\n"))
+        if item["not_compared"]:
+            _say("secret-bound values not shown: " + ", ".join(item["not_compared"]))
+    counts = ", ".join(f"{n} {op}" for op, n in value["summary"].items())
+    _say(f"release {value['release']}: {counts or 'no actions'}")
+    _emit({"state": "diffed", **value})
+    if exit_code and value["changes"]:
+        raise typer.Exit(EXIT_NOT_READY)
+
+
 @app.command("apply")
 def apply(
     spec: SpecOption,
@@ -319,8 +482,16 @@ def apply(
     adopt: AdoptOption = None,
     replace: ReplaceOption = None,
     adopt_all_desired: AdoptAllOption = False,
+    skip_checks: SkipChecksOption = False,
 ) -> None:
-    """Execute an approved plan (``--approve HASH``), or plan and confirm."""
+    """Execute an approved plan (``--approve HASH``), or plan and confirm.
+
+    When the execution is ready, the spec's ``[[checks]]`` run; the release
+    is ready only when they pass (``release_state``: ``ready`` or
+    ``checks-failed``). With ``[release] rollback_on_failed_checks = true`` the
+    previous ready release is re-applied automatically (``rollback`` in the
+    output).
+    """
     _plan_then_execute(
         spec,
         command="apply",
@@ -330,6 +501,7 @@ def apply(
         adopt=adopt,
         replace=replace,
         adopt_all_desired=adopt_all_desired,
+        skip_checks=skip_checks,
     )
 
 
@@ -344,8 +516,12 @@ def rollback(
     adopt: AdoptOption = None,
     replace: ReplaceOption = None,
     adopt_all_desired: AdoptAllOption = False,
+    skip_checks: SkipChecksOption = False,
 ) -> None:
-    """Re-plan and re-apply an earlier release against current cluster state."""
+    """Re-plan and re-apply an earlier release against current cluster state.
+
+    The spec's ``[[checks]]`` run after readiness, as for ``apply``.
+    """
     _plan_then_execute(
         spec,
         command=f"rollback {target}",
@@ -355,14 +531,19 @@ def rollback(
         adopt=adopt,
         replace=replace,
         adopt_all_desired=adopt_all_desired,
+        skip_checks=skip_checks,
     )
 
 
 @app.command("resume")
-def resume(spec: SpecOption, release: ReleaseOption = None) -> None:
+def resume(
+    spec: SpecOption,
+    release: ReleaseOption = None,
+    skip_checks: SkipChecksOption = False,
+) -> None:
     """Resume an interrupted apply of a created release (same grant and ids)."""
     try:
-        outcome = _runner(spec).resume(release)
+        outcome = _runner(spec).resume(release, skip_checks=skip_checks)
     except _refusals() as error:
         _refuse(error)
         return
@@ -380,6 +561,31 @@ def stop(spec: SpecOption, release: ReleaseOption = None) -> None:
     _finish(outcome)
 
 
+@app.command("check")
+def check(
+    spec: SpecOption,
+    release: Annotated[
+        str | None,
+        typer.Option("--release", help="Release to check (default: the selected one)"),
+    ] = None,
+) -> None:
+    """Run the spec's [[checks]] now against a release; changes nothing.
+
+    Exit code ``0`` when every check passed, ``1`` when one failed.
+    """
+    try:
+        outcome = _runner(spec).check(release)
+    except _refusals() as error:
+        _refuse(error)
+        return
+    _emit(outcome)
+    _describe_checks(outcome["checks"])
+    passed = outcome["checks"]["passed"]
+    _say(f"check {outcome['release']}: {'passed' if passed else 'checks-failed'}")
+    if not passed:
+        raise typer.Exit(EXIT_NOT_READY)
+
+
 @app.command("status")
 def status(spec: SpecOption) -> None:
     """Show catalogued releases, their executions and history (no cluster access)."""
@@ -392,10 +598,22 @@ def status(spec: SpecOption) -> None:
         f"deployed: {value.get('deployed')}  previous: {value.get('previous')}  "
         f"releases: {len(value['releases'])}"
     )
+    for item in value["releases"]:
+        checks = item.get("checks")
+        if checks:
+            outcome = (
+                f"skipped ({checks.get('flag')})"
+                if checks.get("skipped")
+                else "passed"
+                if checks["passed"]
+                else f"FAILED: {', '.join(checks['failed'])}"
+            )
+            _say(f"  {item['name']}: checks {outcome}")
     _emit(value)
 
 
 secret_app = typer.Typer(
+    rich_markup_mode=None,
     help="Inspect the secret values of a release (owner only; values need --reveal).",
     no_args_is_help=True,
 )

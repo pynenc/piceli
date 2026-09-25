@@ -1,6 +1,6 @@
 [project]
 name = "piceli"
-version = "0.3.0"
+version = "0.4.0"
 description = "Kubernetes infrastructure as typed Python: model, plan, apply and observe"
 authors = [{ name = "Jose Diaz" }]
 license = "MIT"
@@ -26,9 +26,7 @@ dependencies = [
     "pyyaml>=6.0.1",
     "typer>=0.12",
     "rich>=13.7",
-    "tenacity>=8.2.3",
     "cron-validator>=1.0.8",
-    "cistell>=0.0.4",
 ]
 
 [project.optional-dependencies]
@@ -36,6 +34,7 @@ gcp = [
     "google-auth>=2.27",
     "google-api-core>=2.17",
     "google-cloud-container>=2.40",
+    "tenacity>=8.2.3",
 ]
 telemetry = [
     "opentelemetry-api>=1.41.1",

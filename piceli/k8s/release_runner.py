@@ -33,6 +33,7 @@ import json
 import os
 import re
 import tempfile
+import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -41,6 +42,14 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from piceli.checks import (
+    Check,
+    CheckContext,
+    CheckReport,
+    PythonCheck,
+    parse_checks,
+    run_checks,
+)
 from piceli.k8s.ops.bounds import timestamp
 from piceli.k8s.ops.discovery import (
     RETAINED_KINDS,
@@ -51,6 +60,7 @@ from piceli.k8s.ops.discovery import (
     ResourceType,
     capture_discovery,
 )
+from piceli.k8s.ops.dry_run import capture_server_dry_runs
 from piceli.k8s.ops.execution_journal import ExecutionJournal
 from piceli.k8s.ops.executor import (
     ActionGrant,
@@ -58,16 +68,21 @@ from piceli.k8s.ops.executor import (
     ExecutionLimits,
     PlanExecutor,
 )
+from piceli.k8s.ops.field_diff import plan_diffs
+from piceli.k8s.ops.kubernetes_provider import ProviderError
 from piceli.k8s.ops.plan import (
     DeploymentComposition,
     DeploymentPlan,
     ObservedSnapshot,
     Ownership,
     PlanAuthorization,
+    PrivateEvidence,
     ResourceIntent,
     ResourceRef,
     build_plan,
+    declared_union,
     field_drift,
+    private_evidence,
     replace_refusal,
     retained_content_contained,
     transferable_managers,
@@ -106,6 +121,8 @@ from piceli.k8s.release_spec import (
 POLICY_REVISION = "piceli.release-cli/v1"
 _HASH = re.compile(r"[0-9a-f]{64}")
 ProviderFactory = Callable[[ReleaseSpec], ProviderBinding]
+#: ``factory(spec, release name, {image name: stored image})`` → a check context.
+CheckContextFactory = Callable[[ReleaseSpec, str, Mapping[str, Any]], CheckContext]
 
 
 class ReleaseError(ValueError):
@@ -161,6 +178,37 @@ def default_provider_factory(spec: ReleaseSpec) -> ProviderBinding:
     )
 
 
+def default_check_context(
+    spec: ReleaseSpec, release: str, images: Mapping[str, Any]
+) -> CheckContext:
+    """The check context of a release: the spec's ``[target]``, never ambient."""
+    target = spec.model.target
+    return CheckContext(
+        spec.resolve(target.kubeconfig),
+        target.context,
+        target.namespace,
+        release,
+        images,
+        values=spec.model.values,
+        base=spec.base,
+        transport=target.transport,
+        request_seconds=target.request_seconds,
+    )
+
+
+def _check_summary(value: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """The short form of a check outcome kept in the release history."""
+    if value is None:
+        return None
+    if value.get("skipped"):
+        return {"skipped": True, "flag": value.get("flag")}
+    return {
+        "passed": value["passed"],
+        "failed": list(value["failed"]),
+        "count": len(value["results"]),
+    }
+
+
 def _grant(
     plan: DeploymentPlan,
     snapshot: ObservedSnapshot,
@@ -201,6 +249,7 @@ def _plan_authorization(
     inherited: Sequence[str] = (),
     field_manager: str,
     replace: Sequence[Mapping[str, str]] = (),
+    previous: Sequence[ResourceIntent] = (),
 ) -> PlanAuthorization:
     return PlanAuthorization(
         target,
@@ -209,6 +258,39 @@ def _plan_authorization(
         tuple(inherited),
         field_manager,
         tuple(ResourceRef(**item) for item in replace),
+        tuple(previous),
+    )
+
+
+def _previous_declared(
+    catalog: ReleaseCatalog, names: Sequence[str]
+) -> tuple[ResourceIntent, ...]:
+    """What the named catalogued releases declared, merged per object.
+
+    Records are immutable, so the same names always give the same result; a
+    record that no longer exists contributes nothing.
+    """
+    intents: list[ResourceIntent] = []
+    for name in names:
+        try:
+            record = catalog.get(name)
+        except ValueError:
+            continue
+        for component in composition_from_archive(record.archive).components:
+            intents.extend(component.resources)
+    return declared_union(intents)
+
+
+def _private(
+    composition: DeploymentComposition,
+    snapshot: ObservedSnapshot,
+    store: SecretVersionStore,
+) -> PrivateEvidence:
+    """Private evidence for secret-bound objects (see ``private_evidence``)."""
+    return private_evidence(
+        composition,
+        snapshot,
+        lambda reference: store.resolve(snapshot.target, reference),
     )
 
 
@@ -467,6 +549,7 @@ def _compact_actions(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
                 else {}
             ),
             **({"replace": action["replace"]} if "replace" in action else {}),
+            **({"removes": action["removes"]} if "removes" in action else {}),
         }
         for action in plan["actions"]
     ]
@@ -588,6 +671,12 @@ class PlanResult:
     # What this plan was authorized to adopt/replace (bound to the plan hash
     # through the ADOPT/REPLACE actions).
     authorized: dict[str, Any] = field(default_factory=dict)
+    # The post-deploy checks apply will run, and the rollback policy.
+    checks: dict[str, Any] = field(default_factory=dict)
+    # Field-level diffs of the changed objects (evidence, not in the hash)
+    # and the objects the server dry run could not cover.
+    diffs: list[dict[str, Any]] = field(default_factory=list)
+    dry_run_unavailable: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def plan_hash(self) -> str:
@@ -616,6 +705,9 @@ class PlanResult:
             "drift": self.drift,
             "adopt_not_needed": self.adopt_not_needed,
             "authorized": self.authorized,
+            "checks": self.checks,
+            "diffs": self.diffs,
+            "dry_run_unavailable": self.dry_run_unavailable,
             **({"plan": self.plan} if full else {}),
         }
 
@@ -631,10 +723,14 @@ class _History:
             return []
         value = json.loads(self.path.read_text())
         if not isinstance(value, dict) or value.get("schema_version") != 1:
-            raise ReleaseError("release history is malformed")
+            raise ReleaseError(
+                "release history is malformed", code="release-history-malformed"
+            )
         entries = value.get("entries")
         if not isinstance(entries, list):
-            raise ReleaseError("release history is malformed")
+            raise ReleaseError(
+                "release history is malformed", code="release-history-malformed"
+            )
         return entries
 
     @contextmanager
@@ -690,9 +786,11 @@ class ReleaseRunner:
         spec: ReleaseSpec,
         *,
         provider_factory: ProviderFactory = default_provider_factory,
+        check_context_factory: CheckContextFactory = default_check_context,
     ) -> None:
         self.spec = spec
         self.provider_factory = provider_factory
+        self.check_context_factory = check_context_factory
         self.state = spec.state_dir
         self.history = _History(self.state / "history.json")
         # Restorable copies of objects deleted by ``replace`` (owner-only).
@@ -715,7 +813,10 @@ class ReleaseRunner:
 
     def _plan_path(self, plan_hash: str) -> Path:
         if not _HASH.fullmatch(plan_hash):
-            raise ReleaseError("plan hash must be 64 lowercase hex characters")
+            raise ReleaseError(
+                "plan hash must be 64 lowercase hex characters",
+                code="invalid-plan-hash",
+            )
         return self.state / "plans" / f"{plan_hash}.json"
 
     def _sidecar(self, name: str) -> dict[str, Any]:
@@ -742,7 +843,8 @@ class ReleaseRunner:
             if archived != target.__dict__:
                 raise ReleaseError(
                     "cluster identity differs from the one recorded in this state "
-                    f"directory (release {record.name!r}); refusing to continue"
+                    f"directory (release {record.name!r}); refusing to continue",
+                    code="cluster-identity-changed",
                 )
 
     # ---------------------------------------------------------- composition
@@ -765,22 +867,32 @@ class ReleaseRunner:
         nodes: Mapping[str, NodeRef],
     ) -> Callable[[Mapping[str, SecretVersionRef]], DeploymentComposition]:
         def factory(refs: Mapping[str, SecretVersionRef]) -> DeploymentComposition:
-            composition = function(self.spec.context(images, refs, nodes))
+            from piceli.app.app import App
+
+            context = self.spec.context(images, refs, nodes)
+            composition = function(context)
+            if isinstance(composition, App):
+                # Returning the App keeps its access declarations visible to
+                # `piceli access` / `piceli status`; render it here.
+                composition = composition.composition(context)
             if not isinstance(composition, DeploymentComposition):
                 raise ReleaseSpecError(
-                    "the composition function must return a DeploymentComposition"
+                    "the composition function must return an App or a DeploymentComposition",
+                    code="invalid-composition",
                 )
             for component in composition.components:
                 for resource in component.resources:
                     if not resource.ref.namespace:
                         raise ReleaseSpecError(
                             "cluster-scoped resources are not supported by "
-                            f"releases: {resource.ref.kind}/{resource.ref.name}"
+                            f"releases: {resource.ref.kind}/{resource.ref.name}",
+                            code="invalid-composition",
                         )
                     if resource.ref.namespace != self.spec.model.target.namespace:
                         raise ReleaseSpecError(
                             f"{resource.ref.kind}/{resource.ref.name} targets "
-                            f"namespace {resource.ref.namespace!r}"
+                            f"namespace {resource.ref.namespace!r}",
+                            code="invalid-composition",
                         )
             return composition
 
@@ -815,7 +927,8 @@ class ReleaseRunner:
                     if binding.reference not in by_ref:
                         raise ReleaseSpecError(
                             "the composition binds a reference that is not a "
-                            "declared secret input"
+                            "declared secret input",
+                            code="invalid-composition",
                         )
                     bound.add(by_ref[binding.reference])
                     bindings.append(
@@ -846,7 +959,8 @@ class ReleaseRunner:
         unused = sorted(set(names) - bound - consumed_outputs(self.spec.model.secrets))
         if unused:
             raise ReleaseSpecError(
-                f"declared secret inputs are not bound by the composition: {unused}"
+                f"declared secret inputs are not bound by the composition: {unused}",
+                code="invalid-composition",
             )
         return composition, material
 
@@ -861,16 +975,12 @@ class ReleaseRunner:
     def _source(self, images: Mapping[str, ImageRef]) -> ReleaseSource:
         if len(images) == 1:
             identity = next(iter(images.values())).identity
-        else:
-            identity = (
-                "sha256:"
-                + hashlib.sha256(
-                    _canonical(
-                        {name: image.identity for name, image in images.items()}
-                    ).encode()
-                ).hexdigest()
-            )
-        return ReleaseSource("oci", identity, artifact_digest=identity)
+            return ReleaseSource("oci", identity, artifact_digest=identity)
+        # Several images: record the whole set (name -> digest); the identity
+        # is the digest of that canonical map.
+        return ReleaseSource.image_set(
+            {name: image.identity for name, image in images.items()}
+        )
 
     # ------------------------------------------------------------ discovery
     def _discover(
@@ -902,9 +1012,25 @@ class ReleaseRunner:
             ]
             raise ReleaseError(
                 "discovery is incomplete, refusing to plan"
-                + (f" ({'; '.join(failures)})" if failures else "")
+                + (f" ({'; '.join(failures)})" if failures else ""),
+                code="discovery-incomplete",
             )
         return artifact
+
+    def _dry_runs(
+        self,
+        binding: ProviderBinding,
+        composition: DeploymentComposition,
+        artifact: DiscoveryArtifact,
+    ) -> tuple[DiscoveryArtifact, list[dict[str, Any]]]:
+        """Attach server dry runs of the desired writes (never persisted)."""
+        artifact, unavailable = capture_server_dry_runs(
+            binding.provider,
+            artifact,
+            composition,
+            deadline=time.monotonic() + self.spec.model.discovery.max_seconds,
+        )
+        return artifact, [item.to_dict() for item in unavailable]
 
     # -------------------------------------------------------------- secrets
     def _private_inputs(
@@ -989,9 +1115,15 @@ class ReleaseRunner:
             parse_adopt_entry(entry)
         unknown = sorted(set(rotate) - set(spec.secrets))
         if unknown:
-            raise ReleaseError(f"cannot rotate undeclared secrets: {unknown}")
+            raise ReleaseError(
+                f"cannot rotate undeclared secrets: {unknown}",
+                code="unknown-rotate-secret",
+            )
         for entry in replace:
             parse_adopt_entry(entry, what="replace")
+        for check in spec.checks:
+            if isinstance(check, PythonCheck):
+                check.resolve(self.spec.base)  # refuse an unimportable check now
         requested = _Ownership(
             tuple(dict.fromkeys((*spec.release.adopt, *adopt))),
             tuple(dict.fromkeys((*spec.release.replace, *replace))),
@@ -1008,18 +1140,7 @@ class ReleaseRunner:
                 factory = self._factory(function, images, self._nodes(binding))
                 if rollback_to is None:
                     composition, material = self._preview_composition(factory)
-                    fingerprint = hashlib.sha256(
-                        _canonical(
-                            {
-                                "images": {n: i.identity for n, i in images.items()},
-                                "composition": material,
-                                "secrets": {
-                                    n: config_digest(g) for n, g in spec.secrets.items()
-                                },
-                                "rotation": uuid.uuid4().hex if rotate else None,
-                            }
-                        ).encode()
-                    ).hexdigest()
+                    fingerprint = self._fingerprint(images, material, rotate)
                     name = f"{spec.release.name}-{fingerprint[:12]}"
                     existing = {record.name for record in catalog.records()}
                     if name not in existing:
@@ -1039,15 +1160,128 @@ class ReleaseRunner:
                     intent = "apply"
                 else:
                     if rotate:
-                        raise ReleaseError("--rotate is not valid for a rollback")
+                        raise ReleaseError(
+                            "--rotate is not valid for a rollback",
+                            code="rotate-not-valid-for-rollback",
+                        )
                     name = self.resolve_rollback_target(rollback_to, catalog)
                     intent = "rollback"
-                return self._plan_reapply(name, intent, binding, catalog, requested)
+                return self._plan_reapply(
+                    name, intent, binding, catalog, store, requested
+                )
             finally:
                 journal.close()
                 store.close()
         finally:
             binding.close()
+
+    def _fingerprint(
+        self,
+        images: Mapping[str, ImageRef],
+        material: list[dict[str, Any]],
+        rotate: Sequence[str] = (),
+    ) -> str:
+        """The release fingerprint; its first 12 characters name the release."""
+        return hashlib.sha256(
+            _canonical(
+                {
+                    "images": {n: i.identity for n, i in images.items()},
+                    "composition": material,
+                    "secrets": {
+                        n: config_digest(g) for n, g in self.spec.model.secrets.items()
+                    },
+                    "rotation": uuid.uuid4().hex if rotate else None,
+                }
+            ).encode()
+        ).hexdigest()
+
+    def diff(
+        self,
+        *,
+        adopt: Sequence[str] = (),
+        replace: Sequence[str] = (),
+        adopt_all_desired: bool = False,
+    ) -> dict[str, Any]:
+        """What ``plan`` would change, as field diffs; read-only.
+
+        Captures discovery and the server dry runs like ``plan`` but builds
+        the plan in memory only: no plan, release, secret or discovery file is
+        written, and the cluster receives only reads and ``dryRun=All``
+        requests. Secret-bound objects are compared privately only for an
+        unchanged release (a new release's secret inputs are not
+        materialized), and their values are never shown.
+        """
+        spec = self.spec.model
+        for entry in adopt:
+            parse_adopt_entry(entry)
+        for entry in replace:
+            parse_adopt_entry(entry, what="replace")
+        requested = _Ownership(
+            tuple(dict.fromkeys((*spec.release.adopt, *adopt))),
+            tuple(dict.fromkeys((*spec.release.replace, *replace))),
+            adopt_all_desired,
+        )
+        settings = spec.release
+        images = self.spec.images()
+        function = self.spec.load_composition()
+        binding = self.provider_factory(self.spec)
+        try:
+            catalog = ReleaseCatalog(self.spec.catalog_path)
+            self._check_target(catalog, binding.target)
+            factory = self._factory(function, images, self._nodes(binding))
+            composition, material = self._preview_composition(factory)
+            records = {record.name: record for record in catalog.records()}
+            name = f"{settings.name}-{self._fingerprint(images, material)[:12]}"
+            existing = records.get(name)
+            if existing is not None:
+                # An unchanged release: its archived composition carries the
+                # real secret versions, so bound objects can be compared.
+                composition = composition_from_archive(existing.archive)
+            kinds = self._kinds(composition)
+            if settings.prune:
+                for record in records.values():
+                    kinds |= self._kinds(composition_from_archive(record.archive))
+            artifact, unavailable = self._dry_runs(
+                binding, composition, self._discover(binding, kinds)
+            )
+            snapshot = ObservedSnapshot.from_discovery(artifact)
+            inherited = list(settings.inherited_owners)
+            resolved = requested.resolve(
+                composition, snapshot, inherited, settings.field_manager
+            )
+            private = None
+            if existing is not None and self.spec.secret_store_path.exists():
+                store = SecretVersionStore(self.spec.secret_store_path)
+                try:
+                    private = _private(composition, snapshot, store)
+                finally:
+                    store.close()
+            plan = build_plan(
+                composition,
+                snapshot,
+                _plan_authorization(
+                    binding.target,
+                    prune=settings.prune,
+                    adopt=resolved.adopt,
+                    inherited=inherited,
+                    field_manager=settings.field_manager,
+                    replace=resolved.replace,
+                    previous=_previous_declared(catalog, sorted(records)),
+                ),
+                private=private,
+            )
+        finally:
+            binding.close()
+        summary = plan.summary()
+        counts = _summary(summary)
+        return {
+            "release": settings.name,
+            "summary": counts,
+            "changes": any(operation != "no-op" for operation in counts),
+            "actions": _compact_actions(summary),
+            "diffs": plan_diffs(plan, snapshot),
+            "dry_run_unavailable": unavailable,
+        }
 
     def resolve_rollback_target(
         self, target: str, catalog: ReleaseCatalog | None = None
@@ -1057,13 +1291,19 @@ class ReleaseRunner:
             try:
                 catalog.get(target)
             except ValueError:
-                raise ReleaseError(f"unknown release {target!r}") from None
+                raise ReleaseError(
+                    f"unknown release {target!r}", code="unknown-release"
+                ) from None
             return target
         if not self.history.deployed():
-            raise ReleaseError("no release has been applied yet")
+            raise ReleaseError(
+                "no release has been applied yet", code="no-release-applied"
+            )
         previous = self.history.previous()
         if previous is None:
-            raise ReleaseError("no previous release to roll back to")
+            raise ReleaseError(
+                "no previous release to roll back to", code="no-previous-release"
+            )
         return previous
 
     def _plan_create(
@@ -1085,13 +1325,16 @@ class ReleaseRunner:
         if settings.prune:
             for record in catalog.records():
                 kinds |= self._kinds(composition_from_archive(record.archive))
-        artifact = self._discover(binding, kinds)
+        artifact, unavailable = self._dry_runs(
+            binding, composition, self._discover(binding, kinds)
+        )
         snapshot = ObservedSnapshot.from_discovery(artifact)
         inherited = list(settings.inherited_owners)
         resolved = requested.resolve(
             composition, snapshot, inherited, settings.field_manager
         )
         adopt, replace = resolved.adopt, resolved.replace
+        previous_releases = sorted(record.name for record in catalog.records())
         plan_authorization = _plan_authorization(
             binding.target,
             prune=settings.prune,
@@ -1099,6 +1342,7 @@ class ReleaseRunner:
             inherited=inherited,
             field_manager=settings.field_manager,
             replace=replace,
+            previous=_previous_declared(catalog, previous_releases),
         )
         window = settings.approval_window_seconds
         expires_at = (_now() + timedelta(seconds=window)).isoformat()
@@ -1120,7 +1364,8 @@ class ReleaseRunner:
 
         # Validate the plan and its grant with the placeholder composition
         # first: a refused plan must not generate, import or store any secret.
-        grant(build_plan(composition, snapshot, plan_authorization), snapshot)
+        preview = build_plan(composition, snapshot, plan_authorization)
+        grant(preview, snapshot)
         secrets = self._private_inputs(catalog, store, binding, rotate)
         origin = secrets.origin
         placeholders = self._placeholders()
@@ -1199,11 +1444,23 @@ class ReleaseRunner:
                     "adopt": adopt,
                     "inherited_owners": inherited,
                     "replace": replace,
+                    # Earlier releases whose declarations the plan's field
+                    # removals are computed from (records are immutable).
+                    "previous_releases": previous_releases,
                 }
             )
             + "\n",
         )
         plan = record.archive.to_dict()["revision"]["desired_state"]
+        # The stored plan (real secret versions, so bound objects are compared
+        # privately); the placeholder preview only validated the grant.
+        stored = composition_from_archive(record.archive)
+        planned = build_plan(
+            stored,
+            snapshot,
+            plan_authorization,
+            private=_private(stored, snapshot, store),
+        )
         result = PlanResult(
             name,
             "create",
@@ -1216,6 +1473,9 @@ class ReleaseRunner:
             _drift(composition, snapshot, settings.field_manager, adopt),
             resolved.adopt_not_needed,
             requested.report(resolved),
+            self._checks_policy(),
+            plan_diffs(planned, snapshot),
+            unavailable,
         )
         self._persist_plan(result, prune=settings.prune)
         return result
@@ -1226,6 +1486,7 @@ class ReleaseRunner:
         intent: str,
         binding: ProviderBinding,
         catalog: ReleaseCatalog,
+        store: SecretVersionStore,
         requested: _Ownership,
     ) -> PlanResult:
         settings = self.spec.model.release
@@ -1235,13 +1496,16 @@ class ReleaseRunner:
         if settings.prune:
             for other in catalog.records():
                 kinds |= self._kinds(composition_from_archive(other.archive))
-        artifact = self._discover(binding, kinds)
+        artifact, unavailable = self._dry_runs(
+            binding, composition, self._discover(binding, kinds)
+        )
         snapshot = ObservedSnapshot.from_discovery(artifact)
         inherited = list(settings.inherited_owners)
         resolved = requested.resolve(
             composition, snapshot, inherited, settings.field_manager
         )
         adopt, replace = resolved.adopt, resolved.replace
+        previous_releases = sorted(other.name for other in catalog.records())
         plan = build_plan(
             composition,
             snapshot,
@@ -1252,7 +1516,9 @@ class ReleaseRunner:
                 inherited=inherited,
                 field_manager=settings.field_manager,
                 replace=replace,
+                previous=_previous_declared(catalog, previous_releases),
             ),
+            private=_private(composition, snapshot, store),
         )
         expires_at = (
             _now() + timedelta(seconds=settings.approval_window_seconds)
@@ -1270,6 +1536,9 @@ class ReleaseRunner:
             _drift(composition, snapshot, settings.field_manager, adopt),
             resolved.adopt_not_needed,
             requested.report(resolved),
+            self._checks_policy(),
+            plan_diffs(plan, snapshot),
+            unavailable,
         )
         self._persist_plan(
             result,
@@ -1278,6 +1547,7 @@ class ReleaseRunner:
             adopt=adopt,
             inherited=inherited,
             replace=replace,
+            previous_releases=previous_releases,
         )
         return result
 
@@ -1290,6 +1560,7 @@ class ReleaseRunner:
         adopt: Sequence[Mapping[str, str]] = (),
         inherited: Sequence[str] = (),
         replace: Sequence[Mapping[str, str]] = (),
+        previous_releases: Sequence[str] = (),
     ) -> None:
         _write_private(
             self._plan_path(result.plan_hash),
@@ -1305,22 +1576,39 @@ class ReleaseRunner:
                     "adopt": list(adopt),
                     "inherited_owners": list(inherited),
                     "replace": list(replace),
+                    "previous_releases": list(previous_releases),
+                    # What apply checks is what was reviewed, not a later spec.
+                    "checks": [check.public_dict() for check in self.spec.model.checks],
+                    "rollback_on_failed_checks": (
+                        self.spec.model.release.rollback_on_failed_checks
+                    ),
                 }
             )
             + "\n",
         )
+
+    def _checks_policy(self) -> dict[str, Any]:
+        return {
+            "names": [check.label for check in self.spec.model.checks],
+            "rollback_on_failed_checks": (
+                self.spec.model.release.rollback_on_failed_checks
+            ),
+        }
 
     def pending_plan(self, plan_hash: str) -> dict[str, Any]:
         path = self._plan_path(plan_hash)
         if not path.exists():
             raise ReleaseError(
                 "no pending plan with this hash (unknown, expired or already "
-                "applied); run `piceli release plan` again"
+                "applied); run `piceli release plan` again",
+                code="plan-not-found",
             )
         value = json.loads(path.read_text())
         if timestamp(value["expires_at"], allow_future=True) <= _now():
             path.unlink(missing_ok=True)
-            raise ReleaseError("the approved plan expired; run plan again")
+            raise ReleaseError(
+                "the approved plan expired; run plan again", code="plan-expired"
+            )
         return dict(value)
 
     # ---------------------------------------------------------------- apply
@@ -1351,7 +1639,8 @@ class ReleaseRunner:
         path = self._discovery_path(record.name)
         if not path.exists():
             raise ReleaseError(
-                f"release {record.name!r} has no stored discovery; re-plan it"
+                f"release {record.name!r} has no stored discovery; re-plan it",
+                code="stored-discovery-missing",
             )
         snapshot = ObservedSnapshot.from_discovery(
             DiscoveryArtifact.from_private_json(path.read_text())
@@ -1363,7 +1652,8 @@ class ReleaseRunner:
             or archived["field_manager"] != settings.field_manager
         ):
             raise ReleaseError(
-                f"release {record.name!r} was planned for another owner/field manager"
+                f"release {record.name!r} was planned for another owner/field manager",
+                code="release-owner-mismatch",
             )
         sidecar = self._sidecar(record.name)
         prune = bool(sidecar.get("prune", False))
@@ -1394,6 +1684,9 @@ class ReleaseRunner:
                 inherited=sidecar.get("inherited_owners", ()),
                 field_manager=archived["field_manager"],
                 replace=sidecar.get("replace", ()),
+                previous=_previous_declared(
+                    catalog, sidecar.get("previous_releases", ())
+                ),
             ),
             grant,
             journal,
@@ -1406,26 +1699,43 @@ class ReleaseRunner:
         *,
         expected_intent: str | None = None,
         expected_release: str | None = None,
+        skip_checks: bool = False,
+        trigger: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Execute the persisted plan ``plan_hash`` (the approval)."""
+        """Execute the persisted plan ``plan_hash`` (the approval), then check it.
+
+        When the execution is ready, the plan's ``[[checks]]`` run; the
+        release is ``ready`` (and selected) only when they pass, otherwise
+        ``checks-failed``. With ``rollback_on_failed_checks`` the last other
+        ready release is re-planned and re-applied automatically (see
+        :meth:`_auto_rollback`). ``skip_checks`` skips them and is recorded.
+        ``trigger`` marks an automatic rollback (internal; never rolls back).
+        """
         pending = self.pending_plan(plan_hash)
         if expected_intent is not None and pending["intent"] != expected_intent:
             raise ReleaseError(
                 f"plan {plan_hash[:12]} is a {pending['intent']} plan, "
-                f"not a {expected_intent} plan"
+                f"not a {expected_intent} plan",
+                code="plan-intent-mismatch",
             )
         if expected_release is not None and pending["release"] != expected_release:
             raise ReleaseError(
                 f"plan {plan_hash[:12]} targets {pending['release']!r}, "
-                f"not {expected_release!r}"
+                f"not {expected_release!r}",
+                code="plan-release-mismatch",
             )
         name = pending["release"]
+        checks = parse_checks(pending.get("checks", ()))
         binding = self.provider_factory(self.spec)
         try:
             catalog, journal, store = self._open()
             try:
                 self._check_target(catalog, binding.target)
                 record = catalog.get(name)
+                try:
+                    before: str | None = catalog.selected().name
+                except ValueError:
+                    before = None
                 executor = PlanExecutor(
                     binding.provider,
                     journal,
@@ -1439,7 +1749,10 @@ class ReleaseRunner:
                     )
                     session = workflow.reopen(name)
                     if session.revision.plan.plan_hash != plan_hash:
-                        raise ReleaseError("stored release does not match the plan")
+                        raise ReleaseError(
+                            "stored release does not match the plan",
+                            code="stored-release-mismatch",
+                        )
                     execution_id = session.bundle.execution_id
 
                     def run() -> dict[str, Any]:
@@ -1455,13 +1768,24 @@ class ReleaseRunner:
                         inherited=pending.get("inherited_owners", ()),
                         field_manager=self.spec.model.release.field_manager,
                         replace=pending.get("replace", ()),
+                        previous=_previous_declared(
+                            catalog, pending.get("previous_releases", ())
+                        ),
                     )
                     composition = composition_from_archive(record.archive)
                     if (
-                        build_plan(composition, snapshot, plan_authorization).plan_hash
+                        build_plan(
+                            composition,
+                            snapshot,
+                            plan_authorization,
+                            private=_private(composition, snapshot, store),
+                        ).plan_hash
                         != plan_hash
                     ):
-                        raise ReleaseError("stored evidence does not match the plan")
+                        raise ReleaseError(
+                            "stored evidence does not match the plan",
+                            code="stored-evidence-mismatch",
+                        )
                     settings = self.spec.model.release
                     authorization_id = uuid.uuid4().hex
                     expires_at = pending["expires_at"]
@@ -1506,32 +1830,196 @@ class ReleaseRunner:
                         "plan_hash": plan_hash,
                         "execution_id": execution_id,
                         "state": "running",
+                        **({"skip_checks": True} if skip_checks else {}),
+                        **dict(trigger or {}),
                     }
                 )
                 try:
                     result = run()
                 except ValueError as error:
                     self.history.update(execution_id, state="refused")
-                    raise ReleaseError(f"execution refused: {error}") from None
+                    raise ReleaseError(
+                        f"execution refused: {error}", code="execution-refused"
+                    ) from None
                 self._plan_path(plan_hash).unlink(missing_ok=True)
-                self.history.update(execution_id, state=result.get("state"))
-                if pending["mode"] == "create" and result.get("state") == "ready":
+                state, report = self._verify(
+                    name, execution_id, result, checks, skip_checks=skip_checks
+                )
+                self.history.update(
+                    execution_id, state=state, checks=_check_summary(report)
+                )
+                if state == "ready" and pending["mode"] == "create":
                     catalog.select(name)
-                return {
+                elif state == "checks-failed" and before is not None:
+                    # A re-apply selects its release when ready; a release
+                    # whose checks failed must not stay selected.
+                    catalog.select(before)
+                outcome = {
                     "release": name,
                     "intent": pending["intent"],
                     "mode": pending["mode"],
                     "plan_hash": plan_hash,
                     "source": record.source.to_dict(),
                     "execution": _execution_summary(result),
+                    "release_state": state,
+                    "checks": report,
                     "adopted": _adopted(journal, execution_id, result),
-                    "selected": catalog.selected().name,
+                    "selected": self._selected(catalog),
+                    **({"trigger": dict(trigger)} if trigger else {}),
                 }
             finally:
                 journal.close()
                 store.close()
         finally:
             binding.close()
+        if (
+            state == "checks-failed"
+            and pending.get("rollback_on_failed_checks")
+            and trigger is None
+        ):
+            outcome["rollback"] = self._auto_rollback(name, execution_id)
+        return outcome
+
+    @staticmethod
+    def _selected(catalog: ReleaseCatalog) -> str | None:
+        try:
+            return catalog.selected().name
+        except ValueError:
+            return None
+
+    # --------------------------------------------------------------- checks
+    def _verify(
+        self,
+        name: str,
+        execution_id: str,
+        result: Mapping[str, Any],
+        checks: Sequence[Check],
+        *,
+        skip_checks: bool,
+    ) -> tuple[str, dict[str, Any] | None]:
+        """The release state after an execution: run the checks when it is ready.
+
+        Returns ``(state, check report)``: the execution state when it did not
+        become ready or has no checks, else ``ready`` or ``checks-failed``.
+        The full report is also kept in ``state_dir/checks/<execution>.json``.
+        """
+        state = str(result.get("state"))
+        if state != "ready" or not checks:
+            return state, None
+        if skip_checks:
+            return state, {
+                "skipped": True,
+                "flag": "--skip-checks",
+                "declared": [check.label for check in checks],
+            }
+        images = self._sidecar(name).get("images", {})
+        with self.check_context_factory(self.spec, name, images) as context:
+            report: CheckReport = run_checks(checks, context)
+        value = report.to_dict()
+        _write_private(
+            self.state / "checks" / f"{execution_id}.json",
+            _canonical(
+                {
+                    "schema_version": 1,
+                    "release": name,
+                    "execution_id": execution_id,
+                    "at": _now().isoformat(),
+                    **value,
+                }
+            )
+            + "\n",
+        )
+        return ("ready" if report.passed else "checks-failed"), value
+
+    def _auto_rollback(self, failed: str, execution_id: str) -> dict[str, Any]:
+        """Re-plan and re-apply the last other ready release, without approval.
+
+        ``[release] rollback_on_failed_checks = true`` (bound into the plan
+        that failed its checks) is the standing approval. The rollback is an
+        ordinary journaled re-apply execution whose history entry carries
+        ``trigger = "checks-failed"``; it runs its own checks but never
+        triggers another rollback. The failed execution's history entry
+        records the outcome under ``rollback``.
+        """
+        target = next(
+            (item for item in reversed(self.history.deployed()) if item != failed),
+            None,
+        )
+        value: dict[str, Any]
+        if target is None:
+            value = {
+                "state": "unavailable",
+                "reason": "checks-rollback-unavailable",
+                "detail": "no earlier ready release to roll back to",
+            }
+            self.history.update(execution_id, rollback=value)
+            return value
+        trigger = {
+            "trigger": "checks-failed",
+            "rolled_back_from": failed,
+            "failed_execution_id": execution_id,
+        }
+        try:
+            planned = self.plan(rollback_to=target)
+            outcome = self.apply(
+                planned.plan_hash,
+                expected_intent="rollback",
+                expected_release=target,
+                trigger=trigger,
+            )
+        except (ValueError, OSError, ProviderError) as error:
+            value = {
+                "state": "failed",
+                "reason": "checks-rollback-failed",
+                "target": target,
+                "detail": str(error),
+            }
+        else:
+            done = outcome["release_state"] == "ready"
+            value = {
+                "state": "rolled-back" if done else "failed",
+                "target": target,
+                "plan_hash": planned.plan_hash,
+                "execution": outcome["execution"],
+                "release_state": outcome["release_state"],
+                "checks": outcome["checks"],
+                "selected": outcome["selected"],
+                **({} if done else {"reason": "checks-rollback-failed"}),
+            }
+        self.history.update(
+            execution_id,
+            rollback={
+                key: value[key] for key in ("state", "target", "reason") if key in value
+            }
+            | (
+                {"execution_id": value["execution"]["execution_id"]}
+                if "execution" in value
+                else {}
+            ),
+        )
+        return value
+
+    def check(self, release: str | None = None) -> dict[str, Any]:
+        """Run the spec's checks now against a release (default: the selected one).
+
+        Changes nothing: no state is written and no rollback is triggered.
+        """
+        checks = self.spec.model.checks
+        catalog = ReleaseCatalog(self.spec.catalog_path)
+        if release is None:
+            try:
+                release = catalog.selected().name
+            except ValueError:
+                raise ReleaseError("no release is selected yet") from None
+        else:
+            try:
+                catalog.get(release)
+            except ValueError:
+                raise ReleaseError(f"unknown release {release!r}") from None
+        images = self._sidecar(release).get("images", {})
+        with self.check_context_factory(self.spec, release, images) as context:
+            report = run_checks(checks, context)
+        return {"release": release, "intent": "check", "checks": report.to_dict()}
 
     # --------------------------------------------------------- resume/stop
     def _latest(self, release: str | None) -> dict[str, Any]:
@@ -1542,16 +2030,25 @@ class ReleaseRunner:
             and (release is None or entry["release"] == release)
         ]
         if not entries:
-            raise ReleaseError("no execution recorded for this release")
+            raise ReleaseError(
+                "no execution recorded for this release", code="no-execution-recorded"
+            )
         return entries[-1]
 
-    def resume(self, release: str | None = None) -> dict[str, Any]:
-        """Resume the created release's session execution (same grant, same ids)."""
+    def resume(
+        self, release: str | None = None, *, skip_checks: bool = False
+    ) -> dict[str, Any]:
+        """Resume the created release's session execution (same grant, same ids).
+
+        A resumed execution that becomes ready runs the spec's checks, with the
+        same outcome and automatic rollback as :meth:`apply`.
+        """
         entry = self._latest(release)
         if entry["mode"] != "create":
             raise ReleaseError(
                 "re-apply and rollback executions are not resumable; "
-                "run plan/apply (or rollback) again"
+                "run plan/apply (or rollback) again",
+                code="not-resumable",
             )
         name = entry["release"]
         binding = self.provider_factory(self.spec)
@@ -1572,29 +2069,53 @@ class ReleaseRunner:
                 try:
                     result = workflow.resume(executor, name)
                 except ValueError as error:
-                    raise ReleaseError(f"resume refused: {error}") from None
+                    raise ReleaseError(
+                        f"resume refused: {error}", code="resume-refused"
+                    ) from None
+                state, report = self._verify(
+                    name,
+                    entry["execution_id"],
+                    result,
+                    self.spec.model.checks,
+                    skip_checks=skip_checks,
+                )
                 # Recorded after the run: a resume keeps the execution id, so a
                 # concurrent ``stop`` still finds it through the earlier entry.
                 self.history.append(
-                    entry
+                    {
+                        key: value
+                        for key, value in entry.items()
+                        if key not in {"checks", "rollback", "skip_checks"}
+                    }
                     | {
                         "at": _now().isoformat(),
                         "intent": "resume",
-                        "state": result.get("state"),
+                        "state": state,
+                        "checks": _check_summary(report),
+                        **({"skip_checks": True} if skip_checks else {}),
                     }
                 )
-                if result.get("state") == "ready":
+                if state == "ready":
                     catalog.select(name)
-                return {
+                outcome = {
                     "release": name,
                     "intent": "resume",
                     "execution": _execution_summary(result),
+                    "release_state": state,
+                    "checks": report,
                 }
             finally:
                 journal.close()
                 store.close()
         finally:
             binding.close()
+        if (
+            state == "checks-failed"
+            and self.spec.model.release.rollback_on_failed_checks
+            and "trigger" not in entry
+        ):
+            outcome["rollback"] = self._auto_rollback(name, entry["execution_id"])
+        return outcome
 
     def stop(self, release: str | None = None) -> dict[str, Any]:
         """Cancel the latest execution of a release, owner-checked."""
@@ -1609,11 +2130,14 @@ class ReleaseRunner:
                 try:
                     current = journal.summary(entry["execution_id"])
                 except ValueError:
-                    raise ReleaseError("the execution has not started") from None
+                    raise ReleaseError(
+                        "the execution has not started", code="execution-not-started"
+                    ) from None
                 if current["state"] in {"ready", "cancelled"}:
                     raise ReleaseError(
                         f"the latest execution of {name!r} is already "
-                        f"{current['state']}; nothing to stop"
+                        f"{current['state']}; nothing to stop",
+                        code="nothing-to-stop",
                     )
                 if entry["mode"] == "create":
                     workflow = self._session_workflow(
@@ -1624,9 +2148,15 @@ class ReleaseRunner:
                     execution = journal.export_execution(entry["execution_id"])
                     authorization = execution["binding"]["revision"]["authorization"]
                     if authorization["owner_id"] != binding.provider.owner_id:
-                        raise ReleaseError("execution belongs to another owner")
+                        raise ReleaseError(
+                            "execution belongs to another owner",
+                            code="execution-other-owner",
+                        )
                     if authorization["target"] != binding.target.__dict__:
-                        raise ReleaseError("execution belongs to another target")
+                        raise ReleaseError(
+                            "execution belongs to another target",
+                            code="execution-other-target",
+                        )
                     result = executor.cancel(entry["execution_id"])
                 self.history.update(entry["execution_id"], state=result.get("state"))
                 return {
@@ -1682,6 +2212,11 @@ class ReleaseRunner:
                         summary
                         or {"execution_id": execution_id, "state": "not-started"}
                     )
+                checked = [
+                    entry
+                    for entry in entries
+                    if entry["release"] == record.name and entry.get("checks")
+                ]
                 releases.append(
                     {
                         "name": record.name,
@@ -1692,6 +2227,17 @@ class ReleaseRunner:
                         "revision_id": session["revision_id"],
                         "action_count": session["action_count"],
                         "executions": executions,
+                        # The latest check outcome: passed/failed names, or
+                        # skipped; full reports are in state_dir/checks/.
+                        "checks": (
+                            checked[-1]["checks"]
+                            | {
+                                "execution_id": checked[-1]["execution_id"],
+                                "state": checked[-1]["state"],
+                            }
+                            if checked
+                            else None
+                        ),
                     }
                 )
             releases.sort(key=lambda item: item["created_at"] or "")
@@ -1710,6 +2256,7 @@ class ReleaseRunner:
                     )
             return {
                 "namespace": self.spec.model.target.namespace,
+                "checks": self._checks_policy(),
                 "selected": selected,
                 "deployed": deployed[-1] if deployed else None,
                 "previous": self.history.previous(),
@@ -1731,7 +2278,9 @@ class ReleaseRunner:
             try:
                 record = catalog.get(release)
             except ValueError:
-                raise ReleaseError(f"unknown release {release!r}") from None
+                raise ReleaseError(
+                    f"unknown release {release!r}", code="unknown-release"
+                ) from None
         else:
             try:
                 record = catalog.selected()

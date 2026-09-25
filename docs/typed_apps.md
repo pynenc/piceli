@@ -175,6 +175,14 @@ string as a Secret value is a validation error. Put public values in
 release` verifies the node against the cluster. `piceli render` uses the name
 declared in the spec.
 
+### Access is declared, never rendered
+
+`app.service(web, port=3000, access=app.access.forward(local=18080,
+path="/login"))` declares how to reach the Service from a laptop. It adds
+nothing to the manifests; `piceli status` and `piceli access` use it (see
+{doc}`access`). For them to see it, the composition function returns the App
+itself, as `examples/typed_app/app.py` does; a release renders a returned App.
+
 ## Reusing templates
 
 `app.add(...)` includes a component built elsewhere: a `DeploymentComponent`,
@@ -193,7 +201,7 @@ documented in the API docs.
 
 | Task | Types |
 | --- | --- |
-| Collect and render an app | {py:class}`~piceli.app.app.App` (`deployment`, `service`, `config`, `secret`, `network_policy`, `depends`, `add`, `composition`, `render`) |
+| Collect and render an app | {py:class}`~piceli.app.app.App` (`deployment`, `service`, `config`, `secret`, `network_policy`, `depends`, `add`, `override`, `composition`, `render`) |
 | Containers | {py:class}`~piceli.app.model.Container`, {py:class}`~piceli.app.model.ContainerPort`, {py:class}`~piceli.app.model.Resources` |
 | Health checks | {py:class}`~piceli.app.model.Probe` (`http`, `tcp`, `exec`; also `app.probe`) |
 | Environment | `str`, {py:class}`~piceli.app.model.SecretKey`, {py:class}`~piceli.app.model.ConfigKey`, {py:class}`~piceli.app.model.FieldRef` |
@@ -224,6 +232,33 @@ piceli render [TARGET] [--spec release.toml] [--namespace NS] [--format yaml|jso
 ## Not typed yet
 
 Security contexts, ServiceAccounts and RBAC, StatefulSets, Jobs, Ingress and
-PodDisruptionBudgets are not part of `App` yet. In the meantime, build a
-`DeploymentComponent` from `ResourceIntent` objects (or from the
-{doc}`templates <kubernetes_model/index>`) and include it with `app.add(...)`.
+PodDisruptionBudgets are not part of `App` yet. In the meantime:
+
+- set a field of a declared object with `app.override(obj, patch)`: the patch
+  is merged into the rendered manifest (mappings key by key, `None` removes a
+  key, lists of objects with a unique `name` merge on `name`, other values
+  replace). It cannot change the object's identity or a Secret's data;
+
+  ```python
+  api = app.deployment("api", image=ctx.image("api"), container="server")
+  app.override(
+      api,
+      {
+          "spec": {
+              "template": {
+                  "spec": {
+                      "securityContext": {"runAsNonRoot": True},
+                  }
+              }
+          }
+      },
+  )
+  ```
+
+- for a whole object, build a `DeploymentComponent` from `ResourceIntent`
+  objects (or from the {doc}`templates <kubernetes_model/index>`) and include
+  it with `app.add(...)`.
+
+`container=` names the main container when it must not be named after the
+Deployment. `piceli import` ({doc}`migrate_from_kubectl`) generates both
+forms from live objects.

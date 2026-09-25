@@ -48,6 +48,7 @@ def test_explain_unknown_code_is_rejected() -> None:
     assert json.loads(result.stdout) == {
         "state": "rejected",
         "reason": "unknown-error-code",
+        "message": "Unknown error code",
     }
     assert "unknown-error-code" in result.stderr
 
@@ -59,8 +60,13 @@ def test_reject_prints_json_on_stdout_and_text_on_stderr(
         reject("tool-pin-mismatch")
     assert raised.value.code == 2 and raised.value.reason == "tool-pin-mismatch"
     out, err = capsys.readouterr()
-    assert json.loads(out) == {"state": "rejected", "reason": "tool-pin-mismatch"}
-    assert err.startswith("rejected: Tool differs from its pin")
+    assert json.loads(out) == {
+        "state": "rejected",
+        "reason": "tool-pin-mismatch",
+        "message": ERRORS["tool-pin-mismatch"].title,
+    }
+    assert err.startswith("rejected: Tool differs from its pin [tool-pin-mismatch]")
+    assert ERRORS["tool-pin-mismatch"].fix in err
 
 
 def test_reject_refuses_unregistered_codes() -> None:
@@ -91,14 +97,8 @@ def test_help_json_covers_every_command_with_a_contract() -> None:
         assert contract is not None, path
         assert leaf["help"], path
         effects = contract["side_effects"]
-        assert effects["cluster"] in {
-            "none",
-            "reads",
-            "writes",
-            "ambient-reads",
-            "ambient-writes",
-        }
-        assert contract["contract"] in {"conforms", "partial", "legacy"}
+        assert effects["cluster"] in {"none", "reads", "writes"}
+        assert contract["contract"] in {"conforms", "partial"}
         assert set(contract["exit_codes"]) <= {str(c) for c in EXIT_CODES}
         for param in leaf["params"]:
             assert param["type"] in {
@@ -193,7 +193,7 @@ def test_agents_page_matches_command_metadata() -> None:
         changes = contract.approval_required or contract.cluster.endswith("writes")
         if name in safe:
             assert not changes, f"{path} changes state but is listed as safe"
-        if changes and path != "deploy run":
+        if changes:
             assert name in ask, f"{path} needs approval: list it in docs/agents.md"
 
 

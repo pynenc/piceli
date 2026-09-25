@@ -162,7 +162,7 @@ def test_refused_plan_creates_no_secret_versions_and_runs_no_openssl(
     for _ in range(2):
         code, refused, _ = _run(tmp_path, "plan")
         assert code == 2
-        assert "Deployment/worker" in refused["reason"]
+        assert "Deployment/worker" in refused["message"]
         assert _versions(tmp_path) == 0
     assert openssl_calls == []
 
@@ -184,7 +184,7 @@ def test_plan_refused_by_the_planner_generates_nothing(
     monkeypatch.setattr(runner, "build_plan", refuse)
     for _ in range(2):
         code, refused, _ = _run(tmp_path, "plan")
-        assert code == 2 and "explicit adoption" in refused["reason"]
+        assert code == 2 and "explicit adoption" in refused["message"]
     assert _versions(tmp_path) == 0
     assert openssl_calls == []
     assert not list((tmp_path / "state").glob("releases/*.json"))
@@ -324,7 +324,7 @@ generation = 1""",
     code, refused, _ = _run(tmp_path, "plan")
     assert code == 2, refused
     assert refused["code"] == "secret-import-unavailable"
-    assert "secret:absent/token" in refused["reason"]
+    assert "secret:absent/token" in refused["message"]
     assert _versions(tmp_path) == 0
 
 
