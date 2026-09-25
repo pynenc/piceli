@@ -235,4 +235,4 @@ objects), never data or external side effects. A pipeline with
 `piceli release apply|rollback … --approve`, `piceli release check` on a spec
 you did not write, `piceli access`, `piceli state import`, and every
 `artifacts deliver|build-spec run|execute-command|import-local`. Full rules:
-<https://docs.pynenc.org/projects/piceli/en/latest/agents.html>.
+<https://docs.pynenc.org/projects/piceli/en/stable/agents.html>.

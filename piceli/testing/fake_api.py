@@ -14,7 +14,8 @@ server-side-apply bookkeeping (``managedFields``, conflicts, pruning).
 
 It is not a conformance-tested API server: there is no admission, no
 defaulting beyond readiness status, no watch, and one namespace
-(:data:`TARGET` ``.namespace``) holds every namespaced object.
+(:data:`TARGET` ``.namespace`` unless ``FakeAPI(namespace=...)`` names
+another) holds every namespaced object.
 
 Importing this module has no side effects: nothing listens until
 :func:`serve` (or :func:`fake_cluster`) is entered.
@@ -445,11 +446,20 @@ class FakeAPI:
       Kill tests use it to stop a client process at an exact step.
 
     Use :meth:`put` to seed objects and :meth:`inject` to add faults.
+
+    :param types: The served resources (default :data:`TYPES`).
+    :param namespace: The one namespace that holds namespaced objects
+        (default :data:`TARGET`'s); requests to any other are refused with
+        ``403``, as for a user bound to one namespace.
     """
 
     def __init__(
-        self, types: Mapping[str, tuple[str, str, bool]] | None = None
+        self,
+        types: Mapping[str, tuple[str, str, bool]] | None = None,
+        *,
+        namespace: str = TARGET.namespace,
     ) -> None:
+        self.namespace = namespace
         self.types: dict[str, tuple[str, str, bool]] = dict(
             TYPES if types is None else types
         )
@@ -470,7 +480,7 @@ class FakeAPI:
         self.pod_logs: dict[tuple[str, str, bool], str] = {}
         self.events: list[dict[str, Any]] = []
         self.put(manifest("Namespace", "kube-system"), uid="cluster-uid")
-        self.put(manifest("Namespace", TARGET.namespace), uid="namespace-uid")
+        self.put(manifest("Namespace", namespace), uid="namespace-uid")
 
     def put(
         self,
@@ -624,7 +634,7 @@ class FakeAPI:
                     "kind": "ReplicaSet",
                     "metadata": {
                         "name": rs_name,
-                        "namespace": TARGET.namespace,
+                        "namespace": self.namespace,
                         "uid": uuid.uuid4().hex,
                         "resourceVersion": str(self.version),
                         "labels": {**labels, "pod-template-hash": digest},
@@ -685,7 +695,7 @@ class FakeAPI:
             "kind": "Pod",
             "metadata": {
                 "name": pod_name,
-                "namespace": TARGET.namespace,
+                "namespace": self.namespace,
                 "uid": uuid.uuid4().hex,
                 "resourceVersion": str(self.version),
                 "labels": labels,
@@ -720,7 +730,7 @@ class FakeAPI:
         self, path: str, method: str, query: dict[str, Any]
     ) -> tuple[int, Any] | None:
         """``pods/NAME/log`` (text) and the namespace's ``events``, or ``None``."""
-        base = f"/api/v1/namespaces/{TARGET.namespace}/"
+        base = f"/api/v1/namespaces/{self.namespace}/"
         if method != "GET" or not path.startswith(base):
             return None
         rest = [unquote(part) for part in path[len(base) :].split("/")]
@@ -1057,7 +1067,7 @@ class FakeAPI:
         if not found:
             return 404, {}
         index, (api_version, kind, namespaced) = found[-1]
-        if namespaced and parts[index - 2 : index] != ["namespaces", TARGET.namespace]:
+        if namespaced and parts[index - 2 : index] != ["namespaces", self.namespace]:
             return 403, {}
         name = parts[index + 1] if len(parts) > index + 1 else ""
         current = self.objects.get((kind, name))
@@ -1420,7 +1430,7 @@ class FakeCluster:
     @property
     def namespace(self) -> str:
         """The namespace every namespaced object lives in."""
-        return TARGET.namespace
+        return self.api.namespace
 
     def kubeconfig(self, path: FilePath, *, context: str = "fake") -> FilePath:
         """Write a kubeconfig for this server (see :func:`write_kubeconfig`)."""

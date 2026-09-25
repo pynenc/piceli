@@ -76,6 +76,14 @@ The mental model (model → plan → execute → observe), the engine and a
 glossary.
 :::
 
+:::{grid-item-card} When to use Piceli
+:link: when_to_use
+:link-type: doc
+
+When Piceli fits, when Helm, Kustomize, cdk8s or Pulumi fit better, and the
+same app written in all five.
+:::
+
 :::{grid-item-card} A realistic app
 :link: reference_app
 :link-type: doc
@@ -147,6 +155,8 @@ workload.
 
 getting_started/index
 overview
+when_to_use
+comparisons
 kubernetes_model/index
 ```
 

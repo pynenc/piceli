@@ -105,8 +105,9 @@ never read `~/.kube/config`.
 
 ### If it fails
 
-- **`403` for a namespaced object.** Every namespaced object lives in
-  `TARGET.namespace` (`piceli-test`); requests for another namespace are
+- **`403` for a namespaced object.** Every namespaced object lives in one
+  namespace, `TARGET.namespace` (`piceli-test`) unless you pass
+  `FakeAPI(namespace="my-app")` (0.7.0); requests for another namespace are
   refused.
 - **`404` for a kind.** The server serves the kinds in `TYPES`. Pass
   `FakeAPI(types={...})` (plural → `(apiVersion, kind, namespaced)`) and
@@ -128,7 +129,7 @@ socket and reads no kubeconfig. The names are loaded on first use.
 | `serve(api=None)` | Context manager: yields `(api, url)` for a running server |
 | `provider_at(url, **kwargs)` | A `KubernetesProvider` bound to `TARGET` (field manager `piceli-acceptance`, owner `acceptance-owner`) |
 | `write_kubeconfig(url, path, context="fake")` | A credential-free kubeconfig for the server |
-| `FakeAPI(types=None)` | The server state: `objects`, `requests`, `put(...)`, `inject(...)`, `intercept`, `scale(kind, name, replicas)`, `managers(kind, name)`, `field_ownership`, `ready`, `wait_for_first_consumer`, `terminating_reads` (an `Orphan` delete lingers for that many reads), `fail_pods(workload, reason=…, exit_code=…, restarts=…, logs=…, message=…, events=…)` (0.8.0: with `ready = False` the workload gets a current ReplicaSet and a failing pod, with its log at `pods/NAME/log` and Warning events at `events`; for testing the `apply-crashloop` diagnosis), `pod_logs`, `events` |
+| `FakeAPI(types=None, *, namespace=TARGET.namespace)` | The server state (`namespace`, 0.8.0: the one namespace it serves, so an app that names its own namespace runs unchanged): `objects`, `requests`, `put(...)`, `inject(...)`, `intercept`, `scale(kind, name, replicas)`, `managers(kind, name)`, `field_ownership`, `ready`, `wait_for_first_consumer`, `terminating_reads` (an `Orphan` delete lingers for that many reads), `fail_pods(workload, reason=…, exit_code=…, restarts=…, logs=…, message=…, events=…)` (0.8.0: with `ready = False` the workload gets a current ReplicaSet and a failing pod, with its log at `pods/NAME/log` and Warning events at `events`; for testing the `apply-crashloop` diagnosis), `pod_logs`, `events` |
 | `TARGET` | The `PlanTarget` every server represents (`acceptance-cluster`, `piceli-test`) |
 | `TYPES` | The default served kinds: ConfigMap, Secret, Service, Pod, PersistentVolumeClaim, PersistentVolume, Namespace, Deployment, ReplicaSet (0.8.0), NetworkPolicy, ServiceAccount, Role, RoleBinding, ClusterRole, ClusterRoleBinding, a test `Widget` and (0.6.0) `coordination.k8s.io/v1` Lease, for shared state (`state="cluster"`) |
 | `manifest(kind, name, value=...)` | A minimal valid object for seeding |
@@ -142,7 +143,7 @@ socket and reads no kubeconfig. The names are loaded on first use.
   equality and existence label selectors on lists (`k`, `!k`, `k=v`,
   `k!=v`), no Pods created from Deployments (except the failing pods of
   `fail_pods`).
-- One namespace and one cluster identity (`kube-system` UID `cluster-uid`,
+- One namespace (`FakeAPI(namespace=...)`) and one cluster identity (`kube-system` UID `cluster-uid`,
   namespace UID `namespace-uid`).
 - It exists to test Piceli's clients, not Kubernetes semantics: keep one
   integration test against a disposable `kind` cluster for anything that

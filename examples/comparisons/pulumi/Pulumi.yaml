@@ -1,0 +1,14 @@
+name: webapp
+description: The comparison app (web and api); one stack per environment.
+runtime:
+  name: python
+  options:
+    toolchain: pip
+config:
+  webapp:kubeconfig:
+    type: string
+    description: An explicit kubeconfig file (never the ambient one).
+  webapp:context:
+    type: string
+  webapp:namespace:
+    type: string

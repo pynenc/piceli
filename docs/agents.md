@@ -19,8 +19,9 @@ See the {doc}`roadmap` for every feature's status.
 | Every command, option, side effect and approval rule, as JSON | `piceli help-json` (same as `piceli --help-json`) |
 | What an error code means and what to do next | `piceli explain <code> --json` |
 | The same, as pages | {doc}`reference/cli`, {doc}`reference/errors` |
-| An index of the documentation for language models | [`llms.txt`](https://docs.pynenc.org/projects/piceli/en/latest/llms.txt) |
+| An index of the documentation for language models | [`llms.txt`](https://docs.pynenc.org/projects/piceli/en/stable/llms.txt) |
 | A ready agent skill (`SKILL.md` and scripts: install, plan, ask, deploy, status, diagnose, resume, roll back) | [`skills/piceli`](https://github.com/pynenc/piceli/tree/main/skills/piceli); its walkthrough runs in CI against the built wheel |
+| Whether Piceli fits a task, or another tool fits better | {doc}`when_to_use`, {doc}`comparisons` |
 
 `piceli help-json` is generated from the command definitions. For each
 command, `contract.side_effects` says what it reads and writes and whether it

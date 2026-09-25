@@ -3,7 +3,7 @@
 #
 # Copy this file to .github/workflows/deploy.yml in your repository and adapt
 # the `env` block and the runner labels. The guide is docs/ci.md
-# (https://docs.pynenc.org/projects/piceli/en/latest/ci.html).
+# (https://docs.pynenc.org/projects/piceli/en/stable/ci.html).
 #
 # The apply and resume jobs post the run's summary (summary.md) as the job
 # summary and keep summary.json (for agents) in their artifact.

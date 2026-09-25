@@ -1,0 +1,4 @@
+config:
+  webapp:kubeconfig: cluster.kubeconfig
+  webapp:context: main
+  webapp:namespace: webapp-staging

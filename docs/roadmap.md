@@ -53,6 +53,7 @@ Every feature page starts with its maturity, and this table lists them all:
 | Custom resources and generated models (`app.resource`, `piceli codegen crd`) | {doc}`crds` | preview |
 | Environments (`app.environment`, `--env`, `--diff-env`) | {doc}`environments` | preview |
 | Reference app: dev/staging/prod in one typed module (`examples/reference`, tested on kind) | {doc}`reference_app` | preview |
+| When to use Piceli, and the same app in Helm, Kustomize, cdk8s and Pulumi (`examples/comparisons`, rendered and compared in CI) | {doc}`when_to_use`, {doc}`comparisons` | preview |
 | Engine: discovery, plans, executor, journals (Python API) | {doc}`deployment_planning` | preview |
 | Deploy from source (`piceli deploy`, `piceli.pipeline`) | {doc}`deploy` | preview |
 | Deploy a commit (`piceli deploy --ref`) | {ref}`deploy-ref` | preview |
@@ -81,6 +82,11 @@ Every feature page starts with its maturity, and this table lists them all:
 | Operator workflow (`piceli operator`) | {doc}`operator_workflow` | experimental |
 
 ## How Piceli compares
+
+{doc}`comparisons` writes one app with Piceli, Helm, Kustomize, cdk8s and
+Pulumi, tests that all five render the same objects, and compares their
+size, steps and safety features; {doc}`when_to_use` is the short version.
+The table below is the long-term view.
 
 | | Kustomize | Helm | OpenTofu / Terraform | Argo CD | Piceli (goal) |
 | --- | --- | --- | --- | --- | --- |
