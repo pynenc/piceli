@@ -32,8 +32,15 @@ uv run --frozen ruff check . && uv run --frozen ruff format --check .
 uv run --frozen --group docs sphinx-build -W --keep-going -b html docs docs/_build/html
 ```
 
-`make test-integration` runs against the **current kubeconfig context**. Use a
-disposable cluster (`kind create cluster`) and never a shared one.
+`make test-integration` runs the kind tests against the cluster named by
+`PICELI_KIND_KUBECONFIG` and `PICELI_KIND_CONTEXT` (plus `PICELI_KIND_NODE`,
+the node container, for the node-delivery tests); without them they are
+skipped. They never use the current context. Create a disposable cluster with
+a supported node image (see `.github/kind-nodes.json`), for example
+`kind create cluster --name piceli-it --kubeconfig /tmp/it.kubeconfig`, then
+`PICELI_KIND_KUBECONFIG=/tmp/it.kubeconfig PICELI_KIND_CONTEXT=kind-piceli-it
+PICELI_KIND_NODE=piceli-it-control-plane make test-integration`. Never point
+them at a shared cluster.
 
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/)
 (`feat:`, `fix:`, `docs:`, `test:` …). Behaviour changes get a line in

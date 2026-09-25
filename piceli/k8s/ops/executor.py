@@ -160,9 +160,14 @@ class ExecutionLimits:
     poll_seconds: float = 0.1
     max_polls: int = 100
     concurrency: int = 1
+    # How long an interrupted write may still reach the API server (a request
+    # already sent is not cancelled by the client's death). Only after it may
+    # resume send again a write whose object provably did not change.
+    write_settle_seconds: float = 60
 
     def __post_init__(self) -> None:
         positive(self.max_actions, "actions", 4096)
+        seconds(self.write_settle_seconds, "write settle")
         positive(self.max_polls, "polls", 10000)
         seconds(self.max_seconds, "execution")
         seconds(self.readiness_seconds, "readiness", self.max_seconds)
@@ -992,6 +997,39 @@ class PlanExecutor:
             deadline=deadline,
         )
 
+    def _unwritten(
+        self, row: dict[str, Any], action: PlanAction, deadline: float
+    ) -> bool:
+        """Whether an interrupted write (an ``intent`` row) certainly never landed.
+
+        A create whose object is still absent, or a write/delete whose object
+        still has the UID and resourceVersion recorded just before the write,
+        once ``write_settle_seconds`` have passed since it was sent (a request
+        still in flight could land later). Every write is preconditioned on
+        exactly that version, so nothing reached the object and sending the
+        write again is safe. Replacements and takeovers have their own
+        idempotent resume; rows written before ``written_at`` existed never
+        qualify.
+        """
+        base = row["payload"]
+        if "replace" in base or _is_takeover(row):
+            return False
+        try:
+            sent = timestamp(base.get("written_at"))
+        except ValueError:
+            return False
+        if (
+            datetime.now(UTC) - sent
+        ).total_seconds() < self.limits.write_settle_seconds:
+            return False
+        current = self.provider.get(_identity(action.resource.ref), deadline=deadline)
+        if "before" not in base:
+            return action.operation is PlanOperation.CREATE and current is None
+        if current is None:
+            return False
+        before = self._load(base["before"], current.identity)
+        return _version(before) == _version(current)
+
     def _reconcile(
         self, row: dict[str, Any], action: PlanAction, deadline: float
     ) -> tuple[DiscoveredResource | None, bool]:
@@ -1075,6 +1113,12 @@ class PlanExecutor:
         # Deployment a revision annotation). Values are compared as the server
         # returned them, so quantity canonicalization is not drift either.
         desired = self._manifest_intent(action)
+        if _scaled(current):
+            # An autoscaler took ``spec.replicas`` through the scale
+            # subresource since the write: its value, not drift.
+            spec = desired.get("spec")
+            if isinstance(spec, dict):
+                spec.pop("replicas", None)
         if _project(_receipt_intent(current), desired) != _project(
             _receipt_intent(after), desired
         ) or set(self._foreign_owners(current, desired)) - set(
@@ -1275,6 +1319,12 @@ class PlanExecutor:
                     )
                     if row["state"] in {"compensated", "compensating"}:
                         raise ProviderError("compensation-already-started")
+                    if row["state"] == "intent" and self._unwritten(
+                        row, action, deadline
+                    ):
+                        # Interrupted before the write reached the object:
+                        # send it again, exactly as planned.
+                        row = dict(row, state="pending")
                     if row["state"] in {"pending", "failed"}:
                         current = self.provider.get(
                             _identity(action.resource.ref), deadline=deadline
@@ -1403,6 +1453,7 @@ class PlanExecutor:
                                         deadline=deadline,
                                     )
                             self._guard(execution, authorization, deadline)
+                            payload["written_at"] = datetime.now(UTC).isoformat()
                             self.journal.record(
                                 execution, row["ordinal"], "intent", payload
                             )
@@ -1736,6 +1787,19 @@ def _project(value: Any, template: Any) -> Any:
             _project(item, child) for item, child in zip(value, template, strict=True)
         ]
     return value
+
+
+def _scaled(resource: DiscoveredResource) -> bool:
+    """Whether a ``scale`` subresource entry (an autoscaler) owns ``spec.replicas``."""
+    try:
+        entries = field_manager_entries(resource.manifest)
+    except ValueError:
+        return False
+    return any(
+        entry.subresource == "scale"
+        and "f:replicas" in (entry.fields.get("f:spec") or {})
+        for entry in entries
+    )
 
 
 def _is_takeover(row: dict[str, Any]) -> bool:

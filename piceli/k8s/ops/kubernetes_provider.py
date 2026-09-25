@@ -7,6 +7,7 @@ import hashlib
 import ipaddress
 import json
 import time
+from collections.abc import Mapping
 from typing import Any
 from urllib.parse import quote, urlsplit
 
@@ -79,6 +80,34 @@ def _without_ownership(manifest: dict[str, Any]) -> dict[str, Any]:
     if not annotations:
         metadata.pop("annotations", None)
     return dict(value)
+
+
+#: A write refused only because the status moved its resourceVersion is sent
+#: at most this many times.
+PRECONDITION_ATTEMPTS = 4
+
+
+def status_only_change(before: DiscoveredResource, after: DiscoveredResource) -> bool:
+    """Same object, content and field ownership; only status/bookkeeping moved."""
+
+    def owners(resource: DiscoveredResource) -> list[FieldManagerEntry]:
+        return [
+            entry
+            for entry in field_manager_entries(resource.manifest)
+            if entry.subresource != "status"
+        ]
+
+    try:
+        return (
+            before.manifest["metadata"].get("uid")
+            == after.manifest["metadata"].get("uid")
+            and before.ownership == after.ownership
+            and ResourceIntent.from_manifest(before.manifest).manifest
+            == ResourceIntent.from_manifest(after.manifest).manifest
+            and owners(before) == owners(after)
+        )
+    except ValueError:
+        return False
 
 
 class ProviderError(Exception):
@@ -659,14 +688,37 @@ class KubernetesProvider:
         query: dict[str, Any] = {"fieldManager": self.field_manager}
         if dry_run:
             query["dryRun"] = "All"
-        raw = self._request(
-            "PATCH",
-            self._path(self.api_for(identity, deadline=deadline), identity.name),
-            body=manifest,
-            query=query,
-            deadline=deadline,
-            merge=True,
-        )
+        path = self._path(self.api_for(identity, deadline=deadline), identity.name)
+        body = manifest
+        for attempt in range(PRECONDITION_ATTEMPTS):
+            try:
+                raw = self._request(
+                    "PATCH", path, body=body, query=query, deadline=deadline, merge=True
+                )
+                break
+            except ProviderError as error:
+                # A 409 is a definite refusal. When only the status (or other
+                # bookkeeping) moved the resourceVersion, as a controller does
+                # while a rollout progresses, send the same patch again at the
+                # new version; any content or ownership change still fails.
+                if (
+                    error.status != 409
+                    or error.ambiguous
+                    or attempt + 1 == PRECONDITION_ATTEMPTS
+                ):
+                    raise
+                fresh = self.get(identity, deadline=deadline)
+                if fresh is None or not status_only_change(current, fresh):
+                    raise
+                body = {
+                    **body,
+                    "metadata": {
+                        **body["metadata"],
+                        "resourceVersion": fresh.manifest["metadata"][
+                            "resourceVersion"
+                        ],
+                    },
+                }
         if dry_run:
             returned = raw.get("metadata", {})
             if returned.get("name") != identity.name:
@@ -1205,7 +1257,12 @@ class KubernetesProvider:
             if spec.get("type") == "LoadBalancer":
                 ready = ready and bool(status.get("loadBalancer", {}).get("ingress"))
         else:
-            return ReadinessProbeResult(resource.identity, ReadinessStatus.UNSUPPORTED)
+            generic = _generic_readiness(manifest)
+            if generic is None:
+                return ReadinessProbeResult(
+                    resource.identity, ReadinessStatus.UNSUPPORTED
+                )
+            ready = generic
         return ReadinessProbeResult(
             resource.identity,
             ReadinessStatus.READY if ready else ReadinessStatus.NOT_READY,
@@ -1230,3 +1287,42 @@ class KubernetesProvider:
                 if error.status in {401, 403}
                 else ReadinessStatus.UNSUPPORTED,
             )
+
+
+def _generic_readiness(manifest: Mapping[str, Any]) -> bool | None:
+    """Readiness of a kind without a specific rule (HPA, PDB, custom resources).
+
+    The common status conventions (as in ``kstatus``): not ready while
+    ``status.observedGeneration`` is behind ``metadata.generation``, while a
+    ``Reconciling`` or ``Stalled`` condition is ``True``, or while a ``Ready``
+    condition is not ``True``. An object without such status (a
+    HorizontalPodAutoscaler, most configuration objects) is ready once it is
+    written. ``None`` when the status is malformed.
+    """
+    status = manifest.get("status", {})
+    if status is None:
+        status = {}
+    if not isinstance(status, Mapping):
+        return None
+    generation = manifest.get("metadata", {}).get("generation")
+    observed = status.get("observedGeneration")
+    if (
+        isinstance(observed, int)
+        and isinstance(generation, int)
+        and not isinstance(observed, bool)
+        and observed < generation
+    ):
+        return False
+    conditions = status.get("conditions", [])
+    if conditions is None:
+        conditions = []
+    if not isinstance(conditions, list) or not all(
+        isinstance(item, Mapping) for item in conditions
+    ):
+        return None
+    states = {str(item.get("type")): item.get("status") for item in conditions}
+    if states.get("Reconciling") == "True" or states.get("Stalled") == "True":
+        return False
+    if "Ready" in states:
+        return states["Ready"] == "True"
+    return True

@@ -33,7 +33,7 @@ test-acceptance: ## Fault-injected API acceptance tests (no cluster needed)
 	uv run pytest tests/acceptance
 
 .PHONY: test-integration
-test-integration: ## Integration tests against the current kubeconfig context (use a disposable kind cluster)
+test-integration: ## Integration tests on the kind cluster named by PICELI_KIND_KUBECONFIG/PICELI_KIND_CONTEXT
 	uv run pytest tests/integration
 
 .PHONY: coverage

@@ -154,8 +154,11 @@ class ExecutionJournal:
             "resource_version",
             "retained_reconciled",
             "same_owner_update",
+            "written_at",
         }:
             raise ValueError("legacy receipt is not secret-safe")
+        if "written_at" in payload and not isinstance(payload["written_at"], str):
+            raise ValueError("legacy receipt has invalid write time")
         for key in ("before", "after"):
             if key not in payload:
                 continue

@@ -262,6 +262,19 @@ def _describe_plan(result: Any, spec: str, command: str) -> None:
             f"  drift   {resource['kind']}/{resource['name']}: desired fields "
             f"also managed by {', '.join(item['managers'])}"
         )
+    for item in report.get("autoscaled", ()):
+        if item["mode"] == "initial":
+            continue
+        resource = item["resource"]
+        _say(
+            f"  replicas {resource['kind']}/{resource['name']}: "
+            + (
+                "left to "
+                if item["mode"] == "yielded"
+                else "kept at the live value for "
+            )
+            + ", ".join(item["autoscalers"])
+        )
     for entry in report["adopt_not_needed"]:
         _say(f"  adopt {entry}: not needed (absent or already managed)")
     for entry in report["authorized"].get("replace_not_needed", ()):

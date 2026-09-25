@@ -38,7 +38,7 @@ import textwrap
 import threading
 import time
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -397,6 +397,13 @@ class FakeAPI:
     - ``nodes``: ``{name: Node manifest}`` served at ``/api/v1/nodes/NAME``
       (read-only, not part of discovery); add one with :meth:`add_node`.
 
+    - ``intercept``: an optional ``(request, phase) -> bool`` called for
+      every request with ``phase`` ``"received"`` (before the server acts on
+      it) and ``"committed"`` (after it acted, before the response). Returning
+      true drops the connection at that point: a ``"received"`` request is
+      then never applied, a ``"committed"`` one is applied but unanswered.
+      Kill tests use it to stop a client process at an exact step.
+
     Use :meth:`put` to seed objects and :meth:`inject` to add faults.
     """
 
@@ -418,6 +425,7 @@ class FakeAPI:
         self._terminating: dict[tuple[str, str], int] = {}
         self.version = 1
         self.nodes: dict[str, dict[str, Any]] = {}
+        self.intercept: Callable[[dict[str, Any], str], bool] | None = None
         self.put(manifest("Namespace", "kube-system"), uid="cluster-uid")
         self.put(manifest("Namespace", TARGET.namespace), uid="namespace-uid")
 
@@ -462,6 +470,49 @@ class FakeAPI:
         with self.lock:
             self.nodes[name] = node
         return copy.deepcopy(node)
+
+    def scale(
+        self,
+        kind: str,
+        name: str,
+        replicas: int,
+        *,
+        manager: str = "kube-controller-manager",
+    ) -> dict[str, Any]:
+        """Write ``spec.replicas`` through the ``scale`` subresource.
+
+        What a HorizontalPodAutoscaler does: ``manager`` gets an ``Update``
+        entry with ``subresource: scale`` owning ``spec.replicas``, which no
+        other entry owns afterwards.
+        """
+        with self.lock:
+            current = self.objects[(kind, name)]
+            self.version += 1
+            current.setdefault("spec", {})["replicas"] = replicas
+            metadata = current["metadata"]
+            metadata["resourceVersion"] = str(self.version)
+            metadata["generation"] = metadata.get("generation", 1) + 1
+            owned: set[Path] = {("f:spec", "f:replicas")}
+            entries = []
+            for entry in metadata.get("managedFields", []):
+                if entry.get("subresource") == "scale":
+                    continue
+                entry["fieldsV1"] = fields_v1(paths_of(entry["fieldsV1"]) - owned)
+                if entry["fieldsV1"]:
+                    entries.append(entry)
+            entries.append(
+                {
+                    "manager": manager,
+                    "operation": "Update",
+                    "subresource": "scale",
+                    "apiVersion": current["apiVersion"],
+                    "fieldsType": "FieldsV1",
+                    "fieldsV1": fields_v1(owned),
+                }
+            )
+            metadata["managedFields"] = entries
+            self._readiness(current)
+            return copy.deepcopy(current)
 
     def managers(self, kind: str, name: str) -> dict[str, set[Path]]:
         """Owned field paths by ``manager/operation`` (status excluded)."""
@@ -669,11 +720,17 @@ class FakeAPI:
                 if "raw" in fault:
                     self.respond(200, None, raw=fault["raw"])
                     return
-                if fault.get("disconnect_before"):
+                if fault.get("disconnect_before") or (
+                    api.intercept is not None and api.intercept(request, "received")
+                ):
                     self.connection.close()
                     return
                 with api.lock:
                     status, response = api.route(request)
+                if api.intercept is not None and api.intercept(request, "committed"):
+                    self.connection.shutdown(socket.SHUT_RDWR)
+                    self.connection.close()
+                    return
                 if fault.get("after_commit_delay"):
                     time.sleep(fault["after_commit_delay"])
                 if fault.get("disconnect_after"):

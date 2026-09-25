@@ -81,6 +81,7 @@ prune = false                       # delete managed objects a release drops
 [execution]
 max_seconds = 300
 readiness_seconds = 240
+# write_settle_seconds = 60         # resume re-sends a write that never landed after this long
 
 [images]                            # pinned by digest
 web = "docker.io/library/nginx@sha256:…"

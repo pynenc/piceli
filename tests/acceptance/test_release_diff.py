@@ -352,6 +352,24 @@ def test_denied_dry_run_falls_back_to_a_literal_comparison(release_env):
     assert SECRET_VALUE_MARKER not in result.stdout + result.stderr
 
 
+def test_object_changed_between_discovery_and_dry_run_is_observed_again(
+    release_env,
+):
+    """Regression: a status write between discovery and the dry run (a rollout
+    finishing) made the dry run conflict, and the unchanged release planned
+    ``apply`` from a literal comparison (seen on Kubernetes 1.37)."""
+    api, tmp_path = release_env
+    code, _, result = _run(tmp_path, "apply", "--auto-approve")
+    assert code == 0, result.output
+    api.inject("PATCH", "/deployments/worker", status=409, dry_run=True)
+
+    code, planned, result = _run(tmp_path, "plan")
+    assert code == 0, result.output
+    assert set(_operations(planned).values()) == {"no-op"}, planned["diffs"]
+    assert planned["dry_run_unavailable"] == []
+    assert len([r for r in _dry_runs(api) if "deployments" in r["path"]]) == 2
+
+
 def _drop(tmp_path: Path) -> None:
     """Drop a ConfigMap key and label and a container env var from the module."""
     module = (tmp_path / "compose.py").read_text()

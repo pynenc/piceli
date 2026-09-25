@@ -211,6 +211,7 @@ class ExecutionSpec(_Strict):
     readiness_seconds: float = Field(default=300, gt=0, le=3600)
     poll_seconds: float = Field(default=1.0, gt=0, le=60)
     max_polls: int = Field(default=1000, gt=0, le=10000)
+    write_settle_seconds: float = Field(default=60, gt=0, le=3600)
 
 
 class DiscoverySpec(_Strict):

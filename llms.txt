@@ -9,7 +9,7 @@ Rules for agents:
 - Parse JSON from stdout; human text is on stderr. Exit codes: 0 success, 1 ran but did not succeed, 2 rejected before any change, 3 approval required.
 - On a refusal read `reason` and run `piceli explain <reason> --json` (cause, fix, retry_safe).
 - Never read or print secret values; never rely on `~/.kube/config`, `KUBECONFIG` or the current context, and never pick or change a kube context, `allow_exec` or exec-plugin pins yourself: ask the owner.
-- After an interruption, resume (`piceli deploy … --resume`, `piceli release resume`) instead of planning a new run.
+- After an interruption, resume (`piceli deploy … --resume`, `piceli release resume`) instead of planning a new run; an interrupted re-apply or `release rollback` is not resumable: run the same command again.
 - To deploy committed code from a dirty or shared tree, plan with `--ref SOURCE=REV` and approve with the exact command `--plan` prints (it pins the resolved SHA); `--resume` reuses the run's commits and takes no `--ref`.
 
 Minimal workflow: `piceli render app.py:pipeline` (no cluster; the target's namespace and nodes) → `piceli deploy app.py:pipeline --plan --json` → owner approves → `piceli deploy app.py:pipeline --approve <combined_hash> --json` → `piceli status app.py:pipeline --json`.
@@ -29,7 +29,8 @@ Minimal workflow: `piceli render app.py:pipeline` (no cluster; the target's name
 - [Deploy from CI with an approval step](https://docs.pynenc.org/projects/piceli/en/latest/ci.html): GitHub Actions recipe: plan the pushed commit (`piceli deploy … --ref $GITHUB_SHA --plan --json`), approve through a protected environment, apply with `--ref <same sha> --approve <combined_hash>`, resume; kubeconfig from a 0600 secret file, self-hosted runners, concurrency
 - [Releases from a spec](https://docs.pynenc.org/projects/piceli/en/latest/release_cli.html): `piceli release` plan, apply, adopt, replace, roll back, resume, stop, status (`--spec release.toml`, or `--spec module.py:pipeline` for a pipeline's release); "If plan refuses"
 - [Check a release and roll back automatically](https://docs.pynenc.org/projects/piceli/en/latest/checks.html): `[[checks]]` and `piceli.checks` (http, exec, metric, Python), `rollback_on_failed_checks`, `piceli release check`
-- [How plans decide what changes](https://docs.pynenc.org/projects/piceli/en/latest/plans_and_diffs.html): no-op vs apply from server dry runs, field-level diffs, `piceli release diff`
+- [How plans decide what changes](https://docs.pynenc.org/projects/piceli/en/latest/plans_and_diffs.html): no-op vs apply from server dry runs, field-level diffs, `piceli release diff`; recovering an interrupted apply or rollback; what a rollback restores and what it cannot (data, external side effects, what others own)
+- [Compatibility and shared ownership](https://docs.pynenc.org/projects/piceli/en/latest/compatibility.html): supported Kubernetes versions (the last four minors, 1.34 to 1.37, tested on kind); autoscalers own `spec.replicas` (`autoscaled` in the plan JSON); operators, mutating webhooks, adoption and pruning with other field managers
 - [Manage secrets](https://docs.pynenc.org/projects/piceli/en/latest/secrets.html): generate, template, import and rotate secret values; private versions; `piceli release secret show`
 - [Connect to managed clusters](https://docs.pynenc.org/projects/piceli/en/latest/managed_clusters.html): GKE, EKS, AKS and OIDC exec credential plugins with `[target] allow_exec`, pinning and refresh
 - [Reach your services from your laptop](https://docs.pynenc.org/projects/piceli/en/latest/access.html): declare `app.access.forward`, then `piceli status` (is it up, which URLs; `piceli.status.v1`) and `piceli access` (supervised port forwards, port-conflict owners)

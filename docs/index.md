@@ -153,6 +153,7 @@ typed_apps
 release_cli
 checks
 plans_and_diffs
+compatibility
 secrets
 managed_clusters
 access

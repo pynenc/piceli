@@ -952,3 +952,56 @@ def test_progress_reports_applying_and_readiness_waits(local_api, tmp_path):
     quiet = executor(provider, tmp_path / "again", progress=broken)
     plan, snapshot, grant = prepare(provider, [manifest("Deployment", "other")])
     assert quiet.run("ok", plan, snapshot, grant)["state"] == "ready"
+
+
+def test_autoscaler_scaling_during_readiness_is_not_drift(local_api, tmp_path):
+    """Regression: an autoscaler that scaled the workload right after the write
+    (through the ``scale`` subresource) failed the apply with
+    ``applied-resource-drift``, although ``replicas`` is then the autoscaler's."""
+    api, provider = local_api
+    api.field_ownership = True
+    run = executor(provider, tmp_path)
+    plan, snapshot, grant = prepare(provider, [manifest("Deployment", "worker")])
+    run.after_response = lambda _: api.scale("Deployment", "worker", 3)
+    assert run.run("scaled", plan, snapshot, grant)["state"] == "ready"
+    assert api.objects[("Deployment", "worker")]["spec"]["replicas"] == 3
+
+
+def test_other_writers_changing_declared_replicas_is_still_drift(local_api, tmp_path):
+    api, provider = local_api
+    api.field_ownership = True
+    run = executor(provider, tmp_path)
+    plan, snapshot, grant = prepare(provider, [manifest("Deployment", "worker")])
+
+    def edit(_: int) -> None:
+        current = api.objects[("Deployment", "worker")]
+        current["spec"]["replicas"] = 3
+        current["metadata"]["managedFields"].append(
+            {
+                "manager": "kubectl-edit",
+                "operation": "Update",
+                "apiVersion": "apps/v1",
+                "fieldsType": "FieldsV1",
+                "fieldsV1": {"f:spec": {"f:replicas": {}}},
+            }
+        )
+        api._readiness(current)
+
+    run.after_response = edit
+    assert run.run("edited", plan, snapshot, grant)["state"] == "failed"
+
+
+@pytest.mark.parametrize("dry_run", [True, False], ids=["admission-check", "write"])
+def test_update_retried_when_only_status_moved_the_version(
+    local_api, tmp_path, dry_run
+):
+    """Regression (seen on kind): a controller's status write between Piceli's
+    read and its merge patch made the patch's resourceVersion precondition
+    fail, and the apply failed with ``conflict``."""
+    api, provider = local_api
+    api.put(manifest(value="old"), owned=True)
+    run = executor(provider, tmp_path)
+    plan, snapshot, grant = prepare(provider, [manifest(value="new")])
+    api.inject("PATCH", "/configmaps/settings", status=409, dry_run=dry_run)
+    assert run.run("status-moved", plan, snapshot, grant)["state"] == "ready"
+    assert api.objects[("ConfigMap", "settings")]["data"] == {"mode": "new"}

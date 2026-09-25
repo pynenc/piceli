@@ -1639,6 +1639,151 @@ def _public_metadata_changes(
     return metadata_changes(expected, current.intent.manifest)
 
 
+AUTOSCALER_KINDS = frozenset({("autoscaling", "HorizontalPodAutoscaler")})
+_REPLICAS = {"spec": {"replicas": 0}}
+
+
+def _group(api_version: str) -> str:
+    return api_version.split("/")[0] if "/" in api_version else ""
+
+
+@dataclass(frozen=True, order=True)
+class AutoscaledReplicas:
+    """How a plan treats ``spec.replicas`` of a workload an autoscaler targets.
+
+    ``mode`` is one of:
+
+    * ``initial``: the workload does not exist yet; the declared value (if
+      any) is its initial size;
+    * ``held``: the workload exists and no autoscaler has written the field
+      yet (Piceli still owns it); the plan declares the **live** value, so a
+      new release never changes the count and never removes the field;
+    * ``yielded``: an autoscaler (a ``scale`` subresource or controller
+      manager) owns the field; the plan does not declare it at all.
+    """
+
+    resource: ResourceRef
+    autoscalers: tuple[str, ...]
+    mode: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "resource": self.resource.__dict__,
+            "field": "/spec/replicas",
+            "autoscalers": list(self.autoscalers),
+            "mode": self.mode,
+        }
+
+
+def _autoscaler_targets(
+    composition: DeploymentComposition, snapshot: ObservedSnapshot
+) -> dict[tuple[str, str, str, str], set[str]]:
+    """``(group, kind, namespace, name)`` of each autoscaled workload -> HPAs.
+
+    Autoscalers come from the composition and from the observed snapshot
+    (when discovery covers their kind), so one created by another tool is
+    honoured too.
+    """
+    autoscalers: dict[ResourceRef, dict[str, Any]] = {
+        resource.intent.ref: resource.intent.manifest
+        for resource in snapshot.resources
+        if (_group(resource.intent.ref.api_version), resource.intent.ref.kind)
+        in AUTOSCALER_KINDS
+    }
+    for component in composition.components:
+        for intent in component.resources:
+            if (_group(intent.ref.api_version), intent.ref.kind) in AUTOSCALER_KINDS:
+                autoscalers[intent.ref] = intent.manifest
+    targets: dict[tuple[str, str, str, str], set[str]] = {}
+    for ref, manifest in autoscalers.items():
+        spec = manifest.get("spec")
+        target = spec.get("scaleTargetRef") if isinstance(spec, Mapping) else None
+        if not isinstance(target, Mapping):
+            continue
+        key = (
+            _group(str(target.get("apiVersion", ""))),
+            str(target.get("kind", "")),
+            ref.namespace,
+            str(target.get("name", "")),
+        )
+        targets.setdefault(key, set()).add(f"{ref.kind}/{ref.name}")
+    return targets
+
+
+def autoscaled_replicas(
+    composition: DeploymentComposition,
+    snapshot: ObservedSnapshot,
+    field_manager: str | None,
+) -> tuple[DeploymentComposition, tuple[AutoscaledReplicas, ...]]:
+    """Leave ``spec.replicas`` of autoscaled workloads to their autoscaler.
+
+    A HorizontalPodAutoscaler writes ``spec.replicas`` through the ``scale``
+    subresource. Declaring the field in a release would reset the count on
+    every apply (a fight) and show a perpetual diff. For each workload an
+    autoscaler targets (see :class:`AutoscaledReplicas` for the modes):
+
+    * not live: the declared value is kept as the initial size;
+    * live, and a manager other than ``field_manager`` that a takeover keeps
+      (a subresource entry or a controller) owns the field: it is dropped
+      from the desired manifest;
+    * live otherwise: the live value is declared, so nothing changes and no
+      three-way removal resets it.
+
+    Idempotent: applying it to its own result changes nothing. Returns the
+    composition to plan and one report per autoscaled workload.
+    """
+    targets = _autoscaler_targets(composition, snapshot)
+    if not targets:
+        return composition, ()
+    observed = {resource.intent.ref: resource for resource in snapshot.resources}
+    report: list[AutoscaledReplicas] = []
+    components = []
+    for component in composition.components:
+        resources = []
+        for intent in component.resources:
+            ref = intent.ref
+            autoscalers = targets.get(
+                (_group(ref.api_version), ref.kind, ref.namespace, ref.name)
+            )
+            if not autoscalers:
+                resources.append(intent)
+                continue
+            current = observed.get(ref)
+            manifest = intent.manifest
+            spec = manifest.get("spec")
+            live_spec = None if current is None else current.intent.manifest.get("spec")
+            if current is None or not isinstance(spec, dict):
+                mode = "initial"
+            elif any(
+                entry.manager != field_manager
+                and not is_transferable(entry)
+                and _fields_overlap(entry.fields, _REPLICAS)
+                for entry in current.field_managers
+            ):
+                mode = "yielded"
+                spec.pop("replicas", None)
+            elif isinstance(live_spec, Mapping) and "replicas" in live_spec:
+                mode = "held"
+                spec["replicas"] = live_spec["replicas"]
+            else:
+                mode = "initial"
+            report.append(AutoscaledReplicas(ref, tuple(sorted(autoscalers)), mode))
+            if manifest != intent.manifest:
+                intent = ResourceIntent(
+                    ref,
+                    _canonical_json(manifest),
+                    intent.dependencies,
+                    intent.secret_bindings,
+                )
+            resources.append(intent)
+        components.append(
+            DeploymentComponent(
+                component.name, tuple(resources), component.dependencies
+            )
+        )
+    return DeploymentComposition(tuple(components)), tuple(sorted(report))
+
+
 def field_drift(
     composition: DeploymentComposition,
     snapshot: ObservedSnapshot,
@@ -1650,6 +1795,7 @@ def field_drift(
     later ``kubectl`` edit of one of them shows up here. This report is
     informational and not part of the plan hash.
     """
+    composition, _ = autoscaled_replicas(composition, snapshot, field_manager)
     observed = {resource.intent.ref: resource for resource in snapshot.resources}
     report = []
     for component in composition.components:
@@ -1688,6 +1834,9 @@ def build_plan(
     """
     if authorization.target != snapshot.target:
         raise ValueError("authorization target does not match observed target")
+    composition, _ = autoscaled_replicas(
+        composition, snapshot, authorization.field_manager
+    )
     for ref in (*authorization.adopt_resources, *authorization.replace_resources):
         _validate_target_ref(snapshot.target, ref)
     desired = {

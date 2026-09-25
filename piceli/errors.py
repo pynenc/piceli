@@ -91,7 +91,9 @@ _E = ErrorCode
 _REPLAN = "Run `piceli release plan` again and approve the new plan hash."
 _RESUME = (
     "Inspect the object with a read-only tool; when it matches the release, run "
-    "`piceli release resume --spec release.toml`, otherwise plan again."
+    "`piceli release resume --spec release.toml`, otherwise plan again. A write "
+    "that never reached the object (still absent, or unchanged) is sent again by "
+    "a resume once `[execution] write_settle_seconds` (60 s) have passed."
 )
 
 ERRORS: Mapping[str, ErrorCode] = _entries(
@@ -1126,8 +1128,8 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
     _E(
         "readiness-unsupported",
         "Readiness unsupported",
-        "Piceli cannot evaluate readiness for this kind.",
-        "Report the kind; meanwhile verify it by hand.",
+        "The applied object's `status` is malformed (not an object, or `conditions` is not a list of objects), so its readiness cannot be evaluated.",
+        "Check the object's controller (`kubectl get -o yaml`); verify it by hand and plan again.",
         False,
         "execution",
     ),

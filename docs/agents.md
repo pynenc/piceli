@@ -158,7 +158,9 @@ unattended CI job for this exact spec.
    other clients wrote). Point out every action with `"cluster_scoped": true`
    (`[cluster-scoped]` in the text): a ClusterRole or ClusterRoleBinding
    grants permissions across the whole cluster. A plan whose `summary` has
-   only `no-op` changes nothing.
+   only `no-op` changes nothing. `autoscaled` lists workloads whose
+   `spec.replicas` an autoscaler owns: Piceli leaves that field to it (see
+   compatibility), so do not propose editing `replicas` for them.
 3. Wait for the owner to approve **that plan hash**. A plan expires after
    `approval_window_seconds`; if it did, plan again and ask again.
 4. Run `piceli release apply --spec release.toml --approve <hash>`.
@@ -262,7 +264,14 @@ never build. The approval rules above apply unchanged:
   `piceli release status --spec release.toml`, then
   `piceli release resume --spec release.toml`. Resume reuses the approved
   grant and operation ids; do not plan and apply a new release instead.
-  Re-applies and rollbacks are not resumable: plan them again.
+  It is safe at any point of the interruption: a write that never reached
+  the cluster is sent again, one that did is not repeated.
+- **A re-apply or `release rollback` was interrupted**: these are not
+  resumable (`resume` refuses with `not-resumable`). Run the same `rollback`
+  (or `plan`/`apply`) again: it re-plans against the live state and needs the
+  owner's approval of the new plan hash. A rollback restores what the release
+  declares, never data, external side effects or what other managers own
+  (see "What a rollback restores" in plans_and_diffs).
 - **`piceli deploy` was interrupted** (or failed at a stage you then fixed):
   run `piceli deploy MODULE:ATTR --resume`. It continues the approved run at
   the first unfinished stage and reuses the finished stages' receipts; an
