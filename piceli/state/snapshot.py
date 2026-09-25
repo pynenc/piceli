@@ -29,6 +29,8 @@ import tempfile
 from collections.abc import Iterable, Iterator
 from pathlib import Path, PurePosixPath
 
+from piceli.tempfiles import track, untrack
+
 #: File name suffixes that never leave the machine that wrote them.
 LOCAL_SUFFIXES = (".lock", "-journal", "-wal", "-shm")
 #: Members of a snapshot that hold secret material (values, live Secret
@@ -100,8 +102,11 @@ def _read(path: Path) -> bytes:
         header = stream.read(len(SQLITE_HEADER))
     if header != SQLITE_HEADER:
         return path.read_bytes()
-    descriptor, temporary = tempfile.mkstemp(prefix=".snapshot-", suffix=".sqlite")
+    descriptor, temporary = tempfile.mkstemp(
+        prefix="piceli-snapshot-", suffix=".sqlite"
+    )
     os.close(descriptor)
+    track(temporary)
     try:
         source = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
         try:
@@ -115,6 +120,7 @@ def _read(path: Path) -> bytes:
         return Path(temporary).read_bytes()
     finally:
         Path(temporary).unlink(missing_ok=True)
+        untrack(temporary)
 
 
 def pack(

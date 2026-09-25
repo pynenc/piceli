@@ -2,6 +2,11 @@ import sys
 
 
 def main() -> None:
+    from piceli.tempfiles import install_signal_cleanup
+
+    # SIGTERM/SIGHUP remove live temporary directories (TLS material, OCI
+    # layouts, worktrees) before the default action ends the process.
+    install_signal_cleanup()
     if len(sys.argv) > 1 and sys.argv[1] == "artifacts":
         from piceli.artifacts.cli import main as artifacts_main
 

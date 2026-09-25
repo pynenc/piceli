@@ -122,6 +122,21 @@ def test_workflow_shape_keeps_approval_and_secrets_safe() -> None:
     assert download and download[0]["with"]["name"] == "deploy-plan"
     # Nothing is shared through the runner: no fixed state directory.
     assert "DEPLOY_STATE_DIR: " not in text and "/var/lib/" not in text
+    # apply and resume post the run summary before the state copy is removed,
+    # also when the deploy failed, and keep summary.json in their artifact.
+    for job, result in (("apply", "apply.jsonl"), ("resume", "resume.jsonl")):
+        names = [step.get("name") for step in jobs[job]["steps"]]
+        post = names.index("Post the run summary")
+        assert names.index("Remove the kubeconfig and the state copy") > post
+        step = jobs[job]["steps"][post]
+        assert step["if"] == "always()" and step["env"]["RESULT_FILE"] == result
+        assert '>> "$GITHUB_STEP_SUMMARY"' in step["run"]
+        [(index, upload)] = [
+            (index, item)
+            for index, item in enumerate(jobs[job]["steps"])
+            if str(item.get("uses", "")).startswith("actions/upload-artifact")
+        ]
+        assert index > post and "run-summary.json" in upload["with"]["path"]
 
 
 def shared_state(repo: Path) -> str:
@@ -135,6 +150,28 @@ def shared_state(repo: Path) -> str:
     )
     git(repo, "commit", "-q", "-am", "shared state")
     return git(repo, "rev-parse", "HEAD")
+
+
+def post_summary(job: Job, name: str, lines: list[dict[str, Any]]) -> str:
+    """Run the job's "Post the run summary" step as written (a real bash with
+    jq) on the JSON lines its deploy step wrote; returns $GITHUB_STEP_SUMMARY."""
+    step = next(s for s in steps(name) if s.get("name") == "Post the run summary")
+    result = job.checkout / step["env"]["RESULT_FILE"]
+    result.write_text("".join(json.dumps(line) + "\n" for line in lines))
+    summary = job.root / "step-summary.md"
+    summary.write_text("")
+    subprocess.run(
+        ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", step["run"]],
+        cwd=job.checkout,
+        env={
+            "PATH": os.environ["PATH"],
+            "GITHUB_STEP_SUMMARY": str(summary),
+            **step["env"],
+        },
+        check=True,
+        capture_output=True,
+    )
+    return summary.read_text()
 
 
 class Job:
@@ -225,12 +262,23 @@ def test_recipe_runs_each_job_on_another_runner(ci_shop, tmp_path, monkeypatch):
     env["COMBINED_HASH"] = result["combined_hash"]
     code, lines = jobs["apply"].run(monkeypatch, env)
     assert code == 1 and lines[-1]["stage"] == "deliver", lines
+    if shutil.which("jq"):
+        posted = post_summary(jobs["apply"], "apply", lines)
+        assert posted.startswith("### piceli deploy `shop`: failed")
+        assert "`registry-unreachable`" in posted and "#### Failure" in posted
+        kept = json.loads((jobs["apply"].checkout / "run-summary.json").read_text())
+        assert kept["failure"]["reason"] == "registry-unreachable"
     shutil.rmtree(jobs["apply"].root)  # … and that runner is gone too
 
     # … and the resume job, on a third runner, continues the same run with
     # the same commit (it rebuilds: the image was only on the apply runner).
     code, lines = jobs["resume"].run(monkeypatch, env)
     assert code == 0 and lines[-1]["state"] == "ready", lines
+    if shutil.which("jq"):
+        posted = post_summary(jobs["resume"], "resume", lines)
+        assert posted.startswith("### piceli deploy `shop`: ready")
+        assert f"`{sha[:12]}`" in posted  # the commit it was built from
+        assert "#### Images" in posted and "| apply | done |" in posted
     assert RefBackend.built == ["v1\n", "v1\n"]
     assert api.objects[("Deployment", "web")]["spec"]["template"]["spec"]["containers"][
         0

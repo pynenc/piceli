@@ -50,6 +50,8 @@ AREAS: Mapping[str, str] = MappingProxyType(
         # --- 0.7.0 model completeness ---
         "codegen": "Typed models from CRDs (`piceli codegen crd`)",
         "environments": "Environments (`App.environment`, `--env`, `--diff-env`)",
+        # --- 0.8.0 runner hygiene ---
+        "maintenance": "Runner hygiene (`piceli cache`, `piceli doctor`, `piceli runs`, `cache_budget=`)",
     }
 )
 
@@ -2983,6 +2985,55 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "Fix the override as the message says; `piceli render MODULE:ATTR --env NAME` shows the result without a cluster.",
         False,
         "environments",
+    ),
+    # --- 0.8.0 runner hygiene ---
+    _E(
+        "cache-budget-invalid",
+        "Cache budget invalid",
+        "`--budget` or `Pipeline(cache_budget=...)` is not a positive size.",
+        "Give bytes or a size with a unit, for example `20GiB`, `500MB` or `1073741824`.",
+        False,
+        "maintenance",
+    ),
+    _E(
+        "cache-over-budget",
+        "State directory still over its budget",
+        "After removing everything a prune may remove, a state directory still uses more than its budget. What is left is the release state, receipts and the runs a resume or a rollback of the last releases needs, which are never pruned.",
+        "Run `piceli cache status` to see what is left, then raise the budget, lower `--keep-last`, or move the state directory to a larger disk.",
+        False,
+        "maintenance",
+    ),
+    _E(
+        "cache-arguments-conflict",
+        "Conflicting cache arguments",
+        "The command was given both a pipeline and `--state-dir`, or `--env` without a pipeline.",
+        "Name the pipeline (`MODULE:ATTR`, optionally with `--env`) or a state directory (`--state-dir`), not both.",
+        False,
+        "maintenance",
+    ),
+    _E(
+        "runner-disk-low",
+        "Runner disk space low",
+        "The free space where the state directory or the temporary directory lives is below what the next build needs (estimated from the last build receipts).",
+        "Free space: `piceli cache prune` (add `--budget`), prune the container engine's build cache, or use a runner with a larger disk.",
+        True,
+        "maintenance",
+    ),
+    _E(
+        "runner-memory-low",
+        "Runner memory low",
+        "The runner's available memory is below what the next build needs.",
+        "Stop other work on the runner or use a runner with more memory, then run the command again.",
+        True,
+        "maintenance",
+    ),
+    _E(
+        "runner-tool-missing",
+        "Required tool missing",
+        "A tool the pipeline uses is not installed or does not run: `docker` or `docker buildx` for a build, `kubectl` for a node-loopback registry's port forward.",
+        "Install the tool on the runner (and put it on `PATH`), then run `piceli doctor` again.",
+        False,
+        "maintenance",
     ),
     _E(
         "environment-unsupported",

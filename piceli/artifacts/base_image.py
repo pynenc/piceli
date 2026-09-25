@@ -7,7 +7,6 @@ import json
 import os
 import shutil
 import tarfile
-import tempfile
 import threading
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -27,6 +26,7 @@ from piceli.artifacts.plan import (
     relative,
     validate_digest,
 )
+from piceli.tempfiles import discard, make_directory
 
 
 def _put(layout: Path, body: bytes, media_type: str) -> dict[str, Any]:
@@ -116,8 +116,8 @@ class DockerArchiveOciBuilder:
         if cancel is not None and cancel.is_set():
             raise InterruptedError("runnable image build cancelled")
         output.parent.mkdir(parents=True, exist_ok=True)
-        temporary = Path(tempfile.mkdtemp(prefix=".piceli-runtime-", dir=output.parent))
-        extracted_root = Path(tempfile.mkdtemp(prefix="piceli-docker-archive-"))
+        temporary = make_directory("runtime", dir=output.parent, hidden=True)
+        extracted_root = make_directory("docker-archive")
         extracted = extracted_root / "archive"
         try:
             _extract_archive(base_archive, extracted, max_base_bytes)
@@ -209,5 +209,5 @@ class DockerArchiveOciBuilder:
                 receipt.user,
             )
         finally:
-            shutil.rmtree(temporary, ignore_errors=True)
-            shutil.rmtree(extracted_root, ignore_errors=True)
+            discard(temporary)
+            discard(extracted_root)

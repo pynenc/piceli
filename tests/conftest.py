@@ -1,6 +1,9 @@
 import difflib
 import json
 import os
+import shutil
+import tempfile
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -18,6 +21,89 @@ def _refuse_ambient_config(*args: Any, **kwargs: Any) -> None:
         "unit/acceptance tests must not load an ambient kubeconfig or in-cluster "
         "config; mock the client or use the fake API (integration tests are exempt)"
     )
+
+
+def _piceli_entries(directory: Path) -> set[str]:
+    from piceli.tempfiles import is_temporary
+
+    try:
+        return {name for name in os.listdir(directory) if is_temporary(name)}
+    except FileNotFoundError:
+        return set()
+
+
+def _leftovers(directory: Path, before: set[str], wait: float = 2.0) -> set[str]:
+    """New piceli entries in ``directory``; waits briefly for background threads."""
+    deadline = time.monotonic() + wait
+    while True:
+        left = _piceli_entries(directory) - before
+        if not left or time.monotonic() >= deadline:
+            return left
+        time.sleep(0.05)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _no_leftover_temporary_files(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Iterator[Path]:
+    """Every temporary file or directory Piceli creates must be gone at the end.
+
+    The session gets a private temporary directory (``TMPDIR`` and
+    :data:`tempfile.tempdir`, so child processes use it too): other test runs
+    on the machine cannot interfere, and a ``piceli-*`` or ``.piceli-*`` entry
+    still there when the session ends fails the run. ``tmp_path`` keeps
+    pytest's own base directory (created first, outside it).
+    """
+    base = tmp_path_factory.getbasetemp()
+    root = Path(tempfile.mkdtemp(prefix="pytest-piceli-tmp-")).resolve()
+    saved = (tempfile.tempdir, os.environ.get("TMPDIR"))
+    tempfile.tempdir = str(root)
+    os.environ["TMPDIR"] = str(root)
+    try:
+        yield root
+        from piceli.tempfiles import tracked
+
+        left = sorted(_leftovers(root, set()))
+        still = [path for path in tracked() if Path(path).exists()]
+        # Hidden work directories next to outputs (``.piceli-oci-*``) in the
+        # tests' own tmp_path directories.
+        from piceli.tempfiles import is_temporary
+
+        beside = sorted(
+            str(Path(folder, name).relative_to(base))
+            for folder, folders, files in os.walk(base)
+            for name in (*folders, *files)
+            if is_temporary(name)
+        )
+        assert not left and not still and not beside, (
+            f"piceli left temporary files behind: {left} {still} {beside}"
+        )
+    finally:
+        tempfile.tempdir = saved[0]
+        if saved[1] is None:
+            os.environ.pop("TMPDIR", None)
+        else:
+            os.environ["TMPDIR"] = saved[1]
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@pytest.fixture(autouse=True)
+def _no_leftover_temporary_files_per_test(
+    _no_leftover_temporary_files: Path,
+) -> Iterator[None]:
+    """Name the test that leaked (the session guard only says that one did)."""
+    root = _no_leftover_temporary_files
+    before = _piceli_entries(root)
+    yield
+    left = _leftovers(root, before)
+    if left:
+        for name in left:  # report once, not again for every later test
+            entry = root / name
+            if entry.is_dir() and not entry.is_symlink():
+                shutil.rmtree(entry, ignore_errors=True)
+            else:
+                entry.unlink(missing_ok=True)
+        pytest.fail(f"piceli left temporary files behind: {sorted(left)}")
 
 
 @pytest.fixture(autouse=True)

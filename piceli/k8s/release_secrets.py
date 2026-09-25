@@ -33,8 +33,8 @@ import os
 import secrets
 import stat
 import subprocess
-import tempfile
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn
@@ -201,10 +201,12 @@ def _openssl(openssl: Path, *arguments: str) -> None:
         raise SecretGeneratorError("openssl timed out") from None
 
 
-def _private_tempdir() -> tempfile.TemporaryDirectory[str]:
-    directory = tempfile.TemporaryDirectory(prefix="piceli-tls-")
-    os.chmod(directory.name, 0o700)
-    return directory
+def _private_tempdir() -> AbstractContextManager[Path]:
+    """An owner-only ``piceli-tls-*`` directory for key material, removed on
+    exit, error and terminating signals (:mod:`piceli.tempfiles`)."""
+    from piceli.tempfiles import temporary_directory
+
+    return temporary_directory("tls")
 
 
 def _write_private_file(path: Path, content: bytes) -> None:

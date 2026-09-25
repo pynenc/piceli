@@ -9,7 +9,6 @@ import posixpath
 import shutil
 import stat
 import tarfile
-import tempfile
 import threading
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
@@ -22,6 +21,7 @@ from piceli.artifacts.plan import (
     relative,
     validate_digest,
 )
+from piceli.tempfiles import make_directory, untrack
 
 MANIFEST = "application/vnd.oci.image.manifest.v1+json"
 CONFIG = "application/vnd.oci.image.config.v1+json"
@@ -91,7 +91,7 @@ class OciBuilder:
         if cancel is not None and cancel.is_set():
             raise InterruptedError("artifact build cancelled")
         output.parent.mkdir(parents=True, exist_ok=True)
-        temporary = Path(tempfile.mkdtemp(prefix=".piceli-oci-", dir=output.parent))
+        temporary = make_directory("oci", dir=output.parent, hidden=True)
         try:
             (temporary / "blobs/sha256").mkdir(parents=True)
             layer = io.BytesIO()
@@ -177,6 +177,7 @@ class OciBuilder:
         finally:
             if temporary.exists():
                 shutil.rmtree(temporary)
+            untrack(temporary)
 
 
 def _json(path: Path, maximum: int = 1_048_576) -> Any:

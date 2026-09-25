@@ -142,6 +142,19 @@ noted.
   running any code.
 - `piceli observe forward-save`, `piceli operator backup`: write a local
   preferences file or backup archive.
+- `piceli cache status [MODULE:ATTR | --state-dir DIR] --json`, `piceli
+  cache prune … --dry-run`, `piceli doctor [MODULE:ATTR] --json` and
+  `piceli runs [MODULE:ATTR] --json`: read the state directories, the
+  temporary directory and (doctor) the tools' versions; never a cluster (see
+  {doc}`maintenance`). `doctor` exits `1` with `runner-disk-low`,
+  `runner-memory-low` or `runner-tool-missing` before a build would fail.
+- `piceli cache prune [MODULE:ATTR | --state-dir DIR]` without `--dry-run`
+  deletes local files only: stale temporary directories, runs beyond
+  `--keep-last`, unused delivery receipts and (over `--budget`) build
+  outputs and logs; never the release state, the secret store, approved
+  plans, a resumable run or what a rollback of the last releases needs. Run
+  it when the owner asked to free space or configured `cache_budget=`; show
+  the `--dry-run` list first otherwise.
 
 ## Commands that need the owner's approval
 
@@ -304,6 +317,20 @@ never build. The approval rules above apply unchanged:
    replacing deletes and recreates the object (a Job runs again). Plan with
    the suggested `--replace Kind/name` only when the owner asks for it, and
    have them approve that plan's hash.
+
+## Reading what a deploy did
+
+Every `piceli deploy` run that executed writes
+`<state_dir>/runs/<run id>/summary.json` (schema
+`docs/schemas/piceli-run-summary-v1.schema.json`) and `summary.md`; the
+result line names them (`summary.json`, `summary.markdown`) and
+`piceli runs MODULE:ATTR --json` lists them, newest first. Read the JSON, not
+the Markdown: `state`, `failure.stage`, `failure.reason` (then
+`piceli explain <reason> --json`), `failure.category` and `failed_checks`,
+`plan.classes` and `plan.changes[].fields` (changed JSON pointers, never
+values), `images` (digests, sizes, blobs reused) and `stages` (timings). A
+summary never holds a secret value; post the Markdown as is (CI job summary,
+pull request comment).
 
 ## Resuming interrupted work
 

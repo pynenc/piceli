@@ -106,7 +106,40 @@ anything the reviewed preview did not show.
    `deploy-result` artifact.
 4. Expected output: the `apply` job ends with
    `deploy ready: release <name>` on stderr and a last JSON line with
-   `"state": "ready"`.
+   `"state": "ready"`. Its job summary shows the run's summary (below).
+
+## Run summaries in the job summary
+
+Every deploy run writes `summary.md` and `summary.json` next to its journal
+(see {ref}`maintenance-summaries`), and the result line names them
+(`summary.markdown`, `summary.json`). The `apply` and `resume` jobs'
+**Post the run summary** step (`if: always()`, so a failed run is posted too)
+appends `summary.md` to `$GITHUB_STEP_SUMMARY`: status, release, commits,
+image digests and sizes (blobs uploaded and reused), the plan's action
+classes and changed objects with their changed fields, the checks, the
+failure's code and `piceli explain` command, and stage timings. It copies
+both files into the job's artifact (`run-summary.md`, `run-summary.json`):
+an agent reviewing the deploy reads the JSON
+(`docs/schemas/piceli-run-summary-v1.schema.json`), not the Markdown. A
+summary never contains a secret value or a kubeconfig path.
+
+To also comment on the pull request that was merged into `main`, add this
+step after **Post the run summary** and grant the job
+`pull-requests: write` (the sample keeps `contents: read` only):
+
+```yaml
+      - name: Comment the run summary on the merged pull request
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [ -f run-summary.md ] || exit 0
+          pr=$(gh pr list --state merged --search "$GITHUB_SHA" --json number --jq '.[0].number')
+          [ -z "$pr" ] || gh pr comment "$pr" --body-file run-summary.md
+```
+
+For a workflow that runs on `pull_request` instead, comment on
+`${{ github.event.pull_request.number }}`.
 
 ## Secrets and the kubeconfig
 
@@ -179,6 +212,7 @@ built or delivered something.
 | `deploy-ref-unknown` | The runner's clone does not have the commit | Check the checkout step (`ref`, `fetch-depth`) |
 | `deploy-ref-model-differs` | The checkout's pipeline module is not the commit's | Check out `$GITHUB_SHA` (the default) |
 | `pipeline-nothing-to-resume` | The last run finished; nothing to resume | Push or re-run the workflow for a new plan |
+| A build fails with a full disk | The runner's disk filled up | Run `piceli doctor "$PIPELINE"` before the deploy step, and set `cache_budget=` or run `piceli cache prune` (see {doc}`maintenance`) |
 
 Every code is explained by `piceli explain <code>` and in
 {doc}`reference/errors`.

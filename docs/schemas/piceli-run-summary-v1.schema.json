@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.pynenc.org/projects/piceli/en/latest/schemas/piceli-run-summary-v1.schema.json",
+  "title": "piceli deploy run summary",
+  "description": "<state_dir>/runs/<run id>/summary.json, written when a `piceli deploy` run ends (any outcome). Derived from the run journal and its receipts; never contains secret values, kubeconfig paths or process output. Fields are only added within a major version.",
+  "type": "object",
+  "required": ["schema", "run_id", "state", "combined_hash", "pipeline", "sources", "images", "plan", "checks", "failure", "stages", "seconds"],
+  "properties": {
+    "schema": {"const": "piceli.run-summary.v1"},
+    "run_id": {"type": "string"},
+    "state": {
+      "enum": ["running", "ready", "stopped", "failed", "rejected", "rolled-back", "interrupted"],
+      "description": "The run's state when the summary was written."
+    },
+    "reason": {"type": "string", "description": "Error code of a run that did not become ready (piceli explain <code>)."},
+    "created_at": {"type": ["string", "null"]},
+    "updated_at": {"type": ["string", "null"]},
+    "until": {"$ref": "#/$defs/stageName"},
+    "combined_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "pipeline": {
+      "type": "object",
+      "required": ["app"],
+      "properties": {
+        "app": {"type": "string"},
+        "owner": {"type": ["string", "null"]},
+        "namespace": {"type": ["string", "null"]},
+        "context": {"type": ["string", "null"], "description": "The kubeconfig context name (never the kubeconfig path)."},
+        "environment": {"type": ["string", "null"]}
+      }
+    },
+    "release": {"type": ["string", "null"], "description": "The release planned or applied."},
+    "sources": {
+      "type": "object",
+      "description": "Source name to the commit it was built from.",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "commit": {"type": ["string", "null"]},
+          "dirty": {"type": "boolean"},
+          "ref": {"type": ["string", "null"], "description": "With --ref: the requested revision."}
+        }
+      }
+    },
+    "images": {
+      "type": "object",
+      "description": "Build image name to its digests, size and delivery.",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "config_digest": {"type": "string"},
+          "reference": {"type": "string", "description": "The immutable reference the release uses."},
+          "size_bytes": {"type": "integer", "description": "Blob bytes of the pushed image, else the engine's image size."},
+          "delivery": {
+            "type": "object",
+            "properties": {
+              "action": {"type": "string", "description": "present, pushed, imported, …"},
+              "uploaded": {"type": "integer"},
+              "skipped": {"type": "integer", "description": "Blobs the registry already had (reused layers)."},
+              "uploaded_bytes": {"type": "integer"},
+              "skipped_bytes": {"type": "integer"},
+              "transferred_bytes": {"type": "integer"}
+            }
+          }
+        }
+      }
+    },
+    "plan": {
+      "type": ["object", "null"],
+      "description": "The release plan (null when the run stopped before it).",
+      "properties": {
+        "release": {"type": ["string", "null"]},
+        "mode": {"type": ["string", "null"]},
+        "counts": {"type": "object", "additionalProperties": {"type": "integer"}},
+        "classes": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "The action classes present (create, apply, adopt, replace, delete …), no-op excluded."
+        },
+        "changes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["operation", "kind", "name"],
+            "properties": {
+              "operation": {"type": "string"},
+              "kind": {"type": "string"},
+              "name": {"type": "string"},
+              "fields": {"type": "array", "items": {"type": "string"}, "description": "JSON pointers of the changed fields (at most 20; values are never included)."},
+              "changed_fields": {"type": "integer"}
+            }
+          }
+        },
+        "drift": {"type": "array", "items": {"type": "object"}}
+      }
+    },
+    "checks": {
+      "type": ["object", "null"],
+      "properties": {
+        "passed": {"type": ["boolean", "null"]},
+        "why": {"type": "string"},
+        "results": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {"type": ["string", "null"]},
+              "type": {"type": ["string", "null"]},
+              "passed": {"type": ["boolean", "null"]},
+              "code": {"type": ["string", "null"]},
+              "detail": {"type": ["string", "null"]},
+              "duration": {"type": ["number", "null"]}
+            }
+          }
+        },
+        "rollback": {"type": "object"}
+      }
+    },
+    "failure": {
+      "type": ["object", "null"],
+      "description": "The first stage that failed, was rejected or was interrupted.",
+      "properties": {
+        "stage": {"$ref": "#/$defs/stageName"},
+        "state": {"enum": ["failed", "rejected", "interrupted"]},
+        "reason": {"type": "string"},
+        "explain": {"type": "string"},
+        "message": {"type": "string"},
+        "category": {"type": "string"},
+        "causes": {"type": "array"},
+        "failed_checks": {"type": "array", "items": {"type": "object"}}
+      }
+    },
+    "stages": {
+      "type": "object",
+      "propertyNames": {"$ref": "#/$defs/stageName"},
+      "additionalProperties": {
+        "type": "object",
+        "required": ["state"],
+        "properties": {
+          "state": {"type": "string"},
+          "seconds": {"type": "number"},
+          "reason": {"type": "string"}
+        }
+      }
+    },
+    "seconds": {"type": "number", "description": "Sum of the stage timings."}
+  },
+  "$defs": {
+    "stageName": {"enum": ["inputs", "build", "deliver", "plan", "apply", "checks"]}
+  }
+}

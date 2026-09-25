@@ -4,6 +4,46 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Unreleased
+
+- **Temporary files are always removed:** every temporary directory Piceli
+  creates (generated TLS keys, OCI layouts, build staging, `--ref`
+  worktrees, local image imports, state archives, SQLite snapshot copies) is
+  named `piceli-<purpose>-*`, owner-only, and removed on success, error,
+  `Ctrl-C` and now also on `SIGTERM`/`SIGHUP` (the `piceli` entry point
+  removes live ones before the signal's default action; an `atexit` hook
+  catches threads). A failed write of the release catalog, a delivery
+  receipt or a build output no longer leaves a partial file. The SQLite
+  snapshot copy was named `.snapshot-*`; it is `piceli-snapshot-*` now. The
+  test suite fails when any test leaves a temporary file behind.
+- **`piceli cache status [--json]` and `piceli cache prune [--keep-last N]
+  [--budget 20GiB] [--dry-run]` (preview):** disk used per state directory
+  (each environment's too) and category (builds, toolchains, blobs,
+  receipts, runs, release, other, temp) and by stale temporary directories;
+  a prune that never removes the release state, the secret store, approved
+  plans, build or mirror receipts, the latest or a resumable run, or the runs
+  of the last N applied releases, under the state directory's run lock. With
+  shared state only machine-local files are pruned.
+  `Pipeline(cache_budget="20GiB")` prunes after every run; the deploy result
+  adds `cache`. New codes `cache-budget-invalid`, `cache-over-budget`,
+  `cache-arguments-conflict`. See `docs/maintenance.md`.
+- **`piceli doctor [--json]` (preview):** free disk and memory against what
+  the next build needs (from the last build receipts) and the tools the
+  pipeline uses (`docker`, `docker buildx`, `kubectl`); exit `1` with
+  `runner-disk-low`, `runner-memory-low` or `runner-tool-missing`.
+- **Run summaries (preview):** every deploy run writes
+  `<state_dir>/runs/<id>/summary.json` (`piceli.run-summary.v1`,
+  `docs/schemas/piceli-run-summary-v1.schema.json`) and `summary.md` when it
+  ends, whatever the outcome: commits and refs, image digests, sizes and
+  reused blobs, plan action classes and counts, changed objects with their
+  changed field paths, checks, the failure's code and message, stage
+  timings; never secret values. The deploy result adds `summary`, and the
+  journaled plan stage output adds `diff` (changed field paths). `piceli runs
+  [--json]` lists the runs. The CI recipe posts `summary.md` as the job
+  summary of `apply` and `resume` and keeps `summary.json` in the artifact
+  (`docs/ci.md` also shows a pull request comment).
+- Build receipts record each image's engine size (`size_bytes`).
+
 ## Version 0.7.0
 
 - **Reference app:** `examples/reference/app.py` deploys a realistic app to

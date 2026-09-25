@@ -208,9 +208,8 @@ def snapshot_of(
     allow_partial: bool,
 ) -> bytes:
     """The snapshot an export restores (refuses another release or a partial one)."""
-    import tempfile
-
     from piceli.state import snapshot as snapshots
+    from piceli.tempfiles import temporary_directory
 
     for field in ("name", "namespace", "layout"):
         if document.get(field) != getattr(scope, field):
@@ -249,7 +248,7 @@ def snapshot_of(
             raise StateError(
                 "state-key-required", "the key does not decrypt this export"
             ) from None
-    with tempfile.TemporaryDirectory(prefix="piceli-state-") as folder:
+    with temporary_directory("state") as folder:
         directory = Path(folder) / "state"
         for part in parts:
             snapshots.unpack(part, directory, replace=False)

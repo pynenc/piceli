@@ -74,7 +74,26 @@
         "blocking": {"type": "array", "items": {"type": "object"}},
         "preview": {"$ref": "#/$defs/previewMarker"},
         "plan_file": {"type": "string", "description": "With --plan --out FILE (planned): the portable plan file written (piceli.deploy-plan-file.v1)."},
-        "lock": {"$ref": "#/$defs/lock"}
+        "lock": {"$ref": "#/$defs/lock"},
+        "summary": {
+          "type": "object",
+          "description": "Added in 0.8.0. A run that executed: its summary files under <state_dir>/runs/<run id>/ (summary.json follows piceli-run-summary-v1.schema.json; summary.md is for people and CI job summaries).",
+          "required": ["json", "markdown"],
+          "properties": {
+            "json": {"type": "string"},
+            "markdown": {"type": "string"}
+          }
+        },
+        "cache": {
+          "type": "object",
+          "description": "Added in 0.8.0. With Pipeline(cache_budget=...): the state directory's size after the prune that follows the run.",
+          "properties": {
+            "budget_bytes": {"type": "integer"},
+            "bytes": {"type": "integer"},
+            "freed_bytes": {"type": "integer"},
+            "over_budget": {"type": "boolean"}
+          }
+        }
       }
     },
     "lock": {
