@@ -149,6 +149,7 @@ kubernetes_model/index
 
 deploy
 ci
+state
 typed_apps
 release_cli
 checks

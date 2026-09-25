@@ -121,7 +121,7 @@ socket and reads no kubeconfig. The names are loaded on first use.
 | `write_kubeconfig(url, path, context="fake")` | A credential-free kubeconfig for the server |
 | `FakeAPI(types=None)` | The server state: `objects`, `requests`, `put(...)`, `inject(...)`, `managers(kind, name)`, `field_ownership`, `ready`, `wait_for_first_consumer`, `terminating_reads` (an `Orphan` delete lingers for that many reads) |
 | `TARGET` | The `PlanTarget` every server represents (`acceptance-cluster`, `piceli-test`) |
-| `TYPES` | The default served kinds: ConfigMap, Secret, Service, Pod, PersistentVolumeClaim, PersistentVolume, Namespace, Deployment, NetworkPolicy, ServiceAccount, Role, RoleBinding, ClusterRole, ClusterRoleBinding and a test `Widget` |
+| `TYPES` | The default served kinds: ConfigMap, Secret, Service, Pod, PersistentVolumeClaim, PersistentVolume, Namespace, Deployment, NetworkPolicy, ServiceAccount, Role, RoleBinding, ClusterRole, ClusterRoleBinding, a test `Widget` and (0.6.0) `coordination.k8s.io/v1` Lease, for shared state (`state="cluster"`) |
 | `manifest(kind, name, value=...)` | A minimal valid object for seeding |
 | `field_paths`, `fields_v1`, `paths_of`, `value_at` | Helpers for `managedFields` (FieldsV1) paths |
 | `piceli.testing.pytest_plugin` | The `piceli_fake_cluster` fixture |
@@ -129,8 +129,9 @@ socket and reads no kubeconfig. The names are loaded on first use.
 ## What it does not do
 
 - No admission, no defaulting beyond status (Deployments report ready
-  replicas, PVCs bind, Services get a cluster IP), no watch, no
-  label-selector queries, no Pods created from Deployments.
+  replicas, PVCs bind, Services get a cluster IP), no watch, only
+  equality and existence label selectors on lists (`k`, `!k`, `k=v`,
+  `k!=v`), no Pods created from Deployments.
 - One namespace and one cluster identity (`kube-system` UID `cluster-uid`,
   namespace UID `namespace-uid`).
 - It exists to test Piceli's clients, not Kubernetes semantics: keep one

@@ -81,6 +81,10 @@ def _without_ownership(manifest: dict[str, Any]) -> dict[str, Any]:
     return dict(value)
 
 
+#: Label of Piceli's shared-state objects (see :mod:`piceli.state.cluster`).
+STATE_LABEL = "piceli.io/state"
+
+
 class ProviderError(Exception):
     """Allowlisted failure only; server bodies and credentials are never exposed."""
 
@@ -428,7 +432,12 @@ class KubernetesProvider:
         if api != request.api_resource:
             raise ProviderError("undiscovered-api")
         positive(request.page_size, "page", 1000)
-        query: dict[str, Any] = {"limit": request.page_size}
+        # Piceli's own shared-state objects (Lease lock, state Secrets) are
+        # never part of a release: excluded from every discovery.
+        query: dict[str, Any] = {
+            "limit": request.page_size,
+            "labelSelector": "!" + STATE_LABEL,
+        }
         if request.continuation is not None:
             query["continue"] = text(request.continuation, "continuation")
         try:

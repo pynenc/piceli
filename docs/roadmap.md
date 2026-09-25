@@ -19,6 +19,7 @@ Priorities may change. Progress is tracked in
 | Dependency-ordered plan and apply | ✅ Available |
 | Image handoff by digest (build → deliver → release, immutable references only) | 🟡 Preview |
 | One command from source to a verified release (`piceli deploy`) | 🟡 Preview: journaled, resumable, skips unchanged stages |
+| Shared state and release lock for team CI (`state="cluster"`, plan files) | 🟡 Preview: plan on one runner, apply or resume on another |
 | Server-side apply with preconditions, journal and resume | ✅ The only engine: `piceli release` and the Python API |
 | Field-level diff and true no-op plans | 🟡 Preview: `release plan`/`release diff` (server dry runs) |
 | Safe pruning of removed resources | 🟡 Opt-in (`prune = true`) |
@@ -53,6 +54,7 @@ Every feature page starts with its maturity, and this table lists them all:
 | Deploy from source (`piceli deploy`, `piceli.pipeline`) | {doc}`deploy` | preview |
 | Deploy a commit (`piceli deploy --ref`) | {ref}`deploy-ref` | preview |
 | Deploy from CI with an approval step (GitHub Actions recipe) | {doc}`ci` | preview |
+| Shared deployment state, release lock, plan files, `piceli state` | {doc}`state` | preview |
 | Releases from a spec (`piceli release`) | {doc}`release_cli` | preview |
 | Post-deploy checks and automatic rollback (`[[checks]]`, `piceli.checks`, `release check`) | {doc}`checks` | preview |
 | Field-level diffs and no-op detection (`release plan`, `release diff`) | {doc}`plans_and_diffs` | preview |

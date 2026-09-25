@@ -160,6 +160,10 @@ class ReleaseSettings(_Strict):
     catalog: Path | None = None
     journal: Path | None = None
     secret_store: Path | None = None
+    # "cluster": the state lives in the release namespace behind a Lease lock;
+    # state_dir is this runner's working copy. See docs/state.md.
+    state: Literal["local", "cluster"] = "local"
+    state_lease_seconds: int = Field(default=60, ge=5, le=3600)
     approval_window_seconds: int = Field(default=900, ge=30, le=86400)
     prune: bool = False
     inherited_owners: tuple[str, ...] = ()
@@ -172,6 +176,19 @@ class ReleaseSettings(_Strict):
     # After a release's checks fail, re-apply the previous ready release
     # automatically (journaled like any rollback). See docs/checks.md.
     rollback_on_failed_checks: bool = False
+
+    @model_validator(mode="after")
+    def _shared_state(self) -> ReleaseSettings:
+        if self.state == "cluster" and (
+            self.catalog is not None
+            or self.journal is not None
+            or self.secret_store is not None
+        ):
+            raise ValueError(
+                'state = "cluster" keeps the catalog, journal and secret store '
+                "in state_dir; remove catalog, journal and secret_store"
+            )
+        return self
 
     @field_validator("adopt")
     @classmethod

@@ -8,7 +8,7 @@ import json
 import os
 import re
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -57,6 +57,17 @@ class ExecutionJournal:
         )
         if self.connection.execute("PRAGMA quick_check").fetchone()[0] != "ok":
             raise ValueError("journal integrity check failed")
+
+    #: Called after every committed transaction, before the caller's IO
+    #: (shared state writes the journal through; see :mod:`piceli.state`).
+    on_commit: Callable[[], None] | None = None
+
+    @contextmanager
+    def _transaction(self) -> Iterator[None]:
+        with self.connection:
+            yield
+        if self.on_commit is not None:
+            self.on_commit()
 
     def _capacity(self, encoded: str = "") -> None:
         # Reserve several SQLite pages for a complete intent/receipt transaction.
@@ -110,7 +121,7 @@ class ExecutionJournal:
                 raise ValueError("journal action inventory is incomplete or invalid")
             return
         self._capacity(encoded)
-        with self.connection:
+        with self._transaction():
             self.connection.execute(
                 "INSERT INTO executions(id,binding) VALUES (?,?)", (execution, encoded)
             )
@@ -246,7 +257,7 @@ class ExecutionJournal:
         if state == "ready" and any(item[1] != "ready" for item in prepared):
             raise ValueError("ready legacy execution has incomplete receipts")
         self._capacity(encoded_binding + encoded_archive)
-        with self.connection:
+        with self._transaction():
             self.connection.execute(
                 "INSERT INTO executions(id,binding,state) VALUES (?,?,?)",
                 (execution, encoded_binding, state),
@@ -292,7 +303,7 @@ class ExecutionJournal:
                 raise ValueError("deployment session archive changed")
             return
         self._capacity(encoded)
-        with self.connection:
+        with self._transaction():
             self.connection.execute(
                 "INSERT INTO deployment_sessions(id,archive) VALUES (?,?)",
                 (session_id, encoded),
@@ -321,7 +332,7 @@ class ExecutionJournal:
             payload, sort_keys=True, separators=(",", ":"), allow_nan=False
         )
         self._capacity(encoded)
-        with self.connection:
+        with self._transaction():
             cursor = self.connection.execute(
                 "UPDATE actions SET state=?,payload=? WHERE execution=? AND ordinal=?",
                 (state, encoded, execution, ordinal),
@@ -337,7 +348,7 @@ class ExecutionJournal:
         """Persist one bounded provider failure category without exception details."""
         if not re.fullmatch(r"[a-z][a-z0-9-]{0,79}", category):
             raise ValueError("invalid provider failure category")
-        with self.connection:
+        with self._transaction():
             self.connection.execute(
                 "INSERT INTO events(execution,ordinal,state) VALUES (?,NULL,?)",
                 (execution, f"error:{category}"),
@@ -345,13 +356,13 @@ class ExecutionJournal:
 
     def set_state(self, execution: str, state: str) -> None:
         self._capacity()
-        with self.connection:
+        with self._transaction():
             self.connection.execute(
                 "UPDATE executions SET state=? WHERE id=?", (state, execution)
             )
 
     def cancel(self, execution: str) -> None:
-        with self.connection:
+        with self._transaction():
             cursor = self.connection.execute(
                 "UPDATE executions SET cancelled=1,state='cancelled' WHERE id=?",
                 (execution,),
@@ -360,7 +371,7 @@ class ExecutionJournal:
                 raise ValueError("unknown execution")
 
     def resume(self, execution: str) -> None:
-        with self.connection:
+        with self._transaction():
             self.connection.execute(
                 "UPDATE executions SET cancelled=0,state='pending' WHERE id=?",
                 (execution,),

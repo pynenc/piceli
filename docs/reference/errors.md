@@ -73,6 +73,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`deleted-resource-reappeared`](#error-deleted-resource-reappeared) | execution | no |
 | [`delivery-not-succeeded`](#error-delivery-not-succeeded) | images | no |
 | [`deploy-flags-conflict`](#error-deploy-flags-conflict) | cli | no |
+| [`deploy-plan-file-invalid`](#error-deploy-plan-file-invalid) | pipeline | no |
+| [`deploy-plan-file-mismatch`](#error-deploy-plan-file-mismatch) | pipeline | no |
+| [`deploy-plan-target-mismatch`](#error-deploy-plan-target-mismatch) | pipeline | no |
 | [`deploy-ref-ambiguous`](#error-deploy-ref-ambiguous) | pipeline | no |
 | [`deploy-ref-checkout-failed`](#error-deploy-ref-checkout-failed) | pipeline | yes |
 | [`deploy-ref-invalid`](#error-deploy-ref-invalid) | pipeline | no |
@@ -258,6 +261,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`registry-unreachable`](#error-registry-unreachable) | artifacts-registry | yes |
 | [`release-changes-pending`](#error-release-changes-pending) | release | no |
 | [`release-history-malformed`](#error-release-history-malformed) | release | no |
+| [`release-locked`](#error-release-locked) | state | yes |
 | [`release-owner-mismatch`](#error-release-owner-mismatch) | release | no |
 | [`release-refused`](#error-release-refused) | release | no |
 | [`release-state-unavailable`](#error-release-state-unavailable) | release | yes |
@@ -312,7 +316,19 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`spec-changed`](#error-spec-changed) | build-spec | yes |
 | [`spec-unreadable`](#error-spec-unreadable) | build-spec | no |
 | [`ssh-tool-required`](#error-ssh-tool-required) | artifacts-input | no |
+| [`state-access-denied`](#error-state-access-denied) | state | no |
+| [`state-corrupt`](#error-state-corrupt) | state | no |
+| [`state-crypto-unavailable`](#error-state-crypto-unavailable) | state | no |
+| [`state-export-invalid`](#error-state-export-invalid) | state | no |
+| [`state-import-changed`](#error-state-import-changed) | state | no |
+| [`state-import-partial`](#error-state-import-partial) | state | no |
+| [`state-key-required`](#error-state-key-required) | state | no |
+| [`state-layout-mismatch`](#error-state-layout-mismatch) | state | no |
+| [`state-lock-lost`](#error-state-lock-lost) | state | no |
 | [`state-locked`](#error-state-locked) | observe | yes |
+| [`state-output-exists`](#error-state-output-exists) | state | no |
+| [`state-too-large`](#error-state-too-large) | state | no |
+| [`state-unavailable`](#error-state-unavailable) | state | yes |
 | [`status-checks-unreadable`](#error-status-checks-unreadable) | access | yes |
 | [`status-cluster-unreadable`](#error-status-cluster-unreadable) | access | yes |
 | [`status-port-occupied`](#error-status-port-occupied) | access | yes |
@@ -343,9 +359,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-deploy-flags-conflict)=
 ### `deploy-flags-conflict`
 
-**Conflicting deploy flags.** `piceli deploy` got flags that cannot be combined (`--resume` with planning flags or `--ref`, `--approve` with `--plan` or `--auto-approve`, or `--plan` with `--auto-approve`).
+**Conflicting deploy flags.** `piceli deploy` got flags that cannot be combined (`--resume` with planning flags or `--ref`, `--approve` with `--plan` or `--auto-approve`, `--plan` with `--auto-approve`, `--out` without `--plan`, `--apply` without `--approve` or with planning flags, or no pipeline).
 
-- **Fix:** Use `--plan`, then `--approve HASH` (with the same `--ref`); or `--auto-approve` alone; or `--resume` alone (it reuses the run's commits).
+- **Fix:** Use `--plan` (optionally `--out FILE`), then `--approve HASH` (with the same `--ref`) or `--apply FILE --approve HASH`; or `--auto-approve` alone; or `--resume` alone (it reuses the run's commits).
 - **Retry-safe:** no
 
 (error-deploy-stage-unknown)=
@@ -2727,6 +2743,30 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 ## Deploying a pipeline from source (`piceli deploy`)
 
+(error-deploy-plan-file-invalid)=
+### `deploy-plan-file-invalid`
+
+**Plan file unreadable.** The file given to `piceli deploy --apply` is not a readable `piceli.deploy-plan-file.v1` document (missing, truncated, another schema, or a malformed field).
+
+- **Fix:** Use the file `piceli deploy … --plan --out FILE` wrote, unchanged (for example the CI artifact of the plan job).
+- **Retry-safe:** no
+
+(error-deploy-plan-file-mismatch)=
+### `deploy-plan-file-mismatch`
+
+**Plan file does not match.** `--approve` is not the plan file's combined hash, or the plan file was made for another pipeline, owner or declared target.
+
+- **Fix:** Approve the combined hash printed with this plan file (its `combined_hash`), with the pipeline module it was planned from.
+- **Retry-safe:** no
+
+(error-deploy-plan-target-mismatch)=
+### `deploy-plan-target-mismatch`
+
+**Plan made against another cluster.** The kubeconfig of the applying runner reaches a cluster or namespace whose UIDs differ from the ones the plan file recorded.
+
+- **Fix:** Apply with the kubeconfig the plan was made with, or plan again against this cluster.
+- **Retry-safe:** no
+
 (error-deploy-ref-ambiguous)=
 ### `deploy-ref-ambiguous`
 
@@ -2842,9 +2882,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-pipeline-locked)=
 ### `pipeline-locked`
 
-**Pipeline state directory in use.** Another `piceli deploy` run holds the lock of this pipeline's state directory.
+**Pipeline release locked.** Another run holds the pipeline's lock: another process using this state directory, or, with `state="cluster"`, another runner holding the release's Lease (the rejection's `lock` names the holder and when its lease expires).
 
-- **Fix:** Wait for the other run to finish, then run the command again.
+- **Fix:** Wait for the other run to finish, then run the command again. A runner that died frees the lock when its lease expires (`piceli state show` shows the holder).
 - **Retry-safe:** yes
 
 (error-pipeline-mirror-failed)=
@@ -2965,4 +3005,111 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Stage failed unexpectedly.** A stage raised an unexpected local error (a file or tool could not be used); stderr has the error type.
 
 - **Fix:** Fix the local problem, then continue with `piceli deploy MODULE:ATTR --resume`.
+- **Retry-safe:** yes
+
+
+## Shared deployment state and release locks (`state = "cluster"`, `piceli state …`)
+
+(error-release-locked)=
+### `release-locked`
+
+**Release locked.** Another runner holds the release's Lease in the namespace (`[release] state = "cluster"`); the rejection names the holder and when its lease expires.
+
+- **Fix:** Wait for the other run to finish, then run the command again. A runner that died frees the lock when its lease expires (`piceli state show` shows the holder).
+- **Retry-safe:** yes
+
+(error-state-access-denied)=
+### `state-access-denied`
+
+**Shared state not permitted.** The target's kubeconfig may not read or write the shared state: it needs `get`, `create`, `patch` and `delete` on `secrets` and `leases` (`coordination.k8s.io`) in the release namespace.
+
+- **Fix:** Grant those verbs to the deploying identity in the namespace (see `docs/state.md`), then run the command again.
+- **Retry-safe:** no
+
+(error-state-corrupt)=
+### `state-corrupt`
+
+**Shared state unreadable.** The shared state in the namespace does not match its manifest (a missing or altered chunk Secret, an unknown schema) or a snapshot or export holds an unsafe member.
+
+- **Fix:** Do not edit `piceli-state-*` Secrets by hand. Restore the state from an export with `piceli state import`, or ask the owner.
+- **Retry-safe:** no
+
+(error-state-crypto-unavailable)=
+### `state-crypto-unavailable`
+
+**Encryption library missing.** Encrypting or decrypting the secret material of a state export needs the `cryptography` package, which is not installed.
+
+- **Fix:** Install it (`pip install 'piceli[crypto]'`), or export without `--include-secrets`.
+- **Retry-safe:** no
+
+(error-state-export-invalid)=
+### `state-export-invalid`
+
+**State export unreadable.** The file given to `piceli state import` is not a `piceli.state-export.v1` document, its digest does not match, or it was exported for another release or namespace.
+
+- **Fix:** Use the unchanged file `piceli state export` wrote for this release.
+- **Retry-safe:** no
+
+(error-state-import-changed)=
+### `state-import-changed`
+
+**Import approval does not match.** The `--approve` digest of `piceli state import` is not the digest of this export for this release and state backend.
+
+- **Fix:** Run `piceli state import` without `--approve`, review it, then approve the digest it prints.
+- **Retry-safe:** no
+
+(error-state-import-partial)=
+### `state-import-partial`
+
+**State export without secrets.** The export holds no secret material (secret store, stored discovery, execution journal, backups); importing it would make the next release generate new secret values.
+
+- **Fix:** Import an export made with `--include-secrets --key-file`, or pass `--allow-partial` when regenerating every secret is intended.
+- **Retry-safe:** no
+
+(error-state-key-required)=
+### `state-key-required`
+
+**State key needed.** Exporting secret material (`--include-secrets`) or importing an export that holds it needs `--key-file` with the key (at least 32 characters, in a file only its owner can read); or the key does not decrypt the export.
+
+- **Fix:** Pass `--key-file` naming an owner-only (mode 0600) file with the key used for the export.
+- **Retry-safe:** no
+
+(error-state-layout-mismatch)=
+### `state-layout-mismatch`
+
+**Shared state of another kind.** The namespace already holds shared state for this release name written by another kind of spec (a pipeline versus a `release.toml`).
+
+- **Fix:** Give the release another name, or keep using the spec that wrote the state.
+- **Retry-safe:** no
+
+(error-state-lock-lost)=
+### `state-lock-lost`
+
+**Release lock lost.** This run's release lock was taken over by another runner (its lease expired while this run could not renew it), so this run stopped writing the shared state (fencing).
+
+- **Fix:** Check who holds the lock with `piceli state show`; when that run finished, continue with `piceli deploy … --resume` (or `piceli release resume`).
+- **Retry-safe:** no
+
+(error-state-output-exists)=
+### `state-output-exists`
+
+**Export file exists.** `piceli state export --out` names a file that already exists.
+
+- **Fix:** Choose another path, or pass `--force` to overwrite it.
+- **Retry-safe:** no
+
+(error-state-too-large)=
+### `state-too-large`
+
+**Shared state too large.** The compressed state is larger than the shared-state limit (64 chunks of 512 KiB).
+
+- **Fix:** Remove releases you no longer need from the catalog, or keep this release on `state = "local"`.
+- **Retry-safe:** no
+
+(error-state-unavailable)=
+### `state-unavailable`
+
+**Shared state unreachable.** Reading or writing the shared state or its Lease in the release namespace failed (the API server was unreachable or answered an error).
+
+- **Fix:** Check that the cluster is reachable with the target's kubeconfig, then run the command again.
 - **Retry-safe:** yes

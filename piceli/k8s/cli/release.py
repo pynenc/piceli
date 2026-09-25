@@ -128,49 +128,61 @@ def is_pipeline_target(spec: str) -> bool:
     return not spec.endswith(".toml") and ":" in spec
 
 
-def _load_spec(spec: str, *, current: bool) -> tuple[Any, Any]:
-    """``(release spec, pipeline or None)`` for ``--spec``.
+@contextmanager
+def _runner(spec: str, *, current: bool = False, write: bool = False) -> Iterator[Any]:
+    """A runner whose state is open for the command.
 
-    ``current``: the command plans a new release from the current model, so a
-    pipeline's build images must be delivered from its current sources.
+    ``write``: the command changes state or the cluster. For a pipeline it
+    holds the pipeline's run lock, so it never races a ``piceli deploy`` of
+    the same state (``pipeline-locked``). With shared state (``state =
+    "cluster"``) the working copy is refreshed from the cluster first; a
+    writing command holds the release lock and writes the state back at every
+    apply step and when it ends. Local ``release.toml`` state is used as is.
     """
+    from piceli.k8s.release_runner import ReleaseRunner
     from piceli.k8s.release_spec import ReleaseSpec, ReleaseSpecError
+    from piceli.state import session
+    from piceli.state.scopes import pipeline_scope, release_scope
 
-    if not is_pipeline_target(spec):
+    pipeline = None
+    loaded: Any = None
+    if is_pipeline_target(spec):
+        from piceli.k8s.cli.deploy_pipeline import load_pipeline
+
+        pipeline = load_pipeline(spec)
+        scope = pipeline_scope(pipeline)
+    else:
         path = Path(spec).expanduser()
         if not path.is_file():
             raise ReleaseSpecError(f"release spec not found: {spec}")
-        return ReleaseSpec.from_toml(path), None
-    from piceli.k8s.cli.deploy_pipeline import load_pipeline
-    from piceli.pipeline.operate import operations_spec
+        loaded = ReleaseSpec.from_toml(path)
+        scope = release_scope(loaded)
+    local = scope.settings.backend == "local"
+    if local and (pipeline is None or not write):
+        if pipeline is not None:
+            from piceli.pipeline.operate import operations_spec
 
-    pipeline = load_pipeline(spec)
-    return operations_spec(pipeline, current=current), pipeline
-
-
-def _runner(spec: str, *, current: bool = False) -> Any:
-    from piceli.k8s.release_runner import ReleaseRunner
-
-    return ReleaseRunner(_load_spec(spec, current=current)[0], progress=_progress)
-
-
-@contextmanager
-def _locked_runner(spec: str, *, current: bool) -> Iterator[Any]:
-    """A runner for a command that changes the cluster.
-
-    For a pipeline it holds the pipeline's run lock, so it never races a
-    ``piceli deploy`` of the same state directory (``pipeline-locked``).
-    """
-    from piceli.k8s.release_runner import ReleaseRunner
-
-    loaded, pipeline = _load_spec(spec, current=current)
-    if pipeline is None:
+            loaded = operations_spec(pipeline, current=current)
         yield ReleaseRunner(loaded, progress=_progress)
         return
-    from piceli.pipeline.journal import Journal
+    with session(scope, write=write, say=_say) as held:
+        if pipeline is not None:
+            from piceli.pipeline.operate import operations_spec
 
-    with Journal(pipeline.state_dir).locked():
-        yield ReleaseRunner(loaded, progress=_progress)
+            loaded = operations_spec(pipeline, current=current)
+
+        def progress(text: str) -> None:
+            _progress(text)
+            held.checkpoint()
+
+        runner = ReleaseRunner(loaded, progress=progress)
+        runner.checkpoint = lambda: held.checkpoint(force=True)
+        yield runner
+
+
+def _locked_runner(spec: str, *, current: bool) -> Any:
+    """A runner for a command that changes the cluster (see :func:`_runner`)."""
+    return _runner(spec, current=current, write=True)
 
 
 def _progress(text: str) -> None:
@@ -476,12 +488,13 @@ def plan(
 ) -> None:
     """Capture live discovery and persist an approvable plan (prints its hash)."""
     try:
-        result = _runner(spec, current=True).plan(
-            rotate=rotate or (),
-            adopt=adopt or (),
-            replace=replace or (),
-            adopt_all_desired=adopt_all_desired,
-        )
+        with _runner(spec, current=True, write=True) as runner:
+            result = runner.plan(
+                rotate=rotate or (),
+                adopt=adopt or (),
+                replace=replace or (),
+                adopt_all_desired=adopt_all_desired,
+            )
         if out is not None:
             out.write_text(
                 json.dumps(result.to_dict(full=True), sort_keys=True, indent=2)
@@ -511,11 +524,12 @@ def diff(
 ) -> None:
     """Show what `plan` would change, field by field (read-only, nothing stored)."""
     try:
-        value = _runner(spec, current=True).diff(
-            adopt=adopt or (),
-            replace=replace or (),
-            adopt_all_desired=adopt_all_desired,
-        )
+        with _runner(spec, current=True) as runner:
+            value = runner.diff(
+                adopt=adopt or (),
+                replace=replace or (),
+                adopt_all_desired=adopt_all_desired,
+            )
     except _refusals() as error:
         _refuse(error)
         return
@@ -645,7 +659,8 @@ def check(
     when one failed (``"state": "failed", "reason": "check-failed"``).
     """
     try:
-        outcome = _runner(spec).check(release)
+        with _runner(spec, write=True) as runner:
+            outcome = runner.check(release)
     except _refusals() as error:
         _refuse(error)
         return
@@ -667,7 +682,8 @@ def check(
 def status(spec: SpecOption) -> None:
     """Show catalogued releases, their executions and history (no cluster access)."""
     try:
-        value = _runner(spec).status()
+        with _runner(spec) as runner:
+            value = runner.status()
     except _refusals() as error:
         _refuse(error)
         return
@@ -728,32 +744,52 @@ def secret_show(
 ) -> None:
     """Show a secret's metadata, and its value with --reveal (never logged).
 
-    Reads the local state directory only; never contacts the cluster.
+    Reads the local state directory only; with shared state (``state =
+    "cluster"``) it refreshes the working copy from the cluster first.
     """
-    from piceli.k8s.release_secret_spec import SecretError
-
     try:
-        runner = _runner(spec)
-        metadata = runner.secret_metadata(name, release=release)
-        if as_json and not reveal:
-            _emit(metadata)
-            return
-        if not reveal and not _confirm_reveal(name):
-            raise SecretError(
-                "secret-reveal-required",
-                f"printing secret {name!r} needs --reveal (or confirmation on a "
-                "terminal); use --json for metadata only",
-            )
-        values = runner.reveal_secret(name, key=key, release=release)
-        if not as_json and len(values) != 1:
-            raise SecretError(
-                "secret-key-required",
-                f"secret {name!r} has several values; choose one with --key "
-                f"({', '.join(sorted(values))})",
-            )
+        with _runner(spec) as runner:
+            metadata = runner.secret_metadata(name, release=release)
+            if as_json and not reveal:
+                _emit(metadata)
+                return
+            values = _reveal(runner, name, key, release, reveal=reveal, as_json=as_json)
     except _refusals() as error:
         _refuse(error)
         return
+    _print_values(metadata, values, as_json=as_json)
+
+
+def _reveal(
+    runner: Any,
+    name: str,
+    key: str | None,
+    release: str | None,
+    *,
+    reveal: bool,
+    as_json: bool,
+) -> dict[str, bytes]:
+    from piceli.k8s.release_secret_spec import SecretError
+
+    if not reveal and not _confirm_reveal(name):
+        raise SecretError(
+            "secret-reveal-required",
+            f"printing secret {name!r} needs --reveal (or confirmation on a "
+            "terminal); use --json for metadata only",
+        )
+    values: dict[str, bytes] = runner.reveal_secret(name, key=key, release=release)
+    if not as_json and len(values) != 1:
+        raise SecretError(
+            "secret-key-required",
+            f"secret {name!r} has several values; choose one with --key "
+            f"({', '.join(sorted(values))})",
+        )
+    return values
+
+
+def _print_values(
+    metadata: dict[str, Any], values: dict[str, bytes], *, as_json: bool
+) -> None:
     if as_json:
         revealed: dict[str, Any] = {}
         for item, value in values.items():

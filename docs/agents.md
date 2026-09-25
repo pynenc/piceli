@@ -123,6 +123,12 @@ noted.
   with placeholder images (`stages.plan.preview`), and refuses with the
   `blocking` objects when the release would need adoption or replacement. With `--ref SOURCE=REV` it also checks the commit out
   into a temporary git worktree, removed before it exits.
+- `piceli state show --spec …` (where the state lives, its generation, the
+  release lock's holder; never prints content), `piceli state pull --spec …`
+  (refreshes the local working copy of shared state) and
+  `piceli state export --spec … --out FILE` (secret material left out; with
+  `--include-secrets` only encrypted with a key file the owner provides,
+  never one you create).
 - `piceli artifacts build`: assembles an OCI layout in `--output` without
   running any code.
 - `piceli observe forward-save`, `piceli operator backup`: write a local
@@ -134,7 +140,8 @@ Ask before running these, and show the owner what will happen first.
 
 | Command | Changes | Approve with |
 | --- | --- | --- |
-| `piceli deploy` | Builds images, pushes them to a registry or node, applies a release | `--approve <combined hash>` from `piceli deploy MODULE:ATTR --plan`, after the owner reviewed that plan; `--resume` continues an approved run |
+| `piceli deploy` | Builds images, pushes them to a registry or node, applies a release | `--approve <combined hash>` from `piceli deploy MODULE:ATTR --plan`, after the owner reviewed that plan (or `--apply <plan file> --approve <its hash>` on another runner); `--resume` continues an approved run |
+| `piceli state import` | Replaces the release's state (local directory or the shared state in the namespace) | `--approve <import digest>` printed by `piceli state import` without `--approve`, after the owner agreed to replace the state |
 | `piceli release apply` | The cluster | `--approve <plan hash>` from `release plan`, after the owner reviewed that plan |
 | `piceli release rollback` | The cluster | `--approve <plan hash>` from `release rollback <target>` without `--approve` |
 | `piceli release resume` | The cluster (continues an approved execution) | The owner's go-ahead to continue |
@@ -224,6 +231,21 @@ changes yourself. In CI, the approval is a protected environment and the
 apply job passes the plan job's `combined_hash` (see {doc}`ci`); an agent
 never approves that environment on the owner's behalf.
 
+**Planning and applying on different machines.** `--plan --out FILE`
+writes a plan file; `piceli deploy --apply FILE --approve <combined hash>`
+applies it anywhere (it plans again and refuses any difference:
+`pipeline-plan-changed`, `deploy-plan-file-mismatch`,
+`deploy-plan-target-mismatch`). Across runners the pipeline needs
+`state="cluster"` (see {doc}`state`); never switch a pipeline's `state`
+yourself.
+
+**Shared state and the release lock.** With `state="cluster"` every command
+takes the release lock. `pipeline-locked` (or `release-locked`) names the
+holder and `expires_in`: another deployer is running, so wait and retry; do
+not delete the `piceli-lock-*` Lease or any `piceli-state-*` Secret, ever.
+`state-lock-lost` means another runner took the lock over: run
+`piceli state show`, report it, and resume only when the owner agrees.
+
 (agents-pipeline-release)=
 ### Operating a pipeline's release
 
@@ -244,7 +266,8 @@ never build. The approval rules above apply unchanged:
 3. `plan`/`diff`/`apply` with a pipeline refuse with `pipeline-not-delivered`
    when the current sources were not built and delivered yet: use
    `piceli deploy` instead. `pipeline-locked` means a `piceli deploy` of the
-   same state directory is running: wait.
+   same state directory (with shared state: of the same release, anywhere)
+   is running: wait.
 
 ## When something fails
 
@@ -267,7 +290,9 @@ never build. The approval rules above apply unchanged:
 - **`piceli deploy` was interrupted** (or failed at a stage you then fixed):
   run `piceli deploy MODULE:ATTR --resume`. It continues the approved run at
   the first unfinished stage and reuses the finished stages' receipts; an
-  interrupted apply is resumed with the same grant.
+  interrupted apply is resumed with the same grant. With `state="cluster"`
+  this works from any runner, also when the first runner's state directory
+  is gone; a runner that died holds the lock until its lease expires.
 - **`artifacts deliver` was interrupted**: run it again with the same
   arguments. Registry pushes are content addressed and send only missing
   layers.

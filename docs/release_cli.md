@@ -71,6 +71,8 @@ owner = "release-demo"              # piceli.io/owner of managed objects
 field_manager = "release-demo"
 composition = "composition.py:build"   # or "package.module:function"
 state_dir = ".piceli-release"       # catalog, journal, secret store, plans (0700)
+# state = "cluster"                 # share the state in the namespace, see docs/state.md
+# state_lease_seconds = 60          # how long a dead runner keeps the release lock
 approval_window_seconds = 900       # plan validity and evidence age limit
 prune = false                       # delete managed objects a release drops
 # inherited_owners = ["old-owner"]  # earlier owner ids whose objects count as ours
@@ -770,7 +772,19 @@ after failed checks is described in {doc}`checks`.
 * `status` reads the catalog, journal and history without contacting the
   cluster: releases with their image identities, executions and latest check
   outcome (`checks`), the deployed and previous release, pending plans and
-  recent history.
+  recent history. With `state = "cluster"` it first refreshes the working
+  copy from the namespace (reads only).
+
+## Shared state
+
+With `[release] state = "cluster"` the state directory is a working copy of
+state kept in the release namespace (Secrets plus a Lease lock, see
+{doc}`state`): `plan`, `apply`, `rollback`, `resume`, `stop` and `check` hold
+the release lock (`release-locked` while another runner holds it; a runner
+that died is taken over when its lease expires), and every execution journal
+commit is written back before the change it records, so any machine can
+resume. `catalog`, `journal` and `secret_store` must then stay inside
+`state_dir`.
 
 An execution the executor refused before changing anything is recorded in
 the history with `"state": "rejected"` and `"reason": "execution-refused"`

@@ -67,6 +67,10 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli release status`](#cli-release-status) | Show catalogued releases, their executions and history (no cluster access). | none | no |
 | [`piceli release stop`](#cli-release-stop) | Cancel the latest execution of a release (exact owner only). | reads | no |
 | [`piceli render`](#cli-render) | Print the manifests of a typed app, composition or pipeline. Never contacts a cluster. | none | no |
+| [`piceli state export`](#cli-state-export) | Write the release's state to one file (secret material excluded unless asked). | reads | no |
+| [`piceli state import`](#cli-state-import) | Replace the release's state with an export (needs --approve DIGEST). | writes | yes |
+| [`piceli state pull`](#cli-state-pull) | Refresh the local working copy from the shared state (reads the cluster). | reads | no |
+| [`piceli state show`](#cli-state-show) | Show where the state lives, its generation and who holds the release lock. | reads | no |
 | [`piceli status`](#cli-status) | Say whether the app is up and how to reach it. Read-only. | reads | no |
 
 (cli-access)=
@@ -343,7 +347,7 @@ Deploy a pipeline: inputs → build → deliver → plan → apply → checks.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `TARGET` | text | required |  |
+| `TARGET` | text |  |  |
 | `--plan` | boolean | `False` | Plan every stage and print the combined hash; execute nothing |
 | `--until` | text | `checks` | Stop after this stage: inputs, build, deliver, plan, apply or checks |
 | `--resume` | boolean | `False` | Continue the latest interrupted or failed run at its failed stage |
@@ -352,17 +356,19 @@ Deploy a pipeline: inputs → build → deliver → plan → apply → checks.
 | `--reapply` | boolean | `False` | Apply even when the release is unchanged and already deployed |
 | `--json` | boolean | `False` | Stream one JSON event per stage change on stdout |
 | `--ref` | text (repeatable) |  | Build SOURCE from commit REV (branch, tag or SHA) in a temporary worktree instead of the working tree; repeatable. A bare REV pins every source when they are one repository |
+| `--out` | path |  | With --plan: also write the portable plan file here (apply it on any runner with --apply FILE --approve HASH) |
+| `--apply` | path |  | Apply the plan file written by --plan --out (needs --approve with its combined hash); re-plans and refuses any change |
 
 **Contract**
 
 - **Reads:** pipeline module, build specs and sources, git (source identity; --ref commits), docker, kubeconfig, state_dir, source registries of mirror= images (pull only), mirror_credentials files
-- **Writes:** state_dir (run journal, receipts, release catalog, secret store), local Docker image store, registry or node image store, temporary git worktrees with --ref (removed on exit)
+- **Writes:** state_dir (run journal, receipts, release catalog, secret store), shared state Secrets and release Lease (state="cluster"), --out plan file, local Docker image store, registry or node image store, temporary git worktrees with --ref (removed on exit)
 - **Cluster:** writes
 - **Approval required:** yes
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** --plan never changes the cluster, a registry or a node (it reads the namespace's Deployments and the registry node for a NodeLoopbackRegistry); before the images exist it previews the release with placeholder images (never approvable, never sent to the cluster) and refuses with the blocking objects when it needs adoption or replacement; --approve HASH executes exactly the combined plan, including mirror= copies and a registry adopt=/replace=, and a release planned after delivery may not adopt, replace or delete more than the approved preview; --resume continues the latest interrupted run without a new approval. Unchanged stages are skipped. --ref [SOURCE=]REV builds the sources from commits in temporary worktrees; the combined hash covers the resolved SHAs, --approve needs the same --ref, and --resume reuses the run's SHAs.
+- **Notes:** --plan never changes the cluster, a registry or a node (it reads the namespace's Deployments and the registry node for a NodeLoopbackRegistry); before the images exist it previews the release with placeholder images (never approvable, never sent to the cluster) and refuses with the blocking objects when it needs adoption or replacement; --approve HASH executes exactly the combined plan, including mirror= copies and a registry adopt=/replace=, and a release planned after delivery may not adopt, replace or delete more than the approved preview; --resume continues the latest interrupted run without a new approval. Unchanged stages are skipped. --ref [SOURCE=]REV builds the sources from commits in temporary worktrees; the combined hash covers the resolved SHAs, --approve needs the same --ref, and --resume reuses the run's SHAs. --plan --out FILE writes a portable plan; --apply FILE --approve HASH applies it on any runner (it re-plans and refuses any difference; no build cache needed for images already delivered). With state="cluster" every command holds the release's Lease (pipeline-locked when another runner holds it; a stale lease is taken over) and --plan writes its state to the cluster too.
 
 (cli-explain)=
 ### `piceli explain`
@@ -1116,6 +1122,7 @@ Show catalogued releases, their executions and history (no cluster access).
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
+- **Notes:** With state = "cluster" it first refreshes the working copy from the cluster (reads only, no lock).
 
 (cli-release-stop)=
 ### `piceli release stop`
@@ -1160,6 +1167,94 @@ Print the manifests of a typed app, composition or pipeline. Never contacts a cl
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** Never contacts a cluster; secret values are placeholders. A Pipeline renders with its target's namespace and declared nodes, build images as placeholders, and reads no kubeconfig, build spec or state. stdout carries the manifests (YAML, or one JSON object with --format json); a refusal is always the JSON rejection object.
+
+(cli-state-export)=
+### `piceli state export`
+
+Write the release's state to one file (secret material excluded unless asked).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--spec` | text | required | path/to/release.toml, or MODULE:ATTR naming a piceli Pipeline |
+| `--out` | path | required | The export file to write |
+| `--include-secrets` | boolean | `False` | Also export the secret store, stored discovery, journals and backups, encrypted with --key-file (left out otherwise) |
+| `--key-file` | path |  | Owner-only file with the encryption key (at least 32 characters) |
+| `--force` | boolean | `False` | Overwrite an existing --out file |
+
+**Contract**
+
+- **Reads:** release.toml or pipeline module (--spec MODULE:ATTR), state_dir, --key-file
+- **Writes:** --out file
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Secret store, stored discovery, journals, pending plans and backups are left out unless --include-secrets --key-file (AES-256-GCM, scrypt key); refuses an existing --out without --force.
+
+(cli-state-import)=
+### `piceli state import`
+
+Replace the release's state with an export (needs --approve DIGEST).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--spec` | text | required | path/to/release.toml, or MODULE:ATTR naming a piceli Pipeline |
+| `--in` | path | required | The export file (from piceli state export) |
+| `--key-file` | path |  | The key the export's secrets were encrypted with |
+| `--allow-partial` | boolean | `False` | Import an export without secret material (the next release generates new secret values) |
+| `--approve` | text |  | The import digest printed without --approve |
+
+**Contract**
+
+- **Reads:** release.toml or pipeline module (--spec MODULE:ATTR), --in file, --key-file
+- **Writes:** state_dir, shared state Secrets and Lease (state = "cluster")
+- **Cluster:** writes
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** Without --approve it prints the import digest and exits 3; with it, it holds the release lock and replaces the state. An export without secret material needs --allow-partial.
+
+(cli-state-pull)=
+### `piceli state pull`
+
+Refresh the local working copy from the shared state (reads the cluster).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--spec` | text | required | path/to/release.toml, or MODULE:ATTR naming a piceli Pipeline |
+
+**Contract**
+
+- **Reads:** release.toml or pipeline module (--spec MODULE:ATTR)
+- **Writes:** state_dir (replaced by the shared snapshot)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Takes no release lock; skipped while a run on this machine holds the state directory. A no-op with local state.
+
+(cli-state-show)=
+### `piceli state show`
+
+Show where the state lives, its generation and who holds the release lock.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--spec` | text | required | path/to/release.toml, or MODULE:ATTR naming a piceli Pipeline |
+
+**Contract**
+
+- **Reads:** release.toml or pipeline module (--spec MODULE:ATTR), state_dir
+- **Writes:** nothing (read-only)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Read-only; never prints state content. With local state it does not contact the cluster.
 
 (cli-status)=
 ### `piceli status`

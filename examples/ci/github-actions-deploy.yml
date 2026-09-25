@@ -6,12 +6,16 @@
 # (https://docs.pynenc.org/projects/piceli/en/latest/ci.html).
 #
 # Piceli's own tests run the `piceli deploy` command lines of this file, in
-# this order, against a fake cluster (tests/acceptance/test_ci_recipe.py), so
-# the recipe cannot drift from the CLI.
+# this order, each job in its own checkout and state directory, against a
+# fake cluster (tests/acceptance/test_ci_recipe.py), so the recipe cannot
+# drift from the CLI.
 #
 # Needs, once per repository:
-# - a self-hosted runner that reaches the cluster API and has Docker, labelled
-#   `deploy-my-app` (plan and apply share its build cache and state directory);
+# - a pipeline with shared state: Pipeline(..., state="cluster") keeps the run
+#   journal, release catalog and secret store in the release namespace, behind
+#   a release lock, so plan, apply and resume may run on different runners;
+# - self-hosted runners that reach the cluster API and have Docker, labelled
+#   `deploy-my-app` (they share nothing: no disk, no build cache);
 # - a repository secret DEPLOY_KUBECONFIG holding a kubeconfig with the one
 #   context the pipeline declares (Target.kubeconfig(..., context=...));
 # - an environment `production` with required reviewers.
@@ -38,10 +42,6 @@ permissions:
 env:
   # The pipeline, relative to the repository root.
   PIPELINE: deploy/app.py:pipeline
-  # Read by deploy/app.py: Pipeline(state_dir=os.environ["DEPLOY_STATE_DIR"]).
-  # Keep it on the runner, outside the checkout: it holds the run journal,
-  # the release catalog and the secret store.
-  DEPLOY_STATE_DIR: /var/lib/piceli/my-app
 
 jobs:
   plan:
@@ -59,10 +59,12 @@ jobs:
           umask 077
           printf '%s\n' "$KUBECONFIG_CONTENT" > "$RUNNER_TEMP/deploy.kubeconfig"
           echo "DEPLOY_KUBECONFIG=$RUNNER_TEMP/deploy.kubeconfig" >> "$GITHUB_ENV"
+          # A fresh working copy of the shared state (Pipeline(state_dir=...)).
+          echo "DEPLOY_STATE_DIR=$RUNNER_TEMP/piceli-state" >> "$GITHUB_ENV"
       - name: Plan the pushed commit
         id: plan
         run: |
-          uv run --frozen piceli deploy "$PIPELINE" --ref "$GITHUB_SHA" --plan --json > plan.jsonl 2> plan.txt || { cat plan.txt >&2; exit 1; }
+          uv run --frozen piceli deploy "$PIPELINE" --ref "$GITHUB_SHA" --plan --out deploy-plan.json --json > plan.jsonl 2> plan.txt || { cat plan.txt >&2; exit 1; }
           jq -c 'select(.event == "result")' plan.jsonl > plan.json
           echo "combined_hash=$(jq -r .combined_hash plan.json)" >> "$GITHUB_OUTPUT"
           {
@@ -78,14 +80,17 @@ jobs:
         with:
           name: deploy-plan
           path: |
+            deploy-plan.json
             plan.json
             plan.txt
-      - name: Remove the kubeconfig
+      - name: Remove the kubeconfig and the state copy
         if: always()
-        run: rm -f "$RUNNER_TEMP/deploy.kubeconfig"
+        run: rm -rf "$RUNNER_TEMP/deploy.kubeconfig" "$RUNNER_TEMP/piceli-state"
 
   apply:
     needs: plan
+    # Any runner with the label: the plan file and the shared state are all
+    # it needs from the plan job.
     runs-on: [self-hosted, deploy-my-app]
     # Required reviewers approve this environment after reading the plan in
     # the plan job's summary; the job then applies exactly that plan.
@@ -93,6 +98,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v7
+      - uses: actions/download-artifact@v6
+        with:
+          name: deploy-plan
       - name: Write the kubeconfig (mode 0600, never printed)
         env:
           KUBECONFIG_CONTENT: ${{ secrets.DEPLOY_KUBECONFIG }}
@@ -100,19 +108,21 @@ jobs:
           umask 077
           printf '%s\n' "$KUBECONFIG_CONTENT" > "$RUNNER_TEMP/deploy.kubeconfig"
           echo "DEPLOY_KUBECONFIG=$RUNNER_TEMP/deploy.kubeconfig" >> "$GITHUB_ENV"
+          # A fresh working copy of the shared state (Pipeline(state_dir=...)).
+          echo "DEPLOY_STATE_DIR=$RUNNER_TEMP/piceli-state" >> "$GITHUB_ENV"
       - name: Apply the approved plan
         env:
           COMBINED_HASH: ${{ needs.plan.outputs.combined_hash }}
         run: |
-          uv run --frozen piceli deploy "$PIPELINE" --ref "$GITHUB_SHA" --approve "$COMBINED_HASH" --json > apply.jsonl
+          uv run --frozen piceli deploy --apply deploy-plan.json --approve "$COMBINED_HASH" --json > apply.jsonl
       - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: deploy-result
           path: apply.jsonl
-      - name: Remove the kubeconfig
+      - name: Remove the kubeconfig and the state copy
         if: always()
-        run: rm -f "$RUNNER_TEMP/deploy.kubeconfig"
+        run: rm -rf "$RUNNER_TEMP/deploy.kubeconfig" "$RUNNER_TEMP/piceli-state"
 
   resume:
     if: ${{ inputs.resume }}
@@ -128,6 +138,8 @@ jobs:
           umask 077
           printf '%s\n' "$KUBECONFIG_CONTENT" > "$RUNNER_TEMP/deploy.kubeconfig"
           echo "DEPLOY_KUBECONFIG=$RUNNER_TEMP/deploy.kubeconfig" >> "$GITHUB_ENV"
+          # A fresh working copy of the shared state (Pipeline(state_dir=...)).
+          echo "DEPLOY_STATE_DIR=$RUNNER_TEMP/piceli-state" >> "$GITHUB_ENV"
       - name: Resume the interrupted run at its failed stage
         run: |
           uv run --frozen piceli deploy "$PIPELINE" --resume --json > resume.jsonl
@@ -136,6 +148,6 @@ jobs:
         with:
           name: deploy-resume
           path: resume.jsonl
-      - name: Remove the kubeconfig
+      - name: Remove the kubeconfig and the state copy
         if: always()
-        run: rm -f "$RUNNER_TEMP/deploy.kubeconfig"
+        run: rm -rf "$RUNNER_TEMP/deploy.kubeconfig" "$RUNNER_TEMP/piceli-state"

@@ -5,8 +5,8 @@ names listed in ``__all__`` only change in a minor release with a changelog
 entry, never silently.
 
 The server speaks enough of the Kubernetes REST API (discovery, list with
-pagination, get, create, server-side apply, merge patch, delete with
-preconditions, dry run) for :class:`~piceli.k8s.ops.kubernetes_provider.KubernetesProvider`,
+pagination and label selectors, get, create, server-side apply, merge patch,
+delete with preconditions, dry run) for :class:`~piceli.k8s.ops.kubernetes_provider.KubernetesProvider`,
 ``piceli release`` and ``piceli import live`` to run against it unchanged over a
 loopback HTTP socket. Faults (HTTP errors, delays, disconnects, raw bodies) can
 be injected per request, and an opt-in field-ownership model reproduces
@@ -88,6 +88,8 @@ TYPES: Mapping[str, tuple[str, str, bool]] = {
         False,
     ),
     "widgets": ("example.test/v1", "Widget", False),
+    # The release lock of shared state (``state="cluster"``).
+    "leases": ("coordination.k8s.io/v1", "Lease", True),
 }
 
 
@@ -751,11 +753,12 @@ class FakeAPI:
                     return 404, {}
                 self._readiness(current)
                 return 200, copy.deepcopy(current)
+            selector = query.get("labelSelector", [""])[0]
             values = sorted(
                 [
                     copy.deepcopy(item)
                     for (item_kind, _), item in self.objects.items()
-                    if item_kind == kind
+                    if item_kind == kind and _selected(item, selector)
                 ],
                 key=lambda value: value["metadata"]["name"],
             )
@@ -1124,6 +1127,26 @@ def fake_cluster(
             yield FakeCluster(served, url, provider)
         finally:
             provider.client.close()
+
+
+def _selected(value: dict[str, Any], selector: str) -> bool:
+    """Whether ``value`` matches a label selector (``k``, ``!k``, ``k=v``, ``k!=v``)."""
+    labels = value.get("metadata", {}).get("labels") or {}
+    for term in filter(None, (item.strip() for item in selector.split(","))):
+        if term.startswith("!"):
+            if term[1:] in labels:
+                return False
+        elif "!=" in term:
+            key, _, wanted = term.partition("!=")
+            if labels.get(key) == wanted:
+                return False
+        elif "=" in term:
+            key, _, wanted = term.partition("=")
+            if labels.get(key) != wanted.lstrip("="):
+                return False
+        elif term not in labels:
+            return False
+    return True
 
 
 def _merge_patch(current: Any, patch: Any) -> Any:

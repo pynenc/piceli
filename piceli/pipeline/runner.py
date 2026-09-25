@@ -309,6 +309,8 @@ class PipelineRunner:
         self.check_runner = check_runner
         self.journal = Journal(pipeline.state_dir)
         self.run: Run | None = None
+        #: The open state session (:mod:`piceli.state`) while :meth:`locked`.
+        self.session: Any = None
 
     # ------------------------------------------------------------ helpers
     def identity(self) -> dict[str, Any]:
@@ -337,8 +339,68 @@ class PipelineRunner:
 
     @contextmanager
     def locked(self) -> Iterator[None]:
-        with self.journal.locked():
-            yield
+        """Hold the release's state for this run (see :mod:`piceli.state`).
+
+        ``local``: the state directory's lock file. ``cluster``: the release
+        lock in the namespace; the working copy is refreshed from the cluster
+        first, and every journaled change is written back (fenced).
+        """
+        from piceli.state import session
+        from piceli.state.scopes import pipeline_scope
+
+        with session(pipeline_scope(self.pipeline), write=True, say=self.say) as held:
+            self.session = held
+            self.journal.on_save = lambda: held.checkpoint(force=True)
+            try:
+                yield
+            finally:
+                self.journal.on_save = None
+                self.session = None
+
+    def _checkpoint(self) -> None:
+        """Write the working state through (throttled; shared state only)."""
+        if self.session is not None:
+            self.session.checkpoint()
+
+    def _bind(self, runner: ReleaseRunner, prefix: str) -> None:
+        """Progress lines and journal write-through for a release runner."""
+        runner.progress = self._progress(prefix)
+        if self.session is not None:
+            session = self.session
+            runner.checkpoint = lambda: session.checkpoint(force=True)
+
+    def _progress(self, prefix: str) -> Callable[[str], None]:
+        """A release runner progress sink: say the line, then checkpoint."""
+
+        def progress(text: str) -> None:
+            self.say(f"{prefix}{text}")
+            self._checkpoint()
+
+        return progress
+
+    def adopt_plan_file(self, document: Mapping[str, Any]) -> list[str]:
+        """Check a plan file against this pipeline and seed its receipts.
+
+        Refuses another pipeline or target (``deploy-plan-file-mismatch``) and
+        another cluster than the one planned (``deploy-plan-target-mismatch``).
+        Call it inside :meth:`locked` (after the working copy is refreshed)
+        and before :meth:`plan`.
+        """
+        from piceli.pipeline.planfile import observed_target, seed_receipts
+
+        if document.get("pipeline") != json.loads(canonical(self.identity())):
+            raise PipelineError(
+                "deploy-plan-file-mismatch",
+                "the plan file was made for another pipeline, owner or target",
+            )
+        observed = document.get("observed_target")
+        if observed and observed_target(self.pipeline) != observed:
+            raise PipelineError(
+                "deploy-plan-target-mismatch",
+                "the kubeconfig reaches another cluster or namespace than the "
+                "one the plan was made against",
+            )
+        return seed_receipts(self.pipeline, dict(document))
 
     @contextmanager
     def sources(self) -> Iterator[None]:
@@ -585,13 +647,29 @@ class PipelineRunner:
             return False, {}
         if receipt.get("plan_hash") != item.plan.plan_hash:
             return False, {}
-        for entry in images.values():
+        used = set(self._work.used) if self._work is not None else set()
+        for name, entry in images.items():
             image_id = entry.get("image_id") if isinstance(entry, dict) else None
-            if not isinstance(image_id, str) or not self.backend.image_present(
-                image_id
-            ):
+            if not isinstance(image_id, str):
                 return False, {}
+            if self.backend.image_present(image_id):
+                continue
+            # Another runner built it: the build is not needed again when the
+            # registry or node still has this exact image (by digest).
+            if name in used and self._delivered_elsewhere(name, image_id):
+                continue
+            return False, {}
         return True, images
+
+    def _delivered_elsewhere(self, name: str, config: str) -> bool:
+        if self._work is None or self.pipeline.deliver is None:
+            return False
+        if self._receipt(name, config) is None:
+            return False
+        try:
+            return self._present(name, config, self._work)
+        except Exception:
+            return False
 
     def _plan_deliver(
         self, work: _Work, _reapply: bool
@@ -978,6 +1056,7 @@ class PipelineRunner:
             for name, value in refs.items():
                 self.checkouts.checkouts[name].rev = str(value.get("ref"))
         self._work = self._restore(run)
+        self._rebuild_missing(run)
         run.set_state("running", resumed_at=now())
         return self._continue(str(run.data["until"]), reapply=False, resuming=True)
 
@@ -1023,11 +1102,50 @@ class PipelineRunner:
         )
         if run.stage("deliver").get("state") in {"done", "skipped"}:
             for name, entry in run.output("deliver").get("images", {}).items():
-                work.delivered[name] = load_delivery_receipt(
-                    name, Path(entry["receipt"])
+                # By digest in this state directory: the run may have started
+                # on another runner (shared state), where the path differed.
+                config = entry.get("config_digest")
+                path = (
+                    self._delivery_path(name, config)
+                    if isinstance(config, str)
+                    else Path(entry["receipt"])
                 )
+                work.delivered[name] = load_delivery_receipt(name, path)
                 work.present[name] = True
         return work
+
+    def _rebuild_missing(self, run: Run) -> None:
+        """Build again what a resume cannot deliver (the run began elsewhere).
+
+        With shared state a run can be resumed on another runner. When its
+        build finished but its delivery did not, the images exist only in the
+        first runner's engine: the build stage runs again (same approved
+        build plan), unless each image is here or already delivered.
+        """
+        work = self._work
+        if (
+            work is None
+            or run.stage("build").get("state") not in {"done", "skipped"}
+            or run.stage("deliver").get("state") in {"done", "skipped"}
+        ):
+            return
+        missing = False
+        for item in work.builds:
+            for name, entry in item.images.items():
+                config = entry.get("image_id") if isinstance(entry, dict) else None
+                if not isinstance(config, str) or name not in work.used:
+                    continue
+                if self.backend.image_present(config) or self._delivered_elsewhere(
+                    name, config
+                ):
+                    continue
+                item.cached, item.images, missing = False, {}, True
+                break
+        if missing:
+            self.say(
+                "[build] images of the interrupted run are not here: building again"
+            )
+            run.set_stage("build", state="pending")
 
     def _continue(
         self, until: str, *, reapply: bool, resuming: bool = False
@@ -1309,7 +1427,7 @@ class PipelineRunner:
             info["action"] = "unchanged"
             return info, False
         self.say(f"[deliver] registry {result.release}: applying")
-        runner.progress = lambda text: self.say(f"[deliver] registry: {text}")
+        self._bind(runner, "[deliver] registry: ")
         outcome = runner.apply(result.plan_hash)
         info["action"] = "applied"
         info["execution"] = outcome["execution"]
@@ -1426,7 +1544,7 @@ class PipelineRunner:
         runner = work.runner
         release = planned.get("release") or work.release_plan.release
         plan_hash = planned.get("plan_hash") or work.release_plan.plan_hash
-        runner.progress = lambda text: self.say(f"[apply] {release}: {text}")
+        self._bind(runner, f"[apply] {release}: ")
         if self._unchanged(work, reapply):
             self.say(f"[apply] {release}: unchanged, already deployed and ready")
             return "skipped", {"release": release, "why": "unchanged"}
@@ -1549,7 +1667,7 @@ class PipelineRunner:
                 "message": str(error),
             }
         self.say(f"[checks] rolling back to {target}")
-        runner.progress = lambda text: self.say(f"[checks] rollback {target}: {text}")
+        self._bind(runner, f"[checks] rollback {target}: ")
         try:
             result = runner.plan(rollback_to="previous")
             outcome = runner.apply(

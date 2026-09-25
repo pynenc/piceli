@@ -11,6 +11,7 @@ from piceli.k8s.cli.observe import app as observe_app
 from piceli.k8s.cli.operator import app as operator_app
 from piceli.k8s.cli.release import app as release_app
 from piceli.k8s.cli.render import render
+from piceli.k8s.cli.state import app as state_app
 
 app = typer.Typer(rich_markup_mode=None)
 app.add_typer(import_app, name="import")
@@ -20,6 +21,7 @@ app.add_typer(observe_app, name="observe")
 app.add_typer(operator_app, name="operator")
 app.add_typer(release_app, name="release")
 app.command("render")(render)
+app.add_typer(state_app, name="state")
 register_contract_commands(app)
 register_access_commands(app)
 
