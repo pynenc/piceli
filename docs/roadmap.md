@@ -74,6 +74,7 @@ Every feature page starts with its maturity, and this table lists them all:
 | CLI contract: `piceli explain`, `piceli help-json`, error codes | {doc}`agents` | preview |
 | Import and migration kit (`piceli import live`, `piceli import yaml`, `App.override`) | {doc}`migrate_from_kubectl` | preview |
 | Test double: fake Kubernetes API (`piceli.testing`) | {doc}`testing` | preview |
+| Cross-model eval of agents using Piceli (`evals/`, contributor tooling) | {doc}`contributing/evals` | experimental |
 | Operator workflow (`piceli operator`) | {doc}`operator_workflow` | experimental |
 
 ## How Piceli compares

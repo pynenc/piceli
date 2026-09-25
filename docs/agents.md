@@ -20,6 +20,7 @@ See the {doc}`roadmap` for every feature's status.
 | What an error code means and what to do next | `piceli explain <code> --json` |
 | The same, as pages | {doc}`reference/cli`, {doc}`reference/errors` |
 | An index of the documentation for language models | [`llms.txt`](https://docs.pynenc.org/projects/piceli/en/latest/llms.txt) |
+| How well models follow these rules (the rules below are scored; breaking one fails the task) | {doc}`contributing/evals` |
 
 `piceli help-json` is generated from the command definitions. For each
 command, `contract.side_effects` says what it reads and writes and whether it

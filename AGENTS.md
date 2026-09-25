@@ -20,6 +20,7 @@ make typecheck            # mypy on piceli/
 make lint                 # every pre-commit hook: ruff check + format, uv lock, YAML/TOML
 make docs                 # Sphinx with warnings as errors
 make docs-reference       # regenerate docs/reference/{errors,cli}.md from code
+make evals-check          # self-tests of the cross-model eval harness (evals/)
 make help                 # every target
 ```
 
@@ -46,7 +47,10 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/)
 (`feat:`, `fix:`, `docs:`, `test:` …). Behaviour changes get a line in
 `docs/changelog.md`. A new command, option or error code also needs
 `make docs-reference`, and an entry in `docs/agents.md` and `llms.txt` when it
-is safe to run or needs approval.
+is safe to run or needs approval. A change to the public Python API or the CLI
+also needs `uv run --frozen python evals/run.py api-surface --write` (the eval
+harness checks model answers against that snapshot; `make evals-check` fails
+until it is refreshed).
 
 ## Invariants
 
@@ -115,6 +119,7 @@ These are enforced by tests or review. Do not weaken them.
 | Observe / operator UI and REST API | `piceli/k8s/observe*.py`, `piceli/k8s/operator*.py` |
 | Access and status (`piceli access`, `piceli status`) | `piceli/app/access.py`, `piceli/k8s/access.py`, `piceli/k8s/port_owner.py`, `piceli/k8s/cli/access.py` |
 | Examples (run in CI where possible) | `examples/` |
+| Cross-model eval of agents using Piceli (tasks, grader, sandbox, baselines) | `evals/` (see `evals/README.md`) |
 | Docs (Sphinx + MyST) | `docs/`; agent entry points `llms.txt`, `docs/agents.md` |
 | First-run path for new users | `README.md` quick start, `docs/getting_started/index.md` and the taste in `docs/index.md`; keep the three in sync |
 | Human contributor guide | `CONTRIBUTING.md`, `docs/contributing/` |

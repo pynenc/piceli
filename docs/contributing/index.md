@@ -29,6 +29,7 @@ Other targets (`make help` lists them all):
 | `make test-unit` / `make test-acceptance` | One test suite |
 | `make test-integration` | Integration tests against the disposable cluster named by `PICELI_KIND_KUBECONFIG`, `PICELI_KIND_CONTEXT` (and `PICELI_KIND_NODE`); skipped without them, never the current context |
 | `make coverage` | Tests with an HTML coverage report in `htmlcov/` |
+| `make evals-check` | Self-tests of the cross-model eval harness in `evals/` (see {doc}`evals`) |
 | `make docs` | Build the documentation with warnings treated as errors |
 | `make build` | Build the sdist and wheel into `dist/` |
 
@@ -68,4 +69,5 @@ requests from this repository publish a pre-release to TestPyPI.
 :maxdepth: 1
 
 docs
+evals
 ```

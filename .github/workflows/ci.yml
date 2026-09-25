@@ -56,6 +56,9 @@ jobs:
           sudo install -m 0755 /tmp/sops /usr/local/bin/sops
       - name: Unit and acceptance tests
         run: uv run pytest --cov --cov-report=term --cov-report=xml
+      - name: Eval harness self-tests (mock models, no keys, no network)
+        if: matrix.python == '3.12'
+        run: make evals-check
       - name: Store coverage data
         if: matrix.python == '3.12'
         uses: actions/upload-artifact@v6

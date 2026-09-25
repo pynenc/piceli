@@ -120,7 +120,7 @@ ignore = [
 ]
 
 [tool.mypy]
-files = ["piceli"]
+files = ["piceli", "evals/piceli_eval", "evals/run.py", "evals/tests"]
 python_version = "3.12"
 warn_unused_configs = true
 ignore_missing_imports = true

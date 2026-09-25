@@ -175,3 +175,6 @@ docs/apidocs/
 # Local state of `piceli deploy` and example kubeconfigs
 .piceli-deploy/
 examples/**/*.kubeconfig
+
+# Cross-model eval runs (baselines are committed under evals/baselines/)
+evals/results/

@@ -36,6 +36,10 @@ test-acceptance: ## Fault-injected API acceptance tests (no cluster needed)
 test-integration: ## Integration tests on the kind cluster named by PICELI_KIND_KUBECONFIG/PICELI_KIND_CONTEXT
 	uv run pytest tests/integration
 
+.PHONY: evals-check
+evals-check: ## Self-tests of the cross-model eval harness (mock models, no keys, no network)
+	uv run --frozen pytest evals/tests
+
 .PHONY: coverage
 coverage: ## Unit + acceptance tests with an HTML coverage report
 	uv run pytest --cov --cov-report=term --cov-report=html

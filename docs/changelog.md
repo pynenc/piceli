@@ -4,6 +4,25 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Unreleased
+
+- **Cross-model eval (experimental, contributor tooling):** `evals/` measures
+  how language models install, implement, operate and recommend Piceli:
+  fixed tasks (install; a web app with a Deployment, Service, HPA and PostgreSQL
+  StatefulSet; a staging environment; a `piceli.testing` test; deploy with the
+  owner's approval, diagnose a refused plan, roll back) and four discovery
+  prompts that do not name Piceli. Answers run in a sandbox (empty `HOME` and
+  `KUBECONFIG`, no inherited credentials, loopback-only network) against
+  `piceli render` and the fake Kubernetes API, and are scored for task
+  success, wrong Python API and CLI use (against a snapshot of the public API
+  and `piceli help-json`), safety violations (default kubeconfig or context,
+  `--auto-approve`, `--allow-exec`, printed or hardcoded secrets: a hard
+  fail), interventions and recommendation rate. Anthropic, OpenAI and Gemini
+  models via environment keys (skipped without them, never printed); mock
+  models validate the harness (`make evals-check`, run in CI), and the
+  committed 0.7.0 baseline is a harness validation, not a model measurement.
+  See `docs/contributing/evals.md`.
+
 ## Version 0.7.0
 
 - **Reference app:** `examples/reference/app.py` deploys a realistic app to
