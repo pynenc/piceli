@@ -114,6 +114,19 @@ def status_only_change(before: DiscoveredResource, after: DiscoveredResource) ->
         return False
 
 
+#: A read answered ``429 Too Many Requests`` is sent at most this many times.
+THROTTLED_READ_ATTEMPTS = 5
+
+
+def _retry_after(value: str | None) -> float:
+    """Seconds to wait before resending a throttled read (bounded to [0.1, 2])."""
+    try:
+        seconds = float(value) if value is not None else 0.5
+    except ValueError:
+        seconds = 0.5
+    return min(2.0, max(0.1, seconds))
+
+
 class ProviderError(Exception):
     """Allowlisted failure only; server bodies and credentials are never exposed."""
 
@@ -283,21 +296,41 @@ class KubernetesProvider:
                 url += "?" + urlencode(query)
             response = None
             try:
-                if time.monotonic() >= end:
-                    raise ProviderError("deadline-exceeded")
-                remaining = max(0.001, end - time.monotonic())
-                response = self.client.rest_client.pool_manager.request(
-                    method,
-                    url,
-                    body=None
-                    if body is None
-                    else json.dumps(body, allow_nan=False).encode(),
-                    headers=headers,
-                    preload_content=False,
-                    retries=False,
-                    redirect=False,
-                    timeout=Timeout(total=remaining, connect=remaining, read=remaining),
-                )
+                for attempt in range(THROTTLED_READ_ATTEMPTS):
+                    if time.monotonic() >= end:
+                        raise ProviderError("deadline-exceeded")
+                    remaining = max(0.001, end - time.monotonic())
+                    response = self.client.rest_client.pool_manager.request(
+                        method,
+                        url,
+                        body=None
+                        if body is None
+                        else json.dumps(body, allow_nan=False).encode(),
+                        headers=headers,
+                        preload_content=False,
+                        retries=False,
+                        redirect=False,
+                        timeout=Timeout(
+                            total=remaining, connect=remaining, read=remaining
+                        ),
+                    )
+                    # A read answered 429 (API priority and fairness, or a
+                    # watch cache still initializing, as for a CRD installed
+                    # a moment ago) is sent again after Retry-After, as
+                    # client-go does. Writes are never retried here.
+                    if (
+                        response.status != 429
+                        or method != "GET"
+                        or attempt + 1 == THROTTLED_READ_ATTEMPTS
+                    ):
+                        break
+                    wait = _retry_after(response.headers.get("Retry-After"))
+                    response.close()
+                    response = None
+                    if time.monotonic() + wait >= end:
+                        raise ProviderError("api-unavailable", status=429)
+                    time.sleep(wait)
+                assert response is not None
                 # Error bodies are intentionally never loaded or included in errors.
                 if not 200 <= response.status < 300:
                     category = {
