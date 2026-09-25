@@ -61,12 +61,13 @@
         },
         "stages": {
           "type": "object",
-          "description": "With planned/approval-required: every stage's plan. Otherwise: stage name to its state.",
+          "description": "With planned/approval-required: every stage's plan (a pending release plan adds `preview`, see #/$defs/preview). Otherwise: stage name to its state.",
           "propertyNames": {"$ref": "#/$defs/stageName"}
         },
         "reason": {"type": "string", "description": "Error code (piceli explain <code>)."},
         "stage": {"$ref": "#/$defs/stageName"},
-        "blocking": {"type": "array", "items": {"type": "object"}}
+        "blocking": {"type": "array", "items": {"type": "object"}},
+        "preview": {"$ref": "#/$defs/previewMarker"}
       }
     },
     "rejection": {
@@ -75,7 +76,36 @@
       "properties": {
         "state": {"const": "rejected"},
         "reason": {"type": "string"},
-        "blocking": {"type": "array", "items": {"type": "object"}}
+        "stage": {"$ref": "#/$defs/stageName"},
+        "blocking": {"type": "array", "items": {"type": "object"}},
+        "preview": {"$ref": "#/$defs/previewMarker"}
+      }
+    },
+    "previewMarker": {
+      "type": "object",
+      "description": "Present when the refused or described release plan was a preview with placeholder images.",
+      "required": ["approvable", "placeholders"],
+      "properties": {
+        "approvable": {"const": false},
+        "placeholders": {
+          "type": "object",
+          "description": "Build image name to `pending-build` (not built) or `pending-delivery` (built, not delivered).",
+          "additionalProperties": {"enum": ["pending-build", "pending-delivery"]}
+        }
+      }
+    },
+    "preview": {
+      "description": "`stages.plan.preview` of a planned result whose release plan is `pending`: the release plan's structure and ownership computed with placeholder images. Never approvable; not covered by `combined_hash` except for its adopt/replace/delete set.",
+      "allOf": [{"$ref": "#/$defs/previewMarker"}],
+      "properties": {
+        "state": {"const": "previewed"},
+        "summary": {"type": "object", "additionalProperties": {"type": "integer"}},
+        "changes": {"type": "array", "items": {"type": "object"}},
+        "drift": {"type": "array", "items": {"type": "object"}},
+        "authorized": {"type": "object"},
+        "dry_run_skipped": {"type": "array", "items": {"type": "object"}},
+        "dry_run_unavailable": {"type": "array", "items": {"type": "object"}},
+        "preview_hash": {"$ref": "#/$defs/hash"}
       }
     }
   }

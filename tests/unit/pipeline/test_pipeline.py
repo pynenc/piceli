@@ -432,6 +432,13 @@ def test_shop_example_renders_and_declares_its_checks() -> None:
     assert type(pipeline).__name__ == "Pipeline"
     assert len(pipeline.checks) >= 1  # piceli.checks ships with the release engine
     assert list(pipeline.handles()) == ["rust-hello"]
+    # The pipeline renders offline with its target: namespace and node pin.
+    rendered = CliRunner().invoke(
+        cli, ["render", str(ROOT / "examples/shop/app.py:pipeline")]
+    )
+    assert rendered.exit_code == 0, rendered.output
+    assert "namespace: shop" in rendered.stdout
+    assert "kubernetes.io/hostname: shop-control-plane" in rendered.stdout
 
 
 def test_pipeline_import_is_side_effect_free() -> None:

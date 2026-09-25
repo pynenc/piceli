@@ -46,7 +46,10 @@ Piceli at runtime.
    values and nodes, and names the composition (`[release] composition =
    "app.py:build"`). Without `--spec`, `piceli render` accepts an `App` object
    (`path/to/app.py:app`) or a composition function that needs no images or
-   secrets, and uses `--namespace` (default `default`).
+   secrets, and uses `--namespace` (default `default`). An `App` alone knows
+   no nodes, so a `node="alias"` pin is refused there; render the `Pipeline`
+   instead (`path/to/app.py:pipeline`, see {doc}`deploy`), which uses its
+   target's namespace and declared nodes.
 
 3. **Release it.** Run `piceli release plan --spec
    examples/typed_app/release.toml` (after pointing `[target]` at your
@@ -171,9 +174,10 @@ string as a Secret value is a validation error. Put public values in
 ### Nodes come from the target
 
 `node="primary"` pins the pods to the verified node declared under
-`[target.nodes.primary]` (`nodeSelector: kubernetes.io/hostname`). `piceli
-release` verifies the node against the cluster. `piceli render` uses the name
-declared in the spec.
+`[target.nodes.primary]` (`nodeSelector: kubernetes.io/hostname`), or under
+`nodes=` of a pipeline's `Target`. `piceli release` and `piceli deploy`
+verify the node against the cluster. `piceli render` uses the name declared
+in the spec, or in the `Target` when the target is a `Pipeline`.
 
 ### Access is declared, never rendered
 
@@ -220,11 +224,12 @@ piceli render [TARGET] [--spec release.toml] [--namespace NS] [--format yaml|jso
 
 | | |
 | --- | --- |
-| `TARGET` | `module:attr` or `path/to/file.py:attr` (dotted `attr` allowed). The attribute can be an `App`, a `DeploymentComposition`, or a function of the release context that returns one. It defaults to the spec's `[release] composition`. |
-| `--spec` | A `release.toml` that supplies the namespace, images (receipts are read locally), secret inputs as placeholders, `[values]` and declared nodes. |
-| `--namespace` | Overrides the namespace (default: the spec's namespace, otherwise `default`). |
+| `TARGET` | `module:attr` or `path/to/file.py:attr` (dotted `attr` allowed). The attribute can be an `App`, a `DeploymentComposition`, a function of the release context that returns one, or a `Pipeline` (new in 0.5.0). It defaults to the spec's `[release] composition`. |
+| `--spec` | A `release.toml` that supplies the namespace, images (receipts are read locally), secret inputs as placeholders, `[values]` and declared nodes. Not accepted with a `Pipeline`. |
+| `--namespace` | Overrides the namespace (default: the spec's namespace, otherwise `default`). A `Pipeline` renders into its target's namespace; another value is refused. |
+| A `Pipeline` | Renders the app as `piceli deploy` would release it: the target's namespace and declared nodes (`node="alias"` pins resolve, unverified), secret inputs as placeholders, build images as `pipeline.piceli.invalid/<image>:unresolved`, pinned images as they are, and the delivery node's `kubernetes.io/hostname` pin on workloads that use a built image. It reads no kubeconfig, build spec or pipeline state. |
 | `--format` | `yaml` (default, multi-document) or `json` (one object). |
-| Side effects | Imports the target module and reads the spec and the receipts it names. It never contacts a cluster, never reads or generates secret values and never writes files. |
+| Side effects | Imports the target module and reads the spec and the receipts it names. It never contacts a cluster or reads a kubeconfig, never reads or generates secret values and never writes files. |
 | Retry | Always safe. |
 | Approval | None. |
 | Exit codes | `0` rendered, `2` rejected (`render-target-invalid`, `render-model-invalid`). |

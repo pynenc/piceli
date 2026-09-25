@@ -19,7 +19,11 @@ is unchanged:
     never by tag.
 ``plan``
     A release plan through :class:`~piceli.k8s.release_runner.ReleaseRunner`
-    against live discovery.
+    against live discovery. Before the images are delivered, planning adds a
+    never-approvable preview computed with placeholder images (structure,
+    ownership and blocking objects); the combined hash covers only its
+    adopt/replace/delete set, and the real plan after delivery may not go
+    beyond it (``pipeline-preview-changed``).
 ``apply``
     Skipped when the planned release is the one already deployed and ready
     and its remaining ``apply`` actions remove no field and differ only in
@@ -49,10 +53,12 @@ from piceli.pipeline.compose import (
     canonical,
     digest,
     model_fingerprint,
+    pending_image,
     pinned_images,
     registry_release_spec,
     release_spec,
     used_handles,
+    uses_pending_image,
 )
 from piceli.pipeline.errors import PipelineError
 from piceli.pipeline.journal import FINISHED, Journal, Run, now, write_private
@@ -149,22 +155,44 @@ def _compact(result: PlanResult) -> list[dict[str, Any]]:
 
 
 def _changes(result: PlanResult) -> list[dict[str, Any]]:
+    return _changed(result.to_dict()["actions"])
+
+
+def _changed(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         {"operation": item["operation"], "kind": item["kind"], "name": item["name"]}
-        for item in result.to_dict()["actions"]
+        for item in actions
         if item["operation"] != "no-op"
     ]
 
 
 def _drift(result: PlanResult) -> list[dict[str, Any]]:
+    return _drifted(result.drift)
+
+
+def _drifted(drift: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         {
             "kind": item["resource"]["kind"],
             "name": item["resource"]["name"],
             "managers": list(item["managers"]),
         }
-        for item in result.drift
+        for item in drift
     ]
+
+
+#: Operations that change who owns an object or remove one. After delivery,
+#: the real release plan may not do any of these to an object the approved
+#: placeholder preview did not show.
+OWNERSHIP_OPERATIONS = frozenset({"adopt", "replace", "delete"})
+
+
+def _ownership(changes: list[dict[str, Any]]) -> list[str]:
+    return sorted(
+        f"{item['operation']} {item['kind']}/{item['name']}"
+        for item in changes
+        if item["operation"] in OWNERSHIP_OPERATIONS
+    )
 
 
 def unchanged(runner: ReleaseRunner, result: PlanResult) -> bool:
@@ -589,9 +617,17 @@ class PipelineRunner:
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         fingerprint = model_fingerprint(self.pipeline)
         if any(name not in work.delivered for name in work.used):
+            preview = self._preview(work)
+            # The preview itself is never hashed (its digests are
+            # placeholders); only its ownership outcome is, and after
+            # delivery the real plan may not go beyond it (see _run_plan).
             return (
-                {"state": "pending", "why": "images are not delivered yet"},
-                {"model": fingerprint},
+                {
+                    "state": "pending",
+                    "why": "images are not delivered yet",
+                    "preview": preview,
+                },
+                {"model": fingerprint, "ownership": _ownership(preview["changes"])},
             )
         result = self._release_plan(work)
         drift = _drift(result)
@@ -610,6 +646,66 @@ class PipelineRunner:
             "actions": _hex(_compact(result)),
             "drift": drift,
         }
+
+    def _placeholders(self, work: _Work) -> dict[str, str]:
+        """``pending-build`` or ``pending-delivery`` per undelivered build image."""
+        return {
+            name: (
+                "pending-delivery"
+                if work.producer[name].images.get(name, {}).get("image_id")
+                else "pending-build"
+            )
+            for name in work.used
+            if name not in work.delivered
+        }
+
+    def _preview(self, work: _Work) -> dict[str, Any]:
+        """The release plan's structure with placeholder digests; never approvable.
+
+        Built on a separate release runner, so it never becomes the work's
+        release plan: nothing is persisted, and objects that carry a
+        placeholder image are not sent to the cluster (not even as a dry run).
+        A plan that needs adoption or replacement is refused here, before
+        anything is built or delivered, with the release engine's
+        ``blocking`` list.
+        """
+        placeholders = self._placeholders(work)
+        images: dict[str, ImageRef] = dict(pinned_images(self.pipeline, work.producer))
+        for name in work.used:
+            images[name] = work.delivered.get(name) or pending_image(
+                name, placeholders[name]
+            )
+        marker = {"approvable": False, "placeholders": placeholders}
+        try:
+            runner = self.backend.release_runner(release_spec(self.pipeline, images))
+            result = runner.placeholder_preview(skip_dry_run=uses_pending_image)
+        except Exception as error:
+            failure = classify(error)
+            failure.details = {**failure.details, "stage": "plan", "preview": marker}
+            raise failure from None
+        changes = _changed(result["actions"])
+        preview = {
+            **marker,
+            "state": "previewed",
+            "summary": result["summary"],
+            "changes": changes,
+            "drift": _drifted(result["drift"]),
+            "authorized": result["authorized"],
+            "dry_run_skipped": result["dry_run_skipped"],
+            "dry_run_unavailable": result["dry_run_unavailable"],
+        }
+        preview["preview_hash"] = _hex(
+            {
+                "schema": "piceli.deploy-preview.v1",
+                "placeholders": placeholders,
+                "actions": [
+                    {key: item[key] for key in ("operation", "kind", "name")}
+                    for item in result["actions"]
+                ],
+                "authorized": result["authorized"],
+            }
+        )
+        return preview
 
     def _release_images(self, work: _Work) -> dict[str, ImageRef]:
         images: dict[str, ImageRef] = dict(pinned_images(self.pipeline, work.producer))
@@ -663,6 +759,12 @@ class PipelineRunner:
         self, plan: CombinedPlan, approval: str, *, reapply: bool = False
     ) -> dict[str, Any]:
         """Run an approved plan (``approval`` must equal its combined hash)."""
+        if approval == preview_hash(plan):
+            raise PipelineError(
+                "pipeline-preview-not-approvable",
+                "this is the hash of a placeholder preview, not of a plan; "
+                "approve the combined hash",
+            )
         if approval != plan.combined_hash:
             raise PipelineError(
                 "pipeline-plan-changed",
@@ -1017,6 +1119,7 @@ class PipelineRunner:
                     "pipeline-resume-changed",
                     "the release differs from the approved one; plan again",
                 )
+        self._within_preview(result)
         self.say(
             f"[plan] release {result.release} ({result.mode}): "
             + (
@@ -1033,6 +1136,30 @@ class PipelineRunner:
             "images": work.release_images,
             "source": result.source,
         }
+
+    def _within_preview(self, result: PlanResult) -> None:
+        """Refuse a real plan that adopts, replaces or deletes beyond the preview.
+
+        An approval given before the images existed covered the placeholder
+        preview's ownership outcome only. When the real plan (with digests)
+        takes over or removes another object, nothing is applied: plan again
+        (build and delivery are now skipped) and approve the real plan.
+        """
+        if self.run is None:
+            return
+        approved = self.run.data["plan"]["stages"].get("plan", {}).get("preview")
+        if not isinstance(approved, dict):
+            return
+        allowed = set(_ownership(approved.get("changes", [])))
+        extra = [item for item in _ownership(_changes(result)) if item not in allowed]
+        if extra:
+            raise PipelineError(
+                "pipeline-preview-changed",
+                "after delivery the release plan would "
+                + ", ".join(extra)
+                + ", which the approved preview did not show; plan again and "
+                "approve the real release plan",
+            )
 
     # --------------------------------------------------------- stage: apply
     def _run_apply(self, reapply: bool, resuming: bool) -> tuple[str, dict[str, Any]]:
@@ -1186,6 +1313,12 @@ class PipelineRunner:
             "release": target,
             "execution": outcome["execution"],
         }
+
+
+def preview_hash(plan: CombinedPlan) -> str | None:
+    """The placeholder preview's hash in ``plan``, if its release plan is pending."""
+    preview = plan.stages.get("plan", {}).get("preview")
+    return preview.get("preview_hash") if isinstance(preview, dict) else None
 
 
 def _short_reference(reference: str) -> str:

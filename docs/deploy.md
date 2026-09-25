@@ -84,13 +84,22 @@ New to Piceli? Start with {doc}`getting_started/index`.
    - `access=app.access.forward(...)` on a Service declares how it is reached
      from your laptop; it renders to no Kubernetes object (see {doc}`access`).
 
-2. **Render it without a cluster** (build handles show as placeholders):
+2. **Render it without a cluster.** A `Pipeline` renders with its target's
+   namespace and declared nodes, so `node="alias"` pins resolve; build
+   handles stay placeholders, workloads that use a built image get the
+   delivery node's pin, and secret values are never read or generated:
 
    ```sh
-   piceli render examples/shop/app.py:app --namespace shop
+   piceli render examples/shop/app.py:pipeline
    ```
 
-3. **Plan every stage.** Nothing is built, pushed or applied:
+   It reads no kubeconfig, build spec or state. `piceli render
+   examples/shop/app.py:app --namespace shop` renders the `App` alone, with
+   no target (so no node pins).
+
+3. **Plan every stage.** Nothing is built, pushed or applied. Before the
+   images exist, the release plan is a **preview** with placeholder images
+   (see {ref}`deploy-preview`):
 
    ```sh
    piceli deploy examples/shop/app.py:pipeline --plan
@@ -106,13 +115,30 @@ New to Piceli? Start with {doc}`getting_started/index`.
      deliver  registry shop-registry-d0c1b1b7947f: create ConfigMap/registry-config,
               create PersistentVolumeClaim/registry-storage, create Deployment/registry
      deliver  rust-hello: pending-build
-     plan     after delivery (the release plan needs the image digests)
+     plan     preview with placeholder images (rust-hello=pending-build), not approvable:
+     plan     preview: create Secret/cache-credentials, create Deployment/cache, create Deployment/web,
+              create Service/cache, create Deployment/api, create Service/api, create Service/web
+     plan     the real release plan follows delivery; it may not adopt,
+              replace or delete more than this preview
      apply    pending
      checks   1 check(s) (rollback on failure)
    combined hash: fab781d97321848dc074bd293a208e1057bb5cdf3b79afc12d906b7c83e6ec25
    approve with:
      piceli deploy examples/shop/app.py:pipeline --approve fab781d9…
    ```
+
+   When the namespace already holds objects with the app's names that the
+   release does not manage, `--plan` refuses before anything is built, with
+   every blocking object and the flags that unblock it (exit `2`):
+
+   ```text
+   rejected: existing objects are not managed by this release's owner: … (resource-requires-adoption)
+     blocking Service/web: exists and is not managed by this release's owner -> --adopt Service/web or --replace Service/web
+     (release preview with placeholder images: rust-hello=pending-build; nothing was built or delivered)
+   ```
+
+   Add `adopt=["Service/web"]` (or `replace=`) to the `Pipeline`, or delete
+   the object, and plan again.
 
 4. **Approve the combined hash** after reviewing the plan:
 
@@ -221,11 +247,54 @@ re-applied. `--reapply` forces the apply.
 `--plan` prints one hash over every stage's plan: the build plan hashes,
 builders and network access, the delivery strategy and the known image
 digests, the registry release's actions, the release's actions (or, while the
-images are not built yet, the fingerprint of the rendered app), the checks,
-`--until` and the target identity. `--approve HASH` re-plans and runs only
-when the hash is unchanged; otherwise it is refused with
-`pipeline-plan-changed` and nothing runs. Stages whose plan depends on
-earlier outputs (the release plan after a build) run under that approval.
+images are not built yet, the fingerprint of the rendered app and the
+preview's adopt/replace/delete set), the checks, `--until` and the target
+identity. `--approve HASH` re-plans and runs only when the hash is
+unchanged; otherwise it is refused with `pipeline-plan-changed` and nothing
+runs. Stages whose plan depends on earlier outputs (the release plan after a
+build) run under that approval, within the limits of the preview below.
+
+(deploy-preview)=
+
+## Preview the release before the images exist
+
+A release plan needs the image digests, which exist only after the build and
+the delivery. So that the owner can see what a release would create, adopt,
+replace or delete (and what blocks it) *before* approving a build and a
+registry write, `--plan` computes a **preview** of the release plan with
+placeholder images:
+
+- Each build image that is not delivered yet is
+  `pending-build.piceli.invalid/<image>@sha256:000…` (not built) or
+  `pending-delivery.piceli.invalid/<image>@sha256:000…` (built, not
+  delivered). The `.invalid` domain never resolves and the digest names no
+  image, so a placeholder can never be pulled. Images already delivered and
+  images pinned by digest are used as they are.
+- Ownership is resolved exactly as for a real plan. An object that needs
+  adoption or replacement refuses `--plan` (and `--approve`, before any
+  build) with the release engine's `blocking` list and suggested flags.
+- The preview is **never approvable** and never persisted: no release, plan
+  or secret file is written, and no secret value is generated or read. Its
+  `preview_hash` only identifies it; `--approve <preview_hash>` is refused
+  with `pipeline-preview-not-approvable`.
+- **Placeholders never reach the cluster.** The preview sends only reads,
+  plus the usual server dry runs (`dryRun=All` patches, which change
+  nothing) for managed objects **without** a placeholder. Objects that carry
+  a placeholder image get no dry run (`dry_run_skipped`, reason
+  `dry-run-placeholder-image`) and are compared literally, so they show as
+  `apply`. Secret-bound objects the release already manages also show as
+  `apply`, because the preview never reads their stored values.
+- The combined hash covers the preview's adopt/replace/delete set, not its
+  placeholder digests. After delivery, the real release plan may not adopt,
+  replace or delete any object the approved preview did not show (an object
+  appeared or changed owner in between). If it would, the run stops at the
+  plan stage with `pipeline-preview-changed` and nothing is applied: run
+  `--plan` again (build and delivery are skipped), review the real release
+  plan and approve its hash.
+
+To review the real release plan before anything is applied, approve
+`--until deliver` first, then plan again: the release plan is then computed
+with the delivered digests.
 
 (delivery)=
 
@@ -341,6 +410,9 @@ The policy is used by `piceli deploy` (plan, apply, checks), `piceli status`,
 | --- | --- | --- |
 | Exit `3`, `"state": "approval-required"` | No `--approve`/`--auto-approve` and no terminal to confirm on | Review the plan, then `--approve <combined hash>` |
 | `pipeline-plan-changed` | Something changed since `--plan` | Plan again and approve the new hash |
+| `resource-requires-adoption` (or `plan-blocked`) with `blocking` and `"preview"` | The release preview needs adoption or replacement of existing objects; nothing was built | Add `adopt=["Kind/name"]` (or `replace=`) to the `Pipeline`, or delete the objects, then plan again |
+| `pipeline-preview-not-approvable` | `--approve` got the preview's `preview_hash` | Approve the `combined_hash` |
+| `pipeline-preview-changed` | After delivery the release plan adopts, replaces or deletes beyond the approved preview; nothing was applied | Plan again (build and delivery are skipped) and approve the real plan |
 | `pipeline-image-not-pinned` | An image is a movable tag | Pin it by digest or build it |
 | `pipeline-release-refused` with `blocking` objects | The release needs adoption or replacement of existing objects | Add `adopt=["Kind/name"]` (or `replace=`) to the `Pipeline`; see {doc}`release_cli` |
 | `build-failed`, `smoke-failed` (exit `1`) | The build or its smoke check failed | Read `state_dir/builds/<name>/build.log`, fix, deploy again |
@@ -372,8 +444,10 @@ Every code is explained by `piceli explain <code>` and in
 - **Side effects.** Reads the pipeline module, build specs and sources, the
   local Docker engine and the cluster (explicit kubeconfig). `--plan` writes
   only the pipeline's `state_dir` (pending release plans, as
-  `piceli release plan` does). A run also writes images to the local engine,
-  a registry or a node, and applies releases to the cluster.
+  `piceli release plan` does); before the images exist its release preview
+  sends the cluster only reads and `dryRun=All` patches of objects without a
+  placeholder image. A run also writes images to the local engine, a
+  registry or a node, and applies releases to the cluster.
 - **Approval.** Required: `--approve <combined hash>` from `--plan`,
   `--auto-approve`, or typing the hash's first 12 characters on a terminal.
   `--resume` continues an approved run and needs no new approval.
@@ -396,3 +470,11 @@ Every code is explained by `piceli explain <code>` and in
   `rejected`, `interrupted`. Result states: `planned`, `approval-required`,
   `ready`, `stopped`, `failed`, `rolled-back`, `interrupted`, `rejected`
   (with `reason`, the failed `stage` and any `blocking` objects).
+
+  While the images are not delivered, `stages.plan` keeps
+  `"state": "pending"` and adds `preview` (new in 0.5.0): `approvable`
+  (always `false`), `placeholders` (image → `pending-build` or
+  `pending-delivery`), `state` (`previewed`), `summary`, `changes`, `drift`,
+  `authorized` (adopt/replace), `dry_run_skipped`, `dry_run_unavailable` and
+  `preview_hash`. A refusal of the preview adds `"stage": "plan"` and
+  `preview` (`approvable`, `placeholders`) next to `blocking`.

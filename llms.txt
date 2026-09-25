@@ -5,13 +5,13 @@
 Rules for agents:
 
 - Run `piceli help-json` for every command's options, side effects, approval rules and retry safety; do not guess flags.
-- Plan before apply and never approve on the owner's behalf: show the owner the plan (`piceli deploy … --plan`, `piceli release plan`) and run `--approve <hash>` only after they approved that exact hash. Never add `--auto-approve` unless the owner said this is an unattended CI run for this exact target.
+- Plan before apply and never approve on the owner's behalf: show the owner the plan (`piceli deploy … --plan`, `piceli release plan`) and run `--approve <hash>` only after they approved that exact hash. Before the images exist, `deploy --plan` shows a release preview with placeholder images (`stages.plan.preview`, `approvable: false`): approve the `combined_hash`, never the `preview_hash`. Never add `--auto-approve` unless the owner said this is an unattended CI run for this exact target.
 - Parse JSON from stdout; human text is on stderr. Exit codes: 0 success, 1 ran but did not succeed, 2 rejected before any change, 3 approval required.
 - On a refusal read `reason` and run `piceli explain <reason> --json` (cause, fix, retry_safe).
 - Never read or print secret values; never rely on `~/.kube/config`, `KUBECONFIG` or the current context, and never pick or change a kube context, `allow_exec` or exec-plugin pins yourself: ask the owner.
 - After an interruption, resume (`piceli deploy … --resume`, `piceli release resume`) instead of planning a new run.
 
-Minimal workflow: `piceli render app.py:app --namespace NS` (no cluster) → `piceli deploy app.py:pipeline --plan --json` → owner approves → `piceli deploy app.py:pipeline --approve <combined_hash> --json` → `piceli status app.py:pipeline --json`.
+Minimal workflow: `piceli render app.py:pipeline` (no cluster; the target's namespace and nodes) → `piceli deploy app.py:pipeline --plan --json` → owner approves → `piceli deploy app.py:pipeline --approve <combined_hash> --json` → `piceli status app.py:pipeline --json`.
 
 ## Start here
 
@@ -24,7 +24,7 @@ Minimal workflow: `piceli render app.py:app --namespace NS` (no cluster) → `pi
 
 - [Overview and architecture](https://docs.pynenc.org/projects/piceli/en/latest/overview.html): model, plan, execute, observe; the engine; design principles; glossary
 - [Describe an app in typed Python](https://docs.pynenc.org/projects/piceli/en/latest/typed_apps.html): `piceli.App` deployments, services, config, secrets, volumes, network policies, dependencies; `piceli render`
-- [Deploy an app from source](https://docs.pynenc.org/projects/piceli/en/latest/deploy.html): `piceli deploy MODULE:ATTR`, one journaled run of inputs, build, deliver, plan, apply and checks; `--plan`, `--approve`, `--resume`, `--until`, `--json` events (`piceli.deploy-event.v1`)
+- [Deploy an app from source](https://docs.pynenc.org/projects/piceli/en/latest/deploy.html): `piceli deploy MODULE:ATTR`, one journaled run of inputs, build, deliver, plan, apply and checks; `--plan` (with a placeholder-image release preview and blocking objects before any build), `--approve`, `--resume`, `--until`, `--json` events (`piceli.deploy-event.v1`); `piceli render MODULE:pipeline`
 - [Releases from a spec](https://docs.pynenc.org/projects/piceli/en/latest/release_cli.html): `piceli release` plan, apply, adopt, replace, roll back, resume, stop, status (`--spec release.toml`, or `--spec module.py:pipeline` for a pipeline's release); "If plan refuses"
 - [Check a release and roll back automatically](https://docs.pynenc.org/projects/piceli/en/latest/checks.html): `[[checks]]` and `piceli.checks` (http, exec, metric, Python), `rollback_on_failed_checks`, `piceli release check`
 - [How plans decide what changes](https://docs.pynenc.org/projects/piceli/en/latest/plans_and_diffs.html): no-op vs apply from server dry runs, field-level diffs, `piceli release diff`

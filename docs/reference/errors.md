@@ -80,6 +80,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`docker-unavailable`](#error-docker-unavailable) | build-spec | yes |
 | [`dockerfile-unpinned`](#error-dockerfile-unpinned) | build-spec | no |
 | [`dry-run-limit-exceeded`](#error-dry-run-limit-exceeded) | kubernetes | no |
+| [`dry-run-placeholder-image`](#error-dry-run-placeholder-image) | kubernetes | no |
 | [`exec-auth-not-allowed`](#error-exec-auth-not-allowed) | target | no |
 | [`exec-command-not-found`](#error-exec-command-not-found) | target | no |
 | [`exec-command-unsafe`](#error-exec-command-unsafe) | target | no |
@@ -208,6 +209,8 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`pipeline-not-found`](#error-pipeline-not-found) | pipeline | no |
 | [`pipeline-nothing-to-resume`](#error-pipeline-nothing-to-resume) | pipeline | no |
 | [`pipeline-plan-changed`](#error-pipeline-plan-changed) | pipeline | no |
+| [`pipeline-preview-changed`](#error-pipeline-preview-changed) | pipeline | no |
+| [`pipeline-preview-not-approvable`](#error-pipeline-preview-not-approvable) | pipeline | no |
 | [`pipeline-registry-not-ready`](#error-pipeline-registry-not-ready) | pipeline | yes |
 | [`pipeline-release-refused`](#error-pipeline-release-refused) | pipeline | no |
 | [`pipeline-resume-changed`](#error-pipeline-resume-changed) | pipeline | no |
@@ -1106,6 +1109,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Too many dry runs.** The plan has more changed-candidate objects than the per-plan limit of server dry runs (256); the rest are compared literally.
 
 - **Fix:** Nothing to fix for correctness; objects past the limit may be listed as `apply` although unchanged. Split the release to get exact no-ops.
+- **Retry-safe:** no
+
+(error-dry-run-placeholder-image)=
+### `dry-run-placeholder-image`
+
+**Dry run skipped for a placeholder image.** A `piceli deploy --plan` release preview was computed before the images were built or delivered. Objects that carry a placeholder image (`pending-build`/`pending-delivery`) are never sent to the cluster, not even as a server dry run, so they are compared literally and listed as `apply`.
+
+- **Fix:** Nothing to fix. After delivery, `piceli deploy MODULE:ATTR --plan` computes the real release plan with server dry runs.
 - **Retry-safe:** no
 
 (error-identity-mismatch)=
@@ -2726,6 +2737,22 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Combined plan changed.** The hash passed to `--approve` is not the combined hash of the current plan: a source, image, cluster object or the pipeline changed since it was planned.
 
 - **Fix:** Run `piceli deploy MODULE:ATTR --plan` again, review it and approve the new combined hash.
+- **Retry-safe:** no
+
+(error-pipeline-preview-changed)=
+### `pipeline-preview-changed`
+
+**Release plan exceeds the approved preview.** The run was approved while its images did not exist, so the approval covered the placeholder preview's ownership outcome. After delivery the real release plan adopts, replaces or deletes an object that the preview did not show (an object appeared, changed owner or was declared since). Nothing was applied; build and delivery are finished.
+
+- **Fix:** Run `piceli deploy MODULE:ATTR --plan` again (build and delivery are skipped), review the real release plan and approve its combined hash.
+- **Retry-safe:** no
+
+(error-pipeline-preview-not-approvable)=
+### `pipeline-preview-not-approvable`
+
+**Preview hash is not an approval.** The hash passed to `--approve` is the `preview_hash` of a release preview computed with placeholder images (`pending-build`/`pending-delivery`). A preview shows structure and ownership only and is never approvable.
+
+- **Fix:** Approve the `combined_hash` from `piceli deploy MODULE:ATTR --plan` instead. It approves the build, the delivery and a release that adopts, replaces or deletes at most what the preview showed. To review the real release plan first, run `--until deliver`, then `--plan` again.
 - **Retry-safe:** no
 
 (error-pipeline-registry-not-ready)=

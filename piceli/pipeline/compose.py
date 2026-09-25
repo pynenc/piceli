@@ -211,17 +211,68 @@ def _pinned_ref(name: str, reference: str) -> ImageRef:
     )
 
 
+# ------------------------------------------------------------ placeholders
+
+#: Digest of a placeholder image. It names no image, so it is never approvable.
+PENDING_DIGEST = "sha256:" + "0" * 64
+#: States of a build image that has no delivered reference yet.
+PENDING_STATES = ("pending-build", "pending-delivery")
+_PENDING_IMAGE = re.compile(
+    r"(?:"
+    + "|".join(PENDING_STATES)
+    + r")\.piceli\.invalid/[^@\s]+@"
+    + re.escape(PENDING_DIGEST)
+)
+
+
+def pending_image(name: str, state: str) -> ImageRef:
+    """A placeholder reference for a build image that is not delivered yet.
+
+    ``<state>.piceli.invalid/<name>@sha256:000…`` with ``state``
+    ``pending-build`` (not built) or ``pending-delivery`` (built, not
+    delivered). The ``.invalid`` domain never resolves (RFC 2606) and the
+    digest names no image, so a placeholder can never be pulled; it is used
+    only for a release preview that is never persisted, approved or sent to
+    the cluster.
+    """
+    if state not in PENDING_STATES:
+        raise ValueError(f"unknown pending state {state!r}")
+    repository = f"{state}.piceli.invalid/{name}"
+    return ImageRef(
+        name,
+        PENDING_DIGEST,
+        repository,
+        None,
+        PENDING_DIGEST,
+        ref=f"{repository}@{PENDING_DIGEST}",
+    )
+
+
+def uses_pending_image(resource: ResourceIntent) -> bool:
+    """Whether a desired object carries a placeholder image reference."""
+    return any(
+        isinstance(container.get("image"), str)
+        and _PENDING_IMAGE.fullmatch(container["image"]) is not None
+        for pod in pod_specs(resource.manifest)
+        for container in containers(pod)
+    )
+
+
 # ------------------------------------------------------------ resolution
 
 
 def resolve(
     composition: DeploymentComposition,
     *,
-    images: Mapping[str, ImageRef],
+    images: Mapping[str, ImageRef] | None,
     secrets: Mapping[str, SecretVersionRef],
     pin_node: str | None,
 ) -> DeploymentComposition:
-    """Delivered references for handles, node pins, and real secret versions."""
+    """Delivered references for handles, node pins, and real secret versions.
+
+    With ``images=None`` build handles stay placeholders (offline rendering)
+    and only the node pin is applied.
+    """
     rebind = {placeholder(name): ref for name, ref in secrets.items()}
     components = []
     for component in composition.components:
@@ -235,6 +286,9 @@ def resolve(
                     name = handle_image(container.get("image"))
                     if name is None:
                         continue
+                    uses_handle = changed = True
+                    if images is None:
+                        continue
                     if name not in images:
                         raise PipelineError(
                             "pipeline-image-unknown",
@@ -242,7 +296,6 @@ def resolve(
                             f"image {name!r}, which no build of the pipeline produces",
                         )
                     container["image"] = images[name].reference
-                    uses_handle = changed = True
                 if (
                     uses_handle
                     and pin_node is not None
@@ -277,6 +330,28 @@ def pin_alias(pipeline: Pipeline) -> str | None:
         alias, _ = pipeline.target.node(strategy.node)
         return alias
     return None
+
+
+def offline_composition(
+    pipeline: Pipeline,
+) -> tuple[ReleaseContext, DeploymentComposition]:
+    """The app as ``piceli deploy`` would release it, rendered without a cluster.
+
+    Uses the target's namespace and declared nodes (so ``node="alias"`` pins
+    resolve to the declared names, unverified), value-free secret references,
+    and keeps build handles as placeholders; workloads that use a built image
+    get the delivery node's pin. Reads no kubeconfig, build spec or state.
+    """
+    ctx = preview_context(pipeline)
+    alias = pin_alias(pipeline)
+    node = ctx.nodes.get(alias) if alias is not None else None
+    composition = resolve(
+        render_app(pipeline, ctx),
+        images=None,
+        secrets={},
+        pin_node=node.name if node is not None else None,
+    )
+    return ctx, composition
 
 
 def composition_function(

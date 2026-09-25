@@ -82,7 +82,9 @@ noted.
 
 - `piceli explain`, `piceli help-json`
 - `piceli render`: imports the model module and reads the spec; never contacts
-  a cluster or reads secret values.
+  a cluster or reads secret values. `piceli render MODULE:pipeline` renders a
+  `Pipeline` with its target's namespace and declared nodes, and build images
+  as placeholders; it reads no kubeconfig.
 - `piceli release plan` and `piceli release preview`: read the cluster, store
   a pending plan and secret candidates in the spec's `state_dir`, and print the
   plan hash. They never write to the cluster.
@@ -116,7 +118,9 @@ noted.
 - `piceli deploy MODULE:ATTR --plan`: plans every stage (reads sources,
   the local image store, the registry or node, and the cluster), writes only
   the pipeline's `state_dir`, and prints the combined hash. It never builds,
-  pushes or applies.
+  pushes or applies. Before the images exist it also previews the release
+  with placeholder images (`stages.plan.preview`), and refuses with the
+  `blocking` objects when the release would need adoption or replacement.
 - `piceli artifacts build`: assembles an OCI layout in `--output` without
   running any code.
 - `piceli observe forward-save`, `piceli operator backup`: write a local
@@ -169,7 +173,16 @@ unattended CI job for this exact spec.
 1. Run `piceli deploy MODULE:ATTR --plan --json`. The last line is the result
    with `combined_hash` and every stage's plan.
 2. Show the owner the stderr summary: which builds run, which images are
-   delivered, the release's `create`/`apply`/`delete` lines and the checks.
+   delivered, the release's `create`/`adopt`/`replace`/`apply`/`delete`
+   lines and the checks. While the images are not built or delivered, those
+   lines come from `stages.plan.preview`, computed with placeholder images
+   (`approvable: false`). The combined hash then approves the build, the
+   delivery and a release that adopts, replaces or deletes at most what the
+   preview showed. Never pass the preview's `preview_hash` to `--approve`
+   (refused with `pipeline-preview-not-approvable`). If the owner wants to
+   see the real release plan first, approve `--until deliver`, then plan
+   again. A refused plan with `"preview"` and `blocking` means nothing was
+   built: report each object's `suggest` flags to the owner.
 3. After the owner approves **that combined hash**, run
    `piceli deploy MODULE:ATTR --approve <hash> --json`. Each stdout line is
    one stage event; the last one is the result.
@@ -177,7 +190,11 @@ unattended CI job for this exact spec.
    means a stage ran but did not succeed (`reason` names it; with
    `rollback_on_failed_checks` the result's `checks.rollback` says what was
    restored). Exit `2` with `pipeline-plan-changed` means something changed
-   since the plan: plan and ask again.
+   since the plan: plan and ask again. Exit `2` with
+   `pipeline-preview-changed` means the release plan computed after delivery
+   adopts, replaces or deletes an object the approved preview did not show;
+   nothing was applied: plan again (build and delivery are skipped), show the
+   owner the real release plan and ask again.
 
 (agents-pipeline-release)=
 ### Operating a pipeline's release

@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -117,19 +117,26 @@ def capture_server_dry_runs(
     *,
     max_requests: int = MAX_DRY_RUNS,
     deadline: float | None = None,
+    exclude: Callable[[ResourceIntent], bool] | None = None,
 ) -> tuple[DiscoveryArtifact, tuple[DryRunUnavailable, ...]]:
     """Attach server dry runs of the desired writes to ``artifact``.
 
     Returns the new artifact and the objects left without evidence. A
     provider without ``preview_update`` (a test double, an older adapter)
-    yields the artifact unchanged.
+    yields the artifact unchanged. Objects for which ``exclude`` returns
+    true are never sent, not even as a dry run (a placeholder preview).
     """
     preview = getattr(provider, "preview_update", None)
     if preview is None:
         return artifact, ()
     runs: list[ServerDryRun] = []
     unavailable: list[DryRunUnavailable] = []
-    for index, (intent, current) in enumerate(probe_candidates(composition, artifact)):
+    candidates = [
+        item
+        for item in probe_candidates(composition, artifact)
+        if exclude is None or not exclude(item[0])
+    ]
+    for index, (intent, current) in enumerate(candidates):
         if index >= max_requests:
             unavailable.append(DryRunUnavailable(intent.ref, "dry-run-limit-exceeded"))
             continue

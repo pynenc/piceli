@@ -4,6 +4,32 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.5.0
+
+- **Release preview before the images exist (`piceli deploy --plan`,
+  preview):** while build images are not built or delivered, `--plan` now
+  computes the release plan with placeholder images
+  (`pending-build.piceli.invalid/<image>@sha256:000…` or `pending-delivery…`)
+  instead of printing only "after delivery". It shows what the release would
+  create, adopt, replace, apply or delete, and refuses with the release
+  engine's `blocking` list and suggested flags (before any build or registry
+  write) when existing objects need adoption or replacement. The preview is
+  never approvable or persisted, generates or reads no secret, and objects
+  carrying a placeholder are never sent to the cluster, not even as a server
+  dry run (`dry-run-placeholder-image`). JSON adds `stages.plan.preview`, and
+  a refused preview adds `stage` and `preview`; existing fields keep their
+  meaning. The combined hash of a pending plan now covers the preview's
+  adopt/replace/delete set: after delivery the real release plan may not go
+  beyond it (`pipeline-preview-changed`, nothing applied; plan again).
+  `--approve <preview_hash>` is refused with
+  `pipeline-preview-not-approvable`. An image that is neither a build handle
+  nor pinned by digest is now refused at `--plan` time.
+- **`piceli render MODULE:pipeline`:** a `Pipeline` target renders offline
+  with its target's namespace and declared nodes (`node="alias"` pins
+  resolve), build images as placeholders, pinned images as they are, the
+  delivery node's pin, and secret placeholders. It reads no kubeconfig,
+  build spec or pipeline state. `piceli render MODULE:app` is unchanged.
+
 ## Version 0.4.1
 
 - **Fix (safety):** Piceli signals a child's process group only when the id

@@ -12,7 +12,11 @@ It needs ``docker`` and ``kubectl`` on ``PATH`` and builds
 ``examples/builds/rust-hello`` (``linux/arm64``, like the example). The test
 never reads the ambient kubeconfig. In a uniquely named namespace it:
 
-1. plans the shop pipeline (nothing is executed) and approves its hash;
+0. plans the shop pipeline while an unmanaged ``Service/web`` exists: before
+   anything is built, the placeholder preview refuses with the blocking
+   object and the flags that unblock it, and nothing is written;
+1. plans the shop pipeline (nothing is executed; the release preview uses
+   placeholder images) and approves its hash;
 2. runs it before the cache's existing claim exists, so the apply stage
    fails (not ready) after build and delivery;
 3. creates the claim and resumes: the run continues at the apply stage;
@@ -154,11 +158,48 @@ def test_shop_deploys_resumes_and_reruns_as_noop(namespace, tmp_path) -> None:
     name, api = namespace
     module = _module(tmp_path, name)
 
+    # An object with an app name that the release does not manage blocks the
+    # first plan, before any build or registry write (placeholder preview).
+    api.create_namespaced_service(
+        name,
+        {
+            "metadata": {"name": "web"},
+            "spec": {"selector": {"app": "legacy"}, "ports": [{"port": 80}]},
+        },
+    )
+    code, events, stderr, _ = _deploy(module, name, "--plan", "--json")
+    assert code == 2, stderr
+    blocked = events[-1]
+    assert blocked["reason"] == "resource-requires-adoption", blocked
+    assert blocked["stage"] == "plan"
+    assert blocked["preview"] == {
+        "approvable": False,
+        "placeholders": {"rust-hello": "pending-build"},
+    }
+    assert [(b["kind"], b["name"], b["suggest"]) for b in blocked["blocking"]] == [
+        ("Service", "web", ["--adopt Service/web", "--replace Service/web"])
+    ]
+    assert "blocking Service/web" in stderr, stderr
+    assert not (tmp_path / "state" / "builds").exists()  # nothing was built
+    from kubernetes.client import AppsV1Api
+
+    assert not AppsV1Api(api.api_client).list_namespaced_deployment(name).items
+    service = api.read_namespaced_service("web", name)
+    assert service.spec.selector == {"app": "legacy"}
+    assert "piceli.io/owner" not in (service.metadata.annotations or {})
+    api.delete_namespaced_service("web", name)
+
     code, events, stderr, _ = _deploy(module, name, "--plan", "--json")
     assert code == 0, stderr
     planned = events[-1]
     assert planned["state"] == "planned"
     assert planned["stages"]["deliver"]["registry"]["changes"], planned
+    preview = planned["stages"]["plan"]["preview"]
+    assert preview["approvable"] is False and preview["state"] == "previewed"
+    assert {"operation": "create", "kind": "Service", "name": "web"} in preview[
+        "changes"
+    ]
+    assert "not approvable" in stderr
     assert not api.list_namespaced_pod(name).items  # --plan executed nothing
 
     # Without the cache's claim the apply stage cannot become ready.
@@ -179,8 +220,6 @@ def test_shop_deploys_resumes_and_reruns_as_noop(namespace, tmp_path) -> None:
     assert final["state"] == "ready" and final["run_id"] == failed["run_id"]
     running = [e["stage"] for e in events if e.get("state") == "running"]
     assert running == ["apply", "checks"]
-    from kubernetes.client import AppsV1Api
-
     apps = AppsV1Api(api.api_client)
     for workload in ("web", "api"):
         pod = apps.read_namespaced_deployment(workload, name).spec.template.spec

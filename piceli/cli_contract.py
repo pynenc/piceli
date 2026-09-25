@@ -239,9 +239,12 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
     {
         # ----------------------------------------------------- contract
         "render": _C(
-            "Print the manifests of a typed app or composition (YAML or JSON).",
+            "Print the manifests of a typed app, composition or pipeline (YAML or JSON).",
             reads=("module/app file", "release.toml (optional)", "local receipts"),
-            notes="Never contacts a cluster; secret values are placeholders.",
+            notes="Never contacts a cluster; secret values are placeholders. A "
+            "Pipeline renders with its target's namespace and declared nodes, "
+            "build images as placeholders, and reads no kubeconfig, build spec "
+            "or state.",
         ),
         # ------------------------------------------------------- import
         "import live": _C(
@@ -628,7 +631,12 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             contract="conforms",
             exit_codes=(0, 1, 2, 3),
             notes="--plan never changes the cluster, a registry or a node; "
-            "--approve HASH executes exactly the combined plan; --resume continues "
+            "before the images exist it previews the release with placeholder "
+            "images (never approvable, never sent to the cluster) and refuses "
+            "with the blocking objects when it needs adoption or replacement; "
+            "--approve HASH executes exactly the combined plan, and a release "
+            "planned after delivery may not adopt, replace or delete more than "
+            "the approved preview; --resume continues "
             "the latest interrupted run without a new approval. Unchanged stages "
             "are skipped.",
         ),

@@ -66,7 +66,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli release secret show`](#cli-release-secret-show) | Show a secret's metadata, and its value with --reveal (never logged). | none | no |
 | [`piceli release status`](#cli-release-status) | Show catalogued releases, their executions and history (no cluster access). | none | no |
 | [`piceli release stop`](#cli-release-stop) | Cancel the latest execution of a release (exact owner only). | reads | no |
-| [`piceli render`](#cli-render) | Print the manifests of a typed app or composition. Never contacts a cluster. | none | no |
+| [`piceli render`](#cli-render) | Print the manifests of a typed app, composition or pipeline. Never contacts a cluster. | none | no |
 | [`piceli status`](#cli-status) | Say whether the app is up and how to reach it. Read-only. | reads | no |
 
 (cli-access)=
@@ -361,7 +361,7 @@ Deploy a pipeline: inputs → build → deliver → plan → apply → checks.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** --plan never changes the cluster, a registry or a node; --approve HASH executes exactly the combined plan; --resume continues the latest interrupted run without a new approval. Unchanged stages are skipped.
+- **Notes:** --plan never changes the cluster, a registry or a node; before the images exist it previews the release with placeholder images (never approvable, never sent to the cluster) and refuses with the blocking objects when it needs adoption or replacement; --approve HASH executes exactly the combined plan, and a release planned after delivery may not adopt, replace or delete more than the approved preview; --resume continues the latest interrupted run without a new approval. Unchanged stages are skipped.
 
 (cli-explain)=
 ### `piceli explain`
@@ -1140,13 +1140,13 @@ Cancel the latest execution of a release (exact owner only).
 (cli-render)=
 ### `piceli render`
 
-Print the manifests of a typed app or composition. Never contacts a cluster.
+Print the manifests of a typed app, composition or pipeline. Never contacts a cluster.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `TARGET` | text |  |  |
 | `--spec` | path |  | release.toml providing the namespace, images, secret inputs (as placeholders), [values] and declared nodes |
-| `--namespace` | text |  | Namespace to render into (default: the spec's, else 'default') |
+| `--namespace` | text |  | Namespace to render into (default: the spec's or the pipeline target's, else 'default') |
 | `--format` | choice | `yaml` | Output format |
 
 **Contract**
@@ -1158,7 +1158,7 @@ Print the manifests of a typed app or composition. Never contacts a cluster.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** partial
-- **Notes:** Never contacts a cluster; secret values are placeholders.
+- **Notes:** Never contacts a cluster; secret values are placeholders. A Pipeline renders with its target's namespace and declared nodes, build images as placeholders, and reads no kubeconfig, build spec or state.
 
 (cli-status)=
 ### `piceli status`
