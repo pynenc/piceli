@@ -206,6 +206,13 @@ At each step the resume decides from the journal and the live object:
   resume stops as `blocked` (`ambiguous-write-blocked`,
   `ambiguous-content-blocked` or `ambiguous-delete-blocked`) and can simply
   be run again;
+  with shared state ({doc}`state`) the intent and its write time reach the
+  cluster state before the write is sent, so another runner resumes the same
+  way. The time is the sending runner's clock: keep runners' clocks in sync.
+  Another runner can only resume after taking the release lock over, which
+  already needs `state_lease_seconds` without renewals, and the lock is
+  renewed right before each state write, so a slow state write never shortens
+  the settle window;
 * **after the server applied it** but before Piceli recorded the answer: the
   live object carries the action's operation ID (or contains the declared
   content), so the action counts as applied without a second write;
@@ -218,8 +225,8 @@ nothing.
 
 This is tested by killing `piceli release apply` (a SIGKILL of its process)
 at every write of an apply and of a rollback, before the write, after the
-server applied it and at the next request
-(`tests/acceptance/test_kill_resume.py`), and mid-rollout on kind
+server applied it and at the next request, and with shared state resumed by
+another runner (`tests/acceptance/test_kill_resume.py`), and mid-rollout on kind
 (`tests/integration/test_kill_kind.py`).
 
 (rollback-boundary)=

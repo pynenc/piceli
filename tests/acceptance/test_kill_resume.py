@@ -27,6 +27,7 @@ import subprocess
 import sys
 import textwrap
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -84,7 +85,14 @@ pytestmark = pytest.mark.timeout(180)
 
 
 def _spec(
-    directory: Path, url: str, digest: str, mode: str, feature: str = "off"
+    directory: Path,
+    url: str,
+    digest: str,
+    mode: str,
+    feature: str = "off",
+    *,
+    state: str = "local",
+    state_dir: str = "state",
 ) -> Path:
     (directory / "kubeconfig").write_text(
         textwrap.dedent(
@@ -114,7 +122,9 @@ def _spec(
             owner = "acceptance-owner"
             field_manager = "piceli-acceptance"
             composition = "compose.py:build"
-            state_dir = "state"
+            state_dir = "{state_dir}"
+            state = "{state}"
+            state_lease_seconds = 5
             prune = true
 
             [execution]
@@ -145,9 +155,21 @@ def _run(spec: Path, *args: str) -> tuple[int, dict[str, Any]]:
 
 
 def _write(request: dict[str, Any]) -> bool:
-    return request["method"] in {"POST", "PATCH", "DELETE"} and request["query"].get(
-        "dryRun"
-    ) != ["All"]
+    """A write to the release's objects (not to shared state: Leases, state Secrets)."""
+    path = request["path"]
+    return (
+        request["method"] in {"POST", "PATCH", "DELETE"}
+        and request["query"].get("dryRun") != ["All"]
+        and "/leases" not in path
+        and "piceli-state" not in path
+        and not _state_body(request)
+    )
+
+
+def _state_body(request: dict[str, Any]) -> bool:
+    body = request.get("body")
+    labels = (body or {}).get("metadata", {}).get("labels") or {}
+    return isinstance(body, dict) and "piceli.io/state" in labels
 
 
 class Killer:
@@ -313,3 +335,39 @@ def test_killed_rollback_converges_when_rolled_back_again(tmp_path, index, phase
         # The Secret the releases share was never rewritten.
         assert live["secret"] == secret
         assert ("ConfigMap", "feature") not in api.objects
+
+
+@pytest.mark.parametrize("index", range(1, APPLY_WRITES + 1))
+def test_killed_apply_with_shared_state_resumes_on_another_runner(tmp_path, index):
+    """Shared state and resume-resend together.
+
+    The kill lands after the intent (with ``written_at``) was journaled and
+    written through to the cluster state, before the write reached the server.
+    Another runner (an empty state directory) takes the stale lock over,
+    pulls the state and sends the unlanded write again: one write per object.
+    """
+    with serve() as (api, url):
+        spec = _spec(tmp_path, url, DIGEST_1, "blue", state="cluster")
+        code, planned = _run(spec, "plan")
+        assert code == 0, planned
+        _killed_apply(
+            api, spec, ["apply"], planned["plan_hash"], Killer(index, "before-write")
+        )
+        assert len([r for r in api.requests if _write(r)]) == index
+
+        other = _spec(tmp_path, url, DIGEST_1, "blue", state="cluster", state_dir="b")
+        deadline = time.monotonic() + 30
+        while True:
+            code, resumed = _run(other, "resume")
+            if code != 2 or resumed.get("reason") not in {
+                "release-locked",
+                "pipeline-locked",
+            }:
+                break
+            assert time.monotonic() < deadline, resumed
+            time.sleep(0.5)
+        assert code == 0, resumed
+        assert resumed["release_state"] == "ready", resumed
+        # Each object written once, the interrupted write sent again.
+        assert len([r for r in api.requests if _write(r)]) == APPLY_WRITES + 1
+        _converged(api, other, planned["release"], DIGEST_1, "blue")

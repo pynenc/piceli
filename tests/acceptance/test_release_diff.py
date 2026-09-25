@@ -377,6 +377,41 @@ def test_object_changed_between_discovery_and_dry_run_is_observed_again(
     assert len([r for r in _dry_runs(api) if "deployments" in r["path"]]) == 2
 
 
+def test_observing_again_still_excludes_shared_state_objects(release_env):
+    """Discovery captured again after a dry-run conflict keeps the
+    ``!piceli.io/state`` selector: state objects never enter a plan."""
+    api, tmp_path = release_env
+    code, _, result = _run(tmp_path, "apply", "--auto-approve")
+    assert code == 0, result.output
+    api.put(
+        {
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {
+                "name": "piceli-state-app-0",
+                "namespace": TARGET.namespace,
+                "labels": {"piceli.io/state": "app"},
+            },
+            "data": {},
+        },
+        owned=True,
+    )
+    api.inject("PATCH", "/deployments/worker", status=409, dry_run=True)
+    before = len(api.requests)
+
+    code, planned, result = _run(tmp_path, "plan")
+    assert code == 0, result.output
+    assert set(_operations(planned).values()) == {"no-op"}, planned["diffs"]
+    lists = [
+        request
+        for request in api.requests[before:]
+        if request["method"] == "GET" and request["path"].endswith("/secrets")
+    ]
+    assert len(lists) == 2  # discovered twice
+    assert all(r["query"]["labelSelector"] == ["!piceli.io/state"] for r in lists)
+    assert "piceli-state" not in json.dumps(planned)
+
+
 def _drop(tmp_path: Path) -> None:
     """Drop a ConfigMap key and label and a container env var from the module."""
     module = (tmp_path / "compose.py").read_text()
