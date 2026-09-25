@@ -116,5 +116,6 @@ These are enforced by tests or review. Do not weaken them.
 | Access and status (`piceli access`, `piceli status`) | `piceli/app/access.py`, `piceli/k8s/access.py`, `piceli/k8s/port_owner.py`, `piceli/k8s/cli/access.py` |
 | Examples (run in CI where possible) | `examples/` |
 | Docs (Sphinx + MyST) | `docs/`; agent entry points `llms.txt`, `docs/agents.md` |
-| First-run path for new users | `README.md` quick start, `docs/getting_started/index.md` and the taste in `docs/index.md`; keep the three in sync |
+| First-run path for new users | `README.md` quick start (included from `examples/readme/`: edit the files, then `python scripts/readme_examples.py sync`; run against the fake API by `tests/acceptance/test_readme_quickstart.py`), `docs/getting_started/index.md` (includes the same `app.py`) and the taste in `docs/index.md`; keep the three in sync |
+| Same app in Helm, Kustomize, cdk8s and Pulumi | `examples/comparisons/`, `tests/unit/comparisons/` (CI job `comparisons`), `docs/comparisons.md`, `docs/when_to_use.md` |
 | Human contributor guide | `CONTRIBUTING.md`, `docs/contributing/` |

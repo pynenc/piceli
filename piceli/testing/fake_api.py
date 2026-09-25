@@ -14,7 +14,8 @@ server-side-apply bookkeeping (``managedFields``, conflicts, pruning).
 
 It is not a conformance-tested API server: there is no admission, no
 defaulting beyond readiness status, no watch, and one namespace
-(:data:`TARGET` ``.namespace``) holds every namespaced object.
+(:data:`TARGET` ``.namespace`` unless ``FakeAPI(namespace=...)`` names
+another) holds every namespaced object.
 
 Importing this module has no side effects: nothing listens until
 :func:`serve` (or :func:`fake_cluster`) is entered.
@@ -439,11 +440,20 @@ class FakeAPI:
       Kill tests use it to stop a client process at an exact step.
 
     Use :meth:`put` to seed objects and :meth:`inject` to add faults.
+
+    :param types: The served resources (default :data:`TYPES`).
+    :param namespace: The one namespace that holds namespaced objects
+        (default :data:`TARGET`'s); requests to any other are refused with
+        ``403``, as for a user bound to one namespace.
     """
 
     def __init__(
-        self, types: Mapping[str, tuple[str, str, bool]] | None = None
+        self,
+        types: Mapping[str, tuple[str, str, bool]] | None = None,
+        *,
+        namespace: str = TARGET.namespace,
     ) -> None:
+        self.namespace = namespace
         self.types: dict[str, tuple[str, str, bool]] = dict(
             TYPES if types is None else types
         )
@@ -461,7 +471,7 @@ class FakeAPI:
         self.nodes: dict[str, dict[str, Any]] = {}
         self.intercept: Callable[[dict[str, Any], str], bool] | None = None
         self.put(manifest("Namespace", "kube-system"), uid="cluster-uid")
-        self.put(manifest("Namespace", TARGET.namespace), uid="namespace-uid")
+        self.put(manifest("Namespace", namespace), uid="namespace-uid")
 
     def put(
         self,
@@ -836,7 +846,7 @@ class FakeAPI:
         if not found:
             return 404, {}
         index, (api_version, kind, namespaced) = found[-1]
-        if namespaced and parts[index - 2 : index] != ["namespaces", TARGET.namespace]:
+        if namespaced and parts[index - 2 : index] != ["namespaces", self.namespace]:
             return 403, {}
         name = parts[index + 1] if len(parts) > index + 1 else ""
         current = self.objects.get((kind, name))

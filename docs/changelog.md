@@ -4,6 +4,25 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Unreleased
+
+- **Docs: when to use Piceli, and comparisons:** `docs/when_to_use.md` (use
+  it when / don't) and `docs/comparisons.md`: one app written with Piceli,
+  Helm, Kustomize, cdk8s and Pulumi (`examples/comparisons/<tool>`, pinned
+  versions), with files, lines, steps and safety features compared and
+  where the others are better. A new CI job (`comparisons`) renders every
+  version for dev, staging and prod and checks that it equals `piceli render`.
+- The README quick start is `examples/readme/app.py` and
+  `examples/readme/commands.sh`, included verbatim
+  (`scripts/readme_examples.py check`, also a pre-commit hook) and run
+  against the fake API in `tests/acceptance/test_readme_quickstart.py`;
+  the getting-started page includes the same file.
+- Public documentation links (README, `llms.txt`, package metadata) point at
+  `/en/stable/`; pages not yet in the stable release keep `/en/latest/`.
+- `piceli.testing.FakeAPI(namespace=...)` serves another namespace than
+  `TARGET.namespace`, so an app that names its own namespace runs against the
+  fake API unchanged.
+
 ## Version 0.7.0
 
 - **Reference app:** `examples/reference/app.py` deploys a realistic app to

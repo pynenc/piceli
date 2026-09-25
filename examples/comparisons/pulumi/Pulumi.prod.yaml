@@ -1,0 +1,16 @@
+config:
+  webapp:kubeconfig: cluster.kubeconfig
+  webapp:context: main
+  webapp:namespace: webapp-prod
+  webapp:logLevel: warning
+  webapp:apiReplicas: "3"
+  webapp:webMinReplicas: "3"
+  webapp:webMaxReplicas: "10"
+  webapp:apiResources:
+    cpu: 200m
+    memory: 128Mi
+    memoryLimit: 256Mi
+  webapp:webResources:
+    cpu: 100m
+    memory: 64Mi
+    memoryLimit: 128Mi

@@ -3,7 +3,7 @@
 #
 # Copy this file to .github/workflows/deploy.yml in your repository and adapt
 # the `env` block and the runner labels. The guide is docs/ci.md
-# (https://docs.pynenc.org/projects/piceli/en/latest/ci.html).
+# (https://docs.pynenc.org/projects/piceli/en/stable/ci.html).
 #
 # Piceli's own tests run the `piceli deploy` command lines of this file, in
 # this order, each job in its own checkout and state directory, against a

@@ -49,29 +49,13 @@ Create `app.py` next to `hello.kubeconfig`. It holds three things: the target
 (which cluster and namespace), the app (what runs there) and the pipeline
 (how it gets there and how to check it):
 
-```python
-from piceli import App, Checks, Pipeline, Target
-
-target = Target.kubeconfig(
-    "hello.kubeconfig",  # an explicit file; never ~/.kube/config
-    context="kind-hello",  # an explicit context; never current-context
-    namespace="hello",
-)
-
-app = App("hello")
-web = app.deployment(
-    "web",
-    image=(
-        "docker.io/library/nginx:1.27"
-        "@sha256:6784fb0834aa7dbbe12e3d7471e69c290df3e6ba810dc38b34ae33d3c1c05f7d"
-    ),
-    ports=[80],
-    ready=app.probe.http("/", 80),
-)
-app.service(web, port=80, access=app.access.forward(local=18080, health="/"))
-
-pipeline = Pipeline(app, target, checks=Checks.http(web, "/", expect=200))
+```{literalinclude} ../../examples/readme/app.py
+:language: python
 ```
+
+This is the README's quick start, byte for byte. A test runs it with the
+render, plan, approve and status commands below against a fake API server
+([`tests/acceptance/test_readme_quickstart.py`](https://github.com/pynenc/piceli/blob/main/tests/acceptance/test_readme_quickstart.py)).
 
 - `App(name)` collects declarations and validates each one as you make it.
   Relative paths, such as the kubeconfig, resolve from the directory of

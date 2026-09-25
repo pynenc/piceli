@@ -7,6 +7,8 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
+from urllib.error import HTTPError
+from urllib.request import urlopen
 
 import piceli.testing as testing
 from piceli.k8s.ops.discovery import ResourceIdentity
@@ -131,3 +133,28 @@ def test_pytest_plugin_fixture(tmp_path: Path) -> None:
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "1 passed" in result.stdout
+
+
+def test_a_fake_api_can_serve_the_app_s_own_namespace() -> None:
+    api = testing.FakeAPI(namespace="my-app")
+    assert ("Namespace", "my-app") in api.objects
+    api.put(
+        {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {"name": "settings", "namespace": "my-app"},
+            "data": {"mode": "on"},
+        }
+    )
+    with testing.serve(api) as (_, url):
+
+        def status(namespace: str) -> int:
+            path = f"{url}/api/v1/namespaces/{namespace}/configmaps/settings"
+            try:
+                with urlopen(path, timeout=5) as response:
+                    return int(response.status)
+            except HTTPError as error:
+                return error.code
+
+        assert status("my-app") == 200
+        assert status(testing.TARGET.namespace) == 403

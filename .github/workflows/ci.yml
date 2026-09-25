@@ -64,6 +64,44 @@ jobs:
           path: .coverage
           include-hidden-files: true
 
+  comparisons:
+    # examples/comparisons: the same app in Helm, Kustomize, cdk8s and Pulumi
+    # renders the same objects as Piceli (docs/comparisons.md). Pinned tools;
+    # PICELI_COMPARISONS=require turns a missing tool into a failure.
+    runs-on: ubuntu-latest
+    env:
+      HELM_VERSION: v4.3.0
+      HELM_SHA256: 86584a54def73570558f66f5111cc53dfed56689637ae32c1201205d494f54fb
+      KUSTOMIZE_VERSION: v5.8.1
+      KUSTOMIZE_SHA256: 029a7f0f4e1932c52a0476cf02a0fd855c0bb85694b82c338fc648dcb53a819d
+      PICELI_COMPARISONS: require
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      - name: Install helm and kustomize
+        run: |
+          curl -sSfL -o /tmp/helm.tgz "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
+          echo "${HELM_SHA256}  /tmp/helm.tgz" | sha256sum -c -
+          tar -xzf /tmp/helm.tgz -C /tmp linux-amd64/helm
+          sudo install -m 0755 /tmp/linux-amd64/helm /usr/local/bin/helm
+          curl -sSfL -o /tmp/kustomize.tgz "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2F${KUSTOMIZE_VERSION}/kustomize_${KUSTOMIZE_VERSION}_linux_amd64.tar.gz"
+          echo "${KUSTOMIZE_SHA256}  /tmp/kustomize.tgz" | sha256sum -c -
+          tar -xzf /tmp/kustomize.tgz -C /tmp kustomize
+          sudo install -m 0755 /tmp/kustomize /usr/local/bin/kustomize
+      - run: uv sync --all-extras --python 3.12
+      - name: Render every comparison and compare it with Piceli
+        run: >-
+          uv run
+          --with-requirements examples/comparisons/cdk8s/requirements.txt
+          --with-requirements examples/comparisons/pulumi/requirements.txt
+          pytest tests/unit/comparisons -v
+
   kind-nodes:
     # The supported Kubernetes minors (.github/kind-nodes.json, newest first,
     # pinned by digest). Pull requests and pushes test the newest; the nightly

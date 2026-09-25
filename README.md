@@ -15,7 +15,7 @@
     <a href="https://github.com/pynenc/piceli/actions/workflows/ci.yml">
         <img src="https://github.com/pynenc/piceli/actions/workflows/ci.yml/badge.svg" alt="CI">
     </a>
-    <a href="https://docs.pynenc.org/projects/piceli/" target="_blank">
+    <a href="https://docs.pynenc.org/projects/piceli/en/stable/" target="_blank">
         <img src="https://img.shields.io/readthedocs/piceli" alt="Documentation">
     </a>
     <a href="https://github.com/pynenc/piceli/commits/main">
@@ -31,7 +31,7 @@
 
 ---
 
-**Documentation**: <a href="https://docs.pynenc.org/projects/piceli/" target="_blank">https://docs.pynenc.org/projects/piceli</a>
+**Documentation**: <a href="https://docs.pynenc.org/projects/piceli/en/stable/" target="_blank">https://docs.pynenc.org/projects/piceli/en/stable/</a>
 
 **Source Code**: <a href="https://github.com/pynenc/piceli" target="_blank">https://github.com/pynenc/piceli</a>
 
@@ -51,11 +51,16 @@ whether it is up and forward its ports to your laptop.
 It is a Python-native alternative to hand-maintained YAML, Kustomize overlays
 and Helm templates, and it still accepts plain YAML/JSON and `kubernetes`
 client objects, so you can migrate gradually.
+[When to use Piceli](https://docs.pynenc.org/projects/piceli/en/latest/when_to_use.html)
+says when it fits and when Helm, Kustomize, cdk8s or Pulumi fit better, and
+[the same app in all five](https://docs.pynenc.org/projects/piceli/en/latest/comparisons.html)
+compares them side by side (a CI test checks that all five render the same
+objects).
 
 > **Status: pre-alpha.** APIs change between releases, always with a
-> [changelog](https://docs.pynenc.org/projects/piceli/en/latest/changelog.html)
+> [changelog](https://docs.pynenc.org/projects/piceli/en/stable/changelog.html)
 > entry. Each documentation page states its maturity (stable, preview or
-> experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/latest/roadmap.html)
+> experimental); the [roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)
 > lists them all.
 
 ## What's new in 0.4.0
@@ -72,7 +77,7 @@ client objects, so you can migrate gradually.
 - **One engine**: the legacy delete-and-recreate engine is gone; every change
   goes through server-side apply, the journal and resume.
 
-See the [changelog](https://docs.pynenc.org/projects/piceli/en/latest/changelog.html)
+See the [changelog](https://docs.pynenc.org/projects/piceli/en/stable/changelog.html)
 for the complete list, including breaking changes.
 
 ## Installation
@@ -100,6 +105,8 @@ kubectl --kubeconfig hello.kubeconfig create namespace hello
 
 Describe the app, where it runs and how to check it in `app.py`:
 
+<!-- readme-example: examples/readme/app.py -->
+
 ```python
 from piceli import App, Checks, Pipeline, Target
 
@@ -126,6 +133,8 @@ pipeline = Pipeline(app, target, checks=Checks.http(web, "/", expect=200))
 
 Render it, review the plan, approve that exact plan, and reach the app:
 
+<!-- readme-example: examples/readme/commands.sh -->
+
 ```bash
 piceli render app.py:app --namespace hello   # the manifests; never contacts a cluster
 piceli deploy app.py:pipeline --plan         # what would change, and a combined hash
@@ -141,13 +150,13 @@ interrupted,
 
 Next steps:
 
-- [Getting started](https://docs.pynenc.org/projects/piceli/en/latest/getting_started/index.html)
+- [Getting started](https://docs.pynenc.org/projects/piceli/en/stable/getting_started/index.html)
   walks through the same app step by step.
-- [Deploy an app from source](https://docs.pynenc.org/projects/piceli/en/latest/deploy.html)
+- [Deploy an app from source](https://docs.pynenc.org/projects/piceli/en/stable/deploy.html)
   adds pinned image builds and delivery to a registry or node.
-- [Releases from a spec](https://docs.pynenc.org/projects/piceli/en/latest/release_cli.html)
+- [Releases from a spec](https://docs.pynenc.org/projects/piceli/en/stable/release_cli.html)
   covers `release.toml`, adoption, secrets, rollback and resume.
-- [From kubectl scripts to Piceli](https://docs.pynenc.org/projects/piceli/en/latest/migrate_from_kubectl.html)
+- [From kubectl scripts to Piceli](https://docs.pynenc.org/projects/piceli/en/stable/migrate_from_kubectl.html)
   imports what already runs in a namespace.
 
 ## Key features
@@ -182,10 +191,10 @@ Next steps:
 
 ## For coding agents
 
-Start with [Using Piceli from an agent](https://docs.pynenc.org/projects/piceli/en/latest/agents.html):
+Start with [Using Piceli from an agent](https://docs.pynenc.org/projects/piceli/en/stable/agents.html):
 which commands only read, which need the owner's approval, the output contract
 and how to recover from errors. The documentation index for language models is
-[`llms.txt`](https://docs.pynenc.org/projects/piceli/en/latest/llms.txt). To
+[`llms.txt`](https://docs.pynenc.org/projects/piceli/en/stable/llms.txt). To
 change Piceli itself, read [AGENTS.md](https://github.com/pynenc/piceli/blob/main/AGENTS.md).
 
 ## Requirements
@@ -210,9 +219,9 @@ for setup, tests and pull request guidelines.
 
 - **[GitHub Issues](https://github.com/pynenc/piceli/issues)**: bug reports,
   feature requests and questions
-- **[Documentation](https://docs.pynenc.org/projects/piceli/)**: guides, command
+- **[Documentation](https://docs.pynenc.org/projects/piceli/en/stable/)**: guides, command
   reference and error codes
-- **[Roadmap](https://docs.pynenc.org/projects/piceli/en/latest/roadmap.html)**:
+- **[Roadmap](https://docs.pynenc.org/projects/piceli/en/stable/roadmap.html)**:
   feature maturity and direction
 - **Security**: report vulnerabilities privately, see
   [SECURITY.md](https://github.com/pynenc/piceli/blob/main/SECURITY.md)

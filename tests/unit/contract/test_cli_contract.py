@@ -216,8 +216,8 @@ def test_agents_page_matches_command_metadata() -> None:
 def test_llms_txt_links_to_existing_pages() -> None:
     root = reference_docs.DOCS.parent
     text = (root / "llms.txt").read_text()
-    prefix = "https://docs.pynenc.org/projects/piceli/en/latest/"
-    pages = re.findall(re.escape(prefix) + r"([\w/]+)\.html", text)
+    prefix = "https://docs.pynenc.org/projects/piceli/en/(?:stable|latest)/"
+    pages = re.findall(prefix + r"([\w/]+)\.html", text)
     assert "agents" in pages and "reference/errors" in pages
     for page in pages:
         assert (reference_docs.DOCS / f"{page}.md").exists(), page

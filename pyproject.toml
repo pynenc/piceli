@@ -52,9 +52,9 @@ crypto = [
 
 [project.urls]
 Homepage = "https://pynenc.org"
-Documentation = "https://docs.pynenc.org/projects/piceli/"
+Documentation = "https://docs.pynenc.org/projects/piceli/en/stable/"
 Repository = "https://github.com/pynenc/piceli"
-Changelog = "https://docs.pynenc.org/projects/piceli/en/latest/changelog.html"
+Changelog = "https://docs.pynenc.org/projects/piceli/en/stable/changelog.html"
 Issues = "https://github.com/pynenc/piceli/issues"
 
 [project.scripts]
