@@ -487,101 +487,53 @@
    ],
    "init": [],
    "methods": {
-    "capitalize": [],
-    "casefold": [],
-    "center": [
-     "fillchar",
-     "width"
-    ],
+    "capitalize": null,
+    "casefold": null,
+    "center": null,
     "count": null,
-    "encode": [
-     "encoding",
-     "errors"
-    ],
+    "encode": null,
     "endswith": null,
-    "expandtabs": [
-     "tabsize"
-    ],
+    "expandtabs": null,
     "find": null,
     "format": null,
-    "format_map": [
-     "mapping"
-    ],
+    "format_map": null,
     "index": null,
-    "isalnum": [],
-    "isalpha": [],
-    "isascii": [],
-    "isdecimal": [],
-    "isdigit": [],
-    "isidentifier": [],
-    "islower": [],
-    "isnumeric": [],
-    "isprintable": [],
-    "isspace": [],
-    "istitle": [],
-    "isupper": [],
-    "join": [
-     "iterable"
-    ],
-    "ljust": [
-     "fillchar",
-     "width"
-    ],
-    "lower": [],
-    "lstrip": [
-     "chars"
-    ],
+    "isalnum": null,
+    "isalpha": null,
+    "isascii": null,
+    "isdecimal": null,
+    "isdigit": null,
+    "isidentifier": null,
+    "islower": null,
+    "isnumeric": null,
+    "isprintable": null,
+    "isspace": null,
+    "istitle": null,
+    "isupper": null,
+    "join": null,
+    "ljust": null,
+    "lower": null,
+    "lstrip": null,
     "maketrans": null,
-    "partition": [
-     "sep"
-    ],
-    "removeprefix": [
-     "prefix"
-    ],
-    "removesuffix": [
-     "suffix"
-    ],
-    "replace": [
-     "count",
-     "new",
-     "old"
-    ],
+    "partition": null,
+    "removeprefix": null,
+    "removesuffix": null,
+    "replace": null,
     "rfind": null,
     "rindex": null,
-    "rjust": [
-     "fillchar",
-     "width"
-    ],
-    "rpartition": [
-     "sep"
-    ],
-    "rsplit": [
-     "maxsplit",
-     "sep"
-    ],
-    "rstrip": [
-     "chars"
-    ],
-    "split": [
-     "maxsplit",
-     "sep"
-    ],
-    "splitlines": [
-     "keepends"
-    ],
+    "rjust": null,
+    "rpartition": null,
+    "rsplit": null,
+    "rstrip": null,
+    "split": null,
+    "splitlines": null,
     "startswith": null,
-    "strip": [
-     "chars"
-    ],
-    "swapcase": [],
-    "title": [],
-    "translate": [
-     "table"
-    ],
-    "upper": [],
-    "zfill": [
-     "width"
-    ]
+    "strip": null,
+    "swapcase": null,
+    "title": null,
+    "translate": null,
+    "upper": null,
+    "zfill": null
    }
   },
   "ApprovalPolicy": {
@@ -781,12 +733,8 @@
     "message"
    ],
    "methods": {
-    "add_note": [
-     "note"
-    ],
-    "with_traceback": [
-     "tb"
-    ]
+    "add_note": null,
+    "with_traceback": null
    }
   },
   "CheckFailed": {
@@ -799,12 +747,8 @@
     "detail"
    ],
    "methods": {
-    "add_note": [
-     "note"
-    ],
-    "with_traceback": [
-     "tb"
-    ]
+    "add_note": null,
+    "with_traceback": null
    }
   },
   "CheckReport": {
@@ -873,12 +817,8 @@
     "message"
    ],
    "methods": {
-    "add_note": [
-     "note"
-    ],
-    "with_traceback": [
-     "tb"
-    ]
+    "add_note": null,
+    "with_traceback": null
    }
   },
   "Checks": {
@@ -1501,101 +1441,53 @@
    ],
    "init": [],
    "methods": {
-    "capitalize": [],
-    "casefold": [],
-    "center": [
-     "fillchar",
-     "width"
-    ],
+    "capitalize": null,
+    "casefold": null,
+    "center": null,
     "count": null,
-    "encode": [
-     "encoding",
-     "errors"
-    ],
+    "encode": null,
     "endswith": null,
-    "expandtabs": [
-     "tabsize"
-    ],
+    "expandtabs": null,
     "find": null,
     "format": null,
-    "format_map": [
-     "mapping"
-    ],
+    "format_map": null,
     "index": null,
-    "isalnum": [],
-    "isalpha": [],
-    "isascii": [],
-    "isdecimal": [],
-    "isdigit": [],
-    "isidentifier": [],
-    "islower": [],
-    "isnumeric": [],
-    "isprintable": [],
-    "isspace": [],
-    "istitle": [],
-    "isupper": [],
-    "join": [
-     "iterable"
-    ],
-    "ljust": [
-     "fillchar",
-     "width"
-    ],
-    "lower": [],
-    "lstrip": [
-     "chars"
-    ],
+    "isalnum": null,
+    "isalpha": null,
+    "isascii": null,
+    "isdecimal": null,
+    "isdigit": null,
+    "isidentifier": null,
+    "islower": null,
+    "isnumeric": null,
+    "isprintable": null,
+    "isspace": null,
+    "istitle": null,
+    "isupper": null,
+    "join": null,
+    "ljust": null,
+    "lower": null,
+    "lstrip": null,
     "maketrans": null,
-    "partition": [
-     "sep"
-    ],
-    "removeprefix": [
-     "prefix"
-    ],
-    "removesuffix": [
-     "suffix"
-    ],
-    "replace": [
-     "count",
-     "new",
-     "old"
-    ],
+    "partition": null,
+    "removeprefix": null,
+    "removesuffix": null,
+    "replace": null,
     "rfind": null,
     "rindex": null,
-    "rjust": [
-     "fillchar",
-     "width"
-    ],
-    "rpartition": [
-     "sep"
-    ],
-    "rsplit": [
-     "maxsplit",
-     "sep"
-    ],
-    "rstrip": [
-     "chars"
-    ],
-    "split": [
-     "maxsplit",
-     "sep"
-    ],
-    "splitlines": [
-     "keepends"
-    ],
+    "rjust": null,
+    "rpartition": null,
+    "rsplit": null,
+    "rstrip": null,
+    "split": null,
+    "splitlines": null,
     "startswith": null,
-    "strip": [
-     "chars"
-    ],
-    "swapcase": [],
-    "title": [],
-    "translate": [
-     "table"
-    ],
-    "upper": [],
-    "zfill": [
-     "width"
-    ]
+    "strip": null,
+    "swapcase": null,
+    "title": null,
+    "translate": null,
+    "upper": null,
+    "zfill": null
    }
   },
   "DiscoveryPage": {
@@ -2112,101 +2004,53 @@
     "image"
    ],
    "methods": {
-    "capitalize": [],
-    "casefold": [],
-    "center": [
-     "fillchar",
-     "width"
-    ],
+    "capitalize": null,
+    "casefold": null,
+    "center": null,
     "count": null,
-    "encode": [
-     "encoding",
-     "errors"
-    ],
+    "encode": null,
     "endswith": null,
-    "expandtabs": [
-     "tabsize"
-    ],
+    "expandtabs": null,
     "find": null,
     "format": null,
-    "format_map": [
-     "mapping"
-    ],
+    "format_map": null,
     "index": null,
-    "isalnum": [],
-    "isalpha": [],
-    "isascii": [],
-    "isdecimal": [],
-    "isdigit": [],
-    "isidentifier": [],
-    "islower": [],
-    "isnumeric": [],
-    "isprintable": [],
-    "isspace": [],
-    "istitle": [],
-    "isupper": [],
-    "join": [
-     "iterable"
-    ],
-    "ljust": [
-     "fillchar",
-     "width"
-    ],
-    "lower": [],
-    "lstrip": [
-     "chars"
-    ],
+    "isalnum": null,
+    "isalpha": null,
+    "isascii": null,
+    "isdecimal": null,
+    "isdigit": null,
+    "isidentifier": null,
+    "islower": null,
+    "isnumeric": null,
+    "isprintable": null,
+    "isspace": null,
+    "istitle": null,
+    "isupper": null,
+    "join": null,
+    "ljust": null,
+    "lower": null,
+    "lstrip": null,
     "maketrans": null,
-    "partition": [
-     "sep"
-    ],
-    "removeprefix": [
-     "prefix"
-    ],
-    "removesuffix": [
-     "suffix"
-    ],
-    "replace": [
-     "count",
-     "new",
-     "old"
-    ],
+    "partition": null,
+    "removeprefix": null,
+    "removesuffix": null,
+    "replace": null,
     "rfind": null,
     "rindex": null,
-    "rjust": [
-     "fillchar",
-     "width"
-    ],
-    "rpartition": [
-     "sep"
-    ],
-    "rsplit": [
-     "maxsplit",
-     "sep"
-    ],
-    "rstrip": [
-     "chars"
-    ],
-    "split": [
-     "maxsplit",
-     "sep"
-    ],
-    "splitlines": [
-     "keepends"
-    ],
+    "rjust": null,
+    "rpartition": null,
+    "rsplit": null,
+    "rstrip": null,
+    "split": null,
+    "splitlines": null,
     "startswith": null,
-    "strip": [
-     "chars"
-    ],
-    "swapcase": [],
-    "title": [],
-    "translate": [
-     "table"
-    ],
-    "upper": [],
-    "zfill": [
-     "width"
-    ]
+    "strip": null,
+    "swapcase": null,
+    "title": null,
+    "translate": null,
+    "upper": null,
+    "zfill": null
    }
   },
   "ImageHandoffError": {
@@ -2221,12 +2065,8 @@
     "message"
    ],
    "methods": {
-    "add_note": [
-     "note"
-    ],
-    "with_traceback": [
-     "tb"
-    ]
+    "add_note": null,
+    "with_traceback": null
    }
   },
   "ImageRef": {
@@ -2877,101 +2717,53 @@
    ],
    "init": [],
    "methods": {
-    "capitalize": [],
-    "casefold": [],
-    "center": [
-     "fillchar",
-     "width"
-    ],
+    "capitalize": null,
+    "casefold": null,
+    "center": null,
     "count": null,
-    "encode": [
-     "encoding",
-     "errors"
-    ],
+    "encode": null,
     "endswith": null,
-    "expandtabs": [
-     "tabsize"
-    ],
+    "expandtabs": null,
     "find": null,
     "format": null,
-    "format_map": [
-     "mapping"
-    ],
+    "format_map": null,
     "index": null,
-    "isalnum": [],
-    "isalpha": [],
-    "isascii": [],
-    "isdecimal": [],
-    "isdigit": [],
-    "isidentifier": [],
-    "islower": [],
-    "isnumeric": [],
-    "isprintable": [],
-    "isspace": [],
-    "istitle": [],
-    "isupper": [],
-    "join": [
-     "iterable"
-    ],
-    "ljust": [
-     "fillchar",
-     "width"
-    ],
-    "lower": [],
-    "lstrip": [
-     "chars"
-    ],
+    "isalnum": null,
+    "isalpha": null,
+    "isascii": null,
+    "isdecimal": null,
+    "isdigit": null,
+    "isidentifier": null,
+    "islower": null,
+    "isnumeric": null,
+    "isprintable": null,
+    "isspace": null,
+    "istitle": null,
+    "isupper": null,
+    "join": null,
+    "ljust": null,
+    "lower": null,
+    "lstrip": null,
     "maketrans": null,
-    "partition": [
-     "sep"
-    ],
-    "removeprefix": [
-     "prefix"
-    ],
-    "removesuffix": [
-     "suffix"
-    ],
-    "replace": [
-     "count",
-     "new",
-     "old"
-    ],
+    "partition": null,
+    "removeprefix": null,
+    "removesuffix": null,
+    "replace": null,
     "rfind": null,
     "rindex": null,
-    "rjust": [
-     "fillchar",
-     "width"
-    ],
-    "rpartition": [
-     "sep"
-    ],
-    "rsplit": [
-     "maxsplit",
-     "sep"
-    ],
-    "rstrip": [
-     "chars"
-    ],
-    "split": [
-     "maxsplit",
-     "sep"
-    ],
-    "splitlines": [
-     "keepends"
-    ],
+    "rjust": null,
+    "rpartition": null,
+    "rsplit": null,
+    "rstrip": null,
+    "split": null,
+    "splitlines": null,
     "startswith": null,
-    "strip": [
-     "chars"
-    ],
-    "swapcase": [],
-    "title": [],
-    "translate": [
-     "table"
-    ],
-    "upper": [],
-    "zfill": [
-     "width"
-    ]
+    "strip": null,
+    "swapcase": null,
+    "title": null,
+    "translate": null,
+    "upper": null,
+    "zfill": null
    }
   },
   "Pipeline": {
@@ -3026,12 +2818,8 @@
     "message"
    ],
    "methods": {
-    "add_note": [
-     "note"
-    ],
-    "with_traceback": [
-     "tb"
-    ]
+    "add_note": null,
+    "with_traceback": null
    }
   },
   "PipelineRunner": {
@@ -3292,101 +3080,53 @@
    ],
    "init": [],
    "methods": {
-    "capitalize": [],
-    "casefold": [],
-    "center": [
-     "fillchar",
-     "width"
-    ],
+    "capitalize": null,
+    "casefold": null,
+    "center": null,
     "count": null,
-    "encode": [
-     "encoding",
-     "errors"
-    ],
+    "encode": null,
     "endswith": null,
-    "expandtabs": [
-     "tabsize"
-    ],
+    "expandtabs": null,
     "find": null,
     "format": null,
-    "format_map": [
-     "mapping"
-    ],
+    "format_map": null,
     "index": null,
-    "isalnum": [],
-    "isalpha": [],
-    "isascii": [],
-    "isdecimal": [],
-    "isdigit": [],
-    "isidentifier": [],
-    "islower": [],
-    "isnumeric": [],
-    "isprintable": [],
-    "isspace": [],
-    "istitle": [],
-    "isupper": [],
-    "join": [
-     "iterable"
-    ],
-    "ljust": [
-     "fillchar",
-     "width"
-    ],
-    "lower": [],
-    "lstrip": [
-     "chars"
-    ],
+    "isalnum": null,
+    "isalpha": null,
+    "isascii": null,
+    "isdecimal": null,
+    "isdigit": null,
+    "isidentifier": null,
+    "islower": null,
+    "isnumeric": null,
+    "isprintable": null,
+    "isspace": null,
+    "istitle": null,
+    "isupper": null,
+    "join": null,
+    "ljust": null,
+    "lower": null,
+    "lstrip": null,
     "maketrans": null,
-    "partition": [
-     "sep"
-    ],
-    "removeprefix": [
-     "prefix"
-    ],
-    "removesuffix": [
-     "suffix"
-    ],
-    "replace": [
-     "count",
-     "new",
-     "old"
-    ],
+    "partition": null,
+    "removeprefix": null,
+    "removesuffix": null,
+    "replace": null,
     "rfind": null,
     "rindex": null,
-    "rjust": [
-     "fillchar",
-     "width"
-    ],
-    "rpartition": [
-     "sep"
-    ],
-    "rsplit": [
-     "maxsplit",
-     "sep"
-    ],
-    "rstrip": [
-     "chars"
-    ],
-    "split": [
-     "maxsplit",
-     "sep"
-    ],
-    "splitlines": [
-     "keepends"
-    ],
+    "rjust": null,
+    "rpartition": null,
+    "rsplit": null,
+    "rstrip": null,
+    "split": null,
+    "splitlines": null,
     "startswith": null,
-    "strip": [
-     "chars"
-    ],
-    "swapcase": [],
-    "title": [],
-    "translate": [
-     "table"
-    ],
-    "upper": [],
-    "zfill": [
-     "width"
-    ]
+    "strip": null,
+    "swapcase": null,
+    "title": null,
+    "translate": null,
+    "upper": null,
+    "zfill": null
    }
   },
   "Registry": {
@@ -3557,12 +3297,8 @@
     "message"
    ],
    "methods": {
-    "add_note": [
-     "note"
-    ],
-    "with_traceback": [
-     "tb"
-    ]
+    "add_note": null,
+    "with_traceback": null
    }
   },
   "ReleaseSpecModel": {
@@ -3775,101 +3511,53 @@
    ],
    "init": [],
    "methods": {
-    "capitalize": [],
-    "casefold": [],
-    "center": [
-     "fillchar",
-     "width"
-    ],
+    "capitalize": null,
+    "casefold": null,
+    "center": null,
     "count": null,
-    "encode": [
-     "encoding",
-     "errors"
-    ],
+    "encode": null,
     "endswith": null,
-    "expandtabs": [
-     "tabsize"
-    ],
+    "expandtabs": null,
     "find": null,
     "format": null,
-    "format_map": [
-     "mapping"
-    ],
+    "format_map": null,
     "index": null,
-    "isalnum": [],
-    "isalpha": [],
-    "isascii": [],
-    "isdecimal": [],
-    "isdigit": [],
-    "isidentifier": [],
-    "islower": [],
-    "isnumeric": [],
-    "isprintable": [],
-    "isspace": [],
-    "istitle": [],
-    "isupper": [],
-    "join": [
-     "iterable"
-    ],
-    "ljust": [
-     "fillchar",
-     "width"
-    ],
-    "lower": [],
-    "lstrip": [
-     "chars"
-    ],
+    "isalnum": null,
+    "isalpha": null,
+    "isascii": null,
+    "isdecimal": null,
+    "isdigit": null,
+    "isidentifier": null,
+    "islower": null,
+    "isnumeric": null,
+    "isprintable": null,
+    "isspace": null,
+    "istitle": null,
+    "isupper": null,
+    "join": null,
+    "ljust": null,
+    "lower": null,
+    "lstrip": null,
     "maketrans": null,
-    "partition": [
-     "sep"
-    ],
-    "removeprefix": [
-     "prefix"
-    ],
-    "removesuffix": [
-     "suffix"
-    ],
-    "replace": [
-     "count",
-     "new",
-     "old"
-    ],
+    "partition": null,
+    "removeprefix": null,
+    "removesuffix": null,
+    "replace": null,
     "rfind": null,
     "rindex": null,
-    "rjust": [
-     "fillchar",
-     "width"
-    ],
-    "rpartition": [
-     "sep"
-    ],
-    "rsplit": [
-     "maxsplit",
-     "sep"
-    ],
-    "rstrip": [
-     "chars"
-    ],
-    "split": [
-     "maxsplit",
-     "sep"
-    ],
-    "splitlines": [
-     "keepends"
-    ],
+    "rjust": null,
+    "rpartition": null,
+    "rsplit": null,
+    "rstrip": null,
+    "split": null,
+    "splitlines": null,
     "startswith": null,
-    "strip": [
-     "chars"
-    ],
-    "swapcase": [],
-    "title": [],
-    "translate": [
-     "table"
-    ],
-    "upper": [],
-    "zfill": [
-     "width"
-    ]
+    "strip": null,
+    "swapcase": null,
+    "title": null,
+    "translate": null,
+    "upper": null,
+    "zfill": null
    }
   },
   "ResourceType": {
@@ -4477,14 +4165,8 @@
     "uid"
    ],
    "methods": {
-    "count": [
-     "value"
-    ],
-    "index": [
-     "start",
-     "stop",
-     "value"
-    ]
+    "count": null,
+    "index": null
    }
   },
   "TargetSpec": {

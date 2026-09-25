@@ -124,6 +124,14 @@ def _collect_classes() -> dict[str, type]:
     return found
 
 
+def _from_builtins(cls: type, attr: str) -> bool:
+    """Whether ``cls`` gets ``attr`` from a built-in base (``str``, ``Exception``…)."""
+    for base in cls.__mro__:
+        if attr in vars(base):
+            return base.__module__ == "builtins"
+    return False
+
+
 def _exports(module: Any) -> list[str]:
     names = getattr(module, "__all__", None) or dir(module)
     return sorted(n for n in names if not n.startswith("_"))
@@ -165,6 +173,12 @@ def _describe_class(
         except AttributeError:
             continue
         if not callable(value) or isinstance(value, type):
+            continue
+        if _from_builtins(cls, attr):
+            # Inherited from ``str``, ``Exception``…: not Piceli's API, and
+            # whether its signature is introspectable depends on the CPython
+            # build, so the snapshot would differ between machines.
+            methods[attr] = None
             continue
         methods[attr] = _params(value)
         if (known := _returns(value, names)) is not None:
