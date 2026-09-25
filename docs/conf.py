@@ -9,7 +9,6 @@ sys.path.insert(0, os.path.abspath(".."))
 DISTRIBUTION_METADATA = importlib.metadata.metadata("Piceli")
 # -- Project information -----------------------------------------------------
 author = "Jose Diaz"
-project = DISTRIBUTION_METADATA["Name"]
 version = DISTRIBUTION_METADATA["Version"]
 current_year = datetime.datetime.now(datetime.UTC).year
 project = "piceli"
@@ -18,7 +17,6 @@ release = version
 
 # -- General configuration ---------------------------------------------------
 extensions = [
-    # "sphinx.ext.autodoc",
     "autodoc2",
     "sphinx.ext.extlinks",
     "sphinx.ext.intersphinx",
@@ -44,7 +42,6 @@ intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
     "pynenc": ("https://docs.pynenc.org/en/latest/", None),
 }
-# intersphinx_mapping = {"python": ("https://docs.python.org/3", None)}
 
 # -- Autodoc settings ---------------------------------------------------
 autodoc2_render_plugin = "myst"
@@ -54,31 +51,6 @@ autodoc2_packages = [{"path": "../piceli"}]
 # fields (e.g. HealthProbe.type); these ambiguity warnings are not doc errors.
 suppress_warnings = ["ref.python"]
 autodoc2_hidden_regexes = [r"piceli\.k8s\.templates\.auxiliary\.names\..*_REGEX"]
-# autodoc2_hidden_objects = ["dunder", "private", "inherited"]
-
-# autodoc2_replace_annotations = [
-#     ("re.Pattern", "typing.Pattern"),
-#     ("markdown_it.MarkdownIt", "markdown_it.main.MarkdownIt"),
-# ]
-# autodoc2_replace_bases = [
-#     ("sphinx.directives.SphinxDirective", "sphinx.util.docutils.SphinxDirective"),
-# ]
-# autodoc2_docstring_parser_regexes = [
-#     ("myst_parser", "myst"),
-#     (r"myst_parser\.setup", "myst"),
-# ]
-# nitpicky = True
-# nitpick_ignore_regex = [
-#     (r"py:.*", r"docutils\..*"),
-#     (r"py:.*", r"pygments\..*"),
-#     (r"py:.*", r"typing\.Literal\[.*"),
-# ]
-# nitpick_ignore = [
-#     ("py:exc", "MarkupError"),
-#     ("py:class", "sphinx.util.typing.Inventory"),
-#     ("py:class", "sphinx.writers.html.HTMLTranslator"),
-#     ("py:obj", "sphinx.transforms.post_transforms.ReferencesResolver"),
-# ]
 
 
 # -- MyST settings ---------------------------------------------------
@@ -93,37 +65,12 @@ myst_enable_extensions = [
     "colon_fence",
     "smartquotes",
     "replacements",
-    # "linkify",
     "strikethrough",
     "substitution",
     "tasklist",
     "attrs_inline",
     "attrs_block",
 ]
-# myst_url_schemes = {
-#     "http": None,
-#     "https": None,
-#     "mailto": None,
-#     "ftp": None,
-#     "wiki": "https://en.wikipedia.org/wiki/{{path}}#{{fragment}}",
-#     "doi": "https://doi.org/{{path}}",
-#     "gh-pr": {
-#         "url": "https://github.com/executablebooks/MyST-Parser/pull/{{path}}#{{fragment}}",
-#         "title": "PR #{{path}}",
-#         "classes": ["github"],
-#     },
-#     "gh-issue": {
-#         "url": "https://github.com/executablebooks/MyST-Parser/issue/{{path}}#{{fragment}}",
-#         "title": "Issue #{{path}}",
-#         "classes": ["github"],
-#     },
-#     "gh-user": {
-#         "url": "https://github.com/{{path}}",
-#         "title": "@{{path}}",
-#         "classes": ["github"],
-#     },
-# }
-myst_number_code_blocks = ["typescript"]
 myst_heading_anchors = 2
 myst_footnote_transition = True
 myst_dmath_double_inline = True
@@ -138,7 +85,7 @@ myst_substitutions = {
 html_theme = "furo"
 html_title = "Piceli"
 html_logo = "_static/logo.webp"
-html_favicon = "_static/logo.webp"
+html_favicon = "_static/favicon.png"
 
 language = "en"
 html_static_path = ["_static"]
@@ -161,6 +108,8 @@ html_theme_options: dict[str, Any] = {
     "source_repository": "https://github.com/pynenc/piceli/",
     "source_branch": "main",
     "source_directory": "docs/",
-    # "home_page_in_toc": True,
-    "announcement": f"<b>{version}</b> is now out! See the Changelog for details",
+    "announcement": (
+        f"<b>{version}</b> is out. See the <a href='https://docs.pynenc.org/projects/piceli/en/latest/changelog.html'>changelog</a>"
+        " for details. Piceli is pre-alpha: APIs may change between releases."
+    ),
 }

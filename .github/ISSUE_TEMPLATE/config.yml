@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/pynenc/piceli/security/advisories/new
+    about: Report privately, never in a public issue (see SECURITY.md).
+  - name: Documentation
+    url: https://docs.pynenc.org/projects/piceli/en/latest/
+    about: Guides, the CLI and error-code reference, and the agent guide.

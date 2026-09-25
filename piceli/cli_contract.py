@@ -227,7 +227,12 @@ _EXPLICIT_CONTEXT = (
     "kubectl processes it starts); exec credential plugins need `--allow-exec` "
     "(optionally `--exec-sha256`)."
 )
-_RELEASE_READS = ("release.toml", "composition", "state_dir", "kubeconfig")
+_RELEASE_READS = (
+    "release.toml or pipeline module (--spec MODULE:ATTR)",
+    "composition",
+    "state_dir",
+    "kubeconfig",
+)
 _RELEASE_EXIT = (0, 1, 2, 3)
 
 COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
@@ -385,13 +390,16 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
         "release secret show": _C(
             "Show a generated secret's metadata, or its value with --reveal.",
             contract="conforms",
-            reads=("release.toml", "state_dir (secret store)"),
+            reads=(
+                "release.toml or pipeline module (--spec MODULE:ATTR)",
+                "state_dir (secret store)",
+            ),
             notes="Owner only. Never contacts the cluster; values print only with --reveal or a terminal confirmation.",
         ),
         "release status": _C(
             "Show catalogued releases, executions and history.",
             contract="conforms",
-            reads=("release.toml", "state_dir"),
+            reads=("release.toml or pipeline module (--spec MODULE:ATTR)", "state_dir"),
         ),
         # ------------------------------------------------------- inputs
         "inputs record": _C(
@@ -489,7 +497,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
         "observe forward-save": _C(
             "Save one port-forward preference.",
             contract="conforms",
-            reads=("session archive",),
+            reads=("preferences file", "kubeconfig (with --context, for the scope)"),
             writes=("preferences file",),
         ),
         "observe forward-list": _C(
@@ -532,7 +540,9 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             reads=("session archive", "kubeconfig", "preferences file"),
             writes=("preferences file",),
             cluster="reads",
-            notes=_EXPLICIT_CONTEXT,
+            notes=_EXPLICIT_CONTEXT
+            + " Saved forwards start only with --restore-forwards, and only"
+            " those saved for this cluster, context and namespace.",
             long_running=True,
         ),
         "observe forwards apply": _C(
@@ -590,7 +600,10 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             reads=("kubeconfig", "catalog", "archive", "preferences file"),
             writes=("preferences file", "state_dir"),
             cluster="reads",
-            notes=_EXPLICIT_CONTEXT,
+            notes=_EXPLICIT_CONTEXT
+            + " --access starts the model's declared forwards; saved forwards"
+            " start only with --restore-forwards, and only those saved for this"
+            " cluster, context and namespace.",
             long_running=True,
         ),
         # ------------------------------------------------ P5 pipeline

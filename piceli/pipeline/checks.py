@@ -3,9 +3,10 @@
 ``piceli deploy`` runs a pipeline's ``checks`` after a successful apply
 through a :class:`CheckRunner`: ``runner(checks, context)`` returns an object
 with ``passed`` (bool) and ``results`` (a sequence). The default runner is
-``piceli.checks.run_checks``, imported only when a pipeline declares checks;
-when that module is not installed the stage is refused with
-``pipeline-checks-unavailable``.
+``piceli.checks.run_checks`` over a :class:`piceli.checks.CheckContext` built
+from this context (the target's kubeconfig, context, transport and exec
+policy), imported only when a pipeline declares checks; when that module is
+not installed the stage is refused with ``pipeline-checks-unavailable``.
 
 The ``context`` handed to the runner is a :class:`CheckContext`: the target,
 namespace, release and the delivered image references. Checks read it; they
@@ -58,6 +59,7 @@ class CheckContext:
     :param images: Image name → deployed reference.
     :param app: The typed app.
     :param state_dir: The pipeline's local state directory.
+    :param base: Directory that ``python`` checks resolve relative files from.
     """
 
     target: Target
@@ -68,6 +70,7 @@ class CheckContext:
     images: Mapping[str, str] = field(default_factory=dict)
     app: App | None = None
     state_dir: Path | None = None
+    base: Path | None = None
 
 
 def default_runner() -> CheckRunner:
@@ -85,7 +88,32 @@ def default_runner() -> CheckRunner:
             "the pipeline declares checks but piceli.checks is not available in "
             "this installation",
         )
-    return run  # type: ignore[no-any-return]
+
+    def runner(checks: Sequence[Any], context: Any) -> Any:
+        if not isinstance(context, CheckContext):
+            return run(checks, context)
+        with check_context(context) as adapted:
+            return run(checks, adapted)
+
+    return runner
+
+
+def check_context(context: CheckContext) -> Any:
+    """The :class:`piceli.checks.CheckContext` the default runner hands to checks."""
+    from piceli.checks import CheckContext as Context
+
+    target = context.target
+    return Context(
+        context.kubeconfig,
+        context.context,
+        context.namespace,
+        context.release,
+        dict(context.images),
+        base=context.base,
+        transport=getattr(target, "transport", "https"),
+        request_seconds=getattr(target, "request_seconds", 10.0),
+        exec_policy=target.exec_policy() if target is not None else None,
+    )
 
 
 def describe_check(check: Any) -> Any:

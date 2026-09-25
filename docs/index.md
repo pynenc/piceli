@@ -2,12 +2,19 @@
 
 **Kubernetes infrastructure as typed Python: model it, plan it, apply it safely, and observe it.**
 
-Piceli lets you describe Kubernetes resources with Python (typed templates, the
-official `kubernetes` client models, or plain YAML/JSON), compare that desired state
-with a live cluster, and apply the difference in dependency order. It is a
-Python-native alternative to hand-maintained YAML, Kustomize overlays and Helm
-templates, and it has a recoverable execution engine with durable journals and
-explicit authorization.
+```{image} _static/img/deploy-flow.gif
+:alt: piceli deploy: plan, approve the plan hash, stream each stage to ready, then piceli status
+:width: 720px
+:align: center
+```
+
+Piceli lets you describe a Kubernetes application in typed Python (a typed
+`App`, Piceli templates, the official `kubernetes` client models, or plain
+YAML/JSON), shows you exactly what would change in the live cluster, and
+applies only the plan you approved, in dependency order, with a durable journal
+that makes every run resumable. `piceli deploy` takes an app from source to a
+running, checked release in one command. It is a Python-native alternative to
+hand-maintained YAML, Kustomize overlays and Helm templates.
 
 ```{admonition} Project status: pre-alpha
 :class: warning
@@ -19,78 +26,105 @@ kubeconfig file and context. See {doc}`overview` for the architecture and
 {doc}`roadmap` for the status of each feature.
 ```
 
+## A first taste
+
+```python
+# app.py
+from piceli import App, Checks, Pipeline, Target
+
+target = Target.kubeconfig("hello.kubeconfig", context="kind-hello", namespace="hello")
+
+app = App("hello")
+web = app.deployment(
+    "web",
+    image="docker.io/library/nginx:1.27@sha256:<digest>",
+    ports=[80],
+    ready=app.probe.http("/", 80),
+)
+app.service(web, port=80, access=app.access.forward(local=18080, health="/"))
+
+pipeline = Pipeline(app, target, checks=Checks.http(web, "/", expect=200))
+```
+
+```bash
+piceli render app.py:app --namespace hello               # manifests, no cluster
+piceli deploy app.py:pipeline --plan                     # review; prints a combined hash
+piceli deploy app.py:pipeline --approve <combined-hash>  # runs exactly that plan
+piceli status app.py:pipeline                            # is it up, which URLs
+```
+
+{doc}`getting_started/index` runs this end to end on a disposable `kind`
+cluster.
+
 ## Where to start
 
-::::{grid} 1 2 2 2
+::::{grid} 1 2 2 3
 :gutter: 3
 
 :::{grid-item-card} Getting started
 :link: getting_started/index
 :link-type: doc
 
-Install Piceli, describe a typed app, render it and release it.
+From nothing to a running, checked app in a disposable cluster.
 :::
 
 :::{grid-item-card} Overview and architecture
 :link: overview
 :link-type: doc
 
-The mental model (model → plan → execute → observe), the main building blocks,
-and a glossary.
+The mental model (model → plan → execute → observe), the engine and a
+glossary.
 :::
 
-:::{grid-item-card} Kubernetes model
-:link: kubernetes_model/index
+:::{grid-item-card} Deploy from source
+:link: deploy
 :link-type: doc
 
-Templates, `kubernetes` client objects, and YAML/JSON definitions.
+`piceli deploy`: build, deliver, plan, apply and check in one resumable run.
 :::
 
-:::{grid-item-card} Recoverable deployments
-:link: deployment_planning
+:::{grid-item-card} Releases from a spec
+:link: release_cli
 :link-type: doc
 
-Discovery, pure plans, authorized execution, sessions, revisions and releases.
+`release.toml`, adoption, secrets, rollback and resume.
 :::
 
-:::{grid-item-card} Operations
-:link: operations_lens
+:::{grid-item-card} Coming from kubectl or YAML
+:link: migrate_from_kubectl
 :link-type: doc
 
-A local web UI and JSON API for inventory, logs and port forwards.
+Import a live namespace or manifest files as a typed app.
+:::
+
+:::{grid-item-card} Using Piceli from an agent
+:link: agents
+:link-type: doc
+
+Safe commands, approvals, the output contract and error recovery.
+:::
+
+:::{grid-item-card} Command reference
+:link: reference/cli
+:link-type: doc
+
+Every command and option, with side effects and approval rules.
+:::
+
+:::{grid-item-card} Error codes
+:link: reference/errors
+:link-type: doc
+
+Every refusal code: cause, fix and whether a retry can succeed.
 :::
 
 :::{grid-item-card} Roadmap
 :link: roadmap
 :link-type: doc
 
-Status and direction compared with Kustomize, Helm, OpenTofu/Terraform and Argo CD.
+The maturity of every feature, and where the project is heading.
 :::
 ::::
-
-## A first taste
-
-```python
-# infra.py
-from piceli import App
-
-
-def build(ctx):
-    app = App("hello")
-    web = app.deployment("web", image=ctx.image("web"), ports=[80])
-    app.service(web, port=80)
-    return app.composition(ctx)
-```
-
-```bash
-# Print the manifests without a cluster, then plan and apply a release
-piceli render --spec release.toml
-piceli release plan --spec release.toml
-piceli release apply --spec release.toml --approve <plan-hash>
-```
-
-See {doc}`getting_started/index` for the `release.toml` that names the image,
-the target cluster and the namespace.
 
 ## Part of the Pynenc ecosystem
 
@@ -106,31 +140,45 @@ workload.
 getting_started/index
 overview
 kubernetes_model/index
-migrate_from_kubectl
 ```
 
 ```{toctree}
 :hidden:
 :maxdepth: 2
-:caption: Guides
+:caption: Deploy and operate
 
 deploy
 typed_apps
-deployment_planning
 release_cli
 checks
 plans_and_diffs
-managed_clusters
 secrets
+managed_clusters
+access
+migrate_from_kubectl
+testing
+```
+
+```{toctree}
+:hidden:
+:maxdepth: 2
+:caption: Build and deliver images
+
 source_identity
 containerized_builds
-artifact_delivery
 node_delivery
 node_local_registry
-access
+artifact_delivery
+```
+
+```{toctree}
+:hidden:
+:maxdepth: 2
+:caption: Engine and advanced
+
+deployment_planning
 operations_lens
 operator_workflow
-testing
 ```
 
 ```{toctree}
@@ -141,15 +189,8 @@ testing
 cli/index
 reference/cli
 reference/errors
-apidocs/index
-```
-
-```{toctree}
-:hidden:
-:maxdepth: 1
-:caption: Agents
-
 agents
+apidocs/index
 ```
 
 ```{toctree}
@@ -159,7 +200,7 @@ agents
 
 roadmap
 faq
-contributing/index
 changelog
+contributing/index
 license
 ```

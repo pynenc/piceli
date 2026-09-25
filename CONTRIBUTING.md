@@ -1,36 +1,70 @@
 # Contributing to Piceli
 
-Thanks for your interest in Piceli! Bug reports, documentation fixes, new
-templates and larger features are all welcome. For anything beyond a small fix,
-please open an issue first so the design can be discussed.
+Contributions are welcome: bug reports, documentation fixes, new templates and
+larger features. For anything beyond a small fix, please open an
+[issue](https://github.com/pynenc/piceli/issues) first so the design can be
+discussed. The [roadmap](https://docs.pynenc.org/projects/piceli/en/latest/roadmap.html)
+lists the areas where help has the most impact.
 
-The full guide lives in the documentation:
-<https://docs.pynenc.org/projects/piceli/en/latest/contributing/index.html>
+## Development setup
 
-## Quick start
-
-Piceli uses [uv](https://docs.astral.sh/uv/getting-started/installation/).
+Piceli uses [uv](https://docs.astral.sh/uv/) for environments, locking and
+builds.
 
 ```bash
 git clone https://github.com/pynenc/piceli.git
 cd piceli
-make install              # uv sync --all-extras
+make install              # uv sync --all-extras (creates .venv from uv.lock)
 make install-pre-commit   # ruff, mypy, uv-lock and commit-message hooks
-make test                 # unit + acceptance tests, no cluster needed
+make test                 # unit + acceptance tests; never contacts a cluster
 ```
 
-Run `make help` to see every target (`lint`, `typecheck`, `test-integration`,
-`coverage`, `docs`, `build`).
+`make help` lists every target. Before opening a pull request, all of these
+must pass:
+
+```bash
+uv run --frozen pytest
+uv run --frozen mypy
+uv run --frozen ruff check . && uv run --frozen ruff format --check .
+uv run --frozen --group docs sphinx-build -W --keep-going -b html docs docs/_build/html
+```
+
+`make test-integration` runs against the **current kubeconfig context**. Use a
+disposable cluster (`kind create cluster`), never a shared one.
 
 ## Pull requests
 
 1. Fork the repository and create a branch from `main`.
-2. Add tests for your change, and update the docs and `docs/changelog.md` when
-   behaviour changes.
-3. Make sure `make lint` and `make test` pass.
-4. Use [Conventional Commits](https://www.conventionalcommits.org/) for commit
-   messages (`feat:`, `fix:`, `docs:` …). The commit-msg hook checks this.
-5. Open the pull request against `main`.
+2. Make your change following the guidelines below, and make sure `make lint`
+   and `make test` pass.
+3. Open the pull request against `main`, with a Conventional Commits title.
+
+Guidelines:
+
+- Add a test with every behaviour change. `make test` must not need a
+  cluster: use the fake Kubernetes API in `piceli.testing`.
+- Update the documentation and add a line to `docs/changelog.md` when
+  behaviour changes. After adding an error code, a command or an option, run
+  `make docs-reference`.
+- Use [Conventional Commits](https://www.conventionalcommits.org/) for commit
+  messages and pull request titles (`feat:`, `fix:`, `docs:`, `test:` …). The
+  commit-msg hook checks this.
+- Keep examples generic (`my-app`, `my-cluster`, `example`): never name a real
+  deployment, cluster, company or person.
+
+The design invariants (side-effect-free imports, no ambient kube context, plan
+before apply, fixed error codes, the CLI output contract, secrets never
+printed) and a map of the code are in [AGENTS.md](AGENTS.md). The
+[contributing guide](https://docs.pynenc.org/projects/piceli/en/latest/contributing/index.html)
+in the documentation covers building the docs and page conventions.
+
+## Reporting bugs
+
+Open an [issue](https://github.com/pynenc/piceli/issues) with the Piceli
+version (`pip show piceli`), the command you ran, and the
+JSON it printed on stdout. Error codes and plans never contain secret values,
+so they are safe to share; do not paste kubeconfig files, secret values or
+private hostnames.
 
 ## Code of conduct
 

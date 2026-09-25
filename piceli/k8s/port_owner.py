@@ -50,6 +50,13 @@ class PortOwner:
             value["parent"] = None
         return value
 
+    def shortened(self) -> PortOwner:
+        """The same owner with command lines cut to :data:`MAX_COMMAND`."""
+        parent = self.parent
+        if parent is not None:
+            parent = ProcessInfo(parent.pid, _truncate(parent.command))
+        return PortOwner(self.port, self.pid, _truncate(self.command), parent)
+
     def describe(self) -> str:
         """One line for humans: ``pid 42 (kubectl port-forward …)``."""
         text = f"pid {self.pid}"
@@ -62,12 +69,12 @@ class PortOwner:
         return text
 
 
-def _truncate(command: str | None) -> str | None:
+def _truncate(command: str | None, limit: int = MAX_COMMAND) -> str | None:
     if not command:
         return None
     command = " ".join(command.split())
-    if len(command) > MAX_COMMAND:
-        return command[: MAX_COMMAND - 1] + "…"
+    if len(command) > limit:
+        return command[: limit - 1] + "…"
     return command
 
 
@@ -94,12 +101,12 @@ def _proc_inodes(port: int, proc: Path) -> set[str]:
     return inodes
 
 
-def _proc_command(pid: int, proc: Path) -> str | None:
+def _proc_command(pid: int, proc: Path, limit: int = MAX_COMMAND) -> str | None:
     try:
         raw = (proc / str(pid) / "cmdline").read_bytes()
     except OSError:
         return None
-    return _truncate(raw.replace(b"\0", b" ").decode(errors="replace").strip())
+    return _truncate(raw.replace(b"\0", b" ").decode(errors="replace").strip(), limit)
 
 
 def _proc_parent(pid: int, proc: Path) -> int | None:
@@ -115,7 +122,9 @@ def _proc_parent(pid: int, proc: Path) -> int | None:
         return None
 
 
-def _proc_owner(port: int, proc: Path) -> tuple[int, str | None, int | None] | None:
+def _proc_owner(
+    port: int, proc: Path, limit: int = MAX_COMMAND
+) -> tuple[int, str | None, int | None] | None:
     inodes = _proc_inodes(port, proc)
     if not inodes:
         return None
@@ -132,7 +141,11 @@ def _proc_owner(port: int, proc: Path) -> tuple[int, str | None, int | None] | N
         for descriptor in descriptors:
             try:
                 if os.readlink(descriptor) in targets:
-                    return pid, _proc_command(pid, proc), _proc_parent(pid, proc)
+                    return (
+                        pid,
+                        _proc_command(pid, proc, limit),
+                        _proc_parent(pid, proc),
+                    )
             except OSError:
                 continue
     return None
@@ -156,7 +169,7 @@ def _run(argv: list[str]) -> str | None:
     return result.stdout
 
 
-def _ps(pid: int) -> tuple[str | None, int | None]:
+def _ps(pid: int, limit: int = MAX_COMMAND) -> tuple[str | None, int | None]:
     ps = shutil.which("ps")
     if ps is None:
         return None, None
@@ -168,10 +181,12 @@ def _ps(pid: int) -> tuple[str | None, int | None]:
         ppid: int | None = int(ppid_text)
     except ValueError:
         ppid = None
-    return _truncate(command.strip()), ppid
+    return _truncate(command.strip(), limit), ppid
 
 
-def _lsof_owner(port: int) -> tuple[int, str | None, int | None] | None:
+def _lsof_owner(
+    port: int, limit: int = MAX_COMMAND
+) -> tuple[int, str | None, int | None] | None:
     lsof = shutil.which("lsof") or (
         "/usr/sbin/lsof" if os.path.exists("/usr/sbin/lsof") else None
     )
@@ -192,24 +207,27 @@ def _lsof_owner(port: int) -> tuple[int, str | None, int | None] | None:
             name = line[1:]
     if pid is None:
         return None
-    command, ppid = _ps(pid)
-    return pid, command or _truncate(name), ppid
+    command, ppid = _ps(pid, limit)
+    return pid, command or _truncate(name, limit), ppid
 
 
 # ----------------------------------------------------------------- public API
 
 
-def port_owner(port: int, *, proc: Path = Path("/proc")) -> PortOwner | None:
+def port_owner(
+    port: int, *, proc: Path = Path("/proc"), limit: int = MAX_COMMAND
+) -> PortOwner | None:
     """The process listening on TCP ``port`` (any local address), or ``None``.
 
+    ``limit`` bounds the command lines kept (longer ones end in ``…``).
     Never raises: an owner that cannot be determined is ``None``.
     """
     try:
         if sys.platform.startswith("linux") and (proc / "net" / "tcp").exists():
-            found = _proc_owner(port, proc)
+            found = _proc_owner(port, proc, limit)
             parent_command = _proc_command
         else:
-            found = _lsof_owner(port)
+            found = _lsof_owner(port, limit)
             parent_command = None
         if found is None:
             return None
@@ -217,9 +235,62 @@ def port_owner(port: int, *, proc: Path = Path("/proc")) -> PortOwner | None:
         parent = None
         if ppid is not None and ppid > 1:
             if parent_command is not None:
-                parent = ProcessInfo(ppid, parent_command(ppid, proc))
+                parent = ProcessInfo(ppid, parent_command(ppid, proc, limit))
             else:
-                parent = ProcessInfo(ppid, _ps(ppid)[0])
+                parent = ProcessInfo(ppid, _ps(ppid, limit)[0])
         return PortOwner(port=port, pid=pid, command=command, parent=parent)
     except Exception:  # an explanation must never break the caller
         return None
+
+
+def is_piceli_forward(
+    owner: PortOwner | None,
+    *,
+    context: str,
+    namespace: str,
+    target: str,
+    local_port: int,
+    remote_port: int,
+) -> bool:
+    """Whether ``owner`` is the ``kubectl port-forward`` Piceli starts for a forward.
+
+    True only for a ``kubectl … --context CONTEXT --namespace NAMESPACE
+    port-forward TARGET LOCAL:REMOTE`` process whose parent is a Piceli
+    process (``piceli access``, ``observe serve`` or ``operator serve``):
+    the exact argv :meth:`~piceli.k8s.observe.PortForward.command` builds.
+    Anything else on the port (another project's forward, a dev server, an
+    orphaned ``kubectl``) is not Piceli's, and its command line must not be
+    shown. Pass an owner looked up with a generous ``limit`` so a long
+    kubeconfig path does not truncate the argv.
+    """
+    if owner is None or not owner.command or owner.command.endswith("…"):
+        return False
+    argv = owner.command.split()
+
+    def after(flag: str) -> str | None:
+        try:
+            return argv[argv.index(flag) + 1]
+        except (ValueError, IndexError):
+            return None
+
+    if "port-forward" not in argv or not Path(argv[0]).name.startswith("kubectl"):
+        return False
+    rest = argv[argv.index("port-forward") + 1 :]
+    parent = owner.parent.command if owner.parent is not None else None
+    return (
+        rest[:2] == [target, f"{local_port}:{remote_port}"]
+        and after("--context") == context
+        and after("--namespace") == namespace
+        and parent is not None
+        and _is_piceli(parent)
+    )
+
+
+def _is_piceli(command: str) -> bool:
+    """``…/piceli …`` or ``python -m piceli …``."""
+    argv = command.split()
+    return any(
+        Path(item).name == "piceli"
+        or (item == "-m" and index + 1 < len(argv) and argv[index + 1] == "piceli")
+        for index, item in enumerate(argv)
+    )

@@ -121,6 +121,21 @@ Still refused, with or without `allow_exec`:
    $ piceli release apply --spec release.toml --approve <plan_hash>
    ```
 
+   For a pipeline (`piceli deploy`), set the same options on its `Target`
+   instead; they apply to `piceli deploy`, `piceli status`, `piceli access`
+   and `piceli release … --spec module.py:pipeline`:
+
+   ```python
+   target = Target.kubeconfig(
+       "gke.kubeconfig",
+       context="my-context",
+       namespace="shop",
+       allow_exec=True,
+       exec_sha256="sha256:9f2c…",
+       # exec_pass_env=["CLOUDSDK_CONFIG"], exec_timeout_seconds=60,
+   )
+   ```
+
 Expected output: the same as with a static kubeconfig. When a plugin upgrade
 changes its file, the next command refuses with `exec-pin-mismatch` and names
 the new digest; update `exec_sha256` after checking the upgrade was expected.
@@ -135,6 +150,18 @@ the new digest; update `exec_sha256` after checking the upgrade was expected.
 | `exec_sha256` | `sha256:<64 hex>` | none | Expected digest of the resolved command file. |
 | `exec_pass_env` | list of names | `[]` | Extra variables copied from Piceli's environment. |
 | `exec_timeout_seconds` | number in (0, 300] | `60` | Limit for one plugin run. |
+
+`piceli.pipeline.Target.kubeconfig(...)` takes the same four options as
+keyword arguments (`allow_exec=True`, `exec_sha256=…`, `exec_pass_env=[…]`,
+`exec_timeout_seconds=…`), validated the same way (`pipeline-invalid`
+otherwise).
+
+`piceli status` and `piceli access` use the target's policy too (from
+`[target]` or the pipeline's `Target`). `status` runs the plugin through
+Piceli's own client; `access` resolves and pins it, then `kubectl
+port-forward` runs it itself with your environment (as for `piceli
+observe`). Without the opt-in both refuse the exec user
+(`exec-auth-not-allowed`).
 
 Python API: `KubeconfigTarget(..., allow_exec=True, exec_sha256=...)` with
 `build_provider`, or `api_client_from_kubeconfig(path, context,

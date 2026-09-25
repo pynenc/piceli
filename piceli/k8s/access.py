@@ -8,9 +8,11 @@
   App itself); or
 - ``module:attr`` (or ``file.py:attr``) of an object with ``.app`` (a piceli
   App) and ``.target`` (with ``.kubeconfig``, ``.context`` and
-  ``.namespace``), such as a pipeline. Optional hooks on that object:
-  ``.release_spec`` (a ``ReleaseSpec`` or a path to ``release.toml``) for the
-  release state, and ``.last_checks()`` returning the latest checks result.
+  ``.namespace``), such as a pipeline. A :class:`~piceli.pipeline.Pipeline`
+  brings the release state ``piceli deploy`` keeps. Optional hooks on other
+  objects: ``.release_spec`` (a ``ReleaseSpec`` or a path to
+  ``release.toml``) for the release state, and ``.last_checks()`` returning
+  the latest checks result.
 
 Everything here is explicit: the kubeconfig is a named file and the context
 is named; nothing reads ``KUBECONFIG``, ``~/.kube/config`` or the current
@@ -29,7 +31,7 @@ from types import SimpleNamespace
 from typing import Any, Protocol
 
 from piceli.k8s.observe import local_port_in_use, probe_endpoint
-from piceli.k8s.port_owner import PortOwner, port_owner
+from piceli.k8s.port_owner import PortOwner, is_piceli_forward, port_owner
 from piceli.k8s.ui_config import UiComponent, UiConfig, UiShortcut, UiTier
 
 STATUS_SCHEMA = "piceli.status.v1"
@@ -37,6 +39,8 @@ WORKLOAD_KINDS = ("Deployment", "StatefulSet", "DaemonSet")
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 # Waiting reasons that are part of a normal start, not a problem.
 _NORMAL_WAITING = frozenset({"ContainerCreating", "PodInitializing"})
+# Command lines read to verify a forward is Piceli's (not shown past MAX_COMMAND).
+_OWNER_LIMIT = 4096
 
 
 class AccessTargetError(ValueError):
@@ -57,6 +61,8 @@ class AccessTarget:
     :param workloads: ``(kind, name)`` of every workload the app declares.
     :param spec: The release spec, when known (for the release state).
     :param checks: Returns the latest checks result, when the target has one.
+    :param exec_policy: The target's explicit exec credential plugin opt-in
+        (``[target] allow_exec`` or ``Target(allow_exec=True)``), if any.
     """
 
     name: str
@@ -70,6 +76,7 @@ class AccessTarget:
     spec: Any = None
     checks: Callable[[], Any] | None = None
     app: Any = None
+    exec_policy: Any = None
 
     def shortcut(self, ident: str) -> UiShortcut | None:
         return next((item for item in self.shortcuts if item.id == ident), None)
@@ -151,6 +158,10 @@ def _from_spec(path: Path) -> AccessTarget:
         raise AccessTargetError("access-target-invalid", str(error)) from None
     model = spec.model
     namespace = model.target.namespace
+    try:
+        policy = spec.kubeconfig_target().exec_policy
+    except ValueError as error:
+        raise AccessTargetError("access-target-invalid", str(error)) from None
     if app is not None:
         shortcuts = app.shortcuts(namespace)
         workloads = _app_workloads(app, namespace)
@@ -168,7 +179,27 @@ def _from_spec(path: Path) -> AccessTarget:
         workloads=workloads,
         spec=spec,
         app=app,
+        exec_policy=policy,
     )
+
+
+def _pipeline_release_spec(value: Any) -> Any:
+    """The release state ``piceli deploy`` keeps for a Pipeline, if it has one.
+
+    Built from the pipeline's receipts like ``piceli release --spec
+    MODULE:ATTR``; ``None`` for any other object, or before anything was
+    delivered (then there is no release either).
+    """
+    from piceli.pipeline import Pipeline, PipelineError
+
+    if not isinstance(value, Pipeline):
+        return None
+    from piceli.pipeline.operate import operations_spec
+
+    try:
+        return operations_spec(value, current=False)
+    except (PipelineError, ValueError, OSError):
+        return None
 
 
 def _from_pipeline(entry: str, base: Path) -> AccessTarget:
@@ -201,6 +232,8 @@ def _from_pipeline(entry: str, base: Path) -> AccessTarget:
             f"{entry!r}: .target needs an explicit kubeconfig, context and namespace",
         )
     spec = getattr(value, "release_spec", None)
+    if spec is None:
+        spec = _pipeline_release_spec(value)
     if isinstance(spec, str | Path):
         from piceli.k8s.release_spec import ReleaseSpec, ReleaseSpecError
 
@@ -209,6 +242,7 @@ def _from_pipeline(entry: str, base: Path) -> AccessTarget:
         except ReleaseSpecError as error:
             raise AccessTargetError("access-target-invalid", str(error)) from None
     checks = getattr(value, "last_checks", None)
+    policy = getattr(target, "exec_policy", None)
     return AccessTarget(
         name=app.name,
         namespace=str(namespace),
@@ -221,6 +255,7 @@ def _from_pipeline(entry: str, base: Path) -> AccessTarget:
         spec=spec,
         checks=checks if callable(checks) else None,
         app=app,
+        exec_policy=policy() if callable(policy) else None,
     )
 
 
@@ -354,10 +389,16 @@ class KubernetesWorkloadReader:
         context: str,
         transport: str = "https",
         timeout: float = 10.0,
+        exec_policy: Any = None,
     ) -> None:
-        from piceli.k8s.ops.provider_factory import _client
+        from piceli.k8s.ops.provider_factory import api_client_from_kubeconfig
 
-        self._client = _client(kubeconfig, context, transport)
+        self._client = api_client_from_kubeconfig(
+            kubeconfig,
+            context,
+            transport=transport,  # type: ignore[arg-type]
+            exec_policy=exec_policy,
+        )
         self._timeout = timeout
 
     def workload(self, kind: str, namespace: str, name: str) -> dict[str, Any] | None:
@@ -536,23 +577,64 @@ def workload_status(
     }
 
 
+def _owner_for_status(port: int) -> PortOwner | None:
+    """The port's owner with full command lines, for the ownership check only."""
+    return port_owner(port, limit=_OWNER_LIMIT)
+
+
 def forward_status(
     shortcut: UiShortcut,
     *,
+    context: str | None = None,
+    namespace: str | None = None,
     probe: Callable[..., str | None] = probe_endpoint,
     in_use: Callable[[int], bool] = local_port_in_use,
-    owner: Callable[[int], PortOwner | None] = port_owner,
+    owner: Callable[[int], PortOwner | None] | None = None,
+    owned: Callable[..., bool] | None = None,
 ) -> dict[str, Any]:
     """Whether one declared forward answers on ``127.0.0.1`` right now.
 
-    ``forward`` is ``up`` (the health probe passes), ``unhealthy`` (something
-    listens but the probe fails) or ``down`` (nothing listens). Contacts only
+    ``forward`` is ``up`` (Piceli's ``kubectl port-forward`` for this
+    declaration holds the port and the health probe passes), ``unhealthy``
+    (Piceli's forward holds the port but the probe fails), ``occupied``
+    (another process holds the port: error ``status-port-occupied``; only
+    its pid is reported, never its command line) or ``down`` (nothing
+    listens). A forward counts as Piceli's only when the listener is the
+    ``kubectl`` argv Piceli builds for this context, namespace, target and
+    ports, started by a Piceli process (see
+    :func:`~piceli.k8s.port_owner.is_piceli_forward`); without ``context``
+    nothing can be verified and a listener is ``occupied``. Contacts only
     the loopback address, never the cluster.
     """
+    owner = owner or _owner_for_status
+    owned = owned or is_piceli_forward
     outcome = probe(shortcut.local_port, shortcut.probe)
     listening = outcome is None or in_use(shortcut.local_port)
-    state = "up" if outcome is None else ("unhealthy" if listening else "down")
     holder = owner(shortcut.local_port) if listening else None
+    mine = (
+        listening
+        and context is not None
+        and owned(
+            holder,
+            context=context,
+            namespace=shortcut.namespace or namespace or "",
+            target=shortcut.target,
+            local_port=shortcut.local_port,
+            remote_port=shortcut.remote_port,
+        )
+    )
+    public_owner: dict[str, Any] | None = None
+    if not listening:
+        state, error = "down", outcome
+    elif not mine:
+        state, error = "occupied", "status-port-occupied"
+        if holder is not None:
+            public_owner = PortOwner(port=holder.port, pid=holder.pid).to_dict()
+    else:
+        state = "up" if outcome is None else "unhealthy"
+        error = outcome
+        if holder is not None:
+            public_owner = holder.shortened().to_dict()
     return {
         "id": shortcut.id,
         "label": shortcut.label,
@@ -562,8 +644,8 @@ def forward_status(
         "remote_port": shortcut.remote_port,
         "required": shortcut.required,
         "forward": state,
-        "error": outcome,
-        "owner": holder.to_dict() if holder is not None else None,
+        "error": error,
+        "owner": public_owner,
         "probe": shortcut.probe.public_dict(),
     }
 
@@ -635,7 +717,7 @@ def collect_status(
     reader: WorkloadReader | None,
     *,
     reader_error: str | None = None,
-    forward: Callable[[UiShortcut], dict[str, Any]] = forward_status,
+    forward: Callable[[UiShortcut], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """The ``piceli.status.v1`` document for ``target``.
 
@@ -691,6 +773,13 @@ def collect_status(
         if pods_error:
             item["error"] = pods_error
         summary.workloads.append(item)
+    if forward is None:
+
+        def forward(item: UiShortcut) -> dict[str, Any]:
+            return forward_status(
+                item, context=target.context, namespace=target.namespace
+            )
+
     forwards = [forward(item) for item in target.shortcuts]
     checks = None
     if target.checks is not None:

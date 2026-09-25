@@ -10,6 +10,7 @@ from urllib.request import Request, urlopen
 import pytest
 
 from piceli.k8s.observe import (
+    ForwardScope,
     ForwardSupervisor,
     InventoryReader,
     InventoryReport,
@@ -26,6 +27,8 @@ from piceli.k8s.observe import (
 from piceli.k8s.observe_server import LocalObserveServer
 from piceli.k8s.port_owner import PortOwner
 from piceli.k8s.ui_config import UiConfig
+
+SCOPE = ForwardScope(context="lab", cluster="sha256:" + "0" * 16)
 
 
 class Archive:
@@ -167,7 +170,8 @@ def test_forward_supervisor_owns_only_saved_loopback_processes(tmp_path: Path) -
     store = PreferenceStore(tmp_path / "observe.json")
     store.replace_user(
         UserPreferences(
-            "jose", (PortForward("api", "demo", "service/api", _free_port(), 80),)
+            "jose",
+            (PortForward("api", "demo", "service/api", _free_port(), 80, scope=SCOPE),),
         )
     )
     supervisor = ForwardSupervisor(
@@ -176,6 +180,7 @@ def test_forward_supervisor_owns_only_saved_loopback_processes(tmp_path: Path) -
         kubeconfig=tmp_path / "kubeconfig",
         context="lab",
         kubectl="definitely-not-kubectl",
+        scope=SCOPE,
     )
     supervisor.restore()
     try:
@@ -202,7 +207,8 @@ def test_forward_supervisor_leaves_an_external_port_owner_untouched(
         port = listener.getsockname()[1]
         store.replace_user(
             UserPreferences(
-                "jose", (PortForward("api", "demo", "service/api", port, 80),)
+                "jose",
+                (PortForward("api", "demo", "service/api", port, 80, scope=SCOPE),),
             )
         )
         supervisor = ForwardSupervisor(
@@ -210,6 +216,7 @@ def test_forward_supervisor_leaves_an_external_port_owner_untouched(
             user="jose",
             kubeconfig=tmp_path / "kubeconfig",
             context="lab",
+            scope=SCOPE,
         )
         owner = PortOwner(port=port, pid=4242, command="other-dashboard --serve")
         with (
@@ -316,9 +323,18 @@ def test_local_rest_server_exposes_only_read_only_loopback_data(tmp_path: Path) 
             "alice", (PortForward("alice-forward", "demo", "service/a", 18001, 80),)
         )
     )
+    other_cluster = ForwardScope(context="lab", cluster="sha256:" + "1" * 16)
     store.replace_user(
         UserPreferences(
-            "bob", (PortForward("bob-forward", "demo", "service/b", 18002, 80),)
+            "bob",
+            (
+                PortForward("bob-forward", "demo", "service/b", 18002, 80, scope=SCOPE),
+                PortForward("elsewhere", "demo", "service/b", 18003, 80),
+                PortForward(
+                    "other", "demo", "service/b", 18004, 80, scope=other_cluster
+                ),
+                PortForward("other-ns", "prod", "service/b", 18005, 80, scope=SCOPE),
+            ),
         )
     )
     scoped_server = LocalObserveServer(
@@ -326,6 +342,8 @@ def test_local_rest_server_exposes_only_read_only_loopback_data(tmp_path: Path) 
         lambda: InventoryReport("a" * 32, (), ()),
         store,
         user="bob",
+        namespace="demo",
+        preference_scope=SCOPE,
     )
     scoped_thread = threading.Thread(target=scoped_server.handle_request)
     scoped_thread.start()
@@ -347,6 +365,7 @@ def test_local_rest_server_exposes_only_read_only_loopback_data(tmp_path: Path) 
                                 "target": "service/b",
                                 "local_port": 18002,
                                 "remote_port": 80,
+                                "scope": SCOPE.public_dict(),
                             }
                         ],
                     }

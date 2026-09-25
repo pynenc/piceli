@@ -1488,6 +1488,19 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "access",
     ),
     _E(
+        "status-port-occupied",
+        "Forward port held by another process",
+        "A declared forward's local port is held by a process Piceli did not "
+        "start for this declaration (another project's `kubectl port-forward`, "
+        "a dev server, an orphaned forward). `piceli status` reports the forward "
+        "as `occupied` with that process's pid only, never its command line, and "
+        "never as `up`.",
+        "Stop the process holding the port (`lsof -nP -iTCP:PORT -sTCP:LISTEN`) "
+        "or change `local=`, then run `piceli access TARGET`.",
+        True,
+        "access",
+    ),
+    _E(
         "status-checks-unreadable",
         "Checks result unreadable",
         "The target's `last_checks()` hook raised.",
@@ -2375,7 +2388,7 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
     _E(
         "pipeline-not-found",
         "Pipeline not found",
-        "The `MODULE:ATTR` given to `piceli deploy` does not name a file or module, or its attribute is not a `Pipeline`.",
+        "The `MODULE:ATTR` given to `piceli deploy` (or to `piceli release … --spec`) does not name a file or module, or its attribute is not a `Pipeline`.",
         "Pass `path/to/app.py:pipeline` or `package.module:pipeline` naming a `piceli.Pipeline` object.",
         False,
         "pipeline",
@@ -2489,6 +2502,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "Post-deploy checks failed",
         "The release was applied but at least one check failed, so the run is not ready. With `rollback_on_failed_checks` the previous release was re-applied (see `checks.rollback` in the result).",
         "Read the check results in the result JSON, fix the application and deploy again.",
+        False,
+        "pipeline",
+    ),
+    _E(
+        "pipeline-not-delivered",
+        "Pipeline images not delivered",
+        "`piceli release plan|preview|diff|apply --spec MODULE:ATTR` plans a new release from the pipeline's current model, but a build image it uses was not built from the current build inputs and delivered (or no image of the pipeline was ever delivered). The release commands never build.",
+        "Run `piceli deploy MODULE:ATTR` (it builds and delivers only what changed). Commands on existing releases (`status`, `rollback`, `secret show`, `stop`, `resume`, `check`) use the recorded images and need no new delivery.",
         False,
         "pipeline",
     ),

@@ -4,6 +4,84 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.4.1
+
+- **Fix (safety):** Piceli signals a child's process group only when the id
+  is a real child group: never `1`, `0` or its own group. A test double's
+  `pid` (which converts to `1`) made the forward supervisor send SIGTERM to
+  process group 1, which on Linux CI stopped the job itself.
+- **Release commands for pipeline releases:** every `piceli release`
+  subcommand (`plan`, `preview`, `diff`, `apply`, `rollback`, `resume`,
+  `stop`, `check`, `status`, `secret show`) now takes `--spec MODULE:ATTR`
+  naming a `Pipeline`, as `piceli status` and `piceli access` do, and
+  operates the release `piceli deploy` manages: same state directory,
+  release name, target and composition. Nothing is built: a rollback
+  re-applies the recorded image digests (`oci-set`), and `plan`/`diff`/`apply`
+  use the images delivered from the current sources or refuse with the new
+  code `pipeline-not-delivered`. Commands that change the cluster hold the
+  pipeline's run lock (`pipeline-locked`).
+- **Exec credential plugins for pipelines:** `Target.kubeconfig(...)` takes
+  `allow_exec`, `exec_sha256`, `exec_pass_env` and `exec_timeout_seconds`
+  with the semantics of `[target]` in `release.toml`. They apply to
+  `piceli deploy`, `piceli status`, `piceli access` and the release commands.
+  `piceli status` and `piceli access` now also honour `[target] allow_exec`
+  of a `release.toml`, and refuse an exec user without it
+  (`exec-auth-not-allowed`); post-deploy checks use the target's policy.
+- **Fix:** checks declared on a `Pipeline` (`Checks.http`, `exec`, `metric`,
+  `python`) now run with a `piceli.checks.CheckContext` built from the
+  target; in 0.4.0 the default runner got the pipeline's context and every
+  check failed with `check-raised`.
+- **Fix:** `piceli deploy --resume` of a run that failed at its checks stage
+  with `rollback_on_failed_checks` no longer fails with
+  `pipeline-stage-error`; it rolls back to the previous release.
+- **Fix:** `piceli deploy` prints the build log as a path relative to the
+  working directory or `<state_dir>/…`, never an absolute local path.
+- **Fix:** `piceli status` and `piceli access --dashboard` with a pipeline
+  target now read the pipeline's release state: `status` shows the release
+  line and the dashboard its catalog (active release, managed workloads).
+  The human `status` workload columns line up.
+- **Fix (output contract):** a pipeline's automatic rollback reports
+  `{"state": "rejected", "reason": "<code>", "message": …}` or
+  `{"state": "unavailable", "reason": "checks-rollback-unavailable",
+  "message": …}` instead of `"state": "refused"` or a free-text `reason`. A
+  release execution refused by the executor is recorded in the history as
+  `"state": "rejected"` with `"reason": "execution-refused"` (was
+  `"refused"`).
+- **`piceli --version`** prints `piceli <version>`; the top-level help has a
+  real description.
+- **Saved forwards never start implicitly (safety):** `piceli operator serve`
+  and `piceli observe serve` no longer start a user's saved port forwards at
+  launch. `--restore-forwards` starts them, and only those saved for the same
+  cluster (a digest of the context's API server URL), context and namespace.
+  Forwards saved without a scope (older files, or `forward-save` without the
+  new `--kubeconfig/--context`) are never restored. Forwards added from the
+  dashboard are saved with their scope, and `GET /v1/preferences` lists only
+  the current user's forwards for this cluster, context and namespace.
+- **`piceli status` only reports forwards Piceli owns:** a forward is `up`
+  only when the listener is Piceli's `kubectl port-forward` for that
+  declaration. Any other process on the port is `occupied`
+  (`status-port-occupied`) with its pid only; its command line is never
+  printed. The dashboard's supervisor also refuses to call a forward healthy
+  when another process answers on its port (`conflict`).
+- **`operator serve --access` starts the model's forwards** at launch, like
+  `piceli access --dashboard`, refusing with `access-port-conflict` when a
+  required port is taken. `--no-start-access` leaves them stopped.
+- **Operator dashboard:** Pods and ReplicaSets owned (through
+  `ownerReferences`) by a managed workload are listed as managed with
+  `derived_from` instead of unmanaged. Image references are shortened with the
+  full reference in a tooltip, and the tables keep their columns inside the
+  card.
+- **Readable plans and progress:** `release plan` shortens long values in the
+  middle (keeping the digest tail and the closing quote) and puts long changes
+  on their own lines; `piceli deploy --plan` wraps long change lists and
+  prints the approve command on its own line. `release apply` and the deploy
+  apply stage print progress on stderr while applying and waiting for
+  readiness (`applying 3/7: Deployment/web`, `waiting for Deployment/web to
+  be ready (12s)`); stdout is unchanged.
+- Human output shortens delivered image digests (`@sha256:<12 hex>…`) and
+  drops microseconds from the `piceli status` release time; JSON output keeps
+  the full values.
+
 ## Version 0.4.0
 
 - **Removed:** the legacy delete-and-recreate engine and its CLI

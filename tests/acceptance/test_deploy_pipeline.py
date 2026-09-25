@@ -165,8 +165,10 @@ class FakeBackend(Backend):
         return run
 
 
-@pytest.fixture
-def shop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[Any, Path]]:
+def make_shop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[tuple[Any, Path]]:
+    """The ``shop`` fixture (``tests/acceptance/conftest.py``): fake API + pipeline."""
     FakeBackend.reset()
     monkeypatch.setattr("piceli.pipeline.runner.Backend", FakeBackend)
     with serve() as (api, url):

@@ -60,6 +60,7 @@ __all__ = [
     "build_provider",
     "credential_plugin",
     "read_cluster_identity",
+    "verify_exec_user",
     "verify_kubeconfig_context",
 ]
 
@@ -300,6 +301,36 @@ def verify_kubeconfig_context(
         )
         return plugin.summary()
     return None
+
+
+def verify_exec_user(
+    kubeconfig: Path, context: str, *, exec_policy: ExecPolicy | None = None
+) -> dict[str, str] | None:
+    """Refuse or pin the context's exec plugin only; never runs it.
+
+    For commands that hand the kubeconfig to ``kubectl`` and keep kubectl's
+    own transport rules: a user with an ``exec`` block is refused
+    (``exec-auth-not-allowed``) unless ``exec_policy`` allows it; an allowed
+    plugin is resolved and pinned (``exec_sha256``). Returns the pinned
+    plugin summary, else ``None``.
+    """
+    policy = exec_policy or _NO_EXEC
+    path = Path(kubeconfig).expanduser()
+    document = _read_kubeconfig(path)
+    ctx = _named(document, "contexts", context)
+    user = _named(document, "users", str(ctx.get("user", "")))
+    if "exec" not in user:
+        return None
+    if not policy.allow:
+        raise ExecAuthError(
+            "exec-auth-not-allowed",
+            "the context's user runs an exec credential plugin; review it and "
+            "allow it on the target (allow_exec) to permit it",
+        )
+    plugin = resolve_plugin(
+        user["exec"], kubeconfig_dir=path.resolve().parent, policy=policy
+    )
+    return plugin.summary()
 
 
 def _entries_for(

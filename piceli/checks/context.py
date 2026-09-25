@@ -132,6 +132,8 @@ class CheckContext:
     :param executor: Replaces the Kubernetes API exec (tests).
     :param api_client: An existing ``kubernetes.client.ApiClient`` to use
         instead of building one; the caller keeps ownership.
+    :param exec_policy: The explicit authority to run the context's exec
+        credential plugin (``[target] allow_exec``); none by default.
 
     Example::
 
@@ -157,6 +159,7 @@ class CheckContext:
         forwarder: Forwarder | None = None,
         executor: Executor | None = None,
         api_client: Any | None = None,
+        exec_policy: Any | None = None,
     ) -> None:
         if not context:
             raise ValueError("an explicit kubeconfig context is required")
@@ -179,6 +182,7 @@ class CheckContext:
         self._executor = executor or api_exec
         self._client = api_client
         self._owns_client = api_client is None
+        self.exec_policy = exec_policy
 
     # ----------------------------------------------------------- lifecycle
     def __enter__(self) -> CheckContext:
@@ -203,7 +207,10 @@ class CheckContext:
 
             try:
                 self._client = api_client_from_kubeconfig(
-                    self.kubeconfig, self.context, transport=self.transport
+                    self.kubeconfig,
+                    self.context,
+                    transport=self.transport,
+                    exec_policy=self.exec_policy,
                 )
             except ValueError as error:
                 raise CheckError(

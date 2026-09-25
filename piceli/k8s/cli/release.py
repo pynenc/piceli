@@ -1,5 +1,12 @@
 """``piceli release``: plan, apply, rollback, resume, stop and status from a spec.
 
+``--spec`` names the release either way ``piceli status``/``access`` name a
+target: a ``release.toml`` path, or ``MODULE:ATTR`` (``path/to/file.py:ATTR``)
+naming a :class:`~piceli.pipeline.Pipeline`. For a pipeline the commands
+operate on the release ``piceli deploy`` manages, with the same state
+directory, release name, target and composition
+(:mod:`piceli.pipeline.operate`); nothing is built.
+
 JSON goes to stdout; a short human summary goes to stderr. Exit codes:
 ``0`` success, ``1`` the execution did not become ready
 (``{"state": "failed", "reason": "<code>", …}``), ``2`` rejected
@@ -12,6 +19,8 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Annotated, Any, NoReturn
 
@@ -19,17 +28,22 @@ import typer
 
 app = typer.Typer(
     rich_markup_mode=None,
-    help="Plan, apply and roll back releases described by a release.toml spec.",
+    help=(
+        "Plan, apply and roll back releases described by a release.toml spec "
+        "or deployed by a pipeline (--spec MODULE:ATTR)."
+    ),
     no_args_is_help=True,
 )
 
 SpecOption = Annotated[
-    Path,
+    str,
     typer.Option(
         "--spec",
-        help="release.toml describing the release",
-        exists=True,
-        dir_okay=False,
+        help=(
+            "path/to/release.toml, or MODULE:ATTR (path/to/file.py:ATTR) naming "
+            "a piceli Pipeline: the release `piceli deploy` manages"
+        ),
+        show_default=False,
     ),
 ]
 ApproveOption = Annotated[
@@ -109,11 +123,58 @@ def _say(message: str) -> None:
     typer.echo(message, err=True)
 
 
-def _runner(spec: Path) -> Any:
-    from piceli.k8s.release_runner import ReleaseRunner
-    from piceli.k8s.release_spec import ReleaseSpec
+def is_pipeline_target(spec: str) -> bool:
+    """``MODULE:ATTR`` names a pipeline; anything else is a release.toml path."""
+    return not spec.endswith(".toml") and ":" in spec
 
-    return ReleaseRunner(ReleaseSpec.from_toml(spec))
+
+def _load_spec(spec: str, *, current: bool) -> tuple[Any, Any]:
+    """``(release spec, pipeline or None)`` for ``--spec``.
+
+    ``current``: the command plans a new release from the current model, so a
+    pipeline's build images must be delivered from its current sources.
+    """
+    from piceli.k8s.release_spec import ReleaseSpec, ReleaseSpecError
+
+    if not is_pipeline_target(spec):
+        path = Path(spec).expanduser()
+        if not path.is_file():
+            raise ReleaseSpecError(f"release spec not found: {spec}")
+        return ReleaseSpec.from_toml(path), None
+    from piceli.k8s.cli.deploy_pipeline import load_pipeline
+    from piceli.pipeline.operate import operations_spec
+
+    pipeline = load_pipeline(spec)
+    return operations_spec(pipeline, current=current), pipeline
+
+
+def _runner(spec: str, *, current: bool = False) -> Any:
+    from piceli.k8s.release_runner import ReleaseRunner
+
+    return ReleaseRunner(_load_spec(spec, current=current)[0], progress=_progress)
+
+
+@contextmanager
+def _locked_runner(spec: str, *, current: bool) -> Iterator[Any]:
+    """A runner for a command that changes the cluster.
+
+    For a pipeline it holds the pipeline's run lock, so it never races a
+    ``piceli deploy`` of the same state directory (``pipeline-locked``).
+    """
+    from piceli.k8s.release_runner import ReleaseRunner
+
+    loaded, pipeline = _load_spec(spec, current=current)
+    if pipeline is None:
+        yield ReleaseRunner(loaded, progress=_progress)
+        return
+    from piceli.pipeline.journal import Journal
+
+    with Journal(pipeline.state_dir).locked():
+        yield ReleaseRunner(loaded, progress=_progress)
+
+
+def _progress(text: str) -> None:
+    _say(f"  {text}")
 
 
 def _refusals() -> tuple[type[BaseException], ...]:
@@ -161,7 +222,7 @@ def _say_changes(diff: dict[str, Any] | None, limit: int | None) -> None:
     changes = diff["changes"]
     shown = changes if limit is None else changes[:limit]
     for change in shown:
-        _say(f"            {describe_change(change)}")
+        _say(f"            {describe_change(change, indent=' ' * 12)}")
     if len(changes) > len(shown):
         _say(
             f"            ... {len(changes) - len(shown)} more "
@@ -181,7 +242,7 @@ def _diff_index(report: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]
     }
 
 
-def _describe_plan(result: Any, spec: Path, command: str) -> None:
+def _describe_plan(result: Any, spec: str, command: str) -> None:
     counts = ", ".join(f"{n} {op}" for op, n in result.counts.items()) or "no actions"
     _say(f"release {result.release} ({result.mode}, {result.intent}): {counts}")
     report = result.to_dict()
@@ -346,7 +407,7 @@ def _finish(outcome: dict[str, Any]) -> None:
 
 
 def _plan_then_execute(
-    spec: Path,
+    spec: str,
     *,
     command: str,
     approve: str | None,
@@ -358,39 +419,42 @@ def _plan_then_execute(
     adopt_all_desired: bool = False,
     skip_checks: bool = False,
 ) -> None:
-    try:
-        runner = _runner(spec)
-        if approve is not None:
-            if auto_approve or rotate or adopt or replace or adopt_all_desired:
-                from piceli.cli_contract import reject
+    if approve is not None and (
+        auto_approve or rotate or adopt or replace or adopt_all_desired
+    ):
+        from piceli.cli_contract import reject
 
-                reject(
-                    "approve-with-planning-flags",
-                    "--approve cannot be combined with planning flags",
-                    code="approve-with-planning-flags",
+        reject(
+            "approve-with-planning-flags",
+            "--approve cannot be combined with planning flags",
+            code="approve-with-planning-flags",
+        )
+    try:
+        # A rollback re-applies a catalogued release (its recorded images).
+        with _locked_runner(spec, current=rollback_to is None) as runner:
+            if approve is not None:
+                expected = None
+                if rollback_to is not None:
+                    expected = runner.resolve_rollback_target(rollback_to)
+                outcome = runner.apply(
+                    approve,
+                    expected_intent="rollback" if rollback_to is not None else None,
+                    expected_release=expected,
+                    skip_checks=skip_checks,
                 )
-            expected = None
-            if rollback_to is not None:
-                expected = runner.resolve_rollback_target(rollback_to)
-            outcome = runner.apply(
-                approve,
-                expected_intent="rollback" if rollback_to is not None else None,
-                expected_release=expected,
-                skip_checks=skip_checks,
-            )
-        else:
-            result = runner.plan(
-                rotate=rotate or (),
-                rollback_to=rollback_to,
-                adopt=adopt or (),
-                replace=replace or (),
-                adopt_all_desired=adopt_all_desired,
-            )
-            _describe_plan(result, spec, command)
-            if not auto_approve and not _confirm(result):
-                _emit({"state": "approval-required", **result.to_dict()})
-                raise typer.Exit(EXIT_APPROVAL)
-            outcome = runner.apply(result.plan_hash, skip_checks=skip_checks)
+            else:
+                result = runner.plan(
+                    rotate=rotate or (),
+                    rollback_to=rollback_to,
+                    adopt=adopt or (),
+                    replace=replace or (),
+                    adopt_all_desired=adopt_all_desired,
+                )
+                _describe_plan(result, spec, command)
+                if not auto_approve and not _confirm(result):
+                    _emit({"state": "approval-required", **result.to_dict()})
+                    raise typer.Exit(EXIT_APPROVAL)
+                outcome = runner.apply(result.plan_hash, skip_checks=skip_checks)
     except _refusals() as error:
         _refuse(error)
         return
@@ -411,7 +475,7 @@ def plan(
 ) -> None:
     """Capture live discovery and persist an approvable plan (prints its hash)."""
     try:
-        result = _runner(spec).plan(
+        result = _runner(spec, current=True).plan(
             rotate=rotate or (),
             adopt=adopt or (),
             replace=replace or (),
@@ -446,7 +510,7 @@ def diff(
 ) -> None:
     """Show what `plan` would change, field by field (read-only, nothing stored)."""
     try:
-        value = _runner(spec).diff(
+        value = _runner(spec, current=True).diff(
             adopt=adopt or (),
             replace=replace or (),
             adopt_all_desired=adopt_all_desired,
@@ -543,7 +607,8 @@ def resume(
 ) -> None:
     """Resume an interrupted apply of a created release (same grant and ids)."""
     try:
-        outcome = _runner(spec).resume(release, skip_checks=skip_checks)
+        with _locked_runner(spec, current=False) as runner:
+            outcome = runner.resume(release, skip_checks=skip_checks)
     except _refusals() as error:
         _refuse(error)
         return
@@ -554,7 +619,8 @@ def resume(
 def stop(spec: SpecOption, release: ReleaseOption = None) -> None:
     """Cancel the latest execution of a release (exact owner only)."""
     try:
-        outcome = _runner(spec).stop(release)
+        with _locked_runner(spec, current=False) as runner:
+            outcome = runner.stop(release)
     except _refusals() as error:
         _refuse(error)
         return

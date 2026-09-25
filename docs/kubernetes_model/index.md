@@ -12,7 +12,7 @@ The Kubernetes model in Piceli offers a flexible and powerful way to define and 
 
 Piceli provides various avenues for defining Kubernetes objects:
 
-- **Piceli Templates**: Utilize Python classes to define Kubernetes objects in a programmatic and expressive manner. This method is highly recommended for Python projects.
+- **Piceli Templates**: Utilize Python classes to define Kubernetes objects in a programmatic and expressive manner. For whole applications, the typed `App` (see {doc}`../typed_apps`) builds on the same model and is the recommended starting point.
 
 - **Kubernetes Python Library**: Leverage the official Kubernetes Python client library for defining objects. This approach offers direct access to the Kubernetes API through Python.
 

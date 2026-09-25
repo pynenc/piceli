@@ -1,3 +1,5 @@
+from typing import Annotated
+
 import typer
 
 from piceli.k8s.cli.access import register as register_access_commands
@@ -22,8 +24,28 @@ register_contract_commands(app)
 register_access_commands(app)
 
 
+def _version(value: bool) -> None:
+    if value:
+        import importlib.metadata
+
+        try:
+            version = importlib.metadata.version("piceli")
+        except importlib.metadata.PackageNotFoundError:  # pragma: no cover
+            version = "unknown"
+        typer.echo(f"piceli {version}")
+        raise typer.Exit()
+
+
 @app.callback()
-def common_options() -> None:
-    """
-    Piceli kubernetes commands
-    """
+def common_options(
+    version: Annotated[
+        bool,
+        typer.Option(
+            "--version",
+            help="Print `piceli <version>` and exit",
+            callback=_version,
+            is_eager=True,
+        ),
+    ] = False,
+) -> None:
+    """Kubernetes infrastructure as typed Python: model, plan, apply and observe."""

@@ -14,7 +14,17 @@ changed.
 release (always with a changelog entry).
 ```
 
+```{figure} _static/img/deploy-flow.gif
+:alt: A terminal runs piceli deploy on the shop example with --plan and prints the planned stages, a combined hash and the approve command. It then runs piceli deploy with --approve and that hash, streaming the build, deliver (with registry progress), plan, apply (with readiness progress) and checks stages until the checks pass and "deploy ready" is printed. Finally piceli status reports that shop is up, its release ready and its three Deployments ready, with both declared forwards still down.
+:width: 100%
+
+Plan, approve, check: `piceli deploy --plan`, `piceli deploy --approve`
+and `piceli status` on the shop example against a local `kind` cluster.
+```
+
 ## Prerequisites
+
+New to Piceli? Start with {doc}`getting_started/index`.
 
 - Piceli installed (`pip install piceli`), Python 3.12 or later.
 - `docker` with `buildx` (the build runs in a pinned builder image) and
@@ -51,7 +61,7 @@ release (always with a changelog entry).
 
    ```{literalinclude} ../examples/shop/app.py
    :language: python
-   :lines: 17-
+   :lines: 19-
    ```
 
    - `Target.kubeconfig(...)` names the cluster, namespace and nodes. Relative
@@ -67,6 +77,12 @@ release (always with a changelog entry).
      is an opaque reference the release binds to the real value at apply time.
    - `deliver=` is `NodeLoopbackRegistry()`, `NodeImport()` or
      `Registry("oci://host/prefix")` (see {ref}`delivery`).
+   - `build=` is optional. When every image is already pinned by digest
+     (`repo@sha256:…`), `Pipeline(app, target)` works without `build=` or
+     `deliver=`: the build and deliver stages are skipped and the pipeline
+     plans, applies and checks the release.
+   - `access=app.access.forward(...)` on a Service declares how it is reached
+     from your laptop; it renders to no Kubernetes object (see {doc}`access`).
 
 2. **Render it without a cluster** (build handles show as placeholders):
 
@@ -87,13 +103,15 @@ release (always with a changelog entry).
      inputs   rust-hello: 3 staged file(s), plan 7cd633981e19
      inputs   source piceli: 485a4dc88cee
      build    rust-hello: build (linux/arm64, builder 8fa55b2f3ddf, network none)
-     deliver  registry shop-registry-d0c1b1b7947f: create ConfigMap/registry-config, create PersistentVolumeClaim/registry-storage, create Deployment/registry
+     deliver  registry shop-registry-d0c1b1b7947f: create ConfigMap/registry-config,
+              create PersistentVolumeClaim/registry-storage, create Deployment/registry
      deliver  rust-hello: pending-build
      plan     after delivery (the release plan needs the image digests)
      apply    pending
      checks   1 check(s) (rollback on failure)
    combined hash: fab781d97321848dc074bd293a208e1057bb5cdf3b79afc12d906b7c83e6ec25
-   approve with: piceli deploy examples/shop/app.py:pipeline --approve fab781d9…
+   approve with:
+     piceli deploy examples/shop/app.py:pipeline --approve fab781d9…
    ```
 
 4. **Approve the combined hash** after reviewing the plan:
@@ -102,22 +120,32 @@ release (always with a changelog entry).
    piceli deploy examples/shop/app.py:pipeline --approve <combined hash>
    ```
 
-   Expected output:
+   Expected output, after the plan summary is printed again (`running` lines
+   and repeated `waiting` lines omitted):
 
    ```text
    [inputs] done
-   [build] rust-hello: building (log: …/.piceli-deploy/builds/rust-hello/build.log)
-   [build] rust-hello: [piceli] 3/3 linux/arm64 smoke:rust-hello: succeeded in 0.324s
+   [build] rust-hello: building (log: examples/shop/.piceli-deploy/builds/rust-hello/build.log)
+   [build] rust-hello: [piceli] 1/3 linux/arm64 files: succeeded in 4.904s
+   [build] rust-hello: [piceli] 2/3 linux/arm64 image:rust-hello: succeeded in 3.613s
+   [build] rust-hello: [piceli] 3/3 linux/arm64 smoke:rust-hello: succeeded in 2.855s
+   [build] rust-hello: [piceli] drift check: 3 staged file(s) unchanged
    [build] done
    [deliver] registry shop-registry-d0c1b1b7947f: applying
+   [deliver] registry: applying 1/3: ConfigMap/registry-config
+   [deliver] registry: waiting for PersistentVolumeClaim/registry-storage to be ready (1s)
+   [deliver] registry: waiting for Deployment/registry to be ready (1s)
    [deliver] rust-hello: pushing to shop/rust-hello
-   [deliver] rust-hello: pushed 127.0.0.1:5000/shop/rust-hello@sha256:9b2fbdad…
+   [deliver] rust-hello: pushed 127.0.0.1:5000/shop/rust-hello@sha256:9b2fbdad1c04…
    [deliver] done
    [plan] release shop-fbcc92695da7 (create): 7 create
    [plan] done
    [apply] shop-fbcc92695da7: applying
+   [apply] shop-fbcc92695da7: applying 1/7: Secret/cache-credentials
+   [apply] shop-fbcc92695da7: waiting for Deployment/cache to be ready (1s)
    [apply] done
-   [checks] skipped (no checks)
+   [checks] shop-fbcc92695da7: passed
+   [checks] done
    deploy ready: release shop-fbcc92695da7
    ```
 
@@ -129,7 +157,7 @@ release (always with a changelog entry).
    ```text
    [build] rust-hello: cached (plan 7cd633981e19)
    [build] skipped
-   [deliver] rust-hello: present 127.0.0.1:5000/shop/rust-hello@sha256:9b2fbdad…
+   [deliver] rust-hello: present 127.0.0.1:5000/shop/rust-hello@sha256:9b2fbdad1c04…
    [deliver] skipped
    [plan] done
    [apply] shop-fbcc92695da7: unchanged, already deployed and ready
@@ -137,7 +165,32 @@ release (always with a changelog entry).
    deploy ready: release shop-fbcc92695da7
    ```
 
-6. **Change the source and deploy again.** Only what changed moves: a new
+6. **Check it and reach it.** `piceli status` reads the release's workloads
+   and the declared forwards; `piceli access` forwards the ports (see
+   {doc}`access`):
+
+   ```sh
+   piceli status examples/shop/app.py:pipeline
+   piceli access examples/shop/app.py:pipeline --dashboard 9876
+   ```
+
+   `status` prints (exit code `0`; the forwards are `down` until `access`
+   runs):
+
+   ```text
+   shop is UP  (namespace shop, context kind-shop)
+   release    shop-fbcc92695da7  ready, apply at 2026-09-25T06:46:30+00:00
+   workloads
+     ready        Deployment/api    1/1  api=9b2fbdad15e1
+     ready        Deployment/cache  1/1  cache=a7cee7c8178f
+     ready        Deployment/web    1/1  web=9b2fbdad15e1
+   access     down
+     down      api          http://127.0.0.1:13080/  -> service/api:8080
+     down      web          http://127.0.0.1:13000/  -> service/web:3000
+   Start the forwards with: piceli access examples/shop/app.py:pipeline
+   ```
+
+7. **Change the source and deploy again.** Only what changed moves: a new
    build plan, a new image digest when the image differs, and a new release
    that rolls the workloads using it. An edit that produces a byte-identical
    image stops at the build stage.
@@ -195,8 +248,10 @@ receipts. The release records the whole image set as its source identity
 
 `checks=` takes one check or a list, run after a successful apply through the
 `piceli.checks` runner (`run_checks(checks, context)` returning an object with
-`passed` and `results`). The context is a `piceli.pipeline.CheckContext`
-(target, kubeconfig, context, namespace, release, delivered image references).
+`passed` and `results`). The checks get a `piceli.checks.CheckContext` built
+from the pipeline's target (kubeconfig, context, namespace, transport, exec
+policy), the release and the delivered image references; a custom
+`check_runner` receives the `piceli.pipeline.CheckContext` itself.
 A run is `ready` only when the checks pass. With
 `rollback_on_failed_checks=True` a failed check re-applies the previous
 release; the rollback is journaled in the run and the result's state is
@@ -219,6 +274,67 @@ changed since the approval is refused (`pipeline-resume-changed`). A run that
 finished, rolled back or stopped at `--until` has nothing to resume: plan a
 new run, and unchanged stages are skipped.
 
+## Operate the release: rollback, status and secrets
+
+`piceli deploy` never writes a `release.toml`; every `piceli release`
+subcommand takes the pipeline instead, as `--spec MODULE:ATTR` (the same
+target syntax as `piceli deploy`, `piceli status` and `piceli access`):
+
+```sh
+piceli release status --spec examples/shop/app.py:pipeline
+piceli release rollback previous --spec examples/shop/app.py:pipeline       # plan; prints the hash
+piceli release rollback previous --spec examples/shop/app.py:pipeline --approve <plan hash>
+piceli release secret show cache_password --spec examples/shop/app.py:pipeline --reveal
+```
+
+The commands resolve exactly what `piceli deploy` uses: the release state in
+`state_dir/release`, the release name (the app's name), owner and field
+manager, the target (kubeconfig, context, namespace, exec policy), the secret
+generators and the composition. They never build or deliver:
+
+- `rollback`, `resume`, `stop`, `check`, `status` and `secret show` work on
+  the catalogued releases. A rollback re-applies the archived composition
+  with the image digests recorded in it (the `oci-set` source).
+- `plan`, `preview`, `diff` and `apply` plan a release from the pipeline's
+  current model with the images `piceli deploy` last built from the
+  **current** build inputs and delivered. When a build input changed since,
+  or an image was never delivered, they are refused with
+  `pipeline-not-delivered`: run `piceli deploy`, which builds only what
+  changed.
+- `apply`, `rollback`, `resume` and `stop` hold the pipeline's run lock, so
+  they are refused with `pipeline-locked` while a `piceli deploy` of the same
+  state directory runs.
+- The pipeline's `checks=` (`piceli.checks` declarations) run after readiness
+  of an `apply`, `rollback` or `resume`, and `release check` runs them now;
+  `rollback_on_failed_checks=True` applies as for `piceli deploy`.
+
+The node-loopback registry is a separate release in `state_dir/registry`
+that `piceli deploy` manages; the release commands operate on the app's
+release only. After a manual rollback, the next `piceli deploy` re-applies
+the pipeline's current release (it converges on the model).
+
+## Managed clusters
+
+A target whose kubeconfig user runs an exec credential plugin (GKE, EKS,
+AKS, OIDC) is refused with `exec-auth-not-allowed` unless the `Target` opts
+in, with the same keys and semantics as `[target]` in a `release.toml`:
+
+```python
+target = Target.kubeconfig(
+    "gke.kubeconfig",
+    context="gke_proj_zone_prod",
+    namespace="shop",
+    allow_exec=True,
+    exec_sha256="sha256:…",  # optional pin of the resolved plugin
+    exec_pass_env=["CLOUDSDK_CONFIG"],  # optional extra variables
+    exec_timeout_seconds=60,  # optional, at most 300
+)
+```
+
+The policy is used by `piceli deploy` (plan, apply, checks), `piceli status`,
+`piceli access` and the `piceli release … --spec MODULE:ATTR` commands. See
+{doc}`managed_clusters`.
+
 ## If it fails
 
 | Output | Meaning | Next step |
@@ -232,6 +348,8 @@ new run, and unchanged stages are skipped.
 | `pipeline-apply-not-ready` (exit `1`) | The release did not become ready | Fix the workload (image, probe, claim), then `--resume` |
 | `pipeline-checks-failed` (exit `1`) | A check failed; see `checks.results` and `checks.rollback` in the run | Fix the app and deploy again |
 | `pipeline-locked` | Another run uses the state directory | Wait, then retry |
+| `pipeline-not-delivered` | `piceli release plan/diff/apply --spec MODULE:ATTR` needs images of the current sources | Run `piceli deploy` |
+| `exec-auth-not-allowed` | The kubeconfig user runs an exec plugin and the `Target` does not allow it | Review the plugin, then `Target.kubeconfig(…, allow_exec=True)` |
 
 Every code is explained by `piceli explain <code>` and in
 {doc}`reference/errors`.

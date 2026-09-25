@@ -7,6 +7,8 @@ release never manages. See docs/deploy.md.
     piceli render examples/shop/app.py:app --namespace shop       # no cluster
     piceli deploy examples/shop/app.py:pipeline --plan             # plan every stage
     piceli deploy examples/shop/app.py:pipeline --approve <hash>   # run them
+    piceli status examples/shop/app.py:pipeline                    # is it up?
+    piceli access examples/shop/app.py:pipeline --dashboard 9876   # reach it
 
 The target defaults to a kind cluster named ``shop`` whose kubeconfig is
 ``examples/shop/shop.kubeconfig``; the ``SHOP_*`` environment variables
@@ -81,8 +83,9 @@ web = app.deployment(
     ready=app.probe.http("/", 3000),
 )
 app.service(cache, port=6379)
-app.service(api, port=8080)
-app.service(web, port=3000)
+# How each service is reached from a laptop (renders to no Kubernetes object).
+app.service(api, port=8080, access=app.access.forward(local=13080, health="/healthz"))
+app.service(web, port=3000, access=app.access.forward(local=13000, health="/"))
 app.depends(api, on=cache)
 
 pipeline = Pipeline(

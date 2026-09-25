@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import shutil
 import threading
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -65,6 +66,14 @@ def _short(digest: str | None) -> str:
     return digest.split(":", 1)[-1][:12] if digest else "-"
 
 
+def _seconds(timestamp: str) -> str:
+    """An ISO timestamp without microseconds (human output; JSON keeps it)."""
+    try:
+        return datetime.fromisoformat(timestamp).replace(microsecond=0).isoformat()
+    except ValueError:
+        return timestamp
+
+
 def _human_status(document: dict[str, Any], target: str) -> str:
     lines = [
         f"{document['app']} is {document['state'].upper()}  "
@@ -73,12 +82,14 @@ def _human_status(document: dict[str, Any], target: str) -> str:
     release = document.get("release")
     if release:
         latest = release.get("latest") or {}
-        when = f", {latest['intent']} at {latest['at']}" if latest.get("at") else ""
+        at = _seconds(str(latest.get("at") or ""))
+        when = f", {latest['intent']} at {at}" if at else ""
         lines.append(
             f"release    {release.get('current') or release['name']}  "
             f"{release['state']}{when}"
         )
     lines.append("workloads")
+    rows = []
     for item in document["workloads"]:
         replicas = item.get("replicas") or {}
         count = (
@@ -90,8 +101,13 @@ def _human_status(document: dict[str, Any], target: str) -> str:
             f"{image['container']}={_short(image['digest'])}"
             for image in item["images"]
         )
+        rows.append((item, f"{item['kind']}/{item['name']}", count, images))
+    name_width = max((len(row[1]) for row in rows), default=0)
+    count_width = max((len(row[2]) for row in rows), default=0)
+    for item, name, count, images in rows:
         lines.append(
-            f"  {item['health']:<12} {item['kind']}/{item['name']}  {count}  {images}"
+            f"  {item['health']:<12} {name:<{name_width}}  "
+            f"{count:>{count_width}}  {images}".rstrip()
         )
         lines.extend(f"      {problem}" for problem in item["problems"][:5])
     access = document["access"]
@@ -103,12 +119,19 @@ def _human_status(document: dict[str, Any], target: str) -> str:
             f"-> {forward['target']}:{forward['remote_port']}"
         )
         owner = forward.get("owner")
-        if forward["forward"] != "up":
+        if forward["forward"] == "occupied":
+            # Never print another process's command line; the pid is enough.
+            holder = f"pid {owner['pid']}" if owner else "another process"
+            lines.append(
+                f"      port {forward['local_port']} is held by {holder}, not by "
+                "piceli (status-port-occupied)"
+            )
+        elif forward["forward"] != "up":
             down = True
             if owner:
                 lines.append(
-                    f"      port {forward['local_port']} held by pid {owner['pid']}"
-                    f" ({owner.get('command') or '?'})"
+                    f"      port {forward['local_port']} held by piceli's forward "
+                    f"(pid {owner['pid']})"
                 )
     if down:
         lines.append(f"Start the forwards with: piceli access {target}")
@@ -139,7 +162,10 @@ def status(
     reader: Any = None
     reader_error: str | None = None
     if resolved.workloads:
-        from piceli.k8s.ops.provider_factory import ProviderFactoryError
+        from piceli.k8s.ops.provider_factory import (
+            ExecAuthError,
+            ProviderFactoryError,
+        )
 
         try:
             reader = _workload_reader(
@@ -147,7 +173,10 @@ def status(
                 context=resolved.context,
                 transport=resolved.transport,
                 timeout=timeout,
+                exec_policy=resolved.exec_policy,
             )
+        except ExecAuthError as error:
+            reader_error = error.code  # exec plugin refused, never its output
         except ProviderFactoryError:
             reader_error = "access-kubeconfig-invalid"
         except Exception:  # detail may contain credentials
@@ -170,15 +199,28 @@ def status(
 
 
 def _check_kubeconfig(resolved: AccessTarget) -> None:
-    """The kubeconfig file exists and names the context; never the ambient one."""
+    """The kubeconfig file exists and names the context; never the ambient one.
+
+    A context whose user runs an exec credential plugin is refused unless the
+    target allows it (``allow_exec``); an allowed plugin is resolved and
+    pinned here (``kubectl`` then runs it itself, as for ``piceli observe``).
+    """
     from piceli.k8s.ops.provider_factory import (
+        ExecAuthError,
         ProviderFactoryError,
         _named,
         _read_kubeconfig,
+        verify_exec_user,
     )
 
     try:
         _named(_read_kubeconfig(resolved.kubeconfig), "contexts", resolved.context)
+        verify_exec_user(
+            resolved.kubeconfig, resolved.context, exec_policy=resolved.exec_policy
+        )
+    except ExecAuthError as error:
+        say(f"piceli: {error}")
+        reject(error.code)
     except (ProviderFactoryError, OSError) as error:
         say(f"piceli: {error}")
         reject("access-kubeconfig-invalid")
@@ -218,7 +260,9 @@ def _serve_dashboard(
         if not readers:
             readers.append(
                 KubernetesDynamicInventoryReader(
-                    kubeconfig=resolved.kubeconfig, context=resolved.context
+                    kubeconfig=resolved.kubeconfig,
+                    context=resolved.context,
+                    exec_policy=resolved.exec_policy,
                 )
             )
         return build_operator_report(

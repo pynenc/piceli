@@ -96,6 +96,7 @@ DYNAMIC = {
     "status-cluster-unreadable",
     "status-release-unreadable",
     "status-checks-unreadable",
+    "status-port-occupied",
 }
 # Registered for the CLI contract itself (piceli/cli_contract.py users).
 CONTRACT = {"unknown-error-code"}

@@ -64,6 +64,7 @@ from piceli.pipeline.model import (
     Pipeline,
     Registry,
 )
+from piceli.pipeline.operate import delivery_path, delivery_receipt
 
 if TYPE_CHECKING:
     from piceli.artifacts.build_spec import BuildPlan, BuildSpec
@@ -333,10 +334,22 @@ class PipelineRunner:
 
     def _delivery_path(self, image: str, config: str) -> Path:
         """One receipt per image and config digest, so earlier images stay known."""
-        hexdigits = config.removeprefix("sha256:")
-        return self.pipeline.state_dir / "deliveries" / f"{image}-{hexdigits}.json"
+        return delivery_path(self.pipeline.state_dir, image, config)
 
     _work: _Work | None = None
+
+    def _shown(self, path: Path) -> str:
+        """``path`` for human output: relative to the working directory when
+        under it, else to the state directory; never an absolute local path."""
+        for base, prefix in (
+            (Path.cwd(), ""),
+            (self.pipeline.state_dir, "<state_dir>/"),
+        ):
+            try:
+                return prefix + str(path.resolve().relative_to(base.resolve()))
+            except ValueError:
+                continue
+        return path.name
 
     # ----------------------------------------------------------- planning
     def plan(self, until: str = "checks", *, reapply: bool = False) -> CombinedPlan:
@@ -534,16 +547,7 @@ class PipelineRunner:
         return stage, hashed
 
     def _receipt(self, name: str, config: str) -> tuple[Path, dict[str, Any]] | None:
-        path = self._delivery_path(name, config)
-        try:
-            receipt = json.loads(path.read_text())
-        except (OSError, ValueError):
-            return None
-        if not isinstance(receipt, dict) or receipt.get("approved_digest") != config:
-            return None
-        if receipt.get("state") != "succeeded":
-            return None
-        return path, receipt
+        return delivery_receipt(self.pipeline.state_dir, name, config)
 
     def _present(self, name: str, config: str, work: _Work) -> bool:
         """The last delivery of this exact image is still in the registry/node."""
@@ -843,7 +847,8 @@ class PipelineRunner:
             if item.cached:
                 self.say(f"[build] {name}: cached (plan {item.plan.plan_hash[7:19]})")
             else:
-                self.say(f"[build] {name}: building (log: {item.directory}/build.log)")
+                log = self._shown(item.directory / "build.log")
+                self.say(f"[build] {name}: building (log: {log})")
                 grant = BuildGrant(
                     item.spec.builder.digest,
                     time.time() + item.spec.timeout_seconds + 3600,
@@ -930,7 +935,8 @@ class PipelineRunner:
                 receipt=str(self._delivery_path(name, config)),
             )
             self.say(
-                f"[deliver] {name}: {images[name]['action']} {delivered.reference}"
+                f"[deliver] {name}: {images[name]['action']} "
+                f"{_short_reference(delivered.reference)}"
             )
         output["images"] = images
         return ("done" if acted else "skipped"), output
@@ -949,6 +955,7 @@ class PipelineRunner:
             info["action"] = "unchanged"
             return info, False
         self.say(f"[deliver] registry {result.release}: applying")
+        runner.progress = lambda text: self.say(f"[deliver] registry: {text}")
         outcome = runner.apply(result.plan_hash)
         info["action"] = "applied"
         info["execution"] = outcome["execution"]
@@ -1040,6 +1047,7 @@ class PipelineRunner:
         runner = work.runner
         release = planned.get("release") or work.release_plan.release
         plan_hash = planned.get("plan_hash") or work.release_plan.plan_hash
+        runner.progress = lambda text: self.say(f"[apply] {release}: {text}")
         if self._unchanged(work, reapply):
             self.say(f"[apply] {release}: unchanged, already deployed and ready")
             return "skipped", {"release": release, "why": "unchanged"}
@@ -1059,10 +1067,8 @@ class PipelineRunner:
                 entry is not None
                 and entry["mode"] == "create"
                 and entry["state"]
-                not in {
-                    "cancelled",
-                    "refused",
-                }
+                # "refused" is the history state of releases before 0.4.1.
+                not in {"cancelled", "rejected", "refused"}
             ):
                 self.say(f"[apply] {release}: resuming the interrupted execution")
                 outcome = runner.resume(release)
@@ -1116,6 +1122,7 @@ class PipelineRunner:
             images={name: ref.reference for name, ref in work.delivered.items()},
             app=pipeline.app,
             state_dir=pipeline.state_dir,
+            base=pipeline.base,
         )
         report = runner(pipeline.checks, context)
         passed = bool(report.passed)
@@ -1143,13 +1150,23 @@ class PipelineRunner:
         from piceli.k8s.release_runner import ReleaseError
 
         runner = work.runner
-        assert runner is not None
+        if runner is None:
+            # Resuming at the checks stage: the release was planned and applied
+            # by an earlier invocation, so bind the runner without re-planning.
+            runner = work.runner = self.backend.release_runner(
+                release_spec(self.pipeline, self._release_images(work))
+            )
         try:
             target = runner.resolve_rollback_target("previous")
         except ReleaseError as error:
             self.say(f"[checks] rollback: not possible ({error})")
-            return {"state": "unavailable", "reason": str(error)}
+            return {
+                "state": "unavailable",
+                "reason": "checks-rollback-unavailable",
+                "message": str(error),
+            }
         self.say(f"[checks] rolling back to {target}")
+        runner.progress = lambda text: self.say(f"[checks] rollback {target}: {text}")
         try:
             result = runner.plan(rollback_to="previous")
             outcome = runner.apply(
@@ -1157,9 +1174,21 @@ class PipelineRunner:
             )
         except Exception as error:
             failure = classify(error)
-            return {"state": "refused", "release": target, "reason": failure.code}
+            self.say(f"[checks] rollback to {target} rejected: {failure}")
+            return {
+                "state": "rejected",
+                "release": target,
+                "reason": failure.code,
+                "message": str(failure),
+            }
         return {
             "state": outcome["execution"]["state"],
             "release": target,
             "execution": outcome["execution"],
         }
+
+
+def _short_reference(reference: str) -> str:
+    """``repo@sha256:<12 hex>…`` for human lines; receipts keep the full digest."""
+    name, sep, digest = reference.partition("@sha256:")
+    return f"{name}@sha256:{digest[:12]}…" if sep and len(digest) > 12 else reference

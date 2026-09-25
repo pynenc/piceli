@@ -260,8 +260,17 @@ class PlanExecutor:
         after_response: Callable[[int], None] | None = None,
         telemetry: NoopTelemetry | None = None,
         backups: Path | None = None,
+        progress: Callable[[str], None] | None = None,
+        progress_seconds: float = 5.0,
     ) -> None:
         self.provider = provider
+        # Human progress (``applied 3/7``, ``waiting for Deployment/web``):
+        # a short fixed phrase with kinds and names only, at most every
+        # ``progress_seconds`` unless the object waited on changes.
+        self.progress = progress
+        self.progress_seconds = progress_seconds
+        self._progress_at = 0.0
+        self._progress_key: str | None = None
         # Private directory for replace backups; a plan with a REPLACE action
         # is refused before any write when it is not configured.
         self.backups = backups
@@ -274,6 +283,22 @@ class PlanExecutor:
         # Owner ids accepted for retained objects; widened per run only by the
         # authorization's inherited-owner grant.
         self._owners: frozenset[str] = frozenset({provider.owner_id})
+
+    def _note(self, message: str, key: str | None = None) -> None:
+        """Report progress at most every few seconds, or at once for a new ``key``."""
+        if self.progress is None:
+            return
+        now = time.monotonic()
+        fresh = key is not None and key != self._progress_key
+        if not fresh and now - self._progress_at < self.progress_seconds:
+            return
+        self._progress_at = now
+        if key is not None:
+            self._progress_key = key
+        try:
+            self.progress(message)
+        except Exception:  # progress is advisory; never break an execution
+            pass
 
     def preview(self, plan: DeploymentPlan) -> dict[str, Any]:
         return plan.summary()
@@ -1112,8 +1137,16 @@ class PlanExecutor:
         deadline: float,
     ) -> None:
         end = min(deadline, time.monotonic() + self.limits.readiness_seconds)
-        for _ in range(self.limits.max_polls):
+        started = time.monotonic()
+        ref = action.resource.ref
+        for poll in range(self.limits.max_polls):
             self._guard(execution, authorization, end)
+            if poll:  # not ready at the first look: say what we wait for
+                waited = int(time.monotonic() - started)
+                self._note(
+                    f"waiting for {ref.kind}/{ref.name} to be ready ({waited}s)",
+                    key=f"{ref.kind}/{ref.name}",
+                )
             current = self.provider.get(_identity(action.resource.ref), deadline=end)
             self._verify_receipt(row, action, current)
             if action.operation is PlanOperation.DELETE or (
@@ -1211,10 +1244,16 @@ class PlanExecutor:
             try:
                 deferred = self._first_consumer_refs(plan)
                 deferred_rows: list[tuple[dict[str, Any], PlanAction]] = []
-                for row, action in zip(
-                    self.journal.actions(execution), plan.actions, strict=False
+                total = len(plan.actions)
+                for index, (row, action) in enumerate(
+                    zip(self.journal.actions(execution), plan.actions, strict=False),
+                    start=1,
                 ):
                     self._guard(execution, authorization, deadline)
+                    self._note(
+                        f"applying {index}/{total}: "
+                        f"{action.resource.ref.kind}/{action.resource.ref.name}"
+                    )
                     if row["state"] in {"compensated", "compensating"}:
                         raise ProviderError("compensation-already-started")
                     if row["state"] in {"pending", "failed"}:

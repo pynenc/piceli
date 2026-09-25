@@ -25,6 +25,12 @@ piceli release status   --spec release.toml
 piceli release secret show NAME --spec release.toml [--key KEY] [--release NAME] [--reveal] [--json]
 ```
 
+`--spec` takes a `release.toml` path, or `MODULE:ATTR`
+(`path/to/file.py:ATTR` or `package.module:ATTR`) naming a
+`piceli.pipeline.Pipeline`, the same target syntax as `piceli deploy`,
+`piceli status` and `piceli access`. A value ending in `.toml`, or without a
+`:`, is a spec path. See [Releases deployed by a pipeline](#releases-deployed-by-a-pipeline).
+
 `OWNERSHIP…` are the planning flags that authorize taking over existing
 objects: `--adopt Kind/name`, `--adopt-all-desired` and `--replace Kind/name`
 (see [If `plan` refuses](#if-plan-refuses)).
@@ -756,9 +762,43 @@ after failed checks is described in {doc}`checks`.
   outcome (`checks`), the deployed and previous release, pending plans and
   recent history.
 
+An execution the executor refused before changing anything is recorded in
+the history with `"state": "rejected"` and `"reason": "execution-refused"`
+(before 0.4.1: `"state": "refused"`).
+
 Their refusals: `no-execution-recorded`, `not-resumable`, `resume-refused`,
 `nothing-to-stop`, `execution-not-started`, `execution-other-owner` and
 `execution-other-target` (see {doc}`reference/errors`).
+
+## Releases deployed by a pipeline
+
+`piceli deploy MODULE:ATTR` keeps its release in the pipeline's
+`state_dir/release` and writes no `release.toml`. Pass the pipeline itself as
+`--spec` to operate it:
+
+```sh
+piceli release status   --spec deploy/app.py:pipeline
+piceli release rollback previous --spec deploy/app.py:pipeline [--approve <hash>]
+piceli release secret show cache_password --spec deploy/app.py:pipeline --reveal
+piceli release stop     --spec deploy/app.py:pipeline
+```
+
+The spec is built from the declaration exactly as `piceli deploy` builds it:
+the same state directory, release name, owner, field manager, target
+(kubeconfig, context, namespace, `allow_exec` and the other exec options),
+secret generators and composition, plus the pipeline's `checks=` and
+`rollback_on_failed_checks`. Release commands never build or deliver images:
+
+| Commands | Images |
+| --- | --- |
+| `rollback`, `resume`, `stop`, `check`, `status`, `secret show` | The catalogued releases' own records. A rollback re-applies the archived composition with its recorded image digests (`oci-set` source). |
+| `plan`, `preview`, `diff`, `apply` | The images `piceli deploy` last built from the **current** build inputs and delivered; otherwise refused with `pipeline-not-delivered` (run `piceli deploy`). |
+
+`apply`, `rollback`, `resume` and `stop` on a pipeline hold its run lock and
+are refused with `pipeline-locked` while `piceli deploy` runs on the same
+state directory. A module that fails to import is `pipeline-load-failed`; a
+missing module or an attribute that is not a `Pipeline` is
+`pipeline-not-found`.
 
 ## Output and exit codes
 

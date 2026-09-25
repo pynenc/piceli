@@ -1,13 +1,13 @@
 [project]
 name = "piceli"
-version = "0.4.0"
+version = "0.4.1"
 description = "Kubernetes infrastructure as typed Python: model, plan, apply and observe"
 authors = [{ name = "Jose Diaz" }]
 license = "MIT"
 license-files = ["LICENSE"]
 readme = "README.md"
 requires-python = ">=3.12"
-keywords = ["kubernetes", "infrastructure-as-code", "deployment", "gitops", "devops"]
+keywords = ["kubernetes", "infrastructure-as-code", "deployment", "gitops", "devops", "k8s", "helm", "kustomize", "typed"]
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
     "Intended Audience :: Developers",
@@ -16,6 +16,8 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
     "Environment :: Console",
+    "Operating System :: OS Independent",
+    "Topic :: System :: Clustering",
     "Topic :: System :: Systems Administration",
     "Topic :: Software Development :: Build Tools",
     "Typing :: Typed",

@@ -584,10 +584,12 @@ Persist one harmless port-forward preference for a local user.
 | `--local-port` | integer | required |  |
 | `--remote-port` | integer | required |  |
 | `--preferences` | path |  |  |
+| `--kubeconfig` | path |  | With --context: the cluster this forward is for (needed for --restore-forwards) |
+| `--context` | text |  | With --kubeconfig: the context this forward is for |
 
 **Contract**
 
-- **Reads:** session archive
+- **Reads:** preferences file, kubeconfig (with --context, for the scope)
 - **Writes:** preferences file
 - **Cluster:** none
 - **Approval required:** no
@@ -711,7 +713,8 @@ Open the local operations dashboard and optionally restore saved forwards.
 | `--context` | text | required | Kubeconfig context to use (required; current-context is never used) |
 | `--namespace` | text |  | Namespace for shortcuts and pods (default: the archive's) |
 | `--preferences` | path |  |  |
-| `--user` | text |  | Restore this user's saved forwards |
+| `--user` | text |  | Local user whose saved forwards the dashboard manages |
+| `--restore-forwards` | boolean | `False` | Start the user's saved forwards that were saved for this cluster, context and namespace (off by default; forwards saved elsewhere or without a scope are never started) |
 | `--port` | integer | `9876` |  |
 | `--ui-config` | path | env `PICELI__UI_CONFIG` | TOML file with dashboard shortcuts, topology tiers, and badges (also $PICELI__UI_CONFIG) |
 | `--start-shortcuts`, `--no-start-shortcuts` | boolean | `False` | Start and health-supervise every configured shortcut (port-conflict preflight first) |
@@ -727,7 +730,7 @@ Open the local operations dashboard and optionally restore saved forwards.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`).
+- **Notes:** `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`). Saved forwards start only with --restore-forwards, and only those saved for this cluster, context and namespace.
 
 (cli-observe-status)=
 ### `piceli observe status`
@@ -856,6 +859,8 @@ Launch the Piceli Operator dashboard and unified REST API.
 | `--port` | integer | `9876` |  |
 | `--ui-config` | path | env `PICELI__UI_CONFIG` | TOML file with dashboard shortcuts, topology tiers, and badges (also $PICELI__UI_CONFIG) |
 | `--access` | text |  | release.toml or module:attr whose model access declarations become the dashboard shortcuts (--ui-config entries win by id) |
+| `--start-access`, `--no-start-access` | boolean | `True` | With --access: start the model's declared forwards at launch, like `piceli access TARGET --dashboard` |
+| `--restore-forwards` | boolean | `False` | Start the user's saved forwards that were saved for this cluster, context and namespace (off by default; forwards saved elsewhere or without a scope are never started) |
 | `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
 | `--exec-sha256` | text |  | Expected sha256:<hex> of the resolved exec plugin file |
 
@@ -868,7 +873,7 @@ Launch the Piceli Operator dashboard and unified REST API.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`).
+- **Notes:** `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`). --access starts the model's declared forwards; saved forwards start only with --restore-forwards, and only those saved for this cluster, context and namespace.
 
 (cli-operator-status)=
 ### `piceli operator status`
@@ -904,7 +909,7 @@ Execute an approved plan (``--approve HASH``), or plan and confirm.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--spec` | path | required | release.toml describing the release |
+| `--spec` | text | required | path/to/release.toml, or MODULE:ATTR (path/to/file.py:ATTR) naming a piceli Pipeline: the release `piceli deploy` manages |
 | `--approve` | text |  | Plan hash to execute (from a previous `plan`/`rollback` output) |
 | `--auto-approve` | boolean | `False` | Plan and execute without confirmation (CI) |
 | `--rotate` | text (repeatable) |  | Regenerate this secret generator's values in the new release (repeatable) |
@@ -915,7 +920,7 @@ Execute an approved plan (``--approve HASH``), or plan and confirm.
 
 **Contract**
 
-- **Reads:** release.toml, composition, state_dir, kubeconfig
+- **Reads:** release.toml or pipeline module (--spec MODULE:ATTR), composition, state_dir, kubeconfig
 - **Writes:** state_dir (catalog, journal, secret store, check reports)
 - **Cluster:** writes
 - **Approval required:** yes
@@ -931,12 +936,12 @@ Run the spec's [[checks]] now against a release; changes nothing.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--spec` | path | required | release.toml describing the release |
+| `--spec` | text | required | path/to/release.toml, or MODULE:ATTR (path/to/file.py:ATTR) naming a piceli Pipeline: the release `piceli deploy` manages |
 | `--release` | text |  | Release to check (default: the selected one) |
 
 **Contract**
 
-- **Reads:** release.toml, composition, state_dir, kubeconfig
+- **Reads:** release.toml or pipeline module (--spec MODULE:ATTR), composition, state_dir, kubeconfig
 - **Writes:** nothing (read-only)
 - **Cluster:** reads
 - **Approval required:** no
@@ -952,7 +957,7 @@ Show what `plan` would change, field by field (read-only, nothing stored).
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--spec` | path | required | release.toml describing the release |
+| `--spec` | text | required | path/to/release.toml, or MODULE:ATTR (path/to/file.py:ATTR) naming a piceli Pipeline: the release `piceli deploy` manages |
 | `--adopt` | text (repeatable) |  | Authorize adopting this existing object, as Kind/name or apiVersion/Kind/name (repeatable; adds to [release] adopt) |
 | `--replace` | text (repeatable) |  | Authorize deleting this existing unmanaged object and creating it from the release, after writing a restorable backup (repeatable; adds to [release] replace; never retained or managed objects) |
 | `--adopt-all-desired` | boolean | `False` | Authorize adopting every existing unmanaged object the composition declares (each is listed in the plan and bound to its hash) |
@@ -960,7 +965,7 @@ Show what `plan` would change, field by field (read-only, nothing stored).
 
 **Contract**
 
-- **Reads:** release.toml, composition, state_dir, kubeconfig
+- **Reads:** release.toml or pipeline module (--spec MODULE:ATTR), composition, state_dir, kubeconfig
 - **Writes:** nothing (read-only)
 - **Cluster:** reads
 - **Approval required:** no
@@ -976,7 +981,7 @@ Capture live discovery and persist an approvable plan (prints its hash).
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--spec` | path | required | release.toml describing the release |
+| `--spec` | text | required | path/to/release.toml, or MODULE:ATTR (path/to/file.py:ATTR) naming a piceli Pipeline: the release `piceli deploy` manages |
 | `--rotate` | text (repeatable) |  | Regenerate this secret generator's values in the new release (repeatable) |
 | `--adopt` | text (repeatable) |  | Authorize adopting this existing object, as Kind/name or apiVersion/Kind/name (repeatable; adds to [release] adopt) |
 | `--replace` | text (repeatable) |  | Authorize deleting this existing unmanaged object and creating it from the release, after writing a restorable backup (repeatable; adds to [release] replace; never retained or managed objects) |
@@ -985,7 +990,7 @@ Capture live discovery and persist an approvable plan (prints its hash).
 
 **Contract**
 
-- **Reads:** release.toml, composition, state_dir, kubeconfig
+- **Reads:** release.toml or pipeline module (--spec MODULE:ATTR), composition, state_dir, kubeconfig
 - **Writes:** state_dir (pending plan, secret candidates), --out file
 - **Cluster:** reads
 - **Approval required:** no
@@ -1001,7 +1006,7 @@ Alias of `plan`.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--spec` | path | required | release.toml describing the release |
+| `--spec` | text | required | path/to/release.toml, or MODULE:ATTR (path/to/file.py:ATTR) naming a piceli Pipeline: the release `piceli deploy` manages |
 | `--rotate` | text (repeatable) |  | Regenerate this secret generator's values in the new release (repeatable) |
 | `--adopt` | text (repeatable) |  | Authorize adopting this existing object, as Kind/name or apiVersion/Kind/name (repeatable; adds to [release] adopt) |
 | `--replace` | text (repeatable) |  | Authorize deleting this existing unmanaged object and creating it from the release, after writing a restorable backup (repeatable; adds to [release] replace; never retained or managed objects) |
@@ -1010,7 +1015,7 @@ Alias of `plan`.
 
 **Contract**
 
-- **Reads:** release.toml, composition, state_dir, kubeconfig
+- **Reads:** release.toml or pipeline module (--spec MODULE:ATTR), composition, state_dir, kubeconfig
 - **Writes:** state_dir (pending plan, secret candidates), --out file
 - **Cluster:** reads
 - **Approval required:** no
@@ -1025,13 +1030,13 @@ Resume an interrupted apply of a created release (same grant and ids).
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--spec` | path | required | release.toml describing the release |
+| `--spec` | text | required | path/to/release.toml, or MODULE:ATTR (path/to/file.py:ATTR) naming a piceli Pipeline: the release `piceli deploy` manages |
 | `--release` | text |  | Release name (default: the latest execution) |
 | `--skip-checks` | boolean | `False` | Do not run the spec's [[checks]] after readiness (emergencies only; recorded in the release history) |
 
 **Contract**
 
-- **Reads:** release.toml, composition, state_dir, kubeconfig
+- **Reads:** release.toml or pipeline module (--spec MODULE:ATTR), composition, state_dir, kubeconfig
 - **Writes:** state_dir (journal, check reports)
 - **Cluster:** writes
 - **Approval required:** no
@@ -1048,7 +1053,7 @@ Re-plan and re-apply an earlier release against current cluster state.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `TARGET` | text | required |  |
-| `--spec` | path | required | release.toml describing the release |
+| `--spec` | text | required | path/to/release.toml, or MODULE:ATTR (path/to/file.py:ATTR) naming a piceli Pipeline: the release `piceli deploy` manages |
 | `--approve` | text |  | Plan hash to execute (from a previous `plan`/`rollback` output) |
 | `--auto-approve` | boolean | `False` | Plan and execute without confirmation (CI) |
 | `--adopt` | text (repeatable) |  | Authorize adopting this existing object, as Kind/name or apiVersion/Kind/name (repeatable; adds to [release] adopt) |
@@ -1058,7 +1063,7 @@ Re-plan and re-apply an earlier release against current cluster state.
 
 **Contract**
 
-- **Reads:** release.toml, composition, state_dir, kubeconfig
+- **Reads:** release.toml or pipeline module (--spec MODULE:ATTR), composition, state_dir, kubeconfig
 - **Writes:** state_dir (catalog, journal, check reports)
 - **Cluster:** writes
 - **Approval required:** yes
@@ -1075,7 +1080,7 @@ Show a secret's metadata, and its value with --reveal (never logged).
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `NAME` | text | required |  |
-| `--spec` | path | required | release.toml describing the release |
+| `--spec` | text | required | path/to/release.toml, or MODULE:ATTR (path/to/file.py:ATTR) naming a piceli Pipeline: the release `piceli deploy` manages |
 | `--key` | text |  | One output, e.g. crt, key, ca.crt, cache.crt |
 | `--release` | text |  | Release name (default: the latest execution) |
 | `--reveal` | boolean | `False` | Print the value (otherwise asks on a terminal) |
@@ -1083,7 +1088,7 @@ Show a secret's metadata, and its value with --reveal (never logged).
 
 **Contract**
 
-- **Reads:** release.toml, state_dir (secret store)
+- **Reads:** release.toml or pipeline module (--spec MODULE:ATTR), state_dir (secret store)
 - **Writes:** nothing (read-only)
 - **Cluster:** none
 - **Approval required:** no
@@ -1099,11 +1104,11 @@ Show catalogued releases, their executions and history (no cluster access).
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--spec` | path | required | release.toml describing the release |
+| `--spec` | text | required | path/to/release.toml, or MODULE:ATTR (path/to/file.py:ATTR) naming a piceli Pipeline: the release `piceli deploy` manages |
 
 **Contract**
 
-- **Reads:** release.toml, state_dir
+- **Reads:** release.toml or pipeline module (--spec MODULE:ATTR), state_dir
 - **Writes:** nothing (read-only)
 - **Cluster:** none
 - **Approval required:** no
@@ -1118,12 +1123,12 @@ Cancel the latest execution of a release (exact owner only).
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--spec` | path | required | release.toml describing the release |
+| `--spec` | text | required | path/to/release.toml, or MODULE:ATTR (path/to/file.py:ATTR) naming a piceli Pipeline: the release `piceli deploy` manages |
 | `--release` | text |  | Release name (default: the latest execution) |
 
 **Contract**
 
-- **Reads:** release.toml, composition, state_dir, kubeconfig
+- **Reads:** release.toml or pipeline module (--spec MODULE:ATTR), composition, state_dir, kubeconfig
 - **Writes:** state_dir (journal)
 - **Cluster:** reads
 - **Approval required:** no
