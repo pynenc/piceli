@@ -304,8 +304,8 @@ def deploy(
     --ref the sources are read from commits, and the hash covers the commits.
     """
     from piceli.pipeline import PipelineError, PipelineRunner
-    from piceli.pipeline.runner import preview_hash
     from piceli.pipeline.refs import parse_refs
+    from piceli.pipeline.runner import preview_hash
 
     if until not in STAGE_NAMES:
         say(f"--until must be one of {', '.join(STAGE_NAMES)}")
