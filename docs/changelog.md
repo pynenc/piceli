@@ -6,6 +6,9 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ## Version 0.7.0
 
+- An environment's `replicas=` on a workload an autoscaler targets is refused
+  (`environment-invalid`) instead of being ignored.
+
 - **External secret sources (preview):** three new `[secrets.*]` types, and
   `Sops`, `Vault` and `AwsSecret` for `piceli.pipeline.Secrets`: `sops` (one
   value of a SOPS-encrypted file, or the whole file, decrypted by the `sops`

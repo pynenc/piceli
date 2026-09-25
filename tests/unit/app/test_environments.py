@@ -320,3 +320,18 @@ def test_environment_diff_is_typed_and_ignores_the_namespace():
     assert "    spec.replicas: 1 -> 3" in text
     assert "- Deployment/tools (component tools): only in dev" in text
     assert text.endswith("1 changed, 2 only in dev, 0 only in prod, 3 identical\n")
+
+
+def test_replicas_of_an_autoscaled_workload_are_refused() -> None:
+    from piceli import App, Resources
+    from piceli.app.environment import EnvironmentInvalid
+
+    app = App("shop")
+    api = app.deployment(
+        "api",
+        image="nginx@sha256:" + "a" * 64,
+        resources=Resources(cpu="100m", memory="64Mi"),
+    )
+    app.autoscaler(api, max_replicas=5, cpu=70)
+    with pytest.raises(EnvironmentInvalid, match="autoscaled"):
+        app.environment("prod", replicas={"api": 3})

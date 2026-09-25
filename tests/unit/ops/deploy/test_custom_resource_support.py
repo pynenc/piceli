@@ -126,9 +126,9 @@ def test_custom_resources_follow_the_ready_condition(status, generation, expecte
 
 
 def test_core_kinds_without_a_rule_stay_unsupported():
-    budget = {
-        "apiVersion": "policy/v1",
-        "kind": "PodDisruptionBudget",
+    quota = {
+        "apiVersion": "v1",
+        "kind": "ResourceQuota",
         "metadata": {"name": "api", "namespace": "shop"},
     }
-    assert provider([]).readiness(_discovered(budget)).status.value == "unsupported"
+    assert provider([]).readiness(_discovered(quota)).status.value == "unsupported"

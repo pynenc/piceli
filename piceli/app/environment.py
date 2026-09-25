@@ -261,9 +261,22 @@ def apply_environment(app: App, env: Environment) -> list[Declared]:
                     f"environment {env.name!r}: {table}[{key!r}]: {error}"
                 ) from None
 
-    change(
-        "replicas", _has("replicas"), "workload", lambda o, v: _updated(o, replicas=v)
-    )
+    # An autoscaler owns its target's replicas: refuse instead of dropping them.
+    scaled = {
+        (item.target_kind, item.target)
+        for item in objects
+        if type(item).__name__ == "Autoscaler"
+    }
+
+    def replicas(item: Any, value: int) -> Any:
+        if (_kind(item), item.name) in scaled:
+            raise ValueError(
+                f"{_kind(item)} {item.name!r} is autoscaled; set the autoscaler's "
+                "min_replicas/max_replicas instead"
+            )
+        return _updated(item, replicas=value)
+
+    change("replicas", _has("replicas"), "workload", replicas)
     change("images", workload, "workload", lambda o, v: _main(o, image=v))
     change("resources", workload, "workload", lambda o, v: _main(o, resources=v))
     change(
