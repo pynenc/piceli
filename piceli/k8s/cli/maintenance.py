@@ -16,7 +16,13 @@ from typing import Annotated, Any
 
 import typer
 
-from piceli.cli_contract import EXIT_FAILED, emit_json, reject, say
+from piceli.cli_contract import (
+    EXIT_FAILED,
+    describe_user_error,
+    emit_json,
+    reject,
+    say,
+)
 
 app = typer.Typer(
     rich_markup_mode=None,
@@ -62,22 +68,25 @@ JsonOption = Annotated[
 def _pipeline(target: str, env: str | None) -> Any:
     """Load ``MODULE:ATTR`` (every environment unless ``env`` selects one)."""
     from piceli.app.render import RenderError, load_target
+    from piceli.approval_policy import ApprovalPolicyError
     from piceli.pipeline import Pipeline, PipelineError
 
     try:
         value = load_target(target, Path.cwd())
-    except PipelineError as error:
-        say(f"the pipeline module refused its declaration: {error}")
-        reject(error.code)
+    except (PipelineError, ApprovalPolicyError) as error:
+        reject(error.code, f"the pipeline module refused its declaration: {error}")
     except RenderError as error:
-        say(str(error))
-        reject("pipeline-not-found")
-    except Exception as error:
-        say(f"importing {target} failed: {type(error).__name__}: {error}")
-        reject("pipeline-load-failed")
+        reject("pipeline-not-found", str(error))
+    except Exception as error:  # the pipeline module raised while importing
+        reject(
+            "pipeline-load-failed",
+            f"importing {target} failed: {describe_user_error(error)}",
+        )
     if not isinstance(value, Pipeline):
-        say(f"{target} is a {type(value).__name__}, not a piceli Pipeline")
-        reject("pipeline-not-found")
+        reject(
+            "pipeline-not-found",
+            f"{target} is a {type(value).__name__}, not a piceli Pipeline",
+        )
     if env is not None:
         try:
             return value.for_environment(env)

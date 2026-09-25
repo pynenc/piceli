@@ -51,6 +51,21 @@ COMMANDS = {
     "release status": (["release", "status", "--spec"], [], "pipeline-load-failed"),
     "status": (["status"], ["--json"], "access-target-invalid"),
     "access": (["access"], [], "access-target-invalid"),
+    "access stop --stale": (
+        ["access", "stop", "--stale"],
+        [],
+        "access-target-invalid",
+    ),
+    "render --out": (["render"], ["--out", "rendered"], "render-target-invalid"),
+    "publish": (
+        ["publish"],
+        ["--to", "oci://registry.example/shop/manifests:1"],
+        "render-target-invalid",
+    ),
+    "runs": (["runs"], ["--json"], "pipeline-load-failed"),
+    "cache status": (["cache", "status"], ["--json"], "pipeline-load-failed"),
+    "cache prune": (["cache", "prune"], ["--dry-run"], "pipeline-load-failed"),
+    "doctor": (["doctor"], ["--json"], "pipeline-load-failed"),
 }
 
 
