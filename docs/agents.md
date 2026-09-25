@@ -89,7 +89,9 @@ See also {ref}`the release contract changes <release-contract-changes>`.
 These never change a cluster, registry or node. Some write local files, as
 noted.
 
-- `piceli explain`, `piceli help-json`
+- `piceli explain`, `piceli help-json`; `piceli explain --run ID --spec …`
+  reads why a past execution failed from local state (same as
+  `release status --run`).
 - `piceli render`: imports the model module and reads the spec; never contacts
   a cluster or reads secret values. `piceli render MODULE:pipeline` renders a
   `Pipeline` with its target's namespace and declared nodes, and build images
@@ -111,7 +113,9 @@ noted.
   local state.
 - `piceli release status`: reads local state only. Like every `release`
   command it takes `--spec release.toml` or `--spec MODULE:ATTR` (a
-  pipeline; see {ref}`agents-pipeline-release`).
+  pipeline; see {ref}`agents-pipeline-release`). `--run ID` (an execution
+  id, or with a pipeline the `run_id` of its deploy result) shows one past execution
+  with the causes recorded when it failed (`diagnosis`).
 - `piceli --version`: prints `piceli <version>` (the JSON form is the
   `version` field of `piceli help-json`).
 - `piceli status TARGET --json`: reads the release state, the cluster through
@@ -170,6 +174,7 @@ Ask before running these, and show the owner what will happen first.
 | `piceli artifacts import-local` | The local Docker image store | `--approve-digest <digest>` |
 | `piceli operator approve`, `piceli operator promote`, `piceli operator restore` | Operator state, catalog or files | The owner's go-ahead |
 | `piceli access`, `piceli observe serve`, `piceli operator serve`, `piceli observe forward-run`, `piceli observe forwards apply`, `piceli observe logs-run` | Long-running local processes and ports | The owner's go-ahead |
+| `piceli access stop --stale` | Stops Piceli's own local processes for the app (a forward or dashboard the owner may still be using in another terminal); never another process | The owner's go-ahead |
 
 Never add `--auto-approve` unless the owner has said that this run is an
 unattended CI job for this exact spec.
@@ -310,7 +315,20 @@ never build. The approval rules above apply unchanged:
 4. An unknown code (`piceli explain` exits `2` with `unknown-error-code`)
    should not happen for a `conforms` command: report the whole JSON object
    verbatim.
-5. `immutable-field-changed` (a Job's pod template, or a StatefulSet's
+5. `apply-crashloop` (`pipeline-apply-crashloop` from `piceli deploy`): a
+   workload's new pods cannot start, so the apply stopped at once. Read
+   `diagnosis.workloads[].causes[]` (container, `reason`, `exit_code`,
+   `restarts`, `logs`, `events`; texts are already redacted) and report
+   them; stderr has one line per cause. Do not retry unchanged: the image,
+   command, configuration or Secret must change first, or the owner rolls
+   back (`piceli release rollback previous`, which needs approval). Later,
+   `piceli release status --spec … --run ID` shows the same causes.
+6. `access-port-conflict` with `conflicts[].holder` `piceli-forward` or
+   `piceli-server`: Piceli's own process for this app holds the port (often
+   a `piceli access` left running). Ask the owner before running the
+   suggested `piceli access stop --stale TARGET`. With `holder` `other`,
+   report the pid; never stop another process.
+7. `immutable-field-changed` (a Job's pod template, or a StatefulSet's
    service name, pod management, selector or claim templates would change):
    do not add `--replace` yourself. Show the owner the `blocking` entry;
    replacing deletes and recreates the object (a Job runs again). Plan with

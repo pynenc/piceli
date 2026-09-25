@@ -12,7 +12,9 @@ file and context). In a fresh namespace it checks that ``status`` reports the
 app down, releases an nginx Service that declares access, checks that
 ``status`` reports it up with its image digest, runs ``piceli access`` with the
 real kubectl, fetches the page through the forward, checks that a second
-``access`` is refused with the owner of the port, and stops everything.
+``access`` is refused with the owner of the port (recognised as Piceli's own
+forward), stops the first one with ``access stop --stale``, and checks that
+the port is free.
 """
 
 from __future__ import annotations
@@ -185,15 +187,27 @@ def test_status_and_access_on_kind(tmp_path: Path, namespace: str) -> None:
         assert rejection["reason"] == "access-port-conflict"
         owner = rejection["conflicts"][0]["owner"]
         if owner is not None:
+            # The first access's own kubectl: recognised as piceli's forward
+            # for this app, and stoppable with `access stop --stale`.
+            assert rejection["conflicts"][0]["holder"] == "piceli-forward"
             assert "port-forward" in (owner["command"] or "")
             assert owner["parent"]["pid"] == process.pid
+            assert "piceli access stop --stale" in second.stderr
+            stop = runner.invoke(app, ["access", "stop", "--stale", str(spec)])
+            assert stop.exit_code == 0, stop.stdout + stop.stderr
+            stopped = json.loads(stop.stdout)["stopped"]
+            assert [(item["port"], item["pid"]) for item in stopped] == [
+                (local, process.pid)
+            ]
+            process.communicate(timeout=20)  # the supervisor ended on SIGTERM
     finally:
-        process.send_signal(signal.SIGINT)
-        try:
-            process.communicate(timeout=20)
-        finally:
-            if process.poll() is None:
-                process.kill()
+        if process.poll() is None:
+            process.send_signal(signal.SIGINT)
+            try:
+                process.communicate(timeout=20)
+            finally:
+                if process.poll() is None:
+                    process.kill()
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline and local_port_in_use(local):
         time.sleep(0.1)

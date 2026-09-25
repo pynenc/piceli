@@ -21,7 +21,7 @@ piceli release rollback <release|previous> --spec release.toml [--approve <hash>
 piceli release resume   --spec release.toml [--release NAME] [--skip-checks]
 piceli release stop     --spec release.toml [--release NAME]
 piceli release check    --spec release.toml [--release NAME]
-piceli release status   --spec release.toml
+piceli release status   --spec release.toml [--run EXECUTION_ID]
 piceli release secret show NAME --spec release.toml [--key KEY] [--release NAME] [--reveal] [--json]
 ```
 
@@ -84,6 +84,8 @@ prune = false                       # delete managed objects a release drops
 max_seconds = 300
 readiness_seconds = 240
 # write_settle_seconds = 60         # resume re-sends a write that never landed after this long
+# fail_fast = true                  # stop at once when new pods cannot start (apply-crashloop)
+# crash_restarts = 3                # restarts of a new container that count as not starting
 
 [images]                            # pinned by digest
 web = "docker.io/library/nginx@sha256:…"
@@ -730,6 +732,15 @@ Execution failures of these paths (`failure_category` of `apply`):
 | `replace-delete-not-observed` | On resume, the original object is still there although the journal recorded its delete. Execution `blocked`. | Inspect the object, then plan again. |
 | `invalid-metadata-change` | A metadata-only write was asked to set a non-string value or Piceli's own annotations. | Fix the composition's labels/annotations. |
 | `retained-content-precondition-failed` | A retained object's content (for example a private Secret value) differs from the composition at apply time. Nothing was written. | Use a new object name (see "Secret generators"). |
+| `apply-crashloop` | A workload's new pods cannot start (crash loop, image pull or config error, `crash_restarts` restarts, a failed Job or Pod); the apply stopped without waiting for `readiness_seconds`. The result's `diagnosis` has per workload each container's reason, exit code, restarts, redacted log tail and events; stderr one line per cause. | Fix the cause and plan again, or `rollback previous`. `status --run EXECUTION_ID` shows the causes again ({ref}`deploy-diagnosis`). |
+| `readiness-timeout`, `deadline-exceeded` | An object did not become ready in time. For a workload whose pods show a reason, `diagnosis` lists it too. | See `diagnosis`; fix the workload and `resume`, or plan again. |
+
+`piceli release status --spec release.toml --run EXECUTION_ID` (an id from
+`history`, a unique prefix of at least 8 characters, or with a pipeline its
+`piceli deploy` run id) prints that execution's state and, when it failed,
+the recorded `diagnosis`: one line per cause, then the redacted log lines and
+events. It reads only the local state (`piceli explain --run ID --spec …` is
+the same). An unknown id is `unknown-execution`.
 
 ## Post-deploy checks
 

@@ -26,6 +26,9 @@ class ExecutionJournal:
     No manifests, secret values, private value digests or server errors belong in
     this journal. Payloads contain identity, random private refs and allowlisted
     operation states. Cancellation has a separate transaction and survives death.
+    The one exception is a failed execution's *diagnosis*
+    (:mod:`piceli.k8s.ops.diagnosis`): bounded pod causes whose log lines and
+    messages were redacted before they were recorded.
     """
 
     def __init__(self, path: Path, *, max_bytes: int = 64_000_000) -> None:
@@ -53,6 +56,9 @@ class ExecutionJournal:
                 archive_sha256 TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS deployment_sessions (
                 id TEXT PRIMARY KEY, archive TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS diagnoses (
+                execution TEXT PRIMARY KEY REFERENCES executions(id),
+                payload TEXT NOT NULL);
         """
         )
         if self.connection.execute("PRAGMA quick_check").fetchone()[0] != "ok":
@@ -357,6 +363,38 @@ class ExecutionJournal:
                 (execution, f"error:{category}"),
             )
 
+    def record_diagnosis(self, execution: str, diagnosis: dict[str, Any]) -> None:
+        """Keep the (already redacted, bounded) diagnosis of a failed execution."""
+        encoded = json.dumps(
+            diagnosis, sort_keys=True, separators=(",", ":"), allow_nan=False
+        )
+        if len(encoded) > 256_000:
+            raise ValueError("diagnosis too large")
+        self._capacity(encoded)
+        with self._transaction():
+            self.connection.execute(
+                "INSERT OR REPLACE INTO diagnoses(execution,payload) VALUES (?,?)",
+                (execution, encoded),
+            )
+
+    def clear_diagnosis(self, execution: str) -> None:
+        """Forget an earlier attempt's diagnosis (a resumed execution)."""
+        if self.diagnosis(execution) is None:
+            return
+        with self._transaction():
+            self.connection.execute(
+                "DELETE FROM diagnoses WHERE execution=?", (execution,)
+            )
+
+    def diagnosis(self, execution: str) -> dict[str, Any] | None:
+        row = self.connection.execute(
+            "SELECT payload FROM diagnoses WHERE execution=?", (execution,)
+        ).fetchone()
+        if row is None:
+            return None
+        value = strict_json(row[0])
+        return value if isinstance(value, dict) else None
+
     def set_state(self, execution: str, state: str) -> None:
         self._capacity()
         with self._transaction():
@@ -410,6 +448,9 @@ class ExecutionJournal:
         ).fetchone()
         if failure is not None and row["state"] in {"blocked", "failed"}:
             result["failure_category"] = failure["state"].removeprefix("error:")
+            diagnosis = self.diagnosis(execution)
+            if diagnosis is not None:
+                result["diagnosis"] = diagnosis
         return result
 
     def close(self) -> None:

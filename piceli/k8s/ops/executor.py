@@ -12,6 +12,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from piceli.k8s.ops.bounds import positive, seconds, text, timestamp
+from piceli.k8s.ops.diagnosis import (
+    WORKLOAD_KINDS,
+    diagnose_workload,
+    document,
+    secret_needles,
+)
 from piceli.k8s.ops.discovery import (
     RETAINED_KINDS,
     DiscoveredResource,
@@ -165,9 +171,22 @@ class ExecutionLimits:
     # already sent is not cancelled by the client's death). Only after it may
     # resume send again a write whose object provably did not change.
     write_settle_seconds: float = 60
+    # Fail at once (``apply-crashloop``) when a workload's new pods cannot
+    # start (crash loop, image pull, config error) or restarted
+    # ``crash_restarts`` times, checked at most every ``diagnose_seconds``.
+    fail_fast: bool = True
+    crash_restarts: int = 3
+    diagnose_seconds: float = 2.0
 
     def __post_init__(self) -> None:
         positive(self.max_actions, "actions", 4096)
+        positive(self.crash_restarts, "crash restarts", 1000)
+        if not isinstance(self.fail_fast, bool):
+            raise ValueError("fail_fast must be a boolean")
+        if not isinstance(self.diagnose_seconds, int | float) or not (
+            0 <= self.diagnose_seconds <= 600
+        ):
+            raise ValueError("diagnose seconds must be within 0..600")
         seconds(self.write_settle_seconds, "write settle")
         positive(self.max_polls, "polls", 10000)
         seconds(self.max_seconds, "execution")
@@ -179,6 +198,20 @@ class ExecutionLimits:
             or self.concurrency != 1
         ):
             raise ValueError("this executor supports one ordered action at a time")
+
+
+class _Diagnosed(ProviderError):
+    """A readiness failure with the causes found in the workloads' pods."""
+
+    def __init__(
+        self, category: str, workloads: list[dict[str, Any]], *, ambiguous: bool = False
+    ) -> None:
+        super().__init__(category, ambiguous=ambiguous)
+        self.workloads = workloads
+
+
+#: Time a final diagnosis may take after the readiness deadline passed.
+_FINAL_DIAGNOSIS_SECONDS = 10.0
 
 
 def _terminating(current: DiscoveredResource, action: PlanAction) -> bool:
@@ -303,6 +336,7 @@ class PlanExecutor:
         # Owner ids accepted for retained objects; widened per run only by the
         # authorization's inherited-owner grant.
         self._owners: frozenset[str] = frozenset({provider.owner_id})
+        self._secret_needles: tuple[str, ...] | None = None
 
     def _note(self, message: str, key: str | None = None) -> None:
         """Report progress at most every few seconds, or at once for a new ``key``."""
@@ -1208,37 +1242,129 @@ class PlanExecutor:
         end = min(deadline, time.monotonic() + self.limits.readiness_seconds)
         started = time.monotonic()
         ref = action.resource.ref
-        for poll in range(self.limits.max_polls):
-            self._guard(execution, authorization, end)
-            if poll:  # not ready at the first look: say what we wait for
-                waited = int(time.monotonic() - started)
-                self._note(
-                    f"waiting for {ref.kind}/{ref.name} to be ready ({waited}s)",
-                    key=f"{ref.kind}/{ref.name}",
+        current: DiscoveredResource | None = None
+        check_at = started
+        try:
+            for poll in range(self.limits.max_polls):
+                self._guard(execution, authorization, end)
+                if poll:  # not ready at the first look: say what we wait for
+                    waited = int(time.monotonic() - started)
+                    self._note(
+                        f"waiting for {ref.kind}/{ref.name} to be ready ({waited}s)",
+                        key=f"{ref.kind}/{ref.name}",
+                    )
+                current = self.provider.get(
+                    _identity(action.resource.ref), deadline=end
                 )
-            current = self.provider.get(_identity(action.resource.ref), deadline=end)
-            self._verify_receipt(row, action, current)
-            if (action.operation is PlanOperation.DELETE and current is None) or (
-                action.operation is not PlanOperation.DELETE
-                and current is not None
-                and self.provider.readiness(current).status is ReadinessStatus.READY
-            ):
-                payload = (
-                    row["payload"]
-                    if current is None
-                    else self._receipt(current, row["payload"])
+                self._verify_receipt(row, action, current)
+                if (action.operation is PlanOperation.DELETE and current is None) or (
+                    action.operation is not PlanOperation.DELETE
+                    and current is not None
+                    and self.provider.readiness(current).status is ReadinessStatus.READY
+                ):
+                    payload = (
+                        row["payload"]
+                        if current is None
+                        else self._receipt(current, row["payload"])
+                    )
+                    self.journal.record(execution, row["ordinal"], "ready", payload)
+                    return
+                if (
+                    current is not None
+                    and action.operation is not PlanOperation.DELETE
+                    and self.provider.readiness(current).status
+                    is ReadinessStatus.UNSUPPORTED
+                ):
+                    raise ProviderError("readiness-unsupported")
+                if (
+                    current is not None
+                    and action.operation is not PlanOperation.DELETE
+                    and self.limits.fail_fast
+                    and time.monotonic() >= check_at
+                ):
+                    check_at = time.monotonic() + self.limits.diagnose_seconds
+                    found = self._diagnose(current, end)
+                    if found is not None and found["fatal"]:
+                        raise _Diagnosed("apply-crashloop", [found])
+                time.sleep(
+                    min(self.limits.poll_seconds, max(0, end - time.monotonic()))
                 )
-                self.journal.record(execution, row["ordinal"], "ready", payload)
-                return
-            if (
-                current is not None
-                and action.operation is not PlanOperation.DELETE
-                and self.provider.readiness(current).status
-                is ReadinessStatus.UNSUPPORTED
+        except ProviderError as error:
+            # Out of time while waiting: say what the workload's pods show.
+            if error.category == "deadline-exceeded" and not isinstance(
+                error, _Diagnosed
             ):
-                raise ProviderError("readiness-unsupported")
-            time.sleep(min(self.limits.poll_seconds, max(0, end - time.monotonic())))
+                self._timed_out(current, action, error.category, error.ambiguous)
+            raise
+        self._timed_out(current, action, "readiness-timeout", False)
         raise ProviderError("readiness-timeout")
+
+    def _timed_out(
+        self,
+        current: DiscoveredResource | None,
+        action: PlanAction,
+        category: str,
+        ambiguous: bool,
+    ) -> None:
+        """Raise ``category`` with the workload's causes when its pods show any."""
+        if current is None or action.operation is PlanOperation.DELETE:
+            return
+        found = self._diagnose(
+            current, time.monotonic() + _FINAL_DIAGNOSIS_SECONDS, final=True
+        )
+        if found is not None:
+            raise _Diagnosed(category, [found], ambiguous=ambiguous)
+
+    def _known_secrets(self) -> tuple[str, ...]:
+        """The release's secret values, as redaction needles (cached per run)."""
+        if self._secret_needles is None:
+            try:
+                values = self.secrets.values(self.provider.target)
+            except Exception:  # no store values: pattern redaction still applies
+                values = []
+            self._secret_needles = secret_needles(values)
+        return self._secret_needles
+
+    def _diagnose(
+        self, current: DiscoveredResource, deadline: float, *, final: bool = False
+    ) -> dict[str, Any] | None:
+        """Causes in a not-ready workload's new pods (advisory: never raises)."""
+        if current.identity.kind not in WORKLOAD_KINDS:
+            return None
+        try:
+            return diagnose_workload(
+                self.provider,
+                current.manifest,
+                crash_restarts=self.limits.crash_restarts,
+                known=self._known_secrets,
+                deadline=deadline,
+                final=final,
+            )
+        except Exception:  # unreadable pods (RBAC, API errors): keep waiting
+            return None
+
+    def _diagnose_others(
+        self, rows: list[tuple[dict[str, Any], PlanAction]], deadline: float
+    ) -> list[dict[str, Any]]:
+        """Fatal causes of the other workloads still waiting (one look each)."""
+        found = []
+        for _row, action in rows:
+            if action.operation is PlanOperation.DELETE:
+                continue
+            try:
+                current = self.provider.get(
+                    _identity(action.resource.ref), deadline=deadline
+                )
+            except ProviderError:
+                continue
+            if current is None or (
+                self.provider.readiness(current).status is ReadinessStatus.READY
+            ):
+                continue
+            item = self._diagnose(current, deadline)
+            if item is not None and item["fatal"]:
+                found.append(item)
+        return found
 
     def cancel(self, execution: str) -> dict[str, Any]:
         """Persist cancellation for the running loop and future resumptions."""
@@ -1312,6 +1438,7 @@ class PlanExecutor:
             )
             if resume:
                 self.journal.resume(execution)
+            self.journal.clear_diagnosis(execution)
             try:
                 deferred = self._first_consumer_refs(plan)
                 deferred_rows: list[tuple[dict[str, Any], PlanAction]] = []
@@ -1577,10 +1704,27 @@ class PlanExecutor:
                         item[1].resource.ref.kind != "PersistentVolumeClaim"
                     )
                 )
-                for row, action in deferred_rows:
-                    self._ready(execution, row, action, authorization, deadline)
+                for position, (row, action) in enumerate(deferred_rows):
+                    try:
+                        self._ready(execution, row, action, authorization, deadline)
+                    except _Diagnosed as error:
+                        if error.category == "apply-crashloop":
+                            error.workloads.extend(
+                                self._diagnose_others(
+                                    deferred_rows[position + 1 :],
+                                    time.monotonic() + _FINAL_DIAGNOSIS_SECONDS,
+                                )
+                            )
+                        raise
                 self.journal.set_state(execution, "ready")
             except ProviderError as error:
+                if isinstance(error, _Diagnosed):
+                    try:
+                        self.journal.record_diagnosis(
+                            execution, document(error.category, error.workloads)
+                        )
+                    except ValueError:  # over budget: the category still stands
+                        pass
                 self.journal.record_failure(execution, error.category)
                 self.journal.set_state(
                     execution,

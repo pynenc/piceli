@@ -318,6 +318,9 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
         "explain": _C(
             "Print the registry entry for an error code.",
             contract="conforms",
+            notes="`--run ID --spec SPEC` explains a past execution instead, from "
+            "the local state (same as `piceli release status --spec SPEC --run "
+            "ID`).",
         ),
         "help-json": _C(
             "Print the whole CLI tree, with contracts, as JSON.",
@@ -334,9 +337,24 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             contract="conforms",
             exit_codes=(0, 1, 2),
             notes="Refuses (access-port-conflict) when a declared local port is "
-            "held by another process and names its pid and command; never takes "
-            "a port over. Stops every forward it started on Ctrl-C/SIGTERM/SIGHUP. "
-            "Exit 1 only when every forward gave up.",
+            "held by another process and names its pid (another process's command "
+            "line is never printed); when the holder is Piceli's own stale process "
+            "for this app it says so and suggests `piceli access stop --stale "
+            "TARGET`. Never takes a port over. Stops every forward it started on "
+            "Ctrl-C/SIGTERM/SIGHUP. Exit 1 only when every forward gave up.",
+        ),
+        "access stop": _C(
+            "Stop Piceli's own stale forwards and servers for the app (--stale).",
+            reads=("release.toml or module:attr", "local process table"),
+            writes=("signals Piceli's own processes for this app (SIGTERM)",),
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            notes="Only with --stale. Checks the app's declared forward ports and "
+            "each --port; stops a port's holder only when it is Piceli's own "
+            "process for this target (its kubectl port-forward, orphaned or "
+            "supervised, or piceli access / observe serve / operator serve with "
+            "the same target), never another process, which is reported by pid "
+            "only. Local only: never contacts the cluster.",
         ),
         "status": _C(
             "Say whether the app is up and how to reach it (release, images, "
@@ -454,7 +472,10 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             contract="conforms",
             reads=("release.toml or pipeline module (--spec MODULE:ATTR)", "state_dir"),
             notes='With state = "cluster" it first refreshes the working copy '
-            "from the cluster (reads only, no lock).",
+            "from the cluster (reads only, no lock). `--run ID` shows one past "
+            "execution (an execution id or unique prefix, or a `piceli deploy` "
+            "run id) with the causes recorded when it failed (pod reasons, exit "
+            "codes, redacted log tails, events).",
         ),
         # -------------------------------------------------------- state
         "state show": _C(
@@ -831,6 +852,18 @@ def _click_tree(command: Any, path: tuple[str, ...]) -> dict[str, Any]:
         and param.name not in {"help", "install_completion", "show_completion"}
     ]
     node: dict[str, Any] = {"name": path[-1] if path else "piceli", "path": name}
+    default = getattr(command, "default_command", None)
+    if default is not None and hasattr(command, "commands"):
+        # A command with subcommands (``piceli access TARGET`` and ``piceli
+        # access stop``): the node stays a runnable command, as it was
+        # before it had any, and lists the others under ``subcommands``.
+        node = _click_tree(command.commands[default], path)
+        node["subcommands"] = [
+            _click_tree(sub, (*path, sub_name))
+            for sub_name, sub in sorted(command.commands.items())
+            if sub_name != default and not getattr(sub, "hidden", False)
+        ]
+        return node
     if hasattr(command, "commands"):
         node["help"] = help_text
         node["params"] = params
@@ -952,5 +985,12 @@ def help_tree() -> dict[str, Any]:
 def leaf_commands(node: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     """Every runnable command below ``node`` in a :func:`help_tree` tree."""
     if "commands" not in node:
-        return [node]
+        return [
+            node,
+            *(
+                leaf
+                for child in node.get("subcommands", ())
+                for leaf in leaf_commands(child)
+            ),
+        ]
     return [leaf for child in node["commands"] for leaf in leaf_commands(child)]

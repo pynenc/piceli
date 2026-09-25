@@ -28,6 +28,37 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   MODULE:ATTR` (`pipeline-load-failed`), `status` and `access`
   (`access-target-invalid`) now put the exception's type and text in
   `message` too. `PICELI_DEBUG=1` prints the traceback on stderr.
+- **Fail fast with causes:** while an apply waits for a workload, Piceli
+  watches the pods of the revision being rolled out. `CrashLoopBackOff`
+  (`Init:CrashLoopBackOff`), `ImagePullBackOff`, `ErrImagePull`,
+  `InvalidImageName`, `CreateContainerConfigError`, `CreateContainerError`,
+  `RunContainerError`, `[execution] crash_restarts` restarts (default 3), a
+  failed Job or Pod fail the apply at once with `apply-crashloop`
+  (`pipeline-apply-crashloop` from `piceli deploy`) instead of at
+  `readiness_seconds`. The result adds `diagnosis` (`piceli.diagnosis.v1`:
+  per workload, each container's reason, exit code, restarts, last 20 log
+  lines and latest events, redacted against the release's secret store and
+  secret-looking text) and stderr prints one line per cause; an apply that
+  times out reports what its pods show too. `execution.causes` (compact, no
+  logs) is added to results and `release status`. `[execution] fail_fast =
+  false` restores waiting for the deadline. Not rolled back automatically, as
+  for any apply that does not become ready.
+- `piceli release status --spec … --run ID` (and `piceli explain --run ID
+  --spec …`) shows one past execution, by execution id, unique prefix or
+  `piceli deploy` run id, with the causes recorded in the journal
+  (`unknown-execution` otherwise).
+- **Own stale processes:** `piceli access` recognises a port held by
+  Piceli's own process for the same app (its `kubectl port-forward`,
+  supervised or orphaned, or `piceli access` / `observe serve` / `operator
+  serve` for the same target), says so and suggests the new `piceli access
+  stop --stale TARGET [--port N]`, which stops only those processes. Conflicts
+  add `holder` (`piceli-forward`, `piceli-server`, `other`, `unknown`).
+- Another process's command line is no longer printed in port conflicts
+  (`access-port-conflict`, the dashboard port, `observe`/dashboard forward
+  conflicts): its pid only, as `piceli status` already did (`owner.command`
+  and `owner.parent` are `null` for it).
+- `piceli.testing`: `FakeAPI.fail_pods(...)`, pod logs and events, and
+  ReplicaSets in the default `TYPES`.
 
 ## Version 0.7.0
 

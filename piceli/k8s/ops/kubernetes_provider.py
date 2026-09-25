@@ -257,6 +257,31 @@ class KubernetesProvider:
         apply: bool = False,
         merge: bool = False,
     ) -> dict[str, Any]:
+        result = self._call(
+            method,
+            path,
+            body=body,
+            query=query,
+            deadline=deadline,
+            apply=apply,
+            merge=merge,
+        )
+        assert isinstance(result, dict)
+        return result
+
+    def _call(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: Any = None,
+        query: dict[str, Any] | None = None,
+        deadline: float | None = None,
+        apply: bool = False,
+        merge: bool = False,
+        raw_text: bool = False,
+    ) -> dict[str, Any] | str:
+        """One bounded request; ``raw_text`` returns the body as text (pod logs)."""
         self._target(self.target)
         end = min(
             deadline if deadline is not None else float("inf"),
@@ -268,7 +293,7 @@ class KubernetesProvider:
         if mutating:
             self.verify_target(deadline=end)
         headers = {
-            "Accept": "application/json",
+            "Accept": "*/*" if raw_text else "application/json",
             "Content-Type": (
                 "application/apply-patch+yaml"
                 if apply
@@ -285,7 +310,7 @@ class KubernetesProvider:
         ):
             raise ProviderError("request-byte-limit")
 
-        def send() -> dict[str, Any]:
+        def send() -> dict[str, Any] | str:
             from urllib.parse import urlencode
 
             from urllib3 import Timeout
@@ -349,6 +374,8 @@ class KubernetesProvider:
                 raw = response.read(self.max_response_bytes + 1, decode_content=True)
                 if len(raw) > self.max_response_bytes:
                     raise ProviderError("response-byte-limit", ambiguous=mutating)
+                if raw_text:
+                    return str(raw.decode(errors="replace"))
                 decoded = strict_json(raw.decode(), self.max_response_bytes)
                 if not isinstance(decoded, dict):
                     raise ValueError("expected object")
@@ -1339,6 +1366,82 @@ class KubernetesProvider:
                 if error.status in {401, 403}
                 else ReadinessStatus.UNSUPPORTED,
             )
+
+    # ------------------------------------------------------ pod diagnosis
+    # Read-only helpers for :mod:`piceli.k8s.ops.diagnosis`: the pods of a
+    # workload being rolled out, their events and a bounded log tail. Always
+    # in the target namespace, through the same bounded transport.
+
+    def _namespaced(self, root: str, plural: str, name: str | None = None) -> str:
+        path = f"{root}/namespaces/{quote(self.target.namespace, safe='')}/{plural}"
+        return path + ("/" + quote(name, safe="") if name else "")
+
+    def _items(
+        self, path: str, query: dict[str, Any], deadline: float | None
+    ) -> list[dict[str, Any]]:
+        value = self._request("GET", path, query=query, deadline=deadline)
+        items = value.get("items")
+        if not isinstance(items, list):
+            raise ValueError("list response without items")
+        return [item for item in items if isinstance(item, dict)]
+
+    def list_pods(
+        self, selector: str, *, deadline: float | None = None, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        """Pods matching a label selector (one bounded page)."""
+        return self._items(
+            self._namespaced("/api/v1", "pods"),
+            {"labelSelector": selector, "limit": limit},
+            deadline,
+        )
+
+    def list_replica_sets(
+        self, selector: str, *, deadline: float | None = None, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        """ReplicaSets matching a label selector (one bounded page)."""
+        return self._items(
+            self._namespaced("/apis/apps/v1", "replicasets"),
+            {"labelSelector": selector, "limit": limit},
+            deadline,
+        )
+
+    def pod_events(
+        self, pod: str, *, deadline: float | None = None, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        """Events about one Pod (one bounded page)."""
+        return self._items(
+            self._namespaced("/api/v1", "events"),
+            {
+                "fieldSelector": f"involvedObject.kind=Pod,involvedObject.name={pod}",
+                "limit": limit,
+            },
+            deadline,
+        )
+
+    def pod_log(
+        self,
+        pod: str,
+        container: str,
+        *,
+        previous: bool,
+        tail_lines: int,
+        limit_bytes: int,
+        deadline: float | None = None,
+    ) -> str:
+        """The last ``tail_lines`` log lines of a container (at most ``limit_bytes``)."""
+        result = self._call(
+            "GET",
+            self._namespaced("/api/v1", "pods", pod) + "/log",
+            query={
+                "container": container,
+                "tailLines": tail_lines,
+                "limitBytes": limit_bytes,
+                **({"previous": "true"} if previous else {}),
+            },
+            deadline=deadline,
+            raw_text=True,
+        )
+        return result if isinstance(result, str) else ""
 
 
 def _generic_readiness(manifest: Mapping[str, Any]) -> bool | None:

@@ -708,7 +708,11 @@ def test_port_conflicts_name_the_owner() -> None:
         [shortcut], in_use=lambda port: True, owner=lambda port: owner
     )
     assert conflict.to_dict()["owner"]["pid"] == 4242
-    assert "held by pid 4242 (kubectl port-forward" in conflict.describe()
+    # Not recognised as piceli's: the pid only, never the command line.
+    assert conflict.to_dict()["owner"]["command"] is None
+    assert conflict.to_dict()["holder"] == "other"
+    assert "held by pid 4242 (not piceli)" in conflict.describe()
+    assert "port-forward" not in conflict.describe()
     assert port_conflicts([shortcut], in_use=lambda port: False) == []
 
 
@@ -835,7 +839,8 @@ def test_cli_access_refuses_a_taken_port_and_names_its_owner(
     assert conflict["id"] == "api" and conflict["local_port"] == busy
     if sys.platform.startswith("linux") or shutil.which("lsof"):
         assert conflict["owner"]["pid"] == os.getpid()
-        assert f"held by pid {os.getpid()}" in result.stderr
+        assert conflict["owner"]["command"] is None  # not piceli: pid only
+        assert f"held by pid {os.getpid()} (not piceli)" in result.stderr
 
 
 def _read_events(

@@ -224,6 +224,18 @@ class SecretVersionStore:
             raise ValueError("private version missing or outside target")
         return strict_json(row[0], 1_000_000)
 
+    def values(self, target: PlanTarget, *, limit: int = 10_000) -> list[Any]:
+        """Every stored value of ``target`` (at most ``limit``), for redaction only.
+
+        Used to scrub these values from text read back from the cluster (pod
+        logs, events) before it is shown or journaled; never printed.
+        """
+        rows = self.connection.execute(
+            "SELECT value FROM versions WHERE cluster_id=? AND namespace=? LIMIT ?",
+            (target.cluster_id, target.namespace, limit),
+        ).fetchall()
+        return [strict_json(row[0], 1_000_000) for row in rows]
+
     def contains(self, target: PlanTarget, reference: SecretVersionRef) -> bool:
         """Check an opaque version binding without loading its private value."""
         if reference.store_id != self.store_id:

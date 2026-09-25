@@ -1652,12 +1652,26 @@ class PipelineRunner:
             **({"source": outcome["source"]} if "source" in outcome else {}),
         }
         if outcome["execution"]["state"] != "ready":
+            category = outcome["execution"].get("failure_category", "not ready")
+            diagnosis = outcome.get("diagnosis")
+            # ``output`` (journaled) keeps only the compact causes;
+            # ``diagnosis`` (log tails, events) is for this result only.
+            details = {
+                "output": output,
+                **({"diagnosis": diagnosis} if diagnosis else {}),
+            }
+            if category == "apply-crashloop":
+                raise PipelineError(
+                    "pipeline-apply-crashloop",
+                    f"release {release} cannot start ({category})",
+                    failed=True,
+                    details=details,
+                )
             raise PipelineError(
                 "pipeline-apply-not-ready",
-                f"release {release} did not become ready "
-                f"({outcome['execution'].get('failure_category', 'not ready')})",
+                f"release {release} did not become ready ({category})",
                 failed=True,
-                details={"output": output},
+                details=details,
             )
         return "done", output
 

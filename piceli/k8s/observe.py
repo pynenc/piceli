@@ -1260,6 +1260,8 @@ class ForwardSupervisor:
             self._stop_process(process)
         reason = _OCCUPIED
         if owner is not None:
+            # Another process's command line is never shown: its pid only.
+            owner = PortOwner(port=owner.port, pid=owner.pid)
             reason = f"{_OCCUPIED}: {owner.describe()}"
         managed.owner = owner
         managed.health = "conflict"
@@ -1353,7 +1355,8 @@ def preflight_shortcuts(
     A required shortcut whose local port is already served by another process,
     or that has no namespace, is an error. An optional (``required = false``)
     shortcut on an occupied port is reported as ``external`` and not started.
-    A conflict names the owning process (pid and command) when it can be found.
+    A conflict names the owning process by its pid when it can be found (never
+    its command line).
     """
     start: list[str] = []
     external: list[str] = []
@@ -1373,7 +1376,7 @@ def preflight_shortcuts(
         if in_use(shortcut.local_port):
             if shortcut.required:
                 holder = owner(shortcut.local_port)
-                by = f" ({holder.describe()})" if holder is not None else ""
+                by = f" (pid {holder.pid})" if holder is not None else ""
                 errors.append(
                     f"{shortcut.id}: local port {shortcut.local_port} is already in "
                     f"use by another process{by}; stop it or change local_port"

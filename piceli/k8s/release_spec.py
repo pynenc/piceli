@@ -232,6 +232,10 @@ class ExecutionSpec(_Strict):
     poll_seconds: float = Field(default=1.0, gt=0, le=60)
     max_polls: int = Field(default=1000, gt=0, le=10000)
     write_settle_seconds: float = Field(default=60, gt=0, le=3600)
+    # Fail the apply at once when a workload's new pods cannot start (crash
+    # loop, image pull, config error) or restarted ``crash_restarts`` times.
+    fail_fast: bool = True
+    crash_restarts: int = Field(default=3, ge=1, le=1000)
 
 
 class DiscoverySpec(_Strict):

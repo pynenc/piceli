@@ -51,6 +51,7 @@ from piceli.checks import (
     run_checks,
 )
 from piceli.k8s.ops.bounds import timestamp
+from piceli.k8s.ops.diagnosis import compact
 from piceli.k8s.ops.discovery import (
     RELEASE_CLUSTER_KINDS,
     RELEASE_NAMESPACE_ANNOTATION,
@@ -755,6 +756,11 @@ def _execution_summary(result: Mapping[str, Any]) -> dict[str, Any]:
     }
     if "failure_category" in result:
         summary["failure_category"] = result["failure_category"]
+    causes = compact(result.get("diagnosis"))
+    if causes:
+        # Public: names, reasons and exit codes only (logs stay in the
+        # journal and the command's own result).
+        summary["causes"] = causes
     return summary
 
 
@@ -1985,6 +1991,9 @@ class ReleaseRunner:
             poll_seconds=min(execution.poll_seconds, execution.readiness_seconds),
             max_polls=execution.max_polls,
             write_settle_seconds=execution.write_settle_seconds,
+            fail_fast=execution.fail_fast,
+            crash_restarts=execution.crash_restarts,
+            diagnose_seconds=min(2.0, execution.readiness_seconds),
         )
 
     def _session_workflow(
@@ -2229,6 +2238,11 @@ class ReleaseRunner:
                     "plan_hash": plan_hash,
                     "source": record.source.to_dict(),
                     "execution": _execution_summary(result),
+                    **(
+                        {"diagnosis": result["diagnosis"]}
+                        if "diagnosis" in result
+                        else {}
+                    ),
                     "release_state": state,
                     "checks": report,
                     "adopted": _adopted(journal, execution_id, result),
@@ -2470,6 +2484,11 @@ class ReleaseRunner:
                     "release": name,
                     "intent": "resume",
                     "execution": _execution_summary(result),
+                    **(
+                        {"diagnosis": result["diagnosis"]}
+                        if "diagnosis" in result
+                        else {}
+                    ),
                     "release_state": state,
                     "checks": report,
                 }
@@ -2642,6 +2661,63 @@ class ReleaseRunner:
         finally:
             if journal is not None:
                 journal.close()
+
+    def run(self, execution_id: str) -> dict[str, Any]:
+        """One past execution from the journal: state, category and causes.
+
+        ``execution_id`` is an id from ``history`` (``execution_id``) or a
+        unique prefix of one (at least 8 characters). The ``diagnosis`` (pod
+        causes with redacted log tails and events) is the one recorded when
+        the execution failed. Never contacts the cluster.
+        """
+        entries = self.history.entries() if self.state.exists() else []
+        matches = sorted(
+            {
+                str(entry["execution_id"])
+                for entry in entries
+                if len(execution_id) >= 8
+                and str(entry.get("execution_id", "")).startswith(execution_id)
+            }
+        )
+        if len(matches) != 1:
+            raise ReleaseError(
+                f"no single execution matches {execution_id!r}; list them with "
+                "`piceli release status`",
+                code="unknown-execution",
+            )
+        found = matches[0]
+        entry = next(
+            item for item in reversed(entries) if item["execution_id"] == found
+        )
+        journal = (
+            ExecutionJournal(self.spec.journal_path)
+            if self.spec.journal_path.exists()
+            else None
+        )
+        try:
+            try:
+                summary = journal.summary(found) if journal is not None else None
+            except ValueError:
+                summary = None
+        finally:
+            if journal is not None:
+                journal.close()
+        return {
+            "execution_id": found,
+            "release": entry.get("release"),
+            "intent": entry.get("intent"),
+            "at": entry.get("at"),
+            "release_state": entry.get("state"),
+            "execution": _execution_summary(summary)
+            if summary is not None
+            else {"execution_id": found, "state": "not-started"},
+            **(
+                {"diagnosis": summary["diagnosis"]}
+                if summary is not None and "diagnosis" in summary
+                else {}
+            ),
+            **({"rollback": entry["rollback"]} if "rollback" in entry else {}),
+        }
 
     # -------------------------------------------------------------- secrets
     def _secret_record(

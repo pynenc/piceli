@@ -107,6 +107,10 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["access", str(p / "missing-release.toml")],
         "access-target-invalid",
     ),
+    "access stop": (
+        lambda p: ["access", "stop", "--stale", str(p / "missing-release.toml")],
+        "access-target-invalid",
+    ),
     "import yaml": (
         lambda p: ["import", "yaml", str(p / "no-such-dir")],
         "import-manifests-invalid",

@@ -21,6 +21,7 @@ FIRST_ARGUMENT = {
     "BuildContextError",
     "ExecAuthError",
     "ProviderError",
+    "_Diagnosed",
     "RegistryError",
     "_input",
     "SecretError",
