@@ -23,8 +23,8 @@ pipeline = Pipeline(
     target,
     build=images,
     deliver=Registry("oci://registry.example:5000/my-app"),
-    state="cluster",          # default "local"
-    state_lease_seconds=60,   # how long a dead runner keeps the lock (5-3600)
+    state="cluster",  # default "local"
+    state_lease_seconds=60,  # how long a dead runner keeps the lock (5-3600)
     state_dir=os.environ.get("DEPLOY_STATE_DIR", ".piceli-deploy"),
 )
 ```
