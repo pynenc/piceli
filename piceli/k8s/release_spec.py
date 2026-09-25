@@ -31,6 +31,7 @@ from pydantic import (
     model_validator,
 )
 
+from piceli.approval_policy import DEFAULT_ALLOW, ApprovalPolicy
 from piceli.checks.model import Check, unique_names
 from piceli.k8s.ops.discovery import valid_resource_name
 from piceli.k8s.ops.exec_credentials import ExecPolicy
@@ -154,6 +155,29 @@ class TargetSpec(_Strict):
         return self
 
 
+class AutoApproveSpec(_Strict):
+    """``[release] auto_approve``: the owner's approval policy.
+
+    See :class:`piceli.approval_policy.ApprovalPolicy` and docs/agents.md.
+    """
+
+    allow: tuple[str, ...] = tuple(sorted(DEFAULT_ALLOW))
+    deny: tuple[str, ...] = ()
+    max_objects: int | None = None
+
+    @model_validator(mode="after")
+    def _valid(self) -> AutoApproveSpec:
+        self.policy()
+        return self
+
+    def policy(self) -> ApprovalPolicy:
+        return ApprovalPolicy(
+            allow=frozenset(self.allow),
+            deny=frozenset(self.deny),
+            max_objects=self.max_objects,
+        )
+
+
 class ReleaseSettings(_Strict):
     name: str
     owner: str = Field(min_length=1, max_length=128)
@@ -179,6 +203,14 @@ class ReleaseSettings(_Strict):
     # After a release's checks fail, re-apply the previous ready release
     # automatically (journaled like any rollback). See docs/checks.md.
     rollback_on_failed_checks: bool = False
+    # The owner's approval policy for `apply --approve-if-policy`; part of
+    # the plan hash. See docs/agents.md.
+    auto_approve: AutoApproveSpec | None = None
+
+    @property
+    def approval_policy(self) -> ApprovalPolicy | None:
+        """The declared approval policy, or ``None``."""
+        return None if self.auto_approve is None else self.auto_approve.policy()
 
     @model_validator(mode="after")
     def _shared_state(self) -> ReleaseSettings:

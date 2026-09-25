@@ -17,6 +17,7 @@
     "updated_at": {"type": ["string", "null"]},
     "until": {"$ref": "#/$defs/stageName"},
     "combined_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "approved_by": {"const": "policy", "description": "Added in 0.8.0. Present when the run executed under the owner's auto_approve policy (--approve-if-policy) instead of a human-approved hash."},
     "pipeline": {
       "type": "object",
       "required": ["app"],

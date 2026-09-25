@@ -6,7 +6,8 @@ A :class:`Pipeline` names an :class:`~piceli.app.App`, a :class:`Target`,
 optional :class:`Build` objects whose images the app uses as
 ``build["name"]``, a delivery strategy (:class:`NodeLoopbackRegistry`,
 :class:`NodeImport` or :class:`Registry`), secret generators
-(:class:`Secrets`) and post-deploy checks. ``piceli deploy`` runs
+(:class:`Secrets`), post-deploy checks and the owner's
+:class:`ApprovalPolicy` (``auto_approve=``). ``piceli deploy`` runs
 ``inputs → build → deliver → plan → apply → checks`` as one journaled,
 resumable run in which every stage is skipped when its content is unchanged.
 See ``docs/deploy.md``.
@@ -17,6 +18,7 @@ its tools load on first use.
 
 from typing import TYPE_CHECKING, Any
 
+from piceli.approval_policy import ApprovalPolicy
 from piceli.pipeline.checks import CheckContext, CheckReportLike, CheckRunner
 from piceli.pipeline.errors import PipelineError
 from piceli.pipeline.model import (
@@ -47,6 +49,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "STAGES",
+    "ApprovalPolicy",
     "AwsSecret",
     "Build",
     "CheckContext",

@@ -11,7 +11,8 @@ A summary is derived only from the run journal and the receipts it names:
 commits and refs, image digests and sizes, delivery transfer counts, the
 release plan's action classes and changed objects with their changed field
 paths (never values), check results, the failure's registered code and
-message, and stage timings. It never contains a secret value, a kubeconfig
+message (with a workload's compact causes when it cannot start), whether the
+owner's approval policy approved the run, and stage timings. It never contains a secret value, a kubeconfig
 path or process output.
 
 Importing this module is side-effect free.
@@ -278,6 +279,9 @@ def build(run: Run, state_dir: Path) -> dict[str, Any]:
     }
     if isinstance(data.get("reason"), str):
         summary["reason"] = data["reason"]
+    if data.get("approved_by") == "policy":
+        # Executed under the owner's auto_approve policy, not a human hash.
+        summary["approved_by"] = "policy"
     return summary
 
 
@@ -350,6 +354,8 @@ def markdown(summary: Mapping[str, Any]) -> str:
         f"{_code(pipeline.get('namespace'))} |"
     )
     lines.append(f"| Combined hash | {_code(summary.get('combined_hash'))} |")
+    if summary.get("approved_by") == "policy":
+        lines.append("| Approved by | the owner's approval policy |")
     lines.append(f"| Duration | {_seconds(summary.get('seconds'))} |")
     failure = summary.get("failure")
     if isinstance(failure, Mapping):

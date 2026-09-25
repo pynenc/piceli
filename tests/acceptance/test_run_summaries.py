@@ -52,6 +52,7 @@ def test_a_ready_run_writes_its_summary_and_runs_lists_it(shop) -> None:
         state / "runs" / final["run_id"] / "summary.json"
     )
     assert document["state"] == "ready" and document["failure"] is None
+    assert "approved_by" not in document  # a human (--auto-approve) approved it
     assert document["run_id"] == final["run_id"]
     assert document["combined_hash"] == final["combined_hash"]
     assert document["release"] == final["release"]

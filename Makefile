@@ -36,6 +36,10 @@ test-acceptance: ## Fault-injected API acceptance tests (no cluster needed)
 test-integration: ## Integration tests on the kind cluster named by PICELI_KIND_KUBECONFIG/PICELI_KIND_CONTEXT
 	uv run pytest tests/integration
 
+.PHONY: skill-check
+skill-check: ## Fresh-agent check: run the agent skill's walkthrough from a copy of skills/piceli (fake API)
+	uv run python scripts/skill_check.py
+
 .PHONY: coverage
 coverage: ## Unit + acceptance tests with an HTML coverage report
 	uv run pytest --cov --cov-report=term --cov-report=html

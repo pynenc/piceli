@@ -95,7 +95,9 @@
             "freed_bytes": {"type": "integer"},
             "over_budget": {"type": "boolean"}
           }
-        }
+        },
+        "policy": {"$ref": "#/$defs/policy"},
+        "approved_by": {"const": "policy", "description": "The run was approved by the owner's auto_approve policy (--approve-if-policy), not by a human hash."}
       }
     },
     "diagnosis": {
@@ -137,6 +139,26 @@
         }
       }
     },
+    "policy": {
+      "type": "object",
+      "description": "With approval-policy-exceeded: the owner's approval policy and the actions outside it.",
+      "required": ["allowed", "violations", "changes", "policy"],
+      "properties": {
+        "allowed": {"type": "boolean"},
+        "violations": {"type": "array", "items": {"type": "string"}},
+        "changes": {"type": "integer", "minimum": 0},
+        "policy": {
+          "type": "object",
+          "required": ["schema", "allow", "deny", "max_objects"],
+          "properties": {
+            "schema": {"const": "piceli.approval-policy.v1"},
+            "allow": {"type": "array", "items": {"type": "string"}},
+            "deny": {"type": "array", "items": {"type": "string"}},
+            "max_objects": {"type": ["integer", "null"]}
+          }
+        }
+      }
+    },
     "lock": {
       "type": "object",
       "description": "With pipeline-locked: who holds the release lock and in how many seconds its lease expires unless renewed.",
@@ -156,7 +178,8 @@
         "stage": {"$ref": "#/$defs/stageName"},
         "blocking": {"type": "array", "items": {"type": "object"}},
         "preview": {"$ref": "#/$defs/previewMarker"},
-        "lock": {"$ref": "#/$defs/lock"}
+        "lock": {"$ref": "#/$defs/lock"},
+        "policy": {"$ref": "#/$defs/policy"}
       }
     },
     "previewMarker": {

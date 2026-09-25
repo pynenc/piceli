@@ -413,7 +413,10 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "[[checks]] after readiness (exit 1 with release_state "
             "checks-failed); with rollback_on_failed_checks it re-applies the "
             "previous ready release without a further approval. --skip-checks "
-            "is recorded." + _ENV_NOTE,
+            "is recorded. --approve-if-policy plans and applies only when "
+            "every action is inside the spec's [release] auto_approve policy "
+            "(declared by the owner, part of the plan hash); otherwise exit 3 "
+            "with reason approval-policy-exceeded and the hash to approve." + _ENV_NOTE,
         ),
         "release rollback": _C(
             "Re-plan and re-apply an earlier release.",
@@ -781,7 +784,13 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "environment (the app's overrides and the pipeline's target for it, "
             "state under <state_dir>/environments/NAME); the combined hash "
             "covers the environment's name and resolved values, so --approve, "
-            "--resume and --plan --out/--apply need the same --env. Every run "
+            "--resume and --plan --out/--apply need the same --env. "
+            "--approve-if-policy plans and executes without a hash only when "
+            "every action is inside the pipeline's auto_approve policy "
+            "(declared by the owner, part of the combined hash; never delete, "
+            "replace or adopt); otherwise exit 3 with reason "
+            "approval-policy-exceeded and the approval command. "
+            "Every run "
             "that starts executing writes <state_dir>/runs/<run id>/summary.json "
             "(schema docs/schemas/piceli-run-summary-v1.schema.json) and "
             "summary.md; the result names them (summary). With the pipeline's "

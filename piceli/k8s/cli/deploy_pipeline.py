@@ -11,6 +11,11 @@ ran but did not succeed, ``2`` rejected, ``3`` approval required.
 tree (:mod:`piceli.pipeline.refs`); the printed approval command pins the
 resolved commit SHAs.
 
+``--approve-if-policy`` runs the plan without ``--approve`` only when every
+action is inside the owner's ``auto_approve`` policy declared in the pipeline
+(:mod:`piceli.approval_policy`); otherwise it prints the approval command and
+exits ``3`` with ``"reason": "approval-policy-exceeded"``.
+
 ``--plan --out FILE`` also writes a portable plan (:mod:`piceli.pipeline.planfile`);
 ``--apply FILE --approve HASH`` applies it on any runner: it re-plans against
 live state and runs only when the combined hash is still the approved one.
@@ -50,11 +55,12 @@ def load_pipeline(entry: str, env: str | None = None) -> Any:
     (``environment-required``).
     """
     from piceli.app.render import RenderError, load_target
+    from piceli.approval_policy import ApprovalPolicyError
     from piceli.pipeline import Pipeline, PipelineError
 
     try:
         value = load_target(entry, Path.cwd())
-    except PipelineError as error:
+    except (PipelineError, ApprovalPolicyError) as error:
         reject(error.code, f"the pipeline module refused its declaration: {error}")
     except RenderError as error:
         reject("pipeline-not-found", str(error))
@@ -322,6 +328,15 @@ def deploy(
             "--auto-approve", help="Plan and execute without confirmation (CI)"
         ),
     ] = False,
+    approve_if_policy: Annotated[
+        bool,
+        typer.Option(
+            "--approve-if-policy",
+            help="Execute without --approve only when every action of the plan "
+            "is inside the pipeline's auto_approve policy (declared by the "
+            "owner); otherwise print the approval command and exit 3",
+        ),
+    ] = False,
     reapply: Annotated[
         bool,
         typer.Option(
@@ -381,11 +396,20 @@ def deploy(
     from piceli.pipeline.runner import preview_hash
 
     document: dict[str, Any] | None = None
+    decision: Any = None
     if apply_file is not None:
         document = _plan_file(
             apply_file,
             approve,
-            conflicting=bool(plan or auto_approve or resume or reapply or ref or out)
+            conflicting=bool(
+                plan
+                or auto_approve
+                or approve_if_policy
+                or resume
+                or reapply
+                or ref
+                or out
+            )
             or until != "checks",
         )
         until, reapply = document["until"], document["reapply"]
@@ -412,6 +436,12 @@ def deploy(
     if plan and auto_approve:
         say("--plan executes nothing; drop --auto-approve")
         reject("deploy-flags-conflict")
+    if approve_if_policy and (plan or approve or auto_approve or resume):
+        say(
+            "--approve-if-policy plans and runs in one step; it cannot be "
+            "combined with --plan, --approve, --auto-approve or --resume"
+        )
+        reject("deploy-flags-conflict")
     if resume and ref:
         say("--resume reuses the commits the run was approved with; drop --ref")
         reject("deploy-flags-conflict")
@@ -424,6 +454,12 @@ def deploy(
         # The plan's own commits, never a re-resolved branch.
         refs = recorded_requests(document.get("refs") or {})
     pipeline = load_pipeline(target, env)
+    if approve_if_policy and pipeline.auto_approve is None:
+        say(
+            f"{target} declares no auto_approve policy; only the owner can add "
+            "one (in the pipeline). Plan with --plan and ask for the hash"
+        )
+        reject("approval-policy-missing")
     runner = PipelineRunner(
         pipeline, on_event=emit_json if as_json else _human, say=say, refs=refs
     )
@@ -481,13 +517,39 @@ def deploy(
                             )
                         )
                         reject("pipeline-plan-changed")
+                elif approve_if_policy:
+                    decision = runner.policy_decision(combined)
+                    if decision.allowed:
+                        say(
+                            "inside the owner's approval policy "
+                            f"({decision.changes} change(s)); executing"
+                        )
+                    else:
+                        _say_wrapped(
+                            "outside the owner's approval policy: ",
+                            ", ".join(decision.violations),
+                        )
+                        say("the owner must review this plan; approve with:")
+                        say(f"  {_approve_command(target, combined, env)}")
+                        finished = (
+                            EXIT_APPROVAL,
+                            {
+                                **body,
+                                "state": "approval-required",
+                                "reason": "approval-policy-exceeded",
+                                "policy": decision.to_dict(),
+                            },
+                        )
                 elif not auto_approve and not _confirm(combined.combined_hash):
                     say("approve with:")
                     say(f"  {_approve_command(target, combined, env)}")
                     finished = (EXIT_APPROVAL, {**body, "state": "approval-required"})
                 if finished is None:
                     result = runner.execute(
-                        combined, combined.combined_hash, reapply=reapply
+                        combined,
+                        combined.combined_hash,
+                        reapply=reapply,
+                        policy=decision if approve_if_policy else None,
                     )
     except PipelineError as error:
         _fail(runner, error, target, env)
@@ -645,5 +707,7 @@ def _fail(
         body["preview"] = preview
     if isinstance(diagnosis, dict):
         body["diagnosis"] = diagnosis
+    if isinstance(error.details.get("policy"), dict):
+        body["policy"] = error.details["policy"]
     emit_json(body)
     raise typer.Exit(EXIT_FAILED if error.failed else EXIT_REJECTED)

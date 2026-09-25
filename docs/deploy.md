@@ -258,7 +258,8 @@ images are not built yet, the fingerprint of the rendered app and the
 preview's adopt/replace/delete set), the checks, `--until`, the target
 identity, with `--ref`, the resolved commit of each pinned source and, with
 `--env`, the environment's name and resolved override values (see
-{doc}`environments`). `--approve HASH` re-plans and runs only when the hash is
+{doc}`environments`) and, when declared, the owner's `auto_approve` policy
+(see {ref}`deploy-approval-policy`). `--approve HASH` re-plans and runs only when the hash is
 unchanged; otherwise it is refused with `pipeline-plan-changed` and nothing
 runs. Stages whose plan depends on earlier outputs (the release plan after a
 build) run under that approval, within the limits of the preview below.
@@ -538,6 +539,67 @@ A run is `ready` only when the checks pass. With
 release; the rollback is journaled in the run and the result's state is
 `rolled-back`. `Checks` is importable from `piceli` next to `Pipeline`
 (`from piceli import Checks`); see {doc}`checks` for every check type.
+
+(deploy-approval-policy)=
+
+## Let a policy approve routine plans
+
+The owner can declare in the pipeline which plans may run without them
+approving the hash, for example an agent or a CI job that ships routine
+image updates:
+
+```python
+from piceli import ApprovalPolicy, Pipeline
+
+pipeline = Pipeline(
+    app,
+    target,
+    build=images,
+    deliver=NodeLoopbackRegistry(),
+    auto_approve=ApprovalPolicy(
+        allow={"create", "apply", "no-op"},  # the default
+        deny={"cluster_scoped"},  # optional: remove classes from allow
+        max_objects=10,  # optional: at most this many changes
+    ),
+)
+```
+
+```console
+$ piceli deploy deploy/app.py:pipeline --approve-if-policy --json
+```
+
+`--approve-if-policy` plans every stage like `--plan`, then runs the plan
+only when **every** action is inside the policy: the release's actions (or,
+before the images exist, the placeholder preview's), the node-loopback
+registry's actions and a registry takeover. The run records
+`"approved_by": "policy"` in its journal and result, and the release plan
+made after delivery is checked against the policy again before anything is
+applied (`approval-policy-exceeded`, exit `2`, nothing applied). A plan
+outside the policy runs nothing: the command prints the plan, each
+`policy.violations` item (`delete Service/web`, `cluster_scoped
+ClusterRole/x`, `max_objects: 12 changed objects > 10`) and the usual
+`--approve <combined hash>` command, and exits `3` with
+`"reason": "approval-policy-exceeded"`.
+
+The policy can only narrow what runs unattended:
+
+- `delete`, `replace` and `adopt` are never inside a policy; `allow` naming
+  one is refused (`approval-policy-invalid`), so they always need the hash.
+- `cluster_scoped` objects and `drift` (a desired field another manager wrote,
+  which the apply overwrites) are outside unless `allow` names them.
+- `no-op` actions change nothing and are always inside.
+- The policy is part of the combined hash (and of the release plan hash), so
+  a changed policy makes earlier plans unapprovable and resuming a run
+  refuses it (`pipeline-resume-changed`).
+- There is no command-line flag that sets or widens a policy;
+  `--approve-if-policy` without one is refused (`approval-policy-missing`),
+  and it cannot be combined with `--plan`, `--approve`, `--auto-approve`,
+  `--resume` or `--apply` (`deploy-flags-conflict`). Secrets, exec
+  credential plugins (`allow_exec`) and the release's own refusals work as
+  without a policy.
+
+Keep the policy in reviewed code: an agent must never add or widen it (see
+{doc}`agents`).
 
 ## Plan here, apply there
 

@@ -73,6 +73,8 @@ Every feature page starts with its maturity, and this table lists them all:
 | Access and status from the model (`app.access.forward`, `piceli access`, `piceli status`) | {doc}`access` | preview |
 | Operations lens (`piceli observe`) | {doc}`operations_lens` | preview |
 | CLI contract: `piceli explain`, `piceli help-json`, error codes | {doc}`agents` | preview |
+| Owner-declared approval policy (`auto_approve`, `--approve-if-policy`) | {ref}`deploy-approval-policy` | preview |
+| Agent skill (`skills/piceli`, run in CI against the built wheel) | {doc}`agents` | preview |
 | Import and migration kit (`piceli import live`, `piceli import yaml`, `App.override`) | {doc}`migrate_from_kubectl` | preview |
 | Test double: fake Kubernetes API (`piceli.testing`) | {doc}`testing` | preview |
 | Operator workflow (`piceli operator`) | {doc}`operator_workflow` | experimental |

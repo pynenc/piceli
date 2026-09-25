@@ -96,6 +96,28 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   summary of `apply` and `resume` and keeps `summary.json` in the artifact
   (`docs/ci.md` also shows a pull request comment).
 - Build receipts record each image's engine size (`size_bytes`).
+- **Owner-declared approval policy:** `Pipeline(..., auto_approve=ApprovalPolicy(allow=…, deny=…, max_objects=…))`
+  and `[release] auto_approve = {...}` declare which plans may run without the
+  owner approving the hash; `piceli deploy --approve-if-policy` and
+  `piceli release apply --approve-if-policy` run a plan only when every action
+  is inside it, and otherwise exit `3` with `approval-policy-exceeded`, the
+  violations and the usual approval command. `delete`, `replace` and `adopt`
+  are never inside a policy; cluster-scoped objects and drift need an explicit
+  `allow`. The policy is part of the combined hash and of the release plan
+  hash (plans without one keep their hashes); there is no flag that sets or
+  widens it. A deploy approved by the policy re-checks the release plan made
+  after delivery and records `"approved_by": "policy"`. New codes
+  `approval-policy-invalid`, `approval-policy-missing`,
+  `approval-policy-exceeded`, `approve-if-policy-flags-conflict`; the deploy
+  event schema adds `policy` and `approved_by`, and release plan changes gain
+  `cluster_scoped` in `stages.plan.changes`.
+- **Agent skill:** `skills/piceli` (`SKILL.md`, an example `App` and
+  `Pipeline`, and scripts to check the install, plan and ask the owner,
+  deploy with the approved hash or the owner's policy, check status,
+  diagnose with `piceli explain`, resume and roll back). CI copies the skill
+  alone and runs its walkthrough against the built wheel and the fake API
+  (`make skill-check`); `tests/integration/test_skill_kind.py` runs it against
+  `examples/shop` on a disposable kind cluster.
 
 ## Version 0.7.0
 

@@ -168,7 +168,8 @@ with the JSON pointers of its changed fields (never values), the checks, the
 failure (stage, registered code, `piceli explain` command, message, readiness
 category and, for a workload that cannot start, the compact causes: workload,
 container, reason, exit code and restarts, without log lines; see
-{doc}`deploy`) and every stage's time. It never contains a secret value, a
+{doc}`deploy`), `approved_by: "policy"` when the owner's approval policy
+approved the run instead of a human hash, and every stage's time. It never contains a secret value, a
 kubeconfig path or process output. The deploy result names both files
 (`summary.json`, `summary.markdown`).
 

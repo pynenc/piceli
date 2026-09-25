@@ -33,6 +33,10 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`api-unavailable`](#error-api-unavailable) | kubernetes | yes |
 | [`applied-resource-drift`](#error-applied-resource-drift) | execution | no |
 | [`apply-crashloop`](#error-apply-crashloop) | execution | no |
+| [`approval-policy-exceeded`](#error-approval-policy-exceeded) | approval | no |
+| [`approval-policy-invalid`](#error-approval-policy-invalid) | approval | no |
+| [`approval-policy-missing`](#error-approval-policy-missing) | approval | no |
+| [`approve-if-policy-flags-conflict`](#error-approve-if-policy-flags-conflict) | approval | no |
 | [`approve-with-planning-flags`](#error-approve-with-planning-flags) | release | no |
 | [`auth-provider-refused`](#error-auth-provider-refused) | target | no |
 | [`authorization-expired`](#error-authorization-expired) | execution | no |
@@ -387,7 +391,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-deploy-flags-conflict)=
 ### `deploy-flags-conflict`
 
-**Conflicting deploy flags.** `piceli deploy` got flags that cannot be combined (`--resume` with planning flags or `--ref`, `--approve` with `--plan` or `--auto-approve`, `--plan` with `--auto-approve`, `--out` without `--plan`, `--apply` without `--approve` or with planning flags, or no pipeline).
+**Conflicting deploy flags.** `piceli deploy` got flags that cannot be combined (`--resume` with planning flags or `--ref`, `--approve` with `--plan` or `--auto-approve`, `--plan` with `--auto-approve`, `--approve-if-policy` with `--plan`, `--approve`, `--auto-approve`, `--resume` or `--apply`, `--out` without `--plan`, `--apply` without `--approve` or with planning flags, or no pipeline).
 
 - **Fix:** Use `--plan` (optionally `--out FILE`), then `--approve HASH` (with the same `--ref`) or `--apply FILE --approve HASH`; or `--auto-approve` alone; or `--resume` alone (it reuses the run's commits).
 - **Retry-safe:** no
@@ -3373,4 +3377,39 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Required tool missing.** A tool the pipeline uses is not installed or does not run: `docker` or `docker buildx` for a build, `kubectl` for a node-loopback registry's port forward.
 
 - **Fix:** Install the tool on the runner (and put it on `PATH`), then run `piceli doctor` again.
+- **Retry-safe:** no
+
+
+## Owner-declared approval policies (`auto_approve`, `--approve-if-policy`)
+
+(error-approval-policy-exceeded)=
+### `approval-policy-exceeded`
+
+**Plan outside the approval policy.** `--approve-if-policy` planned a change the owner's policy does not cover: a `delete`, `replace` or `adopt`, a cluster-scoped object or drift the policy does not allow, or more changed objects than `max_objects` (the `policy.violations` list names each). Nothing was applied; the plan is stored and its hash printed.
+
+- **Fix:** Show the plan to the owner and, after they approve, run the printed command with `--approve <hash>`. Never widen the policy or split the change to fit it.
+- **Retry-safe:** no
+
+(error-approval-policy-invalid)=
+### `approval-policy-invalid`
+
+**Approval policy invalid.** The `auto_approve` policy (`ApprovalPolicy(...)` in a pipeline, `[release] auto_approve` in a spec) names an unknown action class, allows `delete`, `replace` or `adopt` (which always need the owner's approval of the hash), or has a `max_objects` outside 0-4096.
+
+- **Fix:** Only the owner changes the policy: use the classes `create`, `apply`, `no-op`, `cluster_scoped` and `drift` in `allow`, any class in `deny`, and an integer `max_objects`.
+- **Retry-safe:** no
+
+(error-approval-policy-missing)=
+### `approval-policy-missing`
+
+**No approval policy declared.** `--approve-if-policy` was given, but the pipeline (`auto_approve=`) or the spec (`[release] auto_approve`) declares no policy. Nothing was planned or changed.
+
+- **Fix:** Plan (`piceli deploy MODULE:ATTR --plan` or `piceli release plan`), show the plan to the owner and run it with `--approve <hash>` after they approve. Never add a policy yourself: only the owner declares one.
+- **Retry-safe:** no
+
+(error-approve-if-policy-flags-conflict)=
+### `approve-if-policy-flags-conflict`
+
+**Flags cannot be combined with --approve-if-policy.** `release apply --approve-if-policy` was combined with `--approve`, `--auto-approve`, `--rotate`, `--adopt`, `--replace` or `--adopt-all-desired`. Only the owner's declared policy decides what applies without a human hash, so no flag may add to the plan.
+
+- **Fix:** Drop the other flags, or plan with them (`piceli release plan …`) and ask the owner to approve the hash.
 - **Retry-safe:** no

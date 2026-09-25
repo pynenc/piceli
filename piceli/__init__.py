@@ -54,6 +54,7 @@ _APP_EXPORTS = frozenset(
 # The pipeline API (``piceli deploy``) is exported lazily the same way.
 _PIPELINE_EXPORTS = frozenset(
     {
+        "ApprovalPolicy",
         "AwsSecret",
         "Build",
         "NodeImport",
@@ -123,6 +124,7 @@ if TYPE_CHECKING:
     )
     from piceli.checks import Checks  # noqa: F401
     from piceli.pipeline import (  # noqa: F401
+        ApprovalPolicy,
         AwsSecret,
         Build,
         NodeImport,

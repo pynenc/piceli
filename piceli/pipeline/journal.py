@@ -141,6 +141,7 @@ class Journal:
         approval: str,
         plan: Mapping[str, Any],
         refs: Mapping[str, Any] | None = None,
+        approved_by: str | None = None,
     ) -> Run:
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
         run_id = f"{stamp}-{uuid.uuid4().hex[:8]}"
@@ -156,6 +157,9 @@ class Journal:
             "plan": dict(plan),
             "stages": {name: {"state": "pending"} for name in STAGES},
         }
+        if approved_by is not None:
+            # "policy": the owner's auto_approve policy approved the run.
+            data["approved_by"] = approved_by
         if refs:
             # ``--ref``: source → {ref, commit}; --resume re-opens these commits.
             data["refs"] = {name: dict(value) for name, value in refs.items()}
