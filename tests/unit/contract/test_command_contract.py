@@ -126,6 +126,22 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["deploy", str(p / "missing.py") + ":pipeline"],
         "pipeline-not-found",
     ),
+    "cache status": (
+        lambda p: ["cache", "status", str(p / "missing.py") + ":pipeline"],
+        "pipeline-not-found",
+    ),
+    "cache prune": (
+        lambda p: ["cache", "prune", "--state-dir", str(p), "--budget", "lots"],
+        "cache-budget-invalid",
+    ),
+    "doctor": (
+        lambda p: ["doctor", str(p / "missing.py") + ":pipeline"],
+        "pipeline-not-found",
+    ),
+    "runs": (
+        lambda p: ["runs", "--env", "prod", "--state-dir", str(p)],
+        "cache-arguments-conflict",
+    ),
     "inputs record": (
         lambda p: ["inputs", "record", "--spec", str(p / "junk")],
         "invalid-inputs-spec",

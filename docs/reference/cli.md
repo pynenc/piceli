@@ -34,8 +34,11 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli artifacts pin`](#cli-artifacts-pin) | Pin one public source file by digest. | none | no |
 | [`piceli artifacts preview`](#cli-artifacts-preview) | Preview a deterministic OCI build plan (no tools run). | none | no |
 | [`piceli artifacts preview-command`](#cli-artifacts-preview-command) | Preview a pinned external build command. | none | no |
+| [`piceli cache prune`](#cli-cache-prune) | Remove what no release, rollback or resume needs: stale temporary directories and partial files, runs beyond --keep-last, unused delivery receipts, and (over --budget) build outputs and logs. | none | no |
+| [`piceli cache status`](#cli-cache-status) | Show the disk used per state directory and category, and Piceli's temporary directories. Read-only. | none | no |
 | [`piceli codegen crd`](#cli-codegen-crd) | Generate pydantic models for one CRD version, from a file or a cluster. | reads | no |
 | [`piceli deploy`](#cli-deploy) | Deploy a pipeline: inputs → build → deliver → plan → apply → checks. | writes | yes |
+| [`piceli doctor`](#cli-doctor) | Check this runner: free disk and memory against what the next build needs (estimated from the last build receipts), and the tools the pipeline uses (docker, docker buildx, kubectl). Exit 1 on a warning. | none | no |
 | [`piceli explain`](#cli-explain) | Explain an error code: cause, fix and whether a retry can succeed. | none | no |
 | [`piceli help-json`](#cli-help-json) | Print the whole CLI tree (commands, options, contracts) as JSON. | none | no |
 | [`piceli import live`](#cli-import-live) | Generate a typed module from the objects of a live namespace (read-only). | reads | no |
@@ -69,6 +72,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli release status`](#cli-release-status) | Show catalogued releases, their executions and history (no cluster access). | none | no |
 | [`piceli release stop`](#cli-release-stop) | Cancel the latest execution of a release (exact owner only). | reads | no |
 | [`piceli render`](#cli-render) | Print the manifests of a typed app, composition or pipeline. Never contacts a cluster. | none | no |
+| [`piceli runs`](#cli-runs) | List the deploy runs of a pipeline, newest first, with their state, release, duration and summary files. Read-only (with shared state it reads the local working copy: run `piceli state pull` first). | none | no |
 | [`piceli state export`](#cli-state-export) | Write the release's state to one file (secret material excluded unless asked). | reads | no |
 | [`piceli state import`](#cli-state-import) | Replace the release's state with an export (needs --approve DIGEST). | writes | yes |
 | [`piceli state pull`](#cli-state-pull) | Refresh the local working copy from the shared state (reads the cluster). | reads | no |
@@ -364,6 +368,55 @@ Preview a pinned external build command.
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 
+(cli-cache-prune)=
+### `piceli cache prune`
+
+Remove what no release, rollback or resume needs: stale temporary directories and partial files, runs beyond --keep-last, unused delivery receipts, and (over --budget) build outputs and logs.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `TARGET` | text |  |  |
+| `--env` | text |  | Only this environment's state (default: every environment) |
+| `--state-dir` | path |  | A pipeline state directory, instead of a pipeline (default: ./.piceli-deploy) |
+| `--keep-last` | integer | `10` | Runs to keep (at least 1) |
+| `--budget` | text |  | Also free space until each state directory fits, e.g. 20GiB (default: the pipeline's cache_budget) |
+| `--dry-run` | boolean | `False` | List what would be removed; remove nothing |
+
+**Contract**
+
+- **Reads:** pipeline module or --state-dir, state_dir, temporary directory
+- **Writes:** state_dir (old runs, unused delivery receipts, build outputs and logs, stale partial files), stale piceli-* temporary directories
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Never removes the release state (catalog, execution journal, secret store, approved plans, backups, history), build or mirror receipts, the latest run, a resumable run or the runs of the last --keep-last applied releases. Holds each state directory's run lock (pipeline-locked while a deploy runs). With shared state (state="cluster") only machine-local files are pruned. --dry-run removes nothing. Exit 1 (cache-over-budget) when a state directory is still over the budget. Always prints one JSON object.
+
+(cli-cache-status)=
+### `piceli cache status`
+
+Show the disk used per state directory and category, and Piceli's temporary directories. Read-only.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `TARGET` | text |  |  |
+| `--env` | text |  | Only this environment's state (default: every environment) |
+| `--state-dir` | path |  | A pipeline state directory, instead of a pipeline (default: ./.piceli-deploy) |
+| `--keep-last` | integer | `10` | Runs a prune keeps (for reclaimable_bytes) |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** pipeline module or --state-dir, state_dir, temporary directory
+- **Writes:** nothing (read-only)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Read-only; never contacts a cluster. Categories: builds (outputs and logs), toolchains, blobs, receipts, runs (journals and summaries), release (never pruned), other, temp (partial files). reclaimable_bytes is what cache prune with --keep-last would free.
+
 (cli-codegen-crd)=
 ### `piceli codegen crd`
 
@@ -424,7 +477,30 @@ Deploy a pipeline: inputs → build → deliver → plan → apply → checks.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** --plan never changes the cluster, a registry or a node (it reads the namespace's Deployments and the registry node for a NodeLoopbackRegistry); before the images exist it previews the release with placeholder images (never approvable, never sent to the cluster) and refuses with the blocking objects when it needs adoption or replacement; --approve HASH executes exactly the combined plan, including mirror= copies and a registry adopt=/replace=, and a release planned after delivery may not adopt, replace or delete more than the approved preview; --resume continues the latest interrupted run without a new approval. Unchanged stages are skipped. --ref [SOURCE=]REV builds the sources from commits in temporary worktrees; the combined hash covers the resolved SHAs, --approve needs the same --ref, and --resume reuses the run's SHAs. --plan --out FILE writes a portable plan; --apply FILE --approve HASH applies it on any runner (it re-plans and refuses any difference; no build cache needed for images already delivered). With state="cluster" every command holds the release's Lease (pipeline-locked when another runner holds it; a stale lease is taken over) and --plan writes its state to the cluster too. --env NAME deploys one environment (the app's overrides and the pipeline's target for it, state under <state_dir>/environments/NAME); the combined hash covers the environment's name and resolved values, so --approve, --resume and --plan --out/--apply need the same --env.
+- **Notes:** --plan never changes the cluster, a registry or a node (it reads the namespace's Deployments and the registry node for a NodeLoopbackRegistry); before the images exist it previews the release with placeholder images (never approvable, never sent to the cluster) and refuses with the blocking objects when it needs adoption or replacement; --approve HASH executes exactly the combined plan, including mirror= copies and a registry adopt=/replace=, and a release planned after delivery may not adopt, replace or delete more than the approved preview; --resume continues the latest interrupted run without a new approval. Unchanged stages are skipped. --ref [SOURCE=]REV builds the sources from commits in temporary worktrees; the combined hash covers the resolved SHAs, --approve needs the same --ref, and --resume reuses the run's SHAs. --plan --out FILE writes a portable plan; --apply FILE --approve HASH applies it on any runner (it re-plans and refuses any difference; no build cache needed for images already delivered). With state="cluster" every command holds the release's Lease (pipeline-locked when another runner holds it; a stale lease is taken over) and --plan writes its state to the cluster too. --env NAME deploys one environment (the app's overrides and the pipeline's target for it, state under <state_dir>/environments/NAME); the combined hash covers the environment's name and resolved values, so --approve, --resume and --plan --out/--apply need the same --env. Every run that starts executing writes <state_dir>/runs/<run id>/summary.json (schema docs/schemas/piceli-run-summary-v1.schema.json) and summary.md; the result names them (summary). With the pipeline's cache_budget the state directory is pruned after the run (result: cache).
+
+(cli-doctor)=
+### `piceli doctor`
+
+Check this runner: free disk and memory against what the next build needs (estimated from the last build receipts), and the tools the pipeline uses (docker, docker buildx, kubectl). Exit 1 on a warning.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `TARGET` | text |  |  |
+| `--env` | text |  | Only this environment's state (default: every environment) |
+| `--state-dir` | path |  | A pipeline state directory, instead of a pipeline (default: ./.piceli-deploy) |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** pipeline module or --state-dir, build receipts, docker, docker buildx, kubectl (version only)
+- **Writes:** nothing (read-only)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Read-only; never contacts a cluster. Exit 1 with a warning (runner-disk-low, runner-memory-low, runner-tool-missing); the need is estimated from the last build receipts.
 
 (cli-explain)=
 ### `piceli explain`
@@ -1240,6 +1316,30 @@ Print the manifests of a typed app, composition or pipeline. Never contacts a cl
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** Never contacts a cluster; secret values are placeholders. A Pipeline renders with its target's namespace and declared nodes, build images as placeholders, and reads no kubeconfig, build spec or state. --env NAME renders one environment of the App (a pipeline's target for it); --diff-env OTHER prints the typed difference between the two environments instead (JSON with --format json). stdout carries the manifests (YAML, or one JSON object with --format json); a refusal is always the JSON rejection object.
+
+(cli-runs)=
+### `piceli runs`
+
+List the deploy runs of a pipeline, newest first, with their state, release, duration and summary files. Read-only (with shared state it reads the local working copy: run `piceli state pull` first).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `TARGET` | text |  |  |
+| `--env` | text |  | Only this environment's state (default: every environment) |
+| `--state-dir` | path |  | A pipeline state directory, instead of a pipeline (default: ./.piceli-deploy) |
+| `--limit` | integer | `20` | Newest runs to list |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** pipeline module or --state-dir, state_dir
+- **Writes:** nothing (read-only)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Read-only; newest first. With shared state it reads the local working copy (piceli state pull first). summary.json follows docs/schemas/piceli-run-summary-v1.schema.json.
 
 (cli-state-export)=
 ### `piceli state export`

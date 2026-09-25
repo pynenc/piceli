@@ -932,6 +932,11 @@ class Pipeline:
     :param execution: ``[execution]`` limits of the release engine
         (``max_seconds``, ``readiness_seconds``, ``poll_seconds`` …).
     :param approval_window_seconds: How long a release plan stays valid.
+    :param cache_budget: Disk the state directory may use (``"20GiB"``,
+        ``"500MB"`` or bytes). After each run, ``piceli deploy`` prunes it
+        like ``piceli cache prune --budget`` (never the release state, the
+        secret store, approved plans or what a rollback needs; see
+        ``docs/maintenance.md``). Not part of the plan hash.
 
     Invariants: every image the app uses is a build handle or pinned by
     digest; the release never manages the node-loopback registry.
@@ -965,6 +970,7 @@ class Pipeline:
         execution: Mapping[str, Any] | None = None,
         approval_window_seconds: int = 900,
         inherited_owners: Sequence[str] = (),
+        cache_budget: str | int | None = None,
     ) -> None:
         from piceli.app import App
 
@@ -1027,6 +1033,15 @@ class Pipeline:
         self.execution = dict(execution or {})
         self.approval_window_seconds = approval_window_seconds
         self.inherited_owners = tuple(inherited_owners)
+        #: Bytes the state directory may use after a run (``None``: no limit).
+        self.cache_budget: int | None = None
+        if cache_budget is not None:
+            from piceli.maintenance.cache import CacheError, parse_size
+
+            try:
+                self.cache_budget = parse_size(cache_budget)
+            except CacheError as error:
+                raise PipelineError("pipeline-invalid", str(error)) from None
 
     @property
     def name(self) -> str:

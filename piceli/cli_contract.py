@@ -781,7 +781,77 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "environment (the app's overrides and the pipeline's target for it, "
             "state under <state_dir>/environments/NAME); the combined hash "
             "covers the environment's name and resolved values, so --approve, "
-            "--resume and --plan --out/--apply need the same --env.",
+            "--resume and --plan --out/--apply need the same --env. Every run "
+            "that starts executing writes <state_dir>/runs/<run id>/summary.json "
+            "(schema docs/schemas/piceli-run-summary-v1.schema.json) and "
+            "summary.md; the result names them (summary). With the pipeline's "
+            "cache_budget the state directory is pruned after the run (result: "
+            "cache).",
+        ),
+        # ------------------------------------------- 0.8.0 maintenance
+        "cache status": _C(
+            "Show the disk Piceli uses per state directory and category, and "
+            "its temporary directories.",
+            reads=(
+                "pipeline module or --state-dir",
+                "state_dir",
+                "temporary directory",
+            ),
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="Read-only; never contacts a cluster. Categories: builds "
+            "(outputs and logs), toolchains, blobs, receipts, runs (journals "
+            "and summaries), release (never pruned), other, temp (partial "
+            "files). reclaimable_bytes is what cache prune with --keep-last "
+            "would free.",
+        ),
+        "cache prune": _C(
+            "Remove stale temporary directories, old runs, unused delivery "
+            "receipts and, over --budget, build outputs and logs.",
+            reads=(
+                "pipeline module or --state-dir",
+                "state_dir",
+                "temporary directory",
+            ),
+            writes=(
+                "state_dir (old runs, unused delivery receipts, build outputs "
+                "and logs, stale partial files)",
+                "stale piceli-* temporary directories",
+            ),
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            notes="Never removes the release state (catalog, execution journal, "
+            "secret store, approved plans, backups, history), build or mirror "
+            "receipts, the latest run, a resumable run or the runs of the last "
+            "--keep-last applied releases. Holds each state directory's run "
+            "lock (pipeline-locked while a deploy runs). With shared state "
+            '(state="cluster") only machine-local files are pruned. --dry-run '
+            "removes nothing. Exit 1 (cache-over-budget) when a state directory "
+            "is still over the budget. Always prints one JSON object.",
+        ),
+        "doctor": _C(
+            "Check free disk and memory against the next build's needs, and "
+            "the tools the pipeline uses.",
+            reads=(
+                "pipeline module or --state-dir",
+                "build receipts",
+                "docker, docker buildx, kubectl (version only)",
+            ),
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            notes="Read-only; never contacts a cluster. Exit 1 with a warning "
+            "(runner-disk-low, runner-memory-low, runner-tool-missing); the "
+            "need is estimated from the last build receipts.",
+        ),
+        "runs": _C(
+            "List a pipeline's deploy runs with state, release, duration and "
+            "summary files.",
+            reads=("pipeline module or --state-dir", "state_dir"),
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="Read-only; newest first. With shared state it reads the local "
+            "working copy (piceli state pull first). summary.json follows "
+            "docs/schemas/piceli-run-summary-v1.schema.json.",
         ),
     }
 )

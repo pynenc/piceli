@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import shutil
 import stat
-import tempfile
 import threading
 import time
 import uuid
@@ -22,6 +21,7 @@ from piceli.artifacts.process import (
     ToolPin,
     _run_process,
 )
+from piceli.tempfiles import discard, make_directory
 
 
 @dataclass(frozen=True)
@@ -54,7 +54,7 @@ class RunnableBuild:
         if result["state"] != "succeeded":
             self._discard_output()
             return result | {"runtime_ready": False, "imported": False, "pushed": False}
-        temporary = Path(tempfile.mkdtemp(prefix="piceli-runnable-inspect-"))
+        temporary = make_directory("runnable-inspect")
         try:
             unpack_oci_archive(
                 self.output_archive, temporary / "oci", max_bytes=max_bytes
@@ -69,7 +69,7 @@ class RunnableBuild:
             self._discard_output()
             raise
         finally:
-            shutil.rmtree(temporary, ignore_errors=True)
+            discard(temporary)
 
     def _discard_output(self) -> None:
         if self.output_archive.is_symlink() or self.output_archive.is_file():

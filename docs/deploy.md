@@ -587,6 +587,19 @@ was not delivered is built again first. A run that
 finished, rolled back or stopped at `--until` has nothing to resume: plan a
 new run, and unchanged stages are skipped.
 
+## Run summaries and disk use
+
+When a run ends, whatever the outcome, it writes
+`state_dir/runs/<run id>/summary.json` (for agents; schema
+`docs/schemas/piceli-run-summary-v1.schema.json`) and `summary.md` (for
+people and CI job summaries): commits, image digests and sizes, the plan's
+action classes and changed fields, checks, the failure's code and stage
+timings, never secret values. The result names them (`summary`), and
+`piceli runs MODULE:ATTR` lists the runs. `Pipeline(cache_budget="20GiB")`
+keeps the state directory within a budget after each run; `piceli cache
+status|prune` and `piceli doctor` show and free disk on the runner. See
+{doc}`maintenance`.
+
 ## Operate the release: rollback, status and secrets
 
 `piceli deploy` never writes a `release.toml`; every `piceli release`

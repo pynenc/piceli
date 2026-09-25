@@ -43,6 +43,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`build-failed`](#error-build-failed) | build-spec | no |
 | [`build-timed-out`](#error-build-timed-out) | build-spec | yes |
 | [`builder-not-approved`](#error-builder-not-approved) | build-spec | no |
+| [`cache-arguments-conflict`](#error-cache-arguments-conflict) | maintenance | no |
+| [`cache-budget-invalid`](#error-cache-budget-invalid) | maintenance | no |
+| [`cache-over-budget`](#error-cache-over-budget) | maintenance | no |
 | [`cancelled`](#error-cancelled) | artifacts-delivery | yes |
 | [`check-api-unavailable`](#error-check-api-unavailable) | checks | yes |
 | [`check-callable-invalid`](#error-check-callable-invalid) | checks | no |
@@ -301,6 +304,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`retained-content-precondition-failed`](#error-retained-content-precondition-failed) | execution | no |
 | [`retained-resource`](#error-retained-resource) | execution | no |
 | [`rotate-not-valid-for-rollback`](#error-rotate-not-valid-for-rollback) | release | no |
+| [`runner-disk-low`](#error-runner-disk-low) | maintenance | yes |
+| [`runner-memory-low`](#error-runner-memory-low) | maintenance | yes |
+| [`runner-tool-missing`](#error-runner-tool-missing) | maintenance | no |
 | [`scope-mismatch`](#error-scope-mismatch) | kubernetes | no |
 | [`secret-dependency-cycle`](#error-secret-dependency-cycle) | secrets | no |
 | [`secret-generator-failed`](#error-secret-generator-failed) | secrets | yes |
@@ -3316,4 +3322,55 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Environment not supported here.** `--env` selects an environment of an `App`; the target is a `DeploymentComposition`, a composition function that does not return an App, or a release.toml spec.
 
 - **Fix:** Return the App from the composition function, or use a pipeline (`--spec MODULE:ATTR`) whose app declares the environment.
+- **Retry-safe:** no
+
+
+## Runner hygiene (`piceli cache`, `piceli doctor`, `piceli runs`, `cache_budget=`)
+
+(error-cache-arguments-conflict)=
+### `cache-arguments-conflict`
+
+**Conflicting cache arguments.** The command was given both a pipeline and `--state-dir`, or `--env` without a pipeline.
+
+- **Fix:** Name the pipeline (`MODULE:ATTR`, optionally with `--env`) or a state directory (`--state-dir`), not both.
+- **Retry-safe:** no
+
+(error-cache-budget-invalid)=
+### `cache-budget-invalid`
+
+**Cache budget invalid.** `--budget` or `Pipeline(cache_budget=...)` is not a positive size.
+
+- **Fix:** Give bytes or a size with a unit, for example `20GiB`, `500MB` or `1073741824`.
+- **Retry-safe:** no
+
+(error-cache-over-budget)=
+### `cache-over-budget`
+
+**State directory still over its budget.** After removing everything a prune may remove, a state directory still uses more than its budget. What is left is the release state, receipts and the runs a resume or a rollback of the last releases needs, which are never pruned.
+
+- **Fix:** Run `piceli cache status` to see what is left, then raise the budget, lower `--keep-last`, or move the state directory to a larger disk.
+- **Retry-safe:** no
+
+(error-runner-disk-low)=
+### `runner-disk-low`
+
+**Runner disk space low.** The free space where the state directory or the temporary directory lives is below what the next build needs (estimated from the last build receipts).
+
+- **Fix:** Free space: `piceli cache prune` (add `--budget`), prune the container engine's build cache, or use a runner with a larger disk.
+- **Retry-safe:** yes
+
+(error-runner-memory-low)=
+### `runner-memory-low`
+
+**Runner memory low.** The runner's available memory is below what the next build needs.
+
+- **Fix:** Stop other work on the runner or use a runner with more memory, then run the command again.
+- **Retry-safe:** yes
+
+(error-runner-tool-missing)=
+### `runner-tool-missing`
+
+**Required tool missing.** A tool the pipeline uses is not installed or does not run: `docker` or `docker buildx` for a build, `kubectl` for a node-loopback registry's port forward.
+
+- **Fix:** Install the tool on the runner (and put it on `PATH`), then run `piceli doctor` again.
 - **Retry-safe:** no

@@ -206,6 +206,24 @@ def _drifted(drift: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
+def _diff_fields(result: PlanResult) -> list[dict[str, Any]]:
+    """Per changed object, the JSON pointers its apply changes (no values)."""
+    found = []
+    for item in result.diffs:
+        resource = item.get("resource") or {}
+        paths = [change["path"] for change in item.get("changes") or []]
+        found.append(
+            {
+                "kind": resource.get("kind"),
+                "name": resource.get("name"),
+                "operation": item.get("operation"),
+                "changed": len(paths),
+                "fields": paths[:20],
+            }
+        )
+    return found
+
+
 #: Operations that change who owns an object or remove one. After delivery,
 #: the real release plan may not do any of these to an object the approved
 #: placeholder preview did not show.
@@ -366,6 +384,8 @@ class PipelineRunner:
         self.check_runner = check_runner
         self.journal = Journal(pipeline.state_dir)
         self.run: Run | None = None
+        #: The ``cache_budget`` outcome of the last run (``None``: no budget).
+        self.cache: dict[str, Any] | None = None
         #: The open state session (:mod:`piceli.state`) while :meth:`locked`.
         self.session: Any = None
 
@@ -1229,6 +1249,7 @@ class PipelineRunner:
                 run.set_stage(name, state="interrupted")
                 run.set_state("interrupted")
                 self._emit(name, "interrupted")
+                self._finish()
                 raise
             except BaseException as error:
                 failure = classify(error)
@@ -1248,6 +1269,7 @@ class PipelineRunner:
                 final = failure.details.get("run_state", "failed")
                 run.set_state(final, reason=failure.code)
                 self._emit(name, result, {"reason": failure.code})
+                self._finish()
                 raise failure from None
             run.set_stage(
                 name,
@@ -1258,7 +1280,59 @@ class PipelineRunner:
             self._emit(name, state, output)
         final = "ready" if limit == len(STAGES) - 1 else "stopped"
         run.set_state(final)
+        self._finish()
         return self.result(final)
+
+    def _finish(self) -> None:
+        """After a run ends (any outcome): write its summary, then keep the
+        state directory within ``cache_budget``. Neither may fail the run."""
+        assert self.run is not None
+        from piceli.pipeline import summary
+
+        try:
+            summary.write(self.run, self.pipeline.state_dir)
+        except Exception as error:  # a summary never changes the outcome
+            self.say(f"[summary] not written ({type(error).__name__})")
+        self.cache = self._enforce_budget()
+
+    def _enforce_budget(self) -> dict[str, Any] | None:
+        """Prune the state directory to ``cache_budget`` (the run lock is held)."""
+        budget = self.pipeline.cache_budget
+        if budget is None:
+            return None
+        from piceli.maintenance.cache import (
+            PruneOptions,
+            format_size,
+            prune_one,
+            prune_temporary,
+            state_dirs,
+        )
+
+        try:
+            item = state_dirs(self.pipeline)[0]
+            report = prune_one(item, PruneOptions(budget=budget))
+            prune_temporary()
+        except Exception as error:
+            self.say(f"[cache] budget not enforced ({type(error).__name__})")
+            return None
+        over = report["budget"]["over"]
+        if report["freed_bytes"] or over:
+            self.say(
+                f"[cache] {format_size(report['bytes_after'])} of "
+                f"{format_size(budget)} budget"
+                + (
+                    f", freed {format_size(report['freed_bytes'])}"
+                    if report["freed_bytes"]
+                    else ""
+                )
+                + (" (still over budget: piceli cache status)" if over else "")
+            )
+        return {
+            "budget_bytes": budget,
+            "bytes": report["bytes_after"],
+            "freed_bytes": report["freed_bytes"],
+            "over_budget": over,
+        }
 
     def result(self, state: str) -> dict[str, Any]:
         assert self.run is not None
@@ -1266,7 +1340,9 @@ class PipelineRunner:
         stages = {name: run.stage(name).get("state") for name in STAGES}
         plan = run.output("plan")
         apply = run.output("apply")
-        return {
+        from piceli.pipeline.summary import summary_paths
+
+        body = {
             "schema": EVENT_SCHEMA,
             "event": "result",
             "state": state,
@@ -1276,6 +1352,12 @@ class PipelineRunner:
             "release": apply.get("release") or plan.get("release"),
             "images": plan.get("images", {}),
         }
+        json_path, markdown_path = summary_paths(run.path)
+        if json_path.is_file() and markdown_path.is_file():
+            body["summary"] = {"json": str(json_path), "markdown": str(markdown_path)}
+        if self.cache is not None:
+            body["cache"] = self.cache
+        return body
 
     # -------------------------------------------------------- stage: inputs
     def _run_inputs(
@@ -1354,6 +1436,11 @@ class PipelineRunner:
                         key: entry.get(key)
                         for key in ("image_id", "digest", "ref", "platform")
                     }
+                    | (
+                        {"size_bytes": entry["size_bytes"]}
+                        if type(entry.get("size_bytes")) is int
+                        else {}
+                    )
                     for image, entry in item.images.items()
                 },
             }
@@ -1567,6 +1654,7 @@ class PipelineRunner:
             "plan_hash": result.plan_hash,
             "summary": result.counts,
             "changes": _changes(result),
+            "diff": _diff_fields(result),
             "images": work.release_images,
             "source": result.source,
         }

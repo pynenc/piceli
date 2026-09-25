@@ -58,6 +58,7 @@ Every feature page starts with its maturity, and this table lists them all:
 | Deploy a commit (`piceli deploy --ref`) | {ref}`deploy-ref` | preview |
 | Deploy from CI with an approval step (GitHub Actions recipe) | {doc}`ci` | preview |
 | Shared deployment state, release lock, plan files, `piceli state` | {doc}`state` | preview |
+| Runner hygiene: temporary-file cleanup, `piceli cache status/prune`, `cache_budget=`, `piceli doctor`, run summaries and `piceli runs` | {doc}`maintenance` | preview |
 | Releases from a spec (`piceli release`) | {doc}`release_cli` | preview |
 | Post-deploy checks and automatic rollback (`[[checks]]`, `piceli.checks`, `release check`) | {doc}`checks` | preview |
 | Field-level diffs and no-op detection (`release plan`, `release diff`) | {doc}`plans_and_diffs` | preview |

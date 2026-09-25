@@ -8,6 +8,7 @@ from piceli.k8s.cli.contract import register as register_contract_commands
 from piceli.k8s.cli.deploy_pipeline import deploy
 from piceli.k8s.cli.importing import app as import_app
 from piceli.k8s.cli.inputs import app as inputs_app
+from piceli.k8s.cli.maintenance import register as register_maintenance_commands
 from piceli.k8s.cli.observe import app as observe_app
 from piceli.k8s.cli.operator import app as operator_app
 from piceli.k8s.cli.release import app as release_app
@@ -26,6 +27,7 @@ app.command("render")(render)
 app.add_typer(state_app, name="state")
 register_contract_commands(app)
 register_access_commands(app)
+register_maintenance_commands(app)
 
 
 def _version(value: bool) -> None:

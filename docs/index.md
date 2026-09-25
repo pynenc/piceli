@@ -158,6 +158,7 @@ kubernetes_model/index
 deploy
 ci
 state
+maintenance
 typed_apps
 crds
 environments

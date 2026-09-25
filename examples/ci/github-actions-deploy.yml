@@ -5,6 +5,9 @@
 # the `env` block and the runner labels. The guide is docs/ci.md
 # (https://docs.pynenc.org/projects/piceli/en/latest/ci.html).
 #
+# The apply and resume jobs post the run's summary (summary.md) as the job
+# summary and keep summary.json (for agents) in their artifact.
+#
 # Piceli's own tests run the `piceli deploy` command lines of this file, in
 # this order, each job in its own checkout and state directory, against a
 # fake cluster (tests/acceptance/test_ci_recipe.py), so the recipe cannot
@@ -115,11 +118,29 @@ jobs:
           COMBINED_HASH: ${{ needs.plan.outputs.combined_hash }}
         run: |
           uv run --frozen piceli deploy --apply deploy-plan.json --approve "$COMBINED_HASH" --json > apply.jsonl
+      - name: Post the run summary
+        # The run's summary.md (release, commits, images, plan, checks, failure
+        # cause, stage timings) becomes the job summary; summary.json, the same
+        # data for agents (docs/schemas/piceli-run-summary-v1.schema.json), is
+        # kept in the artifact. Neither ever contains a secret value.
+        if: always()
+        env:
+          RESULT_FILE: apply.jsonl
+        run: |
+          summary=$(jq -r 'select(.event == "result") | .summary.markdown // empty' "$RESULT_FILE" 2>/dev/null | tail -n 1 || true)
+          if [ -n "$summary" ] && [ -f "$summary" ]; then
+            cat "$summary" >> "$GITHUB_STEP_SUMMARY"
+            cp "$summary" run-summary.md
+            cp "${summary%.md}.json" run-summary.json
+          fi
       - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: deploy-result
-          path: apply.jsonl
+          path: |
+            apply.jsonl
+            run-summary.md
+            run-summary.json
       - name: Remove the kubeconfig and the state copy
         if: always()
         run: rm -rf "$RUNNER_TEMP/deploy.kubeconfig" "$RUNNER_TEMP/piceli-state"
@@ -143,11 +164,29 @@ jobs:
       - name: Resume the interrupted run at its failed stage
         run: |
           uv run --frozen piceli deploy "$PIPELINE" --resume --json > resume.jsonl
+      - name: Post the run summary
+        # The run's summary.md (release, commits, images, plan, checks, failure
+        # cause, stage timings) becomes the job summary; summary.json, the same
+        # data for agents (docs/schemas/piceli-run-summary-v1.schema.json), is
+        # kept in the artifact. Neither ever contains a secret value.
+        if: always()
+        env:
+          RESULT_FILE: resume.jsonl
+        run: |
+          summary=$(jq -r 'select(.event == "result") | .summary.markdown // empty' "$RESULT_FILE" 2>/dev/null | tail -n 1 || true)
+          if [ -n "$summary" ] && [ -f "$summary" ]; then
+            cat "$summary" >> "$GITHUB_STEP_SUMMARY"
+            cp "$summary" run-summary.md
+            cp "${summary%.md}.json" run-summary.json
+          fi
       - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: deploy-resume
-          path: resume.jsonl
+          path: |
+            resume.jsonl
+            run-summary.md
+            run-summary.json
       - name: Remove the kubeconfig and the state copy
         if: always()
         run: rm -rf "$RUNNER_TEMP/deploy.kubeconfig" "$RUNNER_TEMP/piceli-state"

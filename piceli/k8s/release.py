@@ -266,15 +266,20 @@ class ReleaseCatalog:
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         os.chmod(self.path.parent, 0o700)
         encoded = _canonical(value)
-        with tempfile.NamedTemporaryFile(
-            "w", dir=self.path.parent, delete=False
-        ) as output:
-            output.write(encoded + "\n")
-            output.flush()
-            os.fsync(output.fileno())
-            temporary = Path(output.name)
-        os.chmod(temporary, 0o600)
-        os.replace(temporary, self.path)
+        descriptor, name = tempfile.mkstemp(
+            prefix=f".{self.path.name}.", dir=self.path.parent
+        )
+        temporary = Path(name)
+        try:
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "w") as output:
+                output.write(encoded + "\n")
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary, self.path)
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
         descriptor = os.open(self.path.parent, os.O_RDONLY)
         try:
             os.fsync(descriptor)

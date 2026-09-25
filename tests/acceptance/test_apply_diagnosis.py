@@ -244,6 +244,17 @@ def test_deploy_stops_with_one_line_per_failing_workload(shop) -> None:
     run = (tmp_path / "state" / "runs" / f"{run_id}.json").read_text()
     assert "cannot open catalog" not in run
     assert '"reason": "CrashLoopBackOff"' in run
+    # The run summary carries the same compact causes, still without logs.
+    summary_dir = tmp_path / "state" / "runs" / run_id
+    summary = json.loads((summary_dir / "summary.json").read_text())
+    assert summary["failure"]["reason"] == "pipeline-apply-crashloop"
+    assert summary["failure"]["category"] == "apply-crashloop"
+    causes = summary["failure"]["causes"]
+    assert sorted(item["name"] for item in causes) == ["cache", "web"]
+    assert {item["reason"] for item in causes} == {"CrashLoopBackOff"}
+    markdown = (summary_dir / "summary.md").read_text()
+    assert "cannot open catalog" not in markdown + json.dumps(summary)
+    assert "container `cache`: `CrashLoopBackOff`, exit 101" in markdown
 
     status = CliRunner().invoke(
         cli,
