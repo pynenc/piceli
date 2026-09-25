@@ -104,8 +104,9 @@ everything that may go went, the command exits `1` with
 ## Keep a pipeline within a budget
 
 ```python
-pipeline = Pipeline(app, target, build=images, deliver=Registry(url),
-                    cache_budget="20GiB")
+pipeline = Pipeline(
+    app, target, build=images, deliver=Registry(url), cache_budget="20GiB"
+)
 ```
 
 After every run (ready or not), `piceli deploy` prunes the state directory
