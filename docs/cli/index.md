@@ -73,8 +73,9 @@ Local release and operations management. See {doc}`../operator_workflow`.
 
 ## Artifacts Command
 
-Deterministic OCI image layouts from pinned sources. Nothing is pushed. See
-{doc}`../artifact_delivery`.
+Deterministic OCI image layouts from pinned sources, containerized builds and
+image delivery. Nothing is pushed or imported without an explicit approval
+(`--approve-digest`, `--approve-plan`). See {doc}`../artifact_delivery`.
 
 | Subcommand | Description |
 | --- | --- |

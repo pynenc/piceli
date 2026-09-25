@@ -37,7 +37,9 @@ disposable cluster (`kind create cluster`) and never a shared one.
 
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/)
 (`feat:`, `fix:`, `docs:`, `test:` …). Behaviour changes get a line in
-`docs/changelog.md`.
+`docs/changelog.md`. A new command, option or error code also needs
+`make docs-reference`, and an entry in `docs/agents.md` and `llms.txt` when it
+is safe to run or needs approval.
 
 ## Invariants
 
@@ -96,6 +98,8 @@ These are enforced by tests or review. Do not weaken them.
 | Templates (typed object model) | `piceli/k8s/templates/` |
 | Discovery, plans, executor, journal, sessions | `piceli/k8s/ops/` |
 | Releases from a spec | `piceli/k8s/release_spec.py`, `release_runner.py`, `release_secrets.py`, `piceli/k8s/cli/release.py` |
+| Deploy from source (`Pipeline`, `piceli deploy`) | `piceli/pipeline/` |
+| Post-deploy checks (`Checks`, `release check`) | `piceli/checks/` |
 | Builds, source identity, image delivery | `piceli/artifacts/` |
 | Typed apps (`App`, `app.override`) | `piceli/app/` |
 | Import live objects or YAML as a typed module (`piceli import`) | `piceli/importing/`, `piceli/k8s/cli/importing.py` |
@@ -104,3 +108,5 @@ These are enforced by tests or review. Do not weaken them.
 | Access and status (`piceli access`, `piceli status`) | `piceli/app/access.py`, `piceli/k8s/access.py`, `piceli/k8s/port_owner.py`, `piceli/k8s/cli/access.py` |
 | Examples (run in CI where possible) | `examples/` |
 | Docs (Sphinx + MyST) | `docs/`; agent entry points `llms.txt`, `docs/agents.md` |
+| First-run path for new users | `README.md` quick start, `docs/getting_started/index.md` and the taste in `docs/index.md`; keep the three in sync |
+| Human contributor guide | `CONTRIBUTING.md`, `docs/contributing/` |

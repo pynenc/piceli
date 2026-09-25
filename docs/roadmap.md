@@ -84,8 +84,10 @@ audience.
 
 ### 1. Foundations
 
-- Modern packaging and tooling: `uv`, PEP 621 metadata, `ruff`, supported Python
-  3.12+, a CI matrix, trusted publishing to PyPI.
+- ✅ Modern packaging and tooling: `uv`, PEP 621 metadata, `ruff`, supported
+  Python 3.12+, a CI matrix, trusted publishing to PyPI.
+- ✅ A machine-readable CLI contract for agents and CI: `piceli help-json`,
+  `piceli explain`, fixed error codes and generated reference pages.
 - Keep the published documentation in sync with every release.
 - Remove code specific to one deployment and dependencies that are no longer used.
 - Security hardening of the local operations server.
@@ -97,8 +99,10 @@ audience.
   discovery, server-side apply, the journal and resume.
 - ✅ Delete-and-recreate only as an explicit per-object opt-in (`--replace`).
 - ✅ `piceli deploy`: build, delivery and release as one resumable command (preview; see {doc}`deploy`).
-- Field-level diff output in plans.
-- Support standard kubeconfig authentication (exec plugins for GKE, EKS and AKS).
+- ✅ Field-level diffs and true no-op plans (`piceli release diff`; preview, see
+  {doc}`plans_and_diffs`).
+- ✅ Standard kubeconfig authentication through exec plugins for GKE, EKS, AKS
+  and OIDC (preview, see {doc}`managed_clusters`).
 - Fix and fully test every template.
 
 ### 3. A complete model
@@ -115,7 +119,7 @@ audience.
 - Reusable, parameterised components: the Python counterpart of a Helm chart.
 - Environment overlays (dev, staging, production) as typed configuration: the
   Python counterpart of Kustomize.
-- `piceli render` to produce plain YAML, so teams can adopt Piceli gradually and
+- ✅ `piceli render` produces plain YAML, so teams can adopt Piceli gradually and
   feed its output into existing tools.
 
 ### 5. Continuous delivery
@@ -132,5 +136,5 @@ audience.
 
 ## Getting involved
 
-Feedback on priorities is welcome. Open an issue or a discussion on
-[GitHub](https://github.com/pynenc/piceli).
+Feedback on priorities is welcome: open an
+[issue on GitHub](https://github.com/pynenc/piceli/issues).
