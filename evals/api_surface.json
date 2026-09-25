@@ -584,6 +584,61 @@
     ]
    }
   },
+  "ApprovalPolicy": {
+   "attrs": [
+    "allow",
+    "deny",
+    "effective",
+    "evaluate",
+    "from_identity",
+    "from_value",
+    "identity",
+    "max_objects"
+   ],
+   "init": [
+    "allow",
+    "deny",
+    "max_objects"
+   ],
+   "methods": {
+    "evaluate": [
+     "actions",
+     "drift"
+    ],
+    "from_identity": [
+     "value"
+    ],
+    "from_value": [
+     "value"
+    ],
+    "identity": []
+   },
+   "returns": {
+    "evaluate": "PolicyDecision",
+    "from_identity": "ApprovalPolicy",
+    "from_value": "ApprovalPolicy"
+   }
+  },
+  "AutoApproveSpec": {
+   "attrs": [
+    "allow",
+    "deny",
+    "max_objects",
+    "policy"
+   ],
+   "init": [
+    "allow",
+    "deny",
+    "max_objects"
+   ],
+   "methods": {
+    "policy": []
+   },
+   "pydantic": true,
+   "returns": {
+    "policy": "ApprovalPolicy"
+   }
+  },
   "Autoscaler": {
    "attr_types": {
     "target_kind": "Deployment"
@@ -1711,6 +1766,8 @@
   },
   "ExecutionSpec": {
    "attrs": [
+    "crash_restarts",
+    "fail_fast",
     "max_actions",
     "max_polls",
     "max_seconds",
@@ -1719,6 +1776,8 @@
     "write_settle_seconds"
    ],
    "init": [
+    "crash_restarts",
+    "fail_fast",
     "max_actions",
     "max_polls",
     "max_seconds",
@@ -1755,6 +1814,7 @@
   "FakeAPI": {
    "attrs": [
     "add_node",
+    "fail_pods",
     "handler",
     "inject",
     "managers",
@@ -1763,6 +1823,7 @@
     "scale"
    ],
    "init": [
+    "namespace",
     "types"
    ],
    "methods": {
@@ -1770,6 +1831,17 @@
      "architecture",
      "name",
      "uid"
+    ],
+    "fail_pods": [
+     "container",
+     "events",
+     "exit_code",
+     "init",
+     "logs",
+     "message",
+     "reason",
+     "restarts",
+     "workload"
     ],
     "handler": [],
     "inject": null,
@@ -2404,7 +2476,11 @@
     "delete",
     "discover_api_resource",
     "get",
+    "list_pods",
+    "list_replica_sets",
     "list_resources",
+    "pod_events",
+    "pod_log",
     "preview_update",
     "probe_readiness",
     "probe_server_side_apply",
@@ -2465,8 +2541,31 @@
      "deadline",
      "identity"
     ],
+    "list_pods": [
+     "deadline",
+     "limit",
+     "selector"
+    ],
+    "list_replica_sets": [
+     "deadline",
+     "limit",
+     "selector"
+    ],
     "list_resources": [
      "request"
+    ],
+    "pod_events": [
+     "deadline",
+     "limit",
+     "pod"
+    ],
+    "pod_log": [
+     "container",
+     "deadline",
+     "limit_bytes",
+     "pod",
+     "previous",
+     "tail_lines"
     ],
     "preview_update": [
      "current",
@@ -2887,7 +2986,9 @@
     "adopt",
     "app",
     "approval_window_seconds",
+    "auto_approve",
     "build",
+    "cache_budget",
     "checks",
     "deliver",
     "execution",
@@ -2940,6 +3041,7 @@
     "identity",
     "locked",
     "plan",
+    "policy_decision",
     "result",
     "resume",
     "sources"
@@ -2959,6 +3061,7 @@
     "execute": [
      "approval",
      "plan",
+     "policy",
      "reapply"
     ],
     "identity": [],
@@ -2967,6 +3070,9 @@
      "reapply",
      "until"
     ],
+    "policy_decision": [
+     "plan"
+    ],
     "result": [
      "state"
     ],
@@ -2974,7 +3080,8 @@
     "sources": []
    },
    "returns": {
-    "plan": "CombinedPlan"
+    "plan": "CombinedPlan",
+    "policy_decision": "PolicyDecision"
    }
   },
   "PlanTarget": {
@@ -3006,6 +3113,26 @@
    ],
    "methods": {},
    "pydantic": true
+  },
+  "PolicyDecision": {
+   "attr_types": {
+    "policy": "ApprovalPolicy"
+   },
+   "attrs": [
+    "allowed",
+    "changes",
+    "policy",
+    "to_dict",
+    "violations"
+   ],
+   "init": [
+    "changes",
+    "policy",
+    "violations"
+   ],
+   "methods": {
+    "to_dict": []
+   }
   },
   "Probe": {
    "attrs": [
@@ -3320,9 +3447,14 @@
    }
   },
   "ReleaseSettings": {
+   "attr_types": {
+    "auto_approve": "AutoApproveSpec"
+   },
    "attrs": [
     "adopt",
+    "approval_policy",
     "approval_window_seconds",
+    "auto_approve",
     "catalog",
     "composition",
     "field_manager",
@@ -3341,6 +3473,7 @@
    "init": [
     "adopt",
     "approval_window_seconds",
+    "auto_approve",
     "catalog",
     "composition",
     "field_manager",
@@ -4636,16 +4769,20 @@
     "subcommands": [
      "access",
      "artifacts",
+     "cache",
      "codegen",
      "deploy",
+     "doctor",
      "explain",
      "help-json",
      "import",
      "inputs",
      "observe",
      "operator",
+     "publish",
      "release",
      "render",
+     "runs",
      "state",
      "status"
     ]
@@ -4805,6 +4942,39 @@
     ],
     "subcommands": []
    },
+   "cache": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "prune",
+     "status"
+    ]
+   },
+   "cache prune": {
+    "arguments": [
+     "target"
+    ],
+    "flags": [
+     "--budget",
+     "--dry-run",
+     "--env",
+     "--keep-last",
+     "--state-dir"
+    ],
+    "subcommands": []
+   },
+   "cache status": {
+    "arguments": [
+     "target"
+    ],
+    "flags": [
+     "--env",
+     "--json",
+     "--keep-last",
+     "--state-dir"
+    ],
+    "subcommands": []
+   },
    "codegen": {
     "arguments": [],
     "flags": [],
@@ -4838,6 +5008,7 @@
     "flags": [
      "--apply",
      "--approve",
+     "--approve-if-policy",
      "--auto-approve",
      "--env",
      "--json",
@@ -4850,12 +5021,26 @@
     ],
     "subcommands": []
    },
+   "doctor": {
+    "arguments": [
+     "target"
+    ],
+    "flags": [
+     "--env",
+     "--json",
+     "--state-dir"
+    ],
+    "subcommands": []
+   },
    "explain": {
     "arguments": [
      "code"
     ],
     "flags": [
-     "--json"
+     "--env",
+     "--json",
+     "--run",
+     "--spec"
     ],
     "subcommands": []
    },
@@ -5173,6 +5358,24 @@
     ],
     "subcommands": []
    },
+   "publish": {
+    "arguments": [
+     "target"
+    ],
+    "flags": [
+     "--approve",
+     "--ca-file",
+     "--credentials",
+     "--env",
+     "--namespace",
+     "--revision",
+     "--secrets",
+     "--source",
+     "--spec",
+     "--to"
+    ],
+    "subcommands": []
+   },
    "release": {
     "arguments": [],
     "flags": [],
@@ -5195,6 +5398,7 @@
      "--adopt",
      "--adopt-all-desired",
      "--approve",
+     "--approve-if-policy",
      "--auto-approve",
      "--env",
      "--replace",
@@ -5302,6 +5506,7 @@
     "arguments": [],
     "flags": [
      "--env",
+     "--run",
      "--spec"
     ],
     "subcommands": []
@@ -5324,7 +5529,21 @@
      "--env",
      "--format",
      "--namespace",
+     "--out",
+     "--secrets",
      "--spec"
+    ],
+    "subcommands": []
+   },
+   "runs": {
+    "arguments": [
+     "target"
+    ],
+    "flags": [
+     "--env",
+     "--json",
+     "--limit",
+     "--state-dir"
     ],
     "subcommands": []
    },
@@ -5392,6 +5611,8 @@
    "access-kubectl-missing",
    "access-none-declared",
    "access-port-conflict",
+   "access-stop-incomplete",
+   "access-stop-needs-stale",
    "access-target-invalid",
    "access-unknown-forward",
    "adopt-and-replace",
@@ -5401,6 +5622,11 @@
    "ambiguous-write-blocked",
    "api-unavailable",
    "applied-resource-drift",
+   "apply-crashloop",
+   "approval-policy-exceeded",
+   "approval-policy-invalid",
+   "approval-policy-missing",
+   "approve-if-policy-flags-conflict",
    "approve-with-planning-flags",
    "auth-provider-refused",
    "authorization-expired",
@@ -5411,6 +5637,9 @@
    "build-failed",
    "build-timed-out",
    "builder-not-approved",
+   "cache-arguments-conflict",
+   "cache-budget-invalid",
+   "cache-over-budget",
    "cancelled",
    "check-api-unavailable",
    "check-callable-invalid",
@@ -5485,6 +5714,7 @@
    "execution-other-owner",
    "execution-other-target",
    "execution-refused",
+   "explain-run-needs-spec",
    "field-owner-precondition-failed",
    "forward-options-incomplete",
    "forward-options-without-forward",
@@ -5496,6 +5726,13 @@
    "generation-precondition-failed",
    "git-timed-out",
    "git-unavailable",
+   "gitops-artifact-changed",
+   "gitops-empty",
+   "gitops-image-unresolved",
+   "gitops-push-failed",
+   "gitops-secret-value",
+   "gitops-secrets-present",
+   "gitops-target-invalid",
    "grant-expired",
    "grant-mismatch",
    "identity-mismatch",
@@ -5591,6 +5828,7 @@
    "operator-state-unavailable",
    "output-invalid",
    "ownership-precondition-failed",
+   "pipeline-apply-crashloop",
    "pipeline-apply-not-ready",
    "pipeline-checks-failed",
    "pipeline-checks-unavailable",
@@ -5647,6 +5885,7 @@
    "release-refused",
    "release-state-unavailable",
    "render-model-invalid",
+   "render-out-refused",
    "render-target-invalid",
    "replace-backup-failed",
    "replace-delete-not-observed",
@@ -5667,6 +5906,9 @@
    "retained-content-precondition-failed",
    "retained-resource",
    "rotate-not-valid-for-rollback",
+   "runner-disk-low",
+   "runner-memory-low",
+   "runner-tool-missing",
    "scope-mismatch",
    "secret-dependency-cycle",
    "secret-generator-failed",
@@ -5733,6 +5975,7 @@
    "uid-version-precondition-failed",
    "undiscovered-api",
    "unknown-error-code",
+   "unknown-execution",
    "unknown-forward",
    "unknown-release",
    "unknown-rotate-secret",
@@ -5752,6 +5995,9 @@
    },
    "App": {
     "class": "App"
+   },
+   "ApprovalPolicy": {
+    "class": "ApprovalPolicy"
    },
    "Autoscaler": {
     "class": "Autoscaler"
@@ -5972,6 +6218,7 @@
     "class": "Workload"
    },
    "app": {},
+   "approval_policy": {},
    "artifacts": {},
    "bounds": {},
    "checks": {},
@@ -5981,10 +6228,12 @@
    "gcp": {},
    "importing": {},
    "k8s": {},
+   "maintenance": {},
    "pipeline": {},
    "process_group": {},
    "state": {},
    "telemetry": {},
+   "tempfiles": {},
    "testing": {},
    "utils": {},
    "version": {
@@ -6188,6 +6437,12 @@
    "Any": {
     "class": "Any"
    },
+   "ApprovalPolicy": {
+    "class": "ApprovalPolicy"
+   },
+   "AutoApproveSpec": {
+    "class": "AutoApproveSpec"
+   },
    "AwsSecretSpec": {
     "class": "AwsSecretSpec"
    },
@@ -6207,6 +6462,7 @@
    "ConfigDict": {
     "class": "ConfigDict"
    },
+   "DEFAULT_ALLOW": {},
    "DELIVERY_RECEIPT_SCHEMA": {},
    "DELIVERY_SCHEMAS": {},
    "DeploymentComposition": {
@@ -6415,6 +6671,9 @@
    }
   },
   "piceli.pipeline": {
+   "ApprovalPolicy": {
+    "class": "ApprovalPolicy"
+   },
    "AwsSecret": {
     "params": [
      "encoding",
@@ -6609,6 +6868,7 @@
   "piceli.app.model",
   "piceli.app.render",
   "piceli.app.resource",
+  "piceli.approval_policy",
   "piceli.artifacts",
   "piceli.artifacts.base_image",
   "piceli.artifacts.build_context",
@@ -6641,6 +6901,7 @@
   "piceli.gcp",
   "piceli.gcp.credentials",
   "piceli.gcp.gke",
+  "piceli.gitops",
   "piceli.importing",
   "piceli.importing.clean",
   "piceli.importing.codegen",
@@ -6657,8 +6918,10 @@
   "piceli.k8s.cli.deploy_pipeline",
   "piceli.k8s.cli.importing",
   "piceli.k8s.cli.inputs",
+  "piceli.k8s.cli.maintenance",
   "piceli.k8s.cli.observe",
   "piceli.k8s.cli.operator",
+  "piceli.k8s.cli.publish",
   "piceli.k8s.cli.release",
   "piceli.k8s.cli.render",
   "piceli.k8s.cli.state",
@@ -6676,6 +6939,7 @@
   "piceli.k8s.operator_state",
   "piceli.k8s.ops",
   "piceli.k8s.ops.bounds",
+  "piceli.k8s.ops.diagnosis",
   "piceli.k8s.ops.discovery",
   "piceli.k8s.ops.dry_run",
   "piceli.k8s.ops.exec_credentials",
@@ -6729,6 +6993,9 @@
   "piceli.k8s.ui_config",
   "piceli.k8s.utils",
   "piceli.k8s.utils.utils_object",
+  "piceli.maintenance",
+  "piceli.maintenance.cache",
+  "piceli.maintenance.doctor",
   "piceli.pipeline",
   "piceli.pipeline.backend",
   "piceli.pipeline.checks",
@@ -6742,6 +7009,7 @@
   "piceli.pipeline.registry_takeover",
   "piceli.pipeline.runner",
   "piceli.pipeline.secrets",
+  "piceli.pipeline.summary",
   "piceli.process_group",
   "piceli.reference_docs",
   "piceli.settings",
@@ -6753,6 +7021,7 @@
   "piceli.state.scopes",
   "piceli.state.snapshot",
   "piceli.telemetry",
+  "piceli.tempfiles",
   "piceli.testing",
   "piceli.testing.fake_api",
   "piceli.testing.pytest_plugin",
@@ -6788,5 +7057,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.7.0"
+ "version": "0.8.0"
 }

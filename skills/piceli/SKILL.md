@@ -3,7 +3,7 @@ name: piceli
 description: Deploy and operate Kubernetes apps described as typed Python with Piceli, safely, from an agent. Covers installing piceli, describing an App and a Pipeline, rendering without a cluster, planning and showing the plan to the owner, deploying only with the hash the owner approved (or inside the owner's declared auto_approve policy), checking status and access, diagnosing failures with `piceli explain` and the JSON output contract, resuming interrupted runs and rolling back. Use when a project imports piceli or has a Pipeline or release.toml, or when asked to deploy, plan, roll back or debug a Piceli release.
 license: MIT
 metadata:
-  piceli-version: "0.7"
+  piceli-version: "0.8"
 ---
 
 # Piceli
@@ -38,7 +38,7 @@ exist in the version below.
 
 ## Requirements
 
-- `piceli` **0.7.x**, CPython 3.12+: `pip install "piceli>=0.7,<0.8"`.
+- `piceli` **0.8.x**, CPython 3.12+: `pip install "piceli>=0.8,<0.9"`.
 - The owner gives you a kubeconfig **file** and a **context** (here through
   `SHOP_KUBECONFIG` and `SHOP_CONTEXT`). A pipeline with `Build` objects also
   needs Docker; the example below uses pinned images only.
@@ -47,7 +47,7 @@ exist in the version below.
 python scripts/check_install.py
 ```
 
-It checks that `piceli --version` is 0.7.x and that `piceli help-json` has
+It checks that `piceli --version` is 0.8.x and that `piceli help-json` has
 every command and option this skill uses. `piceli help-json` is the full
 reference: every command's side effects, whether it needs approval and
 whether it is safe to retry.
@@ -136,7 +136,9 @@ It runs `piceli status examples/shop.py:pipeline --json`: `state` is `up`,
 `degraded`, `down` or `unknown`, one line per workload with its health, and
 each declared access URL. Exit `1` means not up. `piceli access MODULE:ATTR`
 forwards the declared ports to `127.0.0.1` (a long-running process: ask the
-owner first).
+owner first). When a port is taken by Piceli's own leftover forward or server
+for the same app, the conflict says so (`holder`); `piceli access stop --stale
+MODULE:ATTR` stops only those processes: ask the owner first.
 
 ## 5. The owner's approval policy
 
@@ -183,6 +185,16 @@ failure. `python scripts/diagnose.py --result out.json` reads a saved result
 (with its `blocking` objects and policy violations). An unknown code should
 not happen: report the whole JSON object.
 
+A workload that cannot start (crash loop, image pull error, bad config)
+fails the apply at once with `pipeline-apply-crashloop` (`apply-crashloop`
+from `piceli release`) and a `diagnosis`: per workload, each container's
+reason, exit code, restarts and a redacted log tail. The scripts print one
+line per cause; report them to the owner and do not retry unchanged.
+`piceli release status --spec MODULE:ATTR --run <run id> --json` shows them
+again later. Every deploy run also writes a summary (`summary.json` in the
+result; `piceli runs MODULE:ATTR --json` lists past runs): read it to learn
+what a run did or why it failed.
+
 Common codes: `pipeline-plan-changed` (plan again), `pipeline-locked` (another
 deploy runs; wait), `immutable-field-changed` (a replace is needed: ask the
 owner), `pipeline-registry-takeover-required` (ask the owner),
@@ -224,7 +236,8 @@ objects), never data or external side effects. A pipeline with
 
 `piceli explain`, `piceli help-json`, `piceli --version`, `piceli render`,
 `piceli deploy … --plan`, `piceli status … --json`, `piceli release status`,
-`piceli release plan|diff`, `python scripts/check_install.py`,
+`piceli release plan|diff`, `piceli runs … --json`, `piceli cache status`,
+`piceli doctor`, `python scripts/check_install.py`,
 `python scripts/plan.py …`, `python scripts/status.py …`,
 `python scripts/diagnose.py …`, `python scripts/rollback.py …` without
 `--approve` (it only plans).
@@ -233,6 +246,8 @@ objects), never data or external side effects. A pipeline with
 
 `piceli deploy … --approve`, `--resume` of a run the owner did not approve,
 `piceli release apply|rollback … --approve`, `piceli release check` on a spec
-you did not write, `piceli access`, `piceli state import`, and every
+you did not write, `piceli access`, `piceli access stop --stale`,
+`piceli publish … --approve` (pushes manifests for Flux or Argo CD),
+`piceli cache prune`, `piceli state import`, and every
 `artifacts deliver|build-spec run|execute-command|import-local`. Full rules:
 <https://docs.pynenc.org/projects/piceli/en/stable/agents.html>.

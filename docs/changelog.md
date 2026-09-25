@@ -4,9 +4,9 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
-## Unreleased
+## Version 0.8.0
 
-- `piceli deploy MODULE:ATTR --plan` refused for adoption or replacement now
+- **Fix:** `piceli deploy MODULE:ATTR --plan` refused for adoption or replacement now
   suggests what `piceli deploy` can act on: each `blocking[].suggest` entry
   names the Pipeline declaration (`Pipeline(adopt=["Deployment/web"])`,
   `Pipeline(replace=["Deployment/web"])`) instead of the `--adopt`/`--replace`
@@ -14,10 +14,10 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   sentence says the same. `blocking[].code` and `message` are unchanged, and
   `piceli release` keeps suggesting its flags. Consumers that matched the old
   `--adopt …` strings for a deploy must match the new ones.
-- `piceli deploy` rejections and failures carry the contract's `message`
+- **Fix:** `piceli deploy` rejections and failures carry the contract's `message`
   (the sentence stderr shows first) next to `reason`; the
   `piceli.deploy-event.v1` schema documents it.
-- A model module that raises no longer breaks the output contract with a
+- **Fix:** a model module that raises no longer breaks the output contract with a
   traceback. `piceli render` rejects with `render-target-invalid` (exit `2`,
   one JSON object whatever `--format` says) when the target, or the spec's
   composition, raises while importing or evaluating (a duplicate name, a wrong
@@ -26,8 +26,13 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   with `invalid-composition` (a composition module that raised `ValueError`
   while importing was `release-refused`). `deploy` and `release --spec
   MODULE:ATTR` (`pipeline-load-failed`), `status` and `access`
-  (`access-target-invalid`) now put the exception's type and text in
-  `message` too. `PICELI_DEBUG=1` prints the traceback on stderr.
+  (`access-target-invalid`), and the new `publish`, `render --out` (`render-target-invalid`),
+  `runs`, `cache` and `doctor` (`pipeline-load-failed`) put the exception's
+  type and text in `message` too. `PICELI_DEBUG=1` prints the traceback on stderr.
+- **Fix:** another process's command line is no longer printed in port conflicts
+  (`access-port-conflict`, the dashboard port, `observe`/dashboard forward
+  conflicts): its pid only, as `piceli status` already did (`owner.command`
+  and `owner.parent` are `null` for it).
 - **Fail fast with causes:** while an apply waits for a workload, Piceli
   watches the pods of the revision being rolled out. `CrashLoopBackOff`
   (`Init:CrashLoopBackOff`), `ImagePullBackOff`, `ErrImagePull`,
@@ -53,10 +58,6 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   serve` for the same target), says so and suggests the new `piceli access
   stop --stale TARGET [--port N]`, which stops only those processes. Conflicts
   add `holder` (`piceli-forward`, `piceli-server`, `other`, `unknown`).
-- Another process's command line is no longer printed in port conflicts
-  (`access-port-conflict`, the dashboard port, `observe`/dashboard forward
-  conflicts): its pid only, as `piceli status` already did (`owner.command`
-  and `owner.parent` are `null` for it).
 - `piceli.testing`: `FakeAPI.fail_pods(...)`, pod logs and events, and
   ReplicaSets in the default `TYPES`.
 - **Temporary files are always removed:** every temporary directory Piceli
@@ -89,8 +90,10 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   `docs/schemas/piceli-run-summary-v1.schema.json`) and `summary.md` when it
   ends, whatever the outcome: commits and refs, image digests, sizes and
   reused blobs, plan action classes and counts, changed objects with their
-  changed field paths, checks, the failure's code and message, stage
-  timings; never secret values. The deploy result adds `summary`, and the
+  changed field paths, checks, the failure's code and message (with the
+  compact causes of a workload that cannot start), `approved_by: "policy"`
+  when the owner's approval policy approved the run, stage timings; never
+  secret values or log lines. The deploy result adds `summary`, and the
   journaled plan stage output adds `diff` (changed field paths). `piceli runs
   [--json]` lists the runs. The CI recipe posts `summary.md` as the job
   summary of `apply` and `resume` and keeps `summary.json` in the artifact
@@ -146,6 +149,7 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 - `piceli.testing.FakeAPI(namespace=...)` serves another namespace than
   `TARGET.namespace`, so an app that names its own namespace runs against the
   fake API unchanged.
+  `fail_pods` creates its pods, logs and events in that namespace.
 - **Cross-model eval (experimental, contributor tooling):** `evals/` measures
   how language models install, implement, operate and recommend Piceli:
   fixed tasks (install; a web app with a Deployment, Service, HPA and PostgreSQL
@@ -160,7 +164,10 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   fail), interventions and recommendation rate. Anthropic, OpenAI and Gemini
   models via environment keys (skipped without them, never printed); mock
   models validate the harness (`make evals-check`, run in CI), and the
-  committed 0.7.0 baseline is a harness validation, not a model measurement.
+  committed 0.7.0 and 0.8.0 baselines are harness validations, not model
+  measurements. `--approve-if-policy` is not scored as approving on the
+  owner's behalf (the owner's reviewed policy decides); a captured
+  `piceli publish` digest is.
   See `docs/contributing/evals.md`.
 
 ## Version 0.7.0

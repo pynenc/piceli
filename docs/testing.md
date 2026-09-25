@@ -107,7 +107,7 @@ never read `~/.kube/config`.
 
 - **`403` for a namespaced object.** Every namespaced object lives in one
   namespace, `TARGET.namespace` (`piceli-test`) unless you pass
-  `FakeAPI(namespace="my-app")` (0.7.0); requests for another namespace are
+  `FakeAPI(namespace="my-app")` (0.8.0); requests for another namespace are
   refused.
 - **`404` for a kind.** The server serves the kinds in `TYPES`. Pass
   `FakeAPI(types={...})` (plural → `(apiVersion, kind, namespaced)`) and

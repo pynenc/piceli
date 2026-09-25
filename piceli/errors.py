@@ -50,7 +50,7 @@ AREAS: Mapping[str, str] = MappingProxyType(
         # --- 0.7.0 model completeness ---
         "codegen": "Typed models from CRDs (`piceli codegen crd`)",
         "environments": "Environments (`App.environment`, `--env`, `--diff-env`)",
-        # --- 0.8.0 runner hygiene ---
+        # --- 0.8.0 ---
         "maintenance": "Runner hygiene (`piceli cache`, `piceli doctor`, `piceli runs`, `cache_budget=`)",
         "approval": "Owner-declared approval policies (`auto_approve`, `--approve-if-policy`)",
         "gitops": "GitOps handoff (`piceli publish`, `piceli render --out`)",
@@ -3112,7 +3112,7 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         False,
         "maintenance",
     ),
-    # ---------------------------------------------------------------- gitops
+    # --- 0.8.0 gitops handoff ---
     _E(
         "gitops-secrets-present",
         "Secret in a GitOps handoff",
@@ -3185,7 +3185,7 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         False,
         "environments",
     ),
-    # --- 0.7.0 approval policy ---
+    # --- 0.8.0 approval policy ---
     _E(
         "approval-policy-invalid",
         "Approval policy invalid",

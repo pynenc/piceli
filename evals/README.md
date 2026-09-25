@@ -121,7 +121,7 @@ A baseline is the output of one run per model for a release, committed under
 3. Commit `baselines/<version>/`; compare each `summary` with the previous
    release.
 
-`baselines/0.7.0/` holds only the mock runs (`mock-reference`, `mock-naive`),
+`baselines/0.7.0/` and `baselines/0.8.0/` hold only the mock runs (`mock-reference`, `mock-naive`),
 labelled `"measurement": "harness validation …"`. They validate the harness:
 the reference answers pass every task with no wrong API use, and the naive
 answers (Helm/kubectl habits, guessed APIs, `--auto-approve`, a hardcoded

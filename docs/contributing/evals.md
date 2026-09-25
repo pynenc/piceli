@@ -57,7 +57,7 @@ not hostile code.
 ## Baselines
 
 A baseline per release is committed under `evals/baselines/<version>/`. The
-0.7.0 baseline holds only the two mock models, which validate the harness
+0.7.0 and 0.8.0 baselines hold only the two mock models, which validate the harness
 (the reference answers pass every task, the naive ones fail every task); it is
 not a model measurement. See
 [`evals/README.md`](https://github.com/pynenc/piceli/blob/main/evals/README.md)

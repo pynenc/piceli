@@ -88,3 +88,17 @@ def show_failure(result: dict[str, Any]) -> None:
             else "apply the fix, or report it to the owner; do not retry unchanged"
         )
     )
+    # A workload that cannot start (``apply-crashloop``): why, per container.
+    diagnosis = result.get("diagnosis") or {}
+    for workload in diagnosis.get("workloads", ()):
+        for cause in workload.get("causes", ()):
+            exit_code = cause.get("exit_code")
+            print(
+                f"  cause {workload['kind']}/{workload['name']} "
+                f"container {cause.get('container')}: {cause.get('reason')}"
+                + (f", exit {exit_code}" if exit_code is not None else "")
+                + f", {cause.get('restarts', 0)} restart(s)"
+            )
+    summary = result.get("summary") or {}
+    if summary.get("json"):
+        print(f"  run summary: {summary['json']}")
