@@ -165,3 +165,30 @@ def cli_process(spec: Path, *args: str) -> subprocess.Popen[str]:
 
 def operations(payload: dict[str, Any]) -> dict[str, str]:
     return {f"{a['kind']}/{a['name']}": a["operation"] for a in payload["actions"]}
+
+
+_ARCH = {"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64", "arm64": "arm64"}
+
+
+def node_platform() -> str:
+    """``linux/<arch>`` of the kind node (``PICELI_KIND_NODE``), else of this host.
+
+    Images built for the tests must run on the node: CI runners are amd64,
+    a Mac with Docker Desktop is arm64.
+    """
+    import platform
+
+    machine = platform.machine().lower()
+    node = os.environ.get("PICELI_KIND_NODE", "")
+    docker = shutil.which("docker")
+    if node and docker:
+        result = subprocess.run(
+            [docker, "exec", node, "uname", "-m"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            machine = result.stdout.strip().lower()
+    return f"linux/{_ARCH.get(machine, machine)}"

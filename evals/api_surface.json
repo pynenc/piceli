@@ -670,7 +670,8 @@
     "document",
     "images",
     "lock",
-    "path"
+    "path",
+    "platform"
    ],
    "methods": {
     "dockerfile": [
@@ -695,7 +696,8 @@
     "load": [],
     "spec": [
      "lock",
-     "path"
+     "path",
+     "platform"
     ]
    },
    "returns": {

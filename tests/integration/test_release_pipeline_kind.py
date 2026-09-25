@@ -40,6 +40,7 @@ from typing import Any
 import pytest
 
 from piceli.k8s.ops.provider_factory import api_client_from_kubeconfig
+from tests.integration.kind_support import node_platform
 
 KUBECONFIG = os.environ.get("PICELI_KIND_KUBECONFIG", "")
 CONTEXT = os.environ.get("PICELI_KIND_CONTEXT", "")
@@ -98,6 +99,7 @@ def _module(tmp_path: Path, *, changed: bool) -> str:
             spec = importlib.util.spec_from_file_location("shop_example", {str(EXAMPLE)!r})
             shop = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(shop)
+            shop.images.platform = {node_platform()!r}  # build for the kind node
             {extra}
             # An HTTP workload from an image already on the node (the delivery
             # registry's), checked through a real port forward after readiness.

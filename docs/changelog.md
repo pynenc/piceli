@@ -6,6 +6,12 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ## Version 0.8.0
 
+- **`Build.spec(path, platform=...)`:** build a spec for another platform than
+  its `platforms` (for example `linux/amd64` for a published arm64 example),
+  as part of the plan hash; the post-build spec re-check applies the same
+  override. The kind tests use it to build for the node's platform, so they
+  pass on amd64 CI runners as well as arm64 machines.
+
 - **Fix:** `piceli deploy MODULE:ATTR --plan` refused for adoption or replacement now
   suggests what `piceli deploy` can act on: each `blocking[].suggest` entry
   names the Pipeline declaration (`Pipeline(adopt=["Deployment/web"])`,

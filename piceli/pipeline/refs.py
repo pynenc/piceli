@@ -379,6 +379,8 @@ class SourceCheckouts:
             assert build.document is not None
             base = (build.base or Path.cwd()).resolve()
             spec = BuildSpec.from_dict(build.document, self.remap(base))
+        if build.platform is not None:
+            spec = spec.with_platform(build.platform)
         if len(spec.platforms) != 1:
             raise PipelineError(
                 "pipeline-invalid",

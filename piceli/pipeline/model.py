@@ -438,6 +438,15 @@ def _check_smoke(table: Mapping[str, Any]) -> None:
         raise PipelineError(error.code, str(error)) from None
 
 
+def _with_platform(spec: BuildSpec, platform: str) -> BuildSpec:
+    from piceli.artifacts.build_spec import BuildSpecError
+
+    try:
+        return spec.with_platform(platform)
+    except BuildSpecError as error:
+        raise PipelineError("pipeline-invalid", str(error)) from None
+
+
 class Build:
     """A containerized build (``piceli artifacts build-spec``) whose images a pipeline deploys.
 
@@ -460,6 +469,7 @@ class Build:
         base: Path | None = None,
         images: Sequence[str] | None = None,
         lock: Path | None = None,
+        platform: str | None = None,
     ) -> None:
         if (path is None) == (document is None):
             raise PipelineError("pipeline-invalid", "a build needs a path or document")
@@ -468,20 +478,32 @@ class Build:
         self.base = base
         self.declared_images = tuple(images) if images is not None else None
         self.lock = lock
+        self.platform = platform
         self._spec: BuildSpec | None = None
 
     @classmethod
-    def spec(cls, path: str | Path, *, lock: str | Path | None = None) -> Build:
+    def spec(
+        cls,
+        path: str | Path,
+        *,
+        lock: str | Path | None = None,
+        platform: str | None = None,
+    ) -> Build:
         """A build described by a ``build.toml`` (relative to the declaring file).
 
         :param path: The build spec.
         :param lock: Optional ``inputs`` lock the sources must match.
+        :param platform: Build for this platform (``linux/amd64``,
+            ``linux/arm64``) instead of the spec's ``platforms``, for example
+            to build a published example for your own nodes. Part of the plan
+            hash.
         """
         base = _caller_dir()
         return cls(
             path=_resolve(path, base),
             base=base,
             lock=_resolve(lock, base) if lock is not None else None,
+            platform=platform,
         )
 
     @classmethod
@@ -614,6 +636,8 @@ class Build:
             else:
                 assert self.document is not None
                 spec = BuildSpec.from_dict(self.document, self.base or Path.cwd())
+            if self.platform is not None:
+                spec = _with_platform(spec, self.platform)
             if len(spec.platforms) != 1:
                 raise PipelineError(
                     "pipeline-invalid",

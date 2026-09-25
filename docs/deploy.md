@@ -68,6 +68,8 @@ New to Piceli? Start with {doc}`getting_started/index`.
      paths (the kubeconfig, the build spec, `state_dir`) resolve from the
      directory of the file that declares them.
    - `Build.spec(...)` wraps a `build.toml` (see {doc}`containerized_builds`);
+     `Build.spec(path, platform="linux/amd64")` builds it for another
+     platform than its `platforms` (for example your nodes' architecture);
      `Build.dockerfile(...)` builds one image per Dockerfile target stage;
      its `smoke={"api": Smoke(["--version"], expect_stdout=r"^api ")}` runs
      an isolated check in a built image (arguments, plain `env`, an

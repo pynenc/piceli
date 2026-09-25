@@ -48,13 +48,13 @@ def add(archive: tarfile.TarFile, name: str, body: bytes) -> None:
     archive.addfile(info, io.BytesIO(body))
 
 
-def layer_and_config(marker: bytes) -> tuple[bytes, bytes]:
+def layer_and_config(marker: bytes, architecture: str = "arm64") -> tuple[bytes, bytes]:
     layer = io.BytesIO()
     with tarfile.open(fileobj=layer, mode="w") as archive:
         add(archive, "hello.txt", marker)
     config = json.dumps(
         {
-            "architecture": "arm64",
+            "architecture": architecture,
             "os": "linux",
             "rootfs": {"type": "layers", "diff_ids": [sha(layer.getvalue())]},
         }
@@ -63,10 +63,12 @@ def layer_and_config(marker: bytes) -> tuple[bytes, bytes]:
 
 
 def docker_archive(
-    marker: bytes = b"hi", tags: list[str] | None = None
+    marker: bytes = b"hi",
+    tags: list[str] | None = None,
+    architecture: str = "arm64",
 ) -> tuple[bytes, str]:
     """A classic ``docker save`` tar: index members last, like Docker writes it."""
-    layer, config = layer_and_config(marker)
+    layer, config = layer_and_config(marker, architecture)
     digest = sha(config)
     layer_dir = hashlib.sha256(layer).hexdigest()
     out = io.BytesIO()
@@ -83,8 +85,10 @@ def docker_archive(
     return out.getvalue(), digest
 
 
-def oci_archive(marker: bytes = b"oci") -> tuple[bytes, str]:
-    layer, config = layer_and_config(marker)
+def oci_archive(
+    marker: bytes = b"oci", architecture: str = "arm64"
+) -> tuple[bytes, str]:
+    layer, config = layer_and_config(marker, architecture)
     manifest = json.dumps(
         {
             "schemaVersion": 2,

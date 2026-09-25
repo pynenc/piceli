@@ -31,6 +31,7 @@ from pathlib import Path
 import pytest
 
 from piceli.k8s.ops.provider_factory import api_client_from_kubeconfig
+from tests.integration.kind_support import node_platform
 
 KUBECONFIG = os.environ.get("PICELI_KIND_KUBECONFIG", "")
 CONTEXT = os.environ.get("PICELI_KIND_CONTEXT", "")
@@ -86,6 +87,7 @@ def _module(path: Path, state: Path, change: int) -> None:
             spec = importlib.util.spec_from_file_location("shop_example", {str(EXAMPLE)!r})
             shop = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(shop)
+            shop.images.platform = {node_platform()!r}  # build for the kind node
             shop.app.config("revision", {{"change": "{change}"}})
             pipeline = Pipeline(
                 shop.app, shop.target, build=shop.images,

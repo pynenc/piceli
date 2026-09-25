@@ -771,6 +771,8 @@ class BuildSpec:
     base: Path = field(default=Path("."), compare=False, repr=False)
     origin: Path | None = field(default=None, compare=False, repr=False)
     """The ``build.toml`` this spec was read from; re-checked after a build."""
+    platform_override: str | None = field(default=None, compare=False, repr=False)
+    """A platform that replaced the file's ``platforms`` (``Build.spec(platform=)``)."""
 
     def __post_init__(self) -> None:
         _match(_NAME, self.name, "build name")
@@ -1104,6 +1106,16 @@ class BuildSpec:
             "buildx_builder": self.buildx_builder,
             "inputs": self.inputs,
         }
+
+    def with_platform(self, platform: str) -> BuildSpec:
+        """This spec built for one ``platform`` instead of the file's ``platforms``.
+
+        The override is part of the spec digest (so of every plan hash) and is
+        applied again when the file is re-checked after a build.
+        """
+        return dataclasses.replace(
+            self, platforms=(platform,), platform_override=platform
+        )
 
     @property
     def spec_sha256(self) -> str:
@@ -1848,7 +1860,10 @@ class _Execution:
         origin = self.spec.origin
         if origin is not None:
             try:
-                same = BuildSpec.from_toml(origin).spec_sha256 == self.spec.spec_sha256
+                fresh = BuildSpec.from_toml(origin)
+                if self.spec.platform_override is not None:
+                    fresh = fresh.with_platform(self.spec.platform_override)
+                same = fresh.spec_sha256 == self.spec.spec_sha256
             except BuildSpecError:
                 same = False
             if not same:
