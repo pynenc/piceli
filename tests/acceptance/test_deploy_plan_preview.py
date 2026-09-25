@@ -58,15 +58,27 @@ def test_first_plan_lists_blocking_objects_before_any_build(shop) -> None:
     assert [(b["kind"], b["name"]) for b in final["blocking"]] == [
         ("Deployment", "web")
     ]
+    # `piceli deploy` takes no --adopt/--replace: the suggestions name the
+    # Pipeline declaration that unblocks the object, and so does the message.
     assert final["blocking"][0]["suggest"] == [
-        "--adopt Deployment/web",
-        "--replace Deployment/web",
+        'Pipeline(adopt=["Deployment/web"])',
+        'Pipeline(replace=["Deployment/web"])',
     ]
+    assert final["blocking"][0]["code"] == "resource-requires-adoption"
+    assert "--adopt" not in json.dumps(final)
+    assert "--replace" not in json.dumps(final)
+    assert final["message"].startswith(
+        "existing objects are not managed by this release's owner: Deployment/web"
+    )
+    assert 'adopt=["Kind/name"]' in final["message"]
+    jsonschema.validate(final, SCHEMA)
     assert final["preview"] == {
         "approvable": False,
         "placeholders": {"web": "pending-build"},
     }
     assert "blocking Deployment/web" in result.stderr
+    assert 'Pipeline(adopt=["Deployment/web"])' in result.stderr
+    assert "--adopt" not in result.stderr
     assert "preview" in result.stderr
     # Nothing was built or delivered; the cluster only received reads.
     assert FakeBackend.calls == []

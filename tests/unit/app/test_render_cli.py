@@ -8,6 +8,7 @@ import sys
 import textwrap
 from pathlib import Path
 
+import pytest
 import yaml
 from typer.testing import CliRunner
 
@@ -135,3 +136,85 @@ def test_render_typed_app_example():
     assert sorted(kinds) == sorted(
         ["Deployment", "Deployment", "Service", "Service", "NetworkPolicy", "Secret"]
     )
+
+
+MODEL_ERRORS = {
+    "duplicate-service": (
+        """
+        from piceli import App
+
+        app = App("shop")
+        web = app.deployment("web", image="nginx:1.27", ports=[80])
+        app.service(web, port=80)
+        app.service(web, port=80)
+        """,
+        "app",
+        "importing",
+        "ValueError: Service 'web' is already declared",
+    ),
+    "bad-keyword": (
+        """
+        from piceli import App
+
+        app = App("shop")
+        web = app.deployment("web", image="nginx:1.27", portz=[80])
+        """,
+        "app",
+        "importing",
+        "TypeError: ",
+    ),
+    "any-exception": (
+        """
+        raise RuntimeError("the model module broke")
+        """,
+        "app",
+        "importing",
+        "RuntimeError: the model module broke",
+    ),
+    "composition-raises": (
+        """
+        def build(ctx):
+            raise TypeError("build() got an unexpected keyword argument 'x'")
+        """,
+        "build",
+        "evaluating",
+        "TypeError: build() got an unexpected keyword argument 'x'",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", sorted(MODEL_ERRORS))
+@pytest.mark.parametrize("output", ["yaml", "json"])
+def test_render_rejects_a_model_that_raises(tmp_path, monkeypatch, case, output):
+    source, attribute, doing, text = MODEL_ERRORS[case]
+    (tmp_path / "model.py").write_text(textwrap.dedent(source))
+    monkeypatch.delenv("PICELI_DEBUG", raising=False)
+    result = _invoke(str(tmp_path / "model.py") + ":" + attribute, "--format", output)
+    assert result.exit_code == 2, result.output
+    payload = json.loads(result.stdout)  # one JSON object, whatever --format says
+    assert payload["state"] == "rejected"
+    assert payload["reason"] == "render-target-invalid"
+    assert payload["message"].startswith(f"{doing} ")
+    assert text in payload["message"]
+    assert "Traceback" not in result.stdout + result.stderr
+
+
+def test_render_debug_prints_the_traceback_on_stderr(tmp_path, monkeypatch):
+    (tmp_path / "model.py").write_text('raise RuntimeError("broke")\n')
+    monkeypatch.setenv("PICELI_DEBUG", "1")
+    result = _invoke(str(tmp_path / "model.py") + ":app")
+    assert result.exit_code == 2
+    assert json.loads(result.stdout)["reason"] == "render-target-invalid"
+    assert "Traceback" in result.stderr and "Traceback" not in result.stdout
+
+
+def test_render_spec_composition_that_raises_is_rejected(tmp_path):
+    (tmp_path / "compose.py").write_text('raise TypeError("bad keyword")\n')
+    spec = (EXAMPLE / "release.toml").read_text()
+    spec = spec.replace('"composition.py:build"', f'"{tmp_path / "compose.py"}:build"')
+    (tmp_path / "release.toml").write_text(spec)
+    result = _invoke("--spec", str(tmp_path / "release.toml"))
+    assert result.exit_code == 2, result.output
+    payload = json.loads(result.stdout)
+    assert payload["reason"] == "render-target-invalid"
+    assert "TypeError: bad keyword" in payload["message"]

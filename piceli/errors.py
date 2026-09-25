@@ -1331,8 +1331,8 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
     _E(
         "render-target-invalid",
         "Render target invalid",
-        "The module:attr target cannot be imported or is not an App, composition or composition function.",
-        "Point at `module:attr` or `file.py:attr` of an App, DeploymentComposition or build(ctx) function.",
+        "The module:attr target (or the spec's composition) cannot be imported, is not an App, composition or composition function, or raised while importing or evaluating (the message names the exception's type and text, never a traceback).",
+        "Point at `module:attr` or `file.py:attr` of an App, DeploymentComposition or build(ctx) function, and fix the error the message names (`PICELI_DEBUG=1` prints the traceback on stderr).",
         False,
         "render",
     ),
@@ -1479,7 +1479,8 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "Access target invalid",
         "TARGET is neither a readable release.toml whose composition yields an App "
         "or composition, nor `module:attr` of an object with `.app` (a piceli App) "
-        "and `.target` (explicit kubeconfig, context and namespace).",
+        "and `.target` (explicit kubeconfig, context and namespace), or importing "
+        "that module raised (the message names the exception).",
         "Pass `path/to/release.toml`, or `module:attr` of a pipeline object; the "
         "message says which part is missing.",
         False,
@@ -1597,7 +1598,7 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
     _E(
         "invalid-composition",
         "Invalid composition",
-        "The composition entry point could not be loaded, did not return a DeploymentComposition, declared a cluster-scoped object other than a ClusterRole or ClusterRoleBinding (or one annotated `piceli.io/namespace` with another namespace), targeted another namespace, or its secret bindings do not match the declared secret inputs.",
+        "The composition entry point could not be loaded (its module or function raised: the message names the exception's type and text), did not return a DeploymentComposition, declared a cluster-scoped object other than a ClusterRole or ClusterRoleBinding (or one annotated `piceli.io/namespace` with another namespace), targeted another namespace, or its secret bindings do not match the declared secret inputs.",
         "Fix the composition function named by `[release] composition`, then plan again.",
         False,
         "release",
@@ -1638,7 +1639,7 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "resource-requires-adoption",
         "Existing object requires adoption",
         "An object the composition declares already exists and is not managed by this release's owner (see `blocking` for each object and the flags that unblock it). A cluster-scoped object (ClusterRole, ClusterRoleBinding) is managed only when it also carries `piceli.io/namespace` with this release's namespace.",
-        "Plan again with `--adopt Kind/name` (or `--replace Kind/name` for non-retained objects), `[release] adopt`/`replace`, or `--adopt-all-desired`; or delete the object.",
+        'Plan again with `--adopt Kind/name` (or `--replace Kind/name` for non-retained objects), `[release] adopt`/`replace`, or `--adopt-all-desired`; or delete the object. For `piceli deploy`, declare it on the Pipeline instead (`adopt=["Kind/name"]` or `replace=[…]`; see `blocking[].suggest`).',
         False,
         "release",
     ),
@@ -1654,7 +1655,7 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "immutable-field-changed",
         "Immutable fields would change",
         "The composition changes a field the API server never updates on an existing object: a Job's pod template or `completions`, or a StatefulSet's `serviceName`, `podManagementPolicy`, selector or claim templates (see `blocking`).",
-        "Name the object with `--replace Kind/name` (or `[release] replace`) to delete and recreate it from the release (a StatefulSet keeps its pods and claims), or revert the change.",
+        'Name the object with `--replace Kind/name` (or `[release] replace`; for `piceli deploy`, the Pipeline\'s `replace=["Kind/name"]`) to delete and recreate it from the release (a StatefulSet keeps its pods and claims), or revert the change.',
         False,
         "release",
     ),
@@ -2489,8 +2490,8 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
     _E(
         "pipeline-load-failed",
         "Pipeline module failed to import",
-        "Importing the pipeline's module raised an exception (the message on stderr names it).",
-        "Fix the module until `python path/to/app.py` imports cleanly, then run the command again.",
+        "Importing the pipeline's module raised an exception (the rejection's `message` names its type and text; never a traceback).",
+        "Fix the module until `python path/to/app.py` imports cleanly, then run the command again (`PICELI_DEBUG=1` prints the traceback on stderr).",
         False,
         "pipeline",
     ),

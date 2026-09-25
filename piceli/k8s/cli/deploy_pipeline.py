@@ -33,6 +33,7 @@ from piceli.cli_contract import (
     EXIT_FAILED,
     EXIT_OK,
     EXIT_REJECTED,
+    describe_user_error,
     emit_json,
     reject,
     say,
@@ -54,29 +55,30 @@ def load_pipeline(entry: str, env: str | None = None) -> Any:
     try:
         value = load_target(entry, Path.cwd())
     except PipelineError as error:
-        say(f"the pipeline module refused its declaration: {error}")
-        reject(error.code)
+        reject(error.code, f"the pipeline module refused its declaration: {error}")
     except RenderError as error:
-        say(str(error))
-        reject("pipeline-not-found")
-    except Exception as error:
-        say(f"importing {entry} failed: {type(error).__name__}: {error}")
-        reject("pipeline-load-failed")
+        reject("pipeline-not-found", str(error))
+    except Exception as error:  # the pipeline module raised while importing
+        reject(
+            "pipeline-load-failed",
+            f"importing {entry} failed: {describe_user_error(error)}",
+        )
     if not isinstance(value, Pipeline):
-        say(f"{entry} is a {type(value).__name__}, not a piceli Pipeline")
-        reject("pipeline-not-found")
+        reject(
+            "pipeline-not-found",
+            f"{entry} is a {type(value).__name__}, not a piceli Pipeline",
+        )
     if env is not None:
         try:
             return value.for_environment(env)
         except PipelineError as error:
-            say(str(error))
             reject(error.code, str(error))
     if value.needs_environment:
-        say(
+        reject(
+            "environment-required",
             f"{entry} deploys one target per environment "
-            f"({', '.join(sorted(value.targets))}); pass --env NAME"
+            f"({', '.join(sorted(value.targets))}); pass --env NAME",
         )
-        reject("environment-required")
     return value
 
 
@@ -612,6 +614,8 @@ def _fail(runner: Any, error: Any) -> None:
         body = {"state": "rejected", "reason": error.code}
         if "stage" in error.details:
             body["stage"] = error.details["stage"]
+    # The contract's human sentence (the same one stderr shows first).
+    body["message"] = str(error)
     if error.details.get("blocking"):
         body["blocking"] = error.details["blocking"]
     if error.details.get("holder"):

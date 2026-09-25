@@ -345,6 +345,41 @@ def _label(ref: ResourceRef) -> str:
     return f"{ref.kind}/{ref.name}"
 
 
+#: How a release spec or ``piceli release plan`` authorizes unmanaged objects.
+RELEASE_AUTHORIZATION = (
+    "authorize them with --adopt or --replace Kind/name (repeatable), "
+    "[release] adopt/replace or --adopt-all-desired, or delete them"
+)
+
+
+def blocking_message(
+    blocking: Sequence[Mapping[str, Any]], authorize: str = RELEASE_AUTHORIZATION
+) -> str:
+    """The refusal's sentence for ``blocking`` objects (each with ``suggest``).
+
+    ``authorize`` says how the caller unblocks unmanaged objects: the release
+    flags by default; a pipeline names its own declaration instead.
+    """
+    unmanaged = [
+        item for item in blocking if item["code"] == "resource-requires-adoption"
+    ]
+    parts = []
+    if unmanaged:
+        parts.append(
+            "existing objects are not managed by this release's owner: "
+            + ", ".join(
+                f"{item['kind']}/{item['name']} ({' or '.join(item['suggest'])})"
+                for item in unmanaged
+            )
+            + "; "
+            + authorize
+        )
+    for item in blocking:
+        if item["code"] != "resource-requires-adoption":
+            parts.append(f"{item['kind']}/{item['name']}: {item['message']}")
+    return "; ".join(parts)
+
+
 def scoped_composition(
     composition: DeploymentComposition, namespace: str
 ) -> DeploymentComposition:
@@ -628,26 +663,8 @@ def resolve_ownership(
             )
     if blocking:
         blocking.sort(key=lambda item: (item["kind"], item["name"]))
-        unmanaged = [
-            item for item in blocking if item["code"] == "resource-requires-adoption"
-        ]
-        parts = []
-        if unmanaged:
-            parts.append(
-                "existing objects are not managed by this release's owner: "
-                + ", ".join(
-                    f"{item['kind']}/{item['name']} ({' or '.join(item['suggest'])})"
-                    for item in unmanaged
-                )
-                + "; authorize them with --adopt or --replace Kind/name "
-                "(repeatable), [release] adopt/replace or --adopt-all-desired, "
-                "or delete them"
-            )
-        for item in blocking:
-            if item["code"] != "resource-requires-adoption":
-                parts.append(f"{item['kind']}/{item['name']}: {item['message']}")
         raise ReleaseError(
-            "; ".join(parts),
+            blocking_message(blocking),
             code=blocking[0]["code"]
             if len({item["code"] for item in blocking}) == 1
             else "plan-blocked",
@@ -1055,11 +1072,23 @@ class ReleaseRunner:
             from piceli.app.app import App
 
             context = self.spec.context(images, refs, nodes)
-            composition = function(context)
-            if isinstance(composition, App):
-                # Returning the App keeps its access declarations visible to
-                # `piceli access` / `piceli status`; render it here.
-                composition = composition.composition(context)
+            try:
+                composition = function(context)
+                if isinstance(composition, App):
+                    # Returning the App keeps its access declarations visible
+                    # to `piceli access` / `piceli status`; render it here.
+                    composition = composition.composition(context)
+            except ValueError:
+                raise  # model validation keeps its own code and message
+            except Exception as error:  # the user's composition raised
+                from piceli.cli_contract import describe_user_error
+
+                raise ReleaseSpecError(
+                    "evaluating composition "
+                    f"{self.spec.model.release.composition!r} failed: "
+                    f"{describe_user_error(error)}",
+                    code="invalid-composition",
+                ) from None
             if not isinstance(composition, DeploymentComposition):
                 raise ReleaseSpecError(
                     "the composition function must return an App or a DeploymentComposition",

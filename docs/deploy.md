@@ -281,7 +281,11 @@ placeholder images:
   images pinned by digest are used as they are.
 - Ownership is resolved exactly as for a real plan. An object that needs
   adoption or replacement refuses `--plan` (and `--approve`, before any
-  build) with the release engine's `blocking` list and suggested flags.
+  build) with the release engine's `blocking` list. Each object's `suggest`
+  names the Pipeline declaration that unblocks it
+  (`Pipeline(adopt=["Deployment/web"])` or
+  `Pipeline(replace=["Deployment/web"])`); the adoption becomes part of the
+  pipeline, and so of the combined hash.
 - The preview is **never approvable** and never persisted: no release, plan
   or secret file is written, and no secret value is generated or read. Its
   `preview_hash` only identifies it; `--approve <preview_hash>` is refused
@@ -651,11 +655,12 @@ The policy is used by `piceli deploy` (plan, apply, checks), `piceli status`,
 | --- | --- | --- |
 | Exit `3`, `"state": "approval-required"` | No `--approve`/`--auto-approve` and no terminal to confirm on | Review the plan, then `--approve <combined hash>` |
 | `pipeline-plan-changed` | Something changed since `--plan` | Plan again and approve the new hash |
-| `resource-requires-adoption` (or `plan-blocked`) with `blocking` and `"preview"` | The release preview needs adoption or replacement of existing objects; nothing was built | Add `adopt=["Kind/name"]` (or `replace=`) to the `Pipeline`, or delete the objects, then plan again |
+| `pipeline-load-failed` | Importing the pipeline's module raised (`message`: the exception's type and text, never a traceback) | Fix the module until it imports; `PICELI_DEBUG=1` prints the traceback on stderr |
+| `resource-requires-adoption` (or `plan-blocked`) with `blocking` and `"preview"` | The release preview needs adoption or replacement of existing objects; nothing was built | Do what `blocking[].suggest` names: `Pipeline(adopt=["Kind/name"])` (or `replace=`), after the owner chose it, or delete the objects, then plan again. `deploy` takes no `--adopt`/`--replace` |
 | `pipeline-preview-not-approvable` | `--approve` got the preview's `preview_hash` | Approve the `combined_hash` |
 | `pipeline-preview-changed` | After delivery the release plan adopts, replaces or deletes beyond the approved preview; nothing was applied | Plan again (build and delivery are skipped) and approve the real plan |
 | `pipeline-image-not-pinned` | An image is a movable tag | Pin it by digest or build it |
-| `pipeline-release-refused` with `blocking` objects | The release needs adoption or replacement of existing objects | Add `adopt=["Kind/name"]` (or `replace=`) to the `Pipeline`; see {doc}`release_cli` |
+| `pipeline-release-refused` with `blocking` objects | The release needs adoption or replacement of existing objects | Add `adopt=["Kind/name"]` (or `replace=`) to the `Pipeline`, as `blocking[].suggest` names; see {doc}`release_cli` |
 | `build-failed`, `smoke-failed`, `smoke-output-mismatch` (exit `1`) | The build or its smoke check failed (for a mismatch, stderr shows an excerpt of the unmatched output) | Read `state_dir/builds/<name>/build.log`, fix, deploy again |
 | `pipeline-registry-not-ready` | The node-loopback registry did not start (its port may be held by a process outside the namespace) | Choose another `port=` or free it, then `--resume` |
 | `pipeline-registry-takeover-required` | A live registry holds the port, or a Deployment with the registry's name is not the registry release's | `NodeLoopbackRegistry(adopt="NAME")` or `replace="NAME"` (see {ref}`deploy-registry-takeover`), or another `port=` |

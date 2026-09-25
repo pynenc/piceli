@@ -55,8 +55,7 @@ def _resolve(target: str) -> AccessTarget:
     try:
         return resolve_target(target, Path.cwd())
     except AccessTargetError as error:
-        say(f"piceli: {error}")
-        reject(error.code)
+        reject(error.code, str(error))
 
 
 # ------------------------------------------------------------------- status

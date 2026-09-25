@@ -32,7 +32,8 @@ interruption is harmless.
 - **stdout** carries machine output: one JSON object per command, or JSON lines
   for streaming commands (`observe forwards apply`). Parse it; do not scrape
   stderr. `render` prints YAML manifests unless you pass `--format json`, but
-  its refusals are always the JSON rejection object below.
+  its refusals are always the JSON rejection object below, also when the
+  model module raises (`render-target-invalid`).
 - **stderr** carries human text: summaries, hints and the plan hash to approve.
   It never carries a JSON object.
 - A refusal prints
@@ -42,6 +43,13 @@ interruption is harmless.
   commands add fields: `release` refusals keep `blocking[]` (each item with
   its own `code` and `message`), `inputs` adds `source`, `observe forwards
   apply` adds `preflight`.
+- A `MODULE:ATTR` target whose module raises while importing or evaluating is
+  a refusal like any other (`render-target-invalid` for `render`,
+  `pipeline-load-failed` for `deploy` and `release --spec MODULE:ATTR`,
+  `access-target-invalid` for `status` and `access`, `invalid-composition`
+  for a `release.toml` composition); `message` names the exception's type
+  and text, never a traceback. Report it; `PICELI_DEBUG=1` adds the
+  traceback on stderr when the owner needs it.
 - An operation that ran but did not succeed exits `1` and its result names
   the code in `reason`: `{"state": "failed", "reason": …}` for `release
   apply|rollback|resume`, `release check` (`check-failed`) and `artifacts
@@ -207,7 +215,11 @@ unattended CI job for this exact spec.
    (refused with `pipeline-preview-not-approvable`). If the owner wants to
    see the real release plan first, approve `--until deliver`, then plan
    again. A refused plan with `"preview"` and `blocking` means nothing was
-   built: report each object's `suggest` flags to the owner.
+   built: report each object's `suggest` to the owner. For a pipeline it
+   names the declaration (`Pipeline(adopt=["Kind/name"])` or
+   `Pipeline(replace=["Kind/name"])`); `piceli deploy` takes no
+   `--adopt`/`--replace`. Never add `adopt=` or `replace=` to the pipeline
+   yourself: the owner chooses (`replace` deletes and recreates the object).
 3. After the owner approves **that combined hash**, run
    `piceli deploy MODULE:ATTR --approve <hash> --json`. Each stdout line is
    one stage event; the last one is the result.

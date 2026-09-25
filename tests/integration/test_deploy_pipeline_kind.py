@@ -177,7 +177,11 @@ def test_shop_deploys_resumes_and_reruns_as_noop(namespace, tmp_path) -> None:
         "placeholders": {"rust-hello": "pending-build"},
     }
     assert [(b["kind"], b["name"], b["suggest"]) for b in blocked["blocking"]] == [
-        ("Service", "web", ["--adopt Service/web", "--replace Service/web"])
+        (
+            "Service",
+            "web",
+            ['Pipeline(adopt=["Service/web"])', 'Pipeline(replace=["Service/web"])'],
+        )
     ]
     assert "blocking Service/web" in stderr, stderr
     assert not (tmp_path / "state" / "builds").exists()  # nothing was built

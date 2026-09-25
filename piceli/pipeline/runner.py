@@ -274,6 +274,63 @@ def classify(error: BaseException) -> PipelineError:
     return PipelineError("pipeline-stage-error", f"{type(error).__name__}: {error}")
 
 
+#: How a pipeline authorizes unmanaged objects: its own declaration, since
+#: ``piceli deploy`` takes no ``--adopt``/``--replace`` (they are part of the
+#: pipeline, and so of the combined hash).
+PIPELINE_AUTHORIZATION = (
+    'declare them in the Pipeline: adopt=["Kind/name"] or replace=["Kind/name"], '
+    "or delete them"
+)
+
+
+def pipeline_suggestion(suggestion: str) -> str:
+    """A release engine suggestion rewritten for a pipeline's declaration.
+
+    ``--adopt Kind/name`` becomes ``Pipeline(adopt=["Kind/name"])`` and
+    ``--replace Kind/name`` ``Pipeline(replace=["Kind/name"])``; any other
+    suggestion (such as changing the model) is kept.
+    """
+    for flag in ("adopt", "replace"):
+        prefix = f"--{flag} "
+        if suggestion.startswith(prefix):
+            return f"Pipeline({flag}={json.dumps([suggestion[len(prefix) :]])})"
+    head, found, _ = suggestion.partition(" from --replace/[release] replace")
+    if found and head.startswith("remove "):
+        return f'remove "{head[len("remove ") :]}" from Pipeline(replace=...)'
+    return suggestion
+
+
+def app_release_refusal(error: BaseException) -> PipelineError:
+    """:func:`classify` for the app's release plan (and its preview).
+
+    Objects that block the plan keep their ``code`` and ``message``; their
+    ``suggest`` entries and the refusal's message name the ``Pipeline``
+    declaration (``adopt=``/``replace=``) that unblocks them, never release
+    flags ``piceli deploy`` does not take.
+    """
+    from piceli.k8s.release_runner import blocking_message
+
+    failure = classify(error)
+    blocking = failure.details.get("blocking")
+    if not blocking:
+        return failure
+    rewritten = [
+        {
+            **item,
+            "suggest": [
+                pipeline_suggestion(entry) for entry in item.get("suggest", ())
+            ],
+        }
+        for item in blocking
+    ]
+    return PipelineError(
+        failure.code,
+        blocking_message(rewritten, PIPELINE_AUTHORIZATION),
+        failed=failure.failed,
+        details={**failure.details, "blocking": rewritten},
+    )
+
+
 # ------------------------------------------------------------------ runner
 
 
@@ -938,7 +995,7 @@ class PipelineRunner:
             runner = self.backend.release_runner(release_spec(self.pipeline, images))
             result = runner.placeholder_preview(skip_dry_run=uses_pending_image)
         except Exception as error:
-            failure = classify(error)
+            failure = app_release_refusal(error)
             failure.details = {**failure.details, "stage": "plan", "preview": marker}
             raise failure from None
         changes = _changed(result["actions"])
@@ -978,7 +1035,7 @@ class PipelineRunner:
         try:
             result = runner.plan()
         except Exception as error:
-            raise classify(error) from None
+            raise app_release_refusal(error) from None
         work.runner, work.release_plan = runner, result
         work.release_images = {name: ref.identity for name, ref in images.items()}
         return result
@@ -1583,7 +1640,10 @@ class PipelineRunner:
             except ReleaseError:
                 if not resuming:
                     raise
-                result = runner.plan()
+                try:
+                    result = runner.plan()
+                except ReleaseError as error:
+                    raise app_release_refusal(error) from None
                 work.release_plan = result
                 outcome = runner.apply(result.plan_hash)
         output = {
