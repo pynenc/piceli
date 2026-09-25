@@ -1,0 +1,62 @@
+name: "Bug report"
+description: Something in Piceli does not work as documented
+labels: [bug, needs triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Never paste kubeconfig files, tokens, secret values or private registry
+        credentials. Piceli's JSON output and error codes are safe to share.
+        For a security problem, use a private advisory instead (see SECURITY.md).
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched the existing issues.
+          required: true
+        - label: I can reproduce this with the latest release.
+          required: true
+  - type: input
+    id: version
+    attributes:
+      label: Piceli version
+      description: Output of `pip show piceli` (the `Version:` line).
+      placeholder: e.g. 0.4.0
+    validations:
+      required: true
+  - type: input
+    id: command
+    attributes:
+      label: Command
+      description: The piceli command you ran, with paths shortened.
+      placeholder: piceli deploy app.py:pipeline --plan --json
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: |
+        The JSON on stdout (it carries `reason`, a fixed error code) and the
+        exit code. `piceli explain <reason>` tells you what the code means.
+      render: json
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Minimal reproduction
+      description: A small model (`App`/`Pipeline`) or `release.toml` that shows the problem, with generic names.
+      render: python
+  - type: input
+    id: cluster
+    attributes:
+      label: Kubernetes
+      description: Distribution and version (e.g. kind v0.27 / Kubernetes 1.32, GKE 1.31).

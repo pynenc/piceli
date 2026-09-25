@@ -208,6 +208,8 @@ for setup, tests and pull request guidelines.
   reference and error codes
 - **[Roadmap](https://docs.pynenc.org/projects/piceli/en/latest/roadmap.html)**:
   feature maturity and direction
+- **Security**: report vulnerabilities privately, see
+  [SECURITY.md](https://github.com/pynenc/piceli/blob/main/SECURITY.md)
 
 Piceli is developed alongside [Pynenc](https://docs.pynenc.org), but it does
 not depend on it and works with any Kubernetes workload.
