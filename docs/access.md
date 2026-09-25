@@ -33,6 +33,8 @@ reads `KUBECONFIG`, `~/.kube/config` or the current context.
 
 ## Prerequisites
 
+New to Piceli? Start with {doc}`getting_started/index`.
+
 - An app declared with the typed model (see {doc}`typed_apps`) and released
   with `piceli release` (see {doc}`release_cli`).
 - `kubectl` on your `PATH` (or pass `--kubectl PATH`) for `piceli access`.
@@ -262,3 +264,12 @@ no `--ui-config` declares tiers, one tier listing the app's workloads. `piceli
 operator serve --access TARGET` does the same for the operator dashboard.
 `--ui-config` still works: its shortcuts win over a model forward with the same
 id, and its badges and tiers are kept.
+
+```{figure} _static/img/dashboard-forwards.webp
+:alt: The Port Forwards and Shortcuts tab of the local dashboard for the shop namespace. The api shortcut forwards service/api to 127.0.0.1:13080 and the web shortcut forwards service/web to 127.0.0.1:13000; both are running and healthy. The supervised forwards table lists the same two forwards with their local and remote ports, live links, health and process state.
+:width: 100%
+
+The shop example's two declared forwards (`access=app.access.forward(...)`
+on `api` and `web`, see {doc}`deploy`) as dashboard shortcuts, each probed
+and supervised on loopback.
+```

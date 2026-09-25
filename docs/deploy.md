@@ -14,7 +14,17 @@ changed.
 release (always with a changelog entry).
 ```
 
+```{figure} _static/img/deploy-flow.gif
+:alt: A terminal runs piceli deploy on the shop example with --plan and prints the planned stages and a combined hash. It then runs piceli deploy with --approve and that hash, streaming the build, deliver, plan, apply and checks stages until "deploy ready", and finally piceli status reports that shop is up with its three Deployments ready.
+:width: 100%
+
+Plan, approve, check: `piceli deploy --plan`, `piceli deploy --approve`
+and `piceli status` on the shop example against a local `kind` cluster.
+```
+
 ## Prerequisites
+
+New to Piceli? Start with {doc}`getting_started/index`.
 
 - Piceli installed (`pip install piceli`), Python 3.12 or later.
 - `docker` with `buildx` (the build runs in a pinned builder image) and
@@ -51,7 +61,7 @@ release (always with a changelog entry).
 
    ```{literalinclude} ../examples/shop/app.py
    :language: python
-   :lines: 17-
+   :lines: 19-
    ```
 
    - `Target.kubeconfig(...)` names the cluster, namespace and nodes. Relative
@@ -67,6 +77,12 @@ release (always with a changelog entry).
      is an opaque reference the release binds to the real value at apply time.
    - `deliver=` is `NodeLoopbackRegistry()`, `NodeImport()` or
      `Registry("oci://host/prefix")` (see {ref}`delivery`).
+   - `build=` is optional. When every image is already pinned by digest
+     (`repo@sha256:…`), `Pipeline(app, target)` works without `build=` or
+     `deliver=`: the build and deliver stages are skipped and the pipeline
+     plans, applies and checks the release.
+   - `access=app.access.forward(...)` on a Service declares how it is reached
+     from your laptop; it renders to no Kubernetes object (see {doc}`access`).
 
 2. **Render it without a cluster** (build handles show as placeholders):
 
@@ -117,7 +133,8 @@ release (always with a changelog entry).
    [plan] done
    [apply] shop-fbcc92695da7: applying
    [apply] done
-   [checks] skipped (no checks)
+   [checks] shop-fbcc92695da7: passed
+   [checks] done
    deploy ready: release shop-fbcc92695da7
    ```
 
@@ -137,7 +154,16 @@ release (always with a changelog entry).
    deploy ready: release shop-fbcc92695da7
    ```
 
-6. **Change the source and deploy again.** Only what changed moves: a new
+6. **Check it and reach it.** `piceli status` reads the release's workloads
+   and the declared forwards; `piceli access` forwards the ports (see
+   {doc}`access`):
+
+   ```sh
+   piceli status examples/shop/app.py:pipeline
+   piceli access examples/shop/app.py:pipeline --dashboard 9876
+   ```
+
+7. **Change the source and deploy again.** Only what changed moves: a new
    build plan, a new image digest when the image differs, and a new release
    that rolls the workloads using it. An edit that produces a byte-identical
    image stops at the build stage.
