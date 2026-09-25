@@ -594,13 +594,19 @@ authorizes deleting such an object and creating it from the release. Every
 replace needs its own explicit entry; there is no "replace all".
 
 Replace is allowed only for objects that are **unmanaged**, **not retained**
-and **not owned by another object** (`ownerReferences`). It is refused, before
-any write, for:
+and **not owned by another object** (`ownerReferences`), and for **managed
+Jobs and StatefulSets**, whose immutable fields a release cannot update (a
+Job's pod template; a StatefulSet's `serviceName`, `podManagementPolicy`,
+selector or claim templates). Such a change refuses the plan with
+`immutable-field-changed` until the object is named with `--replace`; see
+{doc}`typed_apps`. A managed Job or StatefulSet named for replace without
+such a change is reported as not needed, so a standing `[release] replace`
+entry never reruns a Job. It is refused, before any write, for:
 
 * retained kinds and objects (Namespace, PersistentVolume, PVC, Secret,
   `piceli.io/retained: "true"`): adopt them instead;
-* objects already managed by this release (including inherited owners): the
-  release already updates them;
+* other objects already managed by this release (including inherited
+  owners): the release already updates them;
 * objects owned by another object, and workloads whose retained dependents a
   background delete would remove.
 
@@ -677,6 +683,7 @@ Choosing between adopt and replace:
 | Adopt everything the composition declares, after reviewing the list | `--adopt-all-desired` | The same takeover for each unmanaged declared object; retained ones metadata-only. |
 | A volume claim, Secret or other retained object | `--adopt Kind/name` (never replace) | Metadata-only: owner annotation and declared labels/annotations; the spec/data must already match. |
 | An immutable field must change (selector, Service `clusterIP`…), or an adoption fails with `invalid-request` | `--replace Kind/name` | Backup, delete, create. New UID; workload pods restart. |
+| A managed Job or StatefulSet whose immutable fields change (`immutable-field-changed`) | `--replace Job/name`, `--replace StatefulSet/name` | Backup, delete, create. A Job runs again; a StatefulSet is deleted with `Orphan` propagation, keeps its pods (adopted by the new one) and its claims. |
 | The object is not yours to change | neither | Rename the object in the composition, or remove it from the composition. |
 
 Refusal codes (`reason` in the JSON, also per object in `blocking[].code`):
@@ -684,7 +691,8 @@ Refusal codes (`reason` in the JSON, also per object in `blocking[].code`):
 | Code | Cause | Fix |
 | --- | --- | --- |
 | `resource-requires-adoption` | An object the composition declares exists without this release's owner. | `--adopt` or `--replace` it (see `suggest`), `--adopt-all-desired`, or delete it. |
-| `replace-refused` | `--replace` names a retained object, an object already managed, or one owned by another object. | Adopt a retained object instead; remove managed objects from the replace list (`[release] replace` is for a one-off migration). |
+| `replace-refused` | `--replace` names a retained object, an object already managed (other than a Job or StatefulSet), or one owned by another object. | Adopt a retained object instead; remove managed objects from the replace list (`[release] replace` is for a one-off migration). |
+| `immutable-field-changed` | The composition changes an immutable field of a managed Job or StatefulSet. | `--replace Kind/name` (see `suggest`), or revert the change. |
 | `retained-content-differs` | A retained object's spec or data differ from the composition; only labels and annotations may change. | Make the composition match the live object (or create a new object under a new name). |
 | `adopt-and-replace` | The same object is named by an adopt and a replace entry. | Keep one. |
 | `adopt-entry-not-declared`, `replace-entry-not-declared` | An entry does not name exactly one resource the composition declares. | Fix the `Kind/name` (or use `apiVersion/Kind/name`). |

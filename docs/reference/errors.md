@@ -121,6 +121,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`image-invalid`](#error-image-invalid) | build-spec | no |
 | [`image-mismatch`](#error-image-mismatch) | build-spec | no |
 | [`image-not-immutable`](#error-image-not-immutable) | images | no |
+| [`immutable-field-changed`](#error-immutable-field-changed) | release | no |
 | [`import-cancelled`](#error-import-cancelled) | artifacts-delivery | yes |
 | [`import-discovery-failed`](#error-import-discovery-failed) | import | yes |
 | [`import-failed`](#error-import-failed) | artifacts-delivery | yes |
@@ -1988,6 +1989,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Run `piceli release plan --spec release.toml` again and approve the new plan hash.
 - **Retry-safe:** no
 
+(error-immutable-field-changed)=
+### `immutable-field-changed`
+
+**Immutable fields would change.** The composition changes a field the API server never updates on an existing object: a Job's pod template or `completions`, or a StatefulSet's `serviceName`, `podManagementPolicy`, selector or claim templates (see `blocking`).
+
+- **Fix:** Name the object with `--replace Kind/name` (or `[release] replace`) to delete and recreate it from the release (a StatefulSet keeps its pods and claims), or revert the change.
+- **Retry-safe:** no
+
 (error-invalid-adopt-entry)=
 ### `invalid-adopt-entry`
 
@@ -2143,7 +2152,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-replace-refused)=
 ### `replace-refused`
 
-**Replace refused.** A `--replace` entry names an object that may not be replaced: it is managed, retained or owned by another object (see `blocking`).
+**Replace refused.** A `--replace` entry names an object that may not be replaced: it is retained, owned by another object, or already managed and not a Job or StatefulSet (see `blocking`).
 
 - **Fix:** Use `--adopt Kind/name` for an unmanaged object, or remove the entry from `--replace`/`[release] replace`.
 - **Retry-safe:** no

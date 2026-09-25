@@ -4,6 +4,42 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.7.0
+
+- **Typed App kinds (preview):** `app.stateful_set(...)` (per-pod
+  `ClaimTemplate` volumes, a governing headless Service by default,
+  `pod_management`, `update_strategy`), `app.daemon_set(...)`, `app.job(...)`,
+  `app.cron_job(...)`, `app.autoscaler(workload, ...)` (HPA `autoscaling/v2`),
+  `app.disruption_budget(workload, ...)` (PDB `policy/v1`), `app.ingress(...)`
+  and Gateway API `app.http_route(...)` with typed `Route` and `GatewayRef`.
+  Every pod kind shares the Deployment's pod model (`piceli.app.Workload`):
+  `pod_defaults`, `service_account=`, `node=` pins, images, secrets, config
+  dependencies and `override` work the same. Workload names are now unique
+  across kinds. `Service(headless=True)` renders `clusterIP: None`.
+- **Autoscaled replicas:** a workload targeted by `app.autoscaler` renders no
+  `spec.replicas` (setting `replicas=` on it is refused), and a plan never
+  removes `/spec/replicas` from a workload an HPA of the same composition
+  targets, so a release never resets the HPA's count.
+- **Claims are never pruned:** StatefulSets render
+  `persistentVolumeClaimRetentionPolicy` `Retain`/`Retain`, and prune and
+  replace delete them with `Orphan` propagation; the claims their templates
+  create are never part of a plan.
+- **Immutable fields:** a plan that would change a managed Job's pod template
+  or `completions`, or a StatefulSet's `serviceName`, `podManagementPolicy`,
+  selector or claim templates, is refused with the new code
+  `immutable-field-changed` (`blocking[].suggest` names the flag).
+  `--replace Kind/name` now also accepts a **managed** Job or StatefulSet and
+  recreates it (Jobs with `Background`, StatefulSets with `Orphan`
+  propagation); every other managed object is still refused.
+- Readiness: a release treats HorizontalPodAutoscaler, PodDisruptionBudget,
+  Ingress and HTTPRoute objects as ready once they exist (no more
+  `readiness-unsupported`). HTTPRoutes are applied with Ingresses, after
+  Services.
+- `piceli.testing`: the fake API serves StatefulSets, DaemonSets, Jobs,
+  CronJobs, HorizontalPodAutoscalers, PodDisruptionBudgets, Ingresses and
+  HTTPRoutes (added to `TYPES`), reports their readiness, and refuses updates
+  to immutable Job and StatefulSet fields with `422`.
+
 ## Version 0.5.0
 
 - **Mirror third-party images (preview):** `NodeLoopbackRegistry(mirror=[…])`

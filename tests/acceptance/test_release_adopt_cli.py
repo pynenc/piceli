@@ -460,5 +460,5 @@ def test_spec_replace_list_and_absent_objects(release_env):
     code, planned, result = _run(tmp_path, "plan")
     assert code == 0, result.output
     assert planned["authorized"]["replace_not_needed"] == ["Deployment/worker"]
-    assert "replace Deployment/worker: not needed (absent)" in result.stderr
+    assert "replace Deployment/worker: not needed (absent" in result.stderr
     assert {item["operation"] for item in planned["actions"]} == {"create"}

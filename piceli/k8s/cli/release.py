@@ -79,9 +79,10 @@ ReplaceOption = Annotated[
     typer.Option(
         "--replace",
         help=(
-            "Authorize deleting this existing unmanaged object and creating it "
+            "Authorize deleting this existing unmanaged object (or a managed "
+            "Job or StatefulSet whose immutable fields change) and creating it "
             "from the release, after writing a restorable backup (repeatable; "
-            "adds to [release] replace; never retained or managed objects)"
+            "adds to [release] replace; never retained objects)"
         ),
     ),
 ]
@@ -265,7 +266,7 @@ def _describe_plan(result: Any, spec: str, command: str) -> None:
     for entry in report["adopt_not_needed"]:
         _say(f"  adopt {entry}: not needed (absent or already managed)")
     for entry in report["authorized"].get("replace_not_needed", ()):
-        _say(f"  replace {entry}: not needed (absent)")
+        _say(f"  replace {entry}: not needed (absent, or managed and unchanged)")
     for name, origin in result.secrets.items():
         _say(f"  secret {name}: {origin}")
     checks = report.get("checks") or {}

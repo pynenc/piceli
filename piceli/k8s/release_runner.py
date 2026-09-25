@@ -73,6 +73,7 @@ from piceli.k8s.ops.executor import (
 from piceli.k8s.ops.field_diff import plan_diffs
 from piceli.k8s.ops.kubernetes_provider import ProviderError
 from piceli.k8s.ops.plan import (
+    REPLACEABLE_MANAGED_KINDS,
     DeploymentComponent,
     DeploymentComposition,
     DeploymentPlan,
@@ -85,6 +86,7 @@ from piceli.k8s.ops.plan import (
     build_plan,
     declared_union,
     field_drift,
+    immutable_changes,
     private_evidence,
     replace_refusal,
     retained_content_contained,
@@ -426,8 +428,12 @@ def resolve_ownership(
     is taken over again, which reclaims those fields.
 
     Replace entries must name an existing **unmanaged, non-retained** object
-    that no other object owns; absent objects are reported as not needed and
-    every other case is refused. ``adopt_all_desired`` adopts every unmanaged
+    that no other object owns, or a managed Job or StatefulSet (whose
+    immutable fields change); absent objects, and managed ones without an
+    immutable change, are reported as not needed and
+    every other case is refused. A managed object whose immutable fields
+    would change and that is not named for replace blocks the plan
+    (``immutable-field-changed``). ``adopt_all_desired`` adopts every unmanaged
     object the composition declares that is not replaced, and nothing else.
 
     Every object that blocks the plan is reported in one refusal, each with
@@ -453,7 +459,14 @@ def resolve_ownership(
     for entry in dict.fromkeys(replace):
         ref = _declared_match(entry, declared, "replace")
         current = observed.get(ref)
-        if current is None:
+        if current is None or (
+            # A managed Job or StatefulSet is replaced only for a change the
+            # API server cannot apply; a standing entry never reruns a Job.
+            current.ownership is Ownership.MANAGED
+            and ref.kind in REPLACEABLE_MANAGED_KINDS
+            and not current.retained
+            and not immutable_changes(intents[ref], current)
+        ):
             replace_not_needed.add(_label(ref))
             continue
         refusal = replace_refusal(current)
@@ -522,6 +535,23 @@ def resolve_ownership(
                     + ("; retained: replace is never allowed" if retained else ""),
                     "suggest": [f"--adopt {_label(ref)}"]
                     + ([] if retained else [f"--replace {_label(ref)}"]),
+                }
+            )
+        elif (
+            ref not in replaced
+            and ref not in adopt
+            and current.ownership is Ownership.MANAGED
+            and (changed := immutable_changes(intents[ref], current))
+        ):
+            blocking.append(
+                {
+                    "kind": ref.kind,
+                    "name": ref.name,
+                    "code": "immutable-field-changed",
+                    "message": "immutable fields would change ("
+                    + ", ".join(changed)
+                    + "); the API server refuses the update",
+                    "suggest": [f"--replace {_label(ref)}"],
                 }
             )
         elif (

@@ -255,6 +255,12 @@ never build. The approval rules above apply unchanged:
 4. An unknown code (`piceli explain` exits `2` with `unknown-error-code`)
    should not happen for a `conforms` command: report the whole JSON object
    verbatim.
+5. `immutable-field-changed` (a Job's pod template, or a StatefulSet's
+   service name, pod management, selector or claim templates would change):
+   do not add `--replace` yourself. Show the owner the `blocking` entry;
+   replacing deletes and recreates the object (a Job runs again). Plan with
+   the suggested `--replace Kind/name` only when the owner asks for it, and
+   have them approve that plan's hash.
 
 ## Resuming interrupted work
 

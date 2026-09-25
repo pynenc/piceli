@@ -10,6 +10,18 @@ from typing import TYPE_CHECKING, Any, ClassVar, Protocol
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from piceli.app.access import Access, Forward
+from piceli.app.kinds import (
+    Autoscaler,
+    CronJob,
+    DaemonSet,
+    DisruptionBudget,
+    GatewayRef,
+    HttpRoute,
+    Ingress,
+    Job,
+    Route,
+    StatefulSet,
+)
 from piceli.app.model import (
     Config,
     Container,
@@ -30,6 +42,7 @@ from piceli.app.model import (
     ServiceAccount,
     ServicePort,
     Volume,
+    Workload,
 )
 from piceli.k8s.ops.discovery import RELEASE_NAMESPACE_ANNOTATION
 from piceli.k8s.ops.plan import (
@@ -68,7 +81,22 @@ class ComponentSource(Protocol):
     def component(self, namespace: str) -> DeploymentComponent: ...
 
 
-Declared = Config | Secret | Deployment | Service | NetworkPolicy | ServiceAccount
+Declared = (
+    Config
+    | Secret
+    | Deployment
+    | StatefulSet
+    | DaemonSet
+    | Job
+    | CronJob
+    | Service
+    | NetworkPolicy
+    | ServiceAccount
+    | Autoscaler
+    | DisruptionBudget
+    | Ingress
+    | HttpRoute
+)
 Handle = Declared | str
 
 
@@ -79,8 +107,11 @@ def _pointer(key: str) -> str:
 class App(BaseModel):
     """A typed application: workloads, configuration and policies in one namespace.
 
-    Declare objects with :meth:`deployment`, :meth:`service`, :meth:`config`,
-    :meth:`secret`, :meth:`service_account` and :meth:`network_policy`, order
+    Declare objects with :meth:`deployment`, :meth:`stateful_set`,
+    :meth:`daemon_set`, :meth:`job`, :meth:`cron_job`, :meth:`service`,
+    :meth:`config`, :meth:`secret`, :meth:`service_account`,
+    :meth:`network_policy`, :meth:`autoscaler`, :meth:`disruption_budget`,
+    :meth:`ingress` and :meth:`http_route`, order
     components with :meth:`depends`, and render with :meth:`composition` (from
     a release context) or :meth:`render` (from a namespace). Rendering is
     pure: it never contacts a cluster.
@@ -92,15 +123,16 @@ class App(BaseModel):
     :param labels: Labels on every object. Defaults to
         ``{"app.kubernetes.io/part-of": name}``. Workloads add their selector
         labels on top, and every pod carries them (see :attr:`release_selector`).
-    :param pod_defaults: Pod settings applied to every Deployment declared on
-        this app (:class:`~piceli.app.model.PodDefaults`): security, an extra
+    :param pod_defaults: Pod settings applied to every workload (Deployment,
+        StatefulSet, DaemonSet, Job, CronJob) declared on this app (:class:`~piceli.app.model.PodDefaults`): security, an extra
         node selector, the termination grace period and token automounting.
         A workload's own typed arguments win; ``override`` still patches last.
 
     Components: every object belongs to a component (the unit of ordering and
-    readiness in a release). A Deployment's default component is its own name;
-    a Service or NetworkPolicy joins its Deployment's component; a config or
-    secret defaults to its own name. A Deployment depends on the components of
+    readiness in a release). A workload's default component is its own name;
+    a Service, NetworkPolicy, autoscaler or disruption budget joins its
+    workload's component; a config or secret defaults to its own name. A
+    workload depends on the components of
     every config and secret of this app that it reads; add other edges with
     :meth:`depends`.
 
@@ -176,8 +208,15 @@ class App(BaseModel):
         for existing in self._objects:
             if type(existing) is type(item) and existing.name == item.name:
                 raise ValueError(f"{kind} {item.name!r} is already declared")
-        if isinstance(item, Deployment):
+        if isinstance(item, Workload):
             item.check_defaults(self.pod_defaults)
+            for existing in self._objects:
+                if isinstance(existing, Workload) and existing.name == item.name:
+                    raise ValueError(
+                        f"{existing.label} {item.name!r} is already declared; "
+                        "workloads share one name space (their pods carry "
+                        "app.kubernetes.io/name: <name>)"
+                    )
         forward = _forward(item)
         if forward is not None:
             ident = forward.name or item.name
@@ -242,54 +281,36 @@ class App(BaseModel):
             Secret(name=name, data=dict(data), type=type, component=component)
         )
 
-    def deployment(
+    def _pod_fields(
         self,
         name: str,
         *,
         image: str,
-        command: Sequence[str] | None = None,
-        args: Sequence[str] | None = None,
-        working_dir: str | None = None,
-        env: Mapping[str, EnvValue] | None = None,
-        ports: Sequence[int | ContainerPort] = (),
-        ready: Probe | None = None,
-        live: Probe | None = None,
-        startup: Probe | None = None,
-        resources: Resources | None = None,
-        volumes: Mapping[str, Volume | Mount] | None = None,
-        pull_policy: str | None = None,
-        container: str | None = None,
-        sidecars: Sequence[Container] = (),
-        init: Sequence[Container] = (),
-        replicas: int = 1,
-        share_process_namespace: bool = False,
-        node: str | None = None,
-        strategy: str | None = None,
-        service_account: ServiceAccount | str | None = None,
-        security: Security | None = None,
-        node_selector: Mapping[str, str] | None = None,
-        termination_grace_seconds: int | None = None,
-        automount_token: bool | None = None,
-        selector: Mapping[str, str] | None = None,
-        labels: Mapping[str, str] | None = None,
-        component: str | None = None,
-        access: Forward | None = None,
-    ) -> Deployment:
-        """Declare a Deployment whose main container is named after it.
-
-        Container arguments (``image`` … ``pull_policy``) describe the main
-        container (see :class:`~piceli.app.model.Container`); ``container``
-        names it when it must not be named after the Deployment. ``sidecars``
-        run next to it and ``init`` containers run first. The remaining
-        arguments are :class:`~piceli.app.model.Deployment` fields; ``access``
-        declares a loopback forward to the pods (prefer a Service's ``access``).
-
-        ``service_account`` is a :class:`~piceli.app.model.ServiceAccount`
-        from :meth:`service_account` (its pods get a token and its
-        permissions) or the name of one the app does not manage.
-        ``security``, ``node_selector`` and ``termination_grace_seconds`` are
-        layered over the app's ``pod_defaults``.
-        """
+        command: Sequence[str] | None,
+        args: Sequence[str] | None,
+        working_dir: str | None,
+        env: Mapping[str, EnvValue] | None,
+        ports: Sequence[int | ContainerPort],
+        ready: Probe | None,
+        live: Probe | None,
+        startup: Probe | None,
+        resources: Resources | None,
+        volumes: Mapping[str, Volume | Mount] | None,
+        pull_policy: str | None,
+        container: str | None,
+        sidecars: Sequence[Container],
+        init: Sequence[Container],
+        share_process_namespace: bool,
+        node: str | None,
+        service_account: ServiceAccount | str | None,
+        security: Security | None,
+        node_selector: Mapping[str, str] | None,
+        termination_grace_seconds: int | None,
+        automount_token: bool | None,
+        labels: Mapping[str, str] | None,
+        component: str | None,
+    ) -> dict[str, Any]:
+        """The :class:`~piceli.app.model.Workload` fields shared by every pod kind."""
         if isinstance(service_account, ServiceAccount):
             if not any(existing is service_account for existing in self._objects):
                 raise ValueError(
@@ -314,34 +335,777 @@ class App(BaseModel):
                 "pull_policy": pull_policy,
             }
         )
+        return {
+            "name": name,
+            "containers": (main, *sidecars),
+            "init_containers": tuple(init),
+            "share_process_namespace": share_process_namespace,
+            "node": node,
+            "service_account": service_account,
+            "security": security,
+            "node_selector": (
+                dict(node_selector) if node_selector is not None else None
+            ),
+            "termination_grace_seconds": termination_grace_seconds,
+            "automount_token": automount_token,
+            "labels": dict(labels or {}),
+            "component": component,
+        }
+
+    def deployment(
+        self,
+        name: str,
+        *,
+        image: str,
+        command: Sequence[str] | None = None,
+        args: Sequence[str] | None = None,
+        working_dir: str | None = None,
+        env: Mapping[str, EnvValue] | None = None,
+        ports: Sequence[int | ContainerPort] = (),
+        ready: Probe | None = None,
+        live: Probe | None = None,
+        startup: Probe | None = None,
+        resources: Resources | None = None,
+        volumes: Mapping[str, Volume | Mount] | None = None,
+        pull_policy: str | None = None,
+        container: str | None = None,
+        sidecars: Sequence[Container] = (),
+        init: Sequence[Container] = (),
+        share_process_namespace: bool = False,
+        node: str | None = None,
+        service_account: ServiceAccount | str | None = None,
+        security: Security | None = None,
+        node_selector: Mapping[str, str] | None = None,
+        termination_grace_seconds: int | None = None,
+        automount_token: bool | None = None,
+        replicas: int | None = None,
+        strategy: str | None = None,
+        selector: Mapping[str, str] | None = None,
+        labels: Mapping[str, str] | None = None,
+        component: str | None = None,
+        access: Forward | None = None,
+    ) -> Deployment:
+        """Declare a Deployment whose main container is named after it.
+
+        Container arguments (``image`` … ``pull_policy``) describe the main
+        container (see :class:`~piceli.app.model.Container`); ``container``
+        names it when it must not be named after the Deployment. ``sidecars``
+        run next to it and ``init`` containers run first. The remaining
+        arguments are :class:`~piceli.app.model.Deployment` fields; ``access``
+        declares a loopback forward to the pods (prefer a Service's ``access``).
+
+        ``service_account`` is a :class:`~piceli.app.model.ServiceAccount`
+        from :meth:`service_account` (its pods get a token and its
+        permissions) or the name of one the app does not manage.
+        ``security``, ``node_selector`` and ``termination_grace_seconds`` are
+        layered over the app's ``pod_defaults``.
+
+        ``replicas`` defaults to 1; leave it unset on a Deployment that an
+        :meth:`autoscaler` targets.
+        """
+        fields = self._pod_fields(
+            name,
+            image=image,
+            command=command,
+            args=args,
+            working_dir=working_dir,
+            env=env,
+            ports=ports,
+            ready=ready,
+            live=live,
+            startup=startup,
+            resources=resources,
+            volumes=volumes,
+            pull_policy=pull_policy,
+            container=container,
+            sidecars=sidecars,
+            init=init,
+            share_process_namespace=share_process_namespace,
+            node=node,
+            service_account=service_account,
+            security=security,
+            node_selector=node_selector,
+            termination_grace_seconds=termination_grace_seconds,
+            automount_token=automount_token,
+            labels=labels,
+            component=component,
+        )
+        if replicas is not None:
+            fields["replicas"] = replicas
         return self._declare(
             Deployment.model_validate(
                 {
-                    "name": name,
-                    "containers": (main, *sidecars),
-                    "init_containers": tuple(init),
-                    "replicas": replicas,
-                    "share_process_namespace": share_process_namespace,
-                    "node": node,
+                    **fields,
                     "strategy": strategy,
-                    "service_account": service_account,
-                    "security": security,
-                    "node_selector": (
-                        dict(node_selector) if node_selector is not None else None
-                    ),
-                    "termination_grace_seconds": termination_grace_seconds,
-                    "automount_token": automount_token,
                     "selector": dict(selector) if selector is not None else None,
-                    "labels": dict(labels or {}),
-                    "component": component,
                     "access": access,
                 }
             )
         )
 
+    def stateful_set(
+        self,
+        name: str,
+        *,
+        image: str,
+        command: Sequence[str] | None = None,
+        args: Sequence[str] | None = None,
+        working_dir: str | None = None,
+        env: Mapping[str, EnvValue] | None = None,
+        ports: Sequence[int | ContainerPort] = (),
+        ready: Probe | None = None,
+        live: Probe | None = None,
+        startup: Probe | None = None,
+        resources: Resources | None = None,
+        volumes: Mapping[str, Volume | Mount] | None = None,
+        pull_policy: str | None = None,
+        container: str | None = None,
+        sidecars: Sequence[Container] = (),
+        init: Sequence[Container] = (),
+        share_process_namespace: bool = False,
+        node: str | None = None,
+        service_account: ServiceAccount | str | None = None,
+        security: Security | None = None,
+        node_selector: Mapping[str, str] | None = None,
+        termination_grace_seconds: int | None = None,
+        automount_token: bool | None = None,
+        replicas: int | None = None,
+        headless: bool = True,
+        service_name: str | None = None,
+        pod_management: str | None = None,
+        update_strategy: str | None = None,
+        min_ready_seconds: int | None = None,
+        selector: Mapping[str, str] | None = None,
+        labels: Mapping[str, str] | None = None,
+        component: str | None = None,
+    ) -> StatefulSet:
+        """Declare a StatefulSet (and its governing headless Service).
+
+        Pod and container arguments are those of :meth:`deployment`. Mount a
+        :class:`~piceli.app.model.ClaimTemplate` in ``volumes`` to give each
+        pod its own PersistentVolumeClaim (``volumeClaimTemplates``); those
+        claims are never created, changed or pruned by a release.
+
+        Governing Service: with ``headless=True`` (the default) the app also
+        declares a headless Service named ``service_name`` (default: the
+        StatefulSet's name) that selects the pods and exposes the main
+        container's ports; ``serviceName`` points at it, so each pod is
+        reachable as ``<pod>.<service>``. With ``headless=False``,
+        ``service_name`` names a Service declared elsewhere (or is left unset).
+
+        :param replicas: Pods; 1 by default. Leave it unset when an
+            :meth:`autoscaler` targets the StatefulSet.
+        :param pod_management: ``OrderedReady`` (default) or ``Parallel``.
+        :param update_strategy: ``RollingUpdate`` (default) or ``OnDelete``.
+
+        Example::
+
+            db = app.stateful_set(
+                "db", image=ctx.image("db"), ports=[5432], replicas=3,
+                volumes={"/var/lib/db": ClaimTemplate("data", size="1Gi")},
+                pod_management="Parallel",
+            )
+        """
+        fields = self._pod_fields(
+            name,
+            image=image,
+            command=command,
+            args=args,
+            working_dir=working_dir,
+            env=env,
+            ports=ports,
+            ready=ready,
+            live=live,
+            startup=startup,
+            resources=resources,
+            volumes=volumes,
+            pull_policy=pull_policy,
+            container=container,
+            sidecars=sidecars,
+            init=init,
+            share_process_namespace=share_process_namespace,
+            node=node,
+            service_account=service_account,
+            security=security,
+            node_selector=node_selector,
+            termination_grace_seconds=termination_grace_seconds,
+            automount_token=automount_token,
+            labels=labels,
+            component=component,
+        )
+        if replicas is not None:
+            fields["replicas"] = replicas
+        governing = service_name or (name if headless else None)
+        item = StatefulSet.model_validate(
+            {
+                **fields,
+                "service_name": governing,
+                "pod_management": pod_management,
+                "update_strategy": update_strategy,
+                "min_ready_seconds": min_ready_seconds,
+                "selector": dict(selector) if selector is not None else None,
+            }
+        )
+        service = None
+        if headless:
+            exposed = [
+                port if isinstance(port, ContainerPort) else ContainerPort(port=port)
+                for port in item.containers[0].ports
+            ]
+            several = len(exposed) > 1
+            service = Service.model_validate(
+                {
+                    "name": governing,
+                    "selector": item.selector_labels,
+                    "ports": tuple(
+                        ServicePort(
+                            port=port.port,
+                            name=(port.name or f"port-{port.port}")
+                            if several
+                            else None,
+                            protocol=port.protocol or "TCP",
+                        )
+                        for port in exposed
+                    ),
+                    "headless": True,
+                    "component": item.component_name,
+                }
+            )
+            for existing in self._objects:
+                if isinstance(existing, Service) and existing.name == service.name:
+                    raise ValueError(
+                        f"Service {service.name!r} is already declared; pass "
+                        "service_name= for the headless Service, or headless=False"
+                    )
+        self._declare(item)
+        if service is not None:
+            self._declare(service)
+        return item
+
+    def daemon_set(
+        self,
+        name: str,
+        *,
+        image: str,
+        command: Sequence[str] | None = None,
+        args: Sequence[str] | None = None,
+        working_dir: str | None = None,
+        env: Mapping[str, EnvValue] | None = None,
+        ports: Sequence[int | ContainerPort] = (),
+        ready: Probe | None = None,
+        live: Probe | None = None,
+        startup: Probe | None = None,
+        resources: Resources | None = None,
+        volumes: Mapping[str, Volume | Mount] | None = None,
+        pull_policy: str | None = None,
+        container: str | None = None,
+        sidecars: Sequence[Container] = (),
+        init: Sequence[Container] = (),
+        share_process_namespace: bool = False,
+        node: str | None = None,
+        service_account: ServiceAccount | str | None = None,
+        security: Security | None = None,
+        node_selector: Mapping[str, str] | None = None,
+        termination_grace_seconds: int | None = None,
+        automount_token: bool | None = None,
+        update_strategy: str | None = None,
+        min_ready_seconds: int | None = None,
+        selector: Mapping[str, str] | None = None,
+        labels: Mapping[str, str] | None = None,
+        component: str | None = None,
+    ) -> DaemonSet:
+        """Declare a DaemonSet: one pod on every node that matches.
+
+        Pod and container arguments are those of :meth:`deployment`;
+        ``node_selector`` (and the app's ``pod_defaults.node_selector``)
+        chooses the nodes, and ``node=`` pins it to one verified node.
+
+        :param update_strategy: ``RollingUpdate`` (default) or ``OnDelete``.
+        """
+        fields = self._pod_fields(
+            name,
+            image=image,
+            command=command,
+            args=args,
+            working_dir=working_dir,
+            env=env,
+            ports=ports,
+            ready=ready,
+            live=live,
+            startup=startup,
+            resources=resources,
+            volumes=volumes,
+            pull_policy=pull_policy,
+            container=container,
+            sidecars=sidecars,
+            init=init,
+            share_process_namespace=share_process_namespace,
+            node=node,
+            service_account=service_account,
+            security=security,
+            node_selector=node_selector,
+            termination_grace_seconds=termination_grace_seconds,
+            automount_token=automount_token,
+            labels=labels,
+            component=component,
+        )
+        return self._declare(
+            DaemonSet.model_validate(
+                {
+                    **fields,
+                    "update_strategy": update_strategy,
+                    "min_ready_seconds": min_ready_seconds,
+                    "selector": dict(selector) if selector is not None else None,
+                }
+            )
+        )
+
+    def job(
+        self,
+        name: str,
+        *,
+        image: str,
+        command: Sequence[str] | None = None,
+        args: Sequence[str] | None = None,
+        working_dir: str | None = None,
+        env: Mapping[str, EnvValue] | None = None,
+        ports: Sequence[int | ContainerPort] = (),
+        ready: Probe | None = None,
+        live: Probe | None = None,
+        startup: Probe | None = None,
+        resources: Resources | None = None,
+        volumes: Mapping[str, Volume | Mount] | None = None,
+        pull_policy: str | None = None,
+        container: str | None = None,
+        sidecars: Sequence[Container] = (),
+        init: Sequence[Container] = (),
+        share_process_namespace: bool = False,
+        node: str | None = None,
+        service_account: ServiceAccount | str | None = None,
+        security: Security | None = None,
+        node_selector: Mapping[str, str] | None = None,
+        termination_grace_seconds: int | None = None,
+        automount_token: bool | None = None,
+        restart_policy: str = "Never",
+        backoff_limit: int | None = None,
+        completions: int | None = None,
+        parallelism: int | None = None,
+        active_deadline_seconds: int | None = None,
+        ttl_seconds_after_finished: int | None = None,
+        labels: Mapping[str, str] | None = None,
+        component: str | None = None,
+    ) -> Job:
+        """Declare a Job: pods that run to completion; a release waits for it.
+
+        Pod and container arguments are those of :meth:`deployment` (a Job
+        has no ``selector``: Kubernetes chooses it). Job arguments are
+        :class:`~piceli.app.kinds.Job` fields.
+
+        Ordering: a Job is applied after the Deployments and Services of the
+        release unless something depends on it; ``app.depends(api, on=job)``
+        runs the Job (to completion) before ``api``.
+
+        Changing an existing Job's pod template or ``completions`` is refused
+        at plan time (``immutable-field-changed``); name it with
+        ``--replace Job/<name>`` to delete it and run the new one.
+
+        Example::
+
+            migrate = app.job("migrate", image=ctx.image("api"),
+                              command=["migrate"], backoff_limit=2)
+            app.depends(api, on=migrate)
+        """
+        fields = self._pod_fields(
+            name,
+            image=image,
+            command=command,
+            args=args,
+            working_dir=working_dir,
+            env=env,
+            ports=ports,
+            ready=ready,
+            live=live,
+            startup=startup,
+            resources=resources,
+            volumes=volumes,
+            pull_policy=pull_policy,
+            container=container,
+            sidecars=sidecars,
+            init=init,
+            share_process_namespace=share_process_namespace,
+            node=node,
+            service_account=service_account,
+            security=security,
+            node_selector=node_selector,
+            termination_grace_seconds=termination_grace_seconds,
+            automount_token=automount_token,
+            labels=labels,
+            component=component,
+        )
+        return self._declare(
+            Job.model_validate(
+                {
+                    **fields,
+                    "restart_policy": restart_policy,
+                    "backoff_limit": backoff_limit,
+                    "completions": completions,
+                    "parallelism": parallelism,
+                    "active_deadline_seconds": active_deadline_seconds,
+                    "ttl_seconds_after_finished": ttl_seconds_after_finished,
+                }
+            )
+        )
+
+    def cron_job(
+        self,
+        name: str,
+        *,
+        schedule: str,
+        image: str,
+        command: Sequence[str] | None = None,
+        args: Sequence[str] | None = None,
+        working_dir: str | None = None,
+        env: Mapping[str, EnvValue] | None = None,
+        ports: Sequence[int | ContainerPort] = (),
+        ready: Probe | None = None,
+        live: Probe | None = None,
+        startup: Probe | None = None,
+        resources: Resources | None = None,
+        volumes: Mapping[str, Volume | Mount] | None = None,
+        pull_policy: str | None = None,
+        container: str | None = None,
+        sidecars: Sequence[Container] = (),
+        init: Sequence[Container] = (),
+        share_process_namespace: bool = False,
+        node: str | None = None,
+        service_account: ServiceAccount | str | None = None,
+        security: Security | None = None,
+        node_selector: Mapping[str, str] | None = None,
+        termination_grace_seconds: int | None = None,
+        automount_token: bool | None = None,
+        time_zone: str | None = None,
+        concurrency: str | None = None,
+        suspend: bool | None = None,
+        starting_deadline_seconds: int | None = None,
+        successful_jobs_history: int | None = None,
+        failed_jobs_history: int | None = None,
+        restart_policy: str = "Never",
+        backoff_limit: int | None = None,
+        completions: int | None = None,
+        parallelism: int | None = None,
+        active_deadline_seconds: int | None = None,
+        ttl_seconds_after_finished: int | None = None,
+        labels: Mapping[str, str] | None = None,
+        component: str | None = None,
+    ) -> CronJob:
+        """Declare a CronJob: a Job on a ``schedule``.
+
+        Pod, container and Job arguments are those of :meth:`job`; schedule
+        arguments are :class:`~piceli.app.kinds.CronJob` fields. The Jobs it
+        creates belong to the CronJob and are never managed by a release.
+
+        Example::
+
+            app.cron_job("report", schedule="0 3 * * *", image=ctx.image("api"),
+                         command=["report"], concurrency="Forbid")
+        """
+        fields = self._pod_fields(
+            name,
+            image=image,
+            command=command,
+            args=args,
+            working_dir=working_dir,
+            env=env,
+            ports=ports,
+            ready=ready,
+            live=live,
+            startup=startup,
+            resources=resources,
+            volumes=volumes,
+            pull_policy=pull_policy,
+            container=container,
+            sidecars=sidecars,
+            init=init,
+            share_process_namespace=share_process_namespace,
+            node=node,
+            service_account=service_account,
+            security=security,
+            node_selector=node_selector,
+            termination_grace_seconds=termination_grace_seconds,
+            automount_token=automount_token,
+            labels=labels,
+            component=component,
+        )
+        return self._declare(
+            CronJob.model_validate(
+                {
+                    **fields,
+                    "schedule": schedule,
+                    "time_zone": time_zone,
+                    "concurrency": concurrency,
+                    "suspend": suspend,
+                    "starting_deadline_seconds": starting_deadline_seconds,
+                    "successful_jobs_history": successful_jobs_history,
+                    "failed_jobs_history": failed_jobs_history,
+                    "restart_policy": restart_policy,
+                    "backoff_limit": backoff_limit,
+                    "completions": completions,
+                    "parallelism": parallelism,
+                    "active_deadline_seconds": active_deadline_seconds,
+                    "ttl_seconds_after_finished": ttl_seconds_after_finished,
+                }
+            )
+        )
+
+    def autoscaler(
+        self,
+        workload: Deployment | StatefulSet,
+        *,
+        max_replicas: int,
+        min_replicas: int = 1,
+        cpu: int | None = None,
+        memory: int | None = None,
+        scale_down_stabilization_seconds: int | None = None,
+        name: str | None = None,
+    ) -> Autoscaler:
+        """Scale ``workload`` with a HorizontalPodAutoscaler (``autoscaling/v2``).
+
+        ``cpu`` and ``memory`` are target average utilizations in percent of
+        the containers' requests, so every container of the workload must
+        request that resource (``resources=Resources(cpu=...)``).
+
+        Replicas rule: the HPA owns the replica count. The workload must not
+        set ``replicas=`` (refused), renders no ``spec.replicas``, and a plan
+        never removes or resets the live value. A workload that had
+        ``replicas`` in an earlier release keeps its live count until the HPA
+        changes it.
+
+        Named after the workload unless ``name`` is given; joins its component.
+
+        Example::
+
+            api = app.deployment("api", image=..., resources=Resources(cpu="100m"))
+            app.autoscaler(api, min_replicas=2, max_replicas=10, cpu=70)
+        """
+        if not isinstance(workload, Deployment | StatefulSet):
+            raise ValueError(
+                "an autoscaler targets a Deployment or a StatefulSet, got "
+                f"{type(workload).__name__}"
+            )
+        self._check_declared(workload, "autoscaler")
+        if "replicas" in workload.model_fields_set:
+            raise ValueError(
+                f"{workload.label} {workload.name!r} sets replicas= and is "
+                "autoscaled; remove replicas= (the autoscaler owns the count; "
+                "use min_replicas=)"
+            )
+        for existing in self._objects:
+            if isinstance(existing, Autoscaler) and (
+                existing.target_kind,
+                existing.target,
+            ) == (workload.kind, workload.name):
+                raise ValueError(
+                    f"{workload.label} {workload.name!r} already has autoscaler "
+                    f"{existing.name!r}"
+                )
+        for resource, value in (("cpu", cpu), ("memory", memory)):
+            if value is None:
+                continue
+            missing = [
+                item.name
+                for item in workload.containers
+                if getattr(item.resources, resource, None) is None
+            ]
+            if missing:
+                raise ValueError(
+                    f"autoscaler on {workload.label} {workload.name!r}: {resource} "
+                    f"utilization needs a {resource} request on every container; "
+                    f"missing on {missing}"
+                )
+        return self._declare(
+            Autoscaler.model_validate(
+                {
+                    "name": name or workload.name,
+                    "target_kind": workload.kind,
+                    "target": workload.name,
+                    "min_replicas": min_replicas,
+                    "max_replicas": max_replicas,
+                    "cpu": cpu,
+                    "memory": memory,
+                    "scale_down_stabilization_seconds": (
+                        scale_down_stabilization_seconds
+                    ),
+                    "component": workload.component_name,
+                }
+            )
+        )
+
+    def disruption_budget(
+        self,
+        workload: Deployment | StatefulSet | DaemonSet,
+        *,
+        min_available: int | str | None = None,
+        max_unavailable: int | str | None = None,
+        unhealthy_pod_eviction: str | None = None,
+        name: str | None = None,
+    ) -> DisruptionBudget:
+        """Limit voluntary disruptions of ``workload``'s pods (a PodDisruptionBudget).
+
+        Pass exactly one of ``min_available`` and ``max_unavailable``, as a pod
+        count or a percentage (``"50%"``). Named after the workload unless
+        ``name`` is given; joins its component.
+
+        Example::
+
+            app.disruption_budget(api, max_unavailable=1)
+        """
+        if not isinstance(workload, Deployment | StatefulSet | DaemonSet):
+            raise ValueError(
+                "a disruption budget protects a Deployment, StatefulSet or "
+                f"DaemonSet, got {type(workload).__name__}"
+            )
+        self._check_declared(workload, "disruption budget")
+        return self._declare(
+            DisruptionBudget.model_validate(
+                {
+                    "name": name or workload.name,
+                    "selector": workload.selector_labels,
+                    "min_available": min_available,
+                    "max_unavailable": max_unavailable,
+                    "unhealthy_pod_eviction": unhealthy_pod_eviction,
+                    "component": workload.component_name,
+                }
+            )
+        )
+
+    def ingress(
+        self,
+        name: str,
+        *,
+        routes: Sequence[Route],
+        hosts: Sequence[str] = (),
+        class_name: str | None = None,
+        tls_secret: Secret | str | None = None,
+        component: str | None = None,
+    ) -> Ingress:
+        """Declare an Ingress (``networking.k8s.io/v1``) to Services of the app.
+
+        :param routes: :class:`~piceli.app.kinds.Route` objects, such as
+            ``Route(web_service, "/")``; every host serves every route.
+        :param hosts: Host names; any host when empty.
+        :param class_name: ``ingressClassName`` (the cluster default when unset).
+        :param tls_secret: A TLS Secret (``app.secret(..., type="kubernetes.io/tls")``
+            or a name) that covers ``hosts``.
+        :param component: Defaults to the first route's Service component
+            when that Service is declared on the app, else ``name``.
+
+        Example::
+
+            web_service = app.service(web, port=3000)
+            app.ingress("shop", hosts=["shop.example.com"],
+                        routes=[Route(web_service, "/")])
+        """
+        routes = tuple(routes)
+        self._check_routes(routes)
+        return self._declare(
+            Ingress.model_validate(
+                {
+                    "name": name,
+                    "routes": routes,
+                    "hosts": tuple(hosts),
+                    "class_name": class_name,
+                    "tls_secret": (
+                        tls_secret.name
+                        if isinstance(tls_secret, Secret)
+                        else tls_secret
+                    ),
+                    "component": component or self._route_component(routes, name),
+                }
+            )
+        )
+
+    def http_route(
+        self,
+        name: str,
+        *,
+        gateway: str | GatewayRef | Sequence[str | GatewayRef],
+        routes: Sequence[Route],
+        hosts: Sequence[str] = (),
+        component: str | None = None,
+    ) -> HttpRoute:
+        """Declare a Gateway API HTTPRoute (``gateway.networking.k8s.io/v1``).
+
+        :param gateway: The parent Gateway: a name in the release namespace,
+            a :class:`~piceli.app.kinds.GatewayRef` (another namespace, a
+            listener ``section``), or several.
+        :param routes: :class:`~piceli.app.kinds.Route` objects; one rule each.
+        :param hosts: ``hostnames``; any host when empty.
+        :param component: As for :meth:`ingress`.
+
+        The cluster needs the Gateway API CRDs; rendering does not. A release
+        waits only until the HTTPRoute exists, not until a Gateway accepts it.
+
+        Example::
+
+            app.http_route("shop", gateway="public", hosts=["shop.example.com"],
+                           routes=[Route(web_service, "/")])
+        """
+        routes = tuple(routes)
+        self._check_routes(routes)
+        parents = [gateway] if isinstance(gateway, str | GatewayRef) else list(gateway)
+        return self._declare(
+            HttpRoute.model_validate(
+                {
+                    "name": name,
+                    "gateways": tuple(
+                        GatewayRef(item) if isinstance(item, str) else item
+                        for item in parents
+                    ),
+                    "routes": routes,
+                    "hosts": tuple(hosts),
+                    "component": component or self._route_component(routes, name),
+                }
+            )
+        )
+
+    def _check_declared(self, item: Declared, what: str) -> None:
+        if not any(existing is item for existing in self._objects):
+            raise ValueError(
+                f"{what}: {type(item).__name__} {item.name!r} is not declared on "
+                "this app"
+            )
+
+    def _check_routes(self, routes: Sequence[Route]) -> None:
+        if not routes:
+            raise ValueError("pass at least one route")
+        for route in routes:
+            if not isinstance(route, Route):
+                raise ValueError(
+                    f"routes take Route(...) objects, got {type(route).__name__}"
+                )
+            service = self._service(route.service)
+            if service is not None and route.port not in {
+                *(port.port for port in service.ports),
+                *(port.name for port in service.ports if port.name),
+            }:
+                raise ValueError(
+                    f"route to service {route.service!r}: port {route.port!r} is "
+                    "not one of its ports"
+                )
+
+    def _service(self, name: str) -> Service | None:
+        for item in self._objects:
+            if isinstance(item, Service) and item.name == name:
+                return item
+        return None
+
+    def _route_component(self, routes: Sequence[Route], default: str) -> str:
+        service = self._service(routes[0].service)
+        return service.component_name if service is not None else default
+
     def service(
         self,
-        workload: Deployment,
+        workload: Workload,
         port: int | None = None,
         *,
         target_port: int | str | None = None,
@@ -350,7 +1114,7 @@ class App(BaseModel):
         type: str | None = None,
         access: Forward | None = None,
     ) -> Service:
-        """Declare a Service that selects ``workload``'s pods.
+        """Declare a Service that selects ``workload``'s pods (any pod kind).
 
         Pass one ``port`` (and optionally ``target_port``) or several named
         :class:`~piceli.app.model.ServicePort` objects. The Service is named
@@ -425,10 +1189,10 @@ class App(BaseModel):
 
     def network_policy(
         self,
-        workload: Deployment | None = None,
+        workload: Workload | None = None,
         *,
         selector: Mapping[str, str] | None = None,
-        allow_from: Sequence[Deployment] = (),
+        allow_from: Sequence[Workload] = (),
         allow_from_selector: Mapping[str, str]
         | Sequence[Mapping[str, str]]
         | None = None,
@@ -599,7 +1363,7 @@ class App(BaseModel):
             resources.setdefault(component, []).extend(
                 self._intents(item, namespace, labels, nodes)
             )
-            if isinstance(item, Deployment):
+            if isinstance(item, Workload):
                 claims |= item.existing_claims()
                 for ref in item.references():
                     owner = owners.get(ref)
@@ -672,14 +1436,14 @@ class App(BaseModel):
                 "type": item.type,
                 "data": dict.fromkeys(item.data, "<private>"),
             }
-        elif isinstance(item, Deployment):
+        elif isinstance(item, Workload):
             node_name = None
             if item.node is not None:
                 if item.node not in nodes:
                     raise ValueError(
-                        f"deployment {item.name!r} is pinned to node {item.node!r}, "
-                        f"which the target does not declare; verified nodes: "
-                        f"{sorted(nodes)}"
+                        f"{item.label} {item.name!r} is pinned to node "
+                        f"{item.node!r}, which the target does not declare; "
+                        f"verified nodes: {sorted(nodes)}"
                     )
                 node_name = nodes[item.node].name
             manifest = item.manifest(
@@ -688,6 +1452,11 @@ class App(BaseModel):
                 node_name,
                 self.pod_defaults,
                 self._automount(item),
+                scaled=any(
+                    isinstance(other, Autoscaler)
+                    and (other.target_kind, other.target) == (item.kind, item.name)
+                    for other in self._objects
+                ),
             )
         elif isinstance(item, ServiceAccount):
             manifest, *extra = item.manifests(
@@ -705,7 +1474,7 @@ class App(BaseModel):
                 intent = intent.with_secret(_pointer(key), reference)
         return [intent, *(ResourceIntent.from_manifest(value) for value in extra)]
 
-    def _automount(self, item: Deployment) -> bool | None:
+    def _automount(self, item: Workload) -> bool | None:
         """Token automounting when the workload sets none (see ``service_account``)."""
         if item.service_account is not None and any(
             isinstance(other, ServiceAccount) and other.name == item.service_account
@@ -719,6 +1488,14 @@ _KINDS: dict[type, str] = {
     Config: "ConfigMap",
     Secret: "Secret",
     Deployment: "Deployment",
+    StatefulSet: "StatefulSet",
+    DaemonSet: "DaemonSet",
+    Job: "Job",
+    CronJob: "CronJob",
+    Autoscaler: "HorizontalPodAutoscaler",
+    DisruptionBudget: "PodDisruptionBudget",
+    Ingress: "Ingress",
+    HttpRoute: "HTTPRoute",
     Service: "Service",
     NetworkPolicy: "NetworkPolicy",
     ServiceAccount: "ServiceAccount",

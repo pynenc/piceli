@@ -1146,6 +1146,12 @@ class KubernetesProvider:
             "ClusterRoleBinding",
             "NetworkPolicy",
             "CronJob",
+            # Accepted by the API server is all a release waits for: an HPA
+            # needs metrics, and an Ingress or HTTPRoute a controller, to act.
+            "HorizontalPodAutoscaler",
+            "PodDisruptionBudget",
+            "Ingress",
+            "HTTPRoute",
         }:
             ready = True
         elif kind in {"Deployment", "StatefulSet", "DaemonSet"}:

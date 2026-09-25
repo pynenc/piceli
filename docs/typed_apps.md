@@ -1,8 +1,10 @@
 # Describe an app in typed Python
 
-This page shows how to describe an application's Deployments, Services,
-configuration, secrets, service accounts with their permissions, pod security
-defaults and network policies with typed Python objects, and
+This page shows how to describe an application's Deployments, StatefulSets,
+DaemonSets, Jobs and CronJobs, Services, configuration, secrets, service
+accounts with their permissions, pod security defaults, network policies,
+autoscalers, disruption budgets, Ingresses and Gateway API HTTPRoutes with
+typed Python objects, and
 how to render them to manifests or release them, with no manifest dicts or YAML.
 
 ```{admonition} Maturity: preview
@@ -127,22 +129,30 @@ become ready before the next. Every declaration belongs to a component:
 
 | Declaration | Default component |
 | --- | --- |
-| `app.deployment(name, …)` | `name` |
+| `app.deployment(name, …)`, `app.stateful_set`, `app.daemon_set`, `app.job`, `app.cron_job` | `name` (a StatefulSet's headless Service joins it) |
 | `app.config(name, …)`, `app.secret(name, …)` | `name` |
-| `app.service(workload, …)`, `app.network_policy(workload, …)` | the workload's component |
+| `app.service(workload, …)`, `app.network_policy(workload, …)`, `app.autoscaler(workload, …)`, `app.disruption_budget(workload, …)` | the workload's component |
+| `app.ingress(name, …)`, `app.http_route(name, …)` | the first route's Service component, else `name` |
 | `app.service_account(name, …)` | `name` (with its Role and ClusterRole objects) |
 | `app.network_policy(selector=…, name=…)` | `component=`, else `name` |
 
 Pass `component=` to group objects, as the example does with `config`. A
-Deployment automatically depends on the component of every config and secret
+workload automatically depends on the component of every config and secret
 of the app that it reads through env or volumes, and of the service account it
 is bound to. `app.depends(a, on=b)` adds
 other edges. It accepts declared objects or component names.
 
+Within a release, kinds are also applied in a fixed order unless a dependency
+says otherwise: Deployments, StatefulSets and DaemonSets, then Services, then
+Jobs and CronJobs, then Ingresses, HTTPRoutes, NetworkPolicies, disruption
+budgets and autoscalers. `app.depends(api, on=migrate)` makes a Job run (to
+completion) before a Deployment instead.
+
 ### Selector labels are chosen once
 
-A Deployment's `spec.selector` is immutable in Kubernetes. Piceli derives it
-from the Deployment's own name only:
+A workload's `spec.selector` is immutable in Kubernetes. Piceli derives it
+from the workload's own name only (a Job's selector is chosen by Kubernetes;
+its pods still carry the label):
 
 ```text
 selector = {"app.kubernetes.io/name": <deployment name>}   # unless selector= is given
@@ -216,7 +226,8 @@ web = app.deployment(
 )
 ```
 
-Every Deployment declared on the app renders:
+Every workload declared on the app (Deployment, StatefulSet, DaemonSet, Job,
+CronJob) renders:
 
 | Setting | Rendered as |
 | --- | --- |
@@ -346,6 +357,212 @@ app's object labels, `{"app.kubernetes.io/part-of": <app name>}` by default),
 so the first policy lets only this app's pods reach its pods. An empty
 selector is refused: it would match every pod in the namespace.
 
+## Stateful workloads
+
+`app.stateful_set(...)` takes the same pod and container arguments as
+`app.deployment(...)`. Mount a `ClaimTemplate` to give each pod its own
+PersistentVolumeClaim:
+
+```python
+from piceli import ClaimTemplate
+
+db = app.stateful_set(
+    "db",
+    image=ctx.image("db"),
+    ports=[5432],
+    replicas=3,
+    volumes={"/var/lib/db": ClaimTemplate("data", size="1Gi")},
+    pod_management="Parallel",  # or "OrderedReady" (default)
+    update_strategy="RollingUpdate",  # or "OnDelete"
+)
+```
+
+- **Headless Service.** By default the app also declares a headless Service
+  (`clusterIP: None`) named after the StatefulSet (or `service_name=`) that
+  selects its pods and exposes the main container's ports (named
+  `port-<number>` when there are several); `serviceName` points at it, so
+  each pod is reachable as `<pod>.<service>`. Pass `headless=False` to point
+  `service_name=` at a Service declared elsewhere, or to have none. Declare a
+  regular Service in front of it with `app.service(db, port=…, name=…)`.
+- **Claims are never pruned.** The claims come from the StatefulSet
+  controller (`<template>-<name>-<ordinal>`), not from the release: no plan
+  creates, changes, adopts or deletes them. The StatefulSet renders
+  `persistentVolumeClaimRetentionPolicy: {whenDeleted: Retain, whenScaled:
+  Retain}`, and a release deletes (prune) or replaces a StatefulSet with
+  `Orphan` propagation, so the claims and their data outlive it; a later
+  release (or a rollback) that declares the StatefulSet again reattaches its
+  pods to the same claims. Delete claims yourself when the data is no longer
+  needed.
+- **Immutable fields.** `service_name`, `pod_management`, the selector and
+  the claim templates cannot change on an existing StatefulSet (see
+  [Immutable fields](#immutable-fields-and-replace)). A `ClaimTemplate` is
+  only accepted on a StatefulSet.
+
+## Jobs, CronJobs and DaemonSets
+
+```python
+migrate = app.job(
+    "migrate",
+    image=ctx.image("api"),
+    command=["migrate"],
+    backoff_limit=2,
+    active_deadline_seconds=600,
+)
+api = app.deployment("api", image=ctx.image("api"), ports=[8080])
+app.depends(api, on=migrate)  # run the migration before the API rolls out
+
+app.cron_job(
+    "report",
+    schedule="0 3 * * *",
+    time_zone="Etc/UTC",
+    image=ctx.image("api"),
+    command=["report"],
+    concurrency="Forbid",
+)
+app.daemon_set(
+    "agent", image=ctx.image("agent"), node_selector={"kubernetes.io/os": "linux"}
+)
+```
+
+- A release waits until a **Job** completes (a failing Job times out the
+  release). `restart_policy` is `Never` (default) or `OnFailure`. A Job has no
+  `selector=`: Kubernetes chooses it. With `ttl_seconds_after_finished`, the
+  Job is deleted after it finishes and the next release creates (and runs) it
+  again.
+- A **CronJob** is ready as soon as it exists. The Jobs it creates belong to
+  it and are never managed or pruned by a release. Every field may change;
+  new Jobs use the new template.
+- A **DaemonSet** runs one pod on every node that matches its node selector
+  (and the app's `pod_defaults.node_selector`); a release waits until every
+  scheduled pod is ready and updated.
+
+## Settings shared by every pod kind
+
+Deployments, StatefulSets, DaemonSets, Jobs and CronJobs share one pod model
+({py:class}`~piceli.app.model.Workload`), so these work the same for all of
+them:
+
+- `pod_defaults` (security, extra node selector, grace period, token
+  automounting), layered under the workload's own arguments;
+- `service_account=` (a declared account gives the pods a token and its
+  permissions);
+- `node=` pins, images from `ctx.image(...)` or a pipeline's build handles
+  (the pipeline pins workloads that use a node-delivered image to that node,
+  whatever their kind);
+- env and volumes from configs and secrets, with the automatic component
+  dependencies;
+- `app.override(workload, patch)`, `app.service(workload, …)` and
+  `app.network_policy(workload, …)`.
+
+Workload names are unique across kinds: a Job and a Deployment with the same
+name would share the `app.kubernetes.io/name` pod label.
+
+## Autoscale a workload
+
+```python
+from piceli import Resources
+
+api = app.deployment(
+    "api",
+    image=ctx.image("api"),
+    ports=[8080],
+    resources=Resources(cpu="100m", memory="128Mi"),
+)
+app.autoscaler(api, min_replicas=2, max_replicas=10, cpu=70)
+```
+
+`app.autoscaler(workload, …)` declares a HorizontalPodAutoscaler
+(`autoscaling/v2`) for a Deployment or StatefulSet. `cpu` and `memory` are
+target average utilizations in percent of the requests, so every container
+of the workload must request that resource (checked when declared).
+
+**Replicas rule: the autoscaler owns the replica count.**
+
+- The workload must not set `replicas=` (refused when declared), and it
+  renders no `spec.replicas`, so a release never writes the count.
+- A plan never removes `/spec/replicas` from a workload that an HPA of the
+  same composition targets, even when an earlier release declared it; a
+  workload that had `replicas` before keeps its live count until the HPA
+  changes it.
+- The HPA's changes are not a difference: the next plan is a no-op.
+
+Only one autoscaler per workload. Metrics need a metrics server in the
+cluster; without one the HPA still enforces `min_replicas`.
+
+## Limit disruptions
+
+```python
+app.disruption_budget(api, max_unavailable=1)
+app.disruption_budget(db, min_available="50%", name="db-budget")
+```
+
+A PodDisruptionBudget (`policy/v1`) selects the workload's pods (a
+Deployment, StatefulSet or DaemonSet). Pass exactly one of `min_available`
+and `max_unavailable`, as a pod count or a percentage;
+`unhealthy_pod_eviction=` sets `unhealthyPodEvictionPolicy`.
+
+## Route HTTP traffic
+
+A `Route(service, path)` is one path to a Service port. With a declared
+Service handle the port is filled in (and checked); a Service the app does not
+declare needs `port=`.
+
+```python
+from piceli import GatewayRef, Route
+
+web_service = app.service(web, port=80, target_port=3000)
+app.ingress(
+    "shop",
+    hosts=["shop.example.com"],
+    class_name="nginx",
+    tls_secret="shop-tls",
+    routes=[Route(web_service, "/"), Route(api_service, "/api", port="http")],
+)
+app.http_route(
+    "shop",
+    gateway=GatewayRef("public", namespace="gateways", section="https"),
+    hosts=["shop.example.com"],
+    routes=[Route(web_service, "/"), Route(api_service, "/api", port=8080)],
+)
+```
+
+- `app.ingress` renders a `networking.k8s.io/v1` Ingress; every host serves
+  every route, and no hosts means any host. It needs an ingress controller to
+  carry traffic, not to be released.
+- `app.http_route` renders a Gateway API `HTTPRoute`
+  (`gateway.networking.k8s.io/v1`), one rule per route, attached to one or
+  more Gateways (a name in the release namespace, or a `GatewayRef`).
+  Backend ports are numbers. **The Gateway API CRDs must be installed in the
+  cluster**; they are not part of Kubernetes. Rendering needs nothing, but
+  without the CRDs a plan is refused because the kind cannot be discovered.
+  Install them from a pinned release, for example
+  `kubectl apply --server-side -f
+  https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/standard-install.yaml`.
+- A release waits only until an Ingress or HTTPRoute exists, not until a
+  controller accepts it.
+
+(immutable-fields-and-replace)=
+## Immutable fields and replace
+
+Some fields never change on an existing object: a Job's pod template and
+`completions`, and a StatefulSet's `serviceName`, `podManagementPolicy`,
+selector and claim templates. Piceli never works around this implicitly.
+When a composition changes one of them, `piceli release plan` refuses with
+`immutable-field-changed` and names the object:
+
+```text
+rejected: Job/migrate: immutable fields would change (spec.template); the API server refuses the update [immutable-field-changed]
+  blocking Job/migrate: … -> --replace Job/migrate
+```
+
+Plan again with `--replace Job/migrate` (or `[release] replace`) to delete the
+object and create it from the release, after a restorable backup (see
+{doc}`release_cli`). A replaced Job's pods are deleted with it and the new Job
+runs; a replaced StatefulSet is deleted with `Orphan` propagation, so its
+pods keep running until the new StatefulSet adopts (and, for a changed
+template, rolls) them, and its claims are kept. An existing claim keeps its
+size: a changed claim template applies only to new claims.
+
 ## Reusing templates
 
 `app.add(...)` includes a component built elsewhere: a `DeploymentComponent`,
@@ -364,14 +581,15 @@ documented in the API docs.
 
 | Task | Types |
 | --- | --- |
-| Collect and render an app | {py:class}`~piceli.app.app.App` (`deployment`, `service`, `config`, `secret`, `service_account`, `network_policy`, `release_selector`, `depends`, `add`, `override`, `composition`, `render`) |
+| Collect and render an app | {py:class}`~piceli.app.app.App` (`deployment`, `stateful_set`, `daemon_set`, `job`, `cron_job`, `service`, `config`, `secret`, `service_account`, `network_policy`, `autoscaler`, `disruption_budget`, `ingress`, `http_route`, `release_selector`, `depends`, `add`, `override`, `composition`, `render`) |
 | Pod settings | {py:class}`~piceli.app.model.PodDefaults`, {py:class}`~piceli.app.model.Security` |
 | Permissions | {py:class}`~piceli.app.model.Rule`, {py:class}`~piceli.app.model.ServiceAccount` |
 | Containers | {py:class}`~piceli.app.model.Container`, {py:class}`~piceli.app.model.ContainerPort`, {py:class}`~piceli.app.model.Resources` |
 | Health checks | {py:class}`~piceli.app.model.Probe` (`http`, `tcp`, `exec`; also `app.probe`) |
 | Environment | `str`, {py:class}`~piceli.app.model.SecretKey`, {py:class}`~piceli.app.model.ConfigKey`, {py:class}`~piceli.app.model.FieldRef` |
-| Volumes | {py:class}`~piceli.app.model.ConfigVolume`, {py:class}`~piceli.app.model.SecretVolume`, {py:class}`~piceli.app.model.MemoryVolume`, {py:class}`~piceli.app.model.ExistingClaim`, {py:class}`~piceli.app.model.Mount` |
-| Declared objects (returned handles) | {py:class}`~piceli.app.model.Deployment`, {py:class}`~piceli.app.model.Service`, {py:class}`~piceli.app.model.ServicePort`, {py:class}`~piceli.app.model.Config`, {py:class}`~piceli.app.model.Secret`, {py:class}`~piceli.app.model.ServiceAccount`, {py:class}`~piceli.app.model.NetworkPolicy` |
+| Volumes | {py:class}`~piceli.app.model.ConfigVolume`, {py:class}`~piceli.app.model.SecretVolume`, {py:class}`~piceli.app.model.MemoryVolume`, {py:class}`~piceli.app.model.ExistingClaim`, {py:class}`~piceli.app.model.ClaimTemplate`, {py:class}`~piceli.app.model.Mount` |
+| HTTP routing | {py:class}`~piceli.app.kinds.Route`, {py:class}`~piceli.app.kinds.GatewayRef` |
+| Declared objects (returned handles) | {py:class}`~piceli.app.model.Deployment`, {py:class}`~piceli.app.kinds.StatefulSet`, {py:class}`~piceli.app.kinds.DaemonSet`, {py:class}`~piceli.app.kinds.Job`, {py:class}`~piceli.app.kinds.CronJob` (all {py:class}`~piceli.app.model.Workload`), {py:class}`~piceli.app.model.Service`, {py:class}`~piceli.app.model.ServicePort`, {py:class}`~piceli.app.model.Config`, {py:class}`~piceli.app.model.Secret`, {py:class}`~piceli.app.model.ServiceAccount`, {py:class}`~piceli.app.model.NetworkPolicy`, {py:class}`~piceli.app.kinds.Autoscaler`, {py:class}`~piceli.app.kinds.DisruptionBudget`, {py:class}`~piceli.app.kinds.Ingress`, {py:class}`~piceli.app.kinds.HttpRoute` |
 
 Everything above is importable from `piceli` directly (`from piceli import
 App, ExistingClaim`). The exports are lazy, so `import piceli` stays cheap and
@@ -397,8 +615,9 @@ piceli render [TARGET] [--spec release.toml] [--namespace NS] [--format yaml|jso
 
 ## Not typed yet
 
-StatefulSets, Jobs, Ingress, PodDisruptionBudgets, tolerations and affinity are
-not part of `App` yet. In the meantime:
+Tolerations, affinity and topology spread constraints are not part of `App`
+yet, nor are other kinds (custom resources, other Gateway API routes). In the
+meantime:
 
 - set a field of a declared object with `app.override(obj, patch)`: the patch
   is merged into the rendered manifest (mappings key by key, `None` removes a

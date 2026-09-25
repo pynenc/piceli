@@ -1599,8 +1599,16 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
     _E(
         "replace-refused",
         "Replace refused",
-        "A `--replace` entry names an object that may not be replaced: it is managed, retained or owned by another object (see `blocking`).",
+        "A `--replace` entry names an object that may not be replaced: it is retained, owned by another object, or already managed and not a Job or StatefulSet (see `blocking`).",
         "Use `--adopt Kind/name` for an unmanaged object, or remove the entry from `--replace`/`[release] replace`.",
+        False,
+        "release",
+    ),
+    _E(
+        "immutable-field-changed",
+        "Immutable fields would change",
+        "The composition changes a field the API server never updates on an existing object: a Job's pod template or `completions`, or a StatefulSet's `serviceName`, `podManagementPolicy`, selector or claim templates (see `blocking`).",
+        "Name the object with `--replace Kind/name` (or `[release] replace`) to delete and recreate it from the release (a StatefulSet keeps its pods and claims), or revert the change.",
         False,
         "release",
     ),

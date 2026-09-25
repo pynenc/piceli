@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, ClassVar, Literal
 
 from pydantic import (
     AfterValidator,
@@ -478,7 +478,67 @@ class ExistingClaim(_Volume):
         }
 
 
-Volume = ConfigVolume | SecretVolume | MemoryVolume | ExistingClaim
+AccessMode = Literal[
+    "ReadWriteOnce", "ReadOnlyMany", "ReadWriteMany", "ReadWriteOncePod"
+]
+
+
+class ClaimTemplate(_Volume):
+    """A per-pod PersistentVolumeClaim of a StatefulSet (``volumeClaimTemplates``).
+
+    Mount it like any volume on ``app.stateful_set(...)``; each pod gets its
+    own claim, named ``<template>-<stateful set>-<ordinal>`` by Kubernetes.
+
+    Data safety: the claims are created by the StatefulSet controller, not by
+    the release, so no plan creates, changes, adopts or prunes them. The
+    StatefulSet renders ``persistentVolumeClaimRetentionPolicy`` ``Retain``
+    for deletion and scale-down, and a release deletes or replaces a
+    StatefulSet with ``Orphan`` propagation: the claims and their data outlive
+    it. A template is immutable once the StatefulSet exists (changing it
+    needs ``--replace StatefulSet/<name>``; existing claims keep their size).
+
+    :param name: Template (and volume) name.
+    :param size: Requested storage, such as ``"1Gi"``.
+    :param storage_class: ``storageClassName``; the cluster default when unset.
+    :param access_modes: Access modes; ``ReadWriteOnce`` by default.
+    :param read_only: Mount read-only.
+
+    Example::
+
+        volumes={"/var/lib/db": ClaimTemplate("data", size="1Gi")}
+    """
+
+    kind: Literal["claim-template"] = "claim-template"
+    name: Name
+    size: Quantity
+    storage_class: ObjectName | None = None
+    access_modes: tuple[AccessMode, ...] = Field(
+        default=("ReadWriteOnce",), min_length=1
+    )
+    read_only: bool = False
+
+    def __init__(self, name: str, /, **data: Any) -> None:
+        super().__init__(**{"name": name, **data})
+
+    def source(self) -> dict[str, Any]:
+        raise ValueError(
+            f"claim template {self.name!r} is not a pod volume; it renders under "
+            "the StatefulSet's volumeClaimTemplates"
+        )
+
+    def template(self) -> dict[str, Any]:
+        """The ``volumeClaimTemplates`` item."""
+        return {
+            "metadata": {"name": self.name},
+            "spec": _compact(
+                accessModes=list(self.access_modes),
+                storageClassName=self.storage_class,
+                resources={"requests": {"storage": self.size}},
+            ),
+        }
+
+
+Volume = ConfigVolume | SecretVolume | MemoryVolume | ExistingClaim | ClaimTemplate
 
 
 def _items(items: Mapping[str, str] | None) -> list[dict[str, str]] | None:
@@ -580,9 +640,9 @@ class Container(_Model):
             mount = item if isinstance(item, Mount) else None
             volume = item.volume if isinstance(item, Mount) else item
             name = volume.volume_name(path)
-            read_only = (isinstance(volume, ExistingClaim) and volume.read_only) or (
-                mount is not None and mount.read_only
-            )
+            read_only = (
+                isinstance(volume, ExistingClaim | ClaimTemplate) and volume.read_only
+            ) or (mount is not None and mount.read_only)
             result.append(
                 (
                     name,
@@ -787,8 +847,9 @@ class Security(_Model):
 class PodDefaults(_Model):
     """Pod settings an :class:`~piceli.app.App` applies to every workload it declares.
 
-    Pass it as ``App(..., pod_defaults=PodDefaults(...))``. Every Deployment
-    declared on the app gets these settings; a workload's own typed argument
+    Pass it as ``App(..., pod_defaults=PodDefaults(...))``. Every workload
+    declared on the app (Deployment, StatefulSet, DaemonSet, Job, CronJob)
+    gets these settings; a workload's own typed argument
     wins (``security=`` field by field, ``node_selector=`` key by key,
     ``termination_grace_seconds=`` and ``automount_token=`` as a whole), and
     :meth:`App.override <piceli.app.App.override>` still patches the rendered
@@ -828,19 +889,22 @@ class PodDefaults(_Model):
 # ------------------------------------------------------------------- workloads
 
 
-class Deployment(_Model):
-    """A Deployment declared with ``app.deployment(...)``.
+class Workload(_Model):
+    """Pod settings shared by every pod-bearing kind of an :class:`~piceli.app.App`.
 
-    :param name: Deployment name; also the default selector.
+    :class:`Deployment` and the kinds in :mod:`piceli.app.kinds`
+    (``StatefulSet``, ``DaemonSet``, ``Job``, ``CronJob``) derive from it, so
+    ``pod_defaults``, ``service_account=``, node pins, images, secrets and
+    volumes behave the same for all of them.
+
+    :param name: Object name; also the default selector.
     :param containers: The main container first, then sidecars.
     :param init_containers: Run to completion, in order, before the others.
-    :param replicas: Desired pods.
     :param selector: Explicit selector labels (see the selector rule below).
-    :param labels: Extra labels on the Deployment and its pods.
+    :param labels: Extra labels on the object and its pods.
     :param node: Alias of a verified target node (``[target.nodes.<alias>]``)
         to pin the pods to, resolved when the app is rendered.
     :param share_process_namespace: Containers see each other's processes.
-    :param strategy: ``RollingUpdate`` or ``Recreate``.
     :param service_account: ``serviceAccountName``.
     :param security: Pod and container security settings; layered field by
         field over the app's ``PodDefaults.security``.
@@ -851,35 +915,35 @@ class Deployment(_Model):
         a pod bound to a service account declared on the app gets ``True``;
         any other pod gets the app's ``PodDefaults.automount_token``.
     :param component: Deployment component; defaults to ``name``.
-    :param access: A loopback forward to the pods (``app.access.forward``);
-        never rendered into the manifest.
 
     Selector rule: the selector is ``{"app.kubernetes.io/name": <name>}`` unless
     ``selector`` is given. It never depends on the app name, the component or
     other labels, so renaming those cannot change the selector of an existing
-    Deployment (which the API server would reject as immutable). Changing it
-    means creating a Deployment with a new name.
+    workload (which the API server would reject as immutable). Changing it
+    means creating a workload with a new name.
     """
+
+    #: The Kubernetes kind this model renders.
+    kind: ClassVar[str] = ""
+    #: How messages name the kind (``"deployment 'api'"``).
+    label: ClassVar[str] = "workload"
 
     name: Name
     containers: tuple[Container, ...] = Field(min_length=1)
     init_containers: tuple[Container, ...] = ()
-    replicas: NonNegativeInt = 1
     selector: Labels | None = Field(default=None, min_length=1)
     labels: Labels = Field(default_factory=dict)
     node: str | None = Field(default=None, min_length=1)
     share_process_namespace: bool = False
-    strategy: Literal["RollingUpdate", "Recreate"] | None = None
     service_account: ObjectName | None = None
     security: Security | None = None
     node_selector: Labels | None = None
     termination_grace_seconds: NonNegativeInt | None = None
     automount_token: bool | None = None
     component: Name | None = None
-    access: Forward | None = None
 
     @model_validator(mode="after")
-    def _pod(self) -> Deployment:
+    def _pod(self) -> Workload:
         self.check_defaults(None)
         names = [item.name for item in (*self.init_containers, *self.containers)]
         duplicates = sorted({name for name in names if names.count(name) > 1})
@@ -897,9 +961,18 @@ class Deployment(_Model):
                     f"label {key!r} conflicts with the selector label {value!r}"
                 )
         self.volumes()  # conflicting volume definitions fail at declaration
-        if self.access is not None:
-            self.access_port()
+        if self.claim_templates() and not self.accepts_claim_templates():
+            raise ValueError(
+                f"{self.label} {self.name!r}: ClaimTemplate volumes are per-pod "
+                "claims of a StatefulSet; declare it with app.stateful_set(...), "
+                "or mount an ExistingClaim"
+            )
         return self
+
+    @classmethod
+    def accepts_claim_templates(cls) -> bool:
+        """Whether ``ClaimTemplate`` volumes may be mounted (StatefulSet only)."""
+        return False
 
     def node_labels(self, defaults: PodDefaults | None) -> dict[str, str]:
         """The extra node selector: the app's defaults, then this workload's."""
@@ -921,28 +994,10 @@ class Deployment(_Model):
                 else "the app's pod_defaults.node_selector"
             )
             raise ValueError(
-                f"deployment {self.name!r}: {source} sets {HOSTNAME_LABEL}, which "
+                f"{self.label} {self.name!r}: {source} sets {HOSTNAME_LABEL}, which "
                 f"conflicts with node={self.node!r}; pin with node= or select the "
                 "host by label, not both"
             )
-
-    def access_port(self) -> int:
-        """The container port the ``access`` forward reaches (main container).
-
-        :raises ValueError: when there is no access declaration, the main
-            container has no ports, or the named port does not exist.
-        """
-        if self.access is None:
-            raise ValueError(f"deployment {self.name!r} declares no access")
-        ports = [
-            item if isinstance(item, ContainerPort) else ContainerPort(port=item)
-            for item in self.containers[0].ports
-        ]
-        return _access_port(
-            f"deployment {self.name!r}",
-            self.access.port,
-            [(item.port, item.name) for item in ports],
-        )
 
     @property
     def selector_labels(self) -> dict[str, str]:
@@ -958,15 +1013,46 @@ class Deployment(_Model):
         return (*self.init_containers, *self.containers)
 
     def volumes(self) -> dict[str, Volume]:
-        """Pod volumes by name, shared by every container that mounts them."""
+        """Pod volumes by name, shared by every container that mounts them.
+
+        ``ClaimTemplate`` mounts are not pod volumes (see :meth:`claim_templates`).
+        """
         result: dict[str, Volume] = {}
         for container in self.all_containers:
             for name, volume, _ in container.mounts():
+                if isinstance(volume, ClaimTemplate):
+                    continue
                 existing = result.setdefault(name, volume)
                 if existing.source() != volume.source():
                     raise ValueError(
                         f"volume name {name!r} is used for two different volumes; "
                         "give one of them another name="
+                    )
+        return result
+
+    def claim_templates(self) -> dict[str, ClaimTemplate]:
+        """Per-pod claim templates by name, in first-mount order."""
+        result: dict[str, ClaimTemplate] = {}
+        pod_volumes = {
+            name
+            for container in self.all_containers
+            for name, volume, _ in container.mounts()
+            if not isinstance(volume, ClaimTemplate)
+        }
+        for container in self.all_containers:
+            for name, volume, _ in container.mounts():
+                if not isinstance(volume, ClaimTemplate):
+                    continue
+                if name in pod_volumes:
+                    raise ValueError(
+                        f"volume name {name!r} is used for a ClaimTemplate and "
+                        "another volume; give one of them another name"
+                    )
+                existing = result.setdefault(name, volume)
+                if existing != volume:
+                    raise ValueError(
+                        f"claim template {name!r} is declared twice with different "
+                        "settings; mount the same ClaimTemplate object"
                     )
         return result
 
@@ -984,22 +1070,24 @@ class Deployment(_Model):
             refs.add(("ServiceAccount", self.service_account))
         return refs
 
-    def manifest(
+    def pod_labels(self, app_labels: Mapping[str, str]) -> dict[str, str]:
+        """Labels of the object and its pods: app, workload, then selector."""
+        return {**app_labels, **self.labels, **self.selector_labels}
+
+    def pod_spec(
         self,
-        namespace: str,
-        app_labels: Mapping[str, str],
         node_name: str | None,
         defaults: PodDefaults | None = None,
         automount_token: bool | None = None,
+        *,
+        restart_policy: str | None = None,
     ) -> dict[str, Any]:
-        """The Deployment manifest.
+        """The pod spec, with the app's ``defaults`` under this workload's fields.
 
-        :param defaults: The app's pod defaults, under this workload's fields.
         :param automount_token: ``automountServiceAccountToken`` when this
             workload sets none (the app decides it; see ``automount_token``).
         """
         self.check_defaults(defaults)
-        labels = {**app_labels, **self.labels, **self.selector_labels}
         security = Security.layered(
             defaults.security if defaults else None, self.security
         )
@@ -1026,12 +1114,13 @@ class Deployment(_Model):
             if self.automount_token is not None
             else automount_token
         )
-        pod = _compact(
+        return _compact(
             shareProcessNamespace=True if self.share_process_namespace else None,
             serviceAccountName=self.service_account,
             automountServiceAccountToken=automount,
             securityContext=(security.pod_manifest() or None) if security else None,
             terminationGracePeriodSeconds=grace,
+            restartPolicy=restart_policy,
             nodeSelector=node_selector or None,
             initContainers=[container(item) for item in self.init_containers] or None,
             containers=[container(item) for item in self.containers],
@@ -1041,8 +1130,88 @@ class Deployment(_Model):
             ]
             or None,
         )
+
+    def manifest(
+        self,
+        namespace: str,
+        app_labels: Mapping[str, str],
+        node_name: str | None,
+        defaults: PodDefaults | None = None,
+        automount_token: bool | None = None,
+        *,
+        scaled: bool = False,
+    ) -> dict[str, Any]:
+        """The rendered object (see each kind).
+
+        :param scaled: An autoscaler owns ``spec.replicas`` (not rendered).
+        """
+        raise NotImplementedError
+
+
+class Deployment(Workload):
+    """A Deployment declared with ``app.deployment(...)``.
+
+    Pod fields are those of :class:`Workload`; in addition:
+
+    :param replicas: Desired pods. Not rendered when an autoscaler targets
+        the Deployment (``app.autoscaler``), which then owns the count.
+    :param strategy: ``RollingUpdate`` or ``Recreate``.
+    :param access: A loopback forward to the pods (``app.access.forward``);
+        never rendered into the manifest.
+    """
+
+    kind: ClassVar[str] = "Deployment"
+    label: ClassVar[str] = "deployment"
+
+    replicas: NonNegativeInt = 1
+    strategy: Literal["RollingUpdate", "Recreate"] | None = None
+    access: Forward | None = None
+
+    @model_validator(mode="after")
+    def _access(self) -> Deployment:
+        if self.access is not None:
+            self.access_port()
+        return self
+
+    def access_port(self) -> int:
+        """The container port the ``access`` forward reaches (main container).
+
+        :raises ValueError: when there is no access declaration, the main
+            container has no ports, or the named port does not exist.
+        """
+        if self.access is None:
+            raise ValueError(f"deployment {self.name!r} declares no access")
+        ports = [
+            item if isinstance(item, ContainerPort) else ContainerPort(port=item)
+            for item in self.containers[0].ports
+        ]
+        return _access_port(
+            f"deployment {self.name!r}",
+            self.access.port,
+            [(item.port, item.name) for item in ports],
+        )
+
+    def manifest(
+        self,
+        namespace: str,
+        app_labels: Mapping[str, str],
+        node_name: str | None,
+        defaults: PodDefaults | None = None,
+        automount_token: bool | None = None,
+        *,
+        scaled: bool = False,
+    ) -> dict[str, Any]:
+        """The Deployment manifest.
+
+        :param defaults: The app's pod defaults, under this workload's fields.
+        :param automount_token: ``automountServiceAccountToken`` when this
+            workload sets none (the app decides it; see ``automount_token``).
+        :param scaled: An autoscaler owns ``spec.replicas`` (not rendered).
+        """
+        labels = self.pod_labels(app_labels)
+        pod = self.pod_spec(node_name, defaults, automount_token)
         spec = _compact(
-            replicas=self.replicas,
+            replicas=None if scaled else self.replicas,
             strategy={"type": self.strategy} if self.strategy else None,
             selector={"matchLabels": self.selector_labels},
             template={"metadata": {"labels": labels}, "spec": pod},
@@ -1089,22 +1258,31 @@ class ServicePort(_Model):
 
 
 class Service(_Model):
-    """A Service in front of a Deployment, declared with ``app.service(...)``.
+    """A Service in front of a workload, declared with ``app.service(...)``.
 
-    It selects the Deployment's immutable selector labels. Several ports need
+    It selects the workload's immutable selector labels. Several ports need
     names. ``access`` (``app.access.forward``) declares how to reach it from a
     laptop; it is never rendered into the manifest.
+
+    ``headless=True`` renders ``clusterIP: None`` (a DNS name per pod, no
+    virtual IP): ``app.stateful_set(...)`` declares one as its governing
+    Service. Only a headless Service may have no ports.
     """
 
     name: Name
     selector: Labels = Field(min_length=1)
-    ports: tuple[ServicePort, ...] = Field(min_length=1)
+    ports: tuple[ServicePort, ...] = ()
     type: Literal["ClusterIP", "NodePort", "LoadBalancer"] | None = None
+    headless: bool = False
     component: Name
     access: Forward | None = None
 
     @model_validator(mode="after")
     def _names(self) -> Service:
+        if not self.ports and not self.headless:
+            raise ValueError("a Service needs at least one port (unless headless)")
+        if self.headless and self.type not in (None, "ClusterIP"):
+            raise ValueError("a headless Service is of type ClusterIP")
         if len(self.ports) > 1 and any(port.name is None for port in self.ports):
             raise ValueError("a Service with several ports needs a name on each")
         if self.access is not None:
@@ -1138,8 +1316,9 @@ class Service(_Model):
             ),
             "spec": _compact(
                 type=self.type,
+                clusterIP="None" if self.headless else None,
                 selector=self.selector,
-                ports=[port.manifest() for port in self.ports],
+                ports=[port.manifest() for port in self.ports] or None,
             ),
         }
 

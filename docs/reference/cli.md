@@ -915,7 +915,7 @@ Execute an approved plan (``--approve HASH``), or plan and confirm.
 | `--auto-approve` | boolean | `False` | Plan and execute without confirmation (CI) |
 | `--rotate` | text (repeatable) |  | Regenerate this secret generator's values in the new release (repeatable) |
 | `--adopt` | text (repeatable) |  | Authorize adopting this existing object, as Kind/name or apiVersion/Kind/name (repeatable; adds to [release] adopt) |
-| `--replace` | text (repeatable) |  | Authorize deleting this existing unmanaged object and creating it from the release, after writing a restorable backup (repeatable; adds to [release] replace; never retained or managed objects) |
+| `--replace` | text (repeatable) |  | Authorize deleting this existing unmanaged object (or a managed Job or StatefulSet whose immutable fields change) and creating it from the release, after writing a restorable backup (repeatable; adds to [release] replace; never retained objects) |
 | `--adopt-all-desired` | boolean | `False` | Authorize adopting every existing unmanaged object the composition declares (each is listed in the plan and bound to its hash) |
 | `--skip-checks` | boolean | `False` | Do not run the spec's [[checks]] after readiness (emergencies only; recorded in the release history) |
 
@@ -960,7 +960,7 @@ Show what `plan` would change, field by field (read-only, nothing stored).
 | --- | --- | --- | --- |
 | `--spec` | text | required | path/to/release.toml, or MODULE:ATTR (path/to/file.py:ATTR) naming a piceli Pipeline: the release `piceli deploy` manages |
 | `--adopt` | text (repeatable) |  | Authorize adopting this existing object, as Kind/name or apiVersion/Kind/name (repeatable; adds to [release] adopt) |
-| `--replace` | text (repeatable) |  | Authorize deleting this existing unmanaged object and creating it from the release, after writing a restorable backup (repeatable; adds to [release] replace; never retained or managed objects) |
+| `--replace` | text (repeatable) |  | Authorize deleting this existing unmanaged object (or a managed Job or StatefulSet whose immutable fields change) and creating it from the release, after writing a restorable backup (repeatable; adds to [release] replace; never retained objects) |
 | `--adopt-all-desired` | boolean | `False` | Authorize adopting every existing unmanaged object the composition declares (each is listed in the plan and bound to its hash) |
 | `--exit-code` | boolean | `False` | Exit 1 when the release would change something |
 
@@ -985,7 +985,7 @@ Capture live discovery and persist an approvable plan (prints its hash).
 | `--spec` | text | required | path/to/release.toml, or MODULE:ATTR (path/to/file.py:ATTR) naming a piceli Pipeline: the release `piceli deploy` manages |
 | `--rotate` | text (repeatable) |  | Regenerate this secret generator's values in the new release (repeatable) |
 | `--adopt` | text (repeatable) |  | Authorize adopting this existing object, as Kind/name or apiVersion/Kind/name (repeatable; adds to [release] adopt) |
-| `--replace` | text (repeatable) |  | Authorize deleting this existing unmanaged object and creating it from the release, after writing a restorable backup (repeatable; adds to [release] replace; never retained or managed objects) |
+| `--replace` | text (repeatable) |  | Authorize deleting this existing unmanaged object (or a managed Job or StatefulSet whose immutable fields change) and creating it from the release, after writing a restorable backup (repeatable; adds to [release] replace; never retained objects) |
 | `--adopt-all-desired` | boolean | `False` | Authorize adopting every existing unmanaged object the composition declares (each is listed in the plan and bound to its hash) |
 | `--out` | path |  | Also write the full redacted plan JSON here |
 
@@ -1010,7 +1010,7 @@ Alias of `plan`.
 | `--spec` | text | required | path/to/release.toml, or MODULE:ATTR (path/to/file.py:ATTR) naming a piceli Pipeline: the release `piceli deploy` manages |
 | `--rotate` | text (repeatable) |  | Regenerate this secret generator's values in the new release (repeatable) |
 | `--adopt` | text (repeatable) |  | Authorize adopting this existing object, as Kind/name or apiVersion/Kind/name (repeatable; adds to [release] adopt) |
-| `--replace` | text (repeatable) |  | Authorize deleting this existing unmanaged object and creating it from the release, after writing a restorable backup (repeatable; adds to [release] replace; never retained or managed objects) |
+| `--replace` | text (repeatable) |  | Authorize deleting this existing unmanaged object (or a managed Job or StatefulSet whose immutable fields change) and creating it from the release, after writing a restorable backup (repeatable; adds to [release] replace; never retained objects) |
 | `--adopt-all-desired` | boolean | `False` | Authorize adopting every existing unmanaged object the composition declares (each is listed in the plan and bound to its hash) |
 | `--out` | path |  | Also write the full redacted plan JSON here |
 
@@ -1058,7 +1058,7 @@ Re-plan and re-apply an earlier release against current cluster state.
 | `--approve` | text |  | Plan hash to execute (from a previous `plan`/`rollback` output) |
 | `--auto-approve` | boolean | `False` | Plan and execute without confirmation (CI) |
 | `--adopt` | text (repeatable) |  | Authorize adopting this existing object, as Kind/name or apiVersion/Kind/name (repeatable; adds to [release] adopt) |
-| `--replace` | text (repeatable) |  | Authorize deleting this existing unmanaged object and creating it from the release, after writing a restorable backup (repeatable; adds to [release] replace; never retained or managed objects) |
+| `--replace` | text (repeatable) |  | Authorize deleting this existing unmanaged object (or a managed Job or StatefulSet whose immutable fields change) and creating it from the release, after writing a restorable backup (repeatable; adds to [release] replace; never retained objects) |
 | `--adopt-all-desired` | boolean | `False` | Authorize adopting every existing unmanaged object the composition declares (each is listed in the plan and bound to its hash) |
 | `--skip-checks` | boolean | `False` | Do not run the spec's [[checks]] after readiness (emergencies only; recorded in the release history) |
 

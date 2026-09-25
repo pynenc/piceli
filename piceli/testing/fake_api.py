@@ -77,6 +77,14 @@ TYPES: Mapping[str, tuple[str, str, bool]] = {
     "persistentvolumes": ("v1", "PersistentVolume", False),
     "namespaces": ("v1", "Namespace", False),
     "deployments": ("apps/v1", "Deployment", True),
+    "statefulsets": ("apps/v1", "StatefulSet", True),
+    "daemonsets": ("apps/v1", "DaemonSet", True),
+    "jobs": ("batch/v1", "Job", True),
+    "cronjobs": ("batch/v1", "CronJob", True),
+    "horizontalpodautoscalers": ("autoscaling/v2", "HorizontalPodAutoscaler", True),
+    "poddisruptionbudgets": ("policy/v1", "PodDisruptionBudget", True),
+    "ingresses": ("networking.k8s.io/v1", "Ingress", True),
+    "httproutes": ("gateway.networking.k8s.io/v1", "HTTPRoute", True),
     "networkpolicies": ("networking.k8s.io/v1", "NetworkPolicy", True),
     "serviceaccounts": ("v1", "ServiceAccount", True),
     "roles": ("rbac.authorization.k8s.io/v1", "Role", True),
@@ -276,9 +284,32 @@ def _prune(manifest: dict[str, Any], removed: set[Path], kept: set[Path]) -> Non
             _remove_path(manifest, path)
 
 
-def _validation_error(body: Any) -> str | None:
-    """The API server's validation rules the fake models (a small subset)."""
-    if not isinstance(body, dict) or body.get("kind") != "Deployment":
+# Spec fields the API server refuses to change on an existing object.
+_IMMUTABLE_SPEC = {
+    "Job": ("template", "completions", "completionMode", "selector"),
+    "StatefulSet": (
+        "selector",
+        "serviceName",
+        "podManagementPolicy",
+        "volumeClaimTemplates",
+    ),
+}
+
+
+def _validation_error(body: Any, current: Any = None) -> str | None:
+    """The API server's validation rules the fake models (a small subset).
+
+    Besides a Deployment's strategy, an update may not change the immutable
+    spec fields of a Job or StatefulSet (``field is immutable``).
+    """
+    if not isinstance(body, dict):
+        return None
+    if isinstance(current, dict) and body.get("kind") in _IMMUTABLE_SPEC:
+        before, after = current.get("spec") or {}, body.get("spec") or {}
+        for key in _IMMUTABLE_SPEC[body["kind"]]:
+            if before.get(key) != after.get(key):
+                return f"spec.{key}: Invalid value: field is immutable"
+    if body.get("kind") != "Deployment":
         return None
     strategy = (body.get("spec") or {}).get("strategy") or {}
     if strategy.get("type") == "Recreate" and strategy.get("rollingUpdate"):
@@ -386,7 +417,8 @@ class FakeAPI:
     - ``requests``: every request received (method, path, query, body,
       content type), in order;
     - ``field_ownership``: opt in to the server-side-apply field model;
-    - ``ready``: whether Deployments report ready replicas;
+    - ``ready``: whether Deployments, StatefulSets and DaemonSets report
+      ready pods and Jobs report completion;
     - ``wait_for_first_consumer``: claim names that stay ``Pending`` until a
       workload mounts them;
     - ``types``: the served resources (default :data:`TYPES`);
@@ -504,13 +536,26 @@ class FakeAPI:
             return copy.deepcopy(value)
 
     def _readiness(self, value: dict[str, Any]) -> None:
-        if value["kind"] == "Deployment":
+        if value["kind"] in {"Deployment", "StatefulSet"}:
             count = value.get("spec", {}).get("replicas", 1)
             value["status"] = {
                 "observedGeneration": value["metadata"]["generation"],
                 "readyReplicas": count if self.ready else 0,
                 "updatedReplicas": count,
                 "replicas": count,
+            }
+        elif value["kind"] == "DaemonSet":
+            value["status"] = {
+                "observedGeneration": value["metadata"]["generation"],
+                "desiredNumberScheduled": 1,
+                "numberReady": 1 if self.ready else 0,
+                "updatedNumberScheduled": 1,
+            }
+        elif value["kind"] == "Job":
+            value["status"] = {
+                "conditions": [{"type": "Complete", "status": "True"}]
+                if self.ready
+                else []
             }
         elif value["kind"] == "Namespace":
             value["status"] = {"phase": "Active"}
@@ -860,7 +905,7 @@ class FakeAPI:
                 ],
             }
         )
-        invalid = _validation_error(body)
+        invalid = _validation_error(body, current)
         if invalid is not None:
             return 422, {"kind": "Status", "message": invalid}
         self._readiness(body)
@@ -875,7 +920,7 @@ class FakeAPI:
     def _commit(
         self, query: dict[str, Any], kind: str, name: str, body: Any, status: int
     ) -> tuple[int, Any]:
-        invalid = _validation_error(body)
+        invalid = _validation_error(body, self.objects.get((kind, name)))
         if invalid is not None:
             return 422, {"kind": "Status", "message": invalid}
         if self.server_defaults:
