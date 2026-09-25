@@ -6,6 +6,10 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ## Version 0.5.1
 
+- **Fix:** stopping a finished build step no longer fails intermittently on
+  macOS with `PermissionError` when only the exited process-group leader is
+  left.
+
 - **Every command follows the output contract:** `render`, `release diff` and
   `release check` are now `conforms` (none is `partial`). `piceli render`
   prints its rejection object on stdout for every `--format` (it did only with
