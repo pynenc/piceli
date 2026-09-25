@@ -22,6 +22,7 @@ from urllib.parse import parse_qsl, urlsplit
 
 from piceli.artifacts.delivery_inputs import DeliveryInputError
 from piceli.artifacts.process import ProcessLimits, ToolPin, _run_process
+from piceli.process_group import signal_group
 
 T = TypeVar("T")
 
@@ -246,7 +247,8 @@ class Runner(Protocol):
 
 def _kill(proc: subprocess.Popen[bytes]) -> None:
     try:
-        os.killpg(proc.pid, signal.SIGKILL)
+        if not signal_group(proc.pid, signal.SIGKILL):
+            proc.kill()
     except (ProcessLookupError, PermissionError):
         pass
 

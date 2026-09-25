@@ -1,5 +1,6 @@
 import difflib
 import json
+import os
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,23 @@ def _refuse_ambient_config(*args: Any, **kwargs: Any) -> None:
         "unit/acceptance tests must not load an ambient kubeconfig or in-cluster "
         "config; mock the client or use the fake API (integration tests are exempt)"
     )
+
+
+@pytest.fixture(autouse=True)
+def _no_foreign_process_groups(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fail a test that signals init's group or the test runner's own group.
+
+    A mocked ``Popen`` has a ``pid`` that converts to ``1``; ``os.killpg(1,
+    SIGTERM)`` is refused on a laptop but kills the CI job's processes.
+    """
+    real_killpg = os.killpg
+
+    def guarded(pgid: int, signum: int) -> None:
+        if pgid <= 1 or pgid == os.getpgrp():
+            raise AssertionError(f"test tried to signal process group {pgid}")
+        real_killpg(pgid, signum)
+
+    monkeypatch.setattr(os, "killpg", guarded)
 
 
 @pytest.fixture(autouse=True)

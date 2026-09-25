@@ -29,6 +29,7 @@ from piceli.k8s.ops.discovery import ResourceIdentity
 from piceli.k8s.ops.session import DeploymentSessionArchive
 from piceli.k8s.port_owner import PortOwner, port_owner
 from piceli.k8s.ui_config import HealthProbe, RestartPolicy, UiShortcut, legacy_health
+from piceli.process_group import signal_group
 
 if TYPE_CHECKING:
     from piceli.k8s.ops.exec_credentials import ExecPolicy
@@ -1294,11 +1295,13 @@ class ForwardSupervisor:
     def _stop_process(process: subprocess.Popen[bytes]) -> None:
         """Terminate one fresh process group previously created by this supervisor."""
         try:
-            os.killpg(process.pid, signal.SIGTERM)
+            if not signal_group(process.pid, signal.SIGTERM):
+                process.terminate()
             process.wait(timeout=3)
         except (OSError, subprocess.TimeoutExpired):
             try:
-                os.killpg(process.pid, signal.SIGKILL)
+                if not signal_group(process.pid, signal.SIGKILL):
+                    process.kill()
                 process.wait(timeout=3)
             except (OSError, subprocess.TimeoutExpired):
                 pass

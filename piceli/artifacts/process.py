@@ -16,6 +16,7 @@ from typing import Any
 
 from piceli.artifacts.plan import SourcePin, canonical, digest, validate_digest
 from piceli.k8s.ops.bounds import positive, seconds, text
+from piceli.process_group import signal_group
 
 
 @dataclass(frozen=True)
@@ -251,7 +252,7 @@ def _run_process(
                 break
         if state != "succeeded" or proc.poll() is None:
             try:
-                os.killpg(proc.pid, signal.SIGKILL)
+                signal_group(proc.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
         code = proc.wait(timeout=1)
@@ -269,7 +270,7 @@ def _run_process(
     finally:
         # A successful parent must not leave forked children running either.
         try:
-            os.killpg(proc.pid, signal.SIGKILL)
+            signal_group(proc.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
         proc.wait(timeout=1)
