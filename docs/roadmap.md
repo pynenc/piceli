@@ -14,7 +14,7 @@ Priorities may change. Progress is tracked in
 | Capability | Status |
 | --- | --- |
 | Define resources in Python, YAML or JSON | ✅ Available |
-| Typed apps (`App`, `piceli render`) that render to release intents | 🟡 Preview: Deployments, Services, ConfigMaps, Secrets, NetworkPolicies |
+| Typed apps (`App`, `piceli render`) that render to release intents | 🟡 Preview: Deployments, Services, ConfigMaps, Secrets, NetworkPolicies (per workload or by label), ServiceAccounts with typed RBAC (ClusterRole/ClusterRoleBinding scoped per namespace), app-level pod defaults |
 | Typed templates for common workloads | 🟡 Core kinds only; no Ingress/Gateway, NetworkPolicy, DaemonSet, PDB, Namespace or cluster-scoped RBAC yet |
 | Dependency-ordered plan and apply | ✅ Available |
 | Image handoff by digest (build → deliver → release, immutable references only) | 🟡 Preview |
@@ -51,6 +51,8 @@ Every feature page starts with its maturity, and this table lists them all:
 | Typed apps (`piceli.App`, `piceli render`) | {doc}`typed_apps` | preview |
 | Engine: discovery, plans, executor, journals (Python API) | {doc}`deployment_planning` | preview |
 | Deploy from source (`piceli deploy`, `piceli.pipeline`) | {doc}`deploy` | preview |
+| Deploy a commit (`piceli deploy --ref`) | {ref}`deploy-ref` | preview |
+| Deploy from CI with an approval step (GitHub Actions recipe) | {doc}`ci` | preview |
 | Releases from a spec (`piceli release`) | {doc}`release_cli` | preview |
 | Post-deploy checks and automatic rollback (`[[checks]]`, `piceli.checks`, `release check`) | {doc}`checks` | preview |
 | Field-level diffs and no-op detection (`release plan`, `release diff`) | {doc}`plans_and_diffs` | preview |
@@ -60,6 +62,7 @@ Every feature page starts with its maturity, and this table lists them all:
 | Deterministic OCI builds (artifact API) | {doc}`artifact_delivery` | preview |
 | Image delivery (`piceli artifacts deliver`) | {doc}`node_delivery` | preview |
 | Node-local registry template | {doc}`node_local_registry` | preview |
+| Mirror third-party images by digest (`mirror=`) and take over a live node registry (`adopt=`/`replace=`) | {doc}`deploy` | preview |
 | Access and status from the model (`app.access.forward`, `piceli access`, `piceli status`) | {doc}`access` | preview |
 | Operations lens (`piceli observe`) | {doc}`operations_lens` | preview |
 | CLI contract: `piceli explain`, `piceli help-json`, error codes | {doc}`agents` | preview |

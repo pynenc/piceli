@@ -4,6 +4,141 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.5.0
+
+- **Mirror third-party images (preview):** `NodeLoopbackRegistry(mirror=[…])`
+  and `Registry(url, mirror=[…])` copy digest-pinned images the app does not
+  build (`docker.io/library/redis@sha256:…`) into the delivery registry in the
+  deliver stage, over the OCI distribution API on the machine running Piceli
+  (anonymous, or `mirror_credentials={"registry": "file.json"}`). The app's
+  references are rewritten to the copy with the same digest, and workloads
+  using it are pinned to the registry node. For a multi-arch index the index
+  keeps its digest and the node registry holds only the node's platform
+  (`NodeLocalRegistry(index_platforms=…)`); `Registry` copies every platform.
+  Copies are verified by digest, skipped when present, recorded in
+  `state_dir/mirrors/` (`piceli.mirror-delivery.v1`) and part of the combined
+  plan hash. New codes: `pipeline-mirror-not-pinned`, `pipeline-mirror-failed`,
+  `mirror-digest-mismatch`, `mirror-manifest-invalid`,
+  `mirror-platform-unavailable`, `blob-not-found`, `invalid-blob-redirect`,
+  `too-many-redirects`. `piceli release plan|diff|apply --spec` refuse with
+  `pipeline-not-delivered` until the mirrors are copied.
+- **Take over a live node-loopback registry (preview):**
+  `NodeLoopbackRegistry(adopt="NAME")` adopts a registry Deployment that
+  already runs on the node (and its ConfigMap and claim) by ownership transfer,
+  keeping its selector and its data, after checking that it is compatible
+  (host network, port, node, storage), else `pipeline-registry-incompatible`.
+  `replace="NAME"` backs it up, deletes and recreates it; storage is never
+  deleted, and the plan says whether the data carries over. A registry that
+  holds the port without either flag is refused at plan time with
+  `pipeline-registry-takeover-required` instead of failing later with
+  `pipeline-registry-not-ready`. New options `host_path=`, `existing_claim=`
+  and `inherited_owners=` on `NodeLoopbackRegistry`, and `existing_claim=`,
+  `selector=` on `NodeLocalRegistry`; new code `pipeline-registry-unreadable`.
+- `StreamedOciRegistryClient` gains `open_blob()` (streamed blob downloads
+  that follow a redirect to another origin without credentials) and
+  `actions="pull"` for pull-only token scopes. `piceli.testing.FakeAPI` serves
+  Nodes (`add_node`).
+- The deploy plan's `deliver` stage adds `mirrors` and `registry.existing` /
+  `registry.index_platforms` only when used, so earlier pipelines keep their
+  combined hashes.
+- **Deploy a commit, not the working tree (preview):**
+  `piceli deploy TARGET --ref [SOURCE=]REV` (repeatable; a bare `REV` when
+  every source is one repository) resolves each revision to its commit SHA,
+  checks it out in a temporary `git worktree` and runs the `inputs` and
+  `build` stages from there; the worktrees are removed on success, failure,
+  `Ctrl-C` and `SIGTERM`. The combined hash covers the SHAs, so an approval
+  of commit X never applies commit Y, and the printed approval command pins
+  them. The pipeline module still runs from the working tree and must match
+  the commit (`deploy-ref-model-differs`). `--resume` reuses the run's
+  commits. New error codes `deploy-ref-invalid`, `deploy-ref-source-unknown`,
+  `deploy-ref-ambiguous`, `deploy-ref-unknown`, `deploy-ref-checkout-failed`
+  and `deploy-ref-model-differs`. Additive output: `refs` in the deploy
+  result, `stages.inputs.refs`/`model`, the run journal and the build
+  receipt; a release created by a deploy records `provenance.sources`
+  (commit, dirty, ref), shown by `piceli release status`.
+- **CI recipe (preview):** {doc}`ci` and `examples/ci/github-actions-deploy.yml`:
+  plan the pushed commit, publish the plan and its combined hash, approve
+  through a protected GitHub environment, apply with the same `--ref` and
+  hash, resume by hand. Piceli's tests run the workflow's commands against
+  the fake API.
+- **App-level pod defaults (preview):** `App(..., pod_defaults=PodDefaults(...))`
+  applies typed settings to every Deployment of the app: `security=Security(...)`
+  (pod `securityContext`: `run_as_non_root`, `run_as_user`, `run_as_group`,
+  `fs_group`, `seccomp`; container `securityContext` on every container:
+  `allow_privilege_escalation`, `read_only_root_filesystem`,
+  `drop_capabilities`, `add_capabilities`; `Security.restricted(...)` for the
+  `restricted` Pod Security Standard), an extra `node_selector` merged with
+  `node=` pins, `termination_grace_seconds` and `automount_token`. Workloads
+  take the same typed arguments, which win (`security` field by field,
+  `node_selector` key by key); `app.override` still patches last. A
+  `kubernetes.io/hostname` selector together with `node=` is refused.
+  Rendering is unchanged when none of this is used.
+- **Typed RBAC (preview):** `app.service_account(name, rules=[Rule(...)],
+  cluster_rules=[Rule(...)])` renders a ServiceAccount, a Role and
+  RoleBinding, and a ClusterRole and ClusterRoleBinding named
+  `<namespace>:<app>:<name>`; bind it with `app.deployment(...,
+  service_account=sa)`. `Rule` refuses empty lists, malformed verbs, resources
+  and groups, `resource_names` with `create`/`deletecollection`, and `"*"`
+  unless `allow_wildcard=True`. The ServiceAccount renders
+  `automountServiceAccountToken: false` and only pods bound to it get `true`.
+- **Cluster-scoped RBAC in releases:** a release may now manage ClusterRole
+  and ClusterRoleBinding objects (other cluster-scoped kinds are still
+  refused with `invalid-composition`). They carry `piceli.io/namespace`, and
+  a provider treats a cluster-scoped object as managed only when it names the
+  release's namespace as well as its owner, so one owner's releases in two
+  namespaces never change, adopt or prune each other's. Plans flag them with
+  `"cluster_scoped": true` (additive) and `[cluster-scoped]`; prune and
+  rollback create and delete them like namespaced objects.
+- **Label-selected network policies:** `app.network_policy(selector=...,
+  allow_from_selector=..., name=...)` and `app.release_selector` (the labels
+  every pod of the app carries) express "only this app's pods may connect".
+- `--adopt`/`--replace` and `[release] adopt`/`replace` accept RBAC names with
+  `:` (`ClusterRole/staging:shop:watcher`).
+- **Fix:** a pruning delete no longer fails with
+  `deleted-resource-reappeared` on a real cluster. An `Orphan` delete keeps
+  the object (with a `deletionTimestamp`) until the garbage collector removes
+  its finalizer; the executor now waits for the same object to disappear, and
+  still refuses an object recreated with another UID.
+- `piceli.testing`: the fake API also serves ServiceAccount, Role,
+  RoleBinding, ClusterRole and ClusterRoleBinding, decodes percent-encoded
+  names, and `FakeAPI.terminating_reads` keeps an `Orphan`-deleted object
+  terminating for a few reads, like a real API server.
+- **Release preview before the images exist (`piceli deploy --plan`,
+  preview):** while build images are not built or delivered, `--plan` now
+  computes the release plan with placeholder images
+  (`pending-build.piceli.invalid/<image>@sha256:000…` or `pending-delivery…`)
+  instead of printing only "after delivery". It shows what the release would
+  create, adopt, replace, apply or delete, and refuses with the release
+  engine's `blocking` list and suggested flags (before any build or registry
+  write) when existing objects need adoption or replacement. The preview is
+  never approvable or persisted, generates or reads no secret, and objects
+  carrying a placeholder are never sent to the cluster, not even as a server
+  dry run (`dry-run-placeholder-image`). JSON adds `stages.plan.preview`, and
+  a refused preview adds `stage` and `preview`; existing fields keep their
+  meaning. The combined hash of a pending plan now covers the preview's
+  adopt/replace/delete set: after delivery the real release plan may not go
+  beyond it (`pipeline-preview-changed`, nothing applied; plan again).
+  `--approve <preview_hash>` is refused with
+  `pipeline-preview-not-approvable`. An image that is neither a build handle
+  nor pinned by digest is now refused at `--plan` time.
+- **`piceli render MODULE:pipeline`:** a `Pipeline` target renders offline
+  with its target's namespace and declared nodes (`node="alias"` pins
+  resolve), build images as placeholders, pinned images as they are, the
+  delivery node's pin, and secret placeholders. It reads no kubeconfig,
+  build spec or pipeline state. `piceli render MODULE:app` is unchanged.
+- **Build smoke checks match output and take an environment**
+  (experimental): a smoke table (`build.toml`, and the new `Smoke` for
+  `Build.dockerfile(..., smoke={...})`) adds `env` (plain, non-secret
+  values), `entrypoint` (overrides the image's entrypoint) and
+  `expect_stdout`/`expect_stderr` (regular expressions searched in the first
+  256 KiB of each stream). A pattern that is not found fails the build with
+  `smoke-output-mismatch` (exit `1`); the step lists the streams under
+  `unmatched`, and stderr and the build log show a short escaped excerpt.
+  Smoke env values that look like secret references are refused
+  (`smoke-env-secret`). The smoke table is part of the plan hash and is
+  recorded in the receipt under `smoke`. Existing smoke checks keep their
+  argv, isolation flags and spec digest.
+
 ## Version 0.4.1
 
 - **Fix (safety):** Piceli signals a child's process group only when the id

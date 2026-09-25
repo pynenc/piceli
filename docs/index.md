@@ -148,6 +148,7 @@ kubernetes_model/index
 :caption: Deploy and operate
 
 deploy
+ci
 typed_apps
 release_cli
 checks

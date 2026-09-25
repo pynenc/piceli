@@ -119,9 +119,9 @@ socket and reads no kubeconfig. The names are loaded on first use.
 | `serve(api=None)` | Context manager: yields `(api, url)` for a running server |
 | `provider_at(url, **kwargs)` | A `KubernetesProvider` bound to `TARGET` (field manager `piceli-acceptance`, owner `acceptance-owner`) |
 | `write_kubeconfig(url, path, context="fake")` | A credential-free kubeconfig for the server |
-| `FakeAPI(types=None)` | The server state: `objects`, `requests`, `put(...)`, `inject(...)`, `managers(kind, name)`, `field_ownership`, `ready`, `wait_for_first_consumer` |
+| `FakeAPI(types=None)` | The server state: `objects`, `requests`, `put(...)`, `inject(...)`, `managers(kind, name)`, `field_ownership`, `ready`, `wait_for_first_consumer`, `terminating_reads` (an `Orphan` delete lingers for that many reads) |
 | `TARGET` | The `PlanTarget` every server represents (`acceptance-cluster`, `piceli-test`) |
-| `TYPES` | The default served kinds: ConfigMap, Secret, Service, Pod, PersistentVolumeClaim, PersistentVolume, Namespace, Deployment, NetworkPolicy and a test `Widget` |
+| `TYPES` | The default served kinds: ConfigMap, Secret, Service, Pod, PersistentVolumeClaim, PersistentVolume, Namespace, Deployment, NetworkPolicy, ServiceAccount, Role, RoleBinding, ClusterRole, ClusterRoleBinding and a test `Widget` |
 | `manifest(kind, name, value=...)` | A minimal valid object for seeding |
 | `field_paths`, `fields_v1`, `paths_of`, `value_at` | Helpers for `managedFields` (FieldsV1) paths |
 | `piceli.testing.pytest_plugin` | The `piceli_fake_cluster` fixture |

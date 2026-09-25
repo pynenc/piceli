@@ -30,7 +30,7 @@ is in `examples/builds/rust-hello/`.
 | Drift checked over the staged files ({ref}`build-drift`) | preview (new in this release) |
 | Streaming `--log` and `--progress` ({ref}`build-log`) | preview (new); the progress line format is for people, not parsers |
 | Tag templates `{image_id:N}` ({ref}`build-tags`) | preview (new) |
-| Smoke checks ({ref}`build-smoke`) | experimental (new): the isolation flags and limits may change |
+| Smoke checks ({ref}`build-smoke`) | experimental: the isolation flags and limits may change; `env`, `entrypoint`, `expect_stdout` and `expect_stderr` are new in 0.5.0 |
 ```
 
 ## The spec
@@ -333,25 +333,62 @@ An image output may declare a check that runs after the image is built:
 smoke = { command = ["--self-test"], expect_exit = 0, timeout_seconds = 60 }
 ```
 
+A server that prints its version, checked by its output:
+
+```toml
+smoke = { command = ["--version"], expect_stdout = '^api \d+\.\d+\.\d+$' }
+```
+
+A shell-entrypoint image whose self-test needs an environment variable:
+
+```toml
+[output.image.smoke]
+entrypoint = ["/bin/sh", "-c"]
+command = ['test "$APP_MODE" = self-test && echo ok']
+env = { APP_MODE = "self-test" }
+expect_stdout = "^ok$"
+```
+
 | Field | Meaning |
 | --- | --- |
 | `command` | Arguments after the image, so they replace `CMD` and keep the entrypoint. `[]` runs the image's default command. |
 | `expect_exit` | The exit code that passes, 0 to 255 (default 0). A check such as "starts and fails only at a declared later step" expects that step's code. |
 | `timeout_seconds` | At most 600 (default 60). |
+| `env` | Optional. Plain environment values for the check, at most 64. Names are `[A-Za-z_][A-Za-z0-9_]*`; values may not contain `$`, quotes, backslashes or control characters. **Not for secrets:** see below. |
+| `entrypoint` | Optional. Replaces the image's entrypoint (a non-empty list). As with `docker run --entrypoint`, the image's `CMD` is then not used: put the arguments in `command`. |
+| `expect_stdout`, `expect_stderr` | Optional. A Python regular expression (1 to 1024 characters) that must be **found** (`re.search`, with `re.MULTILINE` so `^` and `$` match at line boundaries) in the first 256 KiB of that stream, decoded as UTF-8. Anchor it (`^…$`, `\A…\Z`) to match a whole line or the whole output. Checked only after the exit code matched. |
 
 It runs once per platform as
 `docker run --rm --name piceli-smoke-<nonce>-<n> --pull never --platform <p>
 --network none --read-only --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m
 --cap-drop ALL --security-opt no-new-privileges --pids-limit 256 --memory 512m
-<image_id> <command...>`, as the image's own user. It references the image by
-ID, so no tag and no registry are involved. An emulated platform needs a
-binfmt handler on the engine.
+[--env=NAME=value ...] [--entrypoint=<entrypoint[0]>] <image_id>
+[<entrypoint[1:]>...] <command...>`, as the image's own user. `env` and
+`entrypoint` only add options; the isolation flags are the same with or without
+them. It references the image by ID, so no tag and no registry are involved.
+An emulated platform needs a binfmt handler on the engine.
 
 The step is recorded in `steps` as `kind = "smoke:<name>"`; its output goes to
 the log only. A different exit code fails the run with `smoke-failed`, and a
-timeout with `smoke-timed-out` (the container is then removed). Either way no
-file is published and no receipt is written. The image itself stays loaded,
-so you can inspect it.
+timeout with `smoke-timed-out` (the container is then removed). When the exit
+code matches but an `expect_stdout`/`expect_stderr` pattern is not found, the
+run fails with `smoke-output-mismatch`: the failed step lists the streams in
+`unmatched` (for example `["stdout"]`), and stderr and the build log show a
+short, escaped excerpt of the start of each unmatched stream (never the JSON
+result, the error message or a receipt). Either way no file is published and
+no receipt is written. The image itself stays loaded, so you can inspect it.
+
+**Smoke env is not secret.** The whole smoke table, `env` included, is part of
+the spec digest and the plan hash (changing it changes the plan you approve),
+and it is printed by `preview` and recorded in the receipt under `smoke`. Give
+the check a plain value or a self-test mode that needs no credentials. A value
+that looks like a reference to secret material (`secret://…`, `vault://…`,
+`op://…`, `secret:…` and similar store schemes) is refused with
+`smoke-env-secret`; the error names the variable, never the value.
+
+The same check is available in the Python pipeline API as
+`Build.dockerfile(..., smoke={"api": Smoke(["--version"], expect_stdout=r"^api \d+")})`
+(see {doc}`deploy`).
 
 ### CLI
 
@@ -406,6 +443,8 @@ echoed.
 | `build-timed-out` | 1 | A step exceeded `timeout_seconds` or the grant. | Raise `timeout_seconds`/`--max-seconds`. |
 | `smoke-failed` | 1 | A smoke check exited with another code than `expect_exit`. | Read `--log`; fix the image or the check. |
 | `smoke-timed-out` | 1 | A smoke check exceeded its `timeout_seconds`. | Fix the image or raise the timeout (at most 600). |
+| `smoke-output-mismatch` | 1 | A smoke check exited as expected, but `expect_stdout`/`expect_stderr` was not found. | Read the excerpt on stderr or `--log`; fix the image or the pattern. |
+| `smoke-env-secret` | 2 | A smoke `env` value looks like a secret reference. | Use a plain, non-secret value. |
 | `invalid-or-unavailable-build-input` | 2 | Any other unreadable or malformed input (the detail is withheld so no path or output leaks). | Run `preview` and check the files it names. |
 
 ## Receipt schema (`piceli.build-receipt.v1`)
@@ -428,7 +467,8 @@ echoed.
 | `tool` | `docker_sha256`, `buildx_version`, `buildx_builder`. |
 | `outputs.files` | `{path: "sha256:..."}`. With several platforms each path is prefixed with `linux-<arch>/`. |
 | `outputs.images` | `{name: {"image_id", "digest", "platform", "ref"}}`. With several platforms the key is `name/linux-<arch>` and the tag gets a `-<arch>` suffix. `image_id` is the config digest. `digest` is the manifest digest, or `null` when the engine keeps none (Docker's classic image store). `ref` is the resolved tag for a template. |
-| `steps` | Per invocation and smoke check: `platform`, `kind` (`files`, `image:<name>`, `smoke:<name>`), `state`, `exit_code`, `seconds`. |
+| `smoke` | Only when an image declares one: `{name: {"command", "expect_exit", "timeout_seconds", …}}`, each smoke table as declared (`env`, `entrypoint`, `expect_stdout`, `expect_stderr` when set). |
+| `steps` | Per invocation and smoke check: `platform`, `kind` (`files`, `image:<name>`, `smoke:<name>`), `state`, `exit_code`, `seconds`. A failed smoke step whose output did not match also has `unmatched` (the stream names). |
 | `state`, `started_at`, `finished_at` | `"succeeded"`, RFC 3339 UTC. |
 
 A receipt from the `rust-hello` example (abridged):

@@ -12,6 +12,7 @@ from urllib.parse import quote, urlsplit
 
 from piceli.k8s.ops.bounds import bounded_call, positive, seconds, strict_json, text
 from piceli.k8s.ops.discovery import (
+    RELEASE_NAMESPACE_ANNOTATION,
     RETAINED_KINDS,
     ApiResource,
     ApplyProbeResult,
@@ -382,11 +383,24 @@ class KubernetesProvider:
             root += "/namespaces/" + quote(self.target.namespace, safe="")
         return root + "/" + api.plural + ("/" + quote(name, safe="") if name else "")
 
-    def _is_managed(self, manifest: dict[str, Any]) -> bool:
-        """Ownership is an exact owner-id match, never inferred from id shape."""
+    def _is_managed(
+        self, manifest: dict[str, Any], scope: ResourceScope = ResourceScope.NAMESPACED
+    ) -> bool:
+        """Ownership is an exact owner-id match, never inferred from id shape.
+
+        A cluster-scoped object is shared by every namespace, so it is managed
+        only when it also names this target's namespace
+        (``piceli.io/namespace``): one owner's releases in two namespaces
+        never change or prune each other's cluster-scoped objects.
+        """
         ann = manifest.get("metadata", {}).get("annotations") or {}
         owner = ann.get(OWNER_ANNOTATION)
         if not isinstance(owner, str) or not owner:
+            return False
+        if (
+            scope is ResourceScope.CLUSTER
+            and ann.get(RELEASE_NAMESPACE_ANNOTATION) != self.target.namespace
+        ):
             return False
         return owner == self.owner_id or owner in self.inherited_owner_ids
 
@@ -397,7 +411,7 @@ class KubernetesProvider:
             manifest,
             scope=api.scope,
             ownership=Ownership.MANAGED
-            if self._is_managed(manifest)
+            if self._is_managed(manifest, api.scope)
             else Ownership.UNMANAGED,
         )
         if (

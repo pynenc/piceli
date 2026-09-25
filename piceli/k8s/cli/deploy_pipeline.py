@@ -6,12 +6,20 @@ contract: machine output on stdout (with ``--json``, one JSON event per stage
 change, then the result; without it, only the result object), human text on
 stderr. Exit codes: ``0`` ready (or planned/stopped as asked), ``1`` a stage
 ran but did not succeed, ``2`` rejected, ``3`` approval required.
+
+``--ref [SOURCE=]REV`` reads the sources from commits instead of the working
+tree (:mod:`piceli.pipeline.refs`); the printed approval command pins the
+resolved commit SHAs.
 """
 
 from __future__ import annotations
 
+import signal
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from types import FrameType
 from typing import Annotated, Any
 
 import typer
@@ -84,6 +92,18 @@ def _describe(plan: Any, entry: str) -> None:
         for name, source in inputs.get("sources", {}).items():
             dirty = " (dirty)" if source["dirty"] else ""
             say(f"  inputs   source {name}: {source['commit'][:12]}{dirty}")
+        for name, pinned in inputs.get("refs", {}).items():
+            say(f"  inputs   ref {name}: {pinned['ref']} = commit {pinned['commit']}")
+        if "refs" in inputs:
+            checked = inputs.get("model", {}).get("checked_against")
+            say(
+                "  inputs   model: working tree"
+                + (
+                    f" (Python files match source {checked})"
+                    if checked
+                    else " (not in a pinned repository)"
+                )
+            )
     for name, build in stages["build"].get("builds", {}).items():
         say(
             f"  build    {name}: {build['action']} ({build['platform']}, "
@@ -102,11 +122,26 @@ def _describe(plan: Any, entry: str) -> None:
             else changes or "apply"
         )
         _say_wrapped(f"  deliver  registry {registry['release']}: ", note)
+        existing = registry.get("existing")
+        if existing and existing.get("action") in {"adopt", "replace"}:
+            storage = existing.get("storage") or {}
+            where = storage.get("host_path") or storage.get("claim") or "none"
+            say(
+                f"  deliver  registry {existing['action']}s live Deployment/"
+                f"{existing['name']} (data on {where}: {existing['data']})"
+            )
     for name, image in deliver.get("images", {}).items():
         config = image["config_digest"]
         say(
             f"  deliver  {name}: {image['action']}"
             + (f" ({config[7:19]})" if config else "")
+        )
+    for key, mirror in deliver.get("mirrors", {}).items():
+        name, _, digest = key.partition("@")
+        unused = "" if mirror["used"] else ", not used by the app"
+        say(
+            f"  deliver  mirror {name}@{digest[:19]}: {mirror['action']} "
+            f"({mirror['platform']}{unused})"
         )
     release = stages["plan"]
     if release.get("state") == "planned":
@@ -124,7 +159,11 @@ def _describe(plan: Any, entry: str) -> None:
                 f"{', '.join(item['managers'])} (re-applied)",
             )
     elif release.get("state") == "pending":
-        say("  plan     after delivery (the release plan needs the image digests)")
+        preview = release.get("preview")
+        if isinstance(preview, dict):
+            _describe_preview(preview)
+        else:
+            say("  plan     after delivery (the release plan needs the image digests)")
     apply = stages["apply"]
     if apply.get("action") == "skip":
         say(
@@ -142,6 +181,33 @@ def _describe(plan: Any, entry: str) -> None:
     say(f"combined hash: {plan.combined_hash}")
 
 
+def _placeholder_note(preview: dict[str, Any]) -> str:
+    return ", ".join(
+        f"{name}={state}" for name, state in preview.get("placeholders", {}).items()
+    )
+
+
+def _describe_preview(preview: dict[str, Any]) -> None:
+    """The placeholder preview: structure and ownership only, never approvable."""
+    say(
+        "  plan     preview with placeholder images ("
+        + _placeholder_note(preview)
+        + "), not approvable:"
+    )
+    changes = ", ".join(
+        f"{c['operation']} {c['kind']}/{c['name']}" for c in preview["changes"]
+    )
+    _say_wrapped("  plan     preview: ", changes or "no changes")
+    for item in preview.get("drift", ()):
+        _say_wrapped(
+            f"  plan     drift {item['kind']}/{item['name']}: desired fields "
+            "also managed by ",
+            f"{', '.join(item['managers'])} (re-applied)",
+        )
+    say("  plan     the real release plan follows delivery; it may not adopt,")
+    say(_INDENT + "replace or delete more than this preview")
+
+
 def _confirm(combined_hash: str) -> bool:
     if not sys.stdin.isatty():
         return False
@@ -151,6 +217,31 @@ def _confirm(combined_hash: str) -> bool:
         err=True,
     )
     return bool(answer) and len(answer) >= 12 and combined_hash.startswith(answer)
+
+
+def _approve_command(target: str, combined: Any) -> str:
+    """The approval command; ``--ref`` values are pinned to the planned SHAs."""
+    refs = combined.stages.get("inputs", {}).get("refs", {})
+    pinned = "".join(f" --ref {name}={value['commit']}" for name, value in refs.items())
+    return f"piceli deploy {target}{pinned} --approve {combined.combined_hash}"
+
+
+@contextmanager
+def _terminate_as_interrupt() -> Iterator[None]:
+    """Turn SIGTERM (a cancelled CI job) into KeyboardInterrupt so cleanup runs."""
+
+    def interrupt(_signal: int, _frame: FrameType | None) -> None:
+        raise KeyboardInterrupt
+
+    try:
+        previous = signal.signal(signal.SIGTERM, interrupt)
+    except ValueError:  # not the main thread: leave signals alone
+        yield
+        return
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous)
 
 
 def _human(event: dict[str, Any]) -> None:
@@ -210,13 +301,26 @@ def deploy(
         bool,
         typer.Option("--json", help="Stream one JSON event per stage change on stdout"),
     ] = False,
+    ref: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--ref",
+            metavar="[SOURCE=]REV",
+            help="Build SOURCE from commit REV (branch, tag or SHA) in a temporary "
+            "worktree instead of the working tree; repeatable. A bare REV pins "
+            "every source when they are one repository",
+        ),
+    ] = None,
 ) -> None:
     """Deploy a pipeline: inputs → build → deliver → plan → apply → checks.
 
     Every stage is journaled and skipped when its content is unchanged. Plan
-    first (--plan), then approve the combined hash (--approve HASH).
+    first (--plan), then approve the combined hash (--approve HASH). With
+    --ref the sources are read from commits, and the hash covers the commits.
     """
     from piceli.pipeline import PipelineError, PipelineRunner
+    from piceli.pipeline.refs import parse_refs
+    from piceli.pipeline.runner import preview_hash
 
     if until not in STAGE_NAMES:
         say(f"--until must be one of {', '.join(STAGE_NAMES)}")
@@ -230,12 +334,20 @@ def deploy(
     if plan and auto_approve:
         say("--plan executes nothing; drop --auto-approve")
         reject("deploy-flags-conflict")
+    if resume and ref:
+        say("--resume reuses the commits the run was approved with; drop --ref")
+        reject("deploy-flags-conflict")
+    try:
+        refs = parse_refs(ref or ())
+    except PipelineError as error:
+        say(str(error))
+        reject(error.code)
     pipeline = load_pipeline(target)
     runner = PipelineRunner(
-        pipeline, on_event=emit_json if as_json else _human, say=say
+        pipeline, on_event=emit_json if as_json else _human, say=say, refs=refs
     )
     try:
-        with runner.locked():
+        with _terminate_as_interrupt(), runner.locked(), runner.sources():
             if resume:
                 result = runner.resume()
             else:
@@ -246,22 +358,36 @@ def deploy(
                     "event": "result",
                     **combined.to_dict(),
                 }
+                refs_planned = combined.stages["inputs"].get("refs")
+                if refs_planned:
+                    body["refs"] = {n: v["commit"] for n, v in refs_planned.items()}
                 if plan:
                     # The command stays on one line so it can be copied.
                     say("approve with:")
-                    say(f"  piceli deploy {target} --approve {combined.combined_hash}")
+                    say(f"  {_approve_command(target, combined)}")
                     emit_json({**body, "state": "planned"})
                     raise typer.Exit(EXIT_OK)
                 if approve is not None:
+                    if approve == preview_hash(combined):
+                        say(
+                            "that is the hash of the placeholder preview, which "
+                            "is never approvable; approve the combined hash"
+                        )
+                        reject("pipeline-preview-not-approvable")
                     if approve != combined.combined_hash:
                         say(
                             "the plan changed since it was approved (or the hash is "
                             "wrong); review the new plan above"
+                            + (
+                                ""
+                                if refs
+                                else " (a plan made with --ref needs the same --ref)"
+                            )
                         )
                         reject("pipeline-plan-changed")
                 elif not auto_approve and not _confirm(combined.combined_hash):
                     say("approve with:")
-                    say(f"  piceli deploy {target} --approve {combined.combined_hash}")
+                    say(f"  {_approve_command(target, combined)}")
                     emit_json({**body, "state": "approval-required"})
                     raise typer.Exit(EXIT_APPROVAL)
                 result = runner.execute(
@@ -292,6 +418,13 @@ def _fail(runner: Any, error: Any) -> None:
             f"  blocking {item['kind']}/{item['name']}: {item['message']}"
             + (f" -> {suggest}" if suggest else "")
         )
+    preview = error.details.get("preview")
+    if isinstance(preview, dict):
+        say(
+            "  (release preview with placeholder images: "
+            + _placeholder_note(preview)
+            + "; nothing was built or delivered)"
+        )
     say(f"explain with: piceli explain {error.code}")
     if runner.run is not None:
         body = runner.result(runner.run.state)
@@ -308,10 +441,17 @@ def _fail(runner: Any, error: Any) -> None:
         )
         if stage:
             body["stage"] = stage
-            say(f"continue after fixing it with: --resume (stage {stage})")
+            if error.code == "pipeline-preview-changed":
+                say("plan again (finished stages are skipped) and approve the new hash")
+            else:
+                say(f"continue after fixing it with: --resume (stage {stage})")
     else:
         body = {"state": "rejected", "reason": error.code}
+        if "stage" in error.details:
+            body["stage"] = error.details["stage"]
     if error.details.get("blocking"):
         body["blocking"] = error.details["blocking"]
+    if isinstance(preview, dict):
+        body["preview"] = preview
     emit_json(body)
     raise typer.Exit(EXIT_FAILED if error.failed else EXIT_REJECTED)

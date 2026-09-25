@@ -8,7 +8,10 @@ is unchanged:
 
 ``inputs``
     Scans each build's contexts (the build plan hash covers every staged
-    file) and records the sources' git identity as provenance.
+    file) and records the sources' git identity as provenance. With
+    ``refs`` (``piceli deploy --ref``) the pinned sources are read from
+    temporary worktrees at the resolved commits (:mod:`piceli.pipeline.refs`)
+    and the combined hash covers those commits.
 ``build``
     Skipped when the last receipt has the same build plan hash and its images
     are still in the local engine.
@@ -19,7 +22,11 @@ is unchanged:
     never by tag.
 ``plan``
     A release plan through :class:`~piceli.k8s.release_runner.ReleaseRunner`
-    against live discovery.
+    against live discovery. Before the images are delivered, planning adds a
+    never-approvable preview computed with placeholder images (structure,
+    ownership and blocking objects); the combined hash covers only its
+    adopt/replace/delete set, and the real plan after delivery may not go
+    beyond it (``pipeline-preview-changed``).
 ``apply``
     Skipped when the planned release is the one already deployed and ready
     and its remaining ``apply`` actions remove no field and differ only in
@@ -37,7 +44,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -48,11 +55,18 @@ from piceli.pipeline.checks import CheckContext, describe_check, describe_result
 from piceli.pipeline.compose import (
     canonical,
     digest,
+    mirror_node_registry,
+    mirror_repository,
+    mirrors,
     model_fingerprint,
+    pending_image,
     pinned_images,
+    registry_owner,
     registry_release_spec,
     release_spec,
     used_handles,
+    used_mirrors,
+    uses_pending_image,
 )
 from piceli.pipeline.errors import PipelineError
 from piceli.pipeline.journal import FINISHED, Journal, Run, now, write_private
@@ -64,13 +78,26 @@ from piceli.pipeline.model import (
     Pipeline,
     Registry,
 )
-from piceli.pipeline.operate import delivery_path, delivery_receipt
+from piceli.pipeline.operate import (
+    delivery_path,
+    delivery_receipt,
+    mirror_path,
+    mirror_receipt,
+)
+from piceli.pipeline.refs import (
+    RefRequest,
+    SourceCheckouts,
+    open_checkouts,
+    recorded_requests,
+)
 
 if TYPE_CHECKING:
     from piceli.artifacts.build_spec import BuildPlan, BuildSpec
     from piceli.artifacts.source_identity import InputsLock, InputsSpec
     from piceli.k8s.release_runner import PlanResult, ReleaseRunner
     from piceli.k8s.release_spec import ImageRef
+    from piceli.pipeline.compose import PipelineReleaseSpec
+    from piceli.pipeline.registry_takeover import Takeover
 
 PLAN_SCHEMA = "piceli.deploy-plan.v1"
 EVENT_SCHEMA = "piceli.deploy-event.v1"
@@ -116,6 +143,10 @@ class _Work:
     release_plan: PlanResult | None = None
     release_images: dict[str, str] = field(default_factory=dict)
     noop: bool = False
+    provenance: dict[str, Any] = field(default_factory=dict)
+    takeover: Takeover | None = None
+    platforms: tuple[str, ...] | None = None
+    mirrors: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass
@@ -149,22 +180,44 @@ def _compact(result: PlanResult) -> list[dict[str, Any]]:
 
 
 def _changes(result: PlanResult) -> list[dict[str, Any]]:
+    return _changed(result.to_dict()["actions"])
+
+
+def _changed(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         {"operation": item["operation"], "kind": item["kind"], "name": item["name"]}
-        for item in result.to_dict()["actions"]
+        for item in actions
         if item["operation"] != "no-op"
     ]
 
 
 def _drift(result: PlanResult) -> list[dict[str, Any]]:
+    return _drifted(result.drift)
+
+
+def _drifted(drift: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         {
             "kind": item["resource"]["kind"],
             "name": item["resource"]["name"],
             "managers": list(item["managers"]),
         }
-        for item in result.drift
+        for item in drift
     ]
+
+
+#: Operations that change who owns an object or remove one. After delivery,
+#: the real release plan may not do any of these to an object the approved
+#: placeholder preview did not show.
+OWNERSHIP_OPERATIONS = frozenset({"adopt", "replace", "delete"})
+
+
+def _ownership(changes: list[dict[str, Any]]) -> list[str]:
+    return sorted(
+        f"{item['operation']} {item['kind']}/{item['name']}"
+        for item in changes
+        if item["operation"] in OWNERSHIP_OPERATIONS
+    )
 
 
 def unchanged(runner: ReleaseRunner, result: PlanResult) -> bool:
@@ -232,6 +285,9 @@ class PipelineRunner:
     :param on_event: Receives one event per stage change (JSON-safe dicts).
     :param say: Receives human progress lines.
     :param check_runner: Overrides the checks runner (tests, custom checks).
+    :param refs: Sources to read from a commit instead of the working tree
+        (``--ref``); run planning and execution inside :meth:`sources` so the
+        temporary worktrees are removed afterwards.
     """
 
     def __init__(
@@ -242,8 +298,11 @@ class PipelineRunner:
         on_event: EventSink | None = None,
         say: Callable[[str], None] | None = None,
         check_runner: Any = None,
+        refs: Sequence[RefRequest] = (),
     ) -> None:
         self.pipeline = pipeline
+        self.refs = tuple(refs)
+        self.checkouts: SourceCheckouts | None = None
         self.backend = backend or Backend()
         self.on_event = on_event or (lambda _event: None)
         self.say = say or (lambda _line: None)
@@ -281,6 +340,46 @@ class PipelineRunner:
         with self.journal.locked():
             yield
 
+    @contextmanager
+    def sources(self) -> Iterator[None]:
+        """Scope of the ``--ref`` worktrees: removed on exit, whatever happened."""
+        try:
+            yield
+        finally:
+            checkouts, self.checkouts = self.checkouts, None
+            if checkouts is not None:
+                checkouts.close()
+
+    def _open_checkouts(self, requests: Sequence[RefRequest]) -> None:
+        if self.checkouts is None and requests:
+            self.checkouts = open_checkouts(self.pipeline, requests, say=self.say)
+
+    def _load(
+        self, build: Build
+    ) -> tuple[BuildSpec, InputsSpec | None, InputsLock | None]:
+        """A build's spec, inputs and lock: from the pinned commits, or from disk."""
+        from piceli.artifacts.source_identity import InputsLock
+
+        if self.checkouts:
+            return self.checkouts.load_build(build)
+        spec = build.load()
+        inputs = spec.load_inputs()
+        lock = InputsLock.from_json(build.lock.read_text()) if build.lock else None
+        return spec, inputs, lock
+
+    def _provenance(self, sources: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+        """What the release records about its sources (commit, dirty, ``--ref``)."""
+        refs = self.checkouts.describe() if self.checkouts else {}
+        entries = {
+            name: {
+                "commit": value.get("commit"),
+                "dirty": value.get("dirty"),
+                **({"ref": refs[name]["ref"]} if name in refs else {}),
+            }
+            for name, value in sorted(sources.items())
+        }
+        return {"sources": entries} if entries else {}
+
     def _route(self) -> RegistryRoute:
         strategy = self.pipeline.deliver
         target = self.pipeline.target
@@ -288,7 +387,7 @@ class PipelineRunner:
             return RegistryRoute(
                 push=None,
                 node_registry=f"127.0.0.1:{strategy.port}",
-                forward=f"deployment/{strategy.name}",
+                forward=f"deployment/{strategy.registry_name}",
                 namespace=target.namespace,
                 remote_port=strategy.port,
                 kubeconfig=target.kubeconfig,
@@ -312,9 +411,9 @@ class PipelineRunner:
             prefix = strategy.repository or self.pipeline.app.name
             return f"{prefix}/{image}"
         if isinstance(strategy, Registry):
-            from piceli.artifacts.registry import RegistryTarget
+            from piceli.pipeline.compose import registry_prefix
 
-            prefix = RegistryTarget.parse(strategy.url + "/x").repository[: -len("/x")]
+            prefix = registry_prefix(strategy.url)
             return f"{prefix}/{image}" if prefix else image
         work = self._work_producer(image)
         ref = work.images.get(image, {}).get("ref") or ""
@@ -357,6 +456,7 @@ class PipelineRunner:
         if until not in STAGES:
             raise PipelineError("deploy-stage-unknown", f"unknown stage {until!r}")
         limit = STAGES.index(until)
+        self._open_checkouts(self.refs)
         work = _Work()
         self._work = work
         stages: dict[str, dict[str, Any]] = {}
@@ -380,20 +480,12 @@ class PipelineRunner:
     def _plan_inputs(
         self, work: _Work, _reapply: bool
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        from piceli.artifacts.source_identity import InputsLock
-
         pipeline = self.pipeline
         builds: dict[str, Any] = {}
         sources: dict[str, Any] = {}
         for build in pipeline.builds:
             try:
-                spec = build.load()
-                inputs = spec.load_inputs()
-                lock = (
-                    InputsLock.from_json(build.lock.read_text())
-                    if build.lock is not None
-                    else None
-                )
+                spec, inputs, lock = self._load(build)
                 plan = spec.plan(inputs)
             except OSError as error:
                 raise PipelineError("pipeline-invalid", str(error)) from None
@@ -444,10 +536,18 @@ class PipelineRunner:
                 "pipeline-image-unknown",
                 f"the app uses build images {unknown} that no build produces",
             )
+        work.provenance = self._provenance(sources)
         stage = {"builds": builds, "sources": sources, "images": work.used}
-        return stage, {
+        hashed: dict[str, Any] = {
             "builds": {name: value["plan_hash"] for name, value in builds.items()}
         }
+        if self.checkouts:
+            # The commits, not the requested names: a branch that moves after
+            # --plan changes the combined hash.
+            stage["refs"] = self.checkouts.describe()
+            stage["model"] = {"checked_against": self.checkouts.model_source}
+            hashed["refs"] = self.checkouts.hashed()
+        return stage, hashed
 
     def _plan_build(
         self, work: _Work, _reapply: bool
@@ -497,14 +597,15 @@ class PipelineRunner:
         self, work: _Work, _reapply: bool
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         strategy = self.pipeline.deliver
-        if not work.used:
+        mirrored = mirrors(self.pipeline)
+        if not work.used and not mirrored:
             return {"action": "none"}, {"action": "none"}
         assert strategy is not None
         stage: dict[str, Any] = {"strategy": strategy.describe()}
         hashed: dict[str, Any] = {"strategy": strategy.describe()}
         registry_ready = True
         if isinstance(strategy, NodeLoopbackRegistry):
-            spec = registry_release_spec(self.pipeline)
+            spec = self._registry_spec(work)
             runner = self.backend.release_runner(spec)
             try:
                 result = runner.plan()
@@ -526,6 +627,13 @@ class PipelineRunner:
                 "release": result.release,
                 "actions": _hex(_compact(result)),
             }
+            assert work.takeover is not None
+            if work.takeover.existing is not None:
+                stage["registry"]["existing"] = work.takeover.existing
+                hashed["registry"]["existing"] = work.takeover.existing
+            if work.platforms:
+                stage["registry"]["index_platforms"] = list(work.platforms)
+                hashed["registry"]["index_platforms"] = list(work.platforms)
         images: dict[str, Any] = {}
         for name in work.used:
             config = work.producer[name].images.get(name, {}).get("image_id")
@@ -544,6 +652,99 @@ class PipelineRunner:
             name: value["config_digest"] or "pending-build"
             for name, value in images.items()
         }
+        if mirrored:
+            stage["mirrors"], hashed["mirrors"] = self._plan_mirrors(
+                work, registry_ready
+            )
+        return stage, hashed
+
+    def _registry_inputs(self, work: _Work) -> None:
+        """Read the live registry and the node platform (read-only, once per run)."""
+        from piceli.pipeline.registry_takeover import decide
+
+        if work.takeover is not None and work.platforms is not None:
+            return
+        strategy = self.pipeline.deliver
+        assert isinstance(strategy, NodeLoopbackRegistry)
+        target = self.pipeline.target
+        _, node = target.node(strategy.node)
+        try:
+            deployments = self.backend.list_deployments(target)
+            platform = (
+                self.backend.node_platform(target, node.name)
+                if strategy.mirror
+                else None
+            )
+        except PipelineError:
+            raise
+        except Exception as error:
+            raise PipelineError(
+                "pipeline-registry-unreadable",
+                "could not read the namespace's Deployments or the registry node "
+                f"({type(error).__name__}); check access with a read-only tool",
+            ) from None
+        if platform is not None and (
+            platform.count("/") != 1 or platform.endswith(("/None", "/"))
+        ):
+            raise PipelineError(
+                "pipeline-registry-unreadable",
+                f"node {node.name} reports no architecture",
+            )
+        work.takeover = decide(
+            strategy,
+            node=node.name,
+            owner=registry_owner(self.pipeline),
+            deployments=deployments,
+        )
+        work.platforms = (platform,) if platform else ()
+
+    def _registry_spec(self, work: _Work) -> PipelineReleaseSpec:
+        self._registry_inputs(work)
+        assert work.takeover is not None and work.platforms is not None
+        return registry_release_spec(
+            self.pipeline, platforms=work.platforms, takeover=work.takeover.takeover
+        )
+
+    def _mirror_platform(self, work: _Work) -> str | None:
+        """The platform copied from a multi-arch index (``None``: every one)."""
+        if not isinstance(self.pipeline.deliver, NodeLoopbackRegistry):
+            return None
+        self._registry_inputs(work)
+        return work.platforms[0] if work.platforms else None
+
+    def _plan_mirrors(
+        self, work: _Work, registry_ready: bool
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        pipeline = self.pipeline
+        keys = mirrors(pipeline)
+        platform = self._mirror_platform(work)
+        used = used_mirrors(pipeline)
+        host = mirror_node_registry(pipeline)
+        repositories = {key: mirror_repository(pipeline, key) for key in keys}
+        present = [False] * len(keys)
+        if registry_ready:
+            present = self.backend.registry_present(
+                self._route(),
+                [(repositories[key], key.rpartition("@")[2]) for key in keys],
+            )
+        stage: dict[str, Any] = {}
+        hashed: list[dict[str, Any]] = []
+        for key, found in zip(keys, present, strict=True):
+            repository = repositories[key]
+            found = bool(found) and (
+                mirror_receipt(pipeline.state_dir, key, repository) is not None
+            )
+            work.mirrors[key] = {"repository": repository, "present": found}
+            stage[key] = {
+                "action": "present" if found else "mirror",
+                "repository": repository,
+                "reference": f"{host}/{repository}@{key.rpartition('@')[2]}",
+                "platform": platform or "all",
+                "used": key in used,
+            }
+            hashed.append(
+                {"source": key, "repository": repository, "platform": platform or "all"}
+            )
         return stage, hashed
 
     def _receipt(self, name: str, config: str) -> tuple[Path, dict[str, Any]] | None:
@@ -589,9 +790,17 @@ class PipelineRunner:
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         fingerprint = model_fingerprint(self.pipeline)
         if any(name not in work.delivered for name in work.used):
+            preview = self._preview(work)
+            # The preview itself is never hashed (its digests are
+            # placeholders); only its ownership outcome is, and after
+            # delivery the real plan may not go beyond it (see _run_plan).
             return (
-                {"state": "pending", "why": "images are not delivered yet"},
-                {"model": fingerprint},
+                {
+                    "state": "pending",
+                    "why": "images are not delivered yet",
+                    "preview": preview,
+                },
+                {"model": fingerprint, "ownership": _ownership(preview["changes"])},
             )
         result = self._release_plan(work)
         drift = _drift(result)
@@ -611,6 +820,66 @@ class PipelineRunner:
             "drift": drift,
         }
 
+    def _placeholders(self, work: _Work) -> dict[str, str]:
+        """``pending-build`` or ``pending-delivery`` per undelivered build image."""
+        return {
+            name: (
+                "pending-delivery"
+                if work.producer[name].images.get(name, {}).get("image_id")
+                else "pending-build"
+            )
+            for name in work.used
+            if name not in work.delivered
+        }
+
+    def _preview(self, work: _Work) -> dict[str, Any]:
+        """The release plan's structure with placeholder digests; never approvable.
+
+        Built on a separate release runner, so it never becomes the work's
+        release plan: nothing is persisted, and objects that carry a
+        placeholder image are not sent to the cluster (not even as a dry run).
+        A plan that needs adoption or replacement is refused here, before
+        anything is built or delivered, with the release engine's
+        ``blocking`` list.
+        """
+        placeholders = self._placeholders(work)
+        images: dict[str, ImageRef] = dict(pinned_images(self.pipeline, work.producer))
+        for name in work.used:
+            images[name] = work.delivered.get(name) or pending_image(
+                name, placeholders[name]
+            )
+        marker = {"approvable": False, "placeholders": placeholders}
+        try:
+            runner = self.backend.release_runner(release_spec(self.pipeline, images))
+            result = runner.placeholder_preview(skip_dry_run=uses_pending_image)
+        except Exception as error:
+            failure = classify(error)
+            failure.details = {**failure.details, "stage": "plan", "preview": marker}
+            raise failure from None
+        changes = _changed(result["actions"])
+        preview = {
+            **marker,
+            "state": "previewed",
+            "summary": result["summary"],
+            "changes": changes,
+            "drift": _drifted(result["drift"]),
+            "authorized": result["authorized"],
+            "dry_run_skipped": result["dry_run_skipped"],
+            "dry_run_unavailable": result["dry_run_unavailable"],
+        }
+        preview["preview_hash"] = _hex(
+            {
+                "schema": "piceli.deploy-preview.v1",
+                "placeholders": placeholders,
+                "actions": [
+                    {key: item[key] for key in ("operation", "kind", "name")}
+                    for item in result["actions"]
+                ],
+                "authorized": result["authorized"],
+            }
+        )
+        return preview
+
     def _release_images(self, work: _Work) -> dict[str, ImageRef]:
         images: dict[str, ImageRef] = dict(pinned_images(self.pipeline, work.producer))
         for name in work.used:
@@ -619,7 +888,7 @@ class PipelineRunner:
 
     def _release_plan(self, work: _Work) -> PlanResult:
         images = self._release_images(work)
-        spec = release_spec(self.pipeline, images)
+        spec = release_spec(self.pipeline, images, provenance=work.provenance)
         runner = self.backend.release_runner(spec)
         try:
             result = runner.plan()
@@ -663,6 +932,12 @@ class PipelineRunner:
         self, plan: CombinedPlan, approval: str, *, reapply: bool = False
     ) -> dict[str, Any]:
         """Run an approved plan (``approval`` must equal its combined hash)."""
+        if approval == preview_hash(plan):
+            raise PipelineError(
+                "pipeline-preview-not-approvable",
+                "this is the hash of a placeholder preview, not of a plan; "
+                "approve the combined hash",
+            )
         if approval != plan.combined_hash:
             raise PipelineError(
                 "pipeline-plan-changed",
@@ -675,6 +950,7 @@ class PipelineRunner:
             until=plan.until,
             approval=approval,
             plan={"hashed": plan.hashed, "stages": plan.stages},
+            refs=self.checkouts.describe() if self.checkouts else None,
         )
         return self._continue(plan.until, reapply=reapply)
 
@@ -692,13 +968,21 @@ class PipelineRunner:
                 "the pipeline's app, owner or target differs from the run's",
             )
         self.run = run
+        refs = run.data.get("refs") or {}
+        if refs:
+            # The run's own commits, never a re-resolved branch.
+            self._open_checkouts(
+                recorded_requests({n: v["commit"] for n, v in refs.items()})
+            )
+            assert self.checkouts is not None
+            for name, value in refs.items():
+                self.checkouts.checkouts[name].rev = str(value.get("ref"))
         self._work = self._restore(run)
         run.set_state("running", resumed_at=now())
         return self._continue(str(run.data["until"]), reapply=False, resuming=True)
 
     def _restore(self, run: Run) -> _Work:
         """Rebuild the work state from the journal (finished stages keep outputs)."""
-        from piceli.artifacts.source_identity import InputsLock
         from piceli.k8s.release_spec import load_delivery_receipt
 
         work = _Work()
@@ -706,11 +990,7 @@ class PipelineRunner:
         build_out = run.output("build")
         for build in self.pipeline.builds:
             try:
-                spec = build.load()
-                inputs = spec.load_inputs()
-                lock = (
-                    InputsLock.from_json(build.lock.read_text()) if build.lock else None
-                )
+                spec, inputs, lock = self._load(build)
                 plan = spec.plan(inputs)
             except Exception as error:
                 raise classify(error) from None
@@ -736,6 +1016,11 @@ class PipelineRunner:
                 work.producer[image.name] = item
             work.builds.append(item)
         work.used = used_handles(self.pipeline)
+        work.provenance = self._provenance(
+            run.output("inputs").get("sources")
+            or run.data["plan"]["stages"].get("inputs", {}).get("sources")
+            or {}
+        )
         if run.stage("deliver").get("state") in {"done", "skipped"}:
             for name, entry in run.output("deliver").get("images", {}).items():
                 work.delivered[name] = load_delivery_receipt(
@@ -819,6 +1104,7 @@ class PipelineRunner:
         if not work.builds:
             return "skipped", {"why": "no build"}
         return "done", {
+            **({"refs": self.checkouts.describe()} if self.checkouts else {}),
             "builds": {item.spec.name: item.plan.plan_hash for item in work.builds},
             "sources": {
                 source["name"]: {
@@ -869,6 +1155,9 @@ class PipelineRunner:
                     log=item.directory / "build.log",
                     progress=progress,
                 )
+                if self.checkouts:
+                    # The requested revisions next to the sources' commits.
+                    receipt = {**receipt, "refs": self.checkouts.describe()}
                 write_private(
                     item.receipt_path, json.dumps(receipt, sort_keys=True, indent=2)
                 )
@@ -896,7 +1185,8 @@ class PipelineRunner:
 
         work = self._work
         assert work is not None
-        if not work.used:
+        mirrored = mirrors(self.pipeline)
+        if not work.used and not mirrored:
             return "skipped", {"why": "no built image is used"}
         strategy = self.pipeline.deliver
         output: dict[str, Any] = {"strategy": strategy.kind if strategy else None}
@@ -939,7 +1229,71 @@ class PipelineRunner:
                 f"{_short_reference(delivered.reference)}"
             )
         output["images"] = images
+        if mirrored:
+            output["mirrors"], copied = self._run_mirrors(work)
+            acted = acted or copied
         return ("done" if acted else "skipped"), output
+
+    def _run_mirrors(self, work: _Work) -> tuple[dict[str, Any], bool]:
+        """Copy each ``mirror=`` image that is not present yet (content-addressed)."""
+        from piceli.artifacts.mirror import MirrorSource, public
+
+        pipeline = self.pipeline
+        strategy = pipeline.deliver
+        assert isinstance(strategy, NodeLoopbackRegistry | Registry)
+        platform = self._mirror_platform(work)
+        output: dict[str, Any] = {}
+        acted = False
+        for key in mirrors(pipeline):
+            repository = mirror_repository(pipeline, key)
+            path = mirror_path(pipeline.state_dir, key, repository)
+            known = work.mirrors.get(key, {})
+            if known.get("present") and mirror_receipt(
+                pipeline.state_dir, key, repository
+            ):
+                receipt = json.loads(path.read_text())
+                action = "present"
+            else:
+                self.say(f"[deliver] mirror {_short_reference(key)}: copying")
+                domain = MirrorSource.parse(key).domain
+                receipt = self.backend.mirror_deliver(
+                    self._route(),
+                    key,
+                    repository,
+                    platform=platform,
+                    credentials=(strategy.mirror_credentials or {}).get(domain),
+                )
+                write_private(
+                    path, json.dumps(receipt, sort_keys=True, indent=2) + "\n"
+                )
+                if receipt.get("state") != "succeeded":
+                    from piceli.errors import ERRORS
+
+                    reason = receipt.get("reason")
+                    failed = receipt.get("state") == "failed"
+                    details = {"output": {"mirrors": {key: public(receipt)}}}
+                    message = f"mirror of {key!r} did not succeed ({reason})"
+                    if not (isinstance(reason, str) and reason in ERRORS):
+                        raise PipelineError(
+                            "pipeline-mirror-failed",
+                            message,
+                            failed=failed,
+                            details=details,
+                        )
+                    raise PipelineError(reason, message, failed=failed, details=details)
+                action = str(receipt.get("result") or "mirrored")
+                acted = acted or action == "mirrored"
+            work.mirrors[key] = {"repository": repository, "present": True}
+            reference = str(receipt.get("pull_ref"))
+            output[key] = {
+                "action": action,
+                "reference": reference,
+                "digest": key.rpartition("@")[2],
+                "platform": receipt.get("platform"),
+                "receipt": str(path),
+            }
+            self.say(f"[deliver] mirror {_short_reference(key)}: {action}")
+        return output, acted
 
     def _ensure_registry(
         self, work: _Work, resuming: bool
@@ -947,7 +1301,7 @@ class PipelineRunner:
         """Apply the node-loopback registry's release when its plan changes anything."""
         runner, result = work.registry_runner, work.registry_plan
         if runner is None or result is None or resuming:
-            runner = self.backend.release_runner(registry_release_spec(self.pipeline))
+            runner = self.backend.release_runner(self._registry_spec(work))
             result = runner.plan()
             work.registry_runner, work.registry_plan = runner, result
         info: dict[str, Any] = {"release": result.release, "summary": result.counts}
@@ -1017,6 +1371,7 @@ class PipelineRunner:
                     "pipeline-resume-changed",
                     "the release differs from the approved one; plan again",
                 )
+        self._within_preview(result)
         self.say(
             f"[plan] release {result.release} ({result.mode}): "
             + (
@@ -1033,6 +1388,30 @@ class PipelineRunner:
             "images": work.release_images,
             "source": result.source,
         }
+
+    def _within_preview(self, result: PlanResult) -> None:
+        """Refuse a real plan that adopts, replaces or deletes beyond the preview.
+
+        An approval given before the images existed covered the placeholder
+        preview's ownership outcome only. When the real plan (with digests)
+        takes over or removes another object, nothing is applied: plan again
+        (build and delivery are now skipped) and approve the real plan.
+        """
+        if self.run is None:
+            return
+        approved = self.run.data["plan"]["stages"].get("plan", {}).get("preview")
+        if not isinstance(approved, dict):
+            return
+        allowed = set(_ownership(approved.get("changes", [])))
+        extra = [item for item in _ownership(_changes(result)) if item not in allowed]
+        if extra:
+            raise PipelineError(
+                "pipeline-preview-changed",
+                "after delivery the release plan would "
+                + ", ".join(extra)
+                + ", which the approved preview did not show; plan again and "
+                "approve the real release plan",
+            )
 
     # --------------------------------------------------------- stage: apply
     def _run_apply(self, reapply: bool, resuming: bool) -> tuple[str, dict[str, Any]]:
@@ -1154,7 +1533,11 @@ class PipelineRunner:
             # Resuming at the checks stage: the release was planned and applied
             # by an earlier invocation, so bind the runner without re-planning.
             runner = work.runner = self.backend.release_runner(
-                release_spec(self.pipeline, self._release_images(work))
+                release_spec(
+                    self.pipeline,
+                    self._release_images(work),
+                    provenance=work.provenance,
+                )
             )
         try:
             target = runner.resolve_rollback_target("previous")
@@ -1186,6 +1569,12 @@ class PipelineRunner:
             "release": target,
             "execution": outcome["execution"],
         }
+
+
+def preview_hash(plan: CombinedPlan) -> str | None:
+    """The placeholder preview's hash in ``plan``, if its release plan is pending."""
+    preview = plan.stages.get("plan", {}).get("preview")
+    return preview.get("preview_hash") if isinstance(preview, dict) else None
 
 
 def _short_reference(reference: str) -> str:

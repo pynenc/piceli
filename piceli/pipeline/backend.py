@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from piceli.k8s.release_runner import ReleaseRunner
     from piceli.k8s.release_spec import ReleaseSpec
     from piceli.pipeline.checks import CheckRunner
+    from piceli.pipeline.model import Target
 
 GRANT_SECONDS = 3600.0
 
@@ -234,6 +235,108 @@ class Backend:
             DeliveryGrant(image_id, url, time.time() + GRANT_SECONDS),
             node_registry=route.node_registry,
         )
+
+    def mirror_deliver(
+        self,
+        route: RegistryRoute,
+        reference: str,
+        repository: str,
+        *,
+        platform: str | None,
+        credentials: Path | None,
+    ) -> dict[str, Any]:
+        """Copy one digest-pinned image into ``repository``; returns the receipt.
+
+        The source is pulled on this machine over OCI Distribution (anonymous,
+        or with the private ``credentials`` file); the target is reached like a
+        built image's push (``route``: port-forward, credentials, CA).
+        """
+        from piceli.artifacts.mirror import (
+            MirrorSource,
+            Platform,
+            mirror_image,
+        )
+        from piceli.artifacts.registry import (
+            RegistryCredentials,
+            RegistryTarget,
+            StreamedOciRegistryClient,
+        )
+
+        source = MirrorSource.parse(reference)
+        source_target = RegistryTarget.parse(source.url)
+        source_client = StreamedOciRegistryClient(
+            source_target.endpoint(
+                credentials=RegistryCredentials.load(credentials.absolute())
+                if credentials is not None
+                else None,
+                timeout=120,
+            ),
+            actions="pull",
+        )
+        port = free_port()
+        with self._forward(route, port):
+            target = RegistryTarget.parse(route.url(repository, port))
+            target_client = StreamedOciRegistryClient(
+                target.endpoint(
+                    credentials=self._credentials(route),
+                    ca_file=route.ca_file.absolute() if route.ca_file else None,
+                    timeout=120,
+                )
+            )
+            return mirror_image(
+                source,
+                source_client,
+                target_client,
+                repository,
+                platform=Platform.parse(platform) if platform else None,
+                target_registry=route.push or route.forward or "node-loopback",
+                node_registry=route.node_registry or target.registry,
+            )
+
+    # ---------------------------------------------------------- cluster
+    def _api(self, target: Target) -> Any:
+        from piceli.k8s.ops.provider_factory import api_client_from_kubeconfig
+
+        return api_client_from_kubeconfig(
+            target.kubeconfig.absolute(),
+            target.context,
+            transport=target.transport,  # type: ignore[arg-type]
+            exec_policy=target.exec_policy(),
+        )
+
+    def list_deployments(self, target: Target) -> list[dict[str, Any]]:
+        """Every Deployment of the target namespace, as plain manifests (read-only)."""
+        import json
+
+        from kubernetes.client import AppsV1Api
+
+        client = self._api(target)
+        try:
+            response = AppsV1Api(client).list_namespaced_deployment(
+                target.namespace,
+                _preload_content=False,
+                _request_timeout=target.request_seconds,
+            )
+            items = json.loads(response.data).get("items") or []
+        finally:
+            client.close()
+        return [item for item in items if isinstance(item, dict)]
+
+    def node_platform(self, target: Target, node: str) -> str:
+        """``os/architecture`` the node reports (``status.nodeInfo``)."""
+        import json
+
+        from kubernetes.client import CoreV1Api
+
+        client = self._api(target)
+        try:
+            response = CoreV1Api(client).read_node(
+                node, _preload_content=False, _request_timeout=target.request_seconds
+            )
+            info = (json.loads(response.data).get("status") or {}).get("nodeInfo") or {}
+        finally:
+            client.close()
+        return f"{info.get('operatingSystem') or 'linux'}/{info.get('architecture')}"
 
     # ------------------------------------------------------------- node
     def _node_delivery(self, url: str) -> tuple[Any, Any]:

@@ -82,7 +82,9 @@ noted.
 
 - `piceli explain`, `piceli help-json`
 - `piceli render`: imports the model module and reads the spec; never contacts
-  a cluster or reads secret values.
+  a cluster or reads secret values. `piceli render MODULE:pipeline` renders a
+  `Pipeline` with its target's namespace and declared nodes, and build images
+  as placeholders; it reads no kubeconfig.
 - `piceli release plan` and `piceli release preview`: read the cluster, store
   a pending plan and secret candidates in the spec's `state_dir`, and print the
   plan hash. They never write to the cluster.
@@ -116,7 +118,10 @@ noted.
 - `piceli deploy MODULE:ATTR --plan`: plans every stage (reads sources,
   the local image store, the registry or node, and the cluster), writes only
   the pipeline's `state_dir`, and prints the combined hash. It never builds,
-  pushes or applies.
+  pushes or applies. Before the images exist it also previews the release
+  with placeholder images (`stages.plan.preview`), and refuses with the
+  `blocking` objects when the release would need adoption or replacement. With `--ref SOURCE=REV` it also checks the commit out
+  into a temporary git worktree, removed before it exits.
 - `piceli artifacts build`: assembles an OCI layout in `--output` without
   running any code.
 - `piceli observe forward-save`, `piceli operator backup`: write a local
@@ -150,8 +155,10 @@ unattended CI job for this exact spec.
 2. Show the owner the summary from stderr: every `create`, `adopt`, `delete`
    and `drift` line, the changed fields under each `apply` (all of them are in
    `diffs` in the JSON), and the adoption notes (a takeover removes fields
-   other clients wrote). A plan whose `summary` has only `no-op` changes
-   nothing.
+   other clients wrote). Point out every action with `"cluster_scoped": true`
+   (`[cluster-scoped]` in the text): a ClusterRole or ClusterRoleBinding
+   grants permissions across the whole cluster. A plan whose `summary` has
+   only `no-op` changes nothing.
 3. Wait for the owner to approve **that plan hash**. A plan expires after
    `approval_window_seconds`; if it did, plan again and ask again.
 4. Run `piceli release apply --spec release.toml --approve <hash>`.
@@ -169,7 +176,19 @@ unattended CI job for this exact spec.
 1. Run `piceli deploy MODULE:ATTR --plan --json`. The last line is the result
    with `combined_hash` and every stage's plan.
 2. Show the owner the stderr summary: which builds run, which images are
-   delivered, the release's `create`/`apply`/`delete` lines and the checks.
+   delivered and which third-party images are mirrored (`deliver  mirror …`,
+   `stages.deliver.mirrors` in the JSON), the registry's `adopt`/`replace`
+   lines when a live node-loopback registry is taken over (and whether its
+   data is kept, `stages.deliver.registry.existing`), the release's
+   `create`/`adopt`/`replace`/`apply`/`delete` lines and the checks. While
+   the images are not built or delivered, those lines come from `stages.plan.preview`, computed with placeholder images
+   (`approvable: false`). The combined hash then approves the build, the
+   delivery and a release that adopts, replaces or deletes at most what the
+   preview showed. Never pass the preview's `preview_hash` to `--approve`
+   (refused with `pipeline-preview-not-approvable`). If the owner wants to
+   see the real release plan first, approve `--until deliver`, then plan
+   again. A refused plan with `"preview"` and `blocking` means nothing was
+   built: report each object's `suggest` flags to the owner.
 3. After the owner approves **that combined hash**, run
    `piceli deploy MODULE:ATTR --approve <hash> --json`. Each stdout line is
    one stage event; the last one is the result.
@@ -177,7 +196,32 @@ unattended CI job for this exact spec.
    means a stage ran but did not succeed (`reason` names it; with
    `rollback_on_failed_checks` the result's `checks.rollback` says what was
    restored). Exit `2` with `pipeline-plan-changed` means something changed
-   since the plan: plan and ask again.
+   since the plan: plan and ask again. Exit `2` with
+   `pipeline-preview-changed` means the release plan computed after delivery
+   adopts, replaces or deletes an object the approved preview did not show;
+   nothing was applied: plan again (build and delivery are skipped), show the
+   owner the real release plan and ask again.
+
+5. `pipeline-registry-takeover-required` means a registry already runs on
+   the node. Never add `adopt=` or `replace=` to the pipeline yourself: tell
+   the owner which Deployment holds the port and let them choose
+   (`adopt` keeps it and its data in place; `replace` backs it up, deletes
+   and recreates it). Registry credentials for `mirror_credentials=` are files
+   the owner provides; never create, read or print them.
+
+**Deploying a commit.** When the working tree is shared or dirty, or the
+owner asked for a specific commit, add `--ref SOURCE=REV` (or a bare
+`--ref REV` when all sources are one repository) to the `--plan` command.
+The result's `refs` maps each source to the resolved SHA; show it to the
+owner with the plan. Approve with exactly the command `--plan` prints: it
+repeats `--ref` with the **SHA**, not the branch, so a branch that moved
+after the approval is refused (`pipeline-plan-changed`) instead of deployed.
+`--resume` takes no `--ref` (it reuses the run's commits). With `--ref`, the
+pipeline module's Python files must match the commit
+(`deploy-ref-model-differs`): report it, never commit or stash the owner's
+changes yourself. In CI, the approval is a protected environment and the
+apply job passes the plan job's `combined_hash` (see {doc}`ci`); an agent
+never approves that environment on the owner's behalf.
 
 (agents-pipeline-release)=
 ### Operating a pipeline's release
@@ -239,6 +283,12 @@ never build. The approval rules above apply unchanged:
   never on the command line or in logs.
 - Error codes never contain secrets or private paths, so they are safe to
   report.
+- Never put a secret in a build's smoke check (`smoke.env`, `command`,
+  `entrypoint`): the smoke table is printed by `preview` and recorded in the
+  receipt and the plan hash. Values that look like secret references are
+  refused (`smoke-env-secret`). A `smoke-output-mismatch` excerpt appears on
+  stderr and in the build log only; report the code and the `unmatched`
+  streams, and quote the excerpt only if the owner asks.
 
 ## Cluster access
 
@@ -250,6 +300,11 @@ accepted (`observe`, `operator`, `artifacts deliver --via-forward`), and a
 missing context is a usage error (exit `2`), never a fallback to the file's
 `current-context`. Do not change the kubeconfig or context an owner has set
 in a spec, and do not pick a context yourself: ask the owner which one to use.
+
+An app with `cluster_rules` (typed RBAC, {doc}`typed_apps`) needs a
+kubeconfig user that may list and write ClusterRoles and ClusterRoleBindings.
+When planning fails because that discovery is denied, report it to the owner;
+do not switch to a more privileged context yourself.
 
 Never add or change `allow_exec`, `exec_sha256` or `exec_pass_env` in a spec
 or in a pipeline's `Target`, or pass `--allow-exec`/`--exec-sha256`, yourself: allowing an exec credential plugin runs a program with the owner's

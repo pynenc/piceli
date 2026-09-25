@@ -52,6 +52,8 @@ class FakeDocker:
         self.on_build: Any = None
         self.smoke_exit = 0
         self.smoke_state = "succeeded"
+        self.smoke_stdout = b"self-test output\n"
+        self.smoke_stderr = b""
         self.salt = ""
 
     def __call__(
@@ -79,11 +81,17 @@ class FakeDocker:
             return ok, b"", b""
         if command[:1] == ["run"]:
             if on_output is not None:
-                on_output("stdout", b"self-test output\n")
+                on_output("stdout", self.smoke_stdout)
+                if self.smoke_stderr:
+                    on_output("stderr", self.smoke_stderr)
             state = self.smoke_state
             if state == "succeeded" and self.smoke_exit:
                 state = "failed"
-            return {**ok, "state": state, "exit_code": self.smoke_exit}, b"", b""
+            return (
+                {**ok, "state": state, "exit_code": self.smoke_exit},
+                self.smoke_stdout,
+                self.smoke_stderr,
+            )
         if command[:2] == ["buildx", "version"]:
             return ok, b"github.com/docker/buildx v0.99.0 fake\n", b""
         if command[:2] == ["context", "show"]:

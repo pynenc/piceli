@@ -28,7 +28,13 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from piceli.pipeline.compose import pinned_images, release_spec, used_handles
+from piceli.pipeline.compose import (
+    mirror_repository,
+    mirrors,
+    pinned_images,
+    release_spec,
+    used_handles,
+)
 from piceli.pipeline.errors import PipelineError
 
 if TYPE_CHECKING:
@@ -58,6 +64,33 @@ def delivery_receipt(
     return path, receipt
 
 
+def mirror_path(state_dir: Path, key: str, repository: str) -> Path:
+    """The receipt of one mirrored image copied to one repository."""
+    import hashlib
+
+    name = hashlib.sha256(f"{key}\n{repository}".encode()).hexdigest()[:32]
+    return state_dir / "mirrors" / f"{name}.json"
+
+
+def mirror_receipt(
+    state_dir: Path, key: str, repository: str
+) -> tuple[Path, dict[str, Any]] | None:
+    """The succeeded mirror receipt of exactly this source and repository, if any."""
+    path = mirror_path(state_dir, key, repository)
+    try:
+        receipt = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    if (
+        not isinstance(receipt, dict)
+        or receipt.get("state") != "succeeded"
+        or (receipt.get("source") or {}).get("reference") != key
+        or (receipt.get("target") or {}).get("repository") != repository
+    ):
+        return None
+    return path, receipt
+
+
 def _build_receipt(pipeline: Pipeline, name: str) -> dict[str, Any] | None:
     path = pipeline.state_dir / "builds" / name / "receipt.json"
     try:
@@ -74,7 +107,8 @@ def delivered_images(
 
     ``images`` holds every digest-pinned image of the app and each build
     image whose last build was delivered; ``missing`` names the build images
-    the app uses that have none. With ``current`` a build's images count only
+    the app uses that have none, and ``mirror <reference>`` for each
+    ``mirror=`` entry without a succeeded copy. With ``current`` a build's images count only
     when its receipt was built from the current build inputs (the staged
     files' plan hash), as ``piceli deploy`` would use them.
     """
@@ -122,6 +156,12 @@ def delivered_images(
             images[name] = load_delivery_receipt(name, found[0])
         except ImageHandoffError:
             missing.append(name)
+    for key in mirrors(pipeline):
+        if (
+            mirror_receipt(pipeline.state_dir, key, mirror_repository(pipeline, key))
+            is None
+        ):
+            missing.append(f"mirror {key}")
     return images, missing
 
 
@@ -138,7 +178,7 @@ def operations_spec(pipeline: Pipeline, *, current: bool) -> PipelineReleaseSpec
     if current and missing:
         raise PipelineError(
             "pipeline-not-delivered",
-            f"build image(s) {', '.join(missing)} of the current sources were "
+            f"image(s) {', '.join(missing)} of the current sources were "
             "not delivered yet; run `piceli deploy` (it builds and delivers only "
             "what changed)",
         )

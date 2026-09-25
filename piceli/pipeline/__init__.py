@@ -27,6 +27,7 @@ from piceli.pipeline.model import (
     NodeLoopbackRegistry,
     Pipeline,
     Registry,
+    Smoke,
     Target,
     TargetNode,
 )
@@ -51,6 +52,7 @@ __all__ = [
     "Random",
     "Registry",
     "Secrets",
+    "Smoke",
     "Static",
     "Target",
     "TargetNode",

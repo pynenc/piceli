@@ -18,8 +18,9 @@ images loaded into the local Docker engine.
   check, re-hashes every staged file (a change to one fails the build; other
   files of the checkout may change and are only recorded as provenance),
   extracts outputs and returns a `BuildReceipt` (``piceli.build-receipt.v1``).
-  Receipts never contain process output, environment values or absolute
-  paths.
+  Receipts never contain process output, values of the caller's environment
+  or absolute paths. They do record each smoke declaration, whose ``env``
+  holds plain, non-secret values by contract.
 
 Importing this module runs nothing.
 """
@@ -115,6 +116,17 @@ _TAG = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,100}")
 _TAG_PLACEHOLDER = re.compile(r"\{image_id(?::([0-9]{1,2}))?\}")
 PENDING_TAG_PREFIX = "piceli-pending-"
 MAX_SMOKE_SECONDS = 600.0
+MAX_SMOKE_ENV = 64
+MAX_SMOKE_PATTERN = 1024
+SMOKE_CAPTURE_BYTES = 256 * 1024
+"""Only the first bytes of each smoke output stream are matched (bounded)."""
+SMOKE_EXCERPT_CHARS = 400
+# Values that name secret material in a store rather than holding a plain
+# value. Smoke env is recorded in plans and receipts, so it must stay plain.
+_SECRET_REFERENCE = re.compile(
+    r"(?i)(?:(?:secrets?|vault|op|sops|awssm|gcpsm|azkv|keyvault|k8s-secret)://"
+    r"|secrets?:)"
+)
 _DIGEST = re.compile(r"sha256:[a-f0-9]{64}")
 _USER = re.compile(r"[A-Za-z0-9_.-]{1,64}(?::[A-Za-z0-9_.-]{1,64})?")
 _BUILDER_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}")
@@ -213,8 +225,21 @@ def _tag(value: Any) -> str:
     return value
 
 
-def _smoke(value: Any) -> SmokeCheck:
-    _keys(value, {"command"}, {"expect_exit", "timeout_seconds"}, "smoke")
+def parse_smoke(value: Any) -> SmokeCheck:
+    """Validate one ``smoke`` table (TOML or the Python pipeline API)."""
+    _keys(
+        value,
+        {"command"},
+        {
+            "expect_exit",
+            "timeout_seconds",
+            "env",
+            "entrypoint",
+            "expect_stdout",
+            "expect_stderr",
+        },
+        "smoke",
+    )
     command = value["command"]
     if not isinstance(command, list) or (command and not _argv(command, "smoke")):
         raise _fail("smoke.command must be a list of strings")
@@ -224,7 +249,38 @@ def _smoke(value: Any) -> SmokeCheck:
     seconds = value.get("timeout_seconds", 60)
     if type(seconds) not in (int, float) or not 0 < seconds <= MAX_SMOKE_SECONDS:
         raise _fail(f"smoke.timeout_seconds must be in (0, {MAX_SMOKE_SECONDS:g}]")
-    return SmokeCheck(tuple(command), expect, float(seconds))
+    env = value.get("env", {})
+    if not isinstance(env, dict) or len(env) > MAX_SMOKE_ENV:
+        raise _fail(f"smoke.env must be a table of at most {MAX_SMOKE_ENV} strings")
+    entrypoint = value.get("entrypoint")
+    return SmokeCheck(
+        tuple(command),
+        expect,
+        float(seconds),
+        env=tuple(env.items()),
+        entrypoint=(
+            _argv(entrypoint, "smoke.entrypoint") if entrypoint is not None else None
+        ),
+        expect_stdout=value.get("expect_stdout"),
+        expect_stderr=value.get("expect_stderr"),
+    )
+
+
+def _smoke_pattern(value: Any, what: str) -> None:
+    if not isinstance(value, str) or not 0 < len(value) <= MAX_SMOKE_PATTERN:
+        raise _fail(f"{what} must be a regular expression of 1-{MAX_SMOKE_PATTERN}")
+    try:
+        re.compile(value, re.MULTILINE)
+    except re.error:
+        raise _fail(f"{what} is not a valid regular expression") from None
+
+
+def _excerpt(data: bytes) -> str:
+    """A one-line, escaped, truncated view of captured output (human text only)."""
+    text = data[: SMOKE_EXCERPT_CHARS * 4].decode(errors="replace")
+    cut = text[:SMOKE_EXCERPT_CHARS]
+    rendered = json.dumps(cut, ensure_ascii=True)
+    return rendered + (" …" if len(data) > len(cut.encode()) else "")
 
 
 def _mapping(value: Any, what: str) -> dict[str, str]:
@@ -335,20 +391,74 @@ class SmokeCheck:
     """A command run in the built image after the build; see `_Execution`.
 
     ``command`` is appended after the image (it replaces ``CMD`` and keeps the
-    entrypoint; empty runs the image's default). The container has no
-    network, a read-only root filesystem, no capabilities and a bounded time.
+    entrypoint; empty runs the image's default). ``entrypoint`` replaces the
+    image's entrypoint (and, as with ``docker run --entrypoint``, its
+    ``CMD``). ``env`` holds plain, non-secret values: they are part of the
+    plan hash and are recorded in previews and receipts. ``expect_stdout`` and
+    ``expect_stderr`` are regular expressions searched (``re.MULTILINE``) in
+    the first `SMOKE_CAPTURE_BYTES` of each stream once the exit code matches.
+    The container has no network, a read-only root filesystem, no
+    capabilities, bounded memory and processes, and a bounded time.
     """
 
     command: tuple[str, ...]
     expect_exit: int = 0
     timeout_seconds: float = 60.0
+    env: tuple[tuple[str, str], ...] = ()
+    entrypoint: tuple[str, ...] | None = None
+    expect_stdout: str | None = None
+    expect_stderr: str | None = None
+
+    def __post_init__(self) -> None:
+        keys = [key for key, _ in self.env]
+        if len(keys) > MAX_SMOKE_ENV or len(set(keys)) != len(keys):
+            raise _fail("smoke.env must have unique names")
+        for key, item in self.env:
+            _match(_ENV_KEY, key, "smoke.env name")
+            if isinstance(item, str) and _SECRET_REFERENCE.match(item):
+                raise BuildSpecError(
+                    "smoke-env-secret",
+                    f"smoke.env {key} looks like a secret reference; smoke env is "
+                    "recorded in plans and receipts and must hold plain values",
+                )
+            _match(_ENV_VALUE, item, "smoke.env value")
+        if self.entrypoint is not None:
+            _argv(list(self.entrypoint), "smoke.entrypoint")
+        if self.expect_stdout is not None:
+            _smoke_pattern(self.expect_stdout, "smoke.expect_stdout")
+        if self.expect_stderr is not None:
+            _smoke_pattern(self.expect_stderr, "smoke.expect_stderr")
+
+    def unmatched(self, stdout: bytes, stderr: bytes) -> list[str]:
+        """The streams whose expectation is not found in the bounded capture."""
+        missing = []
+        for stream, pattern, data in (
+            ("stdout", self.expect_stdout, stdout),
+            ("stderr", self.expect_stderr, stderr),
+        ):
+            if pattern is None:
+                continue
+            text = data[:SMOKE_CAPTURE_BYTES].decode(errors="replace")
+            if re.search(pattern, text, re.MULTILINE) is None:
+                missing.append(stream)
+        return missing
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        # New fields appear only when set, so existing specs keep their digest.
+        result: dict[str, Any] = {
             "command": list(self.command),
             "expect_exit": self.expect_exit,
             "timeout_seconds": self.timeout_seconds,
         }
+        if self.env:
+            result["env"] = dict(self.env)
+        if self.entrypoint is not None:
+            result["entrypoint"] = list(self.entrypoint)
+        if self.expect_stdout is not None:
+            result["expect_stdout"] = self.expect_stdout
+        if self.expect_stderr is not None:
+            result["expect_stderr"] = self.expect_stderr
+        return result
 
 
 @dataclass(frozen=True)
@@ -921,7 +1031,7 @@ class BuildSpec:
                     _match(_NAME, item["target"], "target")
                     if "target" in item
                     else None,
-                    _smoke(item["smoke"]) if "smoke" in item else None,
+                    parse_smoke(item["smoke"]) if "smoke" in item else None,
                 )
             )
         pinned = document.get("images", {})
@@ -1310,6 +1420,17 @@ class BuildSpec:
                 "buildx_builder": execution.builder_name,
             },
             "outputs": outputs,
+            **(
+                {
+                    "smoke": {
+                        item.name: item.smoke.to_dict()
+                        for item in self.images
+                        if item.smoke
+                    }
+                }
+                if any(item.smoke for item in self.images)
+                else {}
+            ),
             "steps": list(execution.steps),
             "started_at": started_at,
             "finished_at": _now(),
@@ -1325,8 +1446,20 @@ class BuildSpec:
         docker: str = "docker",
         name: str = "piceli-smoke-<nonce>",
     ) -> list[str]:
-        """``docker run`` for an image's smoke check: isolated and bounded."""
-        assert image.smoke is not None
+        """``docker run`` for an image's smoke check: isolated and bounded.
+
+        Declared options use the single-argument ``--flag=value`` form, so a
+        value can never be read as another option; ``--env`` always carries
+        ``NAME=value`` (never a bare name that would copy the caller's
+        environment).
+        """
+        smoke = image.smoke
+        assert smoke is not None
+        declared = [f"--env={key}={value}" for key, value in smoke.env]
+        entry: tuple[str, ...] = ()
+        if smoke.entrypoint is not None:
+            declared.append(f"--entrypoint={smoke.entrypoint[0]}")
+            entry = smoke.entrypoint[1:]
         return [
             docker,
             "run",
@@ -1350,8 +1483,10 @@ class BuildSpec:
             "256",
             "--memory",
             "512m",
+            *declared,
             image_id,
-            *image.smoke.command,
+            *entry,
+            *smoke.command,
         ]
 
 
@@ -1470,7 +1605,7 @@ class _Execution:
         seconds: float,
         *,
         step: dict[str, Any] | None = None,
-    ) -> tuple[dict[str, Any], bytes]:
+    ) -> tuple[dict[str, Any], bytes, bytes]:
         if self.cancel is not None and self.cancel.is_set():
             raise BuildSpecError(
                 "cancelled", "build cancelled", steps=tuple(self.steps)
@@ -1484,7 +1619,7 @@ class _Execution:
             self.log.say(
                 f"[piceli] {len(self.steps) + 1}/{self.total} {label}: running"
             )
-        receipt, stdout, _ = self.runner(
+        receipt, stdout, stderr = self.runner(
             [str(self.docker.tool.path), *argv[1:]],
             cwd,
             ProcessLimits(seconds, PROCESS_OUTPUT_BUDGET),
@@ -1493,10 +1628,14 @@ class _Execution:
             on_output=self.log.feed if step is not None else None,
         )
         self.docker.tool.verify()
-        return receipt, stdout
+        return receipt, stdout, stderr
 
     def _record(
-        self, step: dict[str, Any], receipt: Mapping[str, Any], state: str
+        self,
+        step: dict[str, Any],
+        receipt: Mapping[str, Any],
+        state: str,
+        **extra: Any,
     ) -> None:
         seconds = round(float(receipt["seconds"]), 3)
         self.steps.append(
@@ -1505,6 +1644,7 @@ class _Execution:
                 "state": state,
                 "exit_code": receipt["exit_code"],
                 "seconds": seconds,
+                **extra,
             }
         )
         label = f"{step['platform']} {step['kind']}"
@@ -1522,7 +1662,7 @@ class _Execution:
         *,
         step: dict[str, Any] | None = None,
     ) -> bytes:
-        receipt, stdout = self._run(argv, cwd, seconds, step=step)
+        receipt, stdout, _ = self._run(argv, cwd, seconds, step=step)
         if step is not None:
             self._record(step, receipt, receipt["state"])
         if receipt["state"] != "succeeded":
@@ -1639,15 +1779,44 @@ class _Execution:
     def _smoke(
         self, image: ImageOutput, platform: str, image_id: str, staging: Path
     ) -> None:
-        """Run the image's smoke check; a wrong exit code rejects the build."""
-        assert image.smoke is not None
+        """Run the image's smoke check; a wrong exit code or output rejects the build.
+
+        The exit code is checked first; then ``expect_stdout``/``expect_stderr``
+        against the bounded capture. A mismatch names the streams in the step
+        (``unmatched``) and shows a short escaped excerpt on the progress sink
+        and in the build log only, never in the error, JSON or receipt.
+        """
+        smoke = image.smoke
+        assert smoke is not None
         name = f"piceli-smoke-{self.nonce}-{len(self.steps)}"
         step = {"platform": platform, "kind": f"smoke:{image.name}"}
         argv = self.spec.smoke_argv(image, platform, image_id, name=name)
-        receipt, _ = self._run(argv, staging, image.smoke.timeout_seconds, step=step)
+        receipt, stdout, stderr = self._run(
+            argv, staging, smoke.timeout_seconds, step=step
+        )
         state = receipt["state"]
         finished = state in {"succeeded", "failed"}
-        passed = finished and receipt["exit_code"] == image.smoke.expect_exit
+        passed = finished and receipt["exit_code"] == smoke.expect_exit
+        unmatched = smoke.unmatched(stdout, stderr) if passed else []
+        if unmatched:
+            self._record(step, receipt, "failed", unmatched=unmatched)
+            for stream in unmatched:
+                data = stdout if stream == "stdout" else stderr
+                pattern = (
+                    smoke.expect_stdout if stream == "stdout" else smoke.expect_stderr
+                )
+                text = (
+                    f"[piceli] smoke:{image.name}: {stream} did not match "
+                    f"{json.dumps(pattern)} ({len(data)} bytes); starts with "
+                    f"{_excerpt(data)}"
+                )
+                self.log.line(text)
+                self.log.say(text)
+            raise BuildSpecError(
+                "smoke-output-mismatch",
+                f"smoke output did not match ({', '.join(unmatched)})",
+                steps=tuple(self.steps),
+            )
         self._record(
             step, receipt, "succeeded" if passed else "failed" if finished else state
         )
@@ -1844,7 +2013,13 @@ def add_build_spec_commands(subparsers: Any) -> None:
 
 
 FAILED_CODES = frozenset(
-    {"build-failed", "build-timed-out", "smoke-failed", "smoke-timed-out"}
+    {
+        "build-failed",
+        "build-timed-out",
+        "smoke-failed",
+        "smoke-timed-out",
+        "smoke-output-mismatch",
+    }
 )
 
 

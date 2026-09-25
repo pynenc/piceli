@@ -5,13 +5,14 @@
 Rules for agents:
 
 - Run `piceli help-json` for every command's options, side effects, approval rules and retry safety; do not guess flags.
-- Plan before apply and never approve on the owner's behalf: show the owner the plan (`piceli deploy … --plan`, `piceli release plan`) and run `--approve <hash>` only after they approved that exact hash. Never add `--auto-approve` unless the owner said this is an unattended CI run for this exact target.
+- Plan before apply and never approve on the owner's behalf: show the owner the plan (`piceli deploy … --plan`, `piceli release plan`) and run `--approve <hash>` only after they approved that exact hash. Before the images exist, `deploy --plan` shows a release preview with placeholder images (`stages.plan.preview`, `approvable: false`): approve the `combined_hash`, never the `preview_hash`. Never add `--auto-approve` unless the owner said this is an unattended CI run for this exact target.
 - Parse JSON from stdout; human text is on stderr. Exit codes: 0 success, 1 ran but did not succeed, 2 rejected before any change, 3 approval required.
 - On a refusal read `reason` and run `piceli explain <reason> --json` (cause, fix, retry_safe).
 - Never read or print secret values; never rely on `~/.kube/config`, `KUBECONFIG` or the current context, and never pick or change a kube context, `allow_exec` or exec-plugin pins yourself: ask the owner.
 - After an interruption, resume (`piceli deploy … --resume`, `piceli release resume`) instead of planning a new run.
+- To deploy committed code from a dirty or shared tree, plan with `--ref SOURCE=REV` and approve with the exact command `--plan` prints (it pins the resolved SHA); `--resume` reuses the run's commits and takes no `--ref`.
 
-Minimal workflow: `piceli render app.py:app --namespace NS` (no cluster) → `piceli deploy app.py:pipeline --plan --json` → owner approves → `piceli deploy app.py:pipeline --approve <combined_hash> --json` → `piceli status app.py:pipeline --json`.
+Minimal workflow: `piceli render app.py:pipeline` (no cluster; the target's namespace and nodes) → `piceli deploy app.py:pipeline --plan --json` → owner approves → `piceli deploy app.py:pipeline --approve <combined_hash> --json` → `piceli status app.py:pipeline --json`.
 
 ## Start here
 
@@ -23,8 +24,9 @@ Minimal workflow: `piceli render app.py:app --namespace NS` (no cluster) → `pi
 ## Docs
 
 - [Overview and architecture](https://docs.pynenc.org/projects/piceli/en/latest/overview.html): model, plan, execute, observe; the engine; design principles; glossary
-- [Describe an app in typed Python](https://docs.pynenc.org/projects/piceli/en/latest/typed_apps.html): `piceli.App` deployments, services, config, secrets, volumes, network policies, dependencies; `piceli render`
-- [Deploy an app from source](https://docs.pynenc.org/projects/piceli/en/latest/deploy.html): `piceli deploy MODULE:ATTR`, one journaled run of inputs, build, deliver, plan, apply and checks; `--plan`, `--approve`, `--resume`, `--until`, `--json` events (`piceli.deploy-event.v1`)
+- [Describe an app in typed Python](https://docs.pynenc.org/projects/piceli/en/latest/typed_apps.html): `piceli.App` deployments, services, config, secrets, volumes, pod defaults (`PodDefaults`, `Security`), service accounts with typed RBAC (`Rule`; cluster-scoped objects are per namespace and flagged `cluster_scoped` in plans), label-selected network policies, dependencies; `piceli render`
+- [Deploy an app from source](https://docs.pynenc.org/projects/piceli/en/latest/deploy.html): `piceli deploy MODULE:ATTR`, one journaled run of inputs, build, deliver, plan, apply and checks; `--plan` (with a placeholder-image release preview and blocking objects before any build), `--approve`, `--resume`, `--until`, `--json` events (`piceli.deploy-event.v1`); `piceli render MODULE:pipeline`; `--ref [SOURCE=]REV` builds a commit instead of the working tree (the hash pins the SHA); mirror third-party images by digest (`NodeLoopbackRegistry(mirror=[…])`) and take over a live node registry (`adopt=`/`replace=`, owner's choice, part of the approved plan)
+- [Deploy from CI with an approval step](https://docs.pynenc.org/projects/piceli/en/latest/ci.html): GitHub Actions recipe: plan the pushed commit (`piceli deploy … --ref $GITHUB_SHA --plan --json`), approve through a protected environment, apply with `--ref <same sha> --approve <combined_hash>`, resume; kubeconfig from a 0600 secret file, self-hosted runners, concurrency
 - [Releases from a spec](https://docs.pynenc.org/projects/piceli/en/latest/release_cli.html): `piceli release` plan, apply, adopt, replace, roll back, resume, stop, status (`--spec release.toml`, or `--spec module.py:pipeline` for a pipeline's release); "If plan refuses"
 - [Check a release and roll back automatically](https://docs.pynenc.org/projects/piceli/en/latest/checks.html): `[[checks]]` and `piceli.checks` (http, exec, metric, Python), `rollback_on_failed_checks`, `piceli release check`
 - [How plans decide what changes](https://docs.pynenc.org/projects/piceli/en/latest/plans_and_diffs.html): no-op vs apply from server dry runs, field-level diffs, `piceli release diff`
@@ -34,7 +36,7 @@ Minimal workflow: `piceli render app.py:app --namespace NS` (no cluster) → `pi
 - [From kubectl scripts to Piceli](https://docs.pynenc.org/projects/piceli/en/latest/migrate_from_kubectl.html): `piceli import live|yaml` generates a typed module from existing objects; adopt them with `--adopt-all-desired`; `App.override`
 - [Test against a fake Kubernetes API](https://docs.pynenc.org/projects/piceli/en/latest/testing.html): `piceli.testing` for consumers' own tests, no cluster needed
 - [Source identity](https://docs.pynenc.org/projects/piceli/en/latest/source_identity.html): `piceli inputs record/verify` and source drift
-- [Containerized builds](https://docs.pynenc.org/projects/piceli/en/latest/containerized_builds.html): `build.toml`, pinned builders, build receipts, `piceli artifacts build-spec`
+- [Containerized builds](https://docs.pynenc.org/projects/piceli/en/latest/containerized_builds.html): `build.toml`, pinned builders, build receipts, `piceli artifacts build-spec`; isolated per-image smoke checks with exit code, plain `env`, `entrypoint`, `expect_stdout`/`expect_stderr` regexes (`smoke-output-mismatch`)
 - [Image delivery](https://docs.pynenc.org/projects/piceli/en/latest/node_delivery.html): `piceli artifacts deliver` to a registry (default) or a node, approved by config digest
 - [Node-local registry](https://docs.pynenc.org/projects/piceli/en/latest/node_local_registry.html): a registry one node pulls from without configuration
 - [Roadmap and feature status](https://docs.pynenc.org/projects/piceli/en/latest/roadmap.html): maturity of every feature

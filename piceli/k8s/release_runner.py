@@ -52,6 +52,8 @@ from piceli.checks import (
 )
 from piceli.k8s.ops.bounds import timestamp
 from piceli.k8s.ops.discovery import (
+    RELEASE_CLUSTER_KINDS,
+    RELEASE_NAMESPACE_ANNOTATION,
     RETAINED_KINDS,
     DiscoveryArtifact,
     DiscoveryLimits,
@@ -60,7 +62,7 @@ from piceli.k8s.ops.discovery import (
     ResourceType,
     capture_discovery,
 )
-from piceli.k8s.ops.dry_run import capture_server_dry_runs
+from piceli.k8s.ops.dry_run import capture_server_dry_runs, probe_candidates
 from piceli.k8s.ops.execution_journal import ExecutionJournal
 from piceli.k8s.ops.executor import (
     ActionGrant,
@@ -71,6 +73,7 @@ from piceli.k8s.ops.executor import (
 from piceli.k8s.ops.field_diff import plan_diffs
 from piceli.k8s.ops.kubernetes_provider import ProviderError
 from piceli.k8s.ops.plan import (
+    DeploymentComponent,
     DeploymentComposition,
     DeploymentPlan,
     ObservedSnapshot,
@@ -232,6 +235,13 @@ def _grant(
         owner_id,
         tuple(ActionGrant.for_action(action) for action in plan.actions),
         expires_at,
+        # The approved plan hash covers every action, cluster-scoped ones
+        # included (each is listed with ``cluster_scoped`` in the plan).
+        cluster_resources=tuple(
+            action.resource.ref
+            for action in plan.actions
+            if not action.resource.ref.namespace
+        ),
         compensation_resources=tuple(
             action.resource.ref
             for action in plan.actions
@@ -317,6 +327,72 @@ def _declared_match(
 
 def _label(ref: ResourceRef) -> str:
     return f"{ref.kind}/{ref.name}"
+
+
+def scoped_composition(
+    composition: DeploymentComposition, namespace: str
+) -> DeploymentComposition:
+    """Check a release composition's scope; stamp its cluster-scoped objects.
+
+    Namespaced objects must target ``namespace``. Cluster-scoped objects must
+    be of a kind in :data:`~piceli.k8s.ops.discovery.RELEASE_CLUSTER_KINDS`
+    (ClusterRole, ClusterRoleBinding); each gets the
+    ``piceli.io/namespace: <namespace>`` annotation (typed apps render it)
+    so that only this namespace's release manages it. An object that already
+    names another namespace is refused.
+
+    :raises ReleaseSpecError: ``invalid-composition``.
+    """
+    components = []
+    for component in composition.components:
+        resources = []
+        for resource in component.resources:
+            ref = resource.ref
+            if ref.namespace:
+                if ref.namespace != namespace:
+                    raise ReleaseSpecError(
+                        f"{ref.kind}/{ref.name} targets namespace {ref.namespace!r}",
+                        code="invalid-composition",
+                    )
+                resources.append(resource)
+                continue
+            if (ref.api_version, ref.kind) not in RELEASE_CLUSTER_KINDS:
+                raise ReleaseSpecError(
+                    "cluster-scoped resources other than rbac.authorization.k8s.io/v1 "
+                    "ClusterRole and ClusterRoleBinding are not supported by "
+                    f"releases: {ref.kind}/{ref.name}",
+                    code="invalid-composition",
+                )
+            manifest = resource.manifest
+            metadata = manifest.setdefault("metadata", {})
+            annotations = metadata.get("annotations") or {}
+            declared = annotations.get(RELEASE_NAMESPACE_ANNOTATION)
+            if declared is not None and declared != namespace:
+                raise ReleaseSpecError(
+                    f"{ref.kind}/{ref.name} is annotated "
+                    f"{RELEASE_NAMESPACE_ANNOTATION}={declared!r}, but the release "
+                    f"namespace is {namespace!r}",
+                    code="invalid-composition",
+                )
+            if declared is None:
+                if resource.secret_bindings:
+                    raise ReleaseSpecError(
+                        f"{ref.kind}/{ref.name}: cluster-scoped objects cannot "
+                        "bind secret values",
+                        code="invalid-composition",
+                    )
+                metadata["annotations"] = {
+                    **annotations,
+                    RELEASE_NAMESPACE_ANNOTATION: namespace,
+                }
+                resource = ResourceIntent.from_manifest(manifest, resource.dependencies)
+            resources.append(resource)
+        components.append(
+            DeploymentComponent(
+                component.name, tuple(resources), component.dependencies
+            )
+        )
+    return DeploymentComposition(tuple(components))
 
 
 @dataclass(frozen=True)
@@ -551,6 +627,7 @@ def _compact_actions(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
             ),
             **({"replace": action["replace"]} if "replace" in action else {}),
             **({"removes": action["removes"]} if "removes" in action else {}),
+            **({"cluster_scoped": True} if not action["resource"]["namespace"] else {}),
         }
         for action in plan["actions"]
     ]
@@ -886,21 +963,7 @@ class ReleaseRunner:
                     "the composition function must return an App or a DeploymentComposition",
                     code="invalid-composition",
                 )
-            for component in composition.components:
-                for resource in component.resources:
-                    if not resource.ref.namespace:
-                        raise ReleaseSpecError(
-                            "cluster-scoped resources are not supported by "
-                            f"releases: {resource.ref.kind}/{resource.ref.name}",
-                            code="invalid-composition",
-                        )
-                    if resource.ref.namespace != self.spec.model.target.namespace:
-                        raise ReleaseSpecError(
-                            f"{resource.ref.kind}/{resource.ref.name} targets "
-                            f"namespace {resource.ref.namespace!r}",
-                            code="invalid-composition",
-                        )
-            return composition
+            return scoped_composition(composition, self.spec.model.target.namespace)
 
         return factory
 
@@ -1289,6 +1352,90 @@ class ReleaseRunner:
             "dry_run_unavailable": unavailable,
         }
 
+    def placeholder_preview(
+        self, *, skip_dry_run: Callable[[ResourceIntent], bool]
+    ) -> dict[str, Any]:
+        """The structure and ownership of a release whose images do not exist yet.
+
+        The spec's images are placeholders, so the result is evidence only:
+        nothing is persisted (no plan, release, secret or discovery file), no
+        secret is generated, imported or read, and the cluster receives only
+        reads plus ``dryRun=All`` patches of managed objects for which
+        ``skip_dry_run`` is false (objects carrying a placeholder are never
+        sent). Ownership is resolved exactly as :meth:`plan` does, so an
+        object that needs adoption or replacement raises the same
+        :class:`ReleaseError` with its ``blocking`` list.
+        """
+        spec = self.spec.model
+        settings = spec.release
+        requested = _Ownership(
+            tuple(dict.fromkeys(settings.adopt)),
+            tuple(dict.fromkeys(settings.replace)),
+        )
+        images = self.spec.images()
+        function = self.spec.load_composition()
+        binding = self.provider_factory(self.spec)
+        try:
+            catalog = ReleaseCatalog(self.spec.catalog_path)
+            self._check_target(catalog, binding.target)
+            factory = self._factory(function, images, self._nodes(binding))
+            composition, _material = self._preview_composition(factory)
+            records = sorted(record.name for record in catalog.records())
+            kinds = self._kinds(composition)
+            if settings.prune:
+                for record in catalog.records():
+                    kinds |= self._kinds(composition_from_archive(record.archive))
+            artifact = self._discover(binding, kinds)
+            skipped = sorted(
+                {
+                    (resource.ref.kind, resource.ref.name)
+                    for resource, _current in probe_candidates(composition, artifact)
+                    if skip_dry_run(resource)
+                }
+            )
+            artifact, unavailable = capture_server_dry_runs(
+                binding.provider,
+                artifact,
+                composition,
+                deadline=time.monotonic() + spec.discovery.max_seconds,
+                exclude=skip_dry_run,
+            )
+            snapshot = ObservedSnapshot.from_discovery(artifact)
+            inherited = list(settings.inherited_owners)
+            resolved = requested.resolve(
+                composition, snapshot, inherited, settings.field_manager
+            )
+            plan = build_plan(
+                composition,
+                snapshot,
+                _plan_authorization(
+                    binding.target,
+                    prune=settings.prune,
+                    adopt=resolved.adopt,
+                    inherited=inherited,
+                    field_manager=settings.field_manager,
+                    replace=resolved.replace,
+                    previous=_previous_declared(catalog, records),
+                ),
+            )
+        finally:
+            binding.close()
+        summary = plan.summary()
+        return {
+            "summary": _summary(summary),
+            "actions": _compact_actions(summary),
+            "drift": _drift(
+                composition, snapshot, settings.field_manager, resolved.adopt
+            ),
+            "authorized": requested.report(resolved),
+            "adopt_not_needed": resolved.adopt_not_needed,
+            "dry_run_skipped": [
+                {"kind": kind, "name": name, "reason": "dry-run-placeholder-image"}
+                for kind, name in skipped
+            ],
+            "dry_run_unavailable": [item.to_dict() for item in unavailable],
+        }
+
     def resolve_rollback_target(
         self, target: str, catalog: ReleaseCatalog | None = None
     ) -> str:
@@ -1453,6 +1600,12 @@ class ReleaseRunner:
                     # Earlier releases whose declarations the plan's field
                     # removals are computed from (records are immutable).
                     "previous_releases": previous_releases,
+                    # A pipeline's sources (commit, dirty, --ref); not hashed.
+                    **(
+                        {"provenance": dict(provenance)}
+                        if (provenance := getattr(self.spec, "provenance", None))
+                        else {}
+                    ),
                 }
             )
             + "\n",
@@ -2234,6 +2387,11 @@ class ReleaseRunner:
                         "created_at": sidecar.get("created_at"),
                         "source": record.source.to_dict(),
                         "images": sidecar.get("images", {}),
+                        **(
+                            {"provenance": sidecar["provenance"]}
+                            if "provenance" in sidecar
+                            else {}
+                        ),
                         "revision_id": session["revision_id"],
                         "action_count": session["action_count"],
                         "executions": executions,
