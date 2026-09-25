@@ -354,14 +354,14 @@ Deploy a pipeline: inputs → build → deliver → plan → apply → checks.
 
 **Contract**
 
-- **Reads:** pipeline module, build specs and sources, docker, kubeconfig, state_dir
+- **Reads:** pipeline module, build specs and sources, docker, kubeconfig, state_dir, source registries of mirror= images (pull only), mirror_credentials files
 - **Writes:** state_dir (run journal, receipts, release catalog, secret store), local Docker image store, registry or node image store
 - **Cluster:** writes
 - **Approval required:** yes
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** --plan never changes the cluster, a registry or a node; --approve HASH executes exactly the combined plan; --resume continues the latest interrupted run without a new approval. Unchanged stages are skipped.
+- **Notes:** --plan never changes the cluster, a registry or a node (it reads the namespace's Deployments and the registry node for a NodeLoopbackRegistry); --approve HASH executes exactly the combined plan, including mirror= copies and a registry adopt=/replace=; --resume continues the latest interrupted run without a new approval. Unchanged stages are skipped.
 
 (cli-explain)=
 ### `piceli explain`

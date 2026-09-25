@@ -267,6 +267,19 @@ def _prune(manifest: dict[str, Any], removed: set[Path], kept: set[Path]) -> Non
             _remove_path(manifest, path)
 
 
+def _validation_error(body: Any) -> str | None:
+    """The API server's validation rules the fake models (a small subset)."""
+    if not isinstance(body, dict) or body.get("kind") != "Deployment":
+        return None
+    strategy = (body.get("spec") or {}).get("strategy") or {}
+    if strategy.get("type") == "Recreate" and strategy.get("rollingUpdate"):
+        return (
+            "spec.strategy.rollingUpdate: Forbidden: may not be specified when "
+            "strategy `type` is 'Recreate'"
+        )
+    return None
+
+
 # --- Server defaulting (opt-in: ``FakeAPI.server_defaults = True``) ----------
 #
 # What a real API server adds to every stored object, so that a live object
@@ -367,7 +380,9 @@ class FakeAPI:
     - ``ready``: whether Deployments report ready replicas;
     - ``wait_for_first_consumer``: claim names that stay ``Pending`` until a
       workload mounts them;
-    - ``types``: the served resources (default :data:`TYPES`).
+    - ``types``: the served resources (default :data:`TYPES`);
+    - ``nodes``: ``{name: Node manifest}`` served at ``/api/v1/nodes/NAME``
+      (read-only, not part of discovery); add one with :meth:`add_node`.
 
     Use :meth:`put` to seed objects and :meth:`inject` to add faults.
     """
@@ -387,6 +402,7 @@ class FakeAPI:
         self.ready = True
         self.wait_for_first_consumer: set[str] = set()
         self.version = 1
+        self.nodes: dict[str, dict[str, Any]] = {}
         self.put(manifest("Namespace", "kube-system"), uid="cluster-uid")
         self.put(manifest("Namespace", TARGET.namespace), uid="namespace-uid")
 
@@ -415,6 +431,22 @@ class FakeAPI:
                 ]
                 stored = copy.deepcopy(current)
         return stored
+
+    def add_node(
+        self, name: str, *, architecture: str = "arm64", uid: str | None = None
+    ) -> dict[str, Any]:
+        """Serve a Node (identity and ``status.nodeInfo``) for node-pinned releases."""
+        node = {
+            "apiVersion": "v1",
+            "kind": "Node",
+            "metadata": {"name": name, "uid": uid or uuid.uuid4().hex},
+            "status": {
+                "nodeInfo": {"architecture": architecture, "operatingSystem": "linux"}
+            },
+        }
+        with self.lock:
+            self.nodes[name] = node
+        return copy.deepcopy(node)
 
     def managers(self, kind: str, name: str) -> dict[str, set[Path]]:
         """Owned field paths by ``manager/operation`` (status excluded)."""
@@ -671,6 +703,9 @@ class FakeAPI:
                         if api == version
                     ],
                 }
+        if path.startswith("/api/v1/nodes/") and method == "GET":
+            node = self.nodes.get(path.rsplit("/", 1)[1])
+            return (200, copy.deepcopy(node)) if node is not None else (404, {})
         parts = path.split("/")
         found = [
             (index, self.types[part])
@@ -788,6 +823,9 @@ class FakeAPI:
                 ],
             }
         )
+        invalid = _validation_error(body)
+        if invalid is not None:
+            return 422, {"kind": "Status", "message": invalid}
         self._readiness(body)
         if query.get("dryRun") != ["All"]:
             self.version += 1
@@ -800,6 +838,9 @@ class FakeAPI:
     def _commit(
         self, query: dict[str, Any], kind: str, name: str, body: Any, status: int
     ) -> tuple[int, Any]:
+        invalid = _validation_error(body)
+        if invalid is not None:
+            return 422, {"kind": "Status", "message": invalid}
         if self.server_defaults:
             apply_server_defaults(body, self.objects.get((kind, name)))
         self._readiness(body)

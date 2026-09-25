@@ -110,9 +110,39 @@ collection (see below).
   `CAP_CHOWN`) gives the directory to `run_as_user`. With `run_as_user=None` the
   registry runs as the image user (root) and there is no init container.
 
+- `existing_claim="data"`: a claim that already exists. The template never
+  creates, changes or deletes it (like `ExistingClaim` in a typed app).
+
 The registry runs as UID/GID 65532 with a read-only root filesystem, no
 capabilities, no privilege escalation and the `RuntimeDefault` seccomp profile.
 The container writes only to the storage volume.
+
+## Multi-arch images
+
+By default the registry accepts an image index (a multi-arch image) only when
+every platform's manifest is present, as distribution does.
+`index_platforms=["linux/arm64"]` relaxes that to the listed platforms
+(`validation.manifests.indexes.platforms: list` in `config.yml`): an index
+keeps its digest while the registry holds only the manifests the node can run.
+`piceli deploy` sets it to the node's platform when the pipeline mirrors
+images (see {ref}`deploy-mirror`).
+
+## Take over a registry that already runs
+
+`selector={"app": "old-registry"}` keeps the selector of a Deployment that
+another owner created: Kubernetes never changes a Deployment's selector, so a
+release that adopts a live registry must declare the same one. With
+`name="old-registry"` and matching storage (`host_path=` or
+`existing_claim=`) the release adopts the live Deployment in place
+(`adopt = ["Deployment/old-registry"]` in `release.toml`) and the images on
+the node survive. A Deployment created without a strategy has
+`RollingUpdate`, which Kubernetes refuses to switch to `Recreate` while
+another client owns its settings; `rolling_update=True` keeps a rolling update
+with `maxSurge: 0` and `maxUnavailable: 1`, so the old pod still frees the
+port before the new one starts. `piceli deploy` does this for you with
+`NodeLoopbackRegistry(adopt="old-registry")`, after checking that the live
+registry is compatible, or recreates it with `replace="old-registry"`; see
+{ref}`deploy-registry-takeover`.
 
 ## Garbage collection
 

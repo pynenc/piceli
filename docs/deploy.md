@@ -220,9 +220,11 @@ re-applied. `--reapply` forces the apply.
 
 `--plan` prints one hash over every stage's plan: the build plan hashes,
 builders and network access, the delivery strategy and the known image
-digests, the registry release's actions, the release's actions (or, while the
-images are not built yet, the fingerprint of the rendered app), the checks,
-`--until` and the target identity. `--approve HASH` re-plans and runs only
+digests, the mirrored images (source digest, target repository, platform),
+the registry release's actions and any live registry it adopts or replaces,
+the release's actions (or, while the images are not built yet, the
+fingerprint of the rendered app), the checks, `--until` and the target
+identity. `--approve HASH` re-plans and runs only
 when the hash is unchanged; otherwise it is refused with
 `pipeline-plan-changed` and nothing runs. Stages whose plan depends on
 earlier outputs (the release plan after a build) run under that approval.
@@ -243,6 +245,139 @@ node-loopback registry holds a node's port: two pipelines on the same node
 need different `port=` values. See {doc}`node_delivery` for the delivery
 receipts. The release records the whole image set as its source identity
 (`ReleaseSource(kind="oci-set", images={name: digest})`).
+
+`NodeLoopbackRegistry` also takes `host_path="/srv/registry"` (keep the data
+in a node directory) or `existing_claim="name"` (keep it on a claim the
+registry release never creates, changes or deletes) instead of its own
+`<name>-storage` claim.
+
+(deploy-mirror)=
+
+### Mirror third-party images
+
+An image the app does not build (a cache, a database) is normally pulled by
+the node from its public registry. A node without internet access, or one
+that should pull everything from the node-loopback registry, needs a copy.
+Declare it on the delivery:
+
+```python
+REDIS = "docker.io/library/redis:7.4@sha256:<index digest>"
+
+app.deployment("cache", image=REDIS)
+pipeline = Pipeline(
+    app,
+    target,
+    build=images,
+    deliver=NodeLoopbackRegistry(port=5000, mirror=[REDIS]),
+)
+```
+
+- **Only digest-pinned references** are accepted. A tag without a digest is
+  refused with `pipeline-mirror-not-pinned`, before anything runs. A tag next
+  to the digest (`redis:7.4@sha256:…`) is informational. Short names are
+  normalized like `docker pull` does (`redis` is
+  `docker.io/library/redis`), so the app and `mirror=` may spell the image
+  differently.
+- **The deliver stage copies each image by digest** on the machine running
+  Piceli, over the OCI distribution API (no `docker pull`): it reads the
+  manifest by digest from the source registry, checks that its bytes hash to
+  that digest (`mirror-digest-mismatch` otherwise), copies the missing blobs
+  through the same supervised port-forward as built images, writes the
+  manifests and reads them back. The copy lives at
+  `127.0.0.1:<port>/mirror/<registry>/<repository>@<same digest>` and a
+  receipt (`piceli.mirror-delivery.v1`) is written to
+  `state_dir/mirrors/`.
+- **Multi-arch images keep their digest.** For an image index the index itself
+  is copied (so the digest the app pinned is the digest it pulls) with only
+  the manifest for the registry node's platform (`status.nodeInfo`, for
+  example `linux/arm64`). The pipeline configures the registry to accept an
+  index that holds only that platform (`validation.manifests.indexes` in its
+  `config.yml`; adding the first mirror restarts the registry once). An index
+  without the node's platform, or a single-platform image for another
+  platform, fails with `mirror-platform-unavailable` before anything is
+  written.
+- **The release pulls the copy.** Every container whose image is a mirrored
+  image is rewritten to the copy, with the same digest, and pinned to the
+  registry node like a workload using a built image. The release still records
+  the original digest in its `oci-set` source.
+- **Skipped when present.** Registries are content-addressed: a copy the
+  registry already serves (with a receipt) is `present` in the plan and not
+  copied again; a copy that exists without a receipt is verified and recorded
+  (`already-present`).
+- **Credentials** for a private source come from a private (`0600`) JSON file
+  per registry, `mirror_credentials={"ghcr.io": "ghcr.json"}`, in the format
+  of {doc}`node_delivery` (`{"username": …, "password": …}` or
+  `{"token": …}`); every other source is pulled anonymously. Credentials are
+  sent only to that registry's own origin, never to a redirect target (blob
+  storage), and are never written to a plan, event or receipt.
+- **Part of the combined hash**: the list (source digest, target repository
+  and platform) is in the deliver stage's plan, so adding or changing a mirror
+  needs a new approval.
+
+`Registry("oci://host/prefix", mirror=[…])` copies to
+`prefix/mirror/<registry>/<repository>` in that registry, with every platform
+of an index (the target registry may require them all), and the release
+pulls `<node_registry>/prefix/mirror/…@<digest>`. `NodeImport` has no
+`mirror=`: it imports images from the local engine; use
+`NodeLoopbackRegistry` for mirrors.
+
+The plan shows each mirror under `deliver`:
+
+```text
+  deliver  mirror docker.io/library/redis@sha256:4d3a1f0a6d2c: mirror (linux/arm64)
+```
+
+and the `--json` result carries `stages.deliver.mirrors` (keyed by the
+canonical reference, with `action` `mirror` or `present`, `repository`,
+`reference`, `platform` and `used`, false for an entry the app does not use).
+
+(deploy-registry-takeover)=
+
+### Take over an existing node-loopback registry
+
+A registry that already runs on the node (created with `kubectl`, or by
+another release) holds the loopback port: a second registry could never
+start. `piceli deploy --plan` reads the namespace's Deployments and refuses
+with `pipeline-registry-takeover-required`, naming the Deployment, instead of
+failing later with `pipeline-registry-not-ready`. Take it over explicitly:
+
+```python
+deliver = NodeLoopbackRegistry(
+    port=5000,
+    adopt="old-registry",  # the live Deployment's name
+    host_path="/var/lib/registry",  # where its data already is
+)
+```
+
+- **`adopt="NAME"`** makes `NAME` the registry objects' name and adopts the
+  live Deployment (and `NAME-config`, `NAME-storage` when they exist) by
+  ownership transfer, like `piceli release --adopt`: nothing is deleted, the
+  pod is updated in place (`Recreate`), and its data, including every image
+  already pushed, stays on the node. The live Deployment's selector is kept
+  (Kubernetes never changes it), and a live `RollingUpdate` strategy becomes a
+  one-pod-at-a-time rolling update (`maxSurge: 0`, `maxUnavailable: 1`, the
+  same effect as `Recreate`, which Kubernetes refuses to switch to while
+  another client owns the rolling-update settings). The live registry must be compatible: host
+  network, the same port and node, and its data on the declared storage
+  (`host_path=`, `existing_claim=`, or the claim `NAME-storage`). Otherwise
+  the plan is refused with `pipeline-registry-incompatible`, which lists the
+  differences.
+- **`replace="NAME"`** is for a registry that cannot be adopted in place
+  (another port, selector or storage): the release engine writes a backup of
+  the live Deployment, deletes it and creates the registry's own. Storage is
+  never deleted: a host directory or claim stays where it is, and the plan
+  says whether the new registry uses it (`data: kept`) or not
+  (`not-carried-over`). As everywhere in Piceli, replace needs its own flag;
+  retained objects (the claim) are only ever adopted.
+- `inherited_owners=["old-owner"]` lets the registry release take over a
+  retained claim that another Piceli release owns.
+- The plan shows exactly what happens (`adopt Deployment/old-registry`,
+  `replace Deployment/old-registry`, `create ConfigMap/old-registry-config`)
+  and, under `deliver.registry.existing` in the JSON, the live registry's port,
+  node, storage and whether its data is kept. Both are part of the combined
+  hash.
+- After the first run the registry is the release's own; a standing
+  `adopt=`/`replace=` is then a no-op (`existing.action: managed`).
 
 ## Checks and rollback
 
@@ -344,7 +479,12 @@ The policy is used by `piceli deploy` (plan, apply, checks), `piceli status`,
 | `pipeline-image-not-pinned` | An image is a movable tag | Pin it by digest or build it |
 | `pipeline-release-refused` with `blocking` objects | The release needs adoption or replacement of existing objects | Add `adopt=["Kind/name"]` (or `replace=`) to the `Pipeline`; see {doc}`release_cli` |
 | `build-failed`, `smoke-failed` (exit `1`) | The build or its smoke check failed | Read `state_dir/builds/<name>/build.log`, fix, deploy again |
-| `pipeline-registry-not-ready` | The node-loopback registry did not start (often its port is taken on the node) | Choose another `port=` or free it, then `--resume` |
+| `pipeline-registry-not-ready` | The node-loopback registry did not start (its port may be held by a process outside the namespace) | Choose another `port=` or free it, then `--resume` |
+| `pipeline-registry-takeover-required` | A live registry holds the port, or a Deployment with the registry's name is not the registry release's | `NodeLoopbackRegistry(adopt="NAME")` or `replace="NAME"` (see {ref}`deploy-registry-takeover`), or another `port=` |
+| `pipeline-registry-incompatible` | `adopt=` names a registry on another port, node or storage | Declare matching `host_path=`/`existing_claim=`/`port=`, or `replace=` |
+| `pipeline-mirror-not-pinned` | A `mirror=` entry has no digest | Pin it: `repository@sha256:…` |
+| `mirror-platform-unavailable` (exit `1`) | The mirrored image has no manifest for the node's platform | Pin an image that supports the node |
+| `registry-unauthorized` at `deliver` | A mirror source needs a login | Add `mirror_credentials={"registry": "file.json"}` |
 | `pipeline-apply-not-ready` (exit `1`) | The release did not become ready | Fix the workload (image, probe, claim), then `--resume` |
 | `pipeline-checks-failed` (exit `1`) | A check failed; see `checks.results` and `checks.rollback` in the run | Fix the app and deploy again |
 | `pipeline-locked` | Another run uses the state directory | Wait, then retry |

@@ -169,7 +169,11 @@ unattended CI job for this exact spec.
 1. Run `piceli deploy MODULE:ATTR --plan --json`. The last line is the result
    with `combined_hash` and every stage's plan.
 2. Show the owner the stderr summary: which builds run, which images are
-   delivered, the release's `create`/`apply`/`delete` lines and the checks.
+   delivered and which third-party images are mirrored (`deliver  mirror …`,
+   `stages.deliver.mirrors` in the JSON), the registry's `adopt`/`replace`
+   lines when a live node-loopback registry is taken over (and whether its
+   data is kept, `stages.deliver.registry.existing`), the release's
+   `create`/`apply`/`delete` lines and the checks.
 3. After the owner approves **that combined hash**, run
    `piceli deploy MODULE:ATTR --approve <hash> --json`. Each stdout line is
    one stage event; the last one is the result.
@@ -178,6 +182,12 @@ unattended CI job for this exact spec.
    `rollback_on_failed_checks` the result's `checks.rollback` says what was
    restored). Exit `2` with `pipeline-plan-changed` means something changed
    since the plan: plan and ask again.
+5. `pipeline-registry-takeover-required` means a registry already runs on
+   the node. Never add `adopt=` or `replace=` to the pipeline yourself: tell
+   the owner which Deployment holds the port and let them choose
+   (`adopt` keeps it and its data in place; `replace` backs it up, deletes
+   and recreates it). Registry credentials for `mirror_credentials=` are files
+   the owner provides; never create, read or print them.
 
 (agents-pipeline-release)=
 ### Operating a pipeline's release
