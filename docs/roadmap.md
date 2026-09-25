@@ -31,7 +31,7 @@ Priorities may change. Progress is tracked in
 | Reusable, versioned packages (Helm equivalent) | ❌ Not yet |
 | Custom resources (CRDs) | 🟡 Preview: `app.resource` with models from `piceli codegen crd` |
 | Local operations UI and JSON API | 🟡 Early preview |
-| Continuous reconciliation from Git (Argo CD equivalent) | ❌ Not yet |
+| Continuous reconciliation from Git (Argo CD equivalent) | 🟡 Handoff only: `piceli publish` (Flux OCI artifact) and `render --out` for Flux or Argo CD; no in-cluster Piceli controller |
 | Cloud infrastructure lifecycle (Terraform/OpenTofu equivalent) | ❌ Not yet; GKE cluster helpers only |
 
 ## Feature status
@@ -57,6 +57,7 @@ Every feature page starts with its maturity, and this table lists them all:
 | Deploy from source (`piceli deploy`, `piceli.pipeline`) | {doc}`deploy` | preview |
 | Deploy a commit (`piceli deploy --ref`) | {ref}`deploy-ref` | preview |
 | Deploy from CI with an approval step (GitHub Actions recipe) | {doc}`ci` | preview |
+| GitOps handoff to Flux or Argo CD (`piceli publish`, `piceli render --out`) | {doc}`gitops` | preview |
 | Shared deployment state, release lock, plan files, `piceli state` | {doc}`state` | preview |
 | Runner hygiene: temporary-file cleanup, `piceli cache status/prune`, `cache_budget=`, `piceli doctor`, run summaries and `piceli runs` | {doc}`maintenance` | preview |
 | Releases from a spec (`piceli release`) | {doc}`release_cli` | preview |

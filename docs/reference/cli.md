@@ -61,6 +61,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli operator restore`](#cli-operator-restore) | Safely verify and restore operator state into empty destination. | none | no |
 | [`piceli operator serve`](#cli-operator-serve) | Launch the Piceli Operator dashboard and unified REST API. | reads | no |
 | [`piceli operator status`](#cli-operator-status) | Print classified operator inventory: managed, unmanaged, unknown, and releases. | reads | no |
+| [`piceli publish`](#cli-publish) | Push the rendered manifests as a Flux OCI artifact (needs --approve DIGEST). | none | yes |
 | [`piceli release apply`](#cli-release-apply) | Execute an approved plan (``--approve HASH``), or plan and confirm. | writes | yes |
 | [`piceli release check`](#cli-release-check) | Run the spec's [[checks]] now against a release; changes nothing. | reads | no |
 | [`piceli release diff`](#cli-release-diff) | Show what `plan` would change, field by field (read-only, nothing stored). | reads | no |
@@ -1046,6 +1047,36 @@ Print classified operator inventory: managed, unmanaged, unknown, and releases.
 - **Output contract:** conforms
 - **Notes:** `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`).
 
+(cli-publish)=
+### `piceli publish`
+
+Push the rendered manifests as a Flux OCI artifact (needs --approve DIGEST).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `TARGET` | text |  |  |
+| `--to` | text |  | oci://host[:port]/repository[:tag] to push to (the tag is optional) |
+| `--spec` | path |  | release.toml, as for `piceli render` |
+| `--namespace` | text |  | Namespace to render into |
+| `--env` | text |  | Render this environment of the App |
+| `--secrets` | choice | `refuse` | 'refuse' a Secret object, or leave Secrets out because they are provided outside the artifact ('external') |
+| `--approve` | text |  | The artifact digest printed without --approve; pushes it |
+| `--credentials` | path |  | Private JSON file: {"username", "password"} or {"token"} |
+| `--ca-file` | path |  | CA bundle for a TLS registry |
+| `--source` | text |  | org.opencontainers.image.source annotation (e.g. the Git URL) |
+| `--revision` | text |  | org.opencontainers.image.revision annotation (e.g. main@sha1:<commit>) |
+
+**Contract**
+
+- **Reads:** module/app file, release.toml (optional), local receipts, credentials file
+- **Writes:** OCI registry (artifact blobs, manifest, tag)
+- **Cluster:** none
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** Never contacts a cluster. Without --approve it prints the deterministic artifact digest and exits 3 (nothing is pushed); --approve DIGEST pushes by digest, then the tag, and reads both back. Layout of `flux push artifact` (config application/vnd.cncf.flux.config.v1+json, one layer application/vnd.cncf.flux.content.v1.tar+gzip). A Secret needs --secrets external; redacted values and placeholder images are refused. Credentials only from --credentials FILE, never printed.
+
 (cli-release-apply)=
 ### `piceli release apply`
 
@@ -1307,17 +1338,19 @@ Print the manifests of a typed app, composition or pipeline. Never contacts a cl
 | `--format` | choice | `yaml` | Output format |
 | `--env` | text |  | Render this environment of the App (app.environment(...)); a pipeline also uses its target for it |
 | `--diff-env` | text |  | Print the typed difference between --env and this environment instead of manifests |
+| `--out` | path |  | Write one YAML file per object into this directory (for Argo CD or Flux from Git) instead of printing; it must be absent, empty or written by a previous --out |
+| `--secrets` | choice | `refuse` | With --out: 'refuse' a Secret object, or leave Secrets out because they are provided outside the files ('external': SOPS, ExternalSecret, by hand) |
 
 **Contract**
 
 - **Reads:** module/app file, release.toml (optional), local receipts
-- **Writes:** nothing (read-only)
+- **Writes:** --out directory
 - **Cluster:** none
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** Never contacts a cluster; secret values are placeholders. A Pipeline renders with its target's namespace and declared nodes, build images as placeholders, and reads no kubeconfig, build spec or state. --env NAME renders one environment of the App (a pipeline's target for it); --diff-env OTHER prints the typed difference between the two environments instead (JSON with --format json). stdout carries the manifests (YAML, or one JSON object with --format json); a refusal is always the JSON rejection object.
+- **Notes:** Never contacts a cluster; secret values are placeholders. --out DIR writes one YAML file per object (a directory for Argo CD or Flux from Git; a Secret needs --secrets external, redacted values and placeholder images are refused) and prints one JSON object; DIR must be absent, empty or a previous --out. A Pipeline renders with its target's namespace and declared nodes, build images as placeholders, and reads no kubeconfig, build spec or state. --env NAME renders one environment of the App (a pipeline's target for it); --diff-env OTHER prints the typed difference between the two environments instead (JSON with --format json). stdout carries the manifests (YAML, or one JSON object with --format json); a refusal is always the JSON rejection object.
 
 (cli-runs)=
 ### `piceli runs`

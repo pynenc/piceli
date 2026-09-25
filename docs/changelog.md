@@ -118,6 +118,18 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   alone and runs its walkthrough against the built wheel and the fake API
   (`make skill-check`); `tests/integration/test_skill_kind.py` runs it against
   `examples/shop` on a disposable kind cluster.
+- **GitOps handoff (preview):** `piceli publish MODULE:ATTR [--env E] --to
+  oci://registry/repo[:tag]` packages the rendered manifests as an OCI
+  artifact in the `flux push artifact` layout (config
+  `application/vnd.cncf.flux.config.v1+json`, one
+  `application/vnd.cncf.flux.content.v1.tar+gzip` layer), with a
+  deterministic digest; it prints the digest and exits 3, and pushes by
+  digest (then the tag) only with `--approve <digest>`. `piceli render
+  --out DIR` writes the same files for a Git directory. A Secret is refused
+  unless `--secrets external` leaves Secrets out; redacted values and
+  placeholder images are always refused. New codes `gitops-*` and
+  `render-out-refused`. Flux and Argo CD examples in `docs/gitops.md`; a kind
+  test has Flux reconcile a published artifact.
 
 ## Version 0.7.0
 

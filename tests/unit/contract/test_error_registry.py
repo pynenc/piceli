@@ -23,6 +23,7 @@ FIRST_ARGUMENT = {
     "ProviderError",
     "_Diagnosed",
     "RegistryError",
+    "GitOpsError",
     "_input",
     "SecretError",
     "ImageHandoffError",
@@ -105,6 +106,8 @@ DYNAMIC = {
     "status-port-occupied",
     # state/scopes.py: the lock code of a release.toml scope (lock_code=...)
     "release-locked",
+    # k8s/cli/publish.py: a RegistryError reason that is not registered
+    "gitops-push-failed",
 }
 # Registered for the CLI contract itself (piceli/cli_contract.py users).
 CONTRACT = {"unknown-error-code"}

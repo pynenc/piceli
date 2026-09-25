@@ -278,6 +278,8 @@ class OciRegistry:
                     handler, 400, b'{"errors":[{"code":"DIGEST_INVALID"}]}'
                 )
             self.manifests[(repo, digest)] = (body, media)
+            if not reference.startswith("sha256:"):  # a tag points at it too
+                self.manifests[(repo, reference)] = (body, media)
             return self._reply(handler, 201, b"", {"Docker-Content-Digest": digest})
         stored = self.manifests.get((repo, reference))
         if stored is None:
@@ -287,7 +289,7 @@ class OciRegistry:
             handler,
             200,
             served,
-            {"Docker-Content-Digest": reference, "Content-Type": stored[1]}
+            {"Docker-Content-Digest": sha(stored[0]), "Content-Type": stored[1]}
             | ({"Content-Length": str(len(served))} if method == "HEAD" else {}),
         )
 
