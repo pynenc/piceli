@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NoReturn
 
+from piceli.approval_policy import ApprovalPolicy
 from piceli.k8s.ops.bounds import object_keys, strict_json, timestamp
 from piceli.k8s.ops.discovery import (
     DiscoveryArtifact,
@@ -329,6 +330,11 @@ def _parse_plan(
             levels,
             tuple(ResourceRef(**item) for item in value["protected_resources"]),
             value["schema_version"],
+            approval_policy=(
+                ApprovalPolicy.from_identity(value["approval_policy"])
+                if "approval_policy" in value
+                else None
+            ),
         )
         if plan.summary() != dict(value):
             _fail("plan-hash")

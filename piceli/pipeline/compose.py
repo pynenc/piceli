@@ -25,6 +25,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
+from piceli.approval_policy import ApprovalPolicy
 from piceli.k8s.ops.plan import (
     DeploymentComponent,
     DeploymentComposition,
@@ -533,6 +534,7 @@ def _spec(
     checks: tuple[Any, ...] = (),
     rollback_on_failed_checks: bool = False,
     provenance: Mapping[str, Any] | None = None,
+    auto_approve: ApprovalPolicy | None = None,
 ) -> PipelineReleaseSpec:
     from pydantic import ValidationError
 
@@ -553,6 +555,17 @@ def _spec(
             "adopt": list(adopt),
             "replace": list(replace),
             "rollback_on_failed_checks": rollback_on_failed_checks,
+            **(
+                {}
+                if auto_approve is None
+                else {
+                    "auto_approve": {
+                        key: value
+                        for key, value in auto_approve.identity().items()
+                        if key != "schema"
+                    }
+                }
+            ),
         },
         "execution": dict(pipeline.execution),
         "checks": list(checks),
@@ -618,6 +631,7 @@ def release_spec(
         checks=checks,
         rollback_on_failed_checks=bool(checks) and pipeline.rollback_on_failed_checks,
         provenance=provenance,
+        auto_approve=pipeline.auto_approve,
     )
 
 

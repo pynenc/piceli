@@ -79,6 +79,7 @@ prune = false                       # delete managed objects a release drops
 # adopt = ["Deployment/web", "PersistentVolumeClaim/data"]   # see "Adopting existing objects"
 # replace = ["Deployment/legacy"]   # one-off delete-and-recreate, see "Replacing an object"
 # rollback_on_failed_checks = true  # re-apply the previous ready release when [[checks]] fail
+# auto_approve = { allow = ["create", "apply", "no-op"], max_objects = 10 }  # see "Approval policy"
 
 [execution]
 max_seconds = 300
@@ -407,6 +408,37 @@ plan hash: 4123ff6e…29b8e4 (valid until 2026-09-24T17:24:59+00:00)
 $ piceli release apply --spec release.toml --approve 4123ff6e…29b8e4
 apply web-716dfe62698b: ready
 ```
+
+(release-approval-policy)=
+### Approval policy
+
+`[release] auto_approve` is the owner's policy for plans that may apply
+without a human approving the hash:
+
+```toml
+[release]
+# ...
+auto_approve = { allow = ["create", "apply", "no-op"], deny = ["cluster_scoped"], max_objects = 10 }
+```
+
+`piceli release apply --spec release.toml --approve-if-policy` plans and
+applies only when every action of the plan is inside the policy (the output
+adds `"approved_by": "policy"`). Otherwise nothing is applied: the plan is
+stored, its hash and the usual `--approve` command are printed, and the exit
+code is `3` with `"reason": "approval-policy-exceeded"` and a `policy` object
+whose `violations` name each action outside it. `delete`, `replace` and
+`adopt` are never inside a policy (`approval-policy-invalid` if `allow` names
+one); `cluster_scoped` objects and `drift` need an explicit `allow`; `deny`
+removes classes from `allow`; `max_objects` caps the changed objects.
+
+The policy is part of the plan hash, so changing it changes every plan's
+hash. No flag sets or widens it: `--approve-if-policy` without a declared
+policy is refused (`approval-policy-missing`) before anything is planned, and
+combining it with `--approve`, `--auto-approve`, `--rotate`, `--adopt`,
+`--replace` or `--adopt-all-desired` is refused
+(`approve-if-policy-flags-conflict`). A pipeline's policy
+(`Pipeline(auto_approve=...)`, see {ref}`deploy-approval-policy`) applies to
+`piceli release apply --spec MODULE:ATTR --approve-if-policy` the same way.
 
 (release-plan-output)=
 ### What a plan shows

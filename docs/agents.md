@@ -20,6 +20,7 @@ See the {doc}`roadmap` for every feature's status.
 | What an error code means and what to do next | `piceli explain <code> --json` |
 | The same, as pages | {doc}`reference/cli`, {doc}`reference/errors` |
 | An index of the documentation for language models | [`llms.txt`](https://docs.pynenc.org/projects/piceli/en/latest/llms.txt) |
+| A ready agent skill (`SKILL.md` and scripts: install, plan, ask, deploy, status, diagnose, resume, roll back) | [`skills/piceli`](https://github.com/pynenc/piceli/tree/main/skills/piceli); its walkthrough runs in CI against the built wheel |
 
 `piceli help-json` is generated from the command definitions. For each
 command, `contract.side_effects` says what it reads and writes and whether it
@@ -149,9 +150,9 @@ Ask before running these, and show the owner what will happen first.
 
 | Command | Changes | Approve with |
 | --- | --- | --- |
-| `piceli deploy` | Builds images, pushes them to a registry or node, applies a release | `--approve <combined hash>` from `piceli deploy MODULE:ATTR --plan`, after the owner reviewed that plan (or `--apply <plan file> --approve <its hash>` on another runner); `--resume` continues an approved run |
+| `piceli deploy` | Builds images, pushes them to a registry or node, applies a release | `--approve <combined hash>` from `piceli deploy MODULE:ATTR --plan`, after the owner reviewed that plan (or `--apply <plan file> --approve <its hash>` on another runner); `--resume` continues an approved run; `--approve-if-policy` only when the owner declared an `auto_approve` policy (see below) |
 | `piceli state import` | Replaces the release's state (local directory or the shared state in the namespace) | `--approve <import digest>` printed by `piceli state import` without `--approve`, after the owner agreed to replace the state |
-| `piceli release apply` | The cluster | `--approve <plan hash>` from `release plan`, after the owner reviewed that plan |
+| `piceli release apply` | The cluster | `--approve <plan hash>` from `release plan`, after the owner reviewed that plan; `--approve-if-policy` only with the owner's `[release] auto_approve` |
 | `piceli release rollback` | The cluster | `--approve <plan hash>` from `release rollback <target>` without `--approve` |
 | `piceli release resume` | The cluster (continues an approved execution) | The owner's go-ahead to continue |
 | `piceli release stop` | Local journal (cancels an execution) | The owner's go-ahead |
@@ -165,6 +166,30 @@ Ask before running these, and show the owner what will happen first.
 
 Never add `--auto-approve` unless the owner has said that this run is an
 unattended CI job for this exact spec.
+
+(agents-approval-policy)=
+### When the owner declared an approval policy
+
+An owner may declare, in reviewed code, which plans may run without them
+approving the hash: `Pipeline(..., auto_approve=ApprovalPolicy(allow={"create",
+"apply", "no-op"}, max_objects=10))` or `[release] auto_approve = {...}` (see
+{ref}`deploy-approval-policy` and {ref}`release-approval-policy`). Then
+`piceli deploy MODULE:ATTR --approve-if-policy --json` and
+`piceli release apply --spec … --approve-if-policy` run a plan only when
+**every** action is inside the policy (`"approved_by": "policy"` in the
+result).
+
+- Exit `3` with `"reason": "approval-policy-exceeded"`: nothing ran. Show the
+  owner the plan and `policy.violations`, and run the printed
+  `--approve <hash>` command only after they approve it.
+- `approval-policy-missing`: there is no policy. Plan and ask as usual.
+- `delete`, `replace` and `adopt` are never inside a policy, and
+  cluster-scoped objects and drift are outside unless the owner allowed them.
+- **Never add, edit or widen `auto_approve` yourself**, never split a change
+  to fit under `max_objects`, and never combine `--approve-if-policy` with
+  `--adopt`, `--replace`, `--rotate` or `--adopt-all-desired` (refused). There
+  is no flag that passes a policy: the policy is part of the plan hash.
+- The secret and exec rules below apply unchanged.
 
 ## The approval workflow
 

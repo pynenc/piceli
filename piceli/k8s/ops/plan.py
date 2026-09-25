@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
+from piceli.approval_policy import ApprovalPolicy
 from piceli.k8s.ops.discovery import (
     RELEASE_NAMESPACE_ANNOTATION,
     DiscoveryArtifact,
@@ -796,6 +797,9 @@ class PlanAuthorization:
     # map keys declared there that the composition no longer declares (see
     # :func:`planned_removals`); without it no field is ever removed.
     previous: tuple[ResourceIntent, ...] = field(default=(), repr=False)
+    # The owner's approval policy (``auto_approve``): recorded in the plan
+    # and so in its hash; it decides nothing here (see approval_policy).
+    approval_policy: ApprovalPolicy | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -956,10 +960,13 @@ class DeploymentPlan:
     levels: tuple[tuple[ResourceRef, ...], ...]
     protected_resources: tuple[ResourceRef, ...] = ()
     schema_version: int = PLAN_SCHEMA_VERSION
+    # The owner's approval policy, bound into the hash only when declared
+    # (plans without one keep their hash).
+    approval_policy: ApprovalPolicy | None = None
     plan_hash: str = field(init=False)
 
     def __post_init__(self) -> None:
-        material = {
+        material: dict[str, Any] = {
             "schema_version": self.schema_version,
             "target": self.target.__dict__,
             "snapshot_hash": self.snapshot_hash,
@@ -971,6 +978,8 @@ class DeploymentPlan:
                 resource.__dict__ for resource in self.protected_resources
             ],
         }
+        if self.approval_policy is not None:
+            material["approval_policy"] = self.approval_policy.identity()
         object.__setattr__(self, "plan_hash", _digest(material))
 
     def validate_for(self, snapshot: ObservedSnapshot) -> None:
@@ -995,6 +1004,12 @@ class DeploymentPlan:
                 )
 
     def summary(self) -> dict[str, Any]:
+        value = self._summary()
+        if self.approval_policy is not None:
+            value["approval_policy"] = self.approval_policy.identity()
+        return value
+
+    def _summary(self) -> dict[str, Any]:
         return {
             "schema_version": self.schema_version,
             "plan_hash": self.plan_hash,
@@ -2101,4 +2116,5 @@ def build_plan(
         tuple(actions),
         levels,
         tuple(sorted(protected)),
+        approval_policy=authorization.approval_policy,
     )

@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple, overload
 
+from piceli.approval_policy import ApprovalPolicy, ApprovalPolicyError
 from piceli.pipeline.errors import PipelineError
 
 if TYPE_CHECKING:
@@ -932,6 +933,11 @@ class Pipeline:
     :param execution: ``[execution]`` limits of the release engine
         (``max_seconds``, ``readiness_seconds``, ``poll_seconds`` …).
     :param approval_window_seconds: How long a release plan stays valid.
+    :param auto_approve: The owner's :class:`~piceli.approval_policy.ApprovalPolicy`
+        (or a mapping with ``allow``, ``deny``, ``max_objects``): ``piceli
+        deploy --approve-if-policy`` runs a plan without the human hash only
+        when every action is inside it. Part of the combined hash; it can
+        never allow ``delete``, ``replace`` or ``adopt``.
 
     Invariants: every image the app uses is a build handle or pinned by
     digest; the release never manages the node-loopback registry.
@@ -965,6 +971,7 @@ class Pipeline:
         execution: Mapping[str, Any] | None = None,
         approval_window_seconds: int = 900,
         inherited_owners: Sequence[str] = (),
+        auto_approve: ApprovalPolicy | Mapping[str, Any] | None = None,
     ) -> None:
         from piceli.app import App
 
@@ -1027,6 +1034,13 @@ class Pipeline:
         self.execution = dict(execution or {})
         self.approval_window_seconds = approval_window_seconds
         self.inherited_owners = tuple(inherited_owners)
+        try:
+            #: The owner's approval policy (``auto_approve``), or ``None``.
+            self.auto_approve: ApprovalPolicy | None = ApprovalPolicy.from_value(
+                auto_approve
+            )
+        except ApprovalPolicyError as error:
+            raise PipelineError(error.code, str(error)) from None
 
     @property
     def name(self) -> str:

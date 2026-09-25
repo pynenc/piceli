@@ -50,6 +50,7 @@ AREAS: Mapping[str, str] = MappingProxyType(
         # --- 0.7.0 model completeness ---
         "codegen": "Typed models from CRDs (`piceli codegen crd`)",
         "environments": "Environments (`App.environment`, `--env`, `--diff-env`)",
+        "approval": "Owner-declared approval policies (`auto_approve`, `--approve-if-policy`)",
     }
 )
 
@@ -2721,7 +2722,7 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
     _E(
         "deploy-flags-conflict",
         "Conflicting deploy flags",
-        "`piceli deploy` got flags that cannot be combined (`--resume` with planning flags or `--ref`, `--approve` with `--plan` or `--auto-approve`, `--plan` with `--auto-approve`, `--out` without `--plan`, `--apply` without `--approve` or with planning flags, or no pipeline).",
+        "`piceli deploy` got flags that cannot be combined (`--resume` with planning flags or `--ref`, `--approve` with `--plan` or `--auto-approve`, `--plan` with `--auto-approve`, `--approve-if-policy` with `--plan`, `--approve`, `--auto-approve`, `--resume` or `--apply`, `--out` without `--plan`, `--apply` without `--approve` or with planning flags, or no pipeline).",
         "Use `--plan` (optionally `--out FILE`), then `--approve HASH` (with the same `--ref`) or `--apply FILE --approve HASH`; or `--auto-approve` alone; or `--resume` alone (it reuses the run's commits).",
         False,
         "cli",
@@ -2991,6 +2992,39 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "Return the App from the composition function, or use a pipeline (`--spec MODULE:ATTR`) whose app declares the environment.",
         False,
         "environments",
+    ),
+    # --- 0.7.0 approval policy ---
+    _E(
+        "approval-policy-invalid",
+        "Approval policy invalid",
+        "The `auto_approve` policy (`ApprovalPolicy(...)` in a pipeline, `[release] auto_approve` in a spec) names an unknown action class, allows `delete`, `replace` or `adopt` (which always need the owner's approval of the hash), or has a `max_objects` outside 0-4096.",
+        "Only the owner changes the policy: use the classes `create`, `apply`, `no-op`, `cluster_scoped` and `drift` in `allow`, any class in `deny`, and an integer `max_objects`.",
+        False,
+        "approval",
+    ),
+    _E(
+        "approval-policy-missing",
+        "No approval policy declared",
+        "`--approve-if-policy` was given, but the pipeline (`auto_approve=`) or the spec (`[release] auto_approve`) declares no policy. Nothing was planned or changed.",
+        "Plan (`piceli deploy MODULE:ATTR --plan` or `piceli release plan`), show the plan to the owner and run it with `--approve <hash>` after they approve. Never add a policy yourself: only the owner declares one.",
+        False,
+        "approval",
+    ),
+    _E(
+        "approval-policy-exceeded",
+        "Plan outside the approval policy",
+        "`--approve-if-policy` planned a change the owner's policy does not cover: a `delete`, `replace` or `adopt`, a cluster-scoped object or drift the policy does not allow, or more changed objects than `max_objects` (the `policy.violations` list names each). Nothing was applied; the plan is stored and its hash printed.",
+        "Show the plan to the owner and, after they approve, run the printed command with `--approve <hash>`. Never widen the policy or split the change to fit it.",
+        False,
+        "approval",
+    ),
+    _E(
+        "approve-if-policy-flags-conflict",
+        "Flags cannot be combined with --approve-if-policy",
+        "`release apply --approve-if-policy` was combined with `--approve`, `--auto-approve`, `--rotate`, `--adopt`, `--replace` or `--adopt-all-desired`. Only the owner's declared policy decides what applies without a human hash, so no flag may add to the plan.",
+        "Drop the other flags, or plan with them (`piceli release plan …`) and ask the owner to approve the hash.",
+        False,
+        "approval",
     ),
 )
 

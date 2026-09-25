@@ -96,6 +96,17 @@ AdoptAllOption = Annotated[
         ),
     ),
 ]
+ApproveIfPolicyOption = Annotated[
+    bool,
+    typer.Option(
+        "--approve-if-policy",
+        help=(
+            "Plan and execute only when every action is inside the spec's "
+            "[release] auto_approve policy (declared by the owner); otherwise "
+            "print the plan hash to approve and exit 3"
+        ),
+    ),
+]
 SkipChecksOption = Annotated[
     bool,
     typer.Option(
@@ -474,7 +485,24 @@ def _plan_then_execute(
     adopt_all_desired: bool = False,
     skip_checks: bool = False,
     env: str | None = None,
+    approve_if_policy: bool = False,
 ) -> None:
+    if approve_if_policy and (
+        approve is not None
+        or auto_approve
+        or rotate
+        or adopt
+        or replace
+        or adopt_all_desired
+    ):
+        from piceli.cli_contract import reject
+
+        # The owner's policy decides alone: no flag may add what it covers.
+        reject(
+            "approve-if-policy-flags-conflict",
+            "--approve-if-policy cannot be combined with --approve, "
+            "--auto-approve, --rotate, --adopt, --replace or --adopt-all-desired",
+        )
     if approve is not None and (
         auto_approve or rotate or adopt or replace or adopt_all_desired
     ):
@@ -499,6 +527,8 @@ def _plan_then_execute(
                     skip_checks=skip_checks,
                 )
             else:
+                if approve_if_policy:
+                    _declared_policy(runner)  # refuse before anything is planned
                 result = runner.plan(
                     rotate=rotate or (),
                     rollback_to=rollback_to,
@@ -507,14 +537,57 @@ def _plan_then_execute(
                     adopt_all_desired=adopt_all_desired,
                 )
                 _describe_plan(result, spec, command, env)
-                if not auto_approve and not _confirm(result):
+                if approve_if_policy:
+                    decision = _policy_decision(runner, result)
+                    if not decision.allowed:
+                        _say(
+                            "outside the owner's approval policy: "
+                            + ", ".join(decision.violations)
+                        )
+                        _say("the owner must review this plan and approve its hash")
+                        _emit(
+                            {
+                                "state": "approval-required",
+                                "reason": "approval-policy-exceeded",
+                                "policy": decision.to_dict(),
+                                **result.to_dict(),
+                            }
+                        )
+                        raise typer.Exit(EXIT_APPROVAL)
+                    _say(
+                        "inside the owner's approval policy "
+                        f"({decision.changes} change(s)); applying"
+                    )
+                elif not auto_approve and not _confirm(result):
                     _emit({"state": "approval-required", **result.to_dict()})
                     raise typer.Exit(EXIT_APPROVAL)
                 outcome = runner.apply(result.plan_hash, skip_checks=skip_checks)
+                if approve_if_policy:
+                    outcome = {**outcome, "approved_by": "policy"}
     except _refusals() as error:
         _refuse(error)
         return
     _finish(outcome)
+
+
+def _declared_policy(runner: Any) -> Any:
+    """The spec's ``[release] auto_approve`` policy; refuses without one."""
+    from piceli.k8s.release_spec import ReleaseSpecError
+
+    policy = runner.spec.model.release.approval_policy
+    if policy is None:
+        raise ReleaseSpecError(
+            "the spec declares no [release] auto_approve policy; only the owner "
+            "can add one. Approve the plan hash instead",
+            code="approval-policy-missing",
+        )
+    return policy
+
+
+def _policy_decision(runner: Any, result: Any) -> Any:
+    """The spec's approval policy applied to every action of ``result``."""
+    value = result.to_dict()
+    return _declared_policy(runner).evaluate(value["actions"], drift=value["drift"])
 
 
 @app.command("plan")
@@ -611,8 +684,14 @@ def apply(
     adopt_all_desired: AdoptAllOption = False,
     skip_checks: SkipChecksOption = False,
     env: EnvOption = None,
+    approve_if_policy: ApproveIfPolicyOption = False,
 ) -> None:
     """Execute an approved plan (``--approve HASH``), or plan and confirm.
+
+    ``--approve-if-policy`` plans and applies only when every action is
+    inside the spec's ``[release] auto_approve`` policy, which only the owner
+    declares; any other plan is stored and its hash printed (exit 3,
+    ``approval-policy-exceeded``).
 
     When the execution is ready, the spec's ``[[checks]]`` run; the release
     is ready only when they pass (``release_state``: ``ready`` or
@@ -631,6 +710,7 @@ def apply(
         replace=replace,
         adopt_all_desired=adopt_all_desired,
         skip_checks=skip_checks,
+        approve_if_policy=approve_if_policy,
     )
 
 

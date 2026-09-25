@@ -92,6 +92,7 @@ from piceli.pipeline.refs import (
 )
 
 if TYPE_CHECKING:
+    from piceli.approval_policy import PolicyDecision
     from piceli.artifacts.build_spec import BuildPlan, BuildSpec
     from piceli.artifacts.source_identity import InputsLock, InputsSpec
     from piceli.k8s.release_runner import PlanResult, ReleaseRunner
@@ -185,7 +186,12 @@ def _changes(result: PlanResult) -> list[dict[str, Any]]:
 
 def _changed(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
-        {"operation": item["operation"], "kind": item["kind"], "name": item["name"]}
+        {
+            "operation": item["operation"],
+            "kind": item["kind"],
+            "name": item["name"],
+            **({"cluster_scoped": True} if item.get("cluster_scoped") else {}),
+        }
         for item in actions
         if item["operation"] != "no-op"
     ]
@@ -325,6 +331,13 @@ class PipelineRunner:
             **(
                 {"environment": pipeline.environment.identity()}
                 if pipeline.environment is not None
+                else {}
+            ),
+            # Added in 0.7.0 only when declared, so other plans keep their
+            # hashes: the owner's approval policy is part of the combined hash.
+            **(
+                {"approval_policy": pipeline.auto_approve.identity()}
+                if pipeline.auto_approve is not None
                 else {}
             ),
         }
@@ -1012,11 +1025,87 @@ class PipelineRunner:
         }
         return dict(value), value
 
+    # ------------------------------------------------------ approval policy
+    def policy_decision(self, plan: CombinedPlan) -> PolicyDecision:
+        """Whether every action of ``plan`` is inside the owner's policy.
+
+        Covers the release plan (or, before the images exist, its placeholder
+        preview: the real plan may not adopt, replace or delete beyond it and
+        is checked against the policy again after delivery) and the
+        node-loopback registry's release.
+
+        :raises PipelineError: ``approval-policy-missing`` when the pipeline
+            declares no ``auto_approve``.
+        """
+        policy = self.pipeline.auto_approve
+        if policy is None:
+            raise PipelineError(
+                "approval-policy-missing",
+                "the pipeline declares no auto_approve policy; approve the "
+                "combined hash instead",
+            )
+        release = plan.stages.get("plan", {})
+        if release.get("state") == "pending":
+            release = release.get("preview") or {}
+        actions = list(release.get("changes", ()))
+        drift = list(release.get("drift", ()))
+        registry = plan.stages.get("deliver", {}).get("registry")
+        if isinstance(registry, dict):
+            actions.extend(registry.get("changes", ()))
+            existing = registry.get("existing") or {}
+            if existing.get("action") in {"adopt", "replace"}:
+                actions.append(
+                    {
+                        "operation": existing["action"],
+                        "kind": "Deployment",
+                        "name": existing.get("name"),
+                    }
+                )
+        return policy.evaluate(actions, drift=drift)
+
+    def _within_policy(self, result: PlanResult) -> None:
+        """Refuse a policy-approved run whose real release plan left the policy."""
+        if self.run is None or self.run.data.get("approved_by") != "policy":
+            return
+        policy = self.pipeline.auto_approve
+        decision = (
+            policy.evaluate(_changes(result), drift=_drift(result))
+            if policy is not None
+            else None
+        )
+        if decision is None or not decision.allowed:
+            raise PipelineError(
+                "approval-policy-exceeded",
+                "after delivery the release plan is outside the owner's "
+                "approval policy ("
+                + ", ".join(decision.violations if decision else ["no policy"])
+                + "); nothing was applied: plan again and have the owner "
+                "approve the combined hash",
+                details={"policy": decision.to_dict()} if decision else {},
+            )
+
     # ---------------------------------------------------------- execution
     def execute(
-        self, plan: CombinedPlan, approval: str, *, reapply: bool = False
+        self,
+        plan: CombinedPlan,
+        approval: str,
+        *,
+        reapply: bool = False,
+        policy: PolicyDecision | None = None,
     ) -> dict[str, Any]:
-        """Run an approved plan (``approval`` must equal its combined hash)."""
+        """Run an approved plan (``approval`` must equal its combined hash).
+
+        ``policy`` is the decision of :meth:`policy_decision` when the run is
+        approved by the owner's policy instead of a human (it must allow the
+        plan); the release plan made after delivery is then checked again.
+        """
+        if policy is not None and not policy.allowed:
+            raise PipelineError(
+                "approval-policy-exceeded",
+                "the plan is outside the owner's approval policy: "
+                + ", ".join(policy.violations),
+                details={"policy": policy.to_dict()},
+            )
         if approval == preview_hash(plan):
             raise PipelineError(
                 "pipeline-preview-not-approvable",
@@ -1036,6 +1125,7 @@ class PipelineRunner:
             approval=approval,
             plan={"hashed": plan.hashed, "stages": plan.stages},
             refs=self.checkouts.describe() if self.checkouts else None,
+            approved_by="policy" if policy is not None else None,
         )
         return self._continue(plan.until, reapply=reapply)
 
@@ -1218,6 +1308,11 @@ class PipelineRunner:
             "stages": stages,
             "release": apply.get("release") or plan.get("release"),
             "images": plan.get("images", {}),
+            **(
+                {"approved_by": "policy"}
+                if run.data.get("approved_by") == "policy"
+                else {}
+            ),
         }
 
     # -------------------------------------------------------- stage: inputs
@@ -1497,6 +1592,7 @@ class PipelineRunner:
                     "the release differs from the approved one; plan again",
                 )
         self._within_preview(result)
+        self._within_policy(result)
         self.say(
             f"[plan] release {result.release} ({result.mode}): "
             + (

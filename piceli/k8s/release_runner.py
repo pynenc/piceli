@@ -42,6 +42,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from piceli.approval_policy import ApprovalPolicy
 from piceli.checks import (
     Check,
     CheckContext,
@@ -277,7 +278,10 @@ def _plan_authorization(
     field_manager: str,
     replace: Sequence[Mapping[str, str]] = (),
     previous: Sequence[ResourceIntent] = (),
+    policy: ApprovalPolicy | Mapping[str, Any] | None = None,
 ) -> PlanAuthorization:
+    if isinstance(policy, Mapping):
+        policy = ApprovalPolicy.from_identity(policy)
     return PlanAuthorization(
         target,
         tuple(ResourceRef(**item) for item in adopt),
@@ -286,7 +290,13 @@ def _plan_authorization(
         field_manager,
         tuple(ResourceRef(**item) for item in replace),
         tuple(previous),
+        approval_policy=policy,
     )
+
+
+def _policy_record(policy: ApprovalPolicy | None) -> dict[str, Any]:
+    """The policy a plan was made with, for its sidecar or pending file."""
+    return {} if policy is None else {"approval_policy": policy.identity()}
 
 
 def _previous_declared(
@@ -1512,6 +1522,7 @@ class ReleaseRunner:
                     field_manager=settings.field_manager,
                     replace=resolved.replace,
                     previous=_previous_declared(catalog, sorted(records)),
+                    policy=settings.approval_policy,
                 ),
                 private=private,
             )
@@ -1593,6 +1604,7 @@ class ReleaseRunner:
                     field_manager=settings.field_manager,
                     replace=resolved.replace,
                     previous=_previous_declared(catalog, records),
+                    policy=settings.approval_policy,
                 ),
             )
         finally:
@@ -1672,6 +1684,7 @@ class ReleaseRunner:
             field_manager=settings.field_manager,
             replace=replace,
             previous=_previous_declared(catalog, previous_releases),
+            policy=settings.approval_policy,
         )
         window = settings.approval_window_seconds
         expires_at = (_now() + timedelta(seconds=window)).isoformat()
@@ -1776,6 +1789,8 @@ class ReleaseRunner:
                     # Earlier releases whose declarations the plan's field
                     # removals are computed from (records are immutable).
                     "previous_releases": previous_releases,
+                    # The owner's approval policy, bound into the plan hash.
+                    **_policy_record(settings.approval_policy),
                     # A pipeline's sources (commit, dirty, --ref); not hashed.
                     **(
                         {"provenance": dict(provenance)}
@@ -1851,6 +1866,7 @@ class ReleaseRunner:
                 field_manager=settings.field_manager,
                 replace=replace,
                 previous=_previous_declared(catalog, previous_releases),
+                policy=settings.approval_policy,
             ),
             private=_private(composition, snapshot, store),
         )
@@ -1917,6 +1933,7 @@ class ReleaseRunner:
                     "rollback_on_failed_checks": (
                         self.spec.model.release.rollback_on_failed_checks
                     ),
+                    **_policy_record(self.spec.model.release.approval_policy),
                 }
             )
             + "\n",
@@ -2023,6 +2040,7 @@ class ReleaseRunner:
                 previous=_previous_declared(
                     catalog, sidecar.get("previous_releases", ())
                 ),
+                policy=sidecar.get("approval_policy"),
             ),
             grant,
             journal,
@@ -2108,6 +2126,7 @@ class ReleaseRunner:
                         previous=_previous_declared(
                             catalog, pending.get("previous_releases", ())
                         ),
+                        policy=pending.get("approval_policy"),
                     )
                     composition = composition_from_archive(record.archive)
                     if (

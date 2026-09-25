@@ -174,6 +174,11 @@ jobs:
           /tmp/core/bin/piceli render --spec examples/typed_app/release.toml > /tmp/render.yaml
           grep -q "kind: Deployment" /tmp/render.yaml
           /tmp/core/bin/piceli render --spec examples/typed_app/release.toml --format json | /tmp/core/bin/python -c "import json, sys; assert json.load(sys.stdin)"
+      # A fresh agent with only the skill: every SKILL.md command runs from a
+      # copy of skills/piceli against the built wheel and the fake API of
+      # piceli.testing (no cluster), so the skill cannot drift.
+      - name: Agent skill walkthrough against the built wheel
+        run: /tmp/core/bin/python scripts/skill_check.py
 
   build-spec-arm64:
     # Real containerized build of examples/builds/rust-hello on a native arm64 runner.

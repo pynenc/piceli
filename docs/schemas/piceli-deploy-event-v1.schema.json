@@ -74,7 +74,29 @@
         "blocking": {"type": "array", "items": {"type": "object"}},
         "preview": {"$ref": "#/$defs/previewMarker"},
         "plan_file": {"type": "string", "description": "With --plan --out FILE (planned): the portable plan file written (piceli.deploy-plan-file.v1)."},
-        "lock": {"$ref": "#/$defs/lock"}
+        "lock": {"$ref": "#/$defs/lock"},
+        "policy": {"$ref": "#/$defs/policy"},
+        "approved_by": {"const": "policy", "description": "The run was approved by the owner's auto_approve policy (--approve-if-policy), not by a human hash."}
+      }
+    },
+    "policy": {
+      "type": "object",
+      "description": "With approval-policy-exceeded: the owner's approval policy and the actions outside it.",
+      "required": ["allowed", "violations", "changes", "policy"],
+      "properties": {
+        "allowed": {"type": "boolean"},
+        "violations": {"type": "array", "items": {"type": "string"}},
+        "changes": {"type": "integer", "minimum": 0},
+        "policy": {
+          "type": "object",
+          "required": ["schema", "allow", "deny", "max_objects"],
+          "properties": {
+            "schema": {"const": "piceli.approval-policy.v1"},
+            "allow": {"type": "array", "items": {"type": "string"}},
+            "deny": {"type": "array", "items": {"type": "string"}},
+            "max_objects": {"type": ["integer", "null"]}
+          }
+        }
       }
     },
     "lock": {
@@ -95,7 +117,8 @@
         "stage": {"$ref": "#/$defs/stageName"},
         "blocking": {"type": "array", "items": {"type": "object"}},
         "preview": {"$ref": "#/$defs/previewMarker"},
-        "lock": {"$ref": "#/$defs/lock"}
+        "lock": {"$ref": "#/$defs/lock"},
+        "policy": {"$ref": "#/$defs/policy"}
       }
     },
     "previewMarker": {
