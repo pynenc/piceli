@@ -31,6 +31,11 @@ not tested. A managed Kubernetes service (GKE, EKS, AKS, …) is supported when
 its version is in the range; its extra admission webhooks behave like any
 other webhook (below).
 
+A read the API server throttles (`429`, from API priority and fairness or a
+watch cache that is still initializing, as for a CRD installed a moment
+before) is sent again after its `Retry-After`, like client-go does; writes
+are not.
+
 The `kubernetes` Python client is required at `>=29.0.0`. Piceli uses it for
 configuration loading and the HTTP transport, not for typed API models, so its
 version does not have to match the cluster's. The nightly run also tests the
@@ -113,6 +118,9 @@ plan writes the declared value back (it is the release's field), so an
 operator that keeps writing it will write it back too. Do not declare fields
 a controller manages; leave them out of the release.
 
+Tested by `tests/integration/test_ownership_operator_kind.py` (a CRD, and an
+operator-like writer with its own field manager for `spec` and `status`).
+
 (readiness-rules)=
 ### When an object is ready
 
@@ -139,9 +147,6 @@ with one rule per kind:
 A custom resource whose controller can never make it ready (a Certificate
 that cannot be issued) therefore fails the release after
 `readiness_seconds`, like a Deployment that never becomes ready.
-
-Tested by `tests/integration/test_ownership_operator_kind.py` (a CRD, and an
-operator-like writer with its own field manager for `spec` and `status`).
 
 ### Mutating admission webhooks
 

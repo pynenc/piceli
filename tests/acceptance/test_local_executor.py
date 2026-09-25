@@ -1005,3 +1005,28 @@ def test_update_retried_when_only_status_moved_the_version(
     api.inject("PATCH", "/configmaps/settings", status=409, dry_run=dry_run)
     assert run.run("status-moved", plan, snapshot, grant)["state"] == "ready"
     assert api.objects[("ConfigMap", "settings")]["data"] == {"mode": "new"}
+
+
+def test_throttled_reads_are_sent_again_and_writes_are_not(local_api, tmp_path):
+    """Regression (kind 1.37): a list of a CRD installed a moment before was
+    answered 429 while its watch cache initialized, and discovery reported
+    the kind as ``api-unavailable``. Reads are sent again (as client-go
+    does); a throttled write still fails."""
+    api, provider = local_api
+    api.inject("GET", "/configmaps", status=429)
+    api.inject("GET", "/configmaps", status=429)
+    artifact = discover(provider)
+    assert not artifact.coverage.failures
+    gets = [
+        r
+        for r in api.requests
+        if r["method"] == "GET" and r["path"].endswith("/configmaps")
+    ]
+    assert len(gets) == 3
+
+    plan, snapshot, grant = prepare(provider, [manifest()])
+    api.inject("POST", "/configmaps", status=429, dry_run=False)
+    assert (
+        executor(provider, tmp_path).run("t", plan, snapshot, grant)["state"] != "ready"
+    )
+    assert len(mutations(api)) == 1  # sent once, never retried

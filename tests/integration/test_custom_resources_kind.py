@@ -41,6 +41,9 @@ from piceli.k8s.cli import app as cli
 from piceli.k8s.ops.discovery import RELEASE_NAMESPACE_ANNOTATION
 from piceli.k8s.ops.provider_factory import api_client_from_kubeconfig
 
+# nginx:1.27-alpine multi-arch index digest (as in kind_support).
+DIGEST_1 = "sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10"
+
 KUBECONFIG = os.environ.get("PICELI_KIND_KUBECONFIG", "")
 CONTEXT = os.environ.get("PICELI_KIND_CONTEXT", "")
 ROOT = Path(__file__).resolve().parents[2]
@@ -192,6 +195,9 @@ def _spec(directory: Path, namespace: str, module: str) -> Path:
             prune = true
             [execution]
             readiness_seconds = 60
+            [images]
+            # Unused by the composition; a spec declares at least one image.
+            unused = "docker.io/library/nginx@{DIGEST_1}"
             """
         )
     )
