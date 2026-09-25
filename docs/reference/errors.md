@@ -125,6 +125,13 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`generation-precondition-failed`](#error-generation-precondition-failed) | execution | no |
 | [`git-timed-out`](#error-git-timed-out) | inputs | yes |
 | [`git-unavailable`](#error-git-unavailable) | inputs | no |
+| [`gitops-artifact-changed`](#error-gitops-artifact-changed) | gitops | no |
+| [`gitops-empty`](#error-gitops-empty) | gitops | no |
+| [`gitops-image-unresolved`](#error-gitops-image-unresolved) | gitops | no |
+| [`gitops-push-failed`](#error-gitops-push-failed) | gitops | yes |
+| [`gitops-secret-value`](#error-gitops-secret-value) | gitops | no |
+| [`gitops-secrets-present`](#error-gitops-secrets-present) | gitops | no |
+| [`gitops-target-invalid`](#error-gitops-target-invalid) | gitops | no |
 | [`grant-expired`](#error-grant-expired) | build-spec | yes |
 | [`grant-mismatch`](#error-grant-mismatch) | artifacts-input | yes |
 | [`identity-mismatch`](#error-identity-mismatch) | kubernetes | no |
@@ -276,6 +283,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`release-refused`](#error-release-refused) | release | no |
 | [`release-state-unavailable`](#error-release-state-unavailable) | release | yes |
 | [`render-model-invalid`](#error-render-model-invalid) | render | no |
+| [`render-out-refused`](#error-render-out-refused) | render | no |
 | [`render-target-invalid`](#error-render-target-invalid) | render | no |
 | [`replace-backup-failed`](#error-replace-backup-failed) | execution | yes |
 | [`replace-delete-not-observed`](#error-replace-delete-not-observed) | execution | no |
@@ -1919,6 +1927,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Fix the model as the message describes; `piceli render` shows the result without a cluster.
 - **Retry-safe:** no
 
+(error-render-out-refused)=
+### `render-out-refused`
+
+**Render output directory refused.** `--out` names a directory that holds files `piceli render --out` did not write (or a file it would overwrite), or it was combined with `--diff-env`.
+
+- **Fix:** Pass a new or empty directory, or the directory of a previous `--out` (it holds `.piceli-render`).
+- **Retry-safe:** no
+
 (error-render-target-invalid)=
 ### `render-target-invalid`
 
@@ -3262,4 +3278,63 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Environment not supported here.** `--env` selects an environment of an `App`; the target is a `DeploymentComposition`, a composition function that does not return an App, or a release.toml spec.
 
 - **Fix:** Return the App from the composition function, or use a pipeline (`--spec MODULE:ATTR`) whose app declares the environment.
+- **Retry-safe:** no
+
+
+## GitOps handoff (`piceli publish`, `piceli render --out`)
+
+(error-gitops-artifact-changed)=
+### `gitops-artifact-changed`
+
+**Artifact changed since approval.** `--approve` does not match the digest of this render's artifact: the model, the options or the annotations changed.
+
+- **Fix:** Run `piceli publish` without `--approve`, review the new digest and approve it.
+- **Retry-safe:** no
+
+(error-gitops-empty)=
+### `gitops-empty`
+
+**Nothing to hand off.** The render has no object left to publish (for example only Secrets, left out by `--secrets external`).
+
+- **Fix:** Check the target and `--env`; `piceli render` shows what it renders.
+- **Retry-safe:** no
+
+(error-gitops-image-unresolved)=
+### `gitops-image-unresolved`
+
+**Placeholder image in a GitOps handoff.** An object uses a placeholder image (a pipeline build that has not run, or an image the spec does not pin), which no controller can pull.
+
+- **Fix:** Render from a `release.toml` whose `[images]` or receipts pin every image by digest, or deploy the pipeline with `piceli deploy`.
+- **Retry-safe:** no
+
+(error-gitops-push-failed)=
+### `gitops-push-failed`
+
+**Artifact push failed.** The registry refused or broke off the push. The detail is withheld because it could contain server messages.
+
+- **Fix:** Check the registry, the repository and `--credentials`, then run the same command again; pushes are content-addressed.
+- **Retry-safe:** yes
+
+(error-gitops-secret-value)=
+### `gitops-secret-value`
+
+**Secret value in a GitOps handoff.** A non-Secret object holds a value Piceli redacts (a field or env var named like a password, token or credential) or injects at apply time from its secret store.
+
+- **Fix:** Move the value into a Secret provided outside the files, or list a field that is not secret in the object's `piceli.io/public-fields` annotation.
+- **Retry-safe:** no
+
+(error-gitops-secrets-present)=
+### `gitops-secrets-present`
+
+**Secret in a GitOps handoff.** The render holds a Secret object. A published artifact or rendered directory is applied by Flux or Argo CD as it is and must never carry secret values.
+
+- **Fix:** Provide the Secret outside the files (a SOPS-encrypted file, an `ExternalSecret`, or created by hand) and pass `--secrets external` to leave Secrets out.
+- **Retry-safe:** no
+
+(error-gitops-target-invalid)=
+### `gitops-target-invalid`
+
+**Invalid publish target.** `--to` is missing or not `oci://host[:port]/repository[:tag]`, or an annotation value (`--source`, `--revision`) is not short printable text.
+
+- **Fix:** Pass `--to oci://registry.example/team/app:tag` (plain HTTP only for a loopback registry).
 - **Retry-safe:** no

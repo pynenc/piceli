@@ -10,6 +10,7 @@ from piceli.k8s.cli.importing import app as import_app
 from piceli.k8s.cli.inputs import app as inputs_app
 from piceli.k8s.cli.observe import app as observe_app
 from piceli.k8s.cli.operator import app as operator_app
+from piceli.k8s.cli.publish import publish
 from piceli.k8s.cli.release import app as release_app
 from piceli.k8s.cli.render import render
 from piceli.k8s.cli.state import app as state_app
@@ -21,6 +22,7 @@ app.command("deploy")(deploy)
 app.add_typer(inputs_app, name="inputs")
 app.add_typer(observe_app, name="observe")
 app.add_typer(operator_app, name="operator")
+app.command("publish")(publish)
 app.add_typer(release_app, name="release")
 app.command("render")(render)
 app.add_typer(state_app, name="state")

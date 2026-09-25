@@ -81,6 +81,10 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["render", str(p / "missing.py") + ":app"],
         "render-target-invalid",
     ),
+    "publish": (
+        lambda p: ["publish", str(p / "missing.py") + ":app", "--to", "http://x"],
+        "gitops-target-invalid",
+    ),
     **{
         f"state {command}": (
             lambda p, command=command, extra=extra: [

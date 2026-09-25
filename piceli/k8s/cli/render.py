@@ -4,7 +4,14 @@ Contract:
 
 - Reads the target module and, with ``--spec``, the spec and the local receipt
   files it names. Never contacts a cluster, never reads or generates secret
-  values (secret inputs are placeholders), never writes files. Safe to retry.
+  values (secret inputs are placeholders), and writes files only with
+  ``--out``. Safe to retry.
+- ``--out DIR`` writes one YAML file per object into ``DIR`` (a directory to
+  commit for Argo CD or Flux; see :mod:`piceli.gitops`) and prints one JSON
+  object ``{"state": "written", …}``. A Secret is refused unless
+  ``--secrets external`` (Secrets are left out and listed by name); a redacted
+  value or a placeholder image is always refused. ``DIR`` must be absent,
+  empty or written by a previous ``--out``.
 - A ``Pipeline`` target renders with its target's namespace and declared
   nodes (``node="alias"`` pins resolve), build images as placeholders and
   the delivery node's pin; it reads no kubeconfig, build spec or state and
@@ -20,7 +27,8 @@ Contract:
   loaded, the model is invalid, or an environment is unknown or invalid). A
   rejection always prints one JSON object on stdout, whatever ``--format``
   says: ``{"state": "rejected", "reason": "render-target-invalid" |
-  "render-model-invalid" | "environment-…", "message": …}``
+  "render-model-invalid" | "environment-…" | "render-out-refused" |
+  "gitops-…", "message": …}``
   (:func:`piceli.cli_contract.reject`).
 """
 
@@ -40,6 +48,11 @@ from piceli.cli_contract import reject as contract_reject
 class OutputFormat(StrEnum):
     yaml = "yaml"
     json = "json"
+
+
+class SecretMode(StrEnum):
+    refuse = "refuse"
+    external = "external"
 
 
 Rejector = Callable[[str, str], NoReturn]
@@ -99,6 +112,25 @@ def render(
             show_default=False,
         ),
     ] = None,
+    out: Annotated[
+        Path | None,
+        typer.Option(
+            "--out",
+            help="Write one YAML file per object into this directory (for Argo "
+            "CD or Flux from Git) instead of printing; it must be absent, empty "
+            "or written by a previous --out",
+            show_default=False,
+        ),
+    ] = None,
+    secrets: Annotated[
+        SecretMode,
+        typer.Option(
+            "--secrets",
+            help="With --out: 'refuse' a Secret object, or leave Secrets out "
+            "because they are provided outside the files ('external': SOPS, "
+            "ExternalSecret, by hand)",
+        ),
+    ] = SecretMode.refuse,
 ) -> None:
     """Print the manifests of a typed app, composition or pipeline. Never contacts a cluster."""
     from piceli.app import render as rendering
@@ -111,7 +143,12 @@ def render(
         reject("environment-required", "--diff-env compares with --env; pass both")
     if not target and spec is None:
         reject("render-target-invalid", "pass a TARGET, --spec, or both")
+    if out is not None and diff_env is not None:
+        reject("render-out-refused", "--out writes manifests; drop --diff-env")
     first = _render(target, spec, namespace, env, reject)
+    if out is not None:
+        _write_out(out, first, secrets.value, env)
+        return
     if diff_env is None:
         name, components, _ = first
         if output is OutputFormat.json:
@@ -130,6 +167,39 @@ def render(
         typer.echo(json.dumps({"state": "diffed", **diff}, indent=2, sort_keys=True))
     else:
         typer.echo(diff_text(diff), nl=False)
+
+
+def _write_out(
+    out: Path,
+    rendered: tuple[str, list[dict[str, Any]], Any],
+    secrets: str,
+    env: str | None,
+) -> None:
+    from piceli.cli_contract import emit_json, reject_error, say
+    from piceli.gitops import GitOpsError, handoff, write_directory
+
+    namespace, components, _ = rendered
+    try:
+        written = write_directory(out, handoff(components, secrets))
+    except GitOpsError as error:
+        reject_error(error, "render-out-refused")
+    except OSError as error:
+        reject_error(error, "render-out-refused")
+    body: dict[str, Any] = {
+        "state": "written",
+        "directory": str(out),
+        "namespace": namespace,
+        **written,
+    }
+    if env is not None:
+        body["environment"] = env
+    emit_json(body)
+    say(f"wrote {len(written['files'])} file(s) to {out}")
+    if written["omitted_secrets"]:
+        say(
+            "left out (provide them outside the files): "
+            + ", ".join(written["omitted_secrets"])
+        )
 
 
 def _render(

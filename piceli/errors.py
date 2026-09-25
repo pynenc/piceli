@@ -50,6 +50,7 @@ AREAS: Mapping[str, str] = MappingProxyType(
         # --- 0.7.0 model completeness ---
         "codegen": "Typed models from CRDs (`piceli codegen crd`)",
         "environments": "Environments (`App.environment`, `--env`, `--diff-env`)",
+        "gitops": "GitOps handoff (`piceli publish`, `piceli render --out`)",
     }
 )
 
@@ -2983,6 +2984,71 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "Fix the override as the message says; `piceli render MODULE:ATTR --env NAME` shows the result without a cluster.",
         False,
         "environments",
+    ),
+    # ---------------------------------------------------------------- gitops
+    _E(
+        "gitops-secrets-present",
+        "Secret in a GitOps handoff",
+        "The render holds a Secret object. A published artifact or rendered directory is applied by Flux or Argo CD as it is and must never carry secret values.",
+        "Provide the Secret outside the files (a SOPS-encrypted file, an `ExternalSecret`, or created by hand) and pass `--secrets external` to leave Secrets out.",
+        False,
+        "gitops",
+    ),
+    _E(
+        "gitops-secret-value",
+        "Secret value in a GitOps handoff",
+        "A non-Secret object holds a value Piceli redacts (a field or env var named like a password, token or credential) or injects at apply time from its secret store.",
+        "Move the value into a Secret provided outside the files, or list a field that is not secret in the object's `piceli.io/public-fields` annotation.",
+        False,
+        "gitops",
+    ),
+    _E(
+        "gitops-image-unresolved",
+        "Placeholder image in a GitOps handoff",
+        "An object uses a placeholder image (a pipeline build that has not run, or an image the spec does not pin), which no controller can pull.",
+        "Render from a `release.toml` whose `[images]` or receipts pin every image by digest, or deploy the pipeline with `piceli deploy`.",
+        False,
+        "gitops",
+    ),
+    _E(
+        "gitops-empty",
+        "Nothing to hand off",
+        "The render has no object left to publish (for example only Secrets, left out by `--secrets external`).",
+        "Check the target and `--env`; `piceli render` shows what it renders.",
+        False,
+        "gitops",
+    ),
+    _E(
+        "gitops-target-invalid",
+        "Invalid publish target",
+        "`--to` is missing or not `oci://host[:port]/repository[:tag]`, or an annotation value (`--source`, `--revision`) is not short printable text.",
+        "Pass `--to oci://registry.example/team/app:tag` (plain HTTP only for a loopback registry).",
+        False,
+        "gitops",
+    ),
+    _E(
+        "gitops-artifact-changed",
+        "Artifact changed since approval",
+        "`--approve` does not match the digest of this render's artifact: the model, the options or the annotations changed.",
+        "Run `piceli publish` without `--approve`, review the new digest and approve it.",
+        False,
+        "gitops",
+    ),
+    _E(
+        "gitops-push-failed",
+        "Artifact push failed",
+        "The registry refused or broke off the push. The detail is withheld because it could contain server messages.",
+        "Check the registry, the repository and `--credentials`, then run the same command again; pushes are content-addressed.",
+        True,
+        "gitops",
+    ),
+    _E(
+        "render-out-refused",
+        "Render output directory refused",
+        "`--out` names a directory that holds files `piceli render --out` did not write (or a file it would overwrite), or it was combined with `--diff-env`.",
+        "Pass a new or empty directory, or the directory of a previous `--out` (it holds `.piceli-render`).",
+        False,
+        "render",
     ),
     _E(
         "environment-unsupported",

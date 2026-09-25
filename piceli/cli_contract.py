@@ -245,8 +245,13 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
         "render": _C(
             "Print the manifests of a typed app, composition or pipeline (YAML or JSON).",
             reads=("module/app file", "release.toml (optional)", "local receipts"),
+            writes=("--out directory",),
             contract="conforms",
-            notes="Never contacts a cluster; secret values are placeholders. A "
+            notes="Never contacts a cluster; secret values are placeholders. "
+            "--out DIR writes one YAML file per object (a directory for Argo CD "
+            "or Flux from Git; a Secret needs --secrets external, redacted "
+            "values and placeholder images are refused) and prints one JSON "
+            "object; DIR must be absent, empty or a previous --out. A "
             "Pipeline renders with its target's namespace and declared nodes, "
             "build images as placeholders, and reads no kubeconfig, build spec "
             "or state. --env NAME renders one environment of the App (a "
@@ -255,6 +260,28 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "--format json). stdout carries the manifests (YAML, or one JSON "
             "object with --format json); a refusal is always the JSON rejection "
             "object.",
+        ),
+        "publish": _C(
+            "Push the rendered manifests as a Flux OCI artifact (approval by digest).",
+            reads=(
+                "module/app file",
+                "release.toml (optional)",
+                "local receipts",
+                "credentials file",
+            ),
+            writes=("OCI registry (artifact blobs, manifest, tag)",),
+            approval_required=True,
+            safe_to_retry=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2, 3),
+            notes="Never contacts a cluster. Without --approve it prints the "
+            "deterministic artifact digest and exits 3 (nothing is pushed); "
+            "--approve DIGEST pushes by digest, then the tag, and reads both "
+            "back. Layout of `flux push artifact` (config "
+            "application/vnd.cncf.flux.config.v1+json, one layer "
+            "application/vnd.cncf.flux.content.v1.tar+gzip). A Secret needs "
+            "--secrets external; redacted values and placeholder images are "
+            "refused. Credentials only from --credentials FILE, never printed.",
         ),
         # ------------------------------------------------------ codegen
         "codegen crd": _C(

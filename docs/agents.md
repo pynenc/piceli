@@ -89,6 +89,13 @@ noted.
   environment; `--env A --diff-env B` prints their typed difference (use it
   to show the owner what differs before deploying another environment; see
   {doc}`environments`, and {doc}`reference_app` for a complete example).
+  `--out DIR` writes one YAML file per object into `DIR` (a directory the
+  owner commits for Argo CD or Flux; it must be absent, empty or a previous
+  `--out`); a Secret is refused unless `--secrets external`. See
+  {doc}`gitops`.
+- `piceli publish TARGET --to oci://…` **without** `--approve`: renders,
+  packages the Flux OCI artifact and prints its digest (exit `3`); nothing
+  is pushed.
 - `piceli codegen crd FILE` (reads the file) and `piceli codegen crd
   --from-cluster --kubeconfig F --context C --crd NAME` (one read of the CRD
   through the explicit context): generate typed models for a custom resource
@@ -157,6 +164,7 @@ Ask before running these, and show the owner what will happen first.
 | `piceli release stop` | Local journal (cancels an execution) | The owner's go-ahead |
 | `piceli release check` | Nothing by itself, but runs the spec's checks (declared pod execs and Python functions) | The owner's go-ahead for a spec you did not write |
 | `piceli artifacts deliver` | A registry or node | `--approve-digest <config digest>` |
+| `piceli publish` | A registry (the manifests as a Flux OCI artifact, which a GitOps controller then applies without Piceli's plan) | `--approve <artifact digest>` printed by `piceli publish` without `--approve`, after the owner reviewed the files and the target; see {doc}`gitops` |
 | `piceli artifacts build-spec run` | Runs a build, writes outputs and images | `--approve-builder <digest>` and `--approve-plan <hash>` |
 | `piceli artifacts execute-command` | Runs a pinned tool | `--approve-plan <hash>` |
 | `piceli artifacts import-local` | The local Docker image store | `--approve-digest <digest>` |

@@ -157,6 +157,7 @@ kubernetes_model/index
 
 deploy
 ci
+gitops
 state
 typed_apps
 crds
