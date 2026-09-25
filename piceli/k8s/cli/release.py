@@ -416,6 +416,18 @@ def _describe_rollback(rollback: dict[str, Any] | None) -> None:
     _describe_checks(rollback.get("checks"), "    ")
 
 
+def describe_diagnosis(diagnosis: dict[str, Any] | None, reason: str) -> None:
+    """``failed: 2 workloads not starting (<reason>)`` and one line per cause."""
+    from piceli.k8s.ops.diagnosis import headline, human_lines
+
+    title = headline(diagnosis)
+    if title is None:
+        return
+    _say(f"failed: {title} ({reason})")
+    for line in human_lines(diagnosis):
+        _say(line)
+
+
 def _finish(outcome: dict[str, Any]) -> None:
     from piceli.errors import ERRORS
 
@@ -448,6 +460,8 @@ def _finish(outcome: dict[str, Any]) -> None:
             + ")"
         )
     _describe_checks(outcome.get("checks"))
+    if failed and outcome.get("diagnosis"):
+        describe_diagnosis(outcome["diagnosis"], reason)
     _say(
         f"{outcome['intent']} {outcome['release']}: {state}"
         + (
@@ -731,11 +745,77 @@ def check(
         raise typer.Exit(EXIT_NOT_READY)
 
 
+_RUN_ID = r"[0-9]{8}T[0-9]{12}Z-[0-9a-f]{8}"
+
+
+def _pipeline_execution(runner: Any, run_id: str) -> str | None:
+    """The release execution a ``piceli deploy`` run applied (``--run RUN_ID``)."""
+    import re
+
+    if not re.fullmatch(_RUN_ID, run_id):
+        return None
+    path = Path(runner.state).parent / "runs" / f"{run_id}.json"
+    try:
+        value = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    apply = ((value.get("stages") or {}).get("apply") or {}).get("output") or {}
+    execution = (apply.get("execution") or {}).get("execution_id")
+    return str(execution) if execution else None
+
+
+def _describe_run(value: dict[str, Any]) -> None:
+    execution = value["execution"]
+    category = execution.get("failure_category")
+    _say(
+        f"{value.get('intent')} {value.get('release')} "
+        f"(execution {value['execution_id'][:12]}, {value.get('at')}): "
+        f"{value.get('release_state')}" + (f" ({category})" if category else "")
+    )
+    diagnosis = value.get("diagnosis")
+    if diagnosis:
+        describe_diagnosis(diagnosis, category or str(diagnosis.get("code")))
+        for workload in diagnosis.get("workloads", ()):
+            for cause in workload.get("causes", ()):
+                label = f"{workload['name']}/{cause.get('container') or '-'}"
+                for line in cause.get("logs", ()):
+                    _say(f"    {label} | {line}")
+                for event in cause.get("events", ()):
+                    _say(
+                        f"    {label} event {event['reason']} x{event['count']}: "
+                        f"{event['message']}"
+                    )
+    elif category:
+        _say(f"  explain with: piceli explain {category}")
+
+
 @app.command("status")
-def status(spec: SpecOption, env: EnvOption = None) -> None:
+def status(
+    spec: SpecOption,
+    env: EnvOption = None,
+    run: Annotated[
+        str | None,
+        typer.Option(
+            "--run",
+            help="Show one past execution (an execution id, a unique prefix of "
+            "at least 8 characters, or a `piceli deploy` run id): its state and "
+            "the recorded causes of a failure (redacted log tails, events)",
+        ),
+    ] = None,
+) -> None:
     """Show catalogued releases, their executions and history (no cluster access)."""
     try:
         with _runner(spec, env=env) as runner:
+            if run is not None:
+                execution = (
+                    _pipeline_execution(runner, run)
+                    if is_pipeline_target(spec)
+                    else None
+                )
+                found = runner.run(execution or run)
+                _describe_run(found)
+                _emit(found)
+                return
             value = runner.status()
     except _refusals() as error:
         _refuse(error)

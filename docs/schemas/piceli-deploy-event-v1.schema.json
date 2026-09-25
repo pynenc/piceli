@@ -74,7 +74,47 @@
         "blocking": {"type": "array", "items": {"type": "object"}},
         "preview": {"$ref": "#/$defs/previewMarker"},
         "plan_file": {"type": "string", "description": "With --plan --out FILE (planned): the portable plan file written (piceli.deploy-plan-file.v1)."},
-        "lock": {"$ref": "#/$defs/lock"}
+        "lock": {"$ref": "#/$defs/lock"},
+        "diagnosis": {"$ref": "#/$defs/diagnosis"}
+      }
+    },
+    "diagnosis": {
+      "type": "object",
+      "description": "With pipeline-apply-crashloop (or a not-ready apply whose pods show causes): why workloads did not start, per workload. Logs, messages and event texts are redacted (secret store values and secret-looking text) and bounded.",
+      "required": ["schema", "code", "workloads"],
+      "properties": {
+        "schema": {"const": "piceli.diagnosis.v1"},
+        "code": {"type": "string", "description": "The execution's failure category (apply-crashloop, readiness-timeout, deadline-exceeded)."},
+        "workloads": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["kind", "name", "fatal", "causes"],
+            "properties": {
+              "kind": {"type": "string"},
+              "name": {"type": "string"},
+              "fatal": {"type": "boolean"},
+              "causes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["pod", "container", "reason", "exit_code", "restarts", "logs", "events"],
+                  "properties": {
+                    "pod": {"type": "string"},
+                    "container": {"type": "string"},
+                    "init": {"type": "boolean"},
+                    "reason": {"type": "string"},
+                    "exit_code": {"type": ["integer", "null"]},
+                    "restarts": {"type": "integer"},
+                    "message": {"type": "string"},
+                    "logs": {"type": "array", "items": {"type": "string"}},
+                    "events": {"type": "array", "items": {"type": "object"}}
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     "lock": {

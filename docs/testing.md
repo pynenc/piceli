@@ -128,9 +128,9 @@ socket and reads no kubeconfig. The names are loaded on first use.
 | `serve(api=None)` | Context manager: yields `(api, url)` for a running server |
 | `provider_at(url, **kwargs)` | A `KubernetesProvider` bound to `TARGET` (field manager `piceli-acceptance`, owner `acceptance-owner`) |
 | `write_kubeconfig(url, path, context="fake")` | A credential-free kubeconfig for the server |
-| `FakeAPI(types=None)` | The server state: `objects`, `requests`, `put(...)`, `inject(...)`, `intercept`, `scale(kind, name, replicas)`, `managers(kind, name)`, `field_ownership`, `ready`, `wait_for_first_consumer`, `terminating_reads` (an `Orphan` delete lingers for that many reads) |
+| `FakeAPI(types=None)` | The server state: `objects`, `requests`, `put(...)`, `inject(...)`, `intercept`, `scale(kind, name, replicas)`, `managers(kind, name)`, `field_ownership`, `ready`, `wait_for_first_consumer`, `terminating_reads` (an `Orphan` delete lingers for that many reads), `fail_pods(workload, reason=…, exit_code=…, restarts=…, logs=…, message=…, events=…)` (0.8.0: with `ready = False` the workload gets a current ReplicaSet and a failing pod, with its log at `pods/NAME/log` and Warning events at `events`; for testing the `apply-crashloop` diagnosis), `pod_logs`, `events` |
 | `TARGET` | The `PlanTarget` every server represents (`acceptance-cluster`, `piceli-test`) |
-| `TYPES` | The default served kinds: ConfigMap, Secret, Service, Pod, PersistentVolumeClaim, PersistentVolume, Namespace, Deployment, NetworkPolicy, ServiceAccount, Role, RoleBinding, ClusterRole, ClusterRoleBinding, a test `Widget` and (0.6.0) `coordination.k8s.io/v1` Lease, for shared state (`state="cluster"`) |
+| `TYPES` | The default served kinds: ConfigMap, Secret, Service, Pod, PersistentVolumeClaim, PersistentVolume, Namespace, Deployment, ReplicaSet (0.8.0), NetworkPolicy, ServiceAccount, Role, RoleBinding, ClusterRole, ClusterRoleBinding, a test `Widget` and (0.6.0) `coordination.k8s.io/v1` Lease, for shared state (`state="cluster"`) |
 | `manifest(kind, name, value=...)` | A minimal valid object for seeding |
 | `field_paths`, `fields_v1`, `paths_of`, `value_at` | Helpers for `managedFields` (FieldsV1) paths |
 | `piceli.testing.pytest_plugin` | The `piceli_fake_cluster` fixture |
@@ -140,7 +140,8 @@ socket and reads no kubeconfig. The names are loaded on first use.
 - No admission, no defaulting beyond status (Deployments report ready
   replicas, PVCs bind, Services get a cluster IP), no watch, only
   equality and existence label selectors on lists (`k`, `!k`, `k=v`,
-  `k!=v`), no Pods created from Deployments.
+  `k!=v`), no Pods created from Deployments (except the failing pods of
+  `fail_pods`).
 - One namespace and one cluster identity (`kube-system` UID `cluster-uid`,
   namespace UID `namespace-uid`).
 - It exists to test Piceli's clients, not Kubernetes semantics: keep one

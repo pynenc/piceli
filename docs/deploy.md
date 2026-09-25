@@ -663,7 +663,8 @@ The policy is used by `piceli deploy` (plan, apply, checks), `piceli status`,
 | `pipeline-mirror-not-pinned` | A `mirror=` entry has no digest | Pin it: `repository@sha256:…` |
 | `mirror-platform-unavailable` (exit `1`) | The mirrored image has no manifest for the node's platform | Pin an image that supports the node |
 | `registry-unauthorized` at `deliver` | A mirror source needs a login | Add `mirror_credentials={"registry": "file.json"}` |
-| `pipeline-apply-not-ready` (exit `1`) | The release did not become ready | Fix the workload (image, probe, claim), then `--resume` |
+| `pipeline-apply-crashloop` (exit `1`) | A workload's new pods cannot start: crash loop, image pull or configuration error, or `crash_restarts` restarts. The apply stopped at once; stderr has one line per cause and the result's `diagnosis` the redacted log tails and events | Fix the cause, then deploy again (or `--resume`); `piceli release status --spec MODULE:ATTR --run RUN_ID` shows the causes again ({ref}`deploy-diagnosis`) |
+| `pipeline-apply-not-ready` (exit `1`) | The release did not become ready in time (`diagnosis` lists what its pods show, when anything) | Fix the workload (image, probe, claim), then `--resume` |
 | `pipeline-checks-failed` (exit `1`) | A check failed; see `checks.results` and `checks.rollback` in the run | Fix the app and deploy again |
 | `pipeline-locked` | Another run uses the state directory (with `state="cluster"`: the release, see `lock.holder`) | Wait, then retry |
 | `deploy-plan-file-mismatch`, `deploy-plan-target-mismatch` | `--apply`: the hash, pipeline or cluster is not the plan file's | Approve the file's hash with its pipeline and kubeconfig |
@@ -676,6 +677,67 @@ The policy is used by `piceli deploy` (plan, apply, checks), `piceli status`,
 
 Every code is explained by `piceli explain <code>` and in
 {doc}`reference/errors`.
+
+(deploy-diagnosis)=
+### A workload that cannot start
+
+While the apply waits for a Deployment, StatefulSet, DaemonSet, Job or Pod to
+become ready, Piceli looks at the pods of the revision being rolled out every
+two seconds. A container in `CrashLoopBackOff` (`Init:CrashLoopBackOff` for an
+init container), `ImagePullBackOff`, `ErrImagePull`, `InvalidImageName`,
+`CreateContainerConfigError`, `CreateContainerError` or `RunContainerError`,
+one that restarted `crash_restarts` times (default 3), a failed Job or a
+failed Pod stops the apply **at once**, instead of at `readiness_seconds`:
+
+```text
+[apply] failed (pipeline-apply-crashloop)
+failed: release shop-1a2b3c4d5e6f cannot start (apply-crashloop) (pipeline-apply-crashloop)
+  2 workloads not starting:
+    cache  cache  exit 101  "config file must be owner-only"
+    web    web    exit 1    "fatal: cannot open catalog"
+```
+
+One line per cause: workload, container, exit code (or the reason when the
+container never ran, such as `ImagePullBackOff`) and the last log line (or the
+status message or latest event). The result JSON adds `diagnosis`
+(`piceli.diagnosis.v1`): per workload, each cause's pod, container, reason,
+exit code, restart count, the last 20 log lines and the latest 5 events.
+Every text read from the cluster is **redacted** first: any value in the
+release's secret store (and its decoded form) and anything that looks like a
+secret (`password=…`, bearer tokens, URL credentials, JSON Web Tokens, private
+key markers) becomes `[REDACTED]`, and lines are cut to 300 characters.
+
+The causes are kept in the private execution journal, so they can be read
+again later without the cluster:
+
+```sh
+piceli release status --spec app.py:pipeline --run RUN_ID   # or an execution id
+piceli explain --run RUN_ID --spec app.py:pipeline          # the same
+```
+
+The run journal (`state_dir/runs/`) and `release status` keep only the compact
+causes (workload, container, reason, exit code, restarts), never log lines.
+
+Only pods of the new revision count: an old pod that crash-loops while the new
+one starts never fails the apply, and when the revision cannot be told apart
+(no ReplicaSet yet, the credentials cannot read pods) Piceli simply waits, as
+before. Reading pods, their logs (`pods/log`), events and ReplicaSets needs
+`get`/`list` on them in the namespace; without it the diagnosis is skipped.
+
+A failed apply is not rolled back automatically, exactly as for an apply that
+does not become ready in time: `rollback_on_failed_checks` only acts when the
+release became ready and a check failed. Roll back by hand with
+`piceli release rollback previous --spec MODULE:ATTR`, or fix and deploy
+again. An app that is expected to crash a few times while its dependencies
+start can raise `crash_restarts` or turn the early stop off:
+
+```python
+Pipeline(..., execution={"fail_fast": False})  # wait for readiness_seconds
+Pipeline(..., execution={"crash_restarts": 10})  # tolerate more restarts
+```
+
+(`[execution] fail_fast = false` / `crash_restarts = 10` in a `release.toml`.)
+Even then, an apply that times out reports what the pods show in `diagnosis`.
 
 ## Command contract
 

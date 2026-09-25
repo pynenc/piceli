@@ -488,11 +488,11 @@ def deploy(
                         combined, combined.combined_hash, reapply=reapply
                     )
     except PipelineError as error:
-        _fail(runner, error)
+        _fail(runner, error, target, env)
     except (ValueError, OSError) as error:
         from piceli.pipeline.runner import classify
 
-        _fail(runner, classify(error))
+        _fail(runner, classify(error), target, env)
     except KeyboardInterrupt:
         say(
             "interrupted; continue with: piceli deploy "
@@ -573,7 +573,9 @@ def _write_plan_file(
     say(f"plan file: {out}")
 
 
-def _fail(runner: Any, error: Any) -> None:
+def _fail(
+    runner: Any, error: Any, target: str | None = None, env: str | None = None
+) -> None:
     say(f"{'failed' if error.failed else 'rejected'}: {error} ({error.code})")
     for item in error.details.get("blocking", ()):
         suggest = " or ".join(item.get("suggest", ()))
@@ -588,7 +590,21 @@ def _fail(runner: Any, error: Any) -> None:
             + _placeholder_note(preview)
             + "; nothing was built or delivered)"
         )
+    diagnosis = error.details.get("diagnosis")
+    if isinstance(diagnosis, dict):
+        from piceli.k8s.ops.diagnosis import headline, human_lines
+
+        title = headline(diagnosis)
+        if title:
+            say(f"  {title}:")
+        for line in human_lines(diagnosis):
+            say(f"  {line}")
     say(f"explain with: piceli explain {error.code}")
+    if runner.run is not None and isinstance(diagnosis, dict):
+        say(
+            f"again later: piceli release status --spec {target or 'MODULE:ATTR'}"
+            f"{env_flag(env)} --run {runner.run.run_id}"
+        )
     if runner.run is not None:
         body = runner.result(runner.run.state)
         if not error.failed:
@@ -623,5 +639,7 @@ def _fail(runner: Any, error: Any) -> None:
         }
     if isinstance(preview, dict):
         body["preview"] = preview
+    if isinstance(diagnosis, dict):
+        body["diagnosis"] = diagnosis
     emit_json(body)
     raise typer.Exit(EXIT_FAILED if error.failed else EXIT_REJECTED)

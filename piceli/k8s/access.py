@@ -23,7 +23,10 @@ is side-effect free.
 
 from __future__ import annotations
 
+import os
 import re
+import signal
+import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -31,7 +34,15 @@ from types import SimpleNamespace
 from typing import Any, Protocol
 
 from piceli.k8s.observe import local_port_in_use, probe_endpoint
-from piceli.k8s.port_owner import PortOwner, is_piceli_forward, port_owner
+from piceli.k8s.port_owner import (
+    OTHER,
+    UNKNOWN,
+    Holder,
+    PortOwner,
+    is_piceli_forward,
+    port_owner,
+    recognise,
+)
 from piceli.k8s.ui_config import UiComponent, UiConfig, UiShortcut, UiTier
 
 STATUS_SCHEMA = "piceli.status.v1"
@@ -311,38 +322,189 @@ def select_shortcuts(
 
 @dataclass(frozen=True)
 class PortConflict:
-    """A declared local port already served by another process."""
+    """A declared local port already served by another process.
+
+    ``holder`` says whether that process is Piceli's own for this target
+    (see :func:`~piceli.k8s.port_owner.recognise`); only then is its command
+    line kept, anything else is named by its pid alone.
+    """
 
     id: str
     local_port: int
     required: bool
     owner: PortOwner | None = None
+    holder: Holder | None = None
+
+    def _holder(self) -> Holder:
+        if self.holder is not None:
+            return self.holder
+        return Holder(UNKNOWN if self.owner is None else OTHER, self.owner)
 
     def to_dict(self) -> dict[str, Any]:
+        public = self._holder().public()
         return {
             "id": self.id,
             "local_port": self.local_port,
             "required": self.required,
-            "owner": self.owner.to_dict() if self.owner is not None else None,
+            "owner": public["owner"],
+            "holder": public["holder"],
         }
 
     def describe(self) -> str:
-        holder = self.owner.describe() if self.owner else "an unidentified process"
-        return f"{self.id}: local port {self.local_port} is held by {holder}"
+        return (
+            f"{self.id}: local port {self.local_port} is held by "
+            f"{self._holder().describe()}"
+        )
+
+
+def _full_owner(port: int) -> PortOwner | None:
+    """The port's owner with full command lines, for the ownership check only."""
+    return port_owner(port, limit=_OWNER_LIMIT)
 
 
 def port_conflicts(
     shortcuts: Iterable[UiShortcut],
     *,
     in_use: Callable[[int], bool] = local_port_in_use,
-    owner: Callable[[int], PortOwner | None] = port_owner,
+    owner: Callable[[int], PortOwner | None] = _full_owner,
+    recognise_owner: Callable[[PortOwner | None], Holder] | None = None,
 ) -> list[PortConflict]:
-    """Every declared forward whose local port is already taken, with its owner."""
-    return [
-        PortConflict(item.id, item.local_port, item.required, owner(item.local_port))
-        for item in shortcuts
-        if in_use(item.local_port)
+    """Every declared forward whose local port is already taken, with its owner.
+
+    ``recognise_owner`` (see :func:`holder_check`) marks Piceli's own
+    processes for the target; without it every owner counts as foreign.
+    """
+    conflicts = []
+    for item in shortcuts:
+        if not in_use(item.local_port):
+            continue
+        found = owner(item.local_port)
+        holder = recognise_owner(found) if recognise_owner is not None else None
+        conflicts.append(
+            PortConflict(item.id, item.local_port, item.required, found, holder)
+        )
+    return conflicts
+
+
+def holder_check(
+    target: AccessTarget, names: Iterable[str] = ()
+) -> Callable[[PortOwner | None], Holder]:
+    """Recognise Piceli's own processes for ``target`` (see ``recognise``).
+
+    ``names`` are the TARGET arguments a ``piceli access`` for this app may
+    have been started with (as typed, and absolute).
+    """
+    forwards = tuple(
+        (
+            item.namespace or target.namespace,
+            item.target,
+            item.local_port,
+            item.remote_port,
+        )
+        for item in target.shortcuts
+    )
+    known = tuple(names)
+
+    def check(found: PortOwner | None) -> Holder:
+        return recognise(
+            found,
+            kubeconfig=str(target.kubeconfig),
+            context=target.context,
+            forwards=forwards,
+            targets=known,
+        )
+
+    return check
+
+
+def stale_hint(conflicts: Iterable[PortConflict], target: str) -> str | None:
+    """The ``piceli access stop --stale`` line when Piceli holds one of the ports."""
+    ports = [
+        item.local_port
+        for item in conflicts
+        if item.holder is not None and item.holder.piceli
     ]
+    if not ports:
+        return None
+    return f"stop piceli's stale processes with: piceli access stop --stale {target}"
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def _terminate(pid: object) -> bool:
+    """SIGTERM ``pid``; refuses non-integers (test doubles), init and ourselves."""
+    if type(pid) is not int or pid <= 1 or pid in {os.getpid(), os.getppid()}:
+        return False
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def stop_stale(
+    ports: Iterable[int],
+    check: Callable[[PortOwner | None], Holder],
+    *,
+    in_use: Callable[[int], bool] = local_port_in_use,
+    owner: Callable[[int], PortOwner | None] = _full_owner,
+    terminate: Callable[[object], bool] = _terminate,
+    wait_seconds: float = 5.0,
+) -> dict[str, Any]:
+    """Stop the Piceli processes for this target that hold ``ports``; never others.
+
+    Each held port's owner is recognised (see :func:`holder_check`). A
+    Piceli forward's supervisor (or the orphaned ``kubectl`` itself) and a
+    Piceli server for this target get SIGTERM, after a second look confirms
+    the same process still holds the port. Any other holder is left alone
+    and reported by pid only. Returns ``stopped``, ``left`` (foreign or
+    unidentified holders), ``failed`` (Piceli processes still holding their
+    port after ``wait_seconds``) and ``free`` ports.
+    """
+    stopped: list[dict[str, Any]] = []
+    left: list[dict[str, Any]] = []
+    free: list[int] = []
+    signalled: dict[int, list[int]] = {}
+    for port in dict.fromkeys(ports):
+        if not in_use(port):
+            free.append(port)
+            continue
+        holder = check(owner(port))
+        if not holder.piceli or holder.stop is None or holder.owner is None:
+            left.append({"port": port, **holder.public()})
+            continue
+        again = check(owner(port))  # the same process, right before the signal
+        if again.owner is None or again.owner.pid != holder.owner.pid:
+            left.append({"port": port, **again.public()})
+            continue
+        if holder.stop not in signalled and not terminate(holder.stop):
+            left.append({"port": port, **holder.public()})
+            continue
+        signalled.setdefault(holder.stop, []).append(port)
+        stopped.append({"port": port, "pid": holder.stop, **holder.public()})
+    deadline = time.monotonic() + wait_seconds
+    waiting = {item["port"] for item in stopped}
+    while waiting and time.monotonic() < deadline:
+        waiting = {port for port in waiting if in_use(port)}
+        if waiting:
+            time.sleep(0.1)
+    failed = [item for item in stopped if item["port"] in waiting]
+    return {
+        "stopped": [item for item in stopped if item["port"] not in waiting],
+        "failed": failed,
+        "left": left,
+        "free": free,
+    }
 
 
 # ---------------------------------------------------------------- dashboard
@@ -594,11 +756,6 @@ def workload_status(
     }
 
 
-def _owner_for_status(port: int) -> PortOwner | None:
-    """The port's owner with full command lines, for the ownership check only."""
-    return port_owner(port, limit=_OWNER_LIMIT)
-
-
 def forward_status(
     shortcut: UiShortcut,
     *,
@@ -623,7 +780,7 @@ def forward_status(
     nothing can be verified and a listener is ``occupied``. Contacts only
     the loopback address, never the cluster.
     """
-    owner = owner or _owner_for_status
+    owner = owner or _full_owner
     owned = owned or is_piceli_forward
     outcome = probe(shortcut.local_port, shortcut.probe)
     listening = outcome is None or in_use(shortcut.local_port)

@@ -14,7 +14,12 @@ Contract (see ``docs/access.md``):
   supervises it (health probes, bounded restarts) until interrupted. ``--json``
   prints JSON lines (``started``, ``status``, ``stopped`` events). A required
   forward whose local port is taken is refused with ``access-port-conflict``
-  and the owner's pid and command; nothing is started.
+  and the owner's pid (its command only when it is Piceli's own process for
+  this app, with the hint ``piceli access stop --stale TARGET``); nothing is
+  started.
+- ``access stop --stale`` stops Piceli's own processes for the app that hold
+  its declared ports (a forward's supervisor or orphaned ``kubectl``, an
+  ``access``, ``observe serve`` or ``operator serve``); never another process.
 
 Importing this module is side-effect free.
 """
@@ -28,17 +33,21 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import typer
+from typer.core import TyperCommand, TyperGroup
 
-from piceli.cli_contract import EXIT_FAILED, emit_json, reject, say
+from piceli.cli_contract import EXIT_FAILED, emit_json, fail, reject, say
 from piceli.k8s.access import (
     AccessTarget,
     AccessTargetError,
     KubernetesWorkloadReader,
     access_ui_config,
     collect_status,
+    holder_check,
     port_conflicts,
     resolve_target,
     select_shortcuts,
+    stale_hint,
+    stop_stale,
 )
 from piceli.k8s.ui_config import UI_CONFIG_ENV, load_ui_config
 
@@ -49,6 +58,18 @@ TARGET_HELP = (
 
 #: Builds the live workload reader; replaced in tests (never a real cluster).
 _workload_reader: Any = KubernetesWorkloadReader
+
+
+def _names(target: str) -> tuple[str, ...]:
+    """The TARGET as typed and with an absolute file part (``piceli access`` argv)."""
+    names = [target]
+    if target.endswith(".toml"):
+        names.append(str(Path(target).absolute()))
+    else:
+        file, sep, attr = target.rpartition(":")
+        if sep and file:
+            names.append(f"{Path(file).absolute()}:{attr}")
+    return tuple(dict.fromkeys(names))
 
 
 def _resolve(target: str) -> AccessTarget:
@@ -329,8 +350,8 @@ def access(
     Supervises exactly the forwards the model declares (``app.access.forward``)
     with health probes and bounded restarts until Ctrl-C, SIGTERM or SIGHUP,
     then stops every forward it started. Refuses before starting anything when
-    a required local port is held by another process, naming its pid and
-    command.
+    a required local port is held by another process, naming its pid (and,
+    when it is Piceli's own stale process for this app, how to stop it).
     """
     from piceli.k8s.cli.observe import interrupts_as_keyboard_interrupt
     from piceli.k8s.observe import ForwardSupervisor
@@ -346,24 +367,27 @@ def access(
     if executable is None:
         reject("access-kubectl-missing")
     _check_kubeconfig(resolved)
-    conflicts = port_conflicts(selected)
+    check = holder_check(resolved, _names(target))
+    conflicts = port_conflicts(selected, recognise_owner=check)
     blocking = [item for item in conflicts if item.required]
     if blocking:
         for item in blocking:
             say(f"piceli: {item.describe()}")
+        hint = stale_hint(blocking, target)
         reject(
             "access-port-conflict",
             conflicts=[item.to_dict() for item in blocking],
+            hints=(hint,) if hint else (),
         )
     if dashboard is not None:
-        taken = port_conflicts(
-            [_dashboard_shortcut(dashboard)],
-        )
+        taken = port_conflicts([_dashboard_shortcut(dashboard)], recognise_owner=check)
         if taken:
             say(f"piceli: dashboard {taken[0].describe()}")
+            hint = stale_hint(taken, target)
             reject(
                 "access-port-conflict",
                 conflicts=[item.to_dict() for item in taken],
+                hints=(f"{hint} --port {dashboard}",) if hint else (),
             )
     skipped = {item.id for item in conflicts}
     start = [item for item in selected if item.id not in skipped]
@@ -459,7 +483,108 @@ def access(
         raise typer.Exit(EXIT_FAILED)
 
 
+def stop(
+    target: Annotated[str, typer.Argument(help=TARGET_HELP, show_default=False)],
+    stale: Annotated[
+        bool,
+        typer.Option(
+            "--stale",
+            help="Stop Piceli's own processes for this app that hold its ports "
+            "(required: the only mode)",
+        ),
+    ] = False,
+    port: Annotated[
+        list[int] | None,
+        typer.Option(
+            "--port",
+            min=1,
+            max=65535,
+            help="Also check this loopback port (a dashboard, observe serve or "
+            "operator serve port); repeatable",
+        ),
+    ] = None,
+) -> None:
+    """Stop Piceli's stale forwards and servers for the app; never another process.
+
+    Checks every declared forward's local port (and each --port). A port held
+    by Piceli's own process for this app (the ``kubectl port-forward`` it
+    started, orphaned or still supervised, or ``piceli access``, ``observe
+    serve`` or ``operator serve`` for the same target) is freed with SIGTERM
+    to that process (a forward's supervisor rather than its ``kubectl``).
+    Any other holder is left alone and named by its pid only. Prints one JSON
+    object; exit 1 when a Piceli process still holds its port afterwards.
+    """
+    resolved = _resolve(target)
+    if not stale:
+        say("piceli: access stop only stops stale piceli processes: add --stale")
+        reject("access-stop-needs-stale")
+    ports = [item.local_port for item in resolved.shortcuts] + list(port or ())
+    if not ports:
+        reject("access-none-declared")
+    result = stop_stale(ports, holder_check(resolved, _names(target)))
+    for item in result["stopped"]:
+        what = "forward" if item["holder"] == "piceli-forward" else "process"
+        say(
+            f"piceli: stopped piceli's {what} holding port {item['port']} "
+            f"(pid {item['pid']})"
+        )
+    for item in result["left"]:
+        owner = item.get("owner")
+        holder = f"pid {owner['pid']}" if owner else "an unidentified process"
+        say(
+            f"piceli: port {item['port']} is held by {holder}, not by piceli for "
+            "this app: left alone"
+        )
+    body = {"app": resolved.name, "namespace": resolved.namespace, **result}
+    if result["failed"]:
+        for item in result["failed"]:
+            say(
+                f"piceli: port {item['port']} is still held after stopping pid "
+                f"{item['pid']}; run the command again"
+            )
+        fail("access-stop-incomplete", **body)
+    if not result["stopped"]:
+        say("piceli: no stale piceli process holds this app's ports")
+    emit_json({"state": "succeeded", **body})
+
+
+class _AccessGroup(TyperGroup):
+    """``piceli access TARGET …`` runs the forwards; ``access stop …`` stops.
+
+    Any first argument that is not a subcommand (a TARGET, an option,
+    ``--help``) goes to the hidden default command, so ``piceli access
+    TARGET`` works as before.
+    """
+
+    default_command = "run"
+
+    def parse_args(self, ctx: Any, args: list[str]) -> list[str]:
+        if not args or args[0] not in self.commands:
+            args = [self.default_command, *args]
+        return super().parse_args(ctx, args)
+
+    def resolve_command(self, ctx: Any, args: list[str]) -> Any:
+        name, command, rest = super().resolve_command(ctx, args)
+        # Usage and errors read ``piceli access TARGET``, not ``access run``.
+        return ("" if name == self.default_command else name), command, rest
+
+
+class _DefaultContext(typer.Context):
+    @property
+    def command_path(self) -> str:
+        return str(super().command_path).rstrip()
+
+
+class _DefaultCommand(TyperCommand):
+    context_class = _DefaultContext
+
+
+access_app = typer.Typer(cls=_AccessGroup, rich_markup_mode=None)
+access_app.command("run", hidden=True, cls=_DefaultCommand)(access)
+access_app.command("stop")(stop)
+
+
 def register(app: typer.Typer) -> None:
-    """Add ``access`` and ``status`` to the root application."""
-    app.command("access")(access)
+    """Add ``access`` (with ``access stop``) and ``status`` to the root application."""
+    app.add_typer(access_app, name="access", help=access.__doc__)
     app.command("status")(status)

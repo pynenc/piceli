@@ -148,6 +148,14 @@ A custom resource whose controller can never make it ready (a Certificate
 that cannot be issued) therefore fails the release after
 `readiness_seconds`, like a Deployment that never becomes ready.
 
+A workload whose new pods cannot start does not wait that long: a container in
+`CrashLoopBackOff`, `ImagePullBackOff`, `ErrImagePull`, `InvalidImageName`,
+`CreateContainerConfigError`, `CreateContainerError` or `RunContainerError`,
+`[execution] crash_restarts` restarts (default 3), a failed Job or Pod fails
+the apply at once with `apply-crashloop` and the causes (redacted log tails,
+events) in `diagnosis`. See {ref}`deploy-diagnosis`; `[execution] fail_fast =
+false` turns it off.
+
 ### Mutating admission webhooks
 
 A mutating webhook (a sidecar or policy injector, a defaulting webhook) may

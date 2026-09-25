@@ -73,6 +73,7 @@ TYPES: Mapping[str, tuple[str, str, bool]] = {
     "secrets": ("v1", "Secret", True),
     "services": ("v1", "Service", True),
     "pods": ("v1", "Pod", True),
+    "replicasets": ("apps/v1", "ReplicaSet", True),
     "persistentvolumeclaims": ("v1", "PersistentVolumeClaim", True),
     "persistentvolumes": ("v1", "PersistentVolume", False),
     "namespaces": ("v1", "Namespace", False),
@@ -430,6 +431,11 @@ class FakeAPI:
       garbage collector removes the finalizer.
     - ``nodes``: ``{name: Node manifest}`` served at ``/api/v1/nodes/NAME``
       (read-only, not part of discovery); add one with :meth:`add_node`.
+    - ``pod_failures``: workloads whose pods cannot start (see
+      :meth:`fail_pods`); ``pod_logs`` ``{(pod, container, previous):
+      text}`` served at ``pods/NAME/log``; ``events``: Event objects served
+      at ``/api/v1/namespaces/NS/events`` (``fieldSelector`` on
+      ``involvedObject.kind``/``name``).
 
     - ``intercept``: an optional ``(request, phase) -> bool`` called for
       every request with ``phase`` ``"received"`` (before the server acts on
@@ -460,6 +466,9 @@ class FakeAPI:
         self.version = 1
         self.nodes: dict[str, dict[str, Any]] = {}
         self.intercept: Callable[[dict[str, Any], str], bool] | None = None
+        self.pod_failures: dict[str, dict[str, Any]] = {}
+        self.pod_logs: dict[tuple[str, str, bool], str] = {}
+        self.events: list[dict[str, Any]] = []
         self.put(manifest("Namespace", "kube-system"), uid="cluster-uid")
         self.put(manifest("Namespace", TARGET.namespace), uid="namespace-uid")
 
@@ -547,6 +556,210 @@ class FakeAPI:
             metadata["managedFields"] = entries
             self._readiness(current)
             return copy.deepcopy(current)
+
+    def fail_pods(
+        self,
+        workload: str,
+        *,
+        reason: str | None = "CrashLoopBackOff",
+        exit_code: int | None = 1,
+        restarts: int = 1,
+        logs: str = "",
+        message: str = "",
+        container: str | None = None,
+        init: bool = False,
+        events: tuple[tuple[str, str], ...] = (),
+    ) -> None:
+        """Make the pods of the Deployment/StatefulSet/DaemonSet/Job ``workload`` fail.
+
+        When the executor reads the workload (with :attr:`ready` false) the
+        fake creates what the controllers would: for a Deployment a
+        ReplicaSet of its current revision, and one pod owned by it (or by
+        the workload), whose container ``container`` (default: the first of
+        the template) waits with ``reason`` (``None``: running) after
+        ``restarts`` restarts, the last one exiting ``exit_code``. ``logs``
+        is the previous instance's log (the current one when ``restarts`` is
+        0); ``events`` are ``(reason, message)`` Warning events of the pod.
+        """
+        with self.lock:
+            self.pod_failures[workload] = {
+                "reason": reason,
+                "exit_code": exit_code,
+                "restarts": restarts,
+                "logs": logs,
+                "message": message,
+                "container": container,
+                "init": init,
+                "events": tuple(events),
+            }
+
+    def _materialize_pods(self, value: dict[str, Any]) -> None:
+        """Create the failing pods of a workload registered with :meth:`fail_pods`."""
+        kind = value["kind"]
+        metadata = value["metadata"]
+        failure = self.pod_failures.get(metadata["name"])
+        if failure is None or kind not in {
+            "Deployment",
+            "StatefulSet",
+            "DaemonSet",
+            "Job",
+        }:
+            return
+        spec = value.get("spec") or {}
+        template = spec.get("template") or {}
+        labels = dict((template.get("metadata") or {}).get("labels") or {})
+        digest = hashlib.sha256(
+            json.dumps(template, sort_keys=True).encode()
+        ).hexdigest()[:10]
+        owner = {"kind": kind, "name": metadata["name"], "uid": metadata["uid"]}
+        if kind == "Deployment":
+            revision = str(metadata.get("generation", 1))
+            metadata.setdefault("annotations", {})[
+                "deployment.kubernetes.io/revision"
+            ] = revision
+            rs_name = f"{metadata['name']}-{digest}"
+            if ("ReplicaSet", rs_name) not in self.objects:
+                self.objects[("ReplicaSet", rs_name)] = {
+                    "apiVersion": "apps/v1",
+                    "kind": "ReplicaSet",
+                    "metadata": {
+                        "name": rs_name,
+                        "namespace": TARGET.namespace,
+                        "uid": uuid.uuid4().hex,
+                        "resourceVersion": str(self.version),
+                        "labels": {**labels, "pod-template-hash": digest},
+                        "annotations": {"deployment.kubernetes.io/revision": revision},
+                        "ownerReferences": [owner],
+                    },
+                }
+            rs = self.objects[("ReplicaSet", rs_name)]["metadata"]
+            owner = {"kind": "ReplicaSet", "name": rs_name, "uid": rs["uid"]}
+            labels["pod-template-hash"] = digest
+        elif kind == "StatefulSet":
+            value.setdefault("status", {})["updateRevision"] = (
+                f"{metadata['name']}-{digest}"
+            )
+            labels["controller-revision-hash"] = f"{metadata['name']}-{digest}"
+        elif kind == "DaemonSet":
+            labels["pod-template-generation"] = str(metadata.get("generation", 1))
+        pod_name = f"{metadata['name']}-{digest}-x1"
+        if ("Pod", pod_name) in self.objects:
+            return
+        pod_spec = template.get("spec") or {}
+        containers = [
+            str(item.get("name"))
+            for item in pod_spec.get(
+                "initContainers" if failure["init"] else "containers"
+            )
+            or ()
+            if isinstance(item, dict)
+        ] or ["main"]
+        name = failure["container"] or containers[0]
+        terminated_reason = "Error"
+        last = (
+            {
+                "terminated": {
+                    "exitCode": failure["exit_code"],
+                    "reason": terminated_reason,
+                }
+            }
+            if failure["exit_code"] is not None and failure["restarts"]
+            else {}
+        )
+        state: dict[str, Any] = (
+            {"waiting": {"reason": failure["reason"], "message": failure["message"]}}
+            if failure["reason"]
+            else {"running": {}}
+        )
+        status = {
+            "name": name,
+            "ready": False,
+            "restartCount": failure["restarts"],
+            "state": state,
+            "lastState": last,
+            "image": "example.test/app:1",
+        }
+        self.version += 1
+        self.objects[("Pod", pod_name)] = {
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "metadata": {
+                "name": pod_name,
+                "namespace": TARGET.namespace,
+                "uid": uuid.uuid4().hex,
+                "resourceVersion": str(self.version),
+                "labels": labels,
+                "ownerReferences": [owner],
+            },
+            "spec": copy.deepcopy(pod_spec),
+            "status": {
+                "phase": "Pending" if failure["init"] else "Running",
+                "initContainerStatuses" if failure["init"] else "containerStatuses": [
+                    status
+                ],
+            },
+        }
+        if failure["logs"]:
+            self.pod_logs[(pod_name, name, bool(failure["restarts"]))] = failure["logs"]
+        for index, (reason, message) in enumerate(failure["events"]):
+            self.events.append(
+                {
+                    "apiVersion": "v1",
+                    "kind": "Event",
+                    "metadata": {"name": f"{pod_name}.{index}"},
+                    "involvedObject": {"kind": "Pod", "name": pod_name},
+                    "type": "Warning",
+                    "reason": reason,
+                    "message": message,
+                    "count": 1,
+                    "lastTimestamp": f"2026-01-01T00:00:{index:02d}Z",
+                }
+            )
+
+    def _serve_pod_extras(
+        self, path: str, method: str, query: dict[str, Any]
+    ) -> tuple[int, Any] | None:
+        """``pods/NAME/log`` (text) and the namespace's ``events``, or ``None``."""
+        base = f"/api/v1/namespaces/{TARGET.namespace}/"
+        if method != "GET" or not path.startswith(base):
+            return None
+        rest = [unquote(part) for part in path[len(base) :].split("/")]
+        if rest == ["events"]:
+            wanted = dict(
+                term.split("=", 1)
+                for term in query.get("fieldSelector", [""])[0].split(",")
+                if "=" in term
+            )
+            items = [
+                copy.deepcopy(event)
+                for event in self.events
+                if all(
+                    str(event.get("involvedObject", {}).get(key.split(".", 1)[1]))
+                    == value
+                    for key, value in wanted.items()
+                    if key.startswith("involvedObject.")
+                )
+            ]
+            return 200, {
+                "apiVersion": "v1",
+                "kind": "EventList",
+                "metadata": {"resourceVersion": str(self.version)},
+                "items": items,
+            }
+        if len(rest) == 3 and rest[0] == "pods" and rest[2] == "log":
+            if ("Pod", rest[1]) not in self.objects:
+                return 404, {}
+            container = query.get("container", [""])[0]
+            previous = query.get("previous", ["false"])[0] == "true"
+            text = self.pod_logs.get((rest[1], container, previous))
+            if text is None:
+                return (400, {}) if previous else (200, b"")
+            tail = int(query.get("tailLines", [0])[0] or 0)
+            lines = text.splitlines(keepends=True)
+            if tail:
+                lines = lines[-tail:]
+            return 200, "".join(lines).encode()
+        return None
 
     def managers(self, kind: str, name: str) -> dict[str, set[Path]]:
         """Owned field paths by ``manager/operation`` (status excluded)."""
@@ -789,10 +1002,15 @@ class FakeAPI:
             def respond(
                 self, status: int, value: Any, *, raw: bytes | None = None
             ) -> None:
+                text = isinstance(value, bytes)
+                if isinstance(value, bytes):
+                    raw = value
                 encoded = raw if raw is not None else json.dumps(value).encode()
                 try:
                     self.send_response(status)
-                    self.send_header("Content-Type", "application/json")
+                    self.send_header(
+                        "Content-Type", "text/plain" if text else "application/json"
+                    )
                     self.send_header("Content-Length", str(len(encoded)))
                     self.end_headers()
                     self.wfile.write(encoded)
@@ -822,6 +1040,9 @@ class FakeAPI:
                         if api == version
                     ],
                 }
+        extra = self._serve_pod_extras(path, method, query)
+        if extra is not None:
+            return extra
         if path.startswith("/api/v1/nodes/") and method == "GET":
             node = self.nodes.get(path.rsplit("/", 1)[1])
             return (200, copy.deepcopy(node)) if node is not None else (404, {})
@@ -854,6 +1075,8 @@ class FakeAPI:
                 if current is None:
                     return 404, {}
                 self._readiness(current)
+                if not self.ready:
+                    self._materialize_pods(current)
                 return 200, copy.deepcopy(current)
             selector = query.get("labelSelector", [""])[0]
             values = sorted(

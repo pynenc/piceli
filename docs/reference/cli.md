@@ -23,6 +23,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | Command | Summary | Cluster | Approval |
 | --- | --- | --- | --- |
 | [`piceli access`](#cli-access) | Forward the app's declared ports to 127.0.0.1 and keep them healthy. | reads | no |
+| [`piceli access stop`](#cli-access-stop) | Stop Piceli's stale forwards and servers for the app; never another process. | none | no |
 | [`piceli artifacts build`](#cli-artifacts-build) | Assemble an OCI image layout from a plan without running code. | none | no |
 | [`piceli artifacts build-spec preview`](#cli-artifacts-build-spec-preview) | Preview a containerized build and its plan hash. | none | no |
 | [`piceli artifacts build-spec run`](#cli-artifacts-build-spec-run) | Run an approved containerized build and write a receipt. | none | yes |
@@ -98,7 +99,29 @@ Forward the app's declared ports to 127.0.0.1 and keep them healthy.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** Refuses (access-port-conflict) when a declared local port is held by another process and names its pid and command; never takes a port over. Stops every forward it started on Ctrl-C/SIGTERM/SIGHUP. Exit 1 only when every forward gave up.
+- **Notes:** Refuses (access-port-conflict) when a declared local port is held by another process and names its pid (another process's command line is never printed); when the holder is Piceli's own stale process for this app it says so and suggests `piceli access stop --stale TARGET`. Never takes a port over. Stops every forward it started on Ctrl-C/SIGTERM/SIGHUP. Exit 1 only when every forward gave up.
+
+(cli-access-stop)=
+### `piceli access stop`
+
+Stop Piceli's stale forwards and servers for the app; never another process.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `TARGET` | text | required |  |
+| `--stale` | boolean | `False` | Stop Piceli's own processes for this app that hold its ports (required: the only mode) |
+| `--port` | integer (repeatable) |  | Also check this loopback port (a dashboard, observe serve or operator serve port); repeatable |
+
+**Contract**
+
+- **Reads:** release.toml or module:attr, local process table
+- **Writes:** signals Piceli's own processes for this app (SIGTERM)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Only with --stale. Checks the app's declared forward ports and each --port; stops a port's holder only when it is Piceli's own process for this target (its kubectl port-forward, orphaned or supervised, or piceli access / observe serve / operator serve with the same target), never another process, which is reported by pid only. Local only: never contacts the cluster.
 
 (cli-artifacts-build)=
 ### `piceli artifacts build`
@@ -410,8 +433,11 @@ Explain an error code: cause, fix and whether a retry can succeed.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `CODE` | text | required |  |
+| `CODE` | text |  |  |
 | `--json` | boolean | `False` | Print the entry as one JSON object |
+| `--run` | text |  | Explain a past execution instead (execution id, unique prefix or `piceli deploy` run id; needs --spec): same as `piceli release status --run` |
+| `--spec` | text |  | With --run: path/to/release.toml or MODULE:ATTR of a Pipeline |
+| `--env` | text |  | With --run: the pipeline's environment |
 
 **Contract**
 
@@ -422,6 +448,7 @@ Explain an error code: cause, fix and whether a retry can succeed.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
+- **Notes:** `--run ID --spec SPEC` explains a past execution instead, from the local state (same as `piceli release status --spec SPEC --run ID`).
 
 (cli-help-json)=
 ### `piceli help-json`
@@ -1154,6 +1181,7 @@ Show catalogued releases, their executions and history (no cluster access).
 | --- | --- | --- | --- |
 | `--spec` | text | required | path/to/release.toml, or MODULE:ATTR (path/to/file.py:ATTR) naming a piceli Pipeline: the release `piceli deploy` manages |
 | `--env` | text |  | Environment of a pipeline (--spec MODULE:ATTR): its app overrides, target and state (required when the pipeline has one target per environment) |
+| `--run` | text |  | Show one past execution (an execution id, a unique prefix of at least 8 characters, or a `piceli deploy` run id): its state and the recorded causes of a failure (redacted log tails, events) |
 
 **Contract**
 
@@ -1164,7 +1192,7 @@ Show catalogued releases, their executions and history (no cluster access).
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** With state = "cluster" it first refreshes the working copy from the cluster (reads only, no lock).
+- **Notes:** With state = "cluster" it first refreshes the working copy from the cluster (reads only, no lock). `--run ID` shows one past execution (an execution id or unique prefix, or a `piceli deploy` run id) with the causes recorded when it failed (pod reasons, exit codes, redacted log tails, events).
 
 (cli-release-stop)=
 ### `piceli release stop`

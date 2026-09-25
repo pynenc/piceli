@@ -7,8 +7,10 @@ for the port. Linux reads ``/proc``; other systems (macOS) ask
 Every lookup degrades to ``None`` when the owner cannot be determined (no
 permission, no tool, a race with the process exiting).
 
-The command line of another process is shown to the local user only; it is
-truncated to :data:`MAX_COMMAND` characters. Importing this module is
+:func:`recognise` tells Piceli's own processes for a target (its
+``kubectl port-forward`` children, ``piceli access``, ``observe serve``,
+``operator serve``) from anything else. Only their command lines are shown;
+another process is named by its pid alone. Importing this module is
 side-effect free.
 """
 
@@ -18,6 +20,7 @@ import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -294,3 +297,163 @@ def _is_piceli(command: str) -> bool:
         or (item == "-m" and index + 1 < len(argv) and argv[index + 1] == "piceli")
         for index, item in enumerate(argv)
     )
+
+
+# ------------------------------------------------------- Piceli's own processes
+
+#: A port's holder, from :func:`recognise`.
+PICELI_FORWARD = "piceli-forward"
+PICELI_SERVER = "piceli-server"
+OTHER = "other"
+UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class Holder:
+    """Who holds a port, as far as Piceli can prove it.
+
+    ``kind`` is :data:`PICELI_FORWARD` (the ``kubectl port-forward`` Piceli
+    starts for one of this target's declared forwards), :data:`PICELI_SERVER`
+    (``piceli access`` / ``observe serve`` / ``operator serve`` for this
+    target), :data:`OTHER` (anything else: only its pid may be shown) or
+    :data:`UNKNOWN` (no owner found). ``stop`` is the pid ``piceli access stop
+    --stale`` would signal: the supervising Piceli process of a forward (so it
+    does not restart it), else the listener itself; ``None`` for others.
+    """
+
+    kind: str
+    owner: PortOwner | None = None
+    stop: int | None = None
+
+    @property
+    def piceli(self) -> bool:
+        return self.kind in {PICELI_FORWARD, PICELI_SERVER}
+
+    def public(self) -> dict[str, Any]:
+        """Owner JSON: a Piceli process with its command, anything else pid only."""
+        if self.owner is None:
+            return {"holder": self.kind, "owner": None}
+        owner = (
+            self.owner.shortened()
+            if self.piceli
+            else PortOwner(port=self.owner.port, pid=self.owner.pid)
+        )
+        return {"holder": self.kind, "owner": owner.to_dict()}
+
+    def describe(self) -> str:
+        """``pid 42 (not piceli)`` / ``piceli's forward for this app (pid 42)``."""
+        if self.owner is None:
+            return "an unidentified process"
+        if self.kind == PICELI_FORWARD:
+            return f"piceli's own forward for this app (pid {self.owner.pid})"
+        if self.kind == PICELI_SERVER:
+            return f"a piceli process for this app (pid {self.owner.pid})"
+        return f"pid {self.owner.pid} (not piceli)"
+
+
+def _argv(command: str | None) -> list[str] | None:
+    if not command or command.endswith("…"):
+        return None
+    return command.split()
+
+
+def _piceli_args(argv: list[str]) -> list[str] | None:
+    """The arguments after ``piceli`` (``…/piceli ARGS``, ``python -m piceli ARGS``)."""
+    name = Path(argv[0]).name
+    if name == "piceli":
+        return argv[1:]
+    if name.startswith("python"):
+        for index, item in enumerate(argv[1:-1], start=1):
+            if item == "-m":
+                return argv[index + 2 :] if argv[index + 1] == "piceli" else None
+    return None
+
+
+def _same_path(left: str, right: str) -> bool:
+    if left == right:
+        return True
+    try:
+        return (
+            Path(left).is_absolute() and Path(left).resolve() == Path(right).resolve()
+        )
+    except OSError:
+        return False
+
+
+def recognise(
+    owner: PortOwner | None,
+    *,
+    kubeconfig: str,
+    context: str,
+    forwards: Iterable[tuple[str, str, int, int]] = (),
+    targets: Iterable[str] = (),
+) -> Holder:
+    """Whether ``owner`` is one of Piceli's own processes for this target.
+
+    A **forward** is a ``kubectl`` whose arguments are exactly the ones Piceli
+    builds (``--kubeconfig KUBECONFIG --context CONTEXT --namespace NAMESPACE
+    port-forward TARGET LOCAL:REMOTE --address 127.0.0.1``) for one of
+    ``forwards`` (``(namespace, target, local, remote)``), started by a Piceli process or
+    orphaned (its Piceli parent died). A **server** is a Piceli process
+    (``piceli …`` or ``python -m piceli …``) running ``access`` for one of
+    ``targets`` (the TARGET argument as given, or its absolute path), or
+    ``observe serve`` / ``operator serve`` with the same ``--kubeconfig`` and
+    ``--context``. Anything else is :data:`OTHER`. Look the owner up with a
+    generous ``limit`` so long paths are not truncated.
+    """
+    if owner is None:
+        return Holder(UNKNOWN)
+    argv = _argv(owner.command)
+    if argv is None:
+        return Holder(OTHER, owner)
+    parent = owner.parent
+    if Path(argv[0]).name.startswith("kubectl"):
+        expected = {
+            (
+                "--kubeconfig",
+                kubeconfig,
+                "--context",
+                context,
+                "--namespace",
+                namespace,
+                "port-forward",
+                target,
+                f"{local}:{remote}",
+                "--address",
+                "127.0.0.1",
+            )
+            for namespace, target, local, remote in forwards
+        }
+        if tuple(argv[1:]) not in expected:
+            return Holder(OTHER, owner)
+        if parent is None:  # orphaned: its supervisor died
+            return Holder(PICELI_FORWARD, owner, owner.pid)
+        supervisor = _piceli_args(parent.command.split()) if parent.command else None
+        if supervisor and supervisor[0] in {"access", "observe", "operator"}:
+            return Holder(PICELI_FORWARD, owner, parent.pid)
+        return Holder(OTHER, owner)
+    args = _piceli_args(argv)
+    if args is None:
+        return Holder(OTHER, owner)
+
+    def after(flag: str) -> str | None:
+        try:
+            return args[args.index(flag) + 1]
+        except (ValueError, IndexError):
+            return None
+
+    wanted = set(targets)
+    if args[:1] == ["access"]:
+        positional = [item for item in args[1:] if not item.startswith("-")]
+        if any(_same_path(item, name) for item in positional for name in wanted):
+            return Holder(PICELI_SERVER, owner, owner.pid)
+        return Holder(OTHER, owner)
+    if args[:2] in (["observe", "serve"], ["operator", "serve"]):
+        config = after("--kubeconfig")
+        if (
+            after("--context") == context
+            and config is not None
+            and _same_path(config, kubeconfig)
+        ):
+            return Holder(PICELI_SERVER, owner, owner.pid)
+    return Holder(OTHER, owner)

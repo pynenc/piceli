@@ -111,6 +111,16 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "cli",
     ),
     _E(
+        "explain-run-needs-spec",
+        "Which state holds the run?",
+        "`piceli explain --run ID` reads a past execution from a release's local "
+        "state, so it needs `--spec` (and takes no error code).",
+        "Run `piceli explain --run ID --spec release.toml` (or `--spec MODULE:ATTR` "
+        "for a pipeline), or `piceli release status --spec … --run ID`.",
+        False,
+        "cli",
+    ),
+    _E(
         "invalid-or-unavailable-artifact-input",
         "Invalid or unavailable artifact input",
         "An `artifacts` command could not read or validate one of its inputs "
@@ -1130,6 +1140,25 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "execution",
     ),
     _E(
+        "apply-crashloop",
+        "Workload cannot start",
+        "While waiting for readiness, a pod of the new revision was in "
+        "`CrashLoopBackOff` (`Init:CrashLoopBackOff`), `ImagePullBackOff`, "
+        "`ErrImagePull`, `InvalidImageName`, `CreateContainerConfigError`, "
+        "`CreateContainerError` or `RunContainerError`, or restarted "
+        "`[execution] crash_restarts` times (a failed Job or Pod counts too), so "
+        "the apply failed at once instead of at the deadline. The result's "
+        "`diagnosis` names each workload, container, reason, exit code, restart "
+        "count, the last log lines (redacted) and the latest events.",
+        "Read the causes (`piceli release status --spec … --run EXECUTION_ID` "
+        "shows them again); fix the image, command, config or Secret and plan "
+        "again, or `piceli release rollback previous`. An app that is expected "
+        "to crash while its dependencies start can set `[execution] fail_fast = "
+        "false`.",
+        False,
+        "execution",
+    ),
+    _E(
         "readiness-unsupported",
         "Readiness unsupported",
         "The applied object's `status` is malformed (not an object, or `conditions` is not a list of objects), so its readiness cannot be evaluated.",
@@ -1508,13 +1537,35 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
     _E(
         "access-port-conflict",
         "Declared local port already in use",
-        "A required forward's local port is already held by another process "
-        "(often an older `piceli access`, dashboard or `kubectl port-forward`). "
-        "Piceli never takes a port over; the rejection lists each port's owner "
-        "pid and command when it can be found.",
-        "Stop the listed process (or the dashboard that supervises it), or change "
-        "`local=` in the model, then run the command again.",
+        "A required forward's local port (or the `--dashboard` port) is already "
+        "held by another process. Piceli never takes a port over; the rejection "
+        "lists each port's owner by pid (`holder`: `piceli-forward` or "
+        "`piceli-server` when it is Piceli's own process for this app, else "
+        "`other`; another process's command line is never printed).",
+        "When Piceli's own stale process holds it: `piceli access stop --stale "
+        "TARGET` (add `--port N` for a dashboard port). Otherwise stop the listed "
+        "pid yourself, or change `local=` in the model, then run the command again.",
         False,
+        "access",
+    ),
+    _E(
+        "access-stop-needs-stale",
+        "Say which processes to stop",
+        "`piceli access stop` only stops Piceli's own stale processes for the "
+        "app, and needs `--stale` to say so.",
+        "Run `piceli access stop --stale TARGET`.",
+        False,
+        "access",
+    ),
+    _E(
+        "access-stop-incomplete",
+        "A stale process did not stop",
+        "A Piceli process for this app got SIGTERM but its port was still held "
+        "5 seconds later (a supervised `kubectl` is left behind when its "
+        "supervisor ends).",
+        "Run `piceli access stop --stale TARGET` again; it then stops the "
+        "orphaned `kubectl` itself.",
+        True,
         "access",
     ),
     _E(
@@ -1759,6 +1810,16 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "Unknown release",
         "The release name is not in this state directory's catalog.",
         "Run `piceli release status --spec release.toml` to list the releases.",
+        False,
+        "release",
+    ),
+    _E(
+        "unknown-execution",
+        "Unknown execution",
+        "`--run` names no execution of this state directory's history (or a "
+        "prefix shorter than 8 characters, or one that matches several).",
+        "Run `piceli release status --spec …` and copy an `execution_id` from "
+        "`history`, or pass a `piceli deploy` run id with the pipeline's `--spec`.",
         False,
         "release",
     ),
@@ -2604,6 +2665,19 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "The release was applied but did not become ready in time; the result has the execution's `failure_category`.",
         "Fix the workload (image, probe, resources) and continue with `piceli deploy MODULE:ATTR --resume`, or deploy the previous source.",
         True,
+        "pipeline",
+    ),
+    _E(
+        "pipeline-apply-crashloop",
+        "Release cannot start",
+        "The release was applied but a workload's new pods cannot start (crash "
+        "loop, image pull or configuration error; see `apply-crashloop`), so the "
+        "apply stopped at once. The result's `diagnosis` has one entry per "
+        "failing workload with redacted log tails and events.",
+        "Fix the cause, then deploy again (or `--resume`), or roll back with "
+        "`piceli release rollback previous --spec MODULE:ATTR`. `piceli release "
+        "status --spec MODULE:ATTR --run RUN_ID` shows the causes again.",
+        False,
         "pipeline",
     ),
     _E(
