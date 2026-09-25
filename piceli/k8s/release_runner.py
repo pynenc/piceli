@@ -1453,6 +1453,12 @@ class ReleaseRunner:
                     # Earlier releases whose declarations the plan's field
                     # removals are computed from (records are immutable).
                     "previous_releases": previous_releases,
+                    # A pipeline's sources (commit, dirty, --ref); not hashed.
+                    **(
+                        {"provenance": dict(provenance)}
+                        if (provenance := getattr(self.spec, "provenance", None))
+                        else {}
+                    ),
                 }
             )
             + "\n",
@@ -2234,6 +2240,11 @@ class ReleaseRunner:
                         "created_at": sidecar.get("created_at"),
                         "source": record.source.to_dict(),
                         "images": sidecar.get("images", {}),
+                        **(
+                            {"provenance": sidecar["provenance"]}
+                            if "provenance" in sidecar
+                            else {}
+                        ),
                         "revision_id": session["revision_id"],
                         "action_count": session["action_count"],
                         "executions": executions,

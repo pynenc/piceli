@@ -8,7 +8,10 @@ is unchanged:
 
 ``inputs``
     Scans each build's contexts (the build plan hash covers every staged
-    file) and records the sources' git identity as provenance.
+    file) and records the sources' git identity as provenance. With
+    ``refs`` (``piceli deploy --ref``) the pinned sources are read from
+    temporary worktrees at the resolved commits (:mod:`piceli.pipeline.refs`)
+    and the combined hash covers those commits.
 ``build``
     Skipped when the last receipt has the same build plan hash and its images
     are still in the local engine.
@@ -37,7 +40,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -65,6 +68,12 @@ from piceli.pipeline.model import (
     Registry,
 )
 from piceli.pipeline.operate import delivery_path, delivery_receipt
+from piceli.pipeline.refs import (
+    RefRequest,
+    SourceCheckouts,
+    open_checkouts,
+    recorded_requests,
+)
 
 if TYPE_CHECKING:
     from piceli.artifacts.build_spec import BuildPlan, BuildSpec
@@ -116,6 +125,7 @@ class _Work:
     release_plan: PlanResult | None = None
     release_images: dict[str, str] = field(default_factory=dict)
     noop: bool = False
+    provenance: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -232,6 +242,9 @@ class PipelineRunner:
     :param on_event: Receives one event per stage change (JSON-safe dicts).
     :param say: Receives human progress lines.
     :param check_runner: Overrides the checks runner (tests, custom checks).
+    :param refs: Sources to read from a commit instead of the working tree
+        (``--ref``); run planning and execution inside :meth:`sources` so the
+        temporary worktrees are removed afterwards.
     """
 
     def __init__(
@@ -242,8 +255,11 @@ class PipelineRunner:
         on_event: EventSink | None = None,
         say: Callable[[str], None] | None = None,
         check_runner: Any = None,
+        refs: Sequence[RefRequest] = (),
     ) -> None:
         self.pipeline = pipeline
+        self.refs = tuple(refs)
+        self.checkouts: SourceCheckouts | None = None
         self.backend = backend or Backend()
         self.on_event = on_event or (lambda _event: None)
         self.say = say or (lambda _line: None)
@@ -280,6 +296,46 @@ class PipelineRunner:
     def locked(self) -> Iterator[None]:
         with self.journal.locked():
             yield
+
+    @contextmanager
+    def sources(self) -> Iterator[None]:
+        """Scope of the ``--ref`` worktrees: removed on exit, whatever happened."""
+        try:
+            yield
+        finally:
+            checkouts, self.checkouts = self.checkouts, None
+            if checkouts is not None:
+                checkouts.close()
+
+    def _open_checkouts(self, requests: Sequence[RefRequest]) -> None:
+        if self.checkouts is None and requests:
+            self.checkouts = open_checkouts(self.pipeline, requests, say=self.say)
+
+    def _load(
+        self, build: Build
+    ) -> tuple[BuildSpec, InputsSpec | None, InputsLock | None]:
+        """A build's spec, inputs and lock: from the pinned commits, or from disk."""
+        from piceli.artifacts.source_identity import InputsLock
+
+        if self.checkouts:
+            return self.checkouts.load_build(build)
+        spec = build.load()
+        inputs = spec.load_inputs()
+        lock = InputsLock.from_json(build.lock.read_text()) if build.lock else None
+        return spec, inputs, lock
+
+    def _provenance(self, sources: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+        """What the release records about its sources (commit, dirty, ``--ref``)."""
+        refs = self.checkouts.describe() if self.checkouts else {}
+        entries = {
+            name: {
+                "commit": value.get("commit"),
+                "dirty": value.get("dirty"),
+                **({"ref": refs[name]["ref"]} if name in refs else {}),
+            }
+            for name, value in sorted(sources.items())
+        }
+        return {"sources": entries} if entries else {}
 
     def _route(self) -> RegistryRoute:
         strategy = self.pipeline.deliver
@@ -357,6 +413,7 @@ class PipelineRunner:
         if until not in STAGES:
             raise PipelineError("deploy-stage-unknown", f"unknown stage {until!r}")
         limit = STAGES.index(until)
+        self._open_checkouts(self.refs)
         work = _Work()
         self._work = work
         stages: dict[str, dict[str, Any]] = {}
@@ -380,20 +437,12 @@ class PipelineRunner:
     def _plan_inputs(
         self, work: _Work, _reapply: bool
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        from piceli.artifacts.source_identity import InputsLock
-
         pipeline = self.pipeline
         builds: dict[str, Any] = {}
         sources: dict[str, Any] = {}
         for build in pipeline.builds:
             try:
-                spec = build.load()
-                inputs = spec.load_inputs()
-                lock = (
-                    InputsLock.from_json(build.lock.read_text())
-                    if build.lock is not None
-                    else None
-                )
+                spec, inputs, lock = self._load(build)
                 plan = spec.plan(inputs)
             except OSError as error:
                 raise PipelineError("pipeline-invalid", str(error)) from None
@@ -444,10 +493,18 @@ class PipelineRunner:
                 "pipeline-image-unknown",
                 f"the app uses build images {unknown} that no build produces",
             )
+        work.provenance = self._provenance(sources)
         stage = {"builds": builds, "sources": sources, "images": work.used}
-        return stage, {
+        hashed: dict[str, Any] = {
             "builds": {name: value["plan_hash"] for name, value in builds.items()}
         }
+        if self.checkouts:
+            # The commits, not the requested names: a branch that moves after
+            # --plan changes the combined hash.
+            stage["refs"] = self.checkouts.describe()
+            stage["model"] = {"checked_against": self.checkouts.model_source}
+            hashed["refs"] = self.checkouts.hashed()
+        return stage, hashed
 
     def _plan_build(
         self, work: _Work, _reapply: bool
@@ -619,7 +676,7 @@ class PipelineRunner:
 
     def _release_plan(self, work: _Work) -> PlanResult:
         images = self._release_images(work)
-        spec = release_spec(self.pipeline, images)
+        spec = release_spec(self.pipeline, images, provenance=work.provenance)
         runner = self.backend.release_runner(spec)
         try:
             result = runner.plan()
@@ -675,6 +732,7 @@ class PipelineRunner:
             until=plan.until,
             approval=approval,
             plan={"hashed": plan.hashed, "stages": plan.stages},
+            refs=self.checkouts.describe() if self.checkouts else None,
         )
         return self._continue(plan.until, reapply=reapply)
 
@@ -692,13 +750,21 @@ class PipelineRunner:
                 "the pipeline's app, owner or target differs from the run's",
             )
         self.run = run
+        refs = run.data.get("refs") or {}
+        if refs:
+            # The run's own commits, never a re-resolved branch.
+            self._open_checkouts(
+                recorded_requests({n: v["commit"] for n, v in refs.items()})
+            )
+            assert self.checkouts is not None
+            for name, value in refs.items():
+                self.checkouts.checkouts[name].rev = str(value.get("ref"))
         self._work = self._restore(run)
         run.set_state("running", resumed_at=now())
         return self._continue(str(run.data["until"]), reapply=False, resuming=True)
 
     def _restore(self, run: Run) -> _Work:
         """Rebuild the work state from the journal (finished stages keep outputs)."""
-        from piceli.artifacts.source_identity import InputsLock
         from piceli.k8s.release_spec import load_delivery_receipt
 
         work = _Work()
@@ -706,11 +772,7 @@ class PipelineRunner:
         build_out = run.output("build")
         for build in self.pipeline.builds:
             try:
-                spec = build.load()
-                inputs = spec.load_inputs()
-                lock = (
-                    InputsLock.from_json(build.lock.read_text()) if build.lock else None
-                )
+                spec, inputs, lock = self._load(build)
                 plan = spec.plan(inputs)
             except Exception as error:
                 raise classify(error) from None
@@ -736,6 +798,11 @@ class PipelineRunner:
                 work.producer[image.name] = item
             work.builds.append(item)
         work.used = used_handles(self.pipeline)
+        work.provenance = self._provenance(
+            run.output("inputs").get("sources")
+            or run.data["plan"]["stages"].get("inputs", {}).get("sources")
+            or {}
+        )
         if run.stage("deliver").get("state") in {"done", "skipped"}:
             for name, entry in run.output("deliver").get("images", {}).items():
                 work.delivered[name] = load_delivery_receipt(
@@ -819,6 +886,7 @@ class PipelineRunner:
         if not work.builds:
             return "skipped", {"why": "no build"}
         return "done", {
+            **({"refs": self.checkouts.describe()} if self.checkouts else {}),
             "builds": {item.spec.name: item.plan.plan_hash for item in work.builds},
             "sources": {
                 source["name"]: {
@@ -869,6 +937,9 @@ class PipelineRunner:
                     log=item.directory / "build.log",
                     progress=progress,
                 )
+                if self.checkouts:
+                    # The requested revisions next to the sources' commits.
+                    receipt = {**receipt, "refs": self.checkouts.describe()}
                 write_private(
                     item.receipt_path, json.dumps(receipt, sort_keys=True, indent=2)
                 )
@@ -1154,7 +1225,11 @@ class PipelineRunner:
             # Resuming at the checks stage: the release was planned and applied
             # by an earlier invocation, so bind the runner without re-planning.
             runner = work.runner = self.backend.release_runner(
-                release_spec(self.pipeline, self._release_images(work))
+                release_spec(
+                    self.pipeline,
+                    self._release_images(work),
+                    provenance=work.provenance,
+                )
             )
         try:
             target = runner.resolve_rollback_target("previous")

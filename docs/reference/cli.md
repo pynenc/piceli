@@ -351,17 +351,18 @@ Deploy a pipeline: inputs → build → deliver → plan → apply → checks.
 | `--auto-approve` | boolean | `False` | Plan and execute without confirmation (CI) |
 | `--reapply` | boolean | `False` | Apply even when the release is unchanged and already deployed |
 | `--json` | boolean | `False` | Stream one JSON event per stage change on stdout |
+| `--ref` | text (repeatable) |  | Build SOURCE from commit REV (branch, tag or SHA) in a temporary worktree instead of the working tree; repeatable. A bare REV pins every source when they are one repository |
 
 **Contract**
 
-- **Reads:** pipeline module, build specs and sources, docker, kubeconfig, state_dir
-- **Writes:** state_dir (run journal, receipts, release catalog, secret store), local Docker image store, registry or node image store
+- **Reads:** pipeline module, build specs and sources, git (source identity; --ref commits), docker, kubeconfig, state_dir
+- **Writes:** state_dir (run journal, receipts, release catalog, secret store), local Docker image store, registry or node image store, temporary git worktrees with --ref (removed on exit)
 - **Cluster:** writes
 - **Approval required:** yes
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** --plan never changes the cluster, a registry or a node; --approve HASH executes exactly the combined plan; --resume continues the latest interrupted run without a new approval. Unchanged stages are skipped.
+- **Notes:** --plan never changes the cluster, a registry or a node; --approve HASH executes exactly the combined plan; --resume continues the latest interrupted run without a new approval. Unchanged stages are skipped. --ref [SOURCE=]REV builds the sources from commits in temporary worktrees; the combined hash covers the resolved SHAs, --approve needs the same --ref, and --resume reuses the run's SHAs.
 
 (cli-explain)=
 ### `piceli explain`

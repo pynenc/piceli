@@ -4,6 +4,29 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.5.0
+
+- **Deploy a commit, not the working tree (preview):**
+  `piceli deploy TARGET --ref [SOURCE=]REV` (repeatable; a bare `REV` when
+  every source is one repository) resolves each revision to its commit SHA,
+  checks it out in a temporary `git worktree` and runs the `inputs` and
+  `build` stages from there; the worktrees are removed on success, failure,
+  `Ctrl-C` and `SIGTERM`. The combined hash covers the SHAs, so an approval
+  of commit X never applies commit Y, and the printed approval command pins
+  them. The pipeline module still runs from the working tree and must match
+  the commit (`deploy-ref-model-differs`). `--resume` reuses the run's
+  commits. New error codes `deploy-ref-invalid`, `deploy-ref-source-unknown`,
+  `deploy-ref-ambiguous`, `deploy-ref-unknown`, `deploy-ref-checkout-failed`
+  and `deploy-ref-model-differs`. Additive output: `refs` in the deploy
+  result, `stages.inputs.refs`/`model`, the run journal and the build
+  receipt; a release created by a deploy records `provenance.sources`
+  (commit, dirty, ref), shown by `piceli release status`.
+- **CI recipe (preview):** {doc}`ci` and `examples/ci/github-actions-deploy.yml`:
+  plan the pushed commit, publish the plan and its combined hash, approve
+  through a protected GitHub environment, apply with the same `--ref` and
+  hash, resume by hand. Piceli's tests run the workflow's commands against
+  the fake API.
+
 ## Version 0.4.1
 
 - **Fix (safety):** Piceli signals a child's process group only when the id

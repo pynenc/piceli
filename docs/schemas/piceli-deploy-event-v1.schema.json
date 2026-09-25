@@ -64,6 +64,11 @@
           "description": "With planned/approval-required: every stage's plan. Otherwise: stage name to its state.",
           "propertyNames": {"$ref": "#/$defs/stageName"}
         },
+        "refs": {
+          "type": "object",
+          "additionalProperties": {"type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"},
+          "description": "With --ref (planned/approval-required): each pinned source's resolved commit SHA, which the combined hash covers."
+        },
         "reason": {"type": "string", "description": "Error code (piceli explain <code>)."},
         "stage": {"$ref": "#/$defs/stageName"},
         "blocking": {"type": "array", "items": {"type": "object"}}

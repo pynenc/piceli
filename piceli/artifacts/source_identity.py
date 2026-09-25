@@ -181,6 +181,13 @@ class InputsSpec:
 
     sources: tuple[SourceSpec, ...]
     base: Path = field(default=Path("."), compare=False)
+    roots: Mapping[str, Path] = field(default_factory=dict, compare=False)
+    """Checkout directories that replace a source's declared path (by name).
+
+    ``piceli deploy --ref`` materialises a source at a commit in a temporary
+    worktree and reads it from there; the declaration (and its digest) is
+    unchanged, so identities still record the declared path.
+    """
 
     def __post_init__(self) -> None:
         if (
@@ -215,6 +222,12 @@ class InputsSpec:
         return tuple(item for item in self.sources if item.name in wanted)
 
     def resolve(self, source: SourceSpec) -> Path:
+        """Where ``source`` is read: its checkout root when one is set, else its path."""
+        root = self.roots.get(source.name)
+        return root if root is not None else self.declared(source)
+
+    def declared(self, source: SourceSpec) -> Path:
+        """The declared location of ``source`` (ignores ``roots``)."""
         path = Path(source.path).expanduser()
         return path if path.is_absolute() else self.base / path
 
@@ -578,8 +591,13 @@ def capture_source_identity(
     declared_path: str | None = None,
     subpath: str | None = None,
     timeout: float = DEFAULT_GIT_TIMEOUT,
+    repository: str | None = None,
 ) -> SourceIdentity:
-    """Capture the git identity of the work tree whose top level is ``path``."""
+    """Capture the git identity of the work tree whose top level is ``path``.
+
+    ``repository`` overrides the recorded repository name (a temporary
+    checkout of the repository records the original's name).
+    """
     seconds(timeout, "git", 600)
     _subpath(subpath)
     if not path.is_dir():
@@ -628,7 +646,7 @@ def capture_source_identity(
     return SourceIdentity(
         name=name,
         path=declared_path if declared_path is not None else str(path),
-        repository=repo.name,
+        repository=repository or repo.name,
         commit=commit,
         dirty=bool(entries),
         diff_sha256=digest(canonical(entries)) if entries else None,
@@ -662,6 +680,9 @@ def _capture(
         declared_path=source.path,
         subpath=source.subpath,
         timeout=timeout,
+        repository=(
+            spec.declared(source).resolve().name if source.name in spec.roots else None
+        ),
     )
     if not enforce:
         return identity

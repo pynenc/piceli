@@ -612,6 +612,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             reads=(
                 "pipeline module",
                 "build specs and sources",
+                "git (source identity; --ref commits)",
                 "docker",
                 "kubeconfig",
                 "state_dir",
@@ -620,6 +621,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
                 "state_dir (run journal, receipts, release catalog, secret store)",
                 "local Docker image store",
                 "registry or node image store",
+                "temporary git worktrees with --ref (removed on exit)",
             ),
             cluster="writes",
             approval_required=True,
@@ -630,7 +632,9 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             notes="--plan never changes the cluster, a registry or a node; "
             "--approve HASH executes exactly the combined plan; --resume continues "
             "the latest interrupted run without a new approval. Unchanged stages "
-            "are skipped.",
+            "are skipped. --ref [SOURCE=]REV builds the sources from commits in "
+            "temporary worktrees; the combined hash covers the resolved SHAs, "
+            "--approve needs the same --ref, and --resume reuses the run's SHAs.",
         ),
     }
 )

@@ -116,7 +116,8 @@ noted.
 - `piceli deploy MODULE:ATTR --plan`: plans every stage (reads sources,
   the local image store, the registry or node, and the cluster), writes only
   the pipeline's `state_dir`, and prints the combined hash. It never builds,
-  pushes or applies.
+  pushes or applies. With `--ref SOURCE=REV` it also checks the commit out
+  into a temporary git worktree, removed before it exits.
 - `piceli artifacts build`: assembles an OCI layout in `--output` without
   running any code.
 - `piceli observe forward-save`, `piceli operator backup`: write a local
@@ -178,6 +179,20 @@ unattended CI job for this exact spec.
    `rollback_on_failed_checks` the result's `checks.rollback` says what was
    restored). Exit `2` with `pipeline-plan-changed` means something changed
    since the plan: plan and ask again.
+
+**Deploying a commit.** When the working tree is shared or dirty, or the
+owner asked for a specific commit, add `--ref SOURCE=REV` (or a bare
+`--ref REV` when all sources are one repository) to the `--plan` command.
+The result's `refs` maps each source to the resolved SHA; show it to the
+owner with the plan. Approve with exactly the command `--plan` prints: it
+repeats `--ref` with the **SHA**, not the branch, so a branch that moved
+after the approval is refused (`pipeline-plan-changed`) instead of deployed.
+`--resume` takes no `--ref` (it reuses the run's commits). With `--ref`, the
+pipeline module's Python files must match the commit
+(`deploy-ref-model-differs`): report it, never commit or stash the owner's
+changes yourself. In CI, the approval is a protected environment and the
+apply job passes the plan job's `combined_hash` (see {doc}`ci`); an agent
+never approves that environment on the owner's behalf.
 
 (agents-pipeline-release)=
 ### Operating a pipeline's release
