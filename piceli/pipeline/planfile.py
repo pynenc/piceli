@@ -135,8 +135,13 @@ def plan_document(
     entry: str,
     reapply: bool,
     observed: dict[str, str] | None,
+    environment: str | None = None,
 ) -> dict[str, Any]:
-    """The portable plan of ``combined`` (see the module docstring)."""
+    """The portable plan of ``combined`` (see the module docstring).
+
+    ``environment`` (``--env``) is recorded only when set, and ``--apply``
+    deploys that environment.
+    """
     import importlib.metadata
 
     try:
@@ -160,6 +165,7 @@ def plan_document(
                 "refs": {name: value["commit"] for name, value in refs.items()},
                 "stages": combined.stages,
                 "receipts": receipts(runner),
+                **({"environment": environment} if environment is not None else {}),
             },
             sort_keys=True,
             default=str,
@@ -200,6 +206,11 @@ def load_plan_document(path: Path) -> dict[str, Any]:
         isinstance(document.get("stages"), dict),
         document.get("observed_target") is None
         or isinstance(document.get("observed_target"), dict),
+        document.get("environment") is None
+        or (
+            isinstance(document["environment"], str)
+            and bool(_NAME.fullmatch(document["environment"]))
+        ),
     )
     if not all(checks):
         raise _invalid("the plan file is missing a required field")

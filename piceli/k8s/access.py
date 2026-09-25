@@ -225,6 +225,13 @@ def _from_pipeline(entry: str, base: Path) -> AccessTarget:
             "access-target-invalid",
             f"importing {entry!r} failed: {type(error).__name__}",
         ) from None
+    if getattr(value, "needs_environment", False):
+        raise AccessTargetError(
+            "environment-required",
+            f"{entry!r} deploys one target per environment; status and access "
+            "take a pipeline with one target (select the environment in a "
+            "module attribute: pipeline.for_environment(name))",
+        )
     app = getattr(value, "app", None)
     target = getattr(value, "target", None)
     if not isinstance(app, App) or target is None:

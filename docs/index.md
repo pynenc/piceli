@@ -76,6 +76,14 @@ The mental model (model → plan → execute → observe), the engine and a
 glossary.
 :::
 
+:::{grid-item-card} A realistic app
+:link: reference_app
+:link-type: doc
+
+One typed module for dev, staging and prod: StatefulSet, Gateway route,
+custom resource, network policy, SOPS secret and checks.
+:::
+
 :::{grid-item-card} Deploy from source
 :link: deploy
 :link-type: doc
@@ -151,6 +159,9 @@ deploy
 ci
 state
 typed_apps
+crds
+environments
+reference_app
 release_cli
 checks
 plans_and_diffs

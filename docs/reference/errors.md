@@ -56,6 +56,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`checks-rollback-unavailable`](#error-checks-rollback-unavailable) | checks | no |
 | [`cluster-identity-changed`](#error-cluster-identity-changed) | release | no |
 | [`cluster-identity-unreadable`](#error-cluster-identity-unreadable) | kubernetes | yes |
+| [`codegen-cluster-read-failed`](#error-codegen-cluster-read-failed) | codegen | yes |
+| [`codegen-flags-conflict`](#error-codegen-flags-conflict) | codegen | no |
+| [`codegen-output-refused`](#error-codegen-output-refused) | codegen | no |
 | [`command-cancelled`](#error-command-cancelled) | artifacts-delivery | yes |
 | [`command-failed`](#error-command-failed) | artifacts-delivery | no |
 | [`command-output-limit`](#error-command-output-limit) | artifacts-delivery | no |
@@ -67,6 +70,8 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`context-empty`](#error-context-empty) | build-spec | no |
 | [`context-missing`](#error-context-missing) | build-spec | no |
 | [`context-symlink`](#error-context-symlink) | build-spec | no |
+| [`crd-invalid`](#error-crd-invalid) | codegen | no |
+| [`crd-not-found`](#error-crd-not-found) | codegen | no |
 | [`credentials-file-not-private`](#error-credentials-file-not-private) | artifacts-input | no |
 | [`cross-origin-location-refused`](#error-cross-origin-location-refused) | artifacts-registry | no |
 | [`deadline-exceeded`](#error-deadline-exceeded) | kubernetes | yes |
@@ -91,6 +96,10 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`dockerfile-unpinned`](#error-dockerfile-unpinned) | build-spec | no |
 | [`dry-run-limit-exceeded`](#error-dry-run-limit-exceeded) | kubernetes | no |
 | [`dry-run-placeholder-image`](#error-dry-run-placeholder-image) | kubernetes | no |
+| [`environment-invalid`](#error-environment-invalid) | environments | no |
+| [`environment-required`](#error-environment-required) | environments | no |
+| [`environment-unknown`](#error-environment-unknown) | environments | no |
+| [`environment-unsupported`](#error-environment-unsupported) | environments | no |
 | [`exec-auth-not-allowed`](#error-exec-auth-not-allowed) | target | no |
 | [`exec-command-not-found`](#error-exec-command-not-found) | target | no |
 | [`exec-command-unsafe`](#error-exec-command-unsafe) | target | no |
@@ -124,6 +133,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`image-invalid`](#error-image-invalid) | build-spec | no |
 | [`image-mismatch`](#error-image-mismatch) | build-spec | no |
 | [`image-not-immutable`](#error-image-not-immutable) | images | no |
+| [`immutable-field-changed`](#error-immutable-field-changed) | release | no |
 | [`import-cancelled`](#error-import-cancelled) | artifacts-delivery | yes |
 | [`import-discovery-failed`](#error-import-discovery-failed) | import | yes |
 | [`import-failed`](#error-import-failed) | artifacts-delivery | yes |
@@ -277,6 +287,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`request-byte-limit`](#error-request-byte-limit) | kubernetes | no |
 | [`resource-content-precondition-failed`](#error-resource-content-precondition-failed) | execution | no |
 | [`resource-requires-adoption`](#error-resource-requires-adoption) | release | no |
+| [`resource-scope-mismatch`](#error-resource-scope-mismatch) | release | no |
 | [`response-byte-limit`](#error-response-byte-limit) | kubernetes | no |
 | [`restore-refused`](#error-restore-refused) | observe | no |
 | [`resume-refused`](#error-resume-refused) | release | no |
@@ -295,6 +306,11 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`secret-not-text`](#error-secret-not-text) | secrets | no |
 | [`secret-reveal-required`](#error-secret-reveal-required) | secrets | no |
 | [`secret-rotation-refused`](#error-secret-rotation-refused) | secrets | no |
+| [`secret-source-auth-failed`](#error-secret-source-auth-failed) | secrets | no |
+| [`secret-source-failed`](#error-secret-source-failed) | secrets | yes |
+| [`secret-source-not-found`](#error-secret-source-not-found) | secrets | no |
+| [`secret-source-timeout`](#error-secret-source-timeout) | secrets | yes |
+| [`secret-source-tool-missing`](#error-secret-source-tool-missing) | secrets | no |
 | [`secret-template-invalid`](#error-secret-template-invalid) | secrets | no |
 | [`secret-unknown-reference`](#error-secret-unknown-reference) | secrets | no |
 | [`server-target-identity-mismatch`](#error-server-target-identity-mismatch) | kubernetes | no |
@@ -1831,9 +1847,49 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-secret-rotation-refused)=
 ### `secret-rotation-refused`
 
-**Secret rotation refused.** --rotate named a template or static generator.
+**Secret rotation refused.** --rotate named a template, static or external-source (sops, vault, aws-secrets-manager) generator.
 
-- **Fix:** Rotate the values the template uses, or edit the spec.
+- **Fix:** Rotate the values the template uses, edit the spec, or rotate an external value at its source and plan again.
+- **Retry-safe:** no
+
+(error-secret-source-auth-failed)=
+### `secret-source-auth-failed`
+
+**Secret source refused the credentials.** An external secret source refused access: Vault answered 401/403 or the token file/variable is missing, AWS denied the request or found no credentials, or sops could not decrypt the file's data key (exit code 128).
+
+- **Fix:** Provide a valid Vault token (token_file or token_env), AWS credentials or profile, or the age/PGP/KMS key sops needs (pass_env), then plan again.
+- **Retry-safe:** no
+
+(error-secret-source-failed)=
+### `secret-source-failed`
+
+**Secret source read failed.** An external secret source failed: a network or TLS verification error, an unexpected HTTP status or AWS error, sops failed or does not match sops_sha256, or the response was malformed or too large.
+
+- **Fix:** Read the category in the message (for example tls-verify-failed: set ca_file); retrying is safe once the source is reachable.
+- **Retry-safe:** yes
+
+(error-secret-source-not-found)=
+### `secret-source-not-found`
+
+**Secret source has no such value.** The SOPS file, the Vault path, the AWS secret or the key inside it does not exist, is empty or is not a scalar value.
+
+- **Fix:** Fix file, path, secret_id or key in the spec (the message names the source, never the value).
+- **Retry-safe:** no
+
+(error-secret-source-timeout)=
+### `secret-source-timeout`
+
+**Secret source timed out.** sops, Vault or AWS did not answer within timeout_seconds.
+
+- **Fix:** Check connectivity to the source or raise timeout_seconds; retrying is safe.
+- **Retry-safe:** yes
+
+(error-secret-source-tool-missing)=
+### `secret-source-tool-missing`
+
+**Secret source tool not installed.** The sops binary is not found or not executable, or botocore is missing for an aws-secrets-manager secret.
+
+- **Fix:** Install sops (or set sops = "/absolute/path"), or install the extra: pip install 'piceli[aws]'.
 - **Retry-safe:** no
 
 (error-secret-template-invalid)=
@@ -2005,6 +2061,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Run `piceli release plan --spec release.toml` again and approve the new plan hash.
 - **Retry-safe:** no
 
+(error-immutable-field-changed)=
+### `immutable-field-changed`
+
+**Immutable fields would change.** The composition changes a field the API server never updates on an existing object: a Job's pod template or `completions`, or a StatefulSet's `serviceName`, `podManagementPolicy`, selector or claim templates (see `blocking`).
+
+- **Fix:** Name the object with `--replace Kind/name` (or `[release] replace`) to delete and recreate it from the release (a StatefulSet keeps its pods and claims), or revert the change.
+- **Retry-safe:** no
+
 (error-invalid-adopt-entry)=
 ### `invalid-adopt-entry`
 
@@ -2168,7 +2232,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-replace-refused)=
 ### `replace-refused`
 
-**Replace refused.** A `--replace` entry names an object that may not be replaced: it is managed, retained or owned by another object (see `blocking`).
+**Replace refused.** A `--replace` entry names an object that may not be replaced: it is retained, owned by another object, or already managed and not a Job or StatefulSet (see `blocking`).
 
 - **Fix:** Use `--adopt Kind/name` for an unmanaged object, or remove the entry from `--replace`/`[release] replace`.
 - **Retry-safe:** no
@@ -2179,6 +2243,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Existing object requires adoption.** An object the composition declares already exists and is not managed by this release's owner (see `blocking` for each object and the flags that unblock it). A cluster-scoped object (ClusterRole, ClusterRoleBinding) is managed only when it also carries `piceli.io/namespace` with this release's namespace.
 
 - **Fix:** Plan again with `--adopt Kind/name` (or `--replace Kind/name` for non-retained objects), `[release] adopt`/`replace`, or `--adopt-all-desired`; or delete the object.
+- **Retry-safe:** no
+
+(error-resource-scope-mismatch)=
+### `resource-scope-mismatch`
+
+**Declared scope contradicts discovery.** An object is declared namespaced but the API server serves its kind cluster-scoped, or the reverse (for example `app.resource(..., scope=...)` for a custom resource whose CRD says otherwise). Nothing was planned.
+
+- **Fix:** Declare the scope the CRD states (`scope="cluster"` or `"namespaced"`); `piceli codegen crd` records it in the generated module's `SCOPE`.
 - **Retry-safe:** no
 
 (error-resume-refused)=
@@ -3113,3 +3185,81 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Check that the cluster is reachable with the target's kubeconfig, then run the command again.
 - **Retry-safe:** yes
+
+
+## Typed models from CRDs (`piceli codegen crd`)
+
+(error-codegen-cluster-read-failed)=
+### `codegen-cluster-read-failed`
+
+**Reading the CRD from the cluster failed.** The API server refused or failed the read of the CRD (an HTTP error such as 403, or a transport error). Details are withheld because they could contain credentials.
+
+- **Fix:** Check that the kubeconfig user may `get customresourcedefinitions` and that the cluster is reachable, then run the command again.
+- **Retry-safe:** yes
+
+(error-codegen-flags-conflict)=
+### `codegen-flags-conflict`
+
+**Code generation options conflict.** Pass either a CRD file or `--from-cluster`; `--from-cluster` needs `--kubeconfig`, `--context` and `--crd`, and the cluster options only apply with it.
+
+- **Fix:** Run `piceli codegen crd FILE` or `piceli codegen crd --from-cluster --kubeconfig F --context C --crd NAME`.
+- **Retry-safe:** no
+
+(error-codegen-output-refused)=
+### `codegen-output-refused`
+
+**Code generation output refused.** The `--out` directory does not exist, or the file exists and was not generated by Piceli.
+
+- **Fix:** Choose another path, create the directory, or pass `--force` to overwrite the file.
+- **Retry-safe:** no
+
+(error-crd-invalid)=
+### `crd-invalid`
+
+**CRD invalid.** The input is not an apiextensions.k8s.io/v1 CustomResourceDefinition with a structural schema for the requested version (unparsable YAML/JSON, no CRD, no group or kind, an unknown --version, or no openAPIV3Schema).
+
+- **Fix:** Pass the CRD manifest the operator publishes (for example its release's CRD file) and, if needed, `--version` with a version the CRD lists.
+- **Retry-safe:** no
+
+(error-crd-not-found)=
+### `crd-not-found`
+
+**CRD not found.** `--crd NAME` names no CRD in the file or the cluster, or the file holds several CRDs and `--crd` was not given.
+
+- **Fix:** Pass `--crd` with the CRD's name (`plural.group`, such as `certificates.cert-manager.io`) or its kind; `kubectl get crd` lists them.
+- **Retry-safe:** no
+
+
+## Environments (`App.environment`, `--env`, `--diff-env`)
+
+(error-environment-invalid)=
+### `environment-invalid`
+
+**Environment override invalid.** An environment override names no suitable declared object (a typo, or an override the object cannot take, such as replicas on a ConfigMap), is ambiguous, disables a component another workload still reads, or holds a value the object refuses.
+
+- **Fix:** Fix the override as the message says; `piceli render MODULE:ATTR --env NAME` shows the result without a cluster.
+- **Retry-safe:** no
+
+(error-environment-required)=
+### `environment-required`
+
+**Environment required.** The pipeline declares one target per environment, so the command must say which one (`--env`); or `--diff-env` was given without `--env`.
+
+- **Fix:** Add `--env NAME` (one of the pipeline's environments).
+- **Retry-safe:** no
+
+(error-environment-unknown)=
+### `environment-unknown`
+
+**Unknown environment.** `--env` (or `--diff-env`) names an environment the app does not declare, or, for a pipeline, one it has no target for.
+
+- **Fix:** Use a declared name (`app.environment(name, ...)`); a pipeline needs `target={name: Target...}` for each environment it deploys.
+- **Retry-safe:** no
+
+(error-environment-unsupported)=
+### `environment-unsupported`
+
+**Environment not supported here.** `--env` selects an environment of an `App`; the target is a `DeploymentComposition`, a composition function that does not return an App, or a release.toml spec.
+
+- **Fix:** Return the App from the composition function, or use a pipeline (`--spec MODULE:ATTR`) whose app declares the environment.
+- **Retry-safe:** no

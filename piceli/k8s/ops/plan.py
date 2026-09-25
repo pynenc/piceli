@@ -18,6 +18,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from piceli.k8s.ops.discovery import (
+    RELEASE_NAMESPACE_ANNOTATION,
     DiscoveryArtifact,
     DiscoveryCoverage,
     DiscoveryProvenance,
@@ -83,6 +84,7 @@ _KIND_LEVEL = {
                 "NetworkPolicy",
                 "PodDisruptionBudget",
                 "HorizontalPodAutoscaler",
+                "HTTPRoute",
             ),
         )
     )
@@ -345,9 +347,18 @@ class ResourceRef:
             raise ValueError("resource apiVersion is required")
         if not isinstance(kind, str) or not kind:
             raise ValueError("resource kind is required")
+        annotations = metadata.get("annotations")
         resolved_scope = scope or (
             ResourceScope.CLUSTER
             if kind in _CLUSTER_SCOPED_KINDS
+            # Any other kind is cluster-scoped when it names its release's
+            # namespace in the annotation instead of in metadata.namespace
+            # (how ``App.resource(..., scope="cluster")`` renders it).
+            or (
+                not metadata.get("namespace")
+                and isinstance(annotations, Mapping)
+                and RELEASE_NAMESPACE_ANNOTATION in annotations
+            )
             else ResourceScope.NAMESPACED
         )
         namespace = (
@@ -1483,13 +1494,70 @@ def replace_propagation(kind: str) -> str:
     return "Background" if kind in _BACKGROUND_REPLACE_KINDS else "Orphan"
 
 
+#: Kinds whose spec is immutable in parts (see :func:`immutable_changes`): a
+#: release may also replace one it already manages, when named explicitly.
+REPLACEABLE_MANAGED_KINDS = frozenset({"Job", "StatefulSet"})
+
+# Spec fields the API server refuses to change on an existing object.
+_IMMUTABLE_SPEC = {
+    "Job": ("template", "completions", "completionMode", "selector"),
+    "StatefulSet": (
+        "selector",
+        "serviceName",
+        "podManagementPolicy",
+        "volumeClaimTemplates",
+    ),
+}
+
+
+def immutable_changes(
+    desired: ResourceIntent,
+    current: ObservedResource,
+    removals: Iterable[str] = (),
+) -> tuple[str, ...]:
+    """Immutable spec fields (``spec.<field>``) that ``desired`` would change.
+
+    A field changes when the desired value is not contained in the live one
+    (the server may add defaults), or when a planned removal falls inside it.
+    Kinds without immutable fields, and objects without a live spec, never
+    report a change. Pure: no cluster access.
+    """
+    fields = _IMMUTABLE_SPEC.get(desired.ref.kind, ())
+    live = current.intent.manifest.get("spec")
+    wanted = desired.manifest.get("spec")
+    if not fields or not isinstance(live, dict) or not isinstance(wanted, dict):
+        return ()
+    removed = set()
+    for pointer in removals:
+        parts = _removal_parts(pointer)
+        if len(parts) > 1 and parts[0] == "spec":
+            removed.add(parts[1])
+    return tuple(
+        f"spec.{field}"
+        for field in fields
+        if field in removed
+        or (field in wanted and not manifest_contains(live.get(field), wanted[field]))
+    )
+
+
 def replace_refusal(resource: ObservedResource) -> str | None:
-    """Why an observed object cannot be replaced, or ``None``."""
+    """Why an observed object cannot be replaced, or ``None``.
+
+    Unmanaged objects may be replaced; so may managed objects of a kind in
+    :data:`REPLACEABLE_MANAGED_KINDS` (a Job or StatefulSet whose immutable
+    fields change).
+    """
     if resource.retained or resource.intent.ref.kind in _RETAINED_KINDS:
         return "retained objects are never deleted; adopt it instead"
-    if resource.ownership is not Ownership.UNMANAGED:
+    if (
+        resource.ownership is not Ownership.UNMANAGED
+        and resource.intent.ref.kind not in REPLACEABLE_MANAGED_KINDS
+    ):
         return (
-            "the object is already managed; replace applies only to unmanaged objects"
+            "the object is already managed; replace applies only to unmanaged "
+            "objects and to managed "
+            + " or ".join(sorted(REPLACEABLE_MANAGED_KINDS))
+            + " objects"
         )
     if resource.owner_uids:
         return "the object is owned by another object (ownerReferences)"
@@ -1819,6 +1887,38 @@ def field_drift(
     return sorted(report, key=lambda item: ResourceRef(**item["resource"]))
 
 
+_SCALABLE_KINDS = frozenset({"Deployment", "StatefulSet", "ReplicaSet"})
+
+
+def autoscaled(composition: DeploymentComposition) -> frozenset[ResourceRef]:
+    """Workloads a HorizontalPodAutoscaler of ``composition`` targets.
+
+    Their ``spec.replicas`` belongs to the autoscaler: a plan never removes
+    it (see :func:`build_plan`). Targets are matched by kind and name in the
+    autoscaler's namespace.
+    """
+    resources = [
+        resource
+        for component in composition.components
+        for resource in component.resources
+    ]
+    targets = set()
+    for resource in resources:
+        if resource.ref.kind != "HorizontalPodAutoscaler":
+            continue
+        target = resource.manifest.get("spec", {}).get("scaleTargetRef")
+        if isinstance(target, dict):
+            targets.add(
+                (target.get("kind"), target.get("name"), resource.ref.namespace)
+            )
+    return frozenset(
+        resource.ref
+        for resource in resources
+        if resource.ref.kind in _SCALABLE_KINDS
+        and (resource.ref.kind, resource.ref.name, resource.ref.namespace) in targets
+    )
+
+
 def build_plan(
     composition: DeploymentComposition,
     snapshot: ObservedSnapshot,
@@ -1871,6 +1971,7 @@ def build_plan(
             raise ValueError(f"cannot replace {ref}: retained descendants exist")
     dependencies = _desired_dependencies(composition)
     levels = _topological_levels(dependencies)
+    scaled = autoscaled(composition)
     actions: list[PlanAction] = []
     changes: tuple[str, ...]
     previous = {intent.ref: intent for intent in authorization.previous}
@@ -1905,11 +2006,16 @@ def build_plan(
                 elif current.ownership is Ownership.UNMANAGED:
                     raise ValueError(f"resource requires explicit adoption: {ref}")
                 elif not (
-                    removals := planned_removals(
-                        previous.get(ref),
-                        desired[ref],
-                        current,
-                        authorization.field_manager,
+                    removals := tuple(
+                        pointer
+                        for pointer in planned_removals(
+                            previous.get(ref),
+                            desired[ref],
+                            current,
+                            authorization.field_manager,
+                        )
+                        # An autoscaler owns the replica count: never reset it.
+                        if not (ref in scaled and pointer == "/spec/replicas")
                     )
                 ) and (
                     _equivalent(desired[ref], current.intent, snapshot.defaulted_fields)
@@ -1921,6 +2027,13 @@ def build_plan(
                     operation = PlanOperation.NOOP
                 else:
                     operation = PlanOperation.APPLY
+                    changed = immutable_changes(desired[ref], current, removals)
+                    if changed:
+                        raise ValueError(
+                            f"immutable fields of {ref} would change "
+                            f"({', '.join(changed)}); name it with --replace "
+                            f"{ref.kind}/{ref.name} to recreate it"
+                        )
                     if current.retained:
                         # A retained object is never rewritten: only its
                         # labels and annotations may change, with a

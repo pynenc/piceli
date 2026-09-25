@@ -38,14 +38,17 @@ from piceli.k8s.ops.plan import DeploymentComposition
 from piceli.k8s.ops.provider_factory import KubeconfigTarget, NodeExpectation
 from piceli.k8s.ops.secret_versions import SecretVersionRef
 from piceli.k8s.release_secret_spec import (  # noqa: F401 (re-exported)
+    AwsSecretSpec,
     GeneratorSpec,
     ImportSecretSpec,
     RandomSecretSpec,
     SecretSpec,
+    SopsSecretSpec,
     StaticSecretSpec,
     TemplateSecretSpec,
     TlsCaSpec,
     TlsSelfSignedSpec,
+    VaultSecretSpec,
     check_secrets,
 )
 
@@ -905,6 +908,10 @@ class ReleaseSpec:
                         code="invalid-composition",
                     )
                 module = importlib.util.module_from_spec(loader_spec)
+                # Like `piceli render`: modules next to the file (such as
+                # generated CRD models) import, after every installed package.
+                if str(path.parent) not in sys.path:
+                    sys.path.append(str(path.parent))
                 sys.modules[module_name] = module
                 try:
                     loader_spec.loader.exec_module(module)

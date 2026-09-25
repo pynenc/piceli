@@ -63,8 +63,11 @@ reported as *undeclared*; they are never adopted or removed automatically.
 
 ## Does Piceli support custom resources (CRDs)?
 
-A composition accepts any `apiVersion`/`kind` as a raw manifest in a
-`ResourceIntent`. Typed templates for custom resources are on the {doc}`roadmap`.
+Yes. `piceli codegen crd` generates typed pydantic models from a CRD file or
+a cluster, and `app.resource(api_version, kind, name, spec)` declares the
+object with a validated spec; cluster-scoped ones are managed per namespace.
+See {doc}`crds`. A composition also accepts any `apiVersion`/`kind` as a raw
+manifest in a `ResourceIntent`.
 
 ## Does Piceli push images to a registry?
 

@@ -167,8 +167,10 @@ checks = [
 ]
 ```
 
-A handle's first port becomes the check's `port`. In TOML, and for a plain
-target without `port`, the port is read from the live Service or pod template.
+A handle's first port becomes the check's `port`, and a workload handle keeps
+its kind (`app.stateful_set("store", …)` becomes `statefulset/store`; a Job
+or CronJob handle is refused). In TOML, and for a plain target without
+`port`, the port is read from the live Service or pod template.
 
 ### Python checks
 

@@ -32,6 +32,7 @@ from piceli.k8s.ops.kubernetes_provider import (
     ProviderError,
 )
 from piceli.k8s.ops.plan import (
+    REPLACEABLE_MANAGED_KINDS,
     AdoptionMode,
     DeploymentPlan,
     ObservedResource,
@@ -643,7 +644,10 @@ class PlanExecutor:
         ):
             raise ProviderError("retained-resource")
         if action.operation is PlanOperation.REPLACE and (
-            current.ownership is not Ownership.UNMANAGED
+            (
+                current.ownership is not Ownership.UNMANAGED
+                and action.resource.ref.kind not in REPLACEABLE_MANAGED_KINDS
+            )
             or current.manifest["metadata"].get("ownerReferences")
         ):
             raise ProviderError("replace-precondition-failed")
@@ -794,7 +798,8 @@ class PlanExecutor:
         authorization: ExecutionAuthorization,
         deadline: float,
     ) -> None:
-        """Delete an unmanaged object and create it from the release.
+        """Delete an unmanaged object (or a managed Job or StatefulSet whose
+        immutable fields change) and create it from the release.
 
         Order: a restorable backup of the live object is written (owner-only
         file) and journaled with the intent; the delete carries the observed
@@ -809,7 +814,10 @@ class PlanExecutor:
             self.backups is None
             or current.retained
             or ref.kind in RETAINED_KINDS
-            or current.ownership is not Ownership.UNMANAGED
+            or (
+                current.ownership is not Ownership.UNMANAGED
+                and ref.kind not in REPLACEABLE_MANAGED_KINDS
+            )
             or metadata.get("ownerReferences")
         ):
             raise ProviderError("replace-precondition-failed")

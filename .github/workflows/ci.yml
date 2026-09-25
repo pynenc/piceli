@@ -49,6 +49,11 @@ jobs:
           enable-cache: true
           cache-dependency-glob: uv.lock
       - run: uv sync --all-extras --python ${{ matrix.python }}
+      - name: Install sops (the reference app's SOPS source)
+        run: |
+          curl -sSfL -o /tmp/sops https://github.com/getsops/sops/releases/download/v3.10.2/sops-v3.10.2.linux.amd64
+          echo "79b0f844237bd4b0446e4dc884dbc1765fc7dedc3968f743d5949c6f2e701739  /tmp/sops" | sha256sum -c -
+          sudo install -m 0755 /tmp/sops /usr/local/bin/sops
       - name: Unit and acceptance tests
         run: uv run pytest --cov --cov-report=term --cov-report=xml
       - name: Store coverage data
@@ -117,6 +122,11 @@ jobs:
         run: |
           docker pull busybox:1.36
           docker pull "$(uv run python -c 'from piceli.k8s.templates.deployable.node_local_registry import DEFAULT_REGISTRY_IMAGE as i; print(i)')"
+      - name: Install sops (the reference app's SOPS source)
+        run: |
+          curl -sSfL -o /tmp/sops https://github.com/getsops/sops/releases/download/v3.10.2/sops-v3.10.2.linux.amd64
+          echo "79b0f844237bd4b0446e4dc884dbc1765fc7dedc3968f743d5949c6f2e701739  /tmp/sops" | sha256sum -c -
+          sudo install -m 0755 /tmp/sops /usr/local/bin/sops
       - name: Integration tests
         run: uv run pytest tests/integration --cov --cov-report=term
       - name: Store coverage data

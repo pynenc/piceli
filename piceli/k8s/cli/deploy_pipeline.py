@@ -41,8 +41,13 @@ from piceli.cli_contract import (
 STAGE_NAMES = ("inputs", "build", "deliver", "plan", "apply", "checks")
 
 
-def load_pipeline(entry: str) -> Any:
-    """Import `MODULE:ATTR` and return its Pipeline; rejects (exit 2) otherwise."""
+def load_pipeline(entry: str, env: str | None = None) -> Any:
+    """Import `MODULE:ATTR` and return its Pipeline; rejects (exit 2) otherwise.
+
+    ``env`` selects one environment (``Pipeline.for_environment``); a pipeline
+    with one target per environment is refused without it
+    (``environment-required``).
+    """
     from piceli.app.render import RenderError, load_target
     from piceli.pipeline import Pipeline, PipelineError
 
@@ -60,7 +65,24 @@ def load_pipeline(entry: str) -> Any:
     if not isinstance(value, Pipeline):
         say(f"{entry} is a {type(value).__name__}, not a piceli Pipeline")
         reject("pipeline-not-found")
+    if env is not None:
+        try:
+            return value.for_environment(env)
+        except PipelineError as error:
+            say(str(error))
+            reject(error.code, str(error))
+    if value.needs_environment:
+        say(
+            f"{entry} deploys one target per environment "
+            f"({', '.join(sorted(value.targets))}); pass --env NAME"
+        )
+        reject("environment-required")
     return value
+
+
+def env_flag(env: str | None) -> str:
+    """`` --env NAME`` for printed follow-up commands (empty without one)."""
+    return f" --env {env}" if env else ""
 
 
 #: Human plan lines wrap here; continuation lines align under the stage text.
@@ -223,11 +245,14 @@ def _confirm(combined_hash: str) -> bool:
     return bool(answer) and len(answer) >= 12 and combined_hash.startswith(answer)
 
 
-def _approve_command(target: str, combined: Any) -> str:
+def _approve_command(target: str, combined: Any, env: str | None = None) -> str:
     """The approval command; ``--ref`` values are pinned to the planned SHAs."""
     refs = combined.stages.get("inputs", {}).get("refs", {})
     pinned = "".join(f" --ref {name}={value['commit']}" for name, value in refs.items())
-    return f"piceli deploy {target}{pinned} --approve {combined.combined_hash}"
+    return (
+        f"piceli deploy {target}{env_flag(env)}{pinned} "
+        f"--approve {combined.combined_hash}"
+    )
 
 
 @contextmanager
@@ -332,6 +357,16 @@ def deploy(
             "with its combined hash); re-plans and refuses any change",
         ),
     ] = None,
+    env: Annotated[
+        str | None,
+        typer.Option(
+            "--env",
+            help="Environment to deploy: the app's overrides and the pipeline's "
+            "target for it (required when the pipeline has one target per "
+            "environment); the combined hash covers its name and values",
+            show_default=False,
+        ),
+    ] = None,
 ) -> None:
     """Deploy a pipeline: inputs → build → deliver → plan → apply → checks.
 
@@ -353,6 +388,10 @@ def deploy(
         )
         until, reapply = document["until"], document["reapply"]
         target = target or document["entry"]
+        if env is not None and env != document.get("environment"):
+            say("--apply deploys the environment the plan file was made for")
+            reject("deploy-plan-file-mismatch")
+        env = document.get("environment")
     if out is not None and not plan:
         say("--out writes the plan file of --plan; add --plan")
         reject("deploy-flags-conflict")
@@ -382,7 +421,7 @@ def deploy(
     if document is not None:
         # The plan's own commits, never a re-resolved branch.
         refs = recorded_requests(document.get("refs") or {})
-    pipeline = load_pipeline(target)
+    pipeline = load_pipeline(target, env)
     runner = PipelineRunner(
         pipeline, on_event=emit_json if as_json else _human, say=say, refs=refs
     )
@@ -397,22 +436,24 @@ def deploy(
                     if seeded:
                         say(f"plan file: {len(seeded)} receipt(s) from the plan runner")
                 combined = runner.plan(until, reapply=reapply)
-                _describe(combined, target)
+                _describe(combined, target + env_flag(env))
                 body = {
                     "schema": "piceli.deploy-event.v1",
                     "event": "result",
                     **combined.to_dict(),
                 }
+                if pipeline.environment is not None:
+                    body["environment"] = pipeline.environment.identity()
                 refs_planned = combined.stages["inputs"].get("refs")
                 if refs_planned:
                     body["refs"] = {n: v["commit"] for n, v in refs_planned.items()}
                 if plan:
                     if out is not None:
-                        _write_plan_file(runner, combined, out, target, reapply)
+                        _write_plan_file(runner, combined, out, target, reapply, env)
                         body["plan_file"] = str(out)
                     # The command stays on one line so it can be copied.
                     say("approve with:")
-                    say(f"  {_approve_command(target, combined)}")
+                    say(f"  {_approve_command(target, combined, env)}")
                     if out is not None:
                         say("or on another runner:")
                         say(
@@ -440,7 +481,7 @@ def deploy(
                         reject("pipeline-plan-changed")
                 elif not auto_approve and not _confirm(combined.combined_hash):
                     say("approve with:")
-                    say(f"  {_approve_command(target, combined)}")
+                    say(f"  {_approve_command(target, combined, env)}")
                     finished = (EXIT_APPROVAL, {**body, "state": "approval-required"})
                 if finished is None:
                     result = runner.execute(
@@ -453,7 +494,12 @@ def deploy(
 
         _fail(runner, classify(error))
     except KeyboardInterrupt:
-        say("interrupted; continue with: piceli deploy " + target + " --resume")
+        say(
+            "interrupted; continue with: piceli deploy "
+            + target
+            + env_flag(env)
+            + " --resume"
+        )
         if runner.run is not None:
             emit_json(runner.result("interrupted"))
         raise typer.Exit(EXIT_FAILED) from None
@@ -494,7 +540,12 @@ def _plan_file(path: Path, approve: str | None, *, conflicting: bool) -> dict[st
 
 
 def _write_plan_file(
-    runner: Any, combined: Any, out: Path, target: str, reapply: bool
+    runner: Any,
+    combined: Any,
+    out: Path,
+    target: str,
+    reapply: bool,
+    env: str | None,
 ) -> None:
     from piceli.pipeline.planfile import (
         observed_target,
@@ -511,7 +562,12 @@ def _write_plan_file(
         say(f"plan file: target identity not recorded ({type(error).__name__})")
         observed = None
     document = plan_document(
-        runner, combined, entry=target, reapply=reapply, observed=observed
+        runner,
+        combined,
+        entry=target,
+        reapply=reapply,
+        observed=observed,
+        environment=env,
     )
     write_plan_document(out, document)
     say(f"plan file: {out}")

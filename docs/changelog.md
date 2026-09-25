@@ -4,6 +4,126 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.7.0
+
+- **Reference app:** `examples/reference/app.py` deploys a realistic app to
+  dev, staging and prod from one typed module (StatefulSet with claim
+  templates, Job and CronJob, HPA and PDB, HTTPRoute, a cert-manager
+  `Certificate` typed by `piceli codegen crd`, a release-wide NetworkPolicy,
+  RBAC, restricted pods, a SOPS-encrypted password and checks), with render,
+  fake-API and kind tests; walkthrough in `docs/reference_app.md`.
+- Environments: `autoscalers={name: Scaling(min_replicas=…, max_replicas=…,
+  cpu=…, memory=…)}` changes an autoscaler per environment (the `replicas=`
+  refusal pointed at a fix no override could express), and a `resources=`
+  override that drops a request an autoscaler's utilization target needs is
+  refused (`environment-invalid`).
+- `--diff-env` no longer reports the namespace inside RBAC objects (binding
+  subjects, `<namespace>:<app>:<name>` ClusterRole names) as a difference.
+- `Checks.exec(...)` with a StatefulSet or DaemonSet handle targets
+  `statefulset/<name>` or `daemonset/<name>` instead of `deployment/<name>`;
+  a Job or CronJob handle is refused.
+- An environment's `replicas=` on a workload an autoscaler targets is refused
+  (`environment-invalid`) instead of being ignored.
+
+- **External secret sources (preview):** three new `[secrets.*]` types, and
+  `Sops`, `Vault` and `AwsSecret` for `piceli.pipeline.Secrets`: `sops` (one
+  value of a SOPS-encrypted file, or the whole file, decrypted by the `sops`
+  binary with an explicit argv, a minimal environment plus `pass_env`, a
+  timeout and an optional `sops_sha256` pin), `vault` (one key of a HashiCorp
+  Vault KV v2 secret over verified TLS, token from `token_file` or
+  `token_env`, `namespace`, `version`, `ca_file`) and `aws-secrets-manager`
+  (a secret or one JSON key, through botocore; new extra `piceli[aws]`). They
+  are read at every `plan` and `diff`; each value is reduced to an HMAC-SHA256
+  under a private key (`state_dir/secret-sources.key`) that is part of the
+  release fingerprint, so an unchanged value re-plans the same release and a
+  changed one creates a new release with a new private version (new plan
+  origin `fetched`; the others are `carried:<release>`). A refused plan stores
+  nothing, and values never reach plans, journals, receipts, logs or errors.
+  `--rotate` refuses an external source (rotate it at the source). New codes
+  `secret-source-auth-failed`, `secret-source-not-found`,
+  `secret-source-tool-missing`, `secret-source-timeout` and
+  `secret-source-failed`. Specs without external sources keep their release
+  names; `secret show --json` adds `source` for them.
+- **Custom resources and any other kind (preview):** `app.resource(api_version,
+  kind, name, spec, *, fields=, scope=, public=, labels=, annotations=,
+  component=)` declares one object of any kind with a typed spec (a pydantic
+  model, validated at declaration) or a JSON mapping; it renders by alias with
+  only the fields that were set, joins components, `depends` and `override`
+  like other declarations. Cluster-scoped resources follow the per-namespace
+  ownership rules of ClusterRoles (no namespace, `piceli.io/namespace`
+  annotation, never another namespace's objects); a release now manages any
+  such annotated cluster-scoped kind except Namespace,
+  CustomResourceDefinition and PersistentVolume. A declared scope that the
+  server's discovery contradicts is refused at plan time
+  (`resource-scope-mismatch`). See `docs/crds.md`.
+- **`piceli codegen crd` (preview):** generates a deterministic module of
+  frozen pydantic models (`<Kind>Spec` with `API_VERSION`, `KIND`, `SCOPE`)
+  from a CRD's structural OpenAPI v3 schema, from a file or with
+  `--from-cluster --kubeconfig F --context C --crd NAME`; `--out` replaces
+  only files it generated. A small in-house generator (no new dependency; it
+  understands `x-kubernetes-int-or-string` and preserve-unknown-fields). New
+  codes: `crd-invalid`, `crd-not-found`, `codegen-flags-conflict`,
+  `codegen-output-refused`, `codegen-cluster-read-failed`. Pinned
+  cert-manager `Certificate` and Prometheus-operator `ServiceMonitor` CRDs are
+  vendored in `tests/fixtures/crds/` with their source and licence.
+- **Environments (preview):** `app.environment(name, ...)` declares typed
+  overrides (replicas, images, container resources, config values, hosts,
+  node selectors, resource specs, enabled components) checked against the
+  declared objects; `app.for_environment(name)` returns the derived App.
+  `piceli render --env NAME` renders one environment and `--diff-env OTHER`
+  prints their typed difference (text, or JSON with `--format json`).
+  `Pipeline(app, {"dev": Target…, "prod": Target…})` deploys each environment
+  to its own target with its own state (`state_dir/environments/NAME`);
+  `piceli deploy --env` and `piceli release … --spec MODULE:ATTR --env` select
+  one, and the combined hash covers the environment's name and resolved
+  values. JSON adds `environment` (render, deploy result) only with `--env`.
+  New codes: `environment-unknown`, `environment-required`,
+  `environment-invalid`, `environment-unsupported`. See `docs/environments.md`.
+- Plans show Secret *references* in any kind (`secretName`, `*File`/`*Path`
+  strings, `{name, key}` selectors, `secretTemplate`) instead of redacting
+  them, so custom resources that reference Secrets can be applied; the
+  `piceli.io/public-fields` annotation (`app.resource(..., public=[...])`)
+  declares other sensitive-looking fields public. Values stay redacted.
+- Custom resources without a readiness rule are ready when their `Ready`
+  condition is `True` for the current generation, or once applied when they
+  report none (previously `readiness-unsupported`).
+- A file target (`piceli render path/app.py:app`, a pipeline, a release
+  composition file) can import the modules next to it (such as generated CRD
+  models); its directory is appended to `sys.path`.
+- `piceli` and `piceli.app` export `Environment` and `Resource`.
+- **Typed App kinds (preview):** `app.stateful_set(...)` (per-pod
+  `ClaimTemplate` volumes, a governing headless Service by default,
+  `pod_management`, `update_strategy`), `app.daemon_set(...)`, `app.job(...)`,
+  `app.cron_job(...)`, `app.autoscaler(workload, ...)` (HPA `autoscaling/v2`),
+  `app.disruption_budget(workload, ...)` (PDB `policy/v1`), `app.ingress(...)`
+  and Gateway API `app.http_route(...)` with typed `Route` and `GatewayRef`.
+  Every pod kind shares the Deployment's pod model (`piceli.app.Workload`):
+  `pod_defaults`, `service_account=`, `node=` pins, images, secrets, config
+  dependencies and `override` work the same. Workload names are now unique
+  across kinds. `Service(headless=True)` renders `clusterIP: None`.
+- **Autoscaled replicas:** a workload targeted by `app.autoscaler` renders no
+  `spec.replicas` (setting `replicas=` on it is refused), and a plan never
+  removes `/spec/replicas` from a workload an HPA of the same composition
+  targets, so a release never resets the HPA's count.
+- **Claims are never pruned:** StatefulSets render
+  `persistentVolumeClaimRetentionPolicy` `Retain`/`Retain`, and prune and
+  replace delete them with `Orphan` propagation; the claims their templates
+  create are never part of a plan.
+- **Immutable fields:** a plan that would change a managed Job's pod template
+  or `completions`, or a StatefulSet's `serviceName`, `podManagementPolicy`,
+  selector or claim templates, is refused with the new code
+  `immutable-field-changed` (`blocking[].suggest` names the flag).
+  `--replace Kind/name` now also accepts a **managed** Job or StatefulSet and
+  recreates it (Jobs with `Background`, StatefulSets with `Orphan`
+  propagation); every other managed object is still refused.
+- Readiness: a release treats HorizontalPodAutoscaler, PodDisruptionBudget,
+  Ingress and HTTPRoute objects as ready once they exist (no more
+  `readiness-unsupported`). HTTPRoutes are applied with Ingresses, after
+  Services.
+- `piceli.testing`: the fake API serves StatefulSets, DaemonSets, Jobs,
+  CronJobs, HorizontalPodAutoscalers, PodDisruptionBudgets, Ingresses and
+  HTTPRoutes (added to `TYPES`), reports their readiness, and refuses updates
+  to immutable Job and StatefulSet fields with `422`.
 ## Version 0.6.0
 
 - **Shared deployment state (preview):** `Pipeline(state="cluster")` and

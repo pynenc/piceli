@@ -185,6 +185,9 @@ namespace, see {doc}`../migrate_from_kubectl`.
 - {doc}`../overview` covers the mental model, the engine and a glossary.
 - {doc}`../deploy` adds pinned image builds and delivery to a registry or node.
 - {doc}`../typed_apps` describes everything a typed app can declare.
+- {doc}`../reference_app` walks through a realistic app (stateful store,
+  workers, Gateway route, custom resource, network policy, SOPS secret)
+  deployed to dev, staging and prod from one typed module.
 - {doc}`../release_cli` covers the release spec, adoption, secrets, rollback
   and resume.
 - {doc}`../cli/index` is the command overview; {doc}`../reference/cli` lists

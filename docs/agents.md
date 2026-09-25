@@ -85,7 +85,16 @@ noted.
 - `piceli render`: imports the model module and reads the spec; never contacts
   a cluster or reads secret values. `piceli render MODULE:pipeline` renders a
   `Pipeline` with its target's namespace and declared nodes, and build images
-  as placeholders; it reads no kubeconfig.
+  as placeholders; it reads no kubeconfig. `--env NAME` renders one
+  environment; `--env A --diff-env B` prints their typed difference (use it
+  to show the owner what differs before deploying another environment; see
+  {doc}`environments`, and {doc}`reference_app` for a complete example).
+- `piceli codegen crd FILE` (reads the file) and `piceli codegen crd
+  --from-cluster --kubeconfig F --context C --crd NAME` (one read of the CRD
+  through the explicit context): generate typed models for a custom resource
+  (see {doc}`crds`). `--out` writes that one file and replaces it only when
+  Piceli generated it. The output depends only on the schema. Never pick the
+  kubeconfig or context yourself.
 - `piceli release plan` and `piceli release preview`: read the cluster, store
   a pending plan and secret candidates in the spec's `state_dir`, and print the
   plan hash. They never write to the cluster.
@@ -219,6 +228,14 @@ unattended CI job for this exact spec.
    and recreates it). Registry credentials for `mirror_credentials=` are files
    the owner provides; never create, read or print them.
 
+**Deploying an environment.** When the pipeline declares one target per
+environment, every `deploy` and `release --spec MODULE:ATTR` command needs
+`--env NAME` (`environment-required` otherwise). Plan, show and approve each
+environment separately: the combined hash covers the environment's name and
+override values, so one environment's hash never approves another
+(`pipeline-plan-changed`). Use exactly the approval command `--plan`
+prints (it repeats `--env`). Never choose the environment for the owner.
+
 **Deploying a commit.** When the working tree is shared or dirty, or the
 owner asked for a specific commit, add `--ref SOURCE=REV` (or a bare
 `--ref REV` when all sources are one repository) to the `--plan` command.
@@ -281,6 +298,12 @@ never build. The approval rules above apply unchanged:
 4. An unknown code (`piceli explain` exits `2` with `unknown-error-code`)
    should not happen for a `conforms` command: report the whole JSON object
    verbatim.
+5. `immutable-field-changed` (a Job's pod template, or a StatefulSet's
+   service name, pod management, selector or claim templates would change):
+   do not add `--replace` yourself. Show the owner the `blocking` entry;
+   replacing deletes and recreates the object (a Job runs again). Plan with
+   the suggested `--replace Kind/name` only when the owner asks for it, and
+   have them approve that plan's hash.
 
 ## Resuming interrupted work
 
@@ -316,6 +339,17 @@ never build. The approval rules above apply unchanged:
   plan written by `release plan --out` is redacted.
 - Pass registry credentials only as a file (`--credentials`, mode `0600`),
   never on the command line or in logs.
+- External secret sources (`sops`, `vault`, `aws-secrets-manager` in
+  `[secrets.*]`, or `Sops`/`Vault`/`AwsSecret` in a pipeline) are
+  configured by the owner. Never read, create, copy or configure their
+  credentials yourself: no Vault token files or `VAULT_TOKEN`, no `~/.aws`,
+  AWS profiles or keys, no age/PGP keys or `~/.config/sops`, and do not run
+  `sops`, `vault` or `aws` to look at a value. `plan` reads the sources
+  itself; when it refuses with `secret-source-auth-failed`,
+  `secret-source-tool-missing` or `secret-source-not-found`, report the code
+  and ask the owner. `secret-source-timeout` and `secret-source-failed` are
+  safe to retry once. Do not use `--rotate` on an external source (refused
+  with `secret-rotation-refused`): the owner rotates it at the source.
 - Error codes never contain secrets or private paths, so they are safe to
   report.
 - Never put a secret in a build's smoke check (`smoke.env`, `command`,

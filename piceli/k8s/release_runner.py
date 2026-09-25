@@ -40,7 +40,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from piceli.checks import (
     Check,
@@ -54,11 +54,13 @@ from piceli.k8s.ops.bounds import timestamp
 from piceli.k8s.ops.discovery import (
     RELEASE_CLUSTER_KINDS,
     RELEASE_NAMESPACE_ANNOTATION,
+    RELEASE_REFUSED_CLUSTER_KINDS,
     RETAINED_KINDS,
     DiscoveryArtifact,
     DiscoveryLimits,
     DiscoveryRequest,
     PlanTarget,
+    ResourceScope,
     ResourceType,
     capture_discovery,
 )
@@ -73,6 +75,7 @@ from piceli.k8s.ops.executor import (
 from piceli.k8s.ops.field_diff import plan_diffs
 from piceli.k8s.ops.kubernetes_provider import ProviderError
 from piceli.k8s.ops.plan import (
+    REPLACEABLE_MANAGED_KINDS,
     DeploymentComponent,
     DeploymentComposition,
     DeploymentPlan,
@@ -86,6 +89,7 @@ from piceli.k8s.ops.plan import (
     build_plan,
     declared_union,
     field_drift,
+    immutable_changes,
     private_evidence,
     replace_refusal,
     retained_content_contained,
@@ -104,7 +108,11 @@ from piceli.k8s.release import (
     ReleaseSource,
     ReleaseWorkflow,
 )
-from piceli.k8s.release_secret_spec import SecretError, consumed_outputs
+from piceli.k8s.release_secret_spec import (
+    SecretError,
+    check_rotation,
+    consumed_outputs,
+)
 from piceli.k8s.release_secrets import (
     ImportSources,
     Materialized,
@@ -121,6 +129,9 @@ from piceli.k8s.release_spec import (
     ReleaseSpecError,
     parse_adopt_entry,
 )
+
+if TYPE_CHECKING:
+    from piceli.k8s.secret_sources import Fetched
 
 POLICY_REVISION = "piceli.release-cli/v1"
 _HASH = re.compile(r"[0-9a-f]{64}")
@@ -341,10 +352,13 @@ def scoped_composition(
 
     Namespaced objects must target ``namespace``. Cluster-scoped objects must
     be of a kind in :data:`~piceli.k8s.ops.discovery.RELEASE_CLUSTER_KINDS`
-    (ClusterRole, ClusterRoleBinding); each gets the
-    ``piceli.io/namespace: <namespace>`` annotation (typed apps render it)
-    so that only this namespace's release manages it. An object that already
-    names another namespace is refused.
+    (ClusterRole, ClusterRoleBinding), which get the
+    ``piceli.io/namespace: <namespace>`` annotation (typed apps render it),
+    or of another kind already annotated with it (``app.resource(...,
+    scope="cluster")``), except the kinds in
+    :data:`~piceli.k8s.ops.discovery.RELEASE_REFUSED_CLUSTER_KINDS`. Only this
+    namespace's release manages them. An object that already names another
+    namespace is refused.
 
     :raises ReleaseSpecError: ``invalid-composition``.
     """
@@ -361,17 +375,22 @@ def scoped_composition(
                     )
                 resources.append(resource)
                 continue
-            if (ref.api_version, ref.kind) not in RELEASE_CLUSTER_KINDS:
-                raise ReleaseSpecError(
-                    "cluster-scoped resources other than rbac.authorization.k8s.io/v1 "
-                    "ClusterRole and ClusterRoleBinding are not supported by "
-                    f"releases: {ref.kind}/{ref.name}",
-                    code="invalid-composition",
-                )
             manifest = resource.manifest
             metadata = manifest.setdefault("metadata", {})
             annotations = metadata.get("annotations") or {}
             declared = annotations.get(RELEASE_NAMESPACE_ANNOTATION)
+            if (ref.api_version, ref.kind) not in RELEASE_CLUSTER_KINDS and (
+                declared is None or ref.kind in RELEASE_REFUSED_CLUSTER_KINDS
+            ):
+                raise ReleaseSpecError(
+                    "a release manages cluster-scoped objects only per namespace: "
+                    "rbac.authorization.k8s.io/v1 ClusterRole and "
+                    "ClusterRoleBinding, and other kinds declared with "
+                    'app.resource(..., scope="cluster") (annotated '
+                    f"{RELEASE_NAMESPACE_ANNOTATION}); never Namespace, "
+                    f"CustomResourceDefinition or PersistentVolume: {ref.kind}/{ref.name}",
+                    code="invalid-composition",
+                )
             if declared is not None and declared != namespace:
                 raise ReleaseSpecError(
                     f"{ref.kind}/{ref.name} is annotated "
@@ -398,6 +417,39 @@ def scoped_composition(
             )
         )
     return DeploymentComposition(tuple(components))
+
+
+def _check_scopes(
+    composition: DeploymentComposition, artifact: DiscoveryArtifact
+) -> None:
+    """Refuse objects whose scope contradicts the API server's discovery.
+
+    A typed resource declares its scope (``App.resource(..., scope=...)``);
+    the server's discovery is authoritative, so a namespaced declaration of a
+    cluster-scoped kind (or the reverse) is refused before planning.
+
+    :raises ReleaseSpecError: ``resource-scope-mismatch``.
+    """
+    scopes = {
+        (item.resource_type.api_version, item.resource_type.kind): item.scope
+        for item in artifact.coverage.api_resources
+    }
+    for component in composition.components:
+        for resource in component.resources:
+            ref = resource.ref
+            served = scopes.get((ref.api_version, ref.kind))
+            if served is None:
+                continue
+            declared = (
+                ResourceScope.NAMESPACED if ref.namespace else ResourceScope.CLUSTER
+            )
+            if declared is not served:
+                raise ReleaseSpecError(
+                    f"{ref.kind}/{ref.name} is declared {declared.value}, but the "
+                    f"API server serves {ref.api_version} {ref.kind} as "
+                    f"{served.value}; declare it with scope={served.value!r}",
+                    code="resource-scope-mismatch",
+                )
 
 
 @dataclass(frozen=True)
@@ -431,8 +483,12 @@ def resolve_ownership(
     is taken over again, which reclaims those fields.
 
     Replace entries must name an existing **unmanaged, non-retained** object
-    that no other object owns; absent objects are reported as not needed and
-    every other case is refused. ``adopt_all_desired`` adopts every unmanaged
+    that no other object owns, or a managed Job or StatefulSet (whose
+    immutable fields change); absent objects, and managed ones without an
+    immutable change, are reported as not needed and
+    every other case is refused. A managed object whose immutable fields
+    would change and that is not named for replace blocks the plan
+    (``immutable-field-changed``). ``adopt_all_desired`` adopts every unmanaged
     object the composition declares that is not replaced, and nothing else.
 
     Every object that blocks the plan is reported in one refusal, each with
@@ -458,7 +514,14 @@ def resolve_ownership(
     for entry in dict.fromkeys(replace):
         ref = _declared_match(entry, declared, "replace")
         current = observed.get(ref)
-        if current is None:
+        if current is None or (
+            # A managed Job or StatefulSet is replaced only for a change the
+            # API server cannot apply; a standing entry never reruns a Job.
+            current.ownership is Ownership.MANAGED
+            and ref.kind in REPLACEABLE_MANAGED_KINDS
+            and not current.retained
+            and not immutable_changes(intents[ref], current)
+        ):
             replace_not_needed.add(_label(ref))
             continue
         refusal = replace_refusal(current)
@@ -527,6 +590,23 @@ def resolve_ownership(
                     + ("; retained: replace is never allowed" if retained else ""),
                     "suggest": [f"--adopt {_label(ref)}"]
                     + ([] if retained else [f"--replace {_label(ref)}"]),
+                }
+            )
+        elif (
+            ref not in replaced
+            and ref not in adopt
+            and current.ownership is Ownership.MANAGED
+            and (changed := immutable_changes(intents[ref], current))
+        ):
+            blocking.append(
+                {
+                    "kind": ref.kind,
+                    "name": ref.name,
+                    "code": "immutable-field-changed",
+                    "message": "immutable fields would change ("
+                    + ", ".join(changed)
+                    + "); the API server refuses the update",
+                    "suggest": [f"--replace {_label(ref)}"],
                 }
             )
         elif (
@@ -1075,7 +1155,10 @@ class ReleaseRunner:
 
     # ------------------------------------------------------------ discovery
     def _discover(
-        self, binding: ProviderBinding, kinds: set[ResourceType]
+        self,
+        binding: ProviderBinding,
+        kinds: set[ResourceType],
+        composition: DeploymentComposition | None = None,
     ) -> DiscoveryArtifact:
         for item in self.spec.model.discovery.kinds:
             api_version, _, kind = item.rpartition("/")
@@ -1106,6 +1189,8 @@ class ReleaseRunner:
                 + (f" ({'; '.join(failures)})" if failures else ""),
                 code="discovery-incomplete",
             )
+        if composition is not None:
+            _check_scopes(composition, artifact)
         return artifact
 
     def _dry_runs(
@@ -1138,7 +1223,7 @@ class ReleaseRunner:
         """
         for attempt in range(OBSERVE_ATTEMPTS):
             artifact, unavailable = self._dry_runs(
-                binding, composition, self._discover(binding, kinds)
+                binding, composition, self._discover(binding, kinds, composition)
             )
             if attempt + 1 == OBSERVE_ATTEMPTS or not any(
                 item["reason"] == "conflict" for item in unavailable
@@ -1154,11 +1239,13 @@ class ReleaseRunner:
         store: SecretVersionStore,
         binding: ProviderBinding,
         rotate: Sequence[str],
+        external: Mapping[str, Fetched] | None = None,
     ) -> Materialized:
         """Carry values over from earlier releases unless rotated or reconfigured.
 
         Called only after the plan was validated; imports read their source
-        here (a live Secret through the release's own provider).
+        here (a live Secret through the release's own provider). External
+        sources were read before the release was named (``external``).
         """
         records = sorted(
             catalog.records(),
@@ -1195,6 +1282,39 @@ class ReleaseRunner:
             rotate=rotate,
             carry=carry,
             sources=ImportSources(self.spec.resolve, read_secret),
+            external=external,
+        )
+
+    def _external_sources(self, *, create: bool) -> dict[str, Fetched]:
+        """Read every external secret source now (values stay in memory).
+
+        The keyed digests name the release, so a changed value makes a new
+        release and an unchanged one re-plans the existing release. ``create``
+        creates the private digest key when missing (``plan``); without it
+        (``diff``, read-only) a missing key means no release can match.
+        """
+        from secrets import token_bytes
+
+        from piceli.k8s.release_secret_spec import is_external
+        from piceli.k8s.secret_sources import (
+            KEY_FILE,
+            ExternalSources,
+            fetch_all,
+            source_key,
+        )
+
+        specs = {
+            name: spec
+            for name, spec in self.spec.model.secrets.items()
+            if is_external(spec)
+        }
+        if not specs:
+            return {}
+        key = source_key(self.state / KEY_FILE, create=create)
+        return fetch_all(
+            specs,
+            key if key is not None else token_bytes(32),
+            ExternalSources(self.spec.resolve),
         )
 
     @staticmethod
@@ -1255,7 +1375,12 @@ class ReleaseRunner:
                 factory = self._factory(function, images, self._nodes(binding))
                 if rollback_to is None:
                     composition, material = self._preview_composition(factory)
-                    fingerprint = self._fingerprint(images, material, rotate)
+                    if rotate:
+                        # Refuse --rotate of a template, static or external
+                        # value before any source is read.
+                        check_rotation(spec.secrets, rotate)
+                    external = self._external_sources(create=True)
+                    fingerprint = self._fingerprint(images, material, rotate, external)
                     name = f"{spec.release.name}-{fingerprint[:12]}"
                     existing = {record.name for record in catalog.records()}
                     if name not in existing:
@@ -1271,6 +1396,7 @@ class ReleaseRunner:
                             store,
                             rotate,
                             requested,
+                            external,
                         )
                     intent = "apply"
                 else:
@@ -1295,20 +1421,24 @@ class ReleaseRunner:
         images: Mapping[str, ImageRef],
         material: list[dict[str, Any]],
         rotate: Sequence[str] = (),
+        external: Mapping[str, Fetched] | None = None,
     ) -> str:
-        """The release fingerprint; its first 12 characters name the release."""
-        return hashlib.sha256(
-            _canonical(
-                {
-                    "images": {n: i.identity for n, i in images.items()},
-                    "composition": material,
-                    "secrets": {
-                        n: config_digest(g) for n, g in self.spec.model.secrets.items()
-                    },
-                    "rotation": uuid.uuid4().hex if rotate else None,
-                }
-            ).encode()
-        ).hexdigest()
+        """The release fingerprint; its first 12 characters name the release.
+
+        External secret values contribute their keyed digests (only when the
+        spec has external sources, so other fingerprints are unchanged).
+        """
+        document: dict[str, Any] = {
+            "images": {n: i.identity for n, i in images.items()},
+            "composition": material,
+            "secrets": {
+                n: config_digest(g) for n, g in self.spec.model.secrets.items()
+            },
+            "rotation": uuid.uuid4().hex if rotate else None,
+        }
+        if external:
+            document["sources"] = {n: item.digest for n, item in external.items()}
+        return hashlib.sha256(_canonical(document).encode()).hexdigest()
 
     def diff(
         self,
@@ -1346,7 +1476,9 @@ class ReleaseRunner:
             factory = self._factory(function, images, self._nodes(binding))
             composition, material = self._preview_composition(factory)
             records = {record.name: record for record in catalog.records()}
-            name = f"{settings.name}-{self._fingerprint(images, material)[:12]}"
+            external = self._external_sources(create=False)
+            fingerprint = self._fingerprint(images, material, external=external)
+            name = f"{settings.name}-{fingerprint[:12]}"
             existing = records.get(name)
             if existing is not None:
                 # An unchanged release: its archived composition carries the
@@ -1430,7 +1562,7 @@ class ReleaseRunner:
             if settings.prune:
                 for record in catalog.records():
                     kinds |= self._kinds(composition_from_archive(record.archive))
-            artifact = self._discover(binding, kinds)
+            artifact = self._discover(binding, kinds, composition)
             skipped = sorted(
                 {
                     (resource.ref.kind, resource.ref.name)
@@ -1517,6 +1649,7 @@ class ReleaseRunner:
         store: SecretVersionStore,
         rotate: Sequence[str],
         requested: _Ownership,
+        external: Mapping[str, Fetched] | None = None,
     ) -> PlanResult:
         settings = self.spec.model.release
         kinds = self._kinds(composition)
@@ -1562,7 +1695,7 @@ class ReleaseRunner:
         # first: a refused plan must not generate, import or store any secret.
         preview = build_plan(composition, snapshot, plan_authorization)
         grant(preview, snapshot)
-        secrets = self._private_inputs(catalog, store, binding, rotate)
+        secrets = self._private_inputs(catalog, store, binding, rotate, external)
         origin = secrets.origin
         placeholders = self._placeholders()
         bound_refs = {

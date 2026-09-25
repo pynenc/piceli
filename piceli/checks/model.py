@@ -70,7 +70,8 @@ def _handle_target(value: Any) -> tuple[str, int | None] | None:
 
     Duck-typed so this module does not import :mod:`piceli.app`: a
     :class:`~piceli.app.model.Service` has ``selector`` and ``ports``; a
-    :class:`~piceli.app.model.Deployment` has ``containers``.
+    workload (:class:`~piceli.app.model.Workload`) has ``containers`` and its
+    ``kind``.
     """
     name = getattr(value, "name", None)
     if not isinstance(name, str) or isinstance(value, str):
@@ -80,7 +81,11 @@ def _handle_target(value: Any) -> tuple[str, int | None] | None:
         ports = getattr(containers[0], "ports", ()) or ()
         port = ports[0] if ports else None
         port = getattr(port, "port", port)
-        return f"deployment/{name}", port if isinstance(port, int) else None
+        # A workload handle's own kind (StatefulSet, DaemonSet, Job …); a kind
+        # a check cannot target is refused by the target validator.
+        kind = getattr(value, "kind", None)
+        kind = kind.lower() if isinstance(kind, str) and kind else "deployment"
+        return f"{kind}/{name}", port if isinstance(port, int) else None
     ports = getattr(value, "ports", None)
     if ports is not None and getattr(value, "selector", None) is not None:
         first = ports[0] if ports else None

@@ -42,6 +42,14 @@ RELEASE_CLUSTER_KINDS = frozenset(
         ("rbac.authorization.k8s.io/v1", "ClusterRoleBinding"),
     }
 )
+#: Cluster-scoped kinds a release never manages, even when annotated with
+#: :data:`RELEASE_NAMESPACE_ANNOTATION`: they belong to the cluster's
+#: administration. Other annotated cluster-scoped kinds (custom resources
+#: declared with ``App.resource(..., scope="cluster")``) are managed per
+#: namespace like the RBAC kinds above.
+RELEASE_REFUSED_CLUSTER_KINDS = frozenset(
+    {"Namespace", "CustomResourceDefinition", "PersistentVolume"}
+)
 
 _SENSITIVE_KEY = re.compile(
     r"(^|_)(authorization|credential|password|private_key|secret|token)(_|$)", re.I
@@ -97,9 +105,59 @@ def _reference_fields(path: tuple[str, ...]) -> frozenset[str]:
     return frozenset()
 
 
-def _redact(value: Any, *, path: tuple[str, ...] = ()) -> tuple[Any, bool]:
+#: Annotation listing fields (dotted paths, ``*`` for list items) that the
+#: object's author declares public although their names look sensitive, such
+#: as ``spec.privateKey`` of a cert-manager Certificate (key *settings*, not
+#: key material). ``App.resource(..., public=[...])`` renders it.
+PUBLIC_FIELDS_ANNOTATION = "piceli.io/public-fields"
+_SELECTOR_KEYS = frozenset({"name", "key", "optional"})
+_TEMPLATE_KEYS = frozenset({"annotations", "labels"})
+
+
+def _names_secret(normalized: str, child: Any) -> bool:
+    """Whether a sensitive-looking field *points at* secret material.
+
+    Kubernetes and operators reference Secrets by name: ``secretName``, a
+    ``*File``/``*Path`` location, a ``{name, key}`` selector
+    (``bearerTokenSecret``, ``passwordSecretRef``) or a metadata template
+    (``secretTemplate``). None of them holds the material itself.
+    """
+    if isinstance(child, str):
+        return normalized.endswith(("_name", "_file", "_path"))
+    if isinstance(child, dict) and child:
+        keys = set(child)
+        if (
+            keys <= _SELECTOR_KEYS
+            and "name" in keys
+            and all(isinstance(child[key], str) for key in keys - {"optional"})
+            and isinstance(child.get("optional", False), bool)
+        ):
+            return True
+        if keys <= _TEMPLATE_KEYS and normalized.endswith("_template"):
+            return True
+    return False
+
+
+def _public_fields(manifest: Mapping[str, Any]) -> frozenset[str]:
+    metadata = manifest.get("metadata")
+    annotations = metadata.get("annotations") if isinstance(metadata, Mapping) else None
+    value = (
+        annotations.get(PUBLIC_FIELDS_ANNOTATION)
+        if isinstance(annotations, Mapping)
+        else None
+    )
+    if not isinstance(value, str) or manifest.get("kind") == "Secret":
+        return frozenset()
+    return frozenset(item.strip() for item in value.split(",") if item.strip())
+
+
+def _redact(
+    value: Any, *, path: tuple[str, ...] = (), public: frozenset[str] = frozenset()
+) -> tuple[Any, bool]:
     if isinstance(value, list):
-        redacted_items = [_redact(item, path=path + ("*",)) for item in value]
+        redacted_items = [
+            _redact(item, path=path + ("*",), public=public) for item in value
+        ]
         return [item for item, _ in redacted_items], any(
             changed for _, changed in redacted_items
         )
@@ -121,8 +179,12 @@ def _redact(value: Any, *, path: tuple[str, ...] = ()) -> tuple[Any, bool]:
             # A boolean switch such as ``automountServiceAccountToken`` carries
             # no secret material; string, number and object values still do.
             sensitive = False
+        if sensitive and _names_secret(normalized, child):
+            sensitive = False
         if key == "value" and sensitive_env:
             sensitive = True
+        if sensitive and ".".join(child_path[1:]) in public:
+            sensitive = False
         if sensitive:
             result[key] = (
                 dict.fromkeys(child, "<redacted>")
@@ -131,14 +193,16 @@ def _redact(value: Any, *, path: tuple[str, ...] = ()) -> tuple[Any, bool]:
             )
             changed = True
         else:
-            result[key], child_changed = _redact(child, path=child_path)
+            result[key], child_changed = _redact(child, path=child_path, public=public)
             changed = changed or child_changed
     return result, changed
 
 
 def public_manifest(manifest: dict[str, Any]) -> tuple[dict[str, Any], bool]:
     """Shared redaction for public plans, discovery and executor validation."""
-    public, changed = _redact(manifest, path=(manifest.get("kind", ""),))
+    public, changed = _redact(
+        manifest, path=(manifest.get("kind", ""),), public=_public_fields(manifest)
+    )
     if manifest.get("kind") == "Secret":
         for key in ("data", "stringData"):
             body = public.get(key)

@@ -27,9 +27,9 @@ Priorities may change. Progress is tracked in
 | Post-deploy checks (http, exec, metric, Python) with automatic rollback | 🟡 Preview |
 | Import a live namespace or manifest files as a typed app module (`piceli import live`, `piceli import yaml`) | 🟡 Preview |
 | Public fake Kubernetes API for consumers' tests (`piceli.testing`) | 🟡 Preview |
-| Environments and overlays (Kustomize equivalent) | ❌ Not yet: plain Python functions for now |
+| Environments and overlays (Kustomize equivalent) | 🟡 Preview: typed `Environment` overrides, `--env`, `--diff-env` |
 | Reusable, versioned packages (Helm equivalent) | ❌ Not yet |
-| Custom resources (CRDs) | 🟡 As raw manifests in a composition |
+| Custom resources (CRDs) | 🟡 Preview: `app.resource` with models from `piceli codegen crd` |
 | Local operations UI and JSON API | 🟡 Early preview |
 | Continuous reconciliation from Git (Argo CD equivalent) | ❌ Not yet |
 | Cloud infrastructure lifecycle (Terraform/OpenTofu equivalent) | ❌ Not yet; GKE cluster helpers only |
@@ -50,6 +50,9 @@ Every feature page starts with its maturity, and this table lists them all:
 | Object model: templates, `kubernetes` client models, YAML/JSON (loader) | {doc}`kubernetes_model/index` | stable |
 | CLI overview | {doc}`cli/index` | preview |
 | Typed apps (`piceli.App`, `piceli render`) | {doc}`typed_apps` | preview |
+| Custom resources and generated models (`app.resource`, `piceli codegen crd`) | {doc}`crds` | preview |
+| Environments (`app.environment`, `--env`, `--diff-env`) | {doc}`environments` | preview |
+| Reference app: dev/staging/prod in one typed module (`examples/reference`, tested on kind) | {doc}`reference_app` | preview |
 | Engine: discovery, plans, executor, journals (Python API) | {doc}`deployment_planning` | preview |
 | Deploy from source (`piceli deploy`, `piceli.pipeline`) | {doc}`deploy` | preview |
 | Deploy a commit (`piceli deploy --ref`) | {ref}`deploy-ref` | preview |
@@ -116,15 +119,15 @@ audience.
 - Templates for Namespace, Ingress and Gateway API, NetworkPolicy, DaemonSet,
   PodDisruptionBudget, ClusterRole/ClusterRoleBinding, ResourceQuota and
   LimitRange.
-- A typed generic resource for any kind, including CRDs, with optional generated
-  models.
+- ✅ A typed generic resource for any kind, including CRDs, with generated
+  models (preview, see {doc}`crds`).
 - Namespaces, annotations and rollout strategies on every template.
 
 ### 4. Composition and environments
 
 - Reusable, parameterised components: the Python counterpart of a Helm chart.
-- Environment overlays (dev, staging, production) as typed configuration: the
-  Python counterpart of Kustomize.
+- ✅ Environment overlays (dev, staging, production) as typed configuration:
+  the Python counterpart of Kustomize (preview, see {doc}`environments`).
 - ✅ `piceli render` produces plain YAML, so teams can adopt Piceli gradually and
   feed its output into existing tools.
 
