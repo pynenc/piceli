@@ -71,12 +71,12 @@ from piceli.pipeline.compose import (
 from piceli.pipeline.errors import PipelineError
 from piceli.pipeline.journal import FINISHED, Journal, Run, now, write_private
 from piceli.pipeline.model import (
-    STAGES,
     Build,
     NodeImport,
     NodeLoopbackRegistry,
     Pipeline,
     Registry,
+    stages_for,
 )
 from piceli.pipeline.operate import (
     delivery_path,
@@ -84,6 +84,8 @@ from piceli.pipeline.operate import (
     mirror_path,
     mirror_receipt,
 )
+from piceli.pipeline.prerollout import render_delivered, render_offline
+from piceli.pipeline.prerollout_stage import PreRolloutStage, changing
 from piceli.pipeline.refs import (
     RefRequest,
     SourceCheckouts,
@@ -100,6 +102,7 @@ if TYPE_CHECKING:
     from piceli.k8s.release_runner import PlanResult, ReleaseRunner
     from piceli.k8s.release_spec import ImageRef
     from piceli.pipeline.compose import PipelineReleaseSpec
+    from piceli.pipeline.prerollout_cluster import PreRolloutCluster
     from piceli.pipeline.registry_takeover import Takeover
 
 PLAN_SCHEMA = "piceli.deploy-plan.v1"
@@ -397,6 +400,8 @@ class PipelineRunner:
         refs: Sequence[RefRequest] = (),
     ) -> None:
         self.pipeline = pipeline
+        #: The stages of this pipeline's runs (``prerollout`` only when declared).
+        self.stages = stages_for(pipeline.app)
         self.refs = tuple(refs)
         self.checkouts: SourceCheckouts | None = None
         self.backend = backend or Backend()
@@ -667,15 +672,15 @@ class PipelineRunner:
     # ----------------------------------------------------------- planning
     def plan(self, until: str = "checks", *, reapply: bool = False) -> CombinedPlan:
         """Plan every stage up to ``until``; nothing outside the state dir changes."""
-        if until not in STAGES:
+        if until not in self.stages:
             raise PipelineError("deploy-stage-unknown", f"unknown stage {until!r}")
-        limit = STAGES.index(until)
+        limit = self.stages.index(until)
         self._open_checkouts(self.refs)
         work = _Work()
         self._work = work
         stages: dict[str, dict[str, Any]] = {}
         hashed: dict[str, Any] = {}
-        for index, name in enumerate(STAGES):
+        for index, name in enumerate(self.stages):
             if index > limit:
                 stages[name] = {"state": "not-planned"}
                 continue
@@ -1196,6 +1201,20 @@ class PipelineRunner:
             {"reapply": reapply},
         )
 
+    def _cluster(self) -> PreRolloutCluster:
+        return self.backend.prerollout_cluster(
+            self.pipeline.target,
+            poll_seconds=float(self.pipeline.execution.get("poll_seconds", 2.0)),
+        )
+
+    def _prerollout(self) -> PreRolloutStage:
+        return PreRolloutStage(self.pipeline, self._cluster, self.say)
+
+    def _plan_prerollout(
+        self, _work: _Work, _reapply: bool
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        return self._prerollout().plan(render_offline(self.pipeline))
+
     def _plan_checks(
         self, _work: _Work, _reapply: bool
     ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -1307,6 +1326,7 @@ class PipelineRunner:
             plan={"hashed": plan.hashed, "stages": plan.stages},
             refs=self.checkouts.describe() if self.checkouts else None,
             approved_by="policy" if policy is not None else None,
+            stages=self.stages,
         )
         return self._continue(plan.until, reapply=reapply)
 
@@ -1430,8 +1450,8 @@ class PipelineRunner:
     ) -> dict[str, Any]:
         assert self.run is not None
         run = self.run
-        limit = STAGES.index(until)
-        for name in STAGES[: limit + 1]:
+        limit = self.stages.index(until)
+        for name in self.stages[: limit + 1]:
             if run.stage(name).get("state") in {"done", "skipped"}:
                 continue
             started = time.monotonic()
@@ -1472,7 +1492,7 @@ class PipelineRunner:
                 seconds=round(time.monotonic() - started, 3),
             )
             self._emit(name, state, output)
-        final = "ready" if limit == len(STAGES) - 1 else "stopped"
+        final = "ready" if limit == len(self.stages) - 1 else "stopped"
         run.set_state(final)
         self._finish()
         return self.result(final)
@@ -1531,7 +1551,7 @@ class PipelineRunner:
     def result(self, state: str) -> dict[str, Any]:
         assert self.run is not None
         run = self.run
-        stages = {name: run.stage(name).get("state") for name in STAGES}
+        stages = {name: run.stage(name).get("state") for name in self.stages}
         plan = run.output("plan")
         apply = run.output("apply")
         from piceli.pipeline.summary import summary_paths
@@ -1992,6 +2012,24 @@ class PipelineRunner:
                 details=details,
             )
         return "done", output
+
+    # --------------------------------------------------- stage: prerollout
+    def _run_prerollout(
+        self, reapply: bool, _resuming: bool
+    ) -> tuple[str, dict[str, Any]]:
+        work = self._work
+        assert work is not None and self.run is not None
+        if work.runner is None or work.release_plan is None:
+            self._release_plan(work)
+        assert work.release_plan is not None
+        if self._unchanged(work, reapply):
+            return "skipped", {"why": "unchanged", "checks": [], "skipped": []}
+        rendered = render_delivered(self.pipeline, self._release_images(work))
+        return self._prerollout().run(
+            rendered,
+            changed=changing(work.release_plan.to_dict()["actions"]),
+            run_id=self.run.run_id,
+        )
 
     # -------------------------------------------------------- stage: checks
     def _run_checks(

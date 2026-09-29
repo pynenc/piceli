@@ -21,7 +21,7 @@ import json
 import os
 import tempfile
 import uuid
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -159,6 +159,7 @@ class Journal:
         plan: Mapping[str, Any],
         refs: Mapping[str, Any] | None = None,
         approved_by: str | None = None,
+        stages: Sequence[str] = STAGES,
     ) -> Run:
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
         run_id = f"{stamp}-{uuid.uuid4().hex[:8]}"
@@ -172,7 +173,7 @@ class Journal:
             "approval": approval,
             "until": until,
             "plan": dict(plan),
-            "stages": {name: {"state": "pending"} for name in STAGES},
+            "stages": {name: {"state": "pending"} for name in stages},
         }
         if approved_by is not None:
             # "policy": the owner's auto_approve policy approved the run.

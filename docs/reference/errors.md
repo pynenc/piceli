@@ -282,6 +282,12 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`plan-not-approved`](#error-plan-not-approved) | build-spec | no |
 | [`plan-not-found`](#error-plan-not-found) | release | no |
 | [`plan-release-mismatch`](#error-plan-release-mismatch) | release | no |
+| [`prerollout-claim-exclusive`](#error-prerollout-claim-exclusive) | pipeline | no |
+| [`prerollout-failed`](#error-prerollout-failed) | pipeline | no |
+| [`prerollout-mount-missing`](#error-prerollout-mount-missing) | pipeline | no |
+| [`prerollout-not-startable`](#error-prerollout-not-startable) | pipeline | no |
+| [`prerollout-timeout`](#error-prerollout-timeout) | pipeline | yes |
+| [`prerollout-unavailable`](#error-prerollout-unavailable) | pipeline | no |
 | [`promote-refused`](#error-promote-refused) | observe | no |
 | [`provider-error`](#error-provider-error) | kubernetes | yes |
 | [`rbac-denied`](#error-rbac-denied) | kubernetes | no |
@@ -3171,6 +3177,54 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Fix the local problem, then continue with `piceli deploy MODULE:ATTR --resume`.
 - **Retry-safe:** yes
+
+(error-prerollout-claim-exclusive)=
+### `prerollout-claim-exclusive`
+
+**Upgrade check cannot share a ReadWriteOncePod claim.** The upgrade check mounts the workload's retained claim read-only in a second pod, but the claim is `ReadWriteOncePod` and a running pod holds it: Kubernetes allows only one pod to use it, so the check pod could never start.
+
+- **Fix:** Use `ReadWriteOnce` for a claim the upgrade check must open beside the running pod, drop `UpgradeCheck` for that workload, or check the store from inside the workload (a startup check).
+- **Retry-safe:** no
+
+(error-prerollout-failed)=
+### `prerollout-failed`
+
+**Pre-rollout check failed.** The check Job (new image, the workload's real Secrets, mounts and security context) exited non-zero. Nothing of the release was applied, so the running pods are unchanged. The run summary keeps the exit code and a bounded, scrubbed tail of the log.
+
+- **Fix:** Read `stages.prerollout.output.checks` in the run (`piceli runs`, `piceli watch --json`), fix the image or the configuration and deploy again.
+- **Retry-safe:** no
+
+(error-prerollout-mount-missing)=
+### `prerollout-mount-missing`
+
+**Pre-rollout check would fail to start.** A workload with a pre-rollout check (`App.pre_rollout`) reads a Secret or ConfigMap (environment, `envFrom` or a mount) that the release does not create and that is absent from the cluster or lacks the referenced key. The check Job would fail to start, and so would the workload's pods. Planning refuses it; a run refuses it before creating the Job.
+
+- **Fix:** Create the Secret or ConfigMap (or add the key) in the target namespace, or declare it on the app so the release creates it, then plan again.
+- **Retry-safe:** no
+
+(error-prerollout-not-startable)=
+### `prerollout-not-startable`
+
+**Pre-rollout check pod could not start.** The check pod never started: a Secret or ConfigMap could not be mounted or read, the image could not be pulled, or the pod could not be scheduled (for example a ReadWriteOnce claim on another node). The workload's own pods would fail the same way. Nothing of the release was applied.
+
+- **Fix:** See `category` and `reason` in `stages.prerollout.output.checks` (`mount`, `image`, `scheduling`), fix the object, image or claim, and deploy again.
+- **Retry-safe:** no
+
+(error-prerollout-timeout)=
+### `prerollout-timeout`
+
+**Pre-rollout check timed out.** The check Job did not finish within its `timeout_seconds` (image pull, mount and command included). Nothing of the release was applied. The Job was removed.
+
+- **Fix:** Raise `timeout_seconds` on `App.pre_rollout` if the check is legitimately slow, or fix what makes it hang, then deploy again.
+- **Retry-safe:** yes
+
+(error-prerollout-unavailable)=
+### `prerollout-unavailable`
+
+**Pre-rollout check Job could not be created.** The Kubernetes API refused to create the check Job (missing permission to create Jobs, quota or admission policy). The check is required, so the release is not applied.
+
+- **Fix:** Grant the deploying identity permission to create, read and delete Jobs and to read Pods and their logs in the target namespace, or remove the pre-rollout check.
+- **Retry-safe:** no
 
 
 ## Shared deployment state and release locks (`state = "cluster"`, `piceli state …`)

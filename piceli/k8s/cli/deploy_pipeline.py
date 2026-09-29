@@ -44,7 +44,7 @@ from piceli.cli_contract import (
     say,
 )
 
-STAGE_NAMES = ("inputs", "build", "deliver", "plan", "apply", "checks")
+STAGE_NAMES = ("inputs", "build", "deliver", "plan", "prerollout", "apply", "checks")
 
 
 def load_pipeline(entry: str, env: str | None = None) -> Any:
@@ -308,7 +308,10 @@ def deploy(
         str,
         typer.Option(
             "--until",
-            help="Stop after this stage: inputs, build, deliver, plan, apply or checks",
+            help=(
+                "Stop after this stage: inputs, build, deliver, plan, prerollout "
+                "(only with a pre-rollout check), apply or checks"
+            ),
         ),
     ] = "checks",
     resume: Annotated[
