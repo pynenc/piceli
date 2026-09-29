@@ -162,6 +162,13 @@ noted.
   never one you create).
 - `piceli artifacts build`: assembles an OCI layout in `--output` without
   running any code.
+- `piceli watch [MODULE:ATTR | --state-dir DIR] --json`: follow a deploy run
+  from its journal (`snapshot`, `stage`, `progress`, `run` events, then a
+  `result`; schema `docs/schemas/piceli-watch-event-v1.schema.json`); read-only
+  and offline, so run it beside `piceli deploy` (another terminal) or after
+  it. Exit `0` ready or stopped, `1` failed, interrupted, rolled back or
+  `--timeout` (`watch-timeout`), `2` no run (`watch-no-run`). Use it, not
+  polling the cluster, to report a release's progress ({ref}`watch`).
 - `piceli observe forward-save`, `piceli operator backup`: write a local
   preferences file or backup archive.
 - `piceli cache status [MODULE:ATTR | --state-dir DIR] --json`, `piceli

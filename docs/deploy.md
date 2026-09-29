@@ -651,6 +651,12 @@ was not delivered is built again first. A run that
 finished, rolled back or stopped at `--until` has nothing to resume: plan a
 new run, and unchanged stages are skipped.
 
+A resumed run reports its own outcome: when the resumed stages succeed, the
+run record, its `summary.json` and `piceli runs` say `ready` and drop the
+`reason` and `message` of the earlier failure or interruption (`state` was
+`interrupted` or `failed` only until the resume started). Follow a run from
+another terminal or an agent with `piceli watch` ({ref}`watch`).
+
 ## Run summaries and disk use
 
 When a run ends, whatever the outcome, it writes

@@ -4,6 +4,24 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Unreleased (0.8.1)
+
+- **`piceli watch`:** follow a deploy run from its journal, read-only and
+  offline. `--json` prints JSON lines (`piceli.watch-event.v1`, see
+  `docs/schemas/piceli-watch-event-v1.schema.json`): a `snapshot`, then `stage`,
+  `progress` and `run` events, then the `result` (state, failure `reason`,
+  `resumable`, summary paths). Exit `0` ready or stopped, `1` failed,
+  interrupted, rolled back or `--timeout`, `2` no run. New codes
+  `watch-no-run`, `watch-timeout`. The run journal gains `progress` (the
+  newest 200 progress lines); existing outputs are unchanged.
+- **Fix:** `piceli deploy --resume` reports the resumed run's own outcome: the
+  run record, `summary.json` and `piceli runs` drop the `reason` and `message`
+  of the earlier failure or interruption once the stage succeeds.
+- **Fix:** `piceli access` follows the live owner of a forward during a
+  rollout: it connects to the newest Ready, non-terminating pod of the Service
+  or Deployment and reconnects (without a restart or a failure) when that pod
+  is replaced. Each `status` event adds `pod` (additive; `null` when unknown).
+
 ## Version 0.8.0
 
 - **`Build.spec(path, platform=...)`:** build a spec for another platform than
