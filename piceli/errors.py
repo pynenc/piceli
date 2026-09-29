@@ -54,6 +54,8 @@ AREAS: Mapping[str, str] = MappingProxyType(
         "maintenance": "Runner hygiene (`piceli cache`, `piceli doctor`, `piceli runs`, `cache_budget=`)",
         "approval": "Owner-declared approval policies (`auto_approve`, `--approve-if-policy`)",
         "gitops": "GitOps handoff (`piceli publish`, `piceli render --out`)",
+        # --- 0.9.0 ---
+        "host-build": 'Builds without a container VM (`Build.spec(builder="host")`) and target node facts',
     }
 )
 
@@ -3217,6 +3219,23 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "Drop the other flags, or plan with them (`piceli release plan …`) and ask the owner to approve the hash.",
         False,
         "approval",
+    ),
+    # --- 0.9.0 host builds and node facts ---
+    _E(
+        "node-facts-unavailable",
+        "Node facts unavailable",
+        "A host build reads its node's architecture and kernel version from the Node object (`status.nodeInfo`); the node reports none, an unsupported architecture, or the recorded facts are malformed.",
+        "Check `kubectl get node NODE -o jsonpath='{.status.nodeInfo}'` with the pipeline's kubeconfig; only `amd64` and `arm64` Linux nodes are supported.",
+        False,
+        "host-build",
+    ),
+    _E(
+        "node-page-size-invalid",
+        "Node page-size label invalid",
+        "The node label `piceli.io/page-size` is not `4096`, `16384` or `65536`.",
+        "Run `getconf PAGESIZE` on the node and set the label to that value, or remove the label to use the kernel-release rule.",
+        False,
+        "host-build",
     ),
 )
 

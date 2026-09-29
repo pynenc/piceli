@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from piceli.artifacts.build_spec import BuildGrant, BuildSpec, DockerTool
+    from piceli.artifacts.node_facts import NodeFacts
     from piceli.artifacts.process import ToolPin
     from piceli.artifacts.source_identity import InputsLock, InputsSpec
     from piceli.k8s.release_runner import ReleaseRunner
@@ -337,6 +338,24 @@ class Backend:
         finally:
             client.close()
         return f"{info.get('operatingSystem') or 'linux'}/{info.get('architecture')}"
+
+    def node_facts(self, target: Target, node: str) -> NodeFacts:
+        """Architecture, kernel and page size of ``node`` (read-only, one GET)."""
+        import json
+
+        from kubernetes.client import CoreV1Api
+
+        from piceli.artifacts.node_facts import NodeFacts
+
+        client = self._api(target)
+        try:
+            response = CoreV1Api(client).read_node(
+                node, _preload_content=False, _request_timeout=target.request_seconds
+            )
+            document = json.loads(response.data)
+        finally:
+            client.close()
+        return NodeFacts.from_node(document)
 
     # ------------------------------------------------------------- node
     def _node_delivery(self, url: str) -> tuple[Any, Any]:
