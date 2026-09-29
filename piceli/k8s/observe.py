@@ -18,7 +18,7 @@ import subprocess
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
@@ -504,16 +504,25 @@ class PortForward:
             raise ValueError("forward health path must be a safe absolute path")
 
     def command(
-        self, *, kubectl: str, kubeconfig: Path, context: str | None
+        self,
+        *,
+        kubectl: str,
+        kubeconfig: Path,
+        context: str | None,
+        target: str | None = None,
     ) -> list[str]:
-        """Build the explicit, shell-free kubectl command for this preference."""
+        """Build the explicit, shell-free kubectl command for this preference.
+
+        ``target`` replaces the saved one for this command (a ``pod/NAME`` the
+        supervisor resolved as the live owner of the forward).
+        """
         result = kubectl_target(kubectl, kubeconfig, context)
         return [
             *result,
             "--namespace",
             self.namespace,
             "port-forward",
-            self.target,
+            target or self.target,
             f"{self.local_port}:{self.remote_port}",
             "--address",
             "127.0.0.1",
@@ -729,6 +738,9 @@ class ForwardStatus:
     probe: dict[str, Any] | None = None
     #: The process holding the local port on a ``conflict`` (pid, command).
     owner: dict[str, Any] | None = None
+    #: The pod the forward is connected to when the supervisor resolves the
+    #: live owner of a Service or Deployment target (``None`` otherwise).
+    pod: str | None = None
 
     def __post_init__(self) -> None:
         if self.state not in _FORWARD_STATES:
@@ -758,6 +770,8 @@ class _ManagedForward:
     given_up: bool = False
     stopped: bool = False
     owner: PortOwner | None = None
+    pod: str | None = None
+    next_owner_check: float = 0.0
 
     def reset(self) -> None:
         """Clear failure bookkeeping before an explicit (re)start."""
@@ -767,6 +781,11 @@ class _ManagedForward:
         self.given_up = False
         self.stopped = False
         self.owner = None
+
+
+#: ``(namespace, "service/NAME" | "deployment/NAME")`` to the ready pods that
+#: currently back it, newest first (see :class:`~piceli.k8s.access.LivePodResolver`).
+PodResolver = Callable[[str, str], Sequence[str]]
 
 
 class ForwardSupervisor:
@@ -797,11 +816,15 @@ class ForwardSupervisor:
         shortcuts: Iterable[UiShortcut] = (),
         namespace: str | None = None,
         scope: ForwardScope | None = None,
+        owner_resolver: PodResolver | None = None,
+        owner_interval: float = 2.0,
     ) -> None:
         if not context:
             # kubectl would otherwise fall back to the file's current-context.
             raise ValueError("an explicit kubeconfig context is required")
         self._scope = scope
+        self._resolver = owner_resolver
+        self._owner_interval = owner_interval
         self._preferences = preferences
         self._user = user
         self._kubeconfig = kubeconfig
@@ -926,6 +949,7 @@ class ForwardSupervisor:
             consecutive_failures=managed.consecutive_failures,
             probe=managed.probe.public_dict(),
             owner=managed.owner.to_dict() if managed.owner is not None else None,
+            pod=managed.pod if process is not None and process.poll() is None else None,
         )
 
     def statuses(self) -> tuple[ForwardStatus, ...]:
@@ -1066,6 +1090,7 @@ class ForwardSupervisor:
                         "required": sc.required,
                         "url": sc.url,
                         "owner": status.owner,
+                        "pod": status.pod,
                     }
                 )
             return results
@@ -1113,6 +1138,7 @@ class ForwardSupervisor:
         Probes run outside the lock so a slow upstream never blocks status
         requests; a result is discarded if its process changed meanwhile.
         """
+        self._check_owners()
         with self._lock:
             self._ensure_locked()
             now = time.monotonic()
@@ -1147,6 +1173,55 @@ class ForwardSupervisor:
                         self._conflict_locked(managed, foreign)
                     else:
                         self._record_probe_locked(managed, outcome)
+
+    def _live_pods(self, forward: PortForward) -> tuple[str, ...] | None:
+        """Ready pods now backing ``forward``, newest first (``None``: unknown)."""
+        if self._resolver is None or not forward.target.startswith(
+            ("service/", "deployment/")
+        ):
+            return None
+        try:
+            return tuple(self._resolver(forward.namespace, forward.target))
+        except Exception:  # the API is only an optimisation: keep kubectl's own choice
+            return None
+
+    def _check_owners(self) -> None:
+        """Move a forward whose pod is gone or terminating to the live owner.
+
+        ``kubectl port-forward service/NAME`` binds to one pod when it starts;
+        during a rollout that pod is replaced and the forward keeps pointing at
+        it. The resolver runs outside the lock; a forward whose pod is still
+        ready stays where it is (no needless reconnects).
+        """
+        if self._resolver is None:
+            return
+        with self._lock:
+            now = time.monotonic()
+            due = [
+                (managed, managed.process)
+                for managed in self._forwards.values()
+                if managed.process is not None
+                and managed.process.poll() is None
+                and managed.pod is not None
+                and now >= managed.next_owner_check
+            ]
+            for managed, _process in due:
+                managed.next_owner_check = now + self._owner_interval
+        for managed, process in due:
+            live = self._live_pods(managed.forward)
+            if not live or managed.pod in live:
+                continue
+            with self._lock:
+                current = self._forwards.get(managed.forward.name)
+                if current is not managed or managed.process is not process:
+                    continue
+                previous = managed.pod
+                managed.process = None
+                if process is not None:
+                    self._stop_process(process)
+                managed.last_error = f"backing pod {previous} replaced by {live[0]}"
+                managed.consecutive_failures = 0
+                self._start_locked(managed)
 
     def _record_probe_locked(
         self, managed: _ManagedForward, outcome: str | None
@@ -1228,8 +1303,14 @@ class ForwardSupervisor:
             # start retries.
             self._conflict_locked(managed, self._owner(managed.forward.local_port))
             return
+        live = self._live_pods(managed.forward)
+        managed.pod = live[0] if live else None
+        managed.next_owner_check = time.monotonic() + self._owner_interval
         command = managed.forward.command(
-            kubectl=self._kubectl, kubeconfig=self._kubeconfig, context=self._context
+            kubectl=self._kubectl,
+            kubeconfig=self._kubeconfig,
+            context=self._context,
+            target=f"pod/{managed.pod}" if managed.pod else None,
         )
         try:
             managed.process = subprocess.Popen(
