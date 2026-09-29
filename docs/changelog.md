@@ -4,7 +4,7 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
-## Version 0.8.1 (unreleased)
+## Version 0.8.1
 
 - **Fix (builds):** staged build-context files now get a modification time
   derived from their content hash instead of `source_date_epoch`, so a
