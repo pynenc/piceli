@@ -172,6 +172,7 @@ class App(BaseModel):
     )
     _environments: dict[str, Environment] = PrivateAttr(default_factory=dict)
     _environment: Environment | None = PrivateAttr(default=None)
+    _quiesce: dict[str, tuple[Any, ...]] = PrivateAttr(default_factory=dict)
 
     def __init__(self, name: str, /, **data: Any) -> None:
         super().__init__(name=name, **data)
@@ -1389,6 +1390,7 @@ class App(BaseModel):
         ]
         derived._environments = dict(self._environments)
         derived._environment = env
+        derived._quiesce = dict(self._quiesce)
         for item in objects:
             derived._declare(item)
         return derived
@@ -1462,6 +1464,45 @@ class App(BaseModel):
             if name == source:
                 raise ValueError(f"component {source!r} cannot depend on itself")
             self._edges.append((source, name))
+
+    def quiesce(self, workload: Workload, *hooks: Any) -> None:
+        """Declare how ``workload`` makes its data complete before a restore point.
+
+        When a pipeline with ``restore_points=`` takes a restore point of a
+        claim this Deployment or StatefulSet writes, each hook
+        (:class:`~piceli.restore.Quiesce`) runs in every pod of the workload,
+        in order, before the writers are scaled to zero. Without hooks the
+        writers are only stopped. Hooks are part of the deploy plan's hash.
+
+        Example::
+
+            from piceli.restore import Quiesce
+            app.quiesce(cache, Quiesce.exec(["redis-cli", "SAVE"]))
+        """
+        from piceli.restore.model import Quiesce
+
+        if not any(existing is workload for existing in self._objects):
+            raise ValueError(
+                "quiesce() takes a workload declared on this app, got "
+                f"{type(workload).__name__} {getattr(workload, 'name', '?')!r}"
+            )
+        kind = kind_of(workload)
+        if kind not in {"Deployment", "StatefulSet"}:
+            raise ValueError(
+                f"quiesce() takes a Deployment or StatefulSet, got {kind} "
+                f"{workload.name!r}"
+            )
+        if not hooks or not all(isinstance(hook, Quiesce) for hook in hooks):
+            raise ValueError("quiesce() takes one or more Quiesce hooks")
+        key = f"{kind}/{workload.name}"
+        self._quiesce[key] = (*self._quiesce.get(key, ()), *hooks)
+
+    def quiesce_hooks(self) -> dict[str, list[dict[str, Any]]]:
+        """Declared quiesce hooks per ``Kind/name``, described (JSON-safe)."""
+        return {
+            key: [hook.describe() for hook in hooks]
+            for key, hooks in sorted(self._quiesce.items())
+        }
 
     # --------------------------------------------------------------- render
 

@@ -309,6 +309,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`resource-requires-adoption`](#error-resource-requires-adoption) | release | no |
 | [`resource-scope-mismatch`](#error-resource-scope-mismatch) | release | no |
 | [`response-byte-limit`](#error-response-byte-limit) | kubernetes | no |
+| [`restore-point-writer-unsupported`](#error-restore-point-writer-unsupported) | restore | no |
 | [`restore-refused`](#error-restore-refused) | observe | no |
 | [`resume-refused`](#error-resume-refused) | release | no |
 | [`retained-adoption-precondition-failed`](#error-retained-adoption-precondition-failed) | execution | no |
@@ -3505,4 +3506,15 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Invalid publish target.** `--to` is missing or not `oci://host[:port]/repository[:tag]`, or an annotation value (`--source`, `--revision`) is not short printable text.
 
 - **Fix:** Pass `--to oci://registry.example/team/app:tag` (plain HTTP only for a loopback registry).
+- **Retry-safe:** no
+
+
+## Restore points of retained data (`restore_points=`, `piceli restore-points`, `piceli restore`)
+
+(error-restore-point-writer-unsupported)=
+### `restore-point-writer-unsupported`
+
+**Writer cannot be stopped.** A claim the release touches (or a restore touches) is mounted writably by a workload Piceli cannot stop for a consistent copy: a DaemonSet, Job or CronJob, or a workload the release does not declare. Nothing was stopped or copied.
+
+- **Fix:** Stop that workload yourself (or mount the claim read-only in it), then plan again.
 - **Retry-safe:** no

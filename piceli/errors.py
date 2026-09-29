@@ -54,6 +54,8 @@ AREAS: Mapping[str, str] = MappingProxyType(
         "maintenance": "Runner hygiene (`piceli cache`, `piceli doctor`, `piceli runs`, `cache_budget=`)",
         "approval": "Owner-declared approval policies (`auto_approve`, `--approve-if-policy`)",
         "gitops": "GitOps handoff (`piceli publish`, `piceli render --out`)",
+        # --- 0.9.0 ---
+        "restore": "Restore points of retained data (`restore_points=`, `piceli restore-points`, `piceli restore`)",
     }
 )
 
@@ -3233,6 +3235,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "Drop the other flags, or plan with them (`piceli release plan …`) and ask the owner to approve the hash.",
         False,
         "approval",
+    ),
+    _E(
+        "restore-point-writer-unsupported",
+        "Writer cannot be stopped",
+        "A claim the release touches (or a restore touches) is mounted writably by a workload Piceli cannot stop for a consistent copy: a DaemonSet, Job or CronJob, or a workload the release does not declare. Nothing was stopped or copied.",
+        "Stop that workload yourself (or mount the claim read-only in it), then plan again.",
+        False,
+        "restore",
     ),
 )
 
