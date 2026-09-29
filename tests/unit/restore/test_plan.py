@@ -251,3 +251,21 @@ def test_claim_templates_work_without_a_template_volume_name_collision() -> None
         [claim("data-db-0"), claim("logs-db-0"), claim("data-db2-0")],
     )
     assert [item["claim"] for item in result.claims] == ["data-db-0", "logs-db-0"]
+
+
+def test_include_all_covers_every_claim_of_the_app_once_one_is_touched() -> None:
+    desired = workloads(stateful_app(NEW))
+    result = plan(desired, workloads(stateful_app(OLD)), claims(), include="all")
+    assert [(item["claim"], item["why"]) for item in result.claims] == [
+        ("cache-state", ["the restore point includes every claim"]),
+        ("data-db-0", ["image of container db changes"]),
+        ("data-db-1", ["image of container db changes"]),
+    ]
+    assert [item["workload"] for item in result.writers] == [
+        "Deployment/cache",
+        "StatefulSet/db",
+    ]
+    unchanged = plan(desired, workloads(stateful_app(NEW)), claims(), include="all")
+    assert unchanged.empty
+    assert RestorePoints().describe() == RestorePoints(include="touched").describe()
+    assert RestorePoints(include="all").describe()["include"] == "all"

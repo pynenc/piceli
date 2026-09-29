@@ -236,6 +236,7 @@ def plan(
     *,
     pending: Callable[[str], bool] = lambda _image: False,
     hooks: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
+    include: str = "touched",
 ) -> RestorePlan:
     """The restore point a release needs (see the module doc).
 
@@ -246,6 +247,10 @@ def plan(
     :param pending: Whether an image is a placeholder for an image that is
         not delivered yet (counted as a change).
     :param hooks: Quiesce hook descriptions per ``Kind/name``.
+    :param include: ``"touched"``: only the claims of changed workloads;
+        ``"all"``: when the release touches any claim, also every other
+        existing claim a declared workload writes (one consistent restore
+        point of the whole app).
     :raises RestorePointError: ``restore-point-writer-unsupported`` when a
         writer of a touched claim cannot be stopped (a DaemonSet, Job or
         CronJob, or a workload the release does not declare).
@@ -283,6 +288,18 @@ def plan(
                 {"claim": claim, "workload": ref, "ordinal": ordinal, "why": []},
             )
             entry["why"] = sorted({*entry["why"], *why})
+    if include == "all" and touched:
+        for ref, manifest in sorted(wanted.items()):
+            for claim, ordinal in _claim_names(manifest, existing):
+                touched.setdefault(
+                    claim,
+                    {
+                        "claim": claim,
+                        "workload": ref,
+                        "ordinal": ordinal,
+                        "why": ["the restore point includes every claim"],
+                    },
+                )
     # Every workload (declared or live) that writes a touched claim stops.
     writers: dict[str, dict[str, Any]] = {}
     for ref in sorted({*wanted, *current}):

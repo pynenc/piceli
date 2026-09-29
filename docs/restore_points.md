@@ -117,8 +117,12 @@ workload, size and SHA-256) and `summary.md` a "Restore point" section.
 
 ## Settings
 
-`RestorePoints(directory=None, image=None, timeout_seconds=600, run_as_user=0)`:
+`RestorePoints(directory=None, image=None, timeout_seconds=600, run_as_user=0, include="touched")`:
 
+- `include`: `"touched"` covers the claims of the workloads the release
+  changes; `"all"` also covers, whenever there is a restore point, every other
+  existing claim the app's Deployments and StatefulSets write (their writers
+  stop too), so the restore point holds the whole app at one moment.
 - `directory`: where archives go, relative to the declaring file. Default:
   `<state_dir>/restore-points`. It stays on the machine that runs Piceli:
   `piceli cache prune` never removes it and shared state

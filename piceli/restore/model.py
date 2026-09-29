@@ -178,6 +178,10 @@ class RestorePoints(BaseModel):
         the node, so nothing new is pulled.
     :param timeout_seconds: Bound for each wait (writers gone, helper pod
         running) and each copy.
+    :param include: ``"touched"`` (default): the claims of the workloads the
+        release changes; ``"all"``: when there are any, every other retained
+        claim the app's Deployments and StatefulSets write too, so the
+        restore point holds the whole app at one moment.
     :param run_as_user: The helper's user; ``0`` (default) reads files of any
         owner and restores their ownership (it gets only the file
         capabilities ``CHOWN``, ``DAC_OVERRIDE``, ``DAC_READ_SEARCH``,
@@ -194,6 +198,7 @@ class RestorePoints(BaseModel):
     image: str | None = None
     timeout_seconds: int = Field(default=600, ge=10, le=86400)
     run_as_user: int = Field(default=0, ge=0)
+    include: Literal["touched", "all"] = "touched"
 
     @model_validator(mode="after")
     def _shape(self) -> RestorePoints:
@@ -220,4 +225,6 @@ class RestorePoints(BaseModel):
             "image": self.image,
             "timeout_seconds": self.timeout_seconds,
             "run_as_user": self.run_as_user,
+            # Only when not the default, so other plans keep their hashes.
+            **({"include": self.include} if self.include != "touched" else {}),
         }

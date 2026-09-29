@@ -1028,6 +1028,9 @@ class PipelineRunner:
                 claims,
                 pending=lambda image: handle_image(image) is not None,
                 hooks=self.pipeline.app.quiesce_hooks(),
+                include=self.pipeline.restore_points.include
+                if self.pipeline.restore_points is not None
+                else "touched",
             )
         except RestorePointError as error:
             raise PipelineError(error.code, str(error)) from None

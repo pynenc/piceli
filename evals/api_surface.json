@@ -3674,6 +3674,7 @@
     "describe",
     "directory",
     "image",
+    "include",
     "resolve_directory",
     "run_as_user",
     "timeout_seconds"
@@ -3681,6 +3682,7 @@
    "init": [
     "directory",
     "image",
+    "include",
     "run_as_user",
     "timeout_seconds"
    ],
