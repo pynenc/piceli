@@ -3380,6 +3380,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         False,
         "restore",
     ),
+    _E(
+        "restore-point-plan-changed",
+        "Restore point differs from the plan",
+        "At run time the release touches claims (or needs writers stopped) that the approved plan's backup stage did not show, for example after delivery. Nothing was stopped or copied.",
+        "Plan again (`piceli deploy MODULE:ATTR --plan`) and approve the new combined hash.",
+        False,
+        "restore",
+    ),
 )
 
 

@@ -319,6 +319,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`restore-point-exists`](#error-restore-point-exists) | restore | yes |
 | [`restore-point-helper-failed`](#error-restore-point-helper-failed) | restore | yes |
 | [`restore-point-not-verified`](#error-restore-point-not-verified) | restore | no |
+| [`restore-point-plan-changed`](#error-restore-point-plan-changed) | restore | no |
 | [`restore-point-quiesce-failed`](#error-restore-point-quiesce-failed) | restore | yes |
 | [`restore-point-restart-failed`](#error-restore-point-restart-failed) | restore | yes |
 | [`restore-point-restore-failed`](#error-restore-point-restore-failed) | restore | yes |
@@ -3606,6 +3607,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Restore point not verified.** The restore point's record is not in state `verified` (its run failed or was interrupted before every archive was verified).
 
 - **Fix:** Use a verified restore point (`piceli restore-points`).
+- **Retry-safe:** no
+
+(error-restore-point-plan-changed)=
+### `restore-point-plan-changed`
+
+**Restore point differs from the plan.** At run time the release touches claims (or needs writers stopped) that the approved plan's backup stage did not show, for example after delivery. Nothing was stopped or copied.
+
+- **Fix:** Plan again (`piceli deploy MODULE:ATTR --plan`) and approve the new combined hash.
 - **Retry-safe:** no
 
 (error-restore-point-quiesce-failed)=

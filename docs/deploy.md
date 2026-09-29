@@ -238,6 +238,7 @@ stage's outputs.
 | `inputs` | The build plan hash over every staged file, plus the sources' git identity (provenance only) and, with `--ref`, the pinned commits | Never; it is the cheap scan the other stages key on |
 | `build` | The build plan hash (spec, staged files, Dockerfiles, invocations) | The last receipt has the same plan hash and each image the app uses is still in the local engine, or already delivered (its delivery receipt's digest is in the registry or node: built by another runner) |
 | `deliver` | The image's config digest and the target repository | The registry serves the receipt's manifest digest (`HEAD`), or the node holds the config digest behind the content tag |
+| `backup` (only with `restore_points=`) | The claims the release touches and their writers | No workload that writes a retained claim changes its image or storage settings (see {doc}`restore_points`) |
 | `plan` | The release name: a fingerprint of the delivered digests, the rendered objects and the secret settings | Never; it reads live discovery |
 | `apply` | The release name | That release is deployed and ready, the plan creates, deletes, adopts and replaces nothing, and no other field manager owns a desired field (drift) |
 | `checks` | The release name | No checks are declared, or the apply was skipped and this release already passed its checks |
@@ -261,7 +262,8 @@ preview's adopt/replace/delete set), the checks, `--until`, the target
 identity, with `--ref`, the resolved commit of each pinned source and, with
 `--env`, the environment's name and resolved override values (see
 {doc}`environments`) and, when declared, the owner's `auto_approve` policy
-(see {ref}`deploy-approval-policy`). `--approve HASH` re-plans and runs only when the hash is
+(see {ref}`deploy-approval-policy`) and, with `restore_points=`, the claims
+the `backup` stage covers, their writers and quiesce hooks. `--approve HASH` re-plans and runs only when the hash is
 unchanged; otherwise it is refused with `pipeline-plan-changed` and nothing
 runs. Stages whose plan depends on earlier outputs (the release plan after a
 build) run under that approval, within the limits of the preview below.
@@ -541,6 +543,19 @@ A run is `ready` only when the checks pass. With
 release; the rollback is journaled in the run and the result's state is
 `rolled-back`. `Checks` is importable from `piceli` next to `Pipeline`
 (`from piceli import Checks`); see {doc}`checks` for every check type.
+
+(deploy-restore-points)=
+
+## Restore points before stateful changes
+
+With `Pipeline(..., restore_points=RestorePoints())` a `backup` stage runs
+before the release plan whenever the release changes the image or storage
+settings of a workload that writes a retained claim: it stops every writer,
+waits until their pods are gone, archives and verifies each claim (one per
+StatefulSet replica) on the machine running Piceli, and the apply then starts
+the writers with the new release. The plan lists each claim and why; the
+result and the run summary name the restore point; `piceli restore` puts it
+back. See {doc}`restore_points`.
 
 (deploy-approval-policy)=
 

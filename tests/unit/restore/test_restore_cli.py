@@ -58,12 +58,16 @@ def setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[FakeCluster,
         context={"namespace": "shop", "app": "shop"},
     )
     cluster.calls.clear()
-    monkeypatch.setattr(Backend, "restore_cluster", lambda self, target, say=None: cluster)
+    monkeypatch.setattr(
+        Backend, "restore_cluster", lambda self, target, say=None: cluster
+    )
     cluster.close = lambda: None  # type: ignore[attr-defined]
     return cluster, record["id"]
 
 
-def test_restore_points_lists_and_verifies(setup: tuple[FakeCluster, str], tmp_path: Path) -> None:
+def test_restore_points_lists_and_verifies(
+    setup: tuple[FakeCluster, str], tmp_path: Path
+) -> None:
     _cluster, point = setup
     code, body, stderr = invoke("restore-points", "app.py:pipeline", "--verify")
     assert code == 0, stderr
@@ -96,13 +100,23 @@ def test_restore_plans_then_needs_the_hash_and_brings_the_data_back(
     assert "v2" in marker.read_text()
 
     code, body, _ = invoke(
-        "restore", "app.py:pipeline", "--point", point, "--approve", "sha256:" + "0" * 64
+        "restore",
+        "app.py:pipeline",
+        "--point",
+        point,
+        "--approve",
+        "sha256:" + "0" * 64,
     )
     assert (code, body["reason"]) == (2, "restore-plan-changed")
     assert cluster.calls == []
 
     code, body, stderr = invoke(
-        "restore", "app.py:pipeline", "--point", point, "--approve", planned["restore_hash"]
+        "restore",
+        "app.py:pipeline",
+        "--point",
+        point,
+        "--approve",
+        planned["restore_hash"],
     )
     assert code == 0, stderr
     assert body["state"] == "restored"
@@ -116,7 +130,9 @@ def test_restore_plans_then_needs_the_hash_and_brings_the_data_back(
     assert "v1-0" not in stderr and "v1-0" not in json.dumps(body)
 
 
-def test_restore_refuses_unknown_points_and_claims(setup: tuple[FakeCluster, str]) -> None:
+def test_restore_refuses_unknown_points_and_claims(
+    setup: tuple[FakeCluster, str],
+) -> None:
     _cluster, point = setup
     code, body, _ = invoke("restore", "app.py:pipeline", "--point", "rp-nope")
     assert (code, body["reason"]) == (2, "restore-point-unknown")
@@ -126,7 +142,9 @@ def test_restore_refuses_unknown_points_and_claims(setup: tuple[FakeCluster, str
     assert (code, body["reason"]) == (2, "restore-point-claim-unknown")
 
 
-def test_restore_refuses_a_claim_that_no_longer_exists(setup: tuple[FakeCluster, str]) -> None:
+def test_restore_refuses_a_claim_that_no_longer_exists(
+    setup: tuple[FakeCluster, str],
+) -> None:
     cluster, point = setup
     cluster.claim_names = ["data-db-0"]
     code, body, _ = invoke("restore", "app.py:pipeline", "--point", point)

@@ -10,7 +10,7 @@
   ],
   "$defs": {
     "stageName": {
-      "enum": ["inputs", "build", "deliver", "plan", "apply", "checks"]
+      "enum": ["inputs", "build", "deliver", "backup", "plan", "apply", "checks"]
     },
     "hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "stage": {

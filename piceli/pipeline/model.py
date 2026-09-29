@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 import sys
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple, overload
@@ -37,6 +37,16 @@ _ALIAS = re.compile(r"[a-z][a-z0-9_-]{0,62}")
 _LABEL = re.compile(r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?")
 _PINNED = re.compile(r"[^@\s]+@sha256:[0-9a-f]{64}")
 STAGES = ("inputs", "build", "deliver", "plan", "apply", "checks")
+#: Every stage in run order: ``backup`` (restore points) runs only in a
+#: pipeline that declares ``restore_points``, so other runs, plans and their
+#: hashes are unchanged.
+ALL_STAGES = ("inputs", "build", "deliver", "backup", "plan", "apply", "checks")
+
+
+def ordered_stages(names: Iterable[str]) -> tuple[str, ...]:
+    """``names`` that are stages, in run order."""
+    wanted = set(names)
+    return tuple(name for name in ALL_STAGES if name in wanted)
 
 
 def _caller_dir() -> Path | None:
@@ -922,7 +932,9 @@ class Pipeline:
     The run has six stages, each journaled and skipped when its content
     identity is unchanged: ``inputs`` (identify the sources and staged
     files), ``build`` (containerized builds), ``deliver`` (images to the
-    node or registry, handed off by digest), ``plan`` (a release plan against
+    node or registry, handed off by digest), with ``restore_points`` a
+    ``backup`` stage (a verified restore point of the retained claims the
+    release touches), ``plan`` (a release plan against
     live discovery), ``apply`` (the release engine) and ``checks``.
 
     :param app: The typed :class:`~piceli.app.App`.
@@ -1105,6 +1117,11 @@ class Pipeline:
     @property
     def name(self) -> str:
         return self.app.name
+
+    @property
+    def stages(self) -> tuple[str, ...]:
+        """This pipeline's stages in run order (``backup`` with ``restore_points``)."""
+        return ALL_STAGES if self.restore_points is not None else STAGES
 
     @property
     def restore_point_directory(self) -> Path:

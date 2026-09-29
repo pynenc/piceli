@@ -44,7 +44,7 @@ from piceli.cli_contract import (
     say,
 )
 
-STAGE_NAMES = ("inputs", "build", "deliver", "plan", "apply", "checks")
+STAGE_NAMES = ("inputs", "build", "deliver", "backup", "plan", "apply", "checks")
 
 
 def load_pipeline(entry: str, env: str | None = None) -> Any:
@@ -177,6 +177,22 @@ def _describe(plan: Any, entry: str) -> None:
             f"  deliver  mirror {name}@{digest[:19]}: {mirror['action']} "
             f"({mirror['platform']}{unused})"
         )
+    backup = stages.get("backup")
+    if isinstance(backup, dict) and "action" in backup:
+        if backup["action"] == "skip":
+            say(f"  backup   skip: {backup.get('why')}")
+        for item in backup.get("claims", ()):
+            say(
+                f"  backup   claim {item['claim']} of {item['workload']}: "
+                + "; ".join(item["why"])
+            )
+        for writer in backup.get("writers", ()):
+            hooks = len(writer.get("quiesce") or ())
+            say(
+                f"  backup   stop {writer['workload']} ({writer['replicas']} "
+                "replica(s)) until its pods are gone"
+                + (f", after {hooks} quiesce hook(s)" if hooks else "")
+            )
     release = stages["plan"]
     if release.get("state") == "planned":
         changes = ", ".join(
@@ -308,7 +324,8 @@ def deploy(
         str,
         typer.Option(
             "--until",
-            help="Stop after this stage: inputs, build, deliver, plan, apply or checks",
+            help="Stop after this stage: inputs, build, deliver, backup (with "
+            "restore_points), plan, apply or checks",
         ),
     ] = "checks",
     resume: Annotated[

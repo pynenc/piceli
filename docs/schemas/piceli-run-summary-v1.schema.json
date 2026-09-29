@@ -17,6 +17,27 @@
     "updated_at": {"type": ["string", "null"]},
     "until": {"$ref": "#/$defs/stageName"},
     "combined_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "restore_point": {
+      "type": "object",
+      "description": "Added in 0.9.0. The restore point the backup stage took (pipelines with restore_points): ids, sizes and archive digests, never claim content.",
+      "required": ["id", "claims"],
+      "properties": {
+        "id": {"type": "string"},
+        "directory": {"type": ["string", "null"]},
+        "claims": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "claim": {"type": ["string", "null"]},
+              "workload": {"type": ["string", "null"]},
+              "bytes": {"type": ["integer", "null"]},
+              "sha256": {"type": ["string", "null"]}
+            }
+          }
+        }
+      }
+    },
     "approved_by": {"const": "policy", "description": "Added in 0.8.0. Present when the run executed under the owner's auto_approve policy (--approve-if-policy) instead of a human-approved hash."},
     "pipeline": {
       "type": "object",
@@ -160,6 +181,6 @@
     "seconds": {"type": "number", "description": "Sum of the stage timings."}
   },
   "$defs": {
-    "stageName": {"enum": ["inputs", "build", "deliver", "plan", "apply", "checks"]}
+    "stageName": {"enum": ["inputs", "build", "deliver", "backup", "plan", "apply", "checks"]}
   }
 }
