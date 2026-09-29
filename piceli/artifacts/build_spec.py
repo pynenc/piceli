@@ -44,7 +44,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Any, Protocol
+from typing import Any, ClassVar, Protocol
 
 from piceli.artifacts.build_context import (
     BuildContextError,
@@ -773,6 +773,9 @@ class BuildSpec:
     """The ``build.toml`` this spec was read from; re-checked after a build."""
     platform_override: str | None = field(default=None, compare=False, repr=False)
     """A platform that replaced the file's ``platforms`` (``Build.spec(platform=)``)."""
+
+    #: Which builder runs this spec (a host build says ``"host"``).
+    builder_kind: ClassVar[str] = "docker"
 
     def __post_init__(self) -> None:
         _match(_NAME, self.name, "build name")

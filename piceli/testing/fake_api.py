@@ -509,16 +509,29 @@ class FakeAPI:
         return stored
 
     def add_node(
-        self, name: str, *, architecture: str = "arm64", uid: str | None = None
+        self,
+        name: str,
+        *,
+        architecture: str = "arm64",
+        uid: str | None = None,
+        kernel_version: str | None = None,
+        labels: dict[str, str] | None = None,
     ) -> dict[str, Any]:
-        """Serve a Node (identity and ``status.nodeInfo``) for node-pinned releases."""
+        """Serve a Node (identity and ``status.nodeInfo``) for node-pinned releases.
+
+        ``kernel_version`` and ``labels`` feed the node facts a host build reads.
+        """
+        info = {"architecture": architecture, "operatingSystem": "linux"}
+        if kernel_version is not None:
+            info["kernelVersion"] = kernel_version
+        metadata: dict[str, Any] = {"name": name, "uid": uid or uuid.uuid4().hex}
+        if labels:
+            metadata["labels"] = dict(labels)
         node = {
             "apiVersion": "v1",
             "kind": "Node",
-            "metadata": {"name": name, "uid": uid or uuid.uuid4().hex},
-            "status": {
-                "nodeInfo": {"architecture": architecture, "operatingSystem": "linux"}
-            },
+            "metadata": metadata,
+            "status": {"nodeInfo": info},
         }
         with self.lock:
             self.nodes[name] = node

@@ -3294,6 +3294,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "host-build",
     ),
     _E(
+        "build-builder-mismatch",
+        "Build spec written for the other builder",
+        'A `host-build.toml` (`piceli.host-build.v1`) was declared with the docker builder, or a `build.toml` with `builder="host"`.',
+        'Declare a host build spec with `Build.spec(path, builder="host")` and a `build.toml` with `Build.spec(path)`.',
+        False,
+        "host-build",
+    ),
+    _E(
         "base-layer-unsupported",
         "Base image layer type unsupported",
         "The base image uses layers a host build cannot append to (only `tar` and `tar+gzip` layers, no foreign `urls`).",

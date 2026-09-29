@@ -48,6 +48,7 @@ from piceli.pipeline.errors import PipelineError
 
 if TYPE_CHECKING:
     from piceli.artifacts.build_spec import BuildSpec
+    from piceli.artifacts.host_build import HostBuildSpec
     from piceli.artifacts.source_identity import InputsLock, InputsSpec
     from piceli.pipeline.model import Build, Pipeline
 
@@ -367,21 +368,28 @@ class SourceCheckouts:
 
     def load_build(
         self, build: Build
-    ) -> tuple[BuildSpec, InputsSpec | None, InputsLock | None]:
+    ) -> tuple[BuildSpec | HostBuildSpec, InputsSpec | None, InputsLock | None]:
         """The build's spec, inputs and lock as the pinned commits hold them."""
         from piceli.artifacts.build_spec import BuildSpec
         from piceli.artifacts.source_identity import InputsLock, InputsSpec
+        from piceli.pipeline.model import check_builder, load_host_spec
 
-        if build.path is not None:
+        spec: BuildSpec | HostBuildSpec
+        if build.builder == "host":
+            assert build.path is not None
+            spec = load_host_spec(self.remap(build.path))
+            base = build.path.resolve().parent
+        elif build.path is not None:
+            check_builder(self.remap(build.path), "docker")
             spec = BuildSpec.from_toml(self.remap(build.path))
             base = build.path.resolve().parent
         else:
             assert build.document is not None
             base = (build.base or Path.cwd()).resolve()
             spec = BuildSpec.from_dict(build.document, self.remap(base))
-        if build.platform is not None:
+        if build.platform is not None and isinstance(spec, BuildSpec):
             spec = spec.with_platform(build.platform)
-        if len(spec.platforms) != 1:
+        if build.builder == "docker" and len(spec.platforms) != 1:
             raise PipelineError(
                 "pipeline-invalid",
                 f"build {spec.name!r} targets {len(spec.platforms)} platforms at the "

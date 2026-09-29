@@ -48,6 +48,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`blob-digest-mismatch`](#error-blob-digest-mismatch) | artifacts-registry | yes |
 | [`blob-not-found`](#error-blob-not-found) | artifacts-registry | no |
 | [`blob-source-truncated`](#error-blob-source-truncated) | artifacts-registry | yes |
+| [`build-builder-mismatch`](#error-build-builder-mismatch) | host-build | no |
 | [`build-failed`](#error-build-failed) | build-spec | no |
 | [`build-timed-out`](#error-build-timed-out) | build-spec | yes |
 | [`builder-not-approved`](#error-builder-not-approved) | build-spec | no |
@@ -3532,6 +3533,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Base image lacks the node platform.** The pinned base image (index) has no manifest for the node's platform, or its config reports another platform.
 
 - **Fix:** Pin a base image that publishes the node's platform (`linux/arm64` or `linux/amd64`).
+- **Retry-safe:** no
+
+(error-build-builder-mismatch)=
+### `build-builder-mismatch`
+
+**Build spec written for the other builder.** A `host-build.toml` (`piceli.host-build.v1`) was declared with the docker builder, or a `build.toml` with `builder="host"`.
+
+- **Fix:** Declare a host build spec with `Build.spec(path, builder="host")` and a `build.toml` with `Build.spec(path)`.
 - **Retry-safe:** no
 
 (error-host-build-invalid)=

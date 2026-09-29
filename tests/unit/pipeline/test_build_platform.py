@@ -36,3 +36,34 @@ def test_an_unsupported_platform_is_refused() -> None:
     with pytest.raises(PipelineError) as error:
         Build.spec(SPEC, platform="windows/amd64").load()
     assert error.value.code == "pipeline-invalid"
+
+
+HOST_SPEC = SPEC.parent / "host-build.toml"
+
+
+def test_host_builder_is_opt_in_and_checked_against_the_spec_revision() -> None:
+    assert Build.spec(SPEC).builder == "docker"
+    host = Build.spec(HOST_SPEC, builder="host")
+    assert host.load().builder_kind == "host"
+    assert host.image_names() == ("rust-hello",)
+    with pytest.raises(PipelineError) as error:
+        Build.spec(HOST_SPEC).load()
+    assert error.value.code == "build-builder-mismatch"
+    with pytest.raises(PipelineError) as error:
+        Build.spec(SPEC, builder="host").load()
+    assert error.value.code == "build-builder-mismatch"
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"builder": "podman"},
+        {"builder": "host", "platform": "linux/arm64"},
+        {"node": "primary"},
+        {"cache_dir": "cache"},
+    ],
+)
+def test_host_builder_options_are_validated(kwargs: dict[str, str]) -> None:
+    with pytest.raises(PipelineError) as error:
+        Build.spec(HOST_SPEC, **kwargs)  # type: ignore[arg-type]
+    assert error.value.code == "pipeline-invalid"

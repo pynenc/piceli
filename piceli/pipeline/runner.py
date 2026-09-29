@@ -94,6 +94,8 @@ from piceli.pipeline.refs import (
 if TYPE_CHECKING:
     from piceli.approval_policy import PolicyDecision
     from piceli.artifacts.build_spec import BuildPlan, BuildSpec
+    from piceli.artifacts.host_build import HostBuildPlan, HostBuildSpec
+    from piceli.artifacts.node_facts import NodeFacts
     from piceli.artifacts.source_identity import InputsLock, InputsSpec
     from piceli.k8s.release_runner import PlanResult, ReleaseRunner
     from piceli.k8s.release_spec import ImageRef
@@ -115,8 +117,8 @@ def _hex(value: Any) -> str:
 @dataclass
 class _BuildWork:
     build: Build
-    spec: BuildSpec
-    plan: BuildPlan
+    spec: BuildSpec | HostBuildSpec
+    plan: BuildPlan | HostBuildPlan
     inputs: InputsSpec | None
     lock: InputsLock | None
     directory: Path
@@ -127,6 +129,19 @@ class _BuildWork:
     @property
     def receipt_path(self) -> Path:
         return self.directory / "receipt.json"
+
+    @property
+    def host(self) -> bool:
+        """Built on the host (``builder="host"``): images are OCI archives."""
+        return self.spec.builder_kind == "host"
+
+    def archive(self, name: str) -> Path | None:
+        """The OCI archive of a host-built image (``None`` for a docker build)."""
+        entry = self.images.get(name)
+        path = entry.get("archive") if isinstance(entry, dict) else None
+        if not self.host or not isinstance(path, str):
+            return None
+        return (self.directory / "outputs" / path).absolute()
 
 
 @dataclass
@@ -394,6 +409,8 @@ class PipelineRunner:
         self.cache: dict[str, Any] | None = None
         #: The open state session (:mod:`piceli.state`) while :meth:`locked`.
         self.session: Any = None
+        #: Node facts read for host builds in this process, by node name.
+        self._facts: dict[str, NodeFacts] = {}
 
     # ------------------------------------------------------------ helpers
     def identity(self) -> dict[str, Any]:
@@ -515,16 +532,51 @@ class PipelineRunner:
 
     def _load(
         self, build: Build
-    ) -> tuple[BuildSpec, InputsSpec | None, InputsLock | None]:
-        """A build's spec, inputs and lock: from the pinned commits, or from disk."""
+    ) -> tuple[BuildSpec | HostBuildSpec, InputsSpec | None, InputsLock | None]:
+        """A build's spec, inputs and lock: from the pinned commits, or from disk.
+
+        A host build is bound to its node's facts (read from the target once
+        per run) and to its cache directory.
+        """
+        from piceli.artifacts.host_build import HostBuildSpec
         from piceli.artifacts.source_identity import InputsLock
 
         if self.checkouts:
-            return self.checkouts.load_build(build)
-        spec = build.load()
-        inputs = spec.load_inputs()
-        lock = InputsLock.from_json(build.lock.read_text()) if build.lock else None
+            spec, inputs, lock = self.checkouts.load_build(build)
+        else:
+            spec = build.load()
+            inputs = spec.load_inputs()
+            lock = InputsLock.from_json(build.lock.read_text()) if build.lock else None
+        if isinstance(spec, HostBuildSpec):
+            cache = build.cache_dir or (
+                self.pipeline.state_dir / "toolchains" / "host-build"
+            )
+            spec = spec.for_node(self._node_facts(build)).with_cache_dir(cache)
         return spec, inputs, lock
+
+    def _node_facts(self, build: Build) -> NodeFacts:
+        """The facts of a host build's node (one read-only GET per node and run)."""
+        from piceli.artifacts.node_facts import NodeFactsError
+
+        target = self.pipeline.target
+        if not target.nodes:
+            raise PipelineError(
+                "pipeline-invalid",
+                "a host build reads its node's facts: declare the node in the "
+                "target (nodes={alias: node name})",
+            )
+        _, node = target.node(build.node)
+        if node.name not in self._facts:
+            try:
+                self._facts[node.name] = self.backend.node_facts(target, node.name)
+            except NodeFactsError as error:
+                raise PipelineError(error.code, str(error)) from None
+            except Exception as error:
+                raise PipelineError(
+                    "node-facts-unavailable",
+                    f"could not read node {node.name!r} ({type(error).__name__})",
+                ) from None
+        return self._facts[node.name]
 
     def _provenance(self, sources: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
         """What the release records about its sources (commit, dirty, ``--ref``)."""
@@ -688,6 +740,9 @@ class PipelineRunner:
                     for name, manifest in plan.contexts.items()
                 },
             }
+            if item.host:
+                # Shown and covered by the plan hash (the substituted values).
+                builds[spec.name]["node_facts"] = plan.facts.to_dict()  # type: ignore[union-attr]
         work.used = used_handles(pipeline)
         unknown = [name for name in work.used if name not in work.producer]
         if unknown:
@@ -711,27 +766,66 @@ class PipelineRunner:
     def _plan_build(
         self, work: _Work, _reapply: bool
     ) -> tuple[dict[str, Any], dict[str, Any]]:
+        from piceli.artifacts.host_build import HostBuildSpec
+
         stage: dict[str, Any] = {}
         hashed: dict[str, Any] = {}
         for item in work.builds:
             item.cached, item.images = self._cached_build(item)
-            stage[item.spec.name] = {
+            spec = item.spec
+            if isinstance(spec, HostBuildSpec):
+                stage[spec.name], hashed[spec.name] = self._host_stage(item)
+                continue
+            stage[spec.name] = {
                 "action": "cached" if item.cached else "build",
-                "builder": item.spec.builder.ref,
-                "network": item.spec.network,
-                "platform": item.spec.platforms[0],
+                "builder_kind": "docker",
+                "builder": spec.builder.ref,
+                "network": spec.network,
+                "platform": spec.platforms[0],
                 "images": {
                     image.name: item.images.get(image.name, {}).get("image_id")
-                    for image in item.spec.images
+                    for image in spec.images
                 },
             }
-            hashed[item.spec.name] = {
-                "builder": item.spec.builder.ref,
-                "network": item.spec.network,
-                "platform": item.spec.platforms[0],
-                "images": sorted(image.name for image in item.spec.images),
+            hashed[spec.name] = {
+                "builder": spec.builder.ref,
+                "network": spec.network,
+                "platform": spec.platforms[0],
+                "images": sorted(image.name for image in spec.images),
             }
         return {"builds": stage}, hashed
+
+    def _host_stage(self, item: _BuildWork) -> tuple[dict[str, Any], dict[str, Any]]:
+        """The build stage entry of a host build: builder, tools and node facts."""
+        plan: HostBuildPlan = item.plan  # type: ignore[assignment]
+        builder = plan.builder()
+        shown = {
+            "action": "cached" if item.cached else "build",
+            "builder": "host",
+            "builder_kind": "host",
+            "tools": builder["tools"],
+            "network": "host",
+            "platform": plan.platform,
+            "node_facts": plan.facts.to_dict(),
+            "images": {
+                image.name: item.images.get(image.name, {}).get("image_id")
+                for image in item.spec.images
+            },
+        }
+        hashed = {
+            "builder": "host",
+            "tools": builder["tools"],
+            "platform": plan.platform,
+            "images": sorted(image.name for image in item.spec.images),
+        }
+        return shown, hashed
+
+    def _image_here(self, item: _BuildWork, name: str, image_id: str) -> bool:
+        """The built image is on this machine (docker engine, or a host archive)."""
+        if not item.host:
+            return self.backend.image_present(image_id)
+        path = item.archive(name)
+        return path is not None and path.is_file()
 
     def _cached_build(self, item: _BuildWork) -> tuple[bool, dict[str, dict[str, Any]]]:
         path = item.receipt_path
@@ -749,7 +843,14 @@ class PipelineRunner:
             image_id = entry.get("image_id") if isinstance(entry, dict) else None
             if not isinstance(image_id, str):
                 return False, {}
-            if self.backend.image_present(image_id):
+            if item.host:
+                path = entry.get("archive")
+                if (
+                    isinstance(path, str)
+                    and (item.directory / "outputs" / path).is_file()
+                ):
+                    continue
+            elif self.backend.image_present(image_id):
                 continue
             # Another runner built it: the build is not needed again when the
             # registry or node still has this exact image (by digest).
@@ -1309,7 +1410,7 @@ class PipelineRunner:
                 config = entry.get("image_id") if isinstance(entry, dict) else None
                 if not isinstance(config, str) or name not in work.used:
                     continue
-                if self.backend.image_present(config) or self._delivered_elsewhere(
+                if self._image_here(item, name, config) or self._delivered_elsewhere(
                     name, config
                 ):
                     continue
@@ -1478,6 +1579,7 @@ class PipelineRunner:
     # --------------------------------------------------------- stage: build
     def _run_build(self, _reapply: bool, _resuming: bool) -> tuple[str, dict[str, Any]]:
         from piceli.artifacts.build_spec import BuildGrant
+        from piceli.artifacts.host_build import HostBuildGrant, HostBuildSpec
 
         work = self._work
         assert work is not None
@@ -1493,13 +1595,21 @@ class PipelineRunner:
                 self.say(f"[build] {name}: cached (plan {item.plan.plan_hash[7:19]})")
             else:
                 log = self._shown(item.directory / "build.log")
-                self.say(f"[build] {name}: building (log: {log})")
-                grant = BuildGrant(
-                    item.spec.builder.digest,
-                    time.time() + item.spec.timeout_seconds + 3600,
-                    item.spec.network != "none",
-                    item.plan.plan_hash,
-                )
+                grant: BuildGrant | HostBuildGrant
+                if isinstance(item.spec, HostBuildSpec):
+                    self.say(f"[build] {name}: building on the host (log: {log})")
+                    grant = HostBuildGrant(
+                        item.plan.plan_hash,
+                        time.time() + item.spec.timeout_seconds + 3600,
+                    )
+                else:
+                    self.say(f"[build] {name}: building (log: {log})")
+                    grant = BuildGrant(
+                        item.spec.builder.digest,
+                        time.time() + item.spec.timeout_seconds + 3600,
+                        item.spec.network != "none",
+                        item.plan.plan_hash,
+                    )
                 item.directory.mkdir(parents=True, exist_ok=True)
 
                 def progress(line: str, name: str = name) -> None:
@@ -1686,6 +1796,13 @@ class PipelineRunner:
             )
         return info, True
 
+    def _archive(self, name: str) -> Path | None:
+        """The OCI archive a host build wrote for image ``name`` (else ``None``)."""
+        work = self._work
+        if work is None or name not in work.producer:
+            return None
+        return work.producer[name].archive(name)
+
     def _deliver(self, name: str, config: str) -> str:
         """Deliver one image; returns the receipt's result (pushed, imported …)."""
         strategy = self.pipeline.deliver
@@ -1694,12 +1811,26 @@ class PipelineRunner:
 
             reference = f"{self._repository(name)}:{content_tag(config)}"
             self.say(f"[deliver] {name}: importing into the node as {reference}")
-            receipt = self.backend.node_deliver(self._node_url(), config, reference)
+            archive = self._archive(name)
+            receipt = (
+                self.backend.node_deliver(
+                    self._node_url(), config, reference, archive=archive
+                )
+                if archive is not None
+                else self.backend.node_deliver(self._node_url(), config, reference)
+            )
         else:
             route = self._route()
             repository = self._repository(name)
             self.say(f"[deliver] {name}: pushing to {repository}")
-            receipt = self.backend.registry_deliver(route, config, repository)
+            archive = self._archive(name)
+            receipt = (
+                self.backend.registry_deliver(
+                    route, config, repository, archive=archive
+                )
+                if archive is not None
+                else self.backend.registry_deliver(route, config, repository)
+            )
         path = self._delivery_path(name, config)
         write_private(path, json.dumps(receipt, sort_keys=True, indent=2) + "\n")
         if receipt.get("state") != "succeeded":
