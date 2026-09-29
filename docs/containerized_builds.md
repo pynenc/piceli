@@ -12,6 +12,9 @@ the declared outputs and writes a **build receipt**. The receipt ties the
 output digests to the builder digest and to the git identity of every source
 (see {doc}`source_identity`).
 
+To build without a container engine (no Docker Desktop VM on macOS), with
+the host toolchain and the target node's facts, see {doc}`host_builds`.
+
 ```sh
 piceli artifacts build-spec preview --spec build.toml
 piceli artifacts build-spec run --spec build.toml \

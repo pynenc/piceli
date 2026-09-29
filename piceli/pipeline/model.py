@@ -17,7 +17,7 @@ import sys
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple, overload
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, overload
 
 from piceli.approval_policy import ApprovalPolicy, ApprovalPolicyError
 from piceli.pipeline.errors import PipelineError
@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from piceli.app import App
     from piceli.app.environment import Environment
     from piceli.artifacts.build_spec import BuildSpec
+    from piceli.artifacts.host_build import HostBuildSpec
     from piceli.k8s.ops.exec_credentials import ExecPolicy
     from piceli.pipeline.secrets import Secrets
 
@@ -470,16 +471,41 @@ class Build:
         images: Sequence[str] | None = None,
         lock: Path | None = None,
         platform: str | None = None,
+        builder: str = "docker",
+        node: str | None = None,
+        cache_dir: Path | None = None,
     ) -> None:
         if (path is None) == (document is None):
             raise PipelineError("pipeline-invalid", "a build needs a path or document")
+        if builder not in BUILDERS:
+            raise PipelineError(
+                "pipeline-invalid",
+                f"builder must be one of {sorted(BUILDERS)}, not {builder!r}",
+            )
+        if builder == "host" and (document is not None or platform is not None):
+            raise PipelineError(
+                "pipeline-invalid",
+                "a host build reads a host-build.toml and builds for its node's "
+                "platform (drop platform=)",
+            )
+        if builder == "docker" and (node is not None or cache_dir is not None):
+            raise PipelineError(
+                "pipeline-invalid", 'node= and cache_dir= need builder="host"'
+            )
         self.path = path
         self.document = dict(document) if document is not None else None
         self.base = base
         self.declared_images = tuple(images) if images is not None else None
         self.lock = lock
         self.platform = platform
-        self._spec: BuildSpec | None = None
+        #: ``"docker"`` (BuildKit, the default) or ``"host"`` (no container VM).
+        self.builder = builder
+        #: Target node alias whose facts a host build reads (default: the only one).
+        self.node = node
+        #: Shared stage/target/blob directory of a host build (default:
+        #: ``<state_dir>/toolchains/host-build``).
+        self.cache_dir = cache_dir
+        self._spec: BuildSpec | HostBuildSpec | None = None
 
     @classmethod
     def spec(
@@ -488,15 +514,28 @@ class Build:
         *,
         lock: str | Path | None = None,
         platform: str | None = None,
+        builder: Literal["docker", "host"] = "docker",
+        node: str | None = None,
+        cache_dir: str | Path | None = None,
     ) -> Build:
-        """A build described by a ``build.toml`` (relative to the declaring file).
+        """A build described by a spec file (relative to the declaring file).
 
-        :param path: The build spec.
+        :param path: The build spec: a ``build.toml`` (``builder="docker"``)
+            or a ``host-build.toml`` (``builder="host"``).
         :param lock: Optional ``inputs`` lock the sources must match.
         :param platform: Build for this platform (``linux/amd64``,
             ``linux/arm64``) instead of the spec's ``platforms``, for example
             to build a published example for your own nodes. Part of the plan
-            hash.
+            hash. Docker builds only: a host build uses its node's platform.
+        :param builder: ``"docker"`` (default): BuildKit in the local Docker
+            engine. ``"host"``: the host toolchain, no container VM (see
+            :doc:`host_builds`); the plan reads the target node's facts.
+        :param node: With ``builder="host"``: the target node alias whose
+            facts (architecture, page size) the build uses; default the only
+            declared node.
+        :param cache_dir: With ``builder="host"``: the shared stage, target
+            and blob directory (relative to the declaring file); default
+            ``<state_dir>/toolchains/host-build``. Not part of the plan hash.
         """
         base = _caller_dir()
         return cls(
@@ -504,6 +543,9 @@ class Build:
             base=base,
             lock=_resolve(lock, base) if lock is not None else None,
             platform=platform,
+            builder=builder,
+            node=node,
+            cache_dir=_resolve(cache_dir, base) if cache_dir is not None else None,
         )
 
     @classmethod
@@ -626,12 +668,16 @@ class Build:
             )
         return ImageHandle(image)
 
-    def load(self) -> BuildSpec:
+    def load(self) -> BuildSpec | HostBuildSpec:
         """Parse and validate the build spec (reads the spec file once)."""
+        if self._spec is None and self.builder == "host":
+            assert self.path is not None
+            self._spec = load_host_spec(self.path)
         if self._spec is None:
             from piceli.artifacts.build_spec import BuildSpec
 
             if self.path is not None:
+                check_builder(self.path, "docker")
                 spec = BuildSpec.from_toml(self.path)
             else:
                 assert self.document is not None
@@ -653,7 +699,41 @@ class Build:
 
     def __repr__(self) -> str:
         where = self.path.name if self.path else "dockerfile"
-        return f"Build({where})"
+        suffix = ", builder='host'" if self.builder == "host" else ""
+        return f"Build({where}{suffix})"
+
+
+#: The declared builders of :meth:`Build.spec`.
+BUILDERS = frozenset({"docker", "host"})
+_REVISIONS = {"docker": "piceli.build-spec.v1", "host": "piceli.host-build.v1"}
+
+
+def check_builder(path: Path, builder: str) -> None:
+    """Refuse a spec file written for the other builder (clear error, early)."""
+    import tomllib
+
+    try:
+        revision = tomllib.loads(path.read_text()).get("revision")
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return  # the spec parser reports it with its own code
+    for other, expected in _REVISIONS.items():
+        if other != builder and revision == expected:
+            hint = (
+                'Build.spec(path, builder="host")'
+                if other == "host"
+                else "Build.spec(path) (the default docker builder)"
+            )
+            raise PipelineError(
+                "build-builder-mismatch",
+                f"{path.name} is a {expected} spec; declare it with {hint}",
+            )
+
+
+def load_host_spec(path: Path) -> HostBuildSpec:
+    from piceli.artifacts.host_build import HostBuildSpec
+
+    check_builder(path, "host")
+    return HostBuildSpec.from_toml(path)
 
 
 # ---------------------------------------------------------------- delivery

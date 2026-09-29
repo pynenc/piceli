@@ -133,7 +133,8 @@ def _tools_for(pipeline: Pipeline | None) -> list[str]:
     from piceli.pipeline.model import NodeLoopbackRegistry
 
     wanted = []
-    if pipeline.builds:
+    if any(build.builder == "docker" for build in pipeline.builds):
+        # A host build (builder="host") needs no container engine.
         wanted += ["docker", "docker buildx"]
     if isinstance(pipeline.deliver, NodeLoopbackRegistry):
         wanted.append("kubectl")

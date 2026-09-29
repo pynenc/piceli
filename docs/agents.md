@@ -153,7 +153,10 @@ noted.
   pushes or applies. Before the images exist it also previews the release
   with placeholder images (`stages.plan.preview`), and refuses with the
   `blocking` objects when the release would need adoption or replacement. With `--ref SOURCE=REV` it also checks the commit out
-  into a temporary git worktree, removed before it exits.
+  into a temporary git worktree, removed before it exits. A host build
+  (`Build.spec(..., builder="host")`) also reads its node's facts (one
+  read-only `GET` of the Node) and hashes the declared host tools; nothing
+  runs.
 - `piceli state show --spec …` (where the state lives, its generation, the
   release lock's holder; never prints content), `piceli state pull --spec …`
   (refreshes the local working copy of shared state) and
@@ -269,7 +272,10 @@ result).
    data is kept, `stages.deliver.registry.existing`), the release's
    `create`/`adopt`/`replace`/`apply`/`delete` lines and the checks. While
    the images are not built or delivered, those lines come from `stages.plan.preview`, computed with placeholder images
-   (`approvable: false`). The combined hash then approves the build, the
+   (`approvable: false`). A build with `builder: host`
+   (`stages.build.builds.<name>`) runs its `tools` on this machine as the
+   owner's user, outside any container: say so, with the `node_facts` it
+   compiles for. The combined hash then approves the build, the
    delivery and a release that adopts, replaces or deletes at most what the
    preview showed. Never pass the preview's `preview_hash` to `--approve`
    (refused with `pipeline-preview-not-approvable`). If the owner wants to
