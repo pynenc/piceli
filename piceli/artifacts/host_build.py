@@ -497,6 +497,8 @@ class HostBuildSpec:
                 client_factory,
             )
             outputs = execution.execute(output_dir)
+        finished_at = _now()
+        self._attest(plan, outputs, output_dir, start, started_at, finished_at)
         receipt = {
             "revision": BUILD_RECEIPT_REVISION,
             "state": "succeeded",
@@ -518,9 +520,60 @@ class HostBuildSpec:
             "outputs": outputs,
             "steps": list(execution.steps),
             "started_at": started_at,
-            "finished_at": _now(),
+            "finished_at": finished_at,
         }
         return BuildReceipt(receipt)
+
+    def _attest(
+        self,
+        plan: HostBuildPlan,
+        outputs: dict[str, Any],
+        output_dir: Path,
+        start: InputsLock | None,
+        started_at: str,
+        finished_at: str,
+    ) -> None:
+        """Write each image's SBOM and provenance; record them in ``outputs``."""
+        from piceli.artifacts import attestations
+
+        directory = output_dir / "attestations"
+        if directory.exists():
+            shutil.rmtree(directory)
+        crates = attestations.cargo_packages(plan)
+        sources = start.to_dict()["sources"] if start is not None else []
+        for image in self.images:
+            entry = outputs["images"][image.name]
+            for key, document in (
+                (
+                    "sbom",
+                    attestations.sbom(
+                        image.name,
+                        image.repository,
+                        entry,
+                        crates,
+                        self.source_date_epoch,
+                    ),
+                ),
+                (
+                    "provenance",
+                    attestations.provenance(
+                        image.repository,
+                        entry,
+                        plan,
+                        sources,
+                        started_at,
+                        finished_at,
+                    ),
+                ),
+            ):
+                suffix = "spdx.json" if key == "sbom" else "provenance.json"
+                written = attestations.write(
+                    directory / f"{image.name}.{suffix}", document
+                )
+                entry[key] = {
+                    "path": f"attestations/{written['path']}",
+                    "sha256": written["sha256"],
+                }
 
 
 def _context(name: Any, item: Any) -> ContextSpec:

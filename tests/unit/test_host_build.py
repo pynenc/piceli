@@ -224,3 +224,43 @@ def test_the_grant_binds_the_plan(project: Path, tmp_path: Path) -> None:
     assert not (tmp_path / "cache").exists() or not any(
         (tmp_path / "cache").rglob("*.oci.tar")
     )
+
+
+def test_each_image_gets_an_sbom_and_provenance(project: Path, tmp_path: Path) -> None:
+    (project.parent / "src" / "Cargo.lock").write_text(
+        "version = 3\n\n"
+        '[[package]]\nname = "web"\nversion = "0.1.0"\n\n'
+        '[[package]]\nname = "itoa"\nversion = "1.0.11"\n'
+        'source = "registry+https://github.com/rust-lang/crates.io-index"\n'
+        'checksum = "' + "a" * 64 + '"\n'
+    )
+    project.write_text(
+        project.read_text().replace(
+            'include = ["*.txt"]', 'include = ["*.txt", "Cargo.lock"]'
+        )
+    )
+    out = tmp_path / "out"
+    web = build(project, tmp_path / "cache", out)["outputs"]["images"]["web"]
+    sbom = json.loads((out / web["sbom"]["path"]).read_text())
+    assert sbom["spdxVersion"] == "SPDX-2.3"
+    names = {item["name"]: item for item in sbom["packages"]}
+    assert names["example/web"]["versionInfo"] == web["digest"]
+    assert (
+        names["itoa"]["externalRefs"][0]["referenceLocator"] == "pkg:cargo/itoa@1.0.11"
+    )
+    assert {item["fileName"] for item in sbom["files"]} == {
+        "/etc/web/page",
+        "/srv/static.txt",
+        "/usr/local/bin/web",
+    }
+    statement = json.loads((out / web["provenance"]["path"]).read_text())
+    assert statement["subject"][0]["digest"]["sha256"] == web["digest"][7:]
+    definition = statement["predicate"]["buildDefinition"]
+    assert definition["internalParameters"]["node_facts"]["page_size"] == 16384
+    assert definition["externalParameters"]["env"] == {"LG_PAGE": "14"}
+    assert str(tmp_path) not in json.dumps(statement) + json.dumps(sbom)
+    # The SBOM depends only on inputs and outputs.
+    again = build(project, tmp_path / "cache-2", tmp_path / "out-2")["outputs"][
+        "images"
+    ]
+    assert again["web"]["sbom"]["sha256"] == web["sbom"]["sha256"]
