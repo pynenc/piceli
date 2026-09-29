@@ -228,3 +228,18 @@ def test_pre_rollout_checks_gate_the_rollout_on_kind(tmp_path: Path, namespace) 
     assert code == 2, out
     assert events[-1]["reason"] == "prerollout-mount-missing"
     assert state(client, name)["image"] == second["image"]
+
+    # 6. An image the node cannot pull fails the check as not startable (image),
+    #    long before its timeout, and leaves no Job behind.
+    code, events, out = deploy(
+        tmp_path,
+        name,
+        "--auto-approve",
+        STORE_IMAGE="nginx:1.27-alpine@sha256:" + "0" * 64,
+    )
+    assert code == 1, out
+    assert events[-1]["reason"] == "prerollout-not-startable"
+    check = last_run(tmp_path)["stages"]["prerollout"]["output"]["checks"][0]
+    assert check["category"] == "image" and check["cleaned"] is True
+    unchanged = state(client, name)
+    assert unchanged["image"] == second["image"] and unchanged["jobs"] == []
