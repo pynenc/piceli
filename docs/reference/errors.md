@@ -41,6 +41,10 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`auth-provider-refused`](#error-auth-provider-refused) | target | no |
 | [`authorization-expired`](#error-authorization-expired) | execution | no |
 | [`backup-refused`](#error-backup-refused) | observe | no |
+| [`base-image-invalid`](#error-base-image-invalid) | host-build | no |
+| [`base-image-unavailable`](#error-base-image-unavailable) | host-build | yes |
+| [`base-layer-unsupported`](#error-base-layer-unsupported) | host-build | no |
+| [`base-platform-unavailable`](#error-base-platform-unavailable) | host-build | no |
 | [`blob-digest-mismatch`](#error-blob-digest-mismatch) | artifacts-registry | yes |
 | [`blob-not-found`](#error-blob-not-found) | artifacts-registry | no |
 | [`blob-source-truncated`](#error-blob-source-truncated) | artifacts-registry | yes |
@@ -145,6 +149,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`gitops-target-invalid`](#error-gitops-target-invalid) | gitops | no |
 | [`grant-expired`](#error-grant-expired) | build-spec | yes |
 | [`grant-mismatch`](#error-grant-mismatch) | artifacts-input | yes |
+| [`host-build-invalid`](#error-host-build-invalid) | host-build | no |
+| [`host-output-missing`](#error-host-output-missing) | host-build | no |
+| [`host-tool-missing`](#error-host-tool-missing) | host-build | no |
 | [`identity-mismatch`](#error-identity-mismatch) | kubernetes | no |
 | [`image-declared-twice`](#error-image-declared-twice) | images | no |
 | [`image-digest-mismatch`](#error-image-digest-mismatch) | images | no |
@@ -225,9 +232,12 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`no-previous-release`](#error-no-previous-release) | release | no |
 | [`no-release-applied`](#error-no-release-applied) | release | no |
 | [`no-saved-forwards`](#error-no-saved-forwards) | observe | no |
+| [`node-facts-unavailable`](#error-node-facts-unavailable) | host-build | no |
 | [`node-identity-mismatch`](#error-node-identity-mismatch) | kubernetes | no |
 | [`node-not-found`](#error-node-not-found) | kubernetes | no |
 | [`node-options-on-registry-target`](#error-node-options-on-registry-target) | artifacts-input | no |
+| [`node-page-size-invalid`](#error-node-page-size-invalid) | host-build | no |
+| [`node-platform-mismatch`](#error-node-platform-mismatch) | host-build | no |
 | [`node-query-failed`](#error-node-query-failed) | artifacts-delivery | yes |
 | [`node-registry-required`](#error-node-registry-required) | artifacts-input | no |
 | [`not-found`](#error-not-found) | kubernetes | no |
@@ -3487,4 +3497,87 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Invalid publish target.** `--to` is missing or not `oci://host[:port]/repository[:tag]`, or an annotation value (`--source`, `--revision`) is not short printable text.
 
 - **Fix:** Pass `--to oci://registry.example/team/app:tag` (plain HTTP only for a loopback registry).
+- **Retry-safe:** no
+
+
+## Builds without a container VM (`Build.spec(builder="host")`) and target node facts
+
+(error-base-image-invalid)=
+### `base-image-invalid`
+
+**Base image refused.** The base image reference is malformed, or its registry served a manifest, config or layer whose bytes do not hash to the pinned digest.
+
+- **Fix:** Pin the base as `image@sha256:<digest>` of an image index or manifest the registry serves, then build again.
+- **Retry-safe:** no
+
+(error-base-image-unavailable)=
+### `base-image-unavailable`
+
+**Base image unreachable.** The base image's registry could not be reached or refused the anonymous pull.
+
+- **Fix:** Check the network and the registry, then retry; blobs already fetched are kept in the host build cache.
+- **Retry-safe:** yes
+
+(error-base-layer-unsupported)=
+### `base-layer-unsupported`
+
+**Base image layer type unsupported.** The base image uses layers a host build cannot append to (only `tar` and `tar+gzip` layers, no foreign `urls`).
+
+- **Fix:** Pin a base image published with gzip layers.
+- **Retry-safe:** no
+
+(error-base-platform-unavailable)=
+### `base-platform-unavailable`
+
+**Base image lacks the node platform.** The pinned base image (index) has no manifest for the node's platform, or its config reports another platform.
+
+- **Fix:** Pin a base image that publishes the node's platform (`linux/arm64` or `linux/amd64`).
+- **Retry-safe:** no
+
+(error-host-build-invalid)=
+### `host-build-invalid`
+
+**Host build output inconsistent.** Two entries of one image layer claim the same path, or the assembled image did not read back with the digests it was written with.
+
+- **Fix:** Give each image file its own destination; if the error persists, delete the host build cache directory and build again.
+- **Retry-safe:** no
+
+(error-host-output-missing)=
+### `host-output-missing`
+
+**Host build output missing.** A path named by an image's `files` or `target_files` does not exist after the build, is not a file or directory tree, or holds a symlink that leaves it.
+
+- **Fix:** Check the build commands and the paths in `[[output.image]]` (`target_files` are relative to the shared target directory; placeholders such as `{rust_arch}` are substituted).
+- **Retry-safe:** no
+
+(error-host-tool-missing)=
+### `host-tool-missing`
+
+**Host tool not found.** A tool named in a host build's `build.tools` is not on `PATH` (or is not a regular file) when the pipeline plans.
+
+- **Fix:** Install the tool or put it on `PATH` (for example `nix shell nixpkgs#zig nixpkgs#cargo-zigbuild`), then plan again.
+- **Retry-safe:** no
+
+(error-node-facts-unavailable)=
+### `node-facts-unavailable`
+
+**Node facts unavailable.** A host build reads its node's architecture and kernel version from the Node object (`status.nodeInfo`); the node reports none, an unsupported architecture, or the recorded facts are malformed.
+
+- **Fix:** Check `kubectl get node NODE -o jsonpath='{.status.nodeInfo}'` with the pipeline's kubeconfig; only `amd64` and `arm64` Linux nodes are supported.
+- **Retry-safe:** no
+
+(error-node-page-size-invalid)=
+### `node-page-size-invalid`
+
+**Node page-size label invalid.** The node label `piceli.io/page-size` is not `4096`, `16384` or `65536`.
+
+- **Fix:** Run `getconf PAGESIZE` on the node and set the label to that value, or remove the label to use the kernel-release rule.
+- **Retry-safe:** no
+
+(error-node-platform-mismatch)=
+### `node-platform-mismatch`
+
+**Build platform differs from the node.** A host build declares `build.platform`, but the target node reports another architecture.
+
+- **Fix:** Remove `build.platform` (the node's platform is used) or build for the node the pipeline targets (`Build.spec(..., node=ALIAS)`).
 - **Retry-safe:** no
