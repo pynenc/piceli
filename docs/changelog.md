@@ -4,6 +4,15 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.8.1 (unreleased)
+
+- **Fix (builds):** staged build-context files now get a modification time
+  derived from their content hash instead of `source_date_epoch`, so a
+  same-size edit is no longer hidden from mtime-based tools (Cargo on a cached
+  `target/`) and the manual `source_date_epoch` bump is not needed.
+  `source_date_epoch` still fixes the image metadata. Plan hash and receipts
+  are unchanged.
+
 ## Version 0.8.0
 
 - **`Build.spec(path, platform=...)`:** build a spec for another platform than

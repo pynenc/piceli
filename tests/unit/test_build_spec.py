@@ -246,8 +246,7 @@ def test_example_spec_parses_and_previews() -> None:
 
 
 def test_example_rebuilds_its_crate_despite_the_target_cache() -> None:
-    # Staged sources carry the fixed epoch mtime, so a cached `target/` would
-    # look fresh to cargo after a source edit. The example cleans its own
+    # The example states its intent explicitly: it cleans its own crate (not
     # crate (not the dependencies) before building, inside the cached step.
     spec = BuildSpec.from_toml(EXAMPLE / "build.toml")
     assert any(cache.target == "/work/target" for cache in spec.caches)
@@ -621,6 +620,53 @@ def test_context_change_between_plan_and_staging(
     with pytest.raises(BuildSpecError) as error:
         spec.run(grant(), tmp_path / "o", docker=docker_tool, runner=runner)
     assert error.value.code == "context-changed"
+
+
+def staged_mtimes(tmp_path: Path, docker_tool: DockerTool) -> dict[str, float]:
+    """Run a build with a fake docker; return the staged files' mtimes."""
+    spec = BuildSpec.from_dict(document(), tmp_path)
+    fake = FakeDocker()
+    original = fake.__call__
+    seen: dict[str, float] = {}
+
+    def runner(argv, cwd, limits, environment, expires_at, **kw):  # type: ignore[no-untyped-def]
+        if argv[1:3] == ["buildx", "build"] and not seen:
+            for path in (cwd / "contexts/app").rglob("*"):
+                if path.is_file():
+                    seen[path.relative_to(cwd / "contexts/app").as_posix()] = (
+                        path.stat().st_mtime
+                    )
+        return original(argv, cwd, limits, environment, expires_at, **kw)
+
+    spec.run(
+        grant(),
+        tmp_path / f"out{len(list(tmp_path.glob('out*')))}",
+        docker=docker_tool,
+        runner=runner,
+    )
+    return seen
+
+
+def test_staged_mtime_follows_content_not_size(
+    tmp_path: Path, docker_tool: DockerTool
+) -> None:
+    # A same-size edit must change the staged mtime: a tool that decides
+    # freshness by mtime (Cargo on a cached target/) would otherwise keep the
+    # stale output. The mtime is also newer than any output a previous build
+    # left in a cache, and the same content always gets the same mtime.
+    project(tmp_path)
+    first = staged_mtimes(tmp_path, docker_tool)
+    again = staged_mtimes(tmp_path, docker_tool)
+    assert first == again
+    source = tmp_path / "project/src/main.rs"
+    edited = "fn maim() {}\n"
+    assert len(edited) == len(source.read_text())
+    source.write_text(edited)
+    changed = staged_mtimes(tmp_path, docker_tool)
+    assert changed["src/main.rs"] != first["src/main.rs"]
+    assert changed["Cargo.toml"] == first["Cargo.toml"]
+    for value in (*first.values(), *changed.values()):
+        assert time.time() < value < 2**32
 
 
 # --- sources --------------------------------------------------------------------

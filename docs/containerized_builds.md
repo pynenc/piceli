@@ -52,7 +52,7 @@ commands = [                       # or one `command = [...]`
     ["cargo", "build", "--release", "--locked", "--offline"],
 ]
 network = "none"                   # "none" (default) or "default"
-source_date_epoch = 0              # default 0
+source_date_epoch = 0              # default 0; image metadata and output times only
 timeout_seconds = 1800             # per docker invocation, at most 3600
 env = { CARGO_TERM_COLOR = "never" }
 # buildx_builder = "default"       # default: the builder of the current docker context
@@ -173,7 +173,8 @@ directories to BuildKit. For each context, it does the following:
 - It copies exactly those files into a private temporary directory. Each
   file is re-hashed as it is copied, and a file that changed since the plan
   fails the build with `context-changed`. Staged files get mode 0644 or 0755
-  and the `source_date_epoch` modification time.
+  and a modification time derived from their content hash (see below);
+  staged directories get the `source_date_epoch` time.
 
 The preview and the receipt report each context's file count, bytes, digest,
 pruned directories and skipped private files and links. The `rust-hello`
@@ -186,15 +187,22 @@ An offline build (`network = "none"`) needs its dependencies already in the
 cache. Either run once with `network = "default"` and `--allow-network`, or
 vendor the dependencies into the context.
 
-**Cached build outputs and fixed mtimes.** Staged files carry the
-`source_date_epoch` modification time, so every source file looks older than
-anything a previous build left in a cached `target/`. Tools that decide
-freshness by mtime, such as Cargo, then skip recompiling after a source edit
-and ship the stale artifact. When you cache a build-output directory, clean
-your own packages before building and keep only the dependencies cached. The
-`rust-hello` example runs `cargo clean --release --package rust-hello` before
-`cargo build`. Caching only the registry, or not caching `target/` at all,
-also works.
+**Cached build outputs and content-derived mtimes.** Each staged file's
+modification time is a pure function of its content hash: the same content
+always gets the same time, and an edit of any size (including one that keeps
+the byte count) gets a different one. The times fall in a window from
+2035-08 to 2038-01, later than anything a build cache holds today, so a tool
+that decides freshness by mtime, such as Cargo on a cached `target/`, sees
+every changed file as newer than its old output and recompiles it. Two
+different contents share a time with probability about 1 in 6.7e7. You no
+longer bump `source_date_epoch` after a source edit; it only fixes the image
+metadata and the times of collected outputs.
+
+The trade-off: every staged file is newer than any cached output, so a tool
+that compares mtimes also recompiles the packages built from the context
+when nothing changed. Dependencies in a cached registry stay cached. The
+`rust-hello` example still runs `cargo clean --release --package rust-hello`
+before `cargo build` so that its intent is explicit.
 
 ## Running
 
