@@ -21,12 +21,14 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import shutil
 import signal
 import socket
 import subprocess
 import sys
 import textwrap
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -235,6 +237,16 @@ def _ready_pods(namespace: str) -> list[str]:
         client.close()
 
 
+def _next_event(lines: queue.Queue[str], deadline: float) -> dict[str, Any]:
+    """The next JSON line of ``piceli access`` (``{}`` when none by ``deadline``)."""
+    try:
+        return dict(
+            json.loads(lines.get(timeout=max(0.1, deadline - time.monotonic())))
+        )
+    except (queue.Empty, ValueError):
+        return {}
+
+
 def test_access_follows_the_live_owner_across_a_rollout(
     tmp_path: Path, namespace: str
 ) -> None:
@@ -296,14 +308,19 @@ def test_access_follows_the_live_owner_across_a_rollout(
         env={**os.environ, "KUBECONFIG": KUBECONFIG},
     )
     pods: list[str] = []
+    lines: queue.Queue[str] = queue.Queue()
+    assert process.stdout is not None
+    stdout = process.stdout
+    threading.Thread(
+        target=lambda: [lines.put(line) for line in stdout], daemon=True
+    ).start()
     try:
-        assert process.stdout is not None
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline and not pods:
-            event = json.loads(process.stdout.readline() or "{}")
+            event = _next_event(lines, deadline)
             if event.get("health") == "healthy" and event.get("pod"):
                 pods.append(event["pod"])
-        assert pods == [first], process.stderr.read() if process.poll() else pods
+        assert pods == [first], pods
 
         client = api_client_from_kubeconfig(Path(KUBECONFIG), CONTEXT)
         try:  # a rollout: the template changes, the pod is replaced
@@ -322,7 +339,7 @@ def test_access_follows_the_live_owner_across_a_rollout(
             client.close()
         deadline = time.monotonic() + 120
         while time.monotonic() < deadline:
-            event = json.loads(process.stdout.readline() or "{}")
+            event = _next_event(lines, deadline)
             if event.get("health") == "healthy" and event.get("pod") not in {
                 None,
                 first,
