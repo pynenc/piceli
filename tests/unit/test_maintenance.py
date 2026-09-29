@@ -413,3 +413,17 @@ def test_cli_doctor_exit_codes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     code, body, stderr = invoke("doctor", "--state-dir", str(tmp_path), "--json")
     assert code == 1 and "runner-memory-low" in json.dumps(body)
     assert "piceli explain" in stderr
+
+
+def test_doctor_does_not_want_docker_for_host_builds() -> None:
+    from types import SimpleNamespace
+
+    from piceli.maintenance.doctor import _tools_for
+
+    host = SimpleNamespace(builds=[SimpleNamespace(builder="host")], deliver=None)
+    mixed = SimpleNamespace(
+        builds=[SimpleNamespace(builder="host"), SimpleNamespace(builder="docker")],
+        deliver=None,
+    )
+    assert _tools_for(host) == []  # type: ignore[arg-type]
+    assert _tools_for(mixed) == ["docker", "docker buildx"]  # type: ignore[arg-type]

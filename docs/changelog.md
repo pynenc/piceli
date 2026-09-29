@@ -4,6 +4,32 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.9.0 (unreleased)
+
+- **Builds without a VM (experimental):** `Build.spec("host-build.toml",
+  builder="host")` builds with the host toolchain (for Rust `cargo` or
+  `cargo zigbuild` for `linux/arm64` from macOS), so Docker Desktop can stay
+  closed. The stage is synchronised between builds (unchanged files keep
+  their mtime), every host build of a cache shares one `CARGO_TARGET_DIR`,
+  declared tools are pinned by sha256 and are the only programs a command
+  may start, bases are pulled by digest, and each image file mapping is one
+  deterministic layer, so a one-line change pushes one layer (plus the
+  config) by digest. Each image gets an SPDX SBOM and an in-toto/SLSA
+  provenance statement. The Docker builder stays the default. See
+  {doc}`host_builds`.
+- **Target node facts:** a host build's plan reads its node's architecture,
+  kernel version and page size (label `piceli.io/page-size`, else the kernel
+  release, else the architecture), shows them in `piceli deploy --plan`
+  (`stages.build.builds.<name>.node_facts`) and covers them with the plan
+  hash; `{page_size_log2}`, `{rust_arch}` and friends substitute into the
+  build's commands and env (for example `JEMALLOC_SYS_WITH_LG_PAGE`).
+- New error codes: `node-facts-unavailable`, `node-page-size-invalid`,
+  `node-platform-mismatch`, `host-tool-missing`, `host-output-missing`,
+  `host-build-invalid`, `base-image-invalid`, `base-image-unavailable`,
+  `base-platform-unavailable`, `base-layer-unsupported`,
+  `build-builder-mismatch`. The deploy plan's docker builds gain an additive
+  `builder_kind: "docker"` field; hashes of existing plans do not change.
+
 ## Version 0.8.1 (unreleased)
 
 - **Fix (builds):** staged build-context files now get a modification time

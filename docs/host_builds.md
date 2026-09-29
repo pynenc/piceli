@@ -65,7 +65,9 @@ local Docker engine. A spec written for one builder is refused by the other
    blobs the registry lacks. A one-line change that alters one binary
    uploads that binary's layer and the new config; the base and every other
    layer are skipped (the delivery receipt lists each blob as `uploaded` or
-   `skipped`). A node import (`NodeImport` over ssh) streams the same archive.
+   `skipped`). `NodeImport` imports the same archive; its `docker://`
+   transport (a kind node container) still needs the docker CLI to reach the
+   node, `ssh://` does not.
 
 ```{warning}
 A host build runs the declared tools **as your user, outside any container**:
@@ -166,6 +168,20 @@ tools: {name: sha256}}`, `node_facts`, and for each image its config digest
 (`image_id`), manifest digest, platform, archive path (relative to the
 outputs), every layer (`digest`, `diff_id`, `size`, `origin`: `base` or
 `build`) and every file the build put in it (`path`, `sha256`, `size`).
+
+## SBOM and provenance
+
+Next to each archive the build writes `attestations/<image>.spdx.json`, an
+SPDX 2.3 document (the image by manifest digest, its base by digest, every
+file the build put in it with its sha256, and every package pinned by a
+staged `Cargo.lock`, with its registry checksum and `pkg:cargo` URL; the
+lockfiles pin a superset of what one binary links), and
+`attestations/<image>.provenance.json`, an in-toto Statement v1 with a SLSA
+provenance v1 predicate (subject: the manifest digest; the spec and plan
+hashes, commands, `env`, node facts, tool digests, source commits,
+contexts and base). The receipt records both by path and sha256. They hold
+no local path, secret or process output. The SBOM is deterministic; the
+provenance records the build's start and end times.
 
 ## Errors
 
