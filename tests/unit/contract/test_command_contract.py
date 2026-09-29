@@ -146,6 +146,10 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["runs", "--env", "prod", "--state-dir", str(p)],
         "cache-arguments-conflict",
     ),
+    "watch": (
+        lambda p: ["watch", "--state-dir", str(p / "no-such-state")],
+        "watch-no-run",
+    ),
     "inputs record": (
         lambda p: ["inputs", "record", "--spec", str(p / "junk")],
         "invalid-inputs-spec",
