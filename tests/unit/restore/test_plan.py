@@ -141,7 +141,10 @@ def test_a_writer_piceli_cannot_stop_is_refused() -> None:
                         }
                     ],
                     "volumes": [
-                        {"name": "d", "persistentVolumeClaim": {"claimName": "data-db-0"}}
+                        {
+                            "name": "d",
+                            "persistentVolumeClaim": {"claimName": "data-db-0"},
+                        }
                     ],
                 }
             }
@@ -243,6 +246,8 @@ def test_claim_templates_work_without_a_template_volume_name_collision() -> None
     live = workloads(app)
     live[0]["spec"]["template"]["spec"]["containers"][0]["image"] = OLD
     result = plan(
-        workloads(app), live, [claim("data-db-0"), claim("logs-db-0"), claim("data-db2-0")]
+        workloads(app),
+        live,
+        [claim("data-db-0"), claim("logs-db-0"), claim("data-db2-0")],
     )
     assert [item["claim"] for item in result.claims] == ["data-db-0", "logs-db-0"]

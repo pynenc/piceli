@@ -442,6 +442,8 @@ def open_exec_socket(
     command: Sequence[str],
     container: str | None,
     timeout: float,
+    *,
+    stdin: bool = False,
 ) -> Any:
     """Open a ``pods/exec`` websocket with the client's own TLS and credentials.
 
@@ -463,6 +465,8 @@ def open_exec_socket(
     client.update_params_for_auth(headers, [], ["BearerToken"])
     query = [("command", argument) for argument in command]
     query += [("stdout", "true"), ("stderr", "true")]
+    if stdin:
+        query.append(("stdin", "true"))
     if container is not None:
         query.append(("container", container))
     host = str(configuration.host).rstrip("/")
