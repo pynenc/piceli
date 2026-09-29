@@ -30,7 +30,7 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   `build-builder-mismatch`. The deploy plan's docker builds gain an additive
   `builder_kind: "docker"` field; hashes of existing plans do not change.
 
-## Version 0.8.1 (unreleased)
+## Version 0.8.1
 
 - **Fix (builds):** staged build-context files now get a modification time
   derived from their content hash instead of `source_date_epoch`, so a
