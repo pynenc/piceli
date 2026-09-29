@@ -19,14 +19,17 @@ stay closed; a laptop keeps its memory for the compiler.
 from piceli import App, Build, Pipeline, Registry, Target
 
 target = Target.kubeconfig(
-    "cluster.kubeconfig", context="my-cluster", namespace="shop",
+    "cluster.kubeconfig",
+    context="my-cluster",
+    namespace="shop",
     nodes={"worker": "worker-1"},
 )
-images = Build.spec("host-build.toml", builder="host")   # opt-in, per build
+images = Build.spec("host-build.toml", builder="host")  # opt-in, per build
 app = App("shop")
 app.deployment("api", image=images["api"], ports=[8080])
-pipeline = Pipeline(app, target, build=images,
-                    deliver=Registry("oci://registry.example:5000/shop"))
+pipeline = Pipeline(
+    app, target, build=images, deliver=Registry("oci://registry.example:5000/shop")
+)
 ```
 
 `Build.spec(path)` without `builder=` keeps building a `build.toml` in the
