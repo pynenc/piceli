@@ -72,6 +72,18 @@ def changes(before: dict[str, Any], after: dict[str, Any]) -> Iterator[dict[str,
     """Events between two reads of the same run's journal, in order."""
     run_id = after.get("run_id")
     old_stages, new_stages = _stage_states(before), _stage_states(after)
+    seen = max((item.get("n", 0) for item in before.get("progress") or []), default=0)
+    for item in after.get("progress") or []:
+        if item.get("n", 0) <= seen:
+            continue
+        yield {
+            "schema": WATCH_SCHEMA,
+            "event": "progress",
+            "run_id": run_id,
+            "stage": item.get("stage"),
+            "line": item.get("line"),
+            "at": item.get("at"),
+        }
     for name, value in new_stages.items():
         state = value.get("state")
         previous = (old_stages.get(name) or {}).get("state")
@@ -90,18 +102,6 @@ def changes(before: dict[str, Any], after: dict[str, Any]) -> Iterator[dict[str,
             if key in value:
                 event[key] = value[key]
         yield event
-    seen = max((item.get("n", 0) for item in before.get("progress") or []), default=0)
-    for item in after.get("progress") or []:
-        if item.get("n", 0) <= seen:
-            continue
-        yield {
-            "schema": WATCH_SCHEMA,
-            "event": "progress",
-            "run_id": run_id,
-            "stage": item.get("stage"),
-            "line": item.get("line"),
-            "at": item.get("at"),
-        }
     if after.get("state") != before.get("state"):
         event = {
             "schema": WATCH_SCHEMA,
