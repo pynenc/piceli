@@ -14,6 +14,7 @@ from piceli.k8s.cli.operator import app as operator_app
 from piceli.k8s.cli.publish import publish
 from piceli.k8s.cli.release import app as release_app
 from piceli.k8s.cli.render import render
+from piceli.k8s.cli.restore import register as register_restore_commands
 from piceli.k8s.cli.state import app as state_app
 from piceli.k8s.cli.watch import register as register_watch_command
 
@@ -32,6 +33,7 @@ register_contract_commands(app)
 register_access_commands(app)
 register_maintenance_commands(app)
 register_watch_command(app)
+register_restore_commands(app)
 
 
 def _version(value: bool) -> None:

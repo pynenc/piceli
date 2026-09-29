@@ -309,6 +309,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`resource-requires-adoption`](#error-resource-requires-adoption) | release | no |
 | [`resource-scope-mismatch`](#error-resource-scope-mismatch) | release | no |
 | [`response-byte-limit`](#error-response-byte-limit) | kubernetes | no |
+| [`restore-plan-changed`](#error-restore-plan-changed) | restore | no |
 | [`restore-point-archive-invalid`](#error-restore-point-archive-invalid) | restore | no |
 | [`restore-point-archive-missing`](#error-restore-point-archive-missing) | restore | no |
 | [`restore-point-checksum-mismatch`](#error-restore-point-checksum-mismatch) | restore | no |
@@ -3526,6 +3527,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 
 ## Restore points of retained data (`restore_points=`, `piceli restore-points`, `piceli restore`)
+
+(error-restore-plan-changed)=
+### `restore-plan-changed`
+
+**Restore plan changed.** `piceli restore --approve HASH` was given a hash that is not the restore plan's current hash (the record, the claims or the writers changed).
+
+- **Fix:** Run `piceli restore MODULE:ATTR --point ID` without `--approve`, review the plan and approve its hash.
+- **Retry-safe:** no
 
 (error-restore-point-archive-invalid)=
 ### `restore-point-archive-invalid`

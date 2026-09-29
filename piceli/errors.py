@@ -3372,6 +3372,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         True,
         "restore",
     ),
+    _E(
+        "restore-plan-changed",
+        "Restore plan changed",
+        "`piceli restore --approve HASH` was given a hash that is not the restore plan's current hash (the record, the claims or the writers changed).",
+        "Run `piceli restore MODULE:ATTR --point ID` without `--approve`, review the plan and approve its hash.",
+        False,
+        "restore",
+    ),
 )
 
 
