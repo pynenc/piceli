@@ -89,6 +89,11 @@ class Run:
 
     def set_stage(self, name: str, **values: Any) -> dict[str, Any]:
         entry = self.data["stages"][name]
+        if values.get("state") in {"pending", "running", "done", "skipped"}:
+            # A retry (``--resume``) reports its own outcome, not the earlier one.
+            for stale in ("reason", "message", "finished_at"):
+                if stale not in values:
+                    entry.pop(stale, None)
         entry.update(values)
         if values.get("state") == "running":
             entry["started_at"] = now()
@@ -99,6 +104,8 @@ class Run:
 
     def set_state(self, state: str, **values: Any) -> None:
         self.data["state"] = state
+        if state in {"running", "ready", "stopped"} and "reason" not in values:
+            self.data.pop("reason", None)
         self.data.update(values)
         self.save()
 
