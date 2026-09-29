@@ -166,6 +166,7 @@ kubernetes_model/index
 :caption: Deploy and operate
 
 deploy
+pre_rollout_checks
 ci
 gitops
 state

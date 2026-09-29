@@ -85,6 +85,8 @@
     "override",
     "owner",
     "pod_defaults",
+    "pre_rollout",
+    "pre_rollouts",
     "probe",
     "release_selector",
     "render",
@@ -316,6 +318,12 @@
      "item",
      "patch"
     ],
+    "pre_rollout": [
+     "command",
+     "timeout_seconds",
+     "upgrade",
+     "workload"
+    ],
     "render": [
      "namespace",
      "nodes"
@@ -406,6 +414,7 @@
     "ingress": "Ingress",
     "job": "Job",
     "network_policy": "NetworkPolicy",
+    "pre_rollout": "PreRollout",
     "render": "DeploymentComposition",
     "resource": "Resource",
     "secret": "Secret",
@@ -1717,6 +1726,7 @@
     "fail_pods",
     "handler",
     "inject",
+    "job_result",
     "managers",
     "put",
     "route",
@@ -1747,6 +1757,15 @@
     ],
     "handler": [],
     "inject": null,
+    "job_result": [
+     "container",
+     "events",
+     "exit_code",
+     "logs",
+     "message",
+     "prefix",
+     "waiting"
+    ],
     "managers": [
      "kind",
      "name"
@@ -2931,6 +2950,28 @@
    "methods": {
     "to_dict": []
    }
+  },
+  "PreRollout": {
+   "attr_types": {
+    "upgrade": "UpgradeCheck"
+   },
+   "attrs": [
+    "command",
+    "describe",
+    "timeout_seconds",
+    "upgrade",
+    "workload"
+   ],
+   "init": [
+    "command",
+    "timeout_seconds",
+    "upgrade",
+    "workload"
+   ],
+   "methods": {
+    "describe": []
+   },
+   "pydantic": true
   },
   "Probe": {
    "attrs": [
@@ -4331,6 +4372,20 @@
    "methods": {},
    "pydantic": true
   },
+  "UpgradeCheck": {
+   "attrs": [
+    "command",
+    "timeout_seconds",
+    "volumes"
+   ],
+   "init": [
+    "command",
+    "timeout_seconds",
+    "volumes"
+   ],
+   "methods": {},
+   "pydantic": true
+  },
   "VaultSecretSpec": {
    "attrs": [
     "address",
@@ -5580,6 +5635,12 @@
    "plan-not-approved",
    "plan-not-found",
    "plan-release-mismatch",
+   "prerollout-claim-exclusive",
+   "prerollout-failed",
+   "prerollout-mount-missing",
+   "prerollout-not-startable",
+   "prerollout-timeout",
+   "prerollout-unavailable",
    "promote-refused",
    "provider-error",
    "rbac-denied",
@@ -5821,6 +5882,9 @@
    "PodDefaults": {
     "class": "PodDefaults"
    },
+   "PreRollout": {
+    "class": "PreRollout"
+   },
    "Probe": {
     "class": "Probe"
    },
@@ -5918,6 +5982,9 @@
      "leaves"
     ],
     "returns": "TlsCaSpec"
+   },
+   "UpgradeCheck": {
+    "class": "UpgradeCheck"
    },
    "Vault": {
     "params": [
@@ -6040,6 +6107,9 @@
    "PodDefaults": {
     "class": "PodDefaults"
    },
+   "PreRollout": {
+    "class": "PreRollout"
+   },
    "Probe": {
     "class": "Probe"
    },
@@ -6081,6 +6151,9 @@
    },
    "StatefulSet": {
     "class": "StatefulSet"
+   },
+   "UpgradeCheck": {
+    "class": "UpgradeCheck"
    },
    "Workload": {
     "class": "Workload"
@@ -6362,6 +6435,7 @@
    }
   },
   "piceli.pipeline": {
+   "ALL_STAGES": {},
    "ApprovalPolicy": {
     "class": "ApprovalPolicy"
    },
@@ -6557,6 +6631,7 @@
   "piceli.app.environment",
   "piceli.app.kinds",
   "piceli.app.model",
+  "piceli.app.prerollout",
   "piceli.app.render",
   "piceli.app.resource",
   "piceli.approval_policy",
@@ -6702,6 +6777,9 @@
   "piceli.pipeline.model",
   "piceli.pipeline.operate",
   "piceli.pipeline.planfile",
+  "piceli.pipeline.prerollout",
+  "piceli.pipeline.prerollout_cluster",
+  "piceli.pipeline.prerollout_stage",
   "piceli.pipeline.refs",
   "piceli.pipeline.registry_takeover",
   "piceli.pipeline.runner",
