@@ -21,12 +21,14 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import shutil
 import signal
 import socket
 import subprocess
 import sys
 import textwrap
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -200,6 +202,154 @@ def test_status_and_access_on_kind(tmp_path: Path, namespace: str) -> None:
                 (local, process.pid)
             ]
             process.communicate(timeout=20)  # the supervisor ended on SIGTERM
+    finally:
+        if process.poll() is None:
+            process.send_signal(signal.SIGINT)
+            try:
+                process.communicate(timeout=20)
+            finally:
+                if process.poll() is None:
+                    process.kill()
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and local_port_in_use(local):
+        time.sleep(0.1)
+    assert not local_port_in_use(local)
+
+
+def _ready_pods(namespace: str) -> list[str]:
+    from kubernetes.client import CoreV1Api
+
+    client = api_client_from_kubeconfig(Path(KUBECONFIG), CONTEXT)
+    try:
+        pods = CoreV1Api(client).list_namespaced_pod(
+            namespace, label_selector="app.kubernetes.io/name=web"
+        )
+        return sorted(
+            pod.metadata.name
+            for pod in pods.items
+            if pod.metadata.deletion_timestamp is None
+            and any(
+                item.type == "Ready" and item.status == "True"
+                for item in pod.status.conditions or ()
+            )
+        )
+    finally:
+        client.close()
+
+
+def _next_event(lines: queue.Queue[str], deadline: float) -> dict[str, Any]:
+    """The next JSON line of ``piceli access`` (``{}`` when none by ``deadline``)."""
+    try:
+        return dict(
+            json.loads(lines.get(timeout=max(0.1, deadline - time.monotonic())))
+        )
+    except (queue.Empty, ValueError):
+        return {}
+
+
+def test_access_follows_the_live_owner_across_a_rollout(
+    tmp_path: Path, namespace: str
+) -> None:
+    from kubernetes.client import AppsV1Api
+
+    local = _free_port()
+    (tmp_path / "shop_app.py").write_text(COMPOSITION)
+    spec = tmp_path / "release.toml"
+    spec.write_text(
+        textwrap.dedent(
+            f"""
+            [target]
+            kubeconfig = "{KUBECONFIG}"
+            context = "{CONTEXT}"
+            namespace = "{namespace}"
+
+            [release]
+            name = "shop"
+            owner = "access-e2e"
+            field_manager = "access-e2e"
+            composition = "shop_app.py:build"
+            state_dir = "state"
+
+            [execution]
+            max_seconds = 300
+            readiness_seconds = 240
+
+            [images]
+            web = "docker.io/library/nginx@{DIGEST}"
+
+            [values]
+            local = {local}
+            """
+        )
+    )
+    runner = CliRunner()
+    planned = runner.invoke(app, ["release", "plan", "--spec", str(spec)])
+    assert planned.exit_code == 0, planned.output
+    applied = runner.invoke(
+        app,
+        [
+            "release",
+            "apply",
+            "--spec",
+            str(spec),
+            "--approve",
+            json.loads(planned.stdout)["plan_hash"],
+        ],
+    )
+    assert applied.exit_code == 0, applied.output
+    (first,) = _ready_pods(namespace)
+
+    process = subprocess.Popen(
+        [sys.executable, "-m", "piceli", "access", str(spec), "--json"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=REPO,
+        env={**os.environ, "KUBECONFIG": KUBECONFIG},
+    )
+    pods: list[str] = []
+    lines: queue.Queue[str] = queue.Queue()
+    assert process.stdout is not None
+    stdout = process.stdout
+    threading.Thread(
+        target=lambda: [lines.put(line) for line in stdout], daemon=True
+    ).start()
+    try:
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline and not pods:
+            event = _next_event(lines, deadline)
+            if event.get("health") == "healthy" and event.get("pod"):
+                pods.append(event["pod"])
+        assert pods == [first], pods
+
+        client = api_client_from_kubeconfig(Path(KUBECONFIG), CONTEXT)
+        try:  # a rollout: the template changes, the pod is replaced
+            AppsV1Api(client).patch_namespaced_deployment(
+                "web",
+                namespace,
+                {
+                    "spec": {
+                        "template": {
+                            "metadata": {"annotations": {"piceli.test/roll": "1"}}
+                        }
+                    }
+                },
+            )
+        finally:
+            client.close()
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            event = _next_event(lines, deadline)
+            if event.get("health") == "healthy" and event.get("pod") not in {
+                None,
+                first,
+            }:
+                pods.append(event["pod"])
+                break
+        assert len(pods) == 2, "no status event named the new owner"
+        assert _ready_pods(namespace) == [pods[1]]  # the old pod is gone
+        with urlopen(f"http://127.0.0.1:{local}/", timeout=10) as response:
+            assert response.status == 200
     finally:
         if process.poll() is None:
             process.send_signal(signal.SIGINT)

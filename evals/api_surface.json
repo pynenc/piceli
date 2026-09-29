@@ -4468,7 +4468,8 @@
      "render",
      "runs",
      "state",
-     "status"
+     "status",
+     "watch"
     ]
    },
    "access": {
@@ -5286,6 +5287,21 @@
      "--timeout"
     ],
     "subcommands": []
+   },
+   "watch": {
+    "arguments": [
+     "target"
+    ],
+    "flags": [
+     "--env",
+     "--interval",
+     "--json",
+     "--once",
+     "--run",
+     "--state-dir",
+     "--timeout"
+    ],
+    "subcommands": []
    }
   },
   "error_codes": [
@@ -5666,7 +5682,9 @@
    "unknown-shortcut",
    "unknown-source",
    "upload-rejected",
-   "verification-failed"
+   "verification-failed",
+   "watch-no-run",
+   "watch-timeout"
   ]
  },
  "exports": {
@@ -6579,6 +6597,7 @@
   "piceli.k8s.cli.release",
   "piceli.k8s.cli.render",
   "piceli.k8s.cli.state",
+  "piceli.k8s.cli.watch",
   "piceli.k8s.config",
   "piceli.k8s.config.kubeconfig",
   "piceli.k8s.constants",

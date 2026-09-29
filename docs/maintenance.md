@@ -182,3 +182,44 @@ Each listed run has its state, the error code when it did not become ready,
 the release, the total stage time and its summary files. With shared state
 `piceli runs` reads the local working copy: run `piceli state pull --spec
 MODULE:ATTR` first to see other runners' runs.
+
+(watch)=
+## Following a run: `piceli watch`
+
+`piceli watch [MODULE:ATTR | --state-dir DIR] [--run ID] [--once] [--timeout S] [--json]`
+follows a deploy run until it settles: the newest run, or `--run ID`. It reads
+the run journal that `piceli deploy` rewrites at every stage change and on
+every progress line (for example the apply's "waiting for Deployment/web: 1/2
+ready"), never the cluster, so it is read-only and safe to run beside a
+deploy (from another terminal, another agent, or after the fact). With shared
+state it reads the local working copy (`piceli state pull` first).
+
+Human text goes to stderr. With `--json`, stdout carries JSON lines that
+follow `docs/schemas/piceli-watch-event-v1.schema.json`
+(`"schema": "piceli.watch-event.v1"`); fields are only added within a major
+version:
+
+```json
+{"schema": "piceli.watch-event.v1", "event": "snapshot", "run_id": "20260929T155321Z-d7ef1d09", "state": "running", "release": null, "stages": {"inputs": "done", "build": "done", "deliver": "done", "plan": "done", "apply": "running", "checks": "pending"}}
+{"schema": "piceli.watch-event.v1", "event": "progress", "run_id": "…", "stage": "apply", "line": "shop-1a2b3c4d5e6f: waiting for Deployment/web (1/2 ready)", "at": "…"}
+{"schema": "piceli.watch-event.v1", "event": "stage", "run_id": "…", "stage": "apply", "state": "done", "previous": "running", "seconds": 41.2, "at": "…"}
+{"schema": "piceli.watch-event.v1", "event": "run", "run_id": "…", "state": "ready", "previous": "running", "at": "…"}
+{"schema": "piceli.watch-event.v1", "event": "result", "run_id": "…", "state": "ready", "release": "shop-1a2b3c4d5e6f", "resumable": false, "stages": {"…": "done"}, "summary": {"json": "…/summary.json", "markdown": "…/summary.md"}}
+```
+
+- One `snapshot` first (where the run is now; stage changes that happened
+  before you started watching are in it, not replayed), then one `stage`
+  event per stage state change, one `progress` event per new progress line,
+  one `run` event per run state change, and a final `result`.
+- The `result` carries the run's state (`ready`, `stopped`, `failed`,
+  `rejected`, `rolled-back` or `interrupted`), the failing stage's
+  registered `reason` when there is one (then `piceli explain REASON`),
+  `resumable` (`piceli deploy --resume` can continue it) and the summary
+  files. Read `summary.json` for details.
+- Exit codes: `0` the run is `ready` or `stopped` as asked (also `--once` on
+  a run still going), `1` it failed, was interrupted or rolled back, or
+  `--timeout` passed (`watch-timeout`; the run itself is unaffected), `2` no
+  run to watch (`watch-no-run`).
+- `--once` prints the current state and exits. A `--resume` reuses the run
+  and its id: watch again to follow it. A deploy killed with SIGKILL leaves
+  its run `running`; bound the wait with `--timeout`.

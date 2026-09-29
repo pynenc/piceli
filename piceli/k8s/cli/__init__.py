@@ -15,6 +15,7 @@ from piceli.k8s.cli.publish import publish
 from piceli.k8s.cli.release import app as release_app
 from piceli.k8s.cli.render import render
 from piceli.k8s.cli.state import app as state_app
+from piceli.k8s.cli.watch import register as register_watch_command
 
 app = typer.Typer(rich_markup_mode=None)
 app.add_typer(codegen_app, name="codegen")
@@ -30,6 +31,7 @@ app.add_typer(state_app, name="state")
 register_contract_commands(app)
 register_access_commands(app)
 register_maintenance_commands(app)
+register_watch_command(app)
 
 
 def _version(value: bool) -> None:

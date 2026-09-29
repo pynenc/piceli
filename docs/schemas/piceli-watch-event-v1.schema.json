@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.pynenc.org/projects/piceli/en/latest/schemas/piceli-watch-event-v1.schema.json",
+  "title": "piceli watch stdout line",
+  "description": "One JSON line printed on stdout by `piceli watch --json`: a snapshot, then stage, run and progress changes, then the result (or a rejection or the watch-timeout failure). Fields are only added within a major version.",
+  "anyOf": [
+    {"$ref": "#/$defs/snapshot"},
+    {"$ref": "#/$defs/stage"},
+    {"$ref": "#/$defs/run"},
+    {"$ref": "#/$defs/progress"},
+    {"$ref": "#/$defs/result"},
+    {"$ref": "#/$defs/failure"}
+  ],
+  "$defs": {
+    "stageName": {
+      "enum": ["inputs", "build", "deliver", "plan", "apply", "checks"]
+    },
+    "stageState": {
+      "enum": ["pending", "running", "done", "skipped", "failed", "rejected", "interrupted"]
+    },
+    "runState": {
+      "enum": ["running", "ready", "stopped", "failed", "rejected", "rolled-back", "interrupted"]
+    },
+    "stages": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/stageState"}
+    },
+    "snapshot": {
+      "type": "object",
+      "required": ["schema", "event", "run_id", "state", "stages"],
+      "properties": {
+        "schema": {"const": "piceli.watch-event.v1"},
+        "event": {"const": "snapshot"},
+        "run_id": {"type": "string"},
+        "state": {"$ref": "#/$defs/runState"},
+        "until": {"type": ["string", "null"]},
+        "created_at": {"type": ["string", "null"]},
+        "updated_at": {"type": ["string", "null"]},
+        "release": {"type": ["string", "null"]},
+        "reason": {"type": "string", "description": "Registered error code of the failure."},
+        "stages": {"$ref": "#/$defs/stages"}
+      }
+    },
+    "stage": {
+      "type": "object",
+      "required": ["schema", "event", "run_id", "stage", "state", "previous"],
+      "properties": {
+        "schema": {"const": "piceli.watch-event.v1"},
+        "event": {"const": "stage"},
+        "run_id": {"type": "string"},
+        "stage": {"$ref": "#/$defs/stageName"},
+        "state": {"$ref": "#/$defs/stageState"},
+        "previous": {"type": ["string", "null"]},
+        "at": {"type": ["string", "null"]},
+        "seconds": {"type": "number"},
+        "reason": {"type": "string"},
+        "message": {"type": "string"}
+      }
+    },
+    "run": {
+      "type": "object",
+      "required": ["schema", "event", "run_id", "state", "previous"],
+      "properties": {
+        "schema": {"const": "piceli.watch-event.v1"},
+        "event": {"const": "run"},
+        "run_id": {"type": "string"},
+        "state": {"$ref": "#/$defs/runState"},
+        "previous": {"type": ["string", "null"]},
+        "at": {"type": ["string", "null"]},
+        "reason": {"type": "string"}
+      }
+    },
+    "progress": {
+      "type": "object",
+      "required": ["schema", "event", "run_id", "stage", "line"],
+      "properties": {
+        "schema": {"const": "piceli.watch-event.v1"},
+        "event": {"const": "progress"},
+        "run_id": {"type": "string"},
+        "stage": {"type": ["string", "null"]},
+        "line": {"type": ["string", "null"], "description": "The same text `piceli deploy` prints on stderr."},
+        "at": {"type": ["string", "null"]}
+      }
+    },
+    "result": {
+      "type": "object",
+      "required": ["schema", "event", "run_id", "state", "stages", "resumable"],
+      "properties": {
+        "schema": {"const": "piceli.watch-event.v1"},
+        "event": {"const": "result"},
+        "run_id": {"type": "string"},
+        "state": {"$ref": "#/$defs/runState"},
+        "release": {"type": ["string", "null"]},
+        "reason": {"type": "string"},
+        "resumable": {"type": "boolean", "description": "true when `piceli deploy --resume` can continue the run."},
+        "stages": {"$ref": "#/$defs/stages"},
+        "summary": {
+          "type": "object",
+          "properties": {"json": {"type": "string"}, "markdown": {"type": "string"}}
+        }
+      }
+    },
+    "failure": {
+      "type": "object",
+      "required": ["state", "reason", "message"],
+      "properties": {
+        "state": {"enum": ["rejected", "failed"]},
+        "reason": {"type": "string"},
+        "message": {"type": "string"},
+        "event": {"const": "result"},
+        "run_id": {"type": "string"},
+        "run_state": {"$ref": "#/$defs/runState"},
+        "stages": {"$ref": "#/$defs/stages"}
+      }
+    }
+  }
+}

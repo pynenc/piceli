@@ -17,6 +17,7 @@ side-effect free.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -246,6 +247,23 @@ def port_owner(
         return None
 
 
+_POD_TARGET = re.compile(r"pod/[a-z0-9]([-a-z0-9.]*[a-z0-9])?")
+
+
+def same_target(actual: str, declared: str) -> bool:
+    """Whether a forward's argv target is the declared one.
+
+    A Service or Deployment forward is started against the pod that currently
+    backs it (``pod/NAME``, see :class:`~piceli.k8s.observe.ForwardSupervisor`),
+    so that pod name counts as the declared target; nothing else does.
+    """
+    if actual == declared:
+        return True
+    return declared.startswith(("service/", "deployment/")) and bool(
+        _POD_TARGET.fullmatch(actual)
+    )
+
+
 def is_piceli_forward(
     owner: PortOwner | None,
     *,
@@ -281,7 +299,9 @@ def is_piceli_forward(
     rest = argv[argv.index("port-forward") + 1 :]
     parent = owner.parent.command if owner.parent is not None else None
     return (
-        rest[:2] == [target, f"{local_port}:{remote_port}"]
+        len(rest) >= 2
+        and same_target(rest[0], target)
+        and rest[1] == f"{local_port}:{remote_port}"
         and after("--context") == context
         and after("--namespace") == namespace
         and parent is not None
@@ -424,7 +444,14 @@ def recognise(
             )
             for namespace, target, local, remote in forwards
         }
-        if tuple(argv[1:]) not in expected:
+        given = tuple(argv[1:])
+        if given not in expected and not any(
+            len(given) == len(item)
+            and given[:7] == item[:7]
+            and given[8:] == item[8:]
+            and same_target(given[7], item[7])
+            for item in expected
+        ):
             return Holder(OTHER, owner)
         if parent is None:  # orphaned: its supervisor died
             return Holder(PICELI_FORWARD, owner, owner.pid)

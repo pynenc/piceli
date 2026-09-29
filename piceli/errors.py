@@ -3089,6 +3089,22 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "maintenance",
     ),
     _E(
+        "watch-no-run",
+        "No deploy run to watch",
+        "`piceli watch` found no run journal in the pipeline's state directory (none started yet, another state directory, or the `--run` id does not exist).",
+        "Start a run with `piceli deploy MODULE:ATTR`, check the pipeline or `--state-dir`, and list run ids with `piceli runs`; with shared state run `piceli state pull` first.",
+        True,
+        "maintenance",
+    ),
+    _E(
+        "watch-timeout",
+        "Run had not settled",
+        "`piceli watch --timeout` passed while the run was still going; the run itself is unaffected.",
+        "Watch again (the run continues), or raise `--timeout`; read the last state with `piceli watch --once`.",
+        True,
+        "maintenance",
+    ),
+    _E(
         "runner-disk-low",
         "Runner disk space low",
         "The free space where the state directory or the temporary directory lives is below what the next build needs (estimated from the last build receipts).",

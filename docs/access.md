@@ -265,6 +265,18 @@ The JSON object:
 {"event": "stopped", "state": "stopped"}
 ```
 
+Which pod a forward reaches. `kubectl port-forward service/web` (or a
+Deployment) connects to one pod when it starts and stays with it, so during a
+rollout a forward could keep pointing at a pod that is replaced. Since 0.8.1
+`piceli access` asks the API (read-only) which pods are Ready and not
+terminating for the forward's Service or Deployment, connects to the newest,
+and every ~2 seconds checks that the pod is still one of them; when it is not,
+it reconnects to the live owner without counting a restart or a failure. Each
+`status` event (and the dashboard's forwards) carries `"pod"`: the pod the
+forward is connected to now (`null` for a `pod/NAME` target, when nothing is
+Ready yet, or when the API cannot be read: the forward then keeps kubectl's
+own choice, as before). A change of pod is a new `status` event.
+
 Port conflicts: before starting anything, every declared local port is checked.
 A required forward on a taken port rejects the command:
 

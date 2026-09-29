@@ -586,6 +586,19 @@ class KubernetesWorkloadReader:
         from kubernetes.client import AppsV1Api
         from kubernetes.client.exceptions import ApiException
 
+        if kind == "Service":
+            from kubernetes.client import CoreV1Api
+
+            try:
+                service = CoreV1Api(self._client).read_namespaced_service(
+                    name, namespace, _request_timeout=self._timeout
+                )
+            except ApiException as error:
+                if error.status == 404:
+                    return None
+                raise
+            found: dict[str, Any] = self._client.sanitize_for_serialization(service)
+            return found
         apps = AppsV1Api(self._client)
         read = {
             "Deployment": apps.read_namespaced_deployment,
@@ -615,6 +628,57 @@ class KubernetesWorkloadReader:
 
     def close(self) -> None:
         self._client.close()
+
+
+def _pod_ready(pod: Mapping[str, Any]) -> bool:
+    """Running, not terminating and Ready: a pod that can serve a forward."""
+    metadata = pod.get("metadata") or {}
+    status = pod.get("status") or {}
+    if metadata.get("deletionTimestamp") or status.get("phase") != "Running":
+        return False
+    return any(
+        item.get("type") == "Ready" and item.get("status") == "True"
+        for item in status.get("conditions") or ()
+    )
+
+
+class LivePodResolver:
+    """The pods that currently back a forward's Service or Deployment.
+
+    ``kubectl port-forward service/NAME`` picks one pod when it starts and
+    keeps it; during a rollout that pod is replaced. This asks the API which
+    pods are Ready and not terminating *now* (newest first), so the supervisor
+    can reconnect to the live owner. Read-only; ``pod/NAME`` targets and
+    anything it cannot resolve give no pods (kubectl's own choice stays).
+    """
+
+    def __init__(self, reader: WorkloadReader) -> None:
+        self._reader = reader
+
+    def __call__(self, namespace: str, target: str) -> list[str]:
+        kind, _, name = target.partition("/")
+        if kind == "service":
+            live = self._reader.workload("Service", namespace, name)
+            selector = (live or {}).get("spec", {}).get("selector") or {}
+        elif kind == "deployment":
+            live = self._reader.workload("Deployment", namespace, name)
+            spec = (live or {}).get("spec", {}).get("selector") or {}
+            selector = spec.get("matchLabels") or {}
+        else:
+            return []
+        if not selector:
+            return []
+        ready = [
+            pod for pod in self._reader.pods(namespace, selector) if _pod_ready(pod)
+        ]
+        ready.sort(
+            key=lambda pod: (
+                (pod.get("metadata") or {}).get("creationTimestamp") or "",
+                (pod.get("metadata") or {}).get("name") or "",
+            ),
+            reverse=True,
+        )
+        return [str((pod.get("metadata") or {}).get("name")) for pod in ready]
 
 
 def _int(value: Any) -> int:
