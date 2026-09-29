@@ -33,6 +33,8 @@ from piceli.pipeline.model import STAGES
 RUN_SCHEMA = "piceli.deploy-run.v1"
 #: Run states that ended; any other state can be resumed.
 FINISHED = frozenset({"ready", "rolled-back", "stopped"})
+#: Progress lines kept in a run's journal (the newest).
+MAX_PROGRESS = 200
 
 
 def now() -> str:
@@ -101,6 +103,14 @@ class Run:
             entry["finished_at"] = now()
         self.save()
         return dict(entry)
+
+    def note(self, stage: str, line: str) -> None:
+        """Record one progress line (kept: the last ``MAX_PROGRESS``) for ``watch``."""
+        lines = self.data.setdefault("progress", [])
+        number = int(lines[-1]["n"]) + 1 if lines else 1
+        lines.append({"n": number, "at": now(), "stage": stage, "line": line})
+        del lines[:-MAX_PROGRESS]
+        self.save()
 
     def set_state(self, state: str, **values: Any) -> None:
         self.data["state"] = state

@@ -393,6 +393,8 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`unknown-source`](#error-unknown-source) | inputs | no |
 | [`upload-rejected`](#error-upload-rejected) | artifacts-registry | yes |
 | [`verification-failed`](#error-verification-failed) | artifacts-delivery | yes |
+| [`watch-no-run`](#error-watch-no-run) | maintenance | yes |
+| [`watch-timeout`](#error-watch-timeout) | maintenance | yes |
 
 ## Command-line contract (any command)
 
@@ -3394,6 +3396,22 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Install the tool on the runner (and put it on `PATH`), then run `piceli doctor` again.
 - **Retry-safe:** no
+
+(error-watch-no-run)=
+### `watch-no-run`
+
+**No deploy run to watch.** `piceli watch` found no run journal in the pipeline's state directory (none started yet, another state directory, or the `--run` id does not exist).
+
+- **Fix:** Start a run with `piceli deploy MODULE:ATTR`, check the pipeline or `--state-dir`, and list run ids with `piceli runs`; with shared state run `piceli state pull` first.
+- **Retry-safe:** yes
+
+(error-watch-timeout)=
+### `watch-timeout`
+
+**Run had not settled.** `piceli watch --timeout` passed while the run was still going; the run itself is unaffected.
+
+- **Fix:** Watch again (the run continues), or raise `--timeout`; read the last state with `piceli watch --once`.
+- **Retry-safe:** yes
 
 
 ## Owner-declared approval policies (`auto_approve`, `--approve-if-policy`)
