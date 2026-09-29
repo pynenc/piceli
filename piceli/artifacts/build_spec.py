@@ -1718,6 +1718,7 @@ class _Execution:
                         self.plan.contexts[context.name],
                         staging / "contexts" / context.name,
                         mtime=spec.source_date_epoch,
+                        content_mtime=True,
                     )
                 except BuildContextError as error:
                     raise BuildSpecError(error.code, str(error)) from None
