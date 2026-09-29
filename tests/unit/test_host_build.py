@@ -264,3 +264,16 @@ def test_each_image_gets_an_sbom_and_provenance(project: Path, tmp_path: Path) -
         "images"
     ]
     assert again["web"]["sbom"]["sha256"] == web["sbom"]["sha256"]
+
+
+def test_commands_keep_shell_braces_and_substitute_placeholders(
+    project: Path, tmp_path: Path
+) -> None:
+    project.write_text(
+        project.read_text().replace(
+            'printf %s \\"$LG_PAGE\\"', 'printf %s \\"${LG_PAGE}\\"'
+        )
+    )
+    plan = spec(project, tmp_path / "cache").plan()
+    assert "${LG_PAGE}" in plan.commands[0][2]
+    assert "{rust_arch}" not in plan.commands[0][2]

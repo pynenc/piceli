@@ -290,10 +290,9 @@ class HostBuildSpec:
         items = build["commands"]
         if not isinstance(items, list) or not 0 < len(items) <= 64:
             raise _fail("build.commands must be a list of argv lists")
+        # Other braces in a command stay literal (shell ``${VAR}``): only the
+        # known placeholders are substituted.
         commands = tuple(_argv(item, "build.commands") for item in items)
-        for command in commands:
-            for arg in command:
-                _template(arg, "build.commands", lambda *_: None)
         env = build.get("env", {})
         if not isinstance(env, dict) or len(env) > 128:
             raise _fail("build.env must be a table")
