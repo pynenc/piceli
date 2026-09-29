@@ -329,7 +329,7 @@ def _short(value: str, length: int) -> str:
 def job_name(workload: str, kind: str, ordinal: int | None, run: str) -> str:
     """A Job name of at most 52 characters (pod names add a suffix)."""
     tag = "cfg" if kind == "config" else f"up{ordinal or 0}"
-    return f"{_short(workload, 30)}-{tag}-{_short(run, 8)}"
+    return f"{_short(workload, 30)}-{tag}-{_short(run[-8:], 8)}"
 
 
 def _emptydir(name: str) -> dict[str, Any]:
@@ -366,7 +366,7 @@ def check_job(
     skip = set(optional)
     claims = dict(claims or {})
     retained = set(claims)
-    run_label = _short(run, 8)
+    run_label = _short(run[-8:], 8)
     spec: dict[str, Any] = {
         key: json.loads(canonical(pod[key])) for key in _POD_KEYS if key in pod
     }

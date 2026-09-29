@@ -154,6 +154,17 @@ def test_names_are_bounded_and_the_digest_ignores_the_run() -> None:
         run="another-run-id",
     )
     assert first["metadata"]["name"] != second["metadata"]["name"]
+    # Runs of the same day differ: the unique tail of the run id names the Job.
+    day = check_job(
+        workload(),
+        app="shop",
+        namespace="shop",
+        kind="config",
+        command=["db", "check"],
+        timeout_seconds=60,
+        run="20260101T000000Z-ffff0000",
+    )
+    assert first["metadata"]["name"] != day["metadata"]["name"]
     assert job_digest(first) == job_digest(second)
 
 

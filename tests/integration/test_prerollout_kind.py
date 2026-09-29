@@ -39,6 +39,7 @@ TOKEN = "tok-9f8e7d6c5b4a3210-not-for-logs"
 
 pytestmark = [
     pytest.mark.integration,
+    pytest.mark.timeout(900),
     pytest.mark.skipif(
         not (KUBECONFIG and CONTEXT),
         reason="set PICELI_KIND_KUBECONFIG and PICELI_KIND_CONTEXT",
