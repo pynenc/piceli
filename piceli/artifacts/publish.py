@@ -279,10 +279,13 @@ def _grouped(
                         validate_digest(value["sha256"]),
                     )
                 )
+        # Only an archive's manifest is pushed byte for byte. A Docker build's
+        # `digest` is BuildKit's manifest, which `docker image save` from the
+        # classic store does not reproduce: its pushed digest is not known yet.
         item = PlatformImage(
             platform,
             config,
-            manifest,
+            manifest if isinstance(archive, str) else None,
             _inside(output_dir, archive) if isinstance(archive, str) else None,
             None if isinstance(archive, str) else config,
             tuple(attestations),

@@ -360,6 +360,8 @@ def test_a_docker_build_is_joined_in_an_index_when_published(
                 "files": {},
                 "images": {
                     "api/linux-amd64": {
+                        # BuildKit's manifest: not what the engine's save pushes.
+                        "digest": "sha256:" + "9" * 64,
                         "image_id": amd,
                         "platform": "linux/amd64",
                         "ref": "example/shop/api:1a2b3c-amd64",
