@@ -4,6 +4,20 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.13.0 (unreleased)
+
+- **Machine-wide lock for heavy work (`piceli heavy`):** `piceli heavy run
+  [--name N] [--wait SECONDS] -- COMMAND...` runs a command under an OS-level
+  lock (`flock` in a per-user state directory, released by the OS when the
+  holder dies) so heavy runs of several agents serialize, prints who holds the
+  lock while it waits, forwards `SIGINT`/`SIGTERM`/`SIGHUP`, exits with the
+  command's code and writes a receipt (redacted command, cwd, git commit,
+  times, duration, exit code, peak memory; newest 100 kept). `piceli heavy
+  status [--json]` shows the holder and recent receipts. With
+  `PICELI_HEAVY_LOCK=1`, host builds and Docker `Build.spec` runs take the same
+  lock. New error codes `heavy-lock-timeout`, `heavy-command-empty`,
+  `heavy-command-missing` ({doc}`heavy_work`).
+
 ## Version 0.12.0
 
 - **Grow or move a retained claim (preview):** with

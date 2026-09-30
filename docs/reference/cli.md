@@ -45,6 +45,8 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli deploy`](#cli-deploy) | Deploy a pipeline: inputs → build → deliver → plan → apply → checks. | writes | yes |
 | [`piceli doctor`](#cli-doctor) | Check this runner: free disk and memory against what the next build needs (estimated from the last build receipts), and the tools the pipeline uses (docker, docker buildx, kubectl). Exit 1 on a warning. | none | no |
 | [`piceli explain`](#cli-explain) | Explain an error code: cause, fix and whether a retry can succeed. | none | no |
+| [`piceli heavy run`](#cli-heavy-run) | Run COMMAND once the lock is free; exit with its exit code. | none | no |
+| [`piceli heavy status`](#cli-heavy-status) | Show who holds the lock and the most recent receipts. | none | no |
 | [`piceli help-json`](#cli-help-json) | Print the whole CLI tree (commands, options, contracts) as JSON. | none | no |
 | [`piceli import live`](#cli-import-live) | Generate a typed module from the objects of a live namespace (read-only). | reads | no |
 | [`piceli import yaml`](#cli-import-yaml) | Generate a typed module from a directory of manifests (no cluster). | none | no |
@@ -695,6 +697,49 @@ Explain an error code: cause, fix and whether a retry can succeed.
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** `--run ID --spec SPEC` explains a past execution instead, from the local state (same as `piceli release status --spec SPEC --run ID`).
+
+(cli-heavy-run)=
+### `piceli heavy run`
+
+Run COMMAND once the lock is free; exit with its exit code.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `COMMAND` | text |  |  |
+| `--name` | text |  | A label for the holder record and receipt |
+| `--wait` | float | `3600.0` | Seconds to wait for the lock (0: do not wait) |
+
+**Contract**
+
+- **Reads:** the given command's working directory, git (HEAD, status)
+- **Writes:** the per-user heavy state directory (lock, holder record, receipts, bounded)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** no
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Runs exactly the command given after --, without a shell and with the caller's own authority (like time or flock); Piceli executes nothing else, so there is no plan or approval. The command's exit code is the exit code (128+N for signal N), so 2 may also be the command's own; stdout holds the receipt JSON only (the child's stdout goes to stderr). Crash-safe OS lock (flock): a killed holder releases it. Receipts hold the redacted command, cwd, git commit, times, exit code and peak memory; never the environment. Rejected: heavy-lock-timeout after --wait.
+
+(cli-heavy-status)=
+### `piceli heavy status`
+
+Show who holds the lock and the most recent receipts.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+| `--limit` | integer | `10` | Receipts to list |
+
+**Contract**
+
+- **Reads:** the per-user heavy state directory
+- **Writes:** nothing (read-only)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success
+- **Output contract:** conforms
+- **Notes:** Read-only; never contacts a cluster.
 
 (cli-help-json)=
 ### `piceli help-json`

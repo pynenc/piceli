@@ -85,6 +85,7 @@ from piceli.artifacts.source_identity import (
     SourceIdentityError,
     open_sources,
 )
+from piceli.maintenance import heavy
 
 HOST_BUILD_REVISION = "piceli.host-build.v1"
 #: The platforms a host build can target.
@@ -531,7 +532,8 @@ class HostBuildSpec:
                 cancel,
                 client_factory,
             )
-            outputs = execution.execute(output_dir)
+            with heavy.section(f"host build {self.name}"):
+                outputs = execution.execute(output_dir)
         finished_at = _now()
         self._attest(plan, outputs, output_dir, start, started_at, finished_at)
         receipt = {

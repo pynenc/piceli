@@ -222,6 +222,14 @@ noted.
   it when the owner asked to free space or configured `cache_budget=`; show
   the `--dry-run` list first otherwise.
 
+- `piceli heavy run [--name N] [--wait S] -- COMMAND...` and `piceli heavy
+  status --json`: wrap heavy work (builds, test gates, kind clusters) in
+  `heavy run` so that several agents on one machine run it one at a time;
+  the exit code is the command's, stdout is the receipt JSON (duration,
+  peak memory, commit), and `heavy-lock-timeout` (exit `2`) means the lock
+  stayed held for `--wait`. Set `PICELI_HEAVY_LOCK=1` so Piceli's own builds
+  take the lock too ({doc}`heavy_work`).
+
 ## Commands that need the owner's approval
 
 Ask before running these, and show the owner what will happen first.

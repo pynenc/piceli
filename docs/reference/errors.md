@@ -172,6 +172,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`gitops-target-invalid`](#error-gitops-target-invalid) | gitops | no |
 | [`grant-expired`](#error-grant-expired) | build-spec | yes |
 | [`grant-mismatch`](#error-grant-mismatch) | artifacts-input | yes |
+| [`heavy-command-empty`](#error-heavy-command-empty) | maintenance | no |
+| [`heavy-command-missing`](#error-heavy-command-missing) | maintenance | no |
+| [`heavy-lock-timeout`](#error-heavy-lock-timeout) | maintenance | yes |
 | [`host-build-invalid`](#error-host-build-invalid) | host-build | no |
 | [`host-output-missing`](#error-host-output-missing) | host-build | no |
 | [`host-tool-missing`](#error-host-tool-missing) | host-build | no |
@@ -3575,6 +3578,30 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Run `piceli cache status` to see what is left, then raise the budget, lower `--keep-last`, or move the state directory to a larger disk.
 - **Retry-safe:** no
+
+(error-heavy-command-empty)=
+### `heavy-command-empty`
+
+**No command to run.** `piceli heavy run` was given no command after `--`.
+
+- **Fix:** Pass the command after `--`, for example `piceli heavy run -- cargo test`.
+- **Retry-safe:** no
+
+(error-heavy-command-missing)=
+### `heavy-command-missing`
+
+**Command could not be started.** The command given to `piceli heavy run` does not exist or is not executable in the current directory.
+
+- **Fix:** Check the program name and `PATH`; the command is run without a shell.
+- **Retry-safe:** no
+
+(error-heavy-lock-timeout)=
+### `heavy-lock-timeout`
+
+**Heavy-work lock still held.** Another process held the machine-wide heavy-work lock for the whole `--wait`.
+
+- **Fix:** Run `piceli heavy status` to see the holder, then retry with a larger `--wait` once it finishes.
+- **Retry-safe:** yes
 
 (error-runner-disk-low)=
 ### `runner-disk-low`

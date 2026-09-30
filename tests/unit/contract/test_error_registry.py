@@ -46,6 +46,7 @@ FIRST_ARGUMENT = {
     "LayerError",
     "RestorePointError",
     "PublishError",
+    "HeavyError",
 }
 # ``_Failure(result, reason)`` in the delivery modules; ``reject_error(error, default)``;
 # ``DryRunUnavailable(resource, reason)`` in ``k8s/ops/dry_run.py``.

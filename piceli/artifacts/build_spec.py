@@ -75,6 +75,7 @@ from piceli.artifacts.source_identity import (
     verify_inputs,
 )
 from piceli.bounds import object_keys, strict_json
+from piceli.maintenance import heavy
 from piceli.tempfiles import temporary_directory
 
 BUILD_SPEC_REVISION = "piceli.build-spec.v1"
@@ -1400,7 +1401,8 @@ class BuildSpec:
             execution = _Execution(
                 plan, grant, docker, runner or _default_runner, build_log, cancel
             )
-            outputs = execution.execute(output_dir)
+            with heavy.section(f"build {self.name}"):
+                outputs = execution.execute(output_dir)
         receipt = {
             "revision": BUILD_RECEIPT_REVISION,
             "state": "succeeded",
