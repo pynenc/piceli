@@ -7,12 +7,14 @@ digest commands are the real ones.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from piceli.pipeline.prerollout_cluster import Outcome
 from piceli.restore.cluster import MOUNT
 from piceli.restore.model import RestorePointError
 
@@ -29,6 +31,10 @@ class FakeCluster:
         self.claim_names: list[str] = []
         self.jobs: dict[str, dict[str, Any]] = {}
         self._pod_claim: dict[str, str] = {}
+        self.scratch: dict[str, dict[str, Any]] = {}
+        self.undeletable: set[str] = set()
+        self.storage_class: str | None = "standard"
+        self.affinity: dict[str, Any] | None = None
 
     def claim_dir(self, claim: str) -> Path:
         path = self.root / "claims" / claim
@@ -113,3 +119,74 @@ class FakeCluster:
         ):
             raise RestorePointError(code, "fake exec failed", failed=True)
         return result.returncode
+
+    # scratch claims (restore --to-new-claim)
+    def claim(self, name: str) -> dict[str, Any] | None:
+        if name in self.scratch:
+            return self.scratch[name]
+        if name not in self.claim_names:
+            return None
+        return {
+            "metadata": {"name": name},
+            "spec": {
+                "storageClassName": self.storage_class,
+                "accessModes": ["ReadWriteOnce"],
+                "resources": {"requests": {"storage": "1Gi"}},
+                "volumeName": f"pv-{name}",
+            },
+            "status": {"phase": "Bound"},
+        }
+
+    def volume_affinity(self, volume: str) -> dict[str, Any] | None:
+        self.calls.append(f"read {volume}")
+        return self.affinity
+
+    def create_claim(self, manifest: Mapping[str, Any]) -> None:
+        name = manifest["metadata"]["name"]
+        self.calls.append(f"create claim {name}")
+        self.scratch[name] = dict(manifest)
+
+    def delete_claim(self, name: str, seconds: float) -> bool:
+        self.calls.append(f"delete claim {name}")
+        if name in self.undeletable:
+            return False
+        self.scratch.pop(name, None)
+        path = self.root / "claims" / name
+        if path.exists():
+            shutil.rmtree(path)
+        return True
+
+
+class FakeJobs:
+    """Runs a verify Job's command locally, its claim mounts replaced by the
+    claims' directories (``sh -c`` scripts see the restored files)."""
+
+    def __init__(self, cluster: FakeCluster) -> None:
+        self.cluster = cluster
+        self.jobs: list[dict[str, Any]] = []
+        self.raise_on_run: BaseException | None = None
+
+    def run_job(self, job: Mapping[str, Any], *, redact: Any = ()) -> Outcome:
+        self.jobs.append(dict(job))
+        if self.raise_on_run is not None:
+            raise self.raise_on_run
+        spec = job["spec"]["template"]["spec"]
+        (container,) = spec["containers"]
+        claims = {
+            volume["name"]: volume["persistentVolumeClaim"]["claimName"]
+            for volume in spec.get("volumes") or ()
+            if "persistentVolumeClaim" in volume
+        }
+        command = list(container["command"])
+        for mount in container.get("volumeMounts") or ():
+            if mount["name"] in claims:
+                assert mount["readOnly"] is True
+                local = str(self.cluster.claim_dir(claims[mount["name"]]))
+                command = [part.replace(mount["mountPath"], local) for part in command]
+        result = subprocess.run(command, capture_output=True, check=False, timeout=30)
+        return Outcome(
+            state="passed" if result.returncode == 0 else "failed",
+            exit_code=result.returncode,
+            log_tail=result.stdout.decode(errors="replace"),
+            cleaned=True,
+        )

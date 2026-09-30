@@ -1014,7 +1014,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "Put a restore point back into its claims: plan (exit 3 with the "
             "restore_hash), then --approve HASH.",
             reads=("pipeline module", "restore point directory", "kubeconfig"),
-            writes=("restore point directory (restores/ receipts)",),
+            writes=("restore point directory (restores/ and verifies/ receipts)",),
             cluster="writes",
             approval_required=True,
             safe_to_retry=True,
@@ -1028,7 +1028,14 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "to zero and waits until their pods are gone, empties each claim and "
             "extracts its archive in a helper Job, checks the content digest in "
             "the cluster and scales the writers back. Every file in the claims "
-            "is replaced; run it again after a failure.",
+            "is replaced; run it again after a failure. With --to-new-claim "
+            "(and --all for every verified point) it touches no live claim and "
+            "stops no writer: the plan (exit 3, verify_hash) names one scratch "
+            "claim per restored claim; --approve HASH creates them, restores "
+            "and checks each content digest, runs the app's restore_verify "
+            "command read-only with the workload's image, writes a receipt "
+            "with PASS or FAIL per claim (exit 1 on any FAIL), and deletes the "
+            "scratch claims unless --keep.",
         ),
     }
 )

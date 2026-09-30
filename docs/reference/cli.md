@@ -1558,23 +1558,26 @@ Put a restore point back into its claims (plan, then --approve HASH).
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `TARGET` | text | required |  |
-| `--point` | text | required | The restore point id (rp-…) |
+| `--point` | text |  | The restore point id (rp-…) |
 | `--claim` | text (repeatable) |  | Only this claim (repeatable; default: all) |
 | `--env` | text |  | The pipeline's environment |
 | `--approve` | text |  | Restore; HASH is the plan's restore_hash |
 | `--image` | text |  | Helper image pinned by digest (default: RestorePoints(image=) or each writer's image) |
+| `--to-new-claim` | boolean | `False` | Restore into scratch claims and run the app's restore_verify checks; live claims and writers are not touched |
+| `--all` | boolean | `False` | With --to-new-claim: every verified restore point |
+| `--keep` | boolean | `False` | With --to-new-claim: keep the scratch claims afterwards |
 | `--json` | boolean | `False` | Print one JSON object on stdout |
 
 **Contract**
 
 - **Reads:** pipeline module, restore point directory, kubeconfig
-- **Writes:** restore point directory (restores/ receipts)
+- **Writes:** restore point directory (restores/ and verifies/ receipts)
 - **Cluster:** writes
 - **Approval required:** yes
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** Without --approve it only reads: verifies the archives, checks the claims exist and lists the writers it would stop. With --approve HASH it plans again (restore-plan-changed on any difference), holds the pipeline's state lock, scales the writers to zero and waits until their pods are gone, empties each claim and extracts its archive in a helper Job, checks the content digest in the cluster and scales the writers back. Every file in the claims is replaced; run it again after a failure.
+- **Notes:** Without --approve it only reads: verifies the archives, checks the claims exist and lists the writers it would stop. With --approve HASH it plans again (restore-plan-changed on any difference), holds the pipeline's state lock, scales the writers to zero and waits until their pods are gone, empties each claim and extracts its archive in a helper Job, checks the content digest in the cluster and scales the writers back. Every file in the claims is replaced; run it again after a failure. With --to-new-claim (and --all for every verified point) it touches no live claim and stops no writer: the plan (exit 3, verify_hash) names one scratch claim per restored claim; --approve HASH creates them, restores and checks each content digest, runs the app's restore_verify command read-only with the workload's image, writes a receipt with PASS or FAIL per claim (exit 1 on any FAIL), and deletes the scratch claims unless --keep.
 
 (cli-restore-points)=
 ### `piceli restore-points`

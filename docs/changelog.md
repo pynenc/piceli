@@ -6,6 +6,24 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ## Version 0.11.0 (unreleased)
 
+- **Prove a restore point without touching live data (preview):**
+  `piceli restore MODULE:ATTR --point ID --to-new-claim` (or `--all` for
+  every verified restore point) restores into scratch claims instead of the
+  live ones. The plan (exit 3, `verify_hash`) names one Piceli-owned scratch
+  claim per restored claim, shaped like its source (storage class, size,
+  access modes; pinned to the node of a node-local volume); with
+  `--approve HASH` Piceli creates them, extracts each archive and checks its
+  content digest in the cluster, then runs the command declared with
+  `app.restore_verify(workload, RestoreVerify([...]))` in a Job with the
+  workload's current image and pod settings, the scratch copies mounted
+  read-only at the workload's paths. A receipt under
+  `<restore point>/verifies/` records `PASS` or `FAIL` per claim (exit 1 on
+  any `FAIL`); the scratch claims are deleted in every case unless
+  `--keep`. Writers are never stopped and the command's output is never
+  printed. Scratch claims carry `app.kubernetes.io/managed-by=piceli`,
+  `piceli.io/scratch=true` and `piceli.io/restore-verify=<id>`, and Piceli
+  deletes only claims with that label. New error codes `restore-verify-*`
+  and `restore-options-invalid`. See {doc}`restore_points`.
 - **Deploy events to OTLP (experimental):** `piceli deploy` and
   `piceli release apply|rollback` can send one trace per run (a root span
   with a child span per stage) and one result log record (the dashboard

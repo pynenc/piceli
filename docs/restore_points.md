@@ -7,7 +7,8 @@ that copy back with `piceli restore`.
 ```{admonition} Maturity: preview
 :class: note
 
-`RestorePoints`, `Quiesce`, `piceli restore-points` and `piceli restore` are
+`RestorePoints`, `Quiesce`, `RestoreVerify`, `piceli restore-points` and
+`piceli restore` (with `--to-new-claim`) are
 **preview**: tested end to end on `kind`, but names, options and JSON fields
 may still change in a minor release (always with a changelog entry).
 ```
@@ -194,6 +195,102 @@ back first (`piceli release rollback`, or a failed check with
 `rollback_on_failed_checks`), then restore: the writers restart on the
 restored data with the old version.
 
+## Prove a restore point in scratch claims
+
+An archive that verifies is a complete copy; whether the app can open it is
+another question. `--to-new-claim` answers it without touching live data:
+the restore point goes into new, Piceli-owned scratch claims, and a
+read-only command the app declares checks the copy.
+
+Declare the check next to the workload:
+
+```python
+from piceli import RestoreVerify
+
+app.restore_verify(db, RestoreVerify(["db", "verify", "--read-only", "/var/lib/db"]))
+app.restore_verify(cache, RestoreVerify(["sh", "-c", "test -s /data/dump.rdb"]))
+```
+
+`RestoreVerify(command, timeout_seconds=300)`: `command` is an argv run as
+the container's entrypoint; exit `0` is `PASS`. A declaration renders no
+object and never changes a release's plan hash. Only a Deployment or
+StatefulSet that mounts a retained claim can have one.
+
+Then plan and approve:
+
+```sh
+piceli restore deploy/app.py:pipeline --point rp-… --to-new-claim
+piceli restore deploy/app.py:pipeline --point rp-… --to-new-claim --approve sha256:…
+```
+
+The plan (exit `3`) verifies the archives offline and, per restored claim,
+names its scratch claim (`piceli-verify-<id suffix>-<nn>`), its storage
+class, size and access modes (read from the source claim) and, for a
+node-local volume, the node its volume lives on; and per workload with a
+declared check, the image, the command and the mount paths. `verify_hash`
+covers all of it and `--keep`. With `--approve HASH`, Piceli plans again
+(`restore-verify-plan-changed` on any difference), then for each claim:
+
+1. **Create the scratch claim** like the source, labelled
+   `app.kubernetes.io/managed-by=piceli`, `piceli.io/scratch=true` and
+   `piceli.io/restore-verify=<id>`, with the source's name in the
+   `piceli.io/source-claim` annotation.
+2. **Restore into it** in a helper Job (the same helper as `piceli
+   restore`, pinned to the source volume's node for node-local storage) and
+   check the content digest in the cluster (`restore-verify-mismatch`).
+3. **Run the check.** One Job per workload replica with the workload's
+   *current* image and pod settings (environment, Secret and ConfigMap
+   mounts, security context, service account, node selector), the scratch
+   copies mounted **read-only** at the paths the workload mounts the
+   originals, the declared command as entrypoint. Other claims become empty
+   directories. Its output is never printed or stored; the exit code decides.
+4. **Delete the scratch claims**, on success, failure and interrupt alike,
+   unless `--keep`. Piceli deletes only a claim labelled
+   `piceli.io/scratch=true`, with preconditions on its uid; a scratch claim
+   that stays is `restore-verify-cleanup-failed` and is named.
+
+Writers are never stopped, no live claim is mounted, and the state lock is
+not taken, so it can run beside a deploy. A receipt goes to
+`<directory>/<id>/verifies/` and into the result:
+
+```text
+{"state": "passed", "verify_hash": "sha256:…", "receipts": [{"point": "rp-…",
+ "claims": [{"claim": "data-db-0", "scratch_claim": "piceli-verify-3fa2c1-00",
+ "result": "PASS", "verify": "passed", "content_sha256": "…"}, …], …}]}
+```
+
+A claim is `FAIL` when it did not restore (`restore-verify-scratch-failed`),
+its digest did not match (`restore-verify-mismatch`) or the check did not
+exit `0` or could not start (`restore-verify-failed`); the command exits `1`
+with `restore-verify-failed`. A claim whose workload declares no check is
+`PASS` on its digest alone, with `"verify": "not-declared"`.
+
+`--claim NAME` verifies only some claims; `--image` overrides the helper
+image (not the check's, which is always the workload's); `--keep` leaves the
+scratch claims for a closer look (delete them with `kubectl delete pvc -l
+piceli.io/scratch=true`; the next plan refuses while they exist,
+`restore-verify-scratch-exists`). `--all` instead of `--point` plans every
+verified restore point under one hash.
+
+The scratch claims need room for a full copy of each restored claim, for as
+long as the verify runs. The Kubernetes user needs, besides what `piceli
+restore` needs, `create`, `get` and `delete` on PersistentVolumeClaims and
+`get` on PersistentVolumes (to pin node-local volumes; without it the
+scheduler places the helper).
+
+### On a schedule
+
+Piceli has no scheduler. Run the two steps from CI or a cron job on a
+machine that holds the restore point directory, where the owner agreed in
+advance to the storage it uses:
+
+```sh
+hash=$(piceli restore deploy/app.py:pipeline --all --to-new-claim --json | jq -r .verify_hash)
+piceli restore deploy/app.py:pipeline --all --to-new-claim --approve "$hash"
+```
+
+Exit `1` means a restore point does not verify: alert on it.
+
 ## Limits
 
 - The copy is a file-level archive of a stopped volume, not a database dump;
@@ -206,3 +303,8 @@ restored data with the old version.
 - Special files (devices, FIFOs) are refused when verifying.
 - Nothing is printed from a claim: plans, results, summaries and errors carry
   names, sizes and digests only.
+- `--to-new-claim` needs the source claim to still exist (its storage class
+  and size shape the scratch claim) and a storage class that provisions
+  volumes (`restore-verify-scratch-unsupported` for a static volume). The
+  check runs with the workload's current image, not the one that wrote the
+  data.
