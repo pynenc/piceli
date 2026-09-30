@@ -4,6 +4,20 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.11.0 (unreleased)
+
+- **Deploy events to OTLP (experimental):** `piceli deploy` and
+  `piceli release apply|rollback` can send one trace per run (a root span
+  with a child span per stage) and one result log record (the dashboard
+  marker) to an OTLP/HTTP endpoint, with app, namespace, run, release, plan
+  hash, commit and ref, image digests, outcome and duration. Off unless
+  `--otlp-endpoint` or `OTEL_EXPORTER_OTLP_ENDPOINT` is set; also reads
+  `OTEL_EXPORTER_OTLP_HEADERS`, `_TIMEOUT`, `OTEL_SERVICE_NAME`,
+  `OTEL_SDK_DISABLED`. Never fails a deploy: one bounded export at the end, a
+  problem is one warning line (new codes `deploy-events-export-failed`,
+  `deploy-events-config-invalid`). No secrets are exported and no OpenTelemetry
+  package is needed. See {doc}`deploy_events`.
+
 ## Version 0.10.0
 
 - **Helm chart and manifests for other people's clusters (preview):**

@@ -167,6 +167,7 @@ kubernetes_model/index
 
 deploy
 pre_rollout_checks
+deploy_events
 ci
 gitops
 helm_charts

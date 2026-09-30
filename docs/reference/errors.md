@@ -103,6 +103,8 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`deadline-exceeded`](#error-deadline-exceeded) | kubernetes | yes |
 | [`deleted-resource-reappeared`](#error-deleted-resource-reappeared) | execution | no |
 | [`delivery-not-succeeded`](#error-delivery-not-succeeded) | images | no |
+| [`deploy-events-config-invalid`](#error-deploy-events-config-invalid) | pipeline | no |
+| [`deploy-events-export-failed`](#error-deploy-events-export-failed) | pipeline | yes |
 | [`deploy-flags-conflict`](#error-deploy-flags-conflict) | cli | no |
 | [`deploy-plan-file-invalid`](#error-deploy-plan-file-invalid) | pipeline | no |
 | [`deploy-plan-file-mismatch`](#error-deploy-plan-file-mismatch) | pipeline | no |
@@ -2953,6 +2955,22 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 
 ## Deploying a pipeline from source (`piceli deploy`)
+
+(error-deploy-events-config-invalid)=
+### `deploy-events-config-invalid`
+
+**Deploy events configuration unusable.** Export of deploy events was asked for (`--otlp-endpoint` or `OTEL_EXPORTER_OTLP_*`) but the endpoint, headers, protocol, timeout or service name is malformed. Printed as a warning: the deploy itself is not affected and nothing is exported.
+
+- **Fix:** Fix the OTLP endpoint (`http(s)://host:port`, no credentials in the URL), `OTEL_EXPORTER_OTLP_HEADERS` (`key=value,…`) and `OTEL_EXPORTER_OTLP_PROTOCOL` (`http/protobuf` or `http/json`).
+- **Retry-safe:** no
+
+(error-deploy-events-export-failed)=
+### `deploy-events-export-failed`
+
+**Deploy events not exported.** The OTLP endpoint was unreachable, answered with an error or did not answer within the bound (3 s by default, `OTEL_EXPORTER_OTLP_TIMEOUT`, at most 10 s). Printed as a warning: the deploy itself is not affected and the events are not retried.
+
+- **Fix:** Check the endpoint and its network path from the runner; the next run exports its own events.
+- **Retry-safe:** yes
 
 (error-deploy-plan-file-invalid)=
 ### `deploy-plan-file-invalid`
