@@ -171,6 +171,7 @@ ci
 gitops
 state
 maintenance
+restore_points
 typed_apps
 crds
 environments

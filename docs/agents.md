@@ -178,6 +178,11 @@ noted.
   it. Exit `0` ready or stopped, `1` failed, interrupted, rolled back or
   `--timeout` (`watch-timeout`), `2` no run (`watch-no-run`). Use it, not
   polling the cluster, to report a release's progress ({ref}`watch`).
+- `piceli restore-points MODULE:ATTR [--verify] --json`: list the pipeline's
+  restore points (verified archives of retained claims taken by the deploy's
+  `backup` stage) with ids, claims, sizes and digests; `--verify` reads every
+  archive back (exit `1` when one does not match). Read-only and offline;
+  never prints what a claim holds ({doc}`restore_points`).
 - `piceli observe forward-save`, `piceli operator backup`: write a local
   preferences file or backup archive.
 - `piceli cache status [MODULE:ATTR | --state-dir DIR] --json`, `piceli
@@ -201,6 +206,7 @@ Ask before running these, and show the owner what will happen first.
 | Command | Changes | Approve with |
 | --- | --- | --- |
 | `piceli deploy` | Builds images, pushes them to a registry or node, applies a release | `--approve <combined hash>` from `piceli deploy MODULE:ATTR --plan`, after the owner reviewed that plan (or `--apply <plan file> --approve <its hash>` on another runner); `--resume` continues an approved run; `--approve-if-policy` only when the owner declared an `auto_approve` policy (see below) |
+| `piceli restore` | Replaces every file of the restore point's claims (stops their writers, then starts them again) | `--approve <restore_hash>` printed by `piceli restore MODULE:ATTR --point ID` without `--approve`, after the owner chose that restore point and agreed to lose what the claims hold now |
 | `piceli state import` | Replaces the release's state (local directory or the shared state in the namespace) | `--approve <import digest>` printed by `piceli state import` without `--approve`, after the owner agreed to replace the state |
 | `piceli release apply` | The cluster | `--approve <plan hash>` from `release plan`, after the owner reviewed that plan; `--approve-if-policy` only with the owner's `[release] auto_approve` |
 | `piceli release rollback` | The cluster | `--approve <plan hash>` from `release rollback <target>` without `--approve` |

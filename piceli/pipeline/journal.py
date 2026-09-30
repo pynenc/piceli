@@ -81,7 +81,9 @@ class Run:
         return str(self.data["state"])
 
     def stage(self, name: str) -> dict[str, Any]:
-        return dict(self.data["stages"][name])
+        """The stage's record; empty for a stage this run does not have
+        (``backup`` exists only with ``restore_points``)."""
+        return dict(self.data["stages"].get(name) or {})
 
     def save(self) -> None:
         self.data["updated_at"] = now()
@@ -120,7 +122,7 @@ class Run:
         self.save()
 
     def output(self, name: str) -> dict[str, Any]:
-        return dict(self.data["stages"][name].get("output") or {})
+        return dict((self.data["stages"].get(name) or {}).get("output") or {})
 
 
 class Journal:

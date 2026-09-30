@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from piceli.pipeline.journal import Run, write_private
-from piceli.pipeline.model import ALL_STAGES, STAGES
+from piceli.pipeline.model import STAGES, ordered_stages
 
 SCHEMA = "piceli.run-summary.v1"
 #: Changed field paths listed per object (the count is always complete).
@@ -181,14 +181,9 @@ def _checks(run: Run) -> dict[str, Any] | None:
     return value
 
 
-def _names(stages: Any) -> list[str]:
-    """The run's stages in order: the six always, ``prerollout`` when it ran."""
-    return [name for name in ALL_STAGES if name in STAGES or name in stages]
-
-
 def _failure(run: Run) -> dict[str, Any] | None:
     stages = run.data.get("stages") or {}
-    for name in _names(stages):
+    for name in ordered_stages([*STAGES, *stages]):
         stage = _dict(stages.get(name))
         if stage.get("state") not in _FAILED:
             continue
@@ -223,7 +218,7 @@ def build(run: Run, state_dir: Path) -> dict[str, Any]:
     stages_data = data.get("stages") or {}
     stages: dict[str, Any] = {}
     total = 0.0
-    for name in _names(stages_data):
+    for name in ordered_stages([*STAGES, *stages_data]):
         stage = _dict(stages_data.get(name))
         entry: dict[str, Any] = {"state": stage.get("state", "pending")}
         seconds = stage.get("seconds")
@@ -284,6 +279,21 @@ def build(run: Run, state_dir: Path) -> dict[str, Any]:
     }
     if isinstance(data.get("reason"), str):
         summary["reason"] = data["reason"]
+    backup = _dict(_dict(stages_data.get("backup")).get("output"))
+    if isinstance(backup.get("restore_point"), str):
+        # Added in 0.9.0 for pipelines with restore_points: the restore point
+        # the backup stage took (ids and digests, never claim content).
+        summary["restore_point"] = {
+            "id": backup["restore_point"],
+            "directory": backup.get("directory"),
+            "claims": [
+                {
+                    key: _dict(item).get(key)
+                    for key in ("claim", "workload", "bytes", "sha256")
+                }
+                for item in backup.get("claims") or ()
+            ],
+        }
     if data.get("approved_by") == "policy":
         # Executed under the owner's auto_approve policy, not a human hash.
         summary["approved_by"] = "policy"
@@ -468,6 +478,15 @@ def markdown(summary: Mapping[str, Any]) -> str:
         if rollback:
             lines.append(
                 f"- rollback to {_code(rollback.get('release'))}: {rollback.get('state')}"
+            )
+    point = _dict(summary.get("restore_point"))
+    if point:
+        lines += ["", "#### Restore point", "", f"{_code(point.get('id'))}", ""]
+        for item in point.get("claims") or ():
+            item = _dict(item)
+            lines.append(
+                f"- {_code(item.get('claim'))} ({_code(item.get('workload'))}): "
+                f"{_size(item.get('bytes'))}, {_code(_short('sha256:' + str(item.get('sha256'))))}"
             )
     lines += ["", "#### Stages", "", "| Stage | State | Time |", "| --- | --- | --- |"]
     for name, value in _dict(summary.get("stages")).items():

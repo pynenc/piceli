@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from piceli.pipeline.checks import CheckRunner
     from piceli.pipeline.model import Target
     from piceli.pipeline.prerollout_cluster import PreRolloutCluster
+    from piceli.restore.cluster import RestoreCluster
 
 GRANT_SECONDS = 3600.0
 
@@ -389,6 +390,20 @@ class Backend:
         finally:
             client.close()
         return NodeFacts.from_node(document)
+
+    def restore_cluster(
+        self, target: Target, say: Callable[[str], None] | None = None
+    ) -> RestoreCluster:
+        """The restore point operations for ``target``'s namespace
+        (:mod:`piceli.restore.cluster`); close it after use."""
+        from piceli.restore.cluster import RestoreCluster
+
+        return RestoreCluster(
+            self._api(target),
+            target.namespace,
+            say=say,
+            request_seconds=float(target.request_seconds),
+        )
 
     # ------------------------------------------------------------- node
     def _node_delivery(self, url: str, *, docker: bool = True) -> tuple[Any, Any]:

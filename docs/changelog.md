@@ -50,6 +50,23 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   `base-platform-unavailable`, `base-layer-unsupported`,
   `build-builder-mismatch`. The deploy plan's docker builds gain an additive
   `builder_kind: "docker"` field; hashes of existing plans do not change.
+- **Restore points of retained data:** `Pipeline(restore_points=RestorePoints())`
+  adds a `backup` stage before the release plan. When a release changes the
+  image or storage settings of a workload that writes a retained claim, the
+  plan lists every such claim (one per StatefulSet replica, existing claims)
+  with the reason and the writers to stop; the run runs the quiesce hooks
+  declared with `app.quiesce(workload, Quiesce.exec(...) | Quiesce.http(...))`,
+  scales the writers to zero, waits until no pod (terminating ones included)
+  mounts the claims writably, streams a gzip tarball of each claim from a
+  read-only helper Job to a private local directory and verifies it (SHA-256,
+  listing, content digest computed in the cluster). The result and the run
+  summary gain `restore_point`. `piceli restore-points` lists and verifies
+  them offline; `piceli restore --point ID` plans and, with
+  `--approve <restore_hash>`, puts one back. Pipelines without
+  `restore_points` are unchanged (no `backup` stage, same hashes); the deploy,
+  watch and summary schemas add the `backup` stage name (additive). New codes
+  `restore-point-*`, `restore-plan-changed`. Restore point archives never
+  enter a state snapshot. See `docs/restore_points.md`.
 
 ## Version 0.8.1
 

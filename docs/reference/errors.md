@@ -326,6 +326,25 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`resource-requires-adoption`](#error-resource-requires-adoption) | release | no |
 | [`resource-scope-mismatch`](#error-resource-scope-mismatch) | release | no |
 | [`response-byte-limit`](#error-response-byte-limit) | kubernetes | no |
+| [`restore-plan-changed`](#error-restore-plan-changed) | restore | no |
+| [`restore-point-archive-invalid`](#error-restore-point-archive-invalid) | restore | no |
+| [`restore-point-archive-missing`](#error-restore-point-archive-missing) | restore | no |
+| [`restore-point-checksum-mismatch`](#error-restore-point-checksum-mismatch) | restore | no |
+| [`restore-point-claim-missing`](#error-restore-point-claim-missing) | restore | no |
+| [`restore-point-claim-unknown`](#error-restore-point-claim-unknown) | restore | no |
+| [`restore-point-copy-failed`](#error-restore-point-copy-failed) | restore | yes |
+| [`restore-point-exists`](#error-restore-point-exists) | restore | yes |
+| [`restore-point-helper-failed`](#error-restore-point-helper-failed) | restore | yes |
+| [`restore-point-not-verified`](#error-restore-point-not-verified) | restore | no |
+| [`restore-point-plan-changed`](#error-restore-point-plan-changed) | restore | no |
+| [`restore-point-quiesce-failed`](#error-restore-point-quiesce-failed) | restore | yes |
+| [`restore-point-restart-failed`](#error-restore-point-restart-failed) | restore | yes |
+| [`restore-point-restore-failed`](#error-restore-point-restore-failed) | restore | yes |
+| [`restore-point-restore-mismatch`](#error-restore-point-restore-mismatch) | restore | yes |
+| [`restore-point-target-mismatch`](#error-restore-point-target-mismatch) | restore | no |
+| [`restore-point-unknown`](#error-restore-point-unknown) | restore | no |
+| [`restore-point-writer-unsupported`](#error-restore-point-writer-unsupported) | restore | no |
+| [`restore-point-writers-remain`](#error-restore-point-writers-remain) | restore | yes |
 | [`restore-refused`](#error-restore-refused) | observe | no |
 | [`resume-refused`](#error-resume-refused) | release | no |
 | [`retained-adoption-precondition-failed`](#error-retained-adoption-precondition-failed) | execution | no |
@@ -3662,3 +3681,158 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Remove `build.platform` (the node's platform is used) or build for the node the pipeline targets (`Build.spec(..., node=ALIAS)`).
 - **Retry-safe:** no
+
+
+## Restore points of retained data (`restore_points=`, `piceli restore-points`, `piceli restore`)
+
+(error-restore-plan-changed)=
+### `restore-plan-changed`
+
+**Restore plan changed.** `piceli restore --approve HASH` was given a hash that is not the restore plan's current hash (the record, the claims or the writers changed).
+
+- **Fix:** Run `piceli restore MODULE:ATTR --point ID` without `--approve`, review the plan and approve its hash.
+- **Retry-safe:** no
+
+(error-restore-point-archive-invalid)=
+### `restore-point-archive-invalid`
+
+**Archive is not valid.** A restore point archive could not be read as a gzip tarball, or holds an absolute or parent-relative path, a device or another special file.
+
+- **Fix:** Do not restore it. Take a new restore point; keep the archive for inspection.
+- **Retry-safe:** no
+
+(error-restore-point-archive-missing)=
+### `restore-point-archive-missing`
+
+**Archive is missing.** The record of a restore point names an archive file that is not in its directory.
+
+- **Fix:** Restore the file from your copy of the restore point directory, or use another restore point (`piceli restore-points`).
+- **Retry-safe:** no
+
+(error-restore-point-checksum-mismatch)=
+### `restore-point-checksum-mismatch`
+
+**Archive does not verify.** An archive's SHA-256 differs from its record, or its content digest differs from the digest computed from the claim in the cluster: the file changed or the copy is incomplete.
+
+- **Fix:** Do not restore it. Use another restore point, or restore the file from your copy.
+- **Retry-safe:** no
+
+(error-restore-point-claim-missing)=
+### `restore-point-claim-missing`
+
+**Claim does not exist.** A claim of the restore point does not exist in the target namespace, so there is nothing to restore into. Piceli never creates claims.
+
+- **Fix:** Create the claim (or run the release that creates it), then plan the restore again.
+- **Retry-safe:** no
+
+(error-restore-point-claim-unknown)=
+### `restore-point-claim-unknown`
+
+**Claim not in restore point.** `--claim` names a claim the restore point has no archive of.
+
+- **Fix:** List the restore point's claims with `piceli restore-points MODULE:ATTR --json` and pass one of them.
+- **Retry-safe:** no
+
+(error-restore-point-copy-failed)=
+### `restore-point-copy-failed`
+
+**Claim copy failed.** Streaming a claim's archive or content digest from the helper pod failed: the exec was refused or unavailable, the command exited non-zero, or it ran longer than `timeout_seconds`. The partial archive was removed and the writers were started again.
+
+- **Fix:** Check that the helper image has the tools listed in the docs and that the runner may use `pods/exec`; retry, or raise `timeout_seconds` for large claims.
+- **Retry-safe:** yes
+
+(error-restore-point-exists)=
+### `restore-point-exists`
+
+**Archive already exists.** An archive with the same restore point id and claim already exists. Restore points are never overwritten.
+
+- **Fix:** Run again: every run takes a new restore point id.
+- **Retry-safe:** yes
+
+(error-restore-point-helper-failed)=
+### `restore-point-helper-failed`
+
+**Helper pod did not run.** The helper Job that mounts a claim for the copy did not get a running pod in time (image not pullable, no node can mount the claim, or the pod ended), or no image was known for it. The writers were started again.
+
+- **Fix:** Check the Job's events (`kubectl describe job piceli-...`); declare `RestorePoints(image='...@sha256:...')` with an image that has `sh`, `tar`, `gzip`, `find`, `sort`, `sha256sum` and `head`.
+- **Retry-safe:** yes
+
+(error-restore-point-not-verified)=
+### `restore-point-not-verified`
+
+**Restore point not verified.** The restore point's record is not in state `verified` (its run failed or was interrupted before every archive was verified).
+
+- **Fix:** Use a verified restore point (`piceli restore-points`).
+- **Retry-safe:** no
+
+(error-restore-point-plan-changed)=
+### `restore-point-plan-changed`
+
+**Restore point differs from the plan.** At run time the release touches claims (or needs writers stopped) that the approved plan's backup stage did not show, for example after delivery. Nothing was stopped or copied.
+
+- **Fix:** Plan again (`piceli deploy MODULE:ATTR --plan`) and approve the new combined hash.
+- **Retry-safe:** no
+
+(error-restore-point-quiesce-failed)=
+### `restore-point-quiesce-failed`
+
+**Quiesce hook failed.** A quiesce hook (`app.quiesce`) did not succeed in a writer pod: the HTTP request answered another status or no answer, or the command exited non-zero or timed out. Its output is never shown. Writers already stopped were started again.
+
+- **Fix:** Check the hook against a running pod, fix it or the app, then run again (`piceli deploy --resume` continues the run).
+- **Retry-safe:** yes
+
+(error-restore-point-restart-failed)=
+### `restore-point-restart-failed`
+
+**Writer not started again.** A writer that was scaled to zero for a restore point or restore could not be scaled back. The other writers were started.
+
+- **Fix:** Scale it back by hand to the replica count the restore point record names (`kubectl scale`).
+- **Retry-safe:** yes
+
+(error-restore-point-restore-failed)=
+### `restore-point-restore-failed`
+
+**Restore failed.** Extracting an archive into a claim failed (the helper exited non-zero, the exec was unavailable or timed out). The claim may be partly restored; the writers were started again.
+
+- **Fix:** Fix the cause (image tools, `pods/exec` permission, `timeout_seconds`) and run the same restore again; it empties the claim first.
+- **Retry-safe:** yes
+
+(error-restore-point-restore-mismatch)=
+### `restore-point-restore-mismatch`
+
+**Restored claim does not verify.** After the extraction, the content digest computed from the claim in the cluster differs from the restore point's. The writers were started again.
+
+- **Fix:** Run the restore again; if it persists, look for another writer of the claim.
+- **Retry-safe:** yes
+
+(error-restore-point-target-mismatch)=
+### `restore-point-target-mismatch`
+
+**Restore point from another namespace.** The restore point was taken in another namespace than the pipeline's target.
+
+- **Fix:** Select the matching environment (`--env`) or pipeline.
+- **Retry-safe:** no
+
+(error-restore-point-unknown)=
+### `restore-point-unknown`
+
+**Unknown restore point.** No restore point with that id exists in the pipeline's restore point directory, or its record is unreadable.
+
+- **Fix:** List them with `piceli restore-points MODULE:ATTR` and pass one of the ids.
+- **Retry-safe:** no
+
+(error-restore-point-writer-unsupported)=
+### `restore-point-writer-unsupported`
+
+**Writer cannot be stopped.** A claim the release touches (or a restore touches) is mounted writably by a workload Piceli cannot stop for a consistent copy: a DaemonSet, Job or CronJob, or a workload the release does not declare. Nothing was stopped or copied.
+
+- **Fix:** Stop that workload yourself (or mount the claim read-only in it), then plan again.
+- **Retry-safe:** no
+
+(error-restore-point-writers-remain)=
+### `restore-point-writers-remain`
+
+**Writer pods still exist.** After the writers were scaled to zero, pods (running or terminating) still mounted a claim writably when the restore point's `timeout_seconds` passed. Nothing was copied; the writers were started again.
+
+- **Fix:** Find the pods named in the message (`kubectl get pods`), wait for or remove them, or raise `RestorePoints(timeout_seconds=...)`, then run again.
+- **Retry-safe:** yes

@@ -88,6 +88,8 @@
     "pre_rollout",
     "pre_rollouts",
     "probe",
+    "quiesce",
+    "quiesce_hooks",
     "release_selector",
     "render",
     "resource",
@@ -324,6 +326,10 @@
      "upgrade",
      "workload"
     ],
+    "quiesce": [
+     "workload"
+    ],
+    "quiesce_hooks": [],
     "render": [
      "namespace",
      "nodes"
@@ -2801,6 +2807,8 @@
     "handles",
     "name",
     "needs_environment",
+    "restore_point_directory",
+    "stages",
     "target"
    ],
    "init": [
@@ -2817,6 +2825,7 @@
     "inherited_owners",
     "owner",
     "replace",
+    "restore_points",
     "rollback_on_failed_checks",
     "secrets",
     "state",
@@ -3043,6 +3052,51 @@
     ]
    },
    "pydantic": true
+  },
+  "Quiesce": {
+   "attrs": [
+    "action",
+    "command",
+    "container",
+    "describe",
+    "exec",
+    "expect",
+    "http",
+    "method",
+    "path",
+    "port",
+    "timeout_seconds"
+   ],
+   "init": [
+    "action",
+    "command",
+    "container",
+    "expect",
+    "method",
+    "path",
+    "port",
+    "timeout_seconds"
+   ],
+   "methods": {
+    "describe": [],
+    "exec": [
+     "command",
+     "container",
+     "timeout_seconds"
+    ],
+    "http": [
+     "expect",
+     "method",
+     "path",
+     "port",
+     "timeout_seconds"
+    ]
+   },
+   "pydantic": true,
+   "returns": {
+    "exec": "Quiesce",
+    "http": "Quiesce"
+   }
   },
   "RandomSecretSpec": {
    "attrs": [
@@ -3660,6 +3714,32 @@
    "methods": {
     "delay": [
      "attempt"
+    ]
+   },
+   "pydantic": true
+  },
+  "RestorePoints": {
+   "attrs": [
+    "describe",
+    "directory",
+    "image",
+    "include",
+    "resolve_directory",
+    "run_as_user",
+    "timeout_seconds"
+   ],
+   "init": [
+    "directory",
+    "image",
+    "include",
+    "run_as_user",
+    "timeout_seconds"
+   ],
+   "methods": {
+    "describe": [],
+    "resolve_directory": [
+     "base",
+     "state_dir"
     ]
    },
    "pydantic": true
@@ -4529,6 +4609,8 @@
      "publish",
      "release",
      "render",
+     "restore",
+     "restore-points",
      "runs",
      "state",
      "status",
@@ -5283,6 +5365,31 @@
     ],
     "subcommands": []
    },
+   "restore": {
+    "arguments": [
+     "target"
+    ],
+    "flags": [
+     "--approve",
+     "--claim",
+     "--env",
+     "--image",
+     "--json",
+     "--point"
+    ],
+    "subcommands": []
+   },
+   "restore-points": {
+    "arguments": [
+     "target"
+    ],
+    "flags": [
+     "--env",
+     "--json",
+     "--verify"
+    ],
+    "subcommands": []
+   },
    "runs": {
     "arguments": [
      "target"
@@ -5679,6 +5786,25 @@
    "resource-requires-adoption",
    "resource-scope-mismatch",
    "response-byte-limit",
+   "restore-plan-changed",
+   "restore-point-archive-invalid",
+   "restore-point-archive-missing",
+   "restore-point-checksum-mismatch",
+   "restore-point-claim-missing",
+   "restore-point-claim-unknown",
+   "restore-point-copy-failed",
+   "restore-point-exists",
+   "restore-point-helper-failed",
+   "restore-point-not-verified",
+   "restore-point-plan-changed",
+   "restore-point-quiesce-failed",
+   "restore-point-restart-failed",
+   "restore-point-restore-failed",
+   "restore-point-restore-mismatch",
+   "restore-point-target-mismatch",
+   "restore-point-unknown",
+   "restore-point-writer-unsupported",
+   "restore-point-writers-remain",
    "restore-refused",
    "resume-refused",
    "retained-adoption-precondition-failed",
@@ -5888,6 +6014,9 @@
    "Probe": {
     "class": "Probe"
    },
+   "Quiesce": {
+    "class": "Quiesce"
+   },
    "Random": {
     "params": [
      "bytes",
@@ -5903,6 +6032,9 @@
    },
    "Resources": {
     "class": "Resources"
+   },
+   "RestorePoints": {
+    "class": "RestorePoints"
    },
    "Route": {
     "class": "Route"
@@ -6019,6 +6151,7 @@
    "maintenance": {},
    "pipeline": {},
    "process_group": {},
+   "restore": {},
    "state": {},
    "telemetry": {},
    "tempfiles": {},
@@ -6695,6 +6828,7 @@
   "piceli.k8s.cli.publish",
   "piceli.k8s.cli.release",
   "piceli.k8s.cli.render",
+  "piceli.k8s.cli.restore",
   "piceli.k8s.cli.state",
   "piceli.k8s.cli.watch",
   "piceli.k8s.config",
@@ -6787,6 +6921,12 @@
   "piceli.pipeline.summary",
   "piceli.process_group",
   "piceli.reference_docs",
+  "piceli.restore",
+  "piceli.restore.cluster",
+  "piceli.restore.model",
+  "piceli.restore.plan",
+  "piceli.restore.runner",
+  "piceli.restore.store",
   "piceli.settings",
   "piceli.state",
   "piceli.state.archive",

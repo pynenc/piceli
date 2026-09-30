@@ -1,4 +1,4 @@
-"""One journaled, resumable ``piceli deploy`` run: inputs → build → deliver → plan → apply → checks.
+"""One journaled, resumable ``piceli deploy`` run: inputs → build → deliver → [backup →] plan → apply → checks.
 
 Planning (:meth:`PipelineRunner.plan`) computes every stage's plan without
 changing anything outside the state directory and binds them into one
@@ -20,6 +20,13 @@ is unchanged:
     the node (config digest behind the content tag) already has it. Images
     are handed to the release by the delivery receipt's immutable reference,
     never by tag.
+``backup`` (only with ``Pipeline(restore_points=...)``)
+    Plans which retained claims the release touches (workloads whose image or
+    storage settings change, one claim per StatefulSet replica) and, when
+    executed, takes a verified restore point of them (:mod:`piceli.restore`):
+    quiesce hooks, writers stopped and gone, archives read back. The release
+    plan is then made from the stopped state and the apply starts the
+    writers; a run that ends before its apply starts them again.
 ``plan``
     A release plan through :class:`~piceli.k8s.release_runner.ReleaseRunner`
     against live discovery. Before the images are delivered, planning adds a
@@ -76,7 +83,7 @@ from piceli.pipeline.model import (
     NodeLoopbackRegistry,
     Pipeline,
     Registry,
-    stages_for,
+    ordered_stages,
 )
 from piceli.pipeline.operate import (
     delivery_path,
@@ -106,6 +113,8 @@ if TYPE_CHECKING:
     from piceli.pipeline.registry_takeover import Takeover
 
 PLAN_SCHEMA = "piceli.deploy-plan.v1"
+#: A stage after ``backup`` that starts the writers it stopped.
+STAGE_AFTER_BACKUP = "apply"
 EVENT_SCHEMA = "piceli.deploy-event.v1"
 EventSink = Callable[[dict[str, Any]], None]
 
@@ -166,6 +175,7 @@ class _Work:
     takeover: Takeover | None = None
     platforms: tuple[str, ...] | None = None
     mirrors: dict[str, dict[str, Any]] = field(default_factory=dict)
+    restore_plan: Any = None
 
 
 @dataclass
@@ -400,8 +410,8 @@ class PipelineRunner:
         refs: Sequence[RefRequest] = (),
     ) -> None:
         self.pipeline = pipeline
-        #: The stages of this pipeline's runs (``prerollout`` only when declared).
-        self.stages = stages_for(pipeline.app)
+        #: The stages of this pipeline's runs (``backup``/``prerollout`` only when declared).
+        self.stages = pipeline.stages
         self.refs = tuple(refs)
         self.checkouts: SourceCheckouts | None = None
         self.backend = backend or Backend()
@@ -437,6 +447,13 @@ class PipelineRunner:
             **(
                 {"approval_policy": pipeline.auto_approve.identity()}
                 if pipeline.auto_approve is not None
+                else {}
+            ),
+            # Added in 0.9.0 only when declared, so other plans keep their
+            # hashes: the restore point settings.
+            **(
+                {"restore_points": pipeline.restore_points.describe()}
+                if pipeline.restore_points is not None
                 else {}
             ),
         }
@@ -1069,6 +1086,87 @@ class PipelineRunner:
             return False
         return True
 
+    # ------------------------------------------------ restore points (backup)
+    def _desired_workloads(self, work: _Work) -> list[dict[str, Any]]:
+        """The workloads as the release will apply them.
+
+        Build images not delivered yet stay placeholders (a change); mirrored
+        images use their mirror reference, as the release does.
+        """
+        from piceli.pipeline.compose import (
+            mirror_references,
+            preview_context,
+            render_app,
+            resolve,
+        )
+
+        delivered = all(name in work.delivered for name in work.used)
+        composition = resolve(
+            render_app(self.pipeline, preview_context(self.pipeline)),
+            images=self._release_images(work) if delivered else None,
+            secrets={},
+            pin_node=None,
+            mirrors=mirror_references(self.pipeline),
+        )
+        return [
+            json.loads(json.dumps(dict(resource.manifest)))
+            for component in composition.components
+            for resource in component.resources
+        ]
+
+    def _restore_plan(self, work: _Work) -> tuple[Any, list[dict[str, Any]]]:
+        """The restore point this release needs, against live state (read-only)."""
+        from piceli.pipeline.model import handle_image
+        from piceli.restore.model import RestorePointError
+        from piceli.restore.plan import plan
+
+        desired = self._desired_workloads(work)
+        cluster = self.backend.restore_cluster(self.pipeline.target)
+        try:
+            live, claims = cluster.workloads(), cluster.claims()
+        finally:
+            cluster.close()
+        try:
+            result = plan(
+                desired,
+                live,
+                claims,
+                pending=lambda image: handle_image(image) is not None,
+                hooks=self.pipeline.app.quiesce_hooks(),
+                include=self.pipeline.restore_points.include
+                if self.pipeline.restore_points is not None
+                else "touched",
+            )
+        except RestorePointError as error:
+            raise PipelineError(error.code, str(error)) from None
+        return result, desired
+
+    def _plan_backup(
+        self, work: _Work, _reapply: bool
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        settings = self.pipeline.restore_points
+        assert settings is not None
+        result, _desired = self._restore_plan(work)
+        work.restore_plan = result
+        stage = {
+            "action": "backup" if result.claims else "skip",
+            "directory": self._shown(self.pipeline.restore_point_directory),
+            "claims": result.claims,
+            "writers": [
+                {
+                    key: item[key]
+                    for key in ("workload", "replicas", "claims", "quiesce")
+                }
+                for item in result.writers
+            ],
+            **(
+                {"why": "the release changes no workload that writes a retained claim"}
+                if not result.claims
+                else {}
+            ),
+        }
+        return stage, {"settings": settings.describe(), "restore": result.identity()}
+
     def _plan_plan(
         self, work: _Work, reapply: bool
     ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -1450,8 +1548,9 @@ class PipelineRunner:
     ) -> dict[str, Any]:
         assert self.run is not None
         run = self.run
-        limit = self.stages.index(until)
-        for name in self.stages[: limit + 1]:
+        names = ordered_stages(run.data.get("stages") or {})
+        limit = names.index(until)
+        for name in names[: limit + 1]:
             if run.stage(name).get("state") in {"done", "skipped"}:
                 continue
             started = time.monotonic()
@@ -1492,7 +1591,7 @@ class PipelineRunner:
                 seconds=round(time.monotonic() - started, 3),
             )
             self._emit(name, state, output)
-        final = "ready" if limit == len(self.stages) - 1 else "stopped"
+        final = "ready" if limit == len(names) - 1 else "stopped"
         run.set_state(final)
         self._finish()
         return self.result(final)
@@ -1503,6 +1602,7 @@ class PipelineRunner:
         assert self.run is not None
         from piceli.pipeline import summary
 
+        self._start_stopped_writers()
         try:
             summary.write(self.run, self.pipeline.state_dir)
         except Exception as error:  # a summary never changes the outcome
@@ -1551,7 +1651,10 @@ class PipelineRunner:
     def result(self, state: str) -> dict[str, Any]:
         assert self.run is not None
         run = self.run
-        stages = {name: run.stage(name).get("state") for name in self.stages}
+        stages = {
+            name: run.stage(name).get("state")
+            for name in ordered_stages(run.data.get("stages") or {})
+        }
         plan = run.output("plan")
         apply = run.output("apply")
         from piceli.pipeline.summary import summary_paths
@@ -1576,6 +1679,9 @@ class PipelineRunner:
             body["summary"] = {"json": str(json_path), "markdown": str(markdown_path)}
         if self.cache is not None:
             body["cache"] = self.cache
+        point = run.output("backup").get("restore_point")
+        if isinstance(point, str):
+            body["restore_point"] = point
         return body
 
     # -------------------------------------------------------- stage: inputs
@@ -1869,6 +1975,137 @@ class PipelineRunner:
                 )
             raise PipelineError(reason, message, failed=failed, details=details)
         return str(receipt.get("result") or "delivered")
+
+    # -------------------------------------------------------- stage: backup
+    def _run_backup(
+        self, _reapply: bool, _resuming: bool
+    ) -> tuple[str, dict[str, Any]]:
+        """Take the restore point the approved plan showed (see ``restore_points``).
+
+        The claims and writers are planned again against live state with the
+        delivered images; they may be fewer than approved (an image turned
+        out unchanged) but never more (``restore-point-plan-changed``).
+        """
+        from piceli.restore.model import RestorePointError
+        from piceli.restore.runner import take
+
+        work = self._work
+        settings = self.pipeline.restore_points
+        assert work is not None and self.run is not None and settings is not None
+        approved = (
+            self.run.data["plan"]["hashed"].get("backup", {}).get("restore") or {}
+        )
+        result, desired = self._restore_plan(work)
+        allowed_claims = {item["claim"] for item in approved.get("claims", ())}
+        allowed_writers = {item["workload"] for item in approved.get("writers", ())}
+        extra = sorted(
+            {item["claim"] for item in result.claims} - allowed_claims
+        ) + sorted({item["workload"] for item in result.writers} - allowed_writers)
+        if extra:
+            raise PipelineError(
+                "restore-point-plan-changed",
+                "the release now touches " + ", ".join(extra) + ", which the "
+                "approved plan's backup stage did not show; plan again",
+            )
+        if not result.claims:
+            self.say("[backup] no workload that writes a retained claim changes")
+            return "skipped", {
+                "why": "the release changes no workload that writes a retained claim"
+            }
+        declared = {
+            f"{item.get('kind')}/{(item.get('metadata') or {}).get('name')}"
+            for item in desired
+            if (item.get("spec") or {}).get("replicas") is not None
+        }
+        # The release starts writers whose replicas it declares; the others
+        # (autoscaled) start right after the copy, and all of them when the
+        # run stops here.
+        keep = (
+            declared
+            if STAGE_AFTER_BACKUP in self.run.data.get("stages", {})
+            and self.run.data.get("until") != "backup"
+            else set()
+        )
+        cluster = self.backend.restore_cluster(
+            self.pipeline.target, say=self._progress("[backup] ")
+        )
+        try:
+            record = take(
+                cluster,
+                result,
+                settings,
+                self.pipeline.restore_point_directory,
+                context={
+                    "app": self.pipeline.app.name,
+                    "namespace": self.pipeline.target.namespace,
+                    "target": self.pipeline.target.identity(),
+                    "run_id": self.run.run_id,
+                    "combined_hash": self.run.data.get("combined_hash"),
+                },
+                keep_stopped=keep,
+                say=self._progress("[backup] "),
+            )
+        except RestorePointError as error:
+            raise PipelineError(error.code, str(error), failed=True) from None
+        finally:
+            cluster.close()
+        # Writers changed: the release plan is made again from live state.
+        work.runner, work.release_plan = None, None
+        self.say(
+            f"[backup] restore point {record['id']}: "
+            f"{len(record['claims'])} claim(s) verified"
+        )
+        return "done", {
+            "restore_point": record["id"],
+            "directory": self._shown(self.pipeline.restore_point_directory),
+            "claims": [
+                {
+                    key: item[key]
+                    for key in (
+                        "claim",
+                        "workload",
+                        "bytes",
+                        "sha256",
+                        "content_sha256",
+                    )
+                }
+                for item in record["claims"]
+            ],
+            "stopped": record["writers"],
+            "left_stopped": record.get("left_stopped", []),
+        }
+
+    def _start_stopped_writers(self) -> None:
+        """Start writers the backup stage left stopped when no apply started them.
+
+        Only writers still at zero replicas are scaled back (to their count
+        before the restore point); never fails the run.
+        """
+        if self.run is None or self.pipeline.restore_points is None:
+            return
+        output = self.run.output("backup")
+        left = set(output.get("left_stopped") or ())
+        if not left or self.run.stage("apply").get("state") in {"done"}:
+            return
+        from piceli.restore.runner import _Writers
+
+        try:
+            cluster = self.backend.restore_cluster(self.pipeline.target)
+            try:
+                writers = _Writers(cluster, self._progress("[backup] "))
+                writers.stopped = [
+                    item
+                    for item in output.get("stopped") or ()
+                    if item["workload"] in left
+                ]
+                writers.start()
+            finally:
+                cluster.close()
+        except Exception as error:  # never changes the run's outcome
+            self.say(
+                "[backup] writers left stopped could not be started again "
+                f"({type(error).__name__}); scale them back: " + ", ".join(sorted(left))
+            )
 
     # ---------------------------------------------------------- stage: plan
     def _run_plan(self, _reapply: bool, resuming: bool) -> tuple[str, dict[str, Any]]:

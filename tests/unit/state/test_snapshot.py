@@ -62,6 +62,16 @@ def test_members_leave_local_files_out(tmp_path: Path) -> None:
     assert not private(PurePosixPath("runs/one.json"))
 
 
+def test_restore_point_archives_never_leave_the_runner(tmp_path: Path) -> None:
+    state = _state(tmp_path)
+    point = state / "restore-points" / "rp-20260101t000000z-abcdef"
+    point.mkdir(parents=True)
+    (point / "00-data.tar.gz").write_bytes(b"claim data")
+    (point / "record.json").write_text("{}")
+    assert excluded(PurePosixPath("restore-points/rp-x/00-data.tar.gz"))
+    assert not any("restore-points" in str(item) for item in members(state))
+
+
 def test_pack_is_deterministic_and_unpack_replaces(tmp_path: Path) -> None:
     state = _state(tmp_path)
     first, names = pack(state)

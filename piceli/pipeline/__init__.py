@@ -8,7 +8,7 @@ optional :class:`Build` objects whose images the app uses as
 :class:`NodeImport` or :class:`Registry`), secret generators
 (:class:`Secrets`), post-deploy checks and the owner's
 :class:`ApprovalPolicy` (``auto_approve=``). ``piceli deploy`` runs
-``inputs → build → deliver → plan → apply → checks`` as one journaled,
+``inputs → build → deliver → [backup →] plan → apply → checks`` as one journaled,
 resumable run in which every stage is skipped when its content is unchanged.
 See ``docs/deploy.md``.
 
