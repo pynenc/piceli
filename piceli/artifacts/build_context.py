@@ -385,14 +385,35 @@ class ContextSelection:
         return ContextManifest(tuple(files), pruned, private, symlinks)
 
 
+# Staged content times fall in a window that ends before 2038 (32-bit safe)
+# and starts after any build a cache can hold today, so a staged file is
+# always newer than the output a cached build left for an older version of it.
+CONTENT_TIME_END = 2**31
+CONTENT_TIME_SPAN = 2**26  # about 2.1 years: window opens in 2035
+
+
+def content_time(sha256: str) -> int:
+    """Deterministic modification time for a file with this ``sha256:`` digest."""
+    return (
+        CONTENT_TIME_END
+        - CONTENT_TIME_SPAN
+        + int(sha256.split(":")[-1][:16], 16) % CONTENT_TIME_SPAN
+    )
+
+
 def stage_context(
     root: Path,
     manifest: ContextManifest,
     destination: Path,
     *,
     mtime: int = 0,
+    content_mtime: bool = False,
 ) -> ContextManifest:
     """Copy exactly the manifest's files into a new ``destination`` directory.
+
+    Directories get ``mtime``. Files get ``mtime`` too, unless
+    ``content_mtime`` is set: then each file's time is ``content_time`` of its
+    hash, so an edit of any size changes it.
 
     Each file is re-hashed while copied; any difference from ``manifest``
     (content, size, type or a new symlink) raises ``context-changed``.
@@ -424,7 +445,8 @@ def stage_context(
                 "context-changed", "context file changed while staging"
             )
         os.chmod(target, 0o755 if item.executable else 0o644)
-        os.utime(target, (mtime, mtime))
+        stamp = content_time(item.sha256) if content_mtime else mtime
+        os.utime(target, (stamp, stamp))
     for directory in sorted(directories, key=lambda path: len(path.parts)):
         if directory == destination or destination in directory.parents:
             os.utime(directory, (mtime, mtime))

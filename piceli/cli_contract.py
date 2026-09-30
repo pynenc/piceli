@@ -879,6 +879,18 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "(runner-disk-low, runner-memory-low, runner-tool-missing); the "
             "need is estimated from the last build receipts.",
         ),
+        "watch": _C(
+            "Follow a deploy run from its journal: stage changes, progress "
+            "lines, then the outcome (JSON lines with --json).",
+            reads=("pipeline module or --state-dir", "state_dir"),
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            notes="Read-only and offline (never the cluster); stdout is JSON "
+            "lines piceli.watch-event.v1: snapshot, stage/run/progress, result. "
+            "With shared state it reads the local working copy (piceli state "
+            "pull first). --once prints the current state; --timeout ends with "
+            "watch-timeout (exit 1) and leaves the run alone.",
+        ),
         "runs": _C(
             "List a pipeline's deploy runs with state, release, duration and "
             "summary files.",

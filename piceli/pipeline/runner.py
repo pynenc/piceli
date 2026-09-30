@@ -471,7 +471,10 @@ class PipelineRunner:
 
         def progress(text: str) -> None:
             self.say(f"{prefix}{text}")
-            self._checkpoint()
+            if self.run is not None:
+                self.run.note(prefix.split("]")[0].lstrip("["), text)
+            else:
+                self._checkpoint()
 
         return progress
 

@@ -40,6 +40,7 @@ from piceli.k8s.access import (
     AccessTarget,
     AccessTargetError,
     KubernetesWorkloadReader,
+    LivePodResolver,
     access_ui_config,
     collect_status,
     holder_check,
@@ -259,7 +260,28 @@ def _dashboard_shortcut(port: int) -> Any:
 
 
 def _status_key(item: dict[str, Any]) -> tuple[Any, ...]:
-    return (item["state"], item["health"], item["restarts"], item["error"])
+    return (
+        item["state"],
+        item["health"],
+        item["restarts"],
+        item["error"],
+        item.get("pod"),
+    )
+
+
+def _live_reader(resolved: AccessTarget) -> Any:
+    """The read-only reader that resolves each forward's live pod (``None``
+    when the kubeconfig cannot be used: kubectl's own choice stays)."""
+    try:
+        return _workload_reader(
+            kubeconfig=resolved.kubeconfig,
+            context=resolved.context,
+            transport=resolved.transport,
+            timeout=5.0,
+            exec_policy=resolved.exec_policy,
+        )
+    except Exception:
+        return None
 
 
 def _serve_dashboard(
@@ -390,12 +412,14 @@ def access(
             )
     skipped = {item.id for item in conflicts}
     start = [item for item in selected if item.id not in skipped]
+    reader = _live_reader(resolved)
     supervisor = ForwardSupervisor(
         kubeconfig=resolved.kubeconfig,
         context=resolved.context,
         kubectl=executable,
         shortcuts=selected,
         namespace=resolved.namespace,
+        owner_resolver=LivePodResolver(reader) if reader is not None else None,
     )
     server = None
     failed = False
@@ -465,6 +489,9 @@ def access(
             server.shutdown()
             server.server_close()
         supervisor.close()
+        close = getattr(reader, "close", None)
+        if callable(close):
+            close()
         if failed:
             say("piceli: every forward gave up (access-forwards-failed)")
             stopped = {

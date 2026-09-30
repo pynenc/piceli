@@ -79,6 +79,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli state pull`](#cli-state-pull) | Refresh the local working copy from the shared state (reads the cluster). | reads | no |
 | [`piceli state show`](#cli-state-show) | Show where the state lives, its generation and who holds the release lock. | reads | no |
 | [`piceli status`](#cli-status) | Say whether the app is up and how to reach it. Read-only. | reads | no |
+| [`piceli watch`](#cli-watch) | Follow a deploy run until it settles: every stage change and progress line, then the outcome. Read-only; reads the local run journal (with shared state run `piceli state pull` first), never the cluster. | none | no |
 
 (cli-access)=
 ### `piceli access`
@@ -1485,3 +1486,30 @@ Say whether the app is up and how to reach it. Read-only.
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** Read-only. Exit 0 when every workload is ready, 1 otherwise (including an unreadable cluster). Probes forwards on 127.0.0.1 only. JSON schema: docs/schemas/piceli-status-v1.schema.json.
+
+(cli-watch)=
+### `piceli watch`
+
+Follow a deploy run until it settles: every stage change and progress line, then the outcome. Read-only; reads the local run journal (with shared state run `piceli state pull` first), never the cluster.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `TARGET` | text |  |  |
+| `--env` | text |  | Only this environment's state (default: every environment) |
+| `--state-dir` | path |  | A pipeline state directory, instead of a pipeline (default: ./.piceli-deploy) |
+| `--run` | text |  | Watch this run id (default: the newest run) |
+| `--once` | boolean | `False` | Print the run's current state and exit |
+| `--interval` | float | `0.5` | Journal poll seconds |
+| `--timeout` | float |  | Stop watching after this many seconds (watch-timeout, exit 1) |
+| `--json` | boolean | `False` | Print JSON lines: snapshot, changes, then the result |
+
+**Contract**
+
+- **Reads:** pipeline module or --state-dir, state_dir
+- **Writes:** nothing (read-only)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Read-only and offline (never the cluster); stdout is JSON lines piceli.watch-event.v1: snapshot, stage/run/progress, result. With shared state it reads the local working copy (piceli state pull first). --once prints the current state; --timeout ends with watch-timeout (exit 1) and leaves the run alone.

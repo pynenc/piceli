@@ -33,6 +33,8 @@ from piceli.pipeline.model import STAGES
 RUN_SCHEMA = "piceli.deploy-run.v1"
 #: Run states that ended; any other state can be resumed.
 FINISHED = frozenset({"ready", "rolled-back", "stopped"})
+#: Progress lines kept in a run's journal (the newest).
+MAX_PROGRESS = 200
 
 
 def now() -> str:
@@ -89,6 +91,11 @@ class Run:
 
     def set_stage(self, name: str, **values: Any) -> dict[str, Any]:
         entry = self.data["stages"][name]
+        if values.get("state") in {"pending", "running", "done", "skipped"}:
+            # A retry (``--resume``) reports its own outcome, not the earlier one.
+            for stale in ("reason", "message", "finished_at"):
+                if stale not in values:
+                    entry.pop(stale, None)
         entry.update(values)
         if values.get("state") == "running":
             entry["started_at"] = now()
@@ -97,8 +104,18 @@ class Run:
         self.save()
         return dict(entry)
 
+    def note(self, stage: str, line: str) -> None:
+        """Record one progress line (kept: the last ``MAX_PROGRESS``) for ``watch``."""
+        lines = self.data.setdefault("progress", [])
+        number = int(lines[-1]["n"]) + 1 if lines else 1
+        lines.append({"n": number, "at": now(), "stage": stage, "line": line})
+        del lines[:-MAX_PROGRESS]
+        self.save()
+
     def set_state(self, state: str, **values: Any) -> None:
         self.data["state"] = state
+        if state in {"running", "ready", "stopped"} and "reason" not in values:
+            self.data.pop("reason", None)
         self.data.update(values)
         self.save()
 
