@@ -6,6 +6,20 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ## Version 0.10.0 (unreleased)
 
+- **Helm chart and manifests for other people's clusters (preview):**
+  `piceli chart render|package|manifests|publish` renders the same `App`
+  (or `Pipeline`) as a Helm chart whose templates, with the default values,
+  render the objects `piceli render` prints (plus the `helm.sh/chart` and
+  `app.kubernetes.io/managed-by` labels), a byte-identical chart archive, an
+  OCI chart in the `helm push` layout (approval by digest), or plain
+  manifests with a values file applied and validated by Piceli. Values cover
+  images (repository, tag, digest), `imagePullSecrets`, replicas,
+  resources, node selectors, storage classes and sizes, existing claims,
+  Ingress and HTTPRoute hosts, ConfigMap keys and Secret names;
+  `values.schema.json` documents and validates them. Secrets are never
+  rendered: the chart references existing Secrets by name. An unbuilt
+  pipeline image is a required value. New error codes `chart-*`. See
+  {doc}`helm_charts`.
 - **`piceli release` refuses an App with pre-rollout checks:** only
   `piceli deploy` runs `App.pre_rollout` checks, so `piceli release plan` now
   refuses a composition that returns such an App

@@ -57,6 +57,8 @@ AREAS: Mapping[str, str] = MappingProxyType(
         # --- 0.9.0 ---
         "host-build": 'Builds without a container VM (`Build.spec(builder="host")`) and target node facts',
         "restore": "Restore points of retained data (`restore_points=`, `piceli restore-points`, `piceli restore`)",
+        # --- 0.10.0 ---
+        "chart": "Helm charts and manifests with values (`piceli chart …`)",
     }
 )
 
@@ -3243,6 +3245,70 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "Check the registry, the repository and `--credentials`, then run the same command again; pushes are content-addressed.",
         True,
         "gitops",
+    ),
+    _E(
+        "chart-invalid",
+        "Invalid chart",
+        "The chart name or version is invalid (a name is lowercase letters, digits and `-`, starting with a letter; a version is SemVer 2), no name could be derived from the render, or a mapping key holds `{{`.",
+        "Pass `--name my-app` and `--version 1.2.3`; `piceli render` shows the objects.",
+        False,
+        "chart",
+    ),
+    _E(
+        "chart-secret-value",
+        "Secret value outside a Secret",
+        "An object other than a Secret holds a value Piceli redacts or injects at apply time; a chart never carries secret values.",
+        "Move the value into a Secret (the chart references it by name) or, if it is not secret, list the field in the `piceli.io/public-fields` annotation.",
+        False,
+        "chart",
+    ),
+    _E(
+        "chart-empty",
+        "Nothing to chart",
+        "The render has no object left for a chart (Secrets are never part of it).",
+        "Check the target and `--env`; `piceli render` shows what it renders.",
+        False,
+        "chart",
+    ),
+    _E(
+        "chart-values-invalid",
+        "Values do not match the chart",
+        "A values file is not a YAML mapping, or the merged values break the chart's schema (a missing required image, an unknown key, a wrong type or format). The message names the path and the rule, never the value.",
+        "Fix the values file; `values.schema.json` of `piceli chart render` documents every key.",
+        False,
+        "chart",
+    ),
+    _E(
+        "chart-out-refused",
+        "Chart output refused",
+        "`--out` is missing, holds files `piceli chart render` did not write, or an archive of the same name and version with other content exists.",
+        "Pass a new or empty directory, or the directory of a previous chart render (it holds `.piceli-chart`); bump `--version` for changed content.",
+        False,
+        "chart",
+    ),
+    _E(
+        "chart-target-invalid",
+        "Invalid chart publish target",
+        "`--to` is missing, not `oci://host[:port]/path`, or names a tag (the chart is pushed as `path/<name>:<version>`).",
+        "Pass `--to oci://registry.example/team/charts` (plain HTTP only for a loopback registry).",
+        False,
+        "chart",
+    ),
+    _E(
+        "chart-artifact-changed",
+        "Chart changed since approval",
+        "`--approve` does not match the digest of this chart: the model, the options or the version changed.",
+        "Run `piceli chart publish` without `--approve`, review the new digest and approve it.",
+        False,
+        "chart",
+    ),
+    _E(
+        "chart-push-failed",
+        "Chart push failed",
+        "The registry refused or broke off the push. The detail is withheld because it could contain server messages.",
+        "Check the registry, the path and `--credentials`, then run the same command again; pushes are content-addressed.",
+        True,
+        "chart",
     ),
     _E(
         "render-out-refused",
