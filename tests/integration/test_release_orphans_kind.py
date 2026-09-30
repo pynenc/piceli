@@ -17,7 +17,8 @@ owner, other names, the same ownership labels):
 * ``orphans`` lists ``b``'s objects and the earlier environment's;
 * ``--prune`` needs the approved hash, then removes exactly the approved
   objects; the claims (``b``'s claim and the StatefulSet's own) survive;
-* ``--include-claims`` removes the app's claim, and the StatefulSet's own
+* ``--include-claims`` removes the app's claim, waiting while the pruned
+  registry's pod (slow to stop) still mounts it, and the StatefulSet's own
   claim (created by its controller, without Piceli's owner annotation) still
   survives.
 """
@@ -56,6 +57,9 @@ from piceli.k8s.ops.plan import DeploymentComponent, DeploymentComposition, Reso
 
 PREFIX = "{prefix}"
 WITH_B = {with_b}
+# The registry's pod takes this long to stop, so it still mounts the claim
+# when the claim is pruned (pvc-protection keeps the claim until it is gone).
+REGISTRY_STOP_SECONDS = 20
 LABELS = {{"app.kubernetes.io/part-of": "orphan-shop"}}
 
 
@@ -63,10 +67,14 @@ def build(ctx):
     def meta(name):
         return {{"name": PREFIX + name, "namespace": ctx.namespace, "labels": LABELS}}
 
-    def container(name, mounts=()):
-        return {{"name": name, "image": ctx.image("web"),
+    def container(name, mounts=(), stop_seconds=0):
+        spec = {{"name": name, "image": ctx.image("web"),
                 "resources": {{"requests": {{"cpu": "0.02", "memory": "16Mi"}}}},
                 "volumeMounts": list(mounts)}}
+        if stop_seconds:
+            spec["lifecycle"] = {{"preStop": {{"exec": {{
+                "command": ["sleep", str(stop_seconds)]}}}}}}
+        return spec
 
     def pods(name, containers, volumes=()):
         labels = {{"app": PREFIX + name}}
@@ -95,7 +103,8 @@ def build(ctx):
              "spec": {{"replicas": 1, "selector": selector("b-registry"),
                       "template": pods(
                           "b-registry",
-                          [container("registry", [{{"name": "data", "mountPath": "/data"}}])],
+                          [container("registry", [{{"name": "data", "mountPath": "/data"}}],
+                                     stop_seconds=REGISTRY_STOP_SECONDS)],
                           [{{"name": "data", "persistentVolumeClaim":
                             {{"claimName": PREFIX + "b-data"}}}}])}}}})
         backup = ResourceIntent.from_manifest(
@@ -265,6 +274,13 @@ def test_orphans_list_and_prune_leftovers(tmp_path, namespace):
         current, "orphans", "--prune", "--approve", pending["plan_hash"], *flags
     )
     assert code == 0, (done, err)
+    # The claim stays terminating while the pruned registry's pod still mounts
+    # it (pvc-protection): the prune waits and reports it once it is gone.
+    assert {(i["kind"], i["name"], i["outcome"]) for i in done["deleted"]} == {
+        ("PersistentVolumeClaim", "b-data", "deleted"),
+        ("ConfigMap", "old-a-config", "deleted"),
+        ("Deployment", "old-web", "deleted"),
+    }
     # The StatefulSet's own claim carries no Piceli annotation: never touched.
     assert _live(namespace) == {
         "ConfigMap/a-config",

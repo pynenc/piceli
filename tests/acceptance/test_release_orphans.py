@@ -276,6 +276,61 @@ def test_claims_secrets_other_owners_need_their_flags(env):
     assert other["plan_hash"] != report["plan_hash"]
 
 
+def test_a_claim_prune_waits_until_the_claim_is_gone(env):
+    """A claim stays terminating while a pod mounts it (``pvc-protection``):
+    the prune waits for it and reports ``deleted`` only once it is gone."""
+    api, root = env
+    api.server_defaults = True  # claims carry pvc-protection
+    _deploy_v1_then_v2(api, root)
+    code, pending, _ = _run(root, "orphans", "--prune", "--include-claims")
+    assert code == 3
+    api.terminating_reads = 3
+    code, done, result = _run(
+        root,
+        "orphans",
+        "--prune",
+        "--approve",
+        pending["plan_hash"],
+        "--include-claims",
+    )
+    assert code == 0, result.output
+    assert {(i["kind"], i["outcome"]) for i in done["deleted"]} == {
+        ("ConfigMap", "deleted"),
+        ("PersistentVolumeClaim", "deleted"),
+    }
+    assert ("PersistentVolumeClaim", "b-data") not in api.objects
+
+
+def test_a_claim_still_terminating_is_reported_deleting(env):
+    api, root = env
+    api.server_defaults = True  # claims carry pvc-protection
+    _deploy_v1_then_v2(api, root)
+    code, pending, _ = _run(root, "orphans", "--prune", "--include-claims")
+    assert code == 3
+    api.terminating_reads = 10_000  # beyond readiness_seconds (1 s)
+    code, done, result = _run(
+        root,
+        "orphans",
+        "--prune",
+        "--approve",
+        pending["plan_hash"],
+        "--include-claims",
+    )
+    assert code == 0, result.output
+    assert done["state"] == "succeeded"
+    claim = next(i for i in done["deleted"] if i["kind"] == "PersistentVolumeClaim")
+    assert claim == {
+        "kind": "PersistentVolumeClaim",
+        "name": "b-data",
+        "outcome": "deleting",
+        "finalizers": ["kubernetes.io/pvc-protection"],
+    }
+    # A terminating object is no longer a leftover.
+    code, report, _ = _run(root, "orphans", "--include-claims")
+    assert code == 0
+    assert report["orphans"] == []
+
+
 def test_statefulset_deleting_its_claims_is_kept_without_include_claims(env):
     api, root = env
     _deploy_v1_then_v2(api, root)

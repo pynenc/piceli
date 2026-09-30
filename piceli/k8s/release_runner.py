@@ -2894,7 +2894,9 @@ class ReleaseRunner:
 
         Reads the cluster only, unless ``approve`` (the ``plan_hash`` of an
         earlier call) is given: the set is then read again and, when it is
-        exactly the approved one, deleted (``deleted`` in the result);
+        exactly the approved one, deleted (``deleted`` in the result; each
+        object is waited for until it is gone, at most ``readiness_seconds``,
+        and reported ``deleting`` if it is still terminating);
         otherwise nothing is deleted (``orphans-plan-changed``). The current
         release is the catalog's selected one. Refused before a release is
         deployed (``orphans-no-release``) and while an execution is running
@@ -2968,6 +2970,13 @@ class ReleaseRunner:
                     code="orphans-plan-changed",
                     details={"plan_hash": digest},
                 )
-            return {**report, "deleted": delete_orphans(binding.provider, found)}
+            limits = self._limits()
+            deleted = delete_orphans(
+                binding.provider,
+                found,
+                wait_seconds=limits.readiness_seconds,
+                poll_seconds=limits.poll_seconds,
+            )
+            return {**report, "deleted": deleted}
         finally:
             binding.close()
