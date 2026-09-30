@@ -45,6 +45,12 @@ from piceli.app.model import (
     Volume,
     Workload,
 )
+from piceli.app.prerollout import (
+    DEFAULT_TIMEOUT_SECONDS,
+    PreRollout,
+    UpgradeCheck,
+    retained_mounts,
+)
 from piceli.app.resource import Resource, Scope
 from piceli.k8s.ops.discovery import RELEASE_NAMESPACE_ANNOTATION, ResourceScope
 from piceli.k8s.ops.plan import (
@@ -172,6 +178,8 @@ class App(BaseModel):
     )
     _environments: dict[str, Environment] = PrivateAttr(default_factory=dict)
     _environment: Environment | None = PrivateAttr(default=None)
+    _pre_rollouts: list[PreRollout] = PrivateAttr(default_factory=list)
+    _quiesce: dict[str, tuple[Any, ...]] = PrivateAttr(default_factory=dict)
 
     def __init__(self, name: str, /, **data: Any) -> None:
         super().__init__(name=name, **data)
@@ -1387,8 +1395,17 @@ class App(BaseModel):
         derived._overrides = [
             item for item in self._overrides if (item[0], item[1]) in kept
         ]
+        derived._pre_rollouts = [
+            item
+            for item in self._pre_rollouts
+            if any(
+                isinstance(other, Workload) and other.name == item.workload
+                for other in objects
+            )
+        ]
         derived._environments = dict(self._environments)
         derived._environment = env
+        derived._quiesce = dict(self._quiesce)
         for item in objects:
             derived._declare(item)
         return derived
@@ -1462,6 +1479,139 @@ class App(BaseModel):
             if name == source:
                 raise ValueError(f"component {source!r} cannot depend on itself")
             self._edges.append((source, name))
+
+    def pre_rollout(
+        self,
+        workload: Workload,
+        command: Sequence[str] | None = None,
+        *,
+        timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+        upgrade: UpgradeCheck | None = None,
+    ) -> PreRollout:
+        """Declare what ``piceli deploy`` verifies before ``workload`` changes.
+
+        Before the workload's pods change, Piceli runs a Job with the **new**
+        image and the workload's real pod settings: environment (including
+        Secret and ConfigMap references), Secret and ConfigMap mounts, security
+        context, service account, resources and node selector. The check
+        command runs as the container's entrypoint; the release proceeds only
+        if it exits 0. Probes, ports, sidecars and init containers are not
+        copied, and the Job's pod carries none of the workload's selector
+        labels (no Service or NetworkPolicy selects it). Volumes that hold
+        data (claims) are replaced by empty directories for ``command``: it
+        checks configuration, never the retained data.
+
+        With ``upgrade``, a second Job mounts the workload's retained claims
+        read-only at their paths (see :class:`~piceli.app.prerollout.UpgradeCheck`).
+
+        Declaring a check renders no object, so it never changes the plan
+        hash of a release; the deploy plan shows it under the ``prerollout``
+        stage. ``Job`` and ``CronJob`` cannot have one.
+
+        :param workload: A Deployment, StatefulSet or DaemonSet of this app.
+        :param command: argv to run in the new image; ``None`` when only
+            ``upgrade`` is declared.
+        :param timeout_seconds: Longest the check Job may take (10 to 3600).
+        :param upgrade: Optional read-only check of the retained volumes.
+        :raises ValueError: for a workload of another kind or another app, a
+            second declaration for the same workload, no check at all, or an
+            ``upgrade`` that names a path that is not a retained claim mount.
+
+        Example::
+
+            db = app.stateful_set(
+                "db", image=ctx.image("db"),
+                volumes={"/var/lib/db": ClaimTemplate("data", size="1Gi")},
+            )
+            app.pre_rollout(
+                db, ["db", "check-config"],
+                upgrade=UpgradeCheck(["db", "verify", "/var/lib/db"]),
+            )
+        """
+        if not any(existing is workload for existing in self._objects):
+            raise ValueError(
+                "pre_rollout() takes a workload declared on this app, got "
+                f"{type(workload).__name__} {getattr(workload, 'name', '?')!r}"
+            )
+        if not isinstance(workload, Deployment | StatefulSet | DaemonSet):
+            raise ValueError(
+                f"{workload.label} {workload.name!r} cannot have a pre-rollout "
+                "check: only a Deployment, StatefulSet or DaemonSet does"
+            )
+        if any(item.workload == workload.name for item in self._pre_rollouts):
+            raise ValueError(
+                f"{workload.label} {workload.name!r} already has a pre-rollout check"
+            )
+        if command is None and upgrade is None:
+            raise ValueError("pre_rollout() needs a command, an upgrade check or both")
+        item = PreRollout.model_validate(
+            {
+                "workload": workload.name,
+                "command": command,
+                "timeout_seconds": timeout_seconds,
+                "upgrade": upgrade,
+            }
+        )
+        if upgrade is not None:
+            retained = retained_mounts(workload)
+            if not retained:
+                raise ValueError(
+                    f"{workload.label} {workload.name!r} mounts no retained claim "
+                    "(ClaimTemplate or ExistingClaim), so an upgrade check has "
+                    "nothing to open"
+                )
+            unknown = sorted(set(upgrade.volumes) - set(retained))
+            if unknown:
+                raise ValueError(
+                    f"upgrade check volumes {unknown} are not retained claim mounts "
+                    f"of {workload.name!r}; they are {sorted(retained)}"
+                )
+        self._pre_rollouts.append(item)
+        return item
+
+    @property
+    def pre_rollouts(self) -> tuple[PreRollout, ...]:
+        """The declared pre-rollout checks, in declaration order."""
+        return tuple(self._pre_rollouts)
+
+    def quiesce(self, workload: Workload, *hooks: Any) -> None:
+        """Declare how ``workload`` makes its data complete before a restore point.
+
+        When a pipeline with ``restore_points=`` takes a restore point of a
+        claim this Deployment or StatefulSet writes, each hook
+        (:class:`~piceli.restore.Quiesce`) runs in every pod of the workload,
+        in order, before the writers are scaled to zero. Without hooks the
+        writers are only stopped. Hooks are part of the deploy plan's hash.
+
+        Example::
+
+            from piceli.restore import Quiesce
+            app.quiesce(cache, Quiesce.exec(["redis-cli", "SAVE"]))
+        """
+        from piceli.restore.model import Quiesce
+
+        if not any(existing is workload for existing in self._objects):
+            raise ValueError(
+                "quiesce() takes a workload declared on this app, got "
+                f"{type(workload).__name__} {getattr(workload, 'name', '?')!r}"
+            )
+        kind = kind_of(workload)
+        if kind not in {"Deployment", "StatefulSet"}:
+            raise ValueError(
+                f"quiesce() takes a Deployment or StatefulSet, got {kind} "
+                f"{workload.name!r}"
+            )
+        if not hooks or not all(isinstance(hook, Quiesce) for hook in hooks):
+            raise ValueError("quiesce() takes one or more Quiesce hooks")
+        key = f"{kind}/{workload.name}"
+        self._quiesce[key] = (*self._quiesce.get(key, ()), *hooks)
+
+    def quiesce_hooks(self) -> dict[str, list[dict[str, Any]]]:
+        """Declared quiesce hooks per ``Kind/name``, described (JSON-safe)."""
+        return {
+            key: [hook.describe() for hook in hooks]
+            for key, hooks in sorted(self._quiesce.items())
+        }
 
     # --------------------------------------------------------------- render
 

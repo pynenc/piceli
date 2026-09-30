@@ -4,7 +4,7 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
-## Version 0.9.0 (unreleased)
+## Unreleased (web UI)
 
 - **Web application (experimental):** adds the optional `piceli[ui]` service
   and `piceli ui serve` for explicit inventory scopes and existing release
@@ -43,6 +43,8 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 - **Recovery approval:** pipeline recovery propagates a stale or expired plan
   refusal instead of silently planning and applying another digest.
 
+## Version 0.9.0
+
 - **Builds without a VM (experimental):** `Build.spec("host-build.toml",
   builder="host")` builds with the host toolchain (for Rust `cargo` or
   `cargo zigbuild` for `linux/arm64` from macOS), so Docker Desktop can stay
@@ -60,6 +62,51 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   (`stages.build.builds.<name>.node_facts`) and covers them with the plan
   hash; `{page_size_log2}`, `{rust_arch}` and friends substitute into the
   build's commands and env (for example `JEMALLOC_SYS_WITH_LG_PAGE`).
+- **Pre-rollout and upgrade checks (experimental):** `App.pre_rollout(workload,
+  command, upgrade=UpgradeCheck(...))` declares a check that `piceli deploy`
+  runs *before* a workload changes: a Job with the new image and the
+  workload's real Secrets, ConfigMap and Secret mounts, environment, security
+  context and service account (claims replaced by empty directories). The
+  release proceeds only if it exits 0, so a bad Secret mount or an
+  incompatible store fails the run with the pods unchanged. `UpgradeCheck`
+  additionally opens the workload's retained claims (one Job per StatefulSet
+  ordinal) **read-only**, pinned to the node of the running pod for
+  `ReadWriteOnce` claims. New `prerollout` deploy stage (only for apps that
+  declare a check, after `deliver`; `--until prerollout`), shown in the plan
+  with the Secrets and ConfigMaps the pod reads; planning refuses a missing
+  Secret or key. Check Jobs are always removed (also on interrupt; a TTL covers a
+  killed deployer); the run summary keeps the exit code and a scrubbed,
+  bounded log tail. Declaring a check renders no object, so plan hashes of
+  existing apps do not change, and the stage lists of apps without a check
+  keep their six stages. `piceli.testing.FakeAPI.job_result(...)` decides how
+  check Jobs end in tests. See {doc}`pre_rollout_checks`.
+- **Restore points of retained data:** `Pipeline(restore_points=RestorePoints())`
+  adds a `backup` stage before the release plan. When a release changes the
+  image or storage settings of a workload that writes a retained claim, the
+  plan lists every such claim (one per StatefulSet replica, existing claims)
+  with the reason and the writers to stop; the run runs the quiesce hooks
+  declared with `app.quiesce(workload, Quiesce.exec(...) | Quiesce.http(...))`,
+  scales the writers to zero, waits until no pod (terminating ones included)
+  mounts the claims writably, streams a gzip tarball of each claim from a
+  read-only helper Job to a private local directory and verifies it (SHA-256,
+  listing, content digest computed in the cluster). The result and the run
+  summary gain `restore_point`. `piceli restore-points` lists and verifies
+  them offline; `piceli restore --point ID` plans and, with
+  `--approve <restore_hash>`, puts one back. Pipelines without
+  `restore_points` are unchanged (no `backup` stage, same hashes); the deploy,
+  watch and summary schemas add the `backup` stage name (additive). New codes
+  `restore-point-*`, `restore-plan-changed`. Restore point archives never
+  enter a state snapshot. See {doc}`restore_points`.
+- **Stage order:** a run's stages are `inputs, build, deliver, prerollout,
+  backup, plan, apply, checks`, each optional stage present only when
+  declared. A new image passes its pre-rollout checks (including the
+  read-only upgrade check next to the running writer) before any writer is
+  stopped for a restore point, and the restore point is taken before the
+  release plan. Pipelines that declare neither keep their six stages and
+  their plan hashes.
+- New error codes: `prerollout-mount-missing`, `prerollout-claim-exclusive`,
+  `prerollout-failed`, `prerollout-timeout`, `prerollout-not-startable`,
+  `prerollout-unavailable`.
 - New error codes: `node-facts-unavailable`, `node-page-size-invalid`,
   `node-platform-mismatch`, `host-tool-missing`, `host-output-missing`,
   `host-build-invalid`, `base-image-invalid`, `base-image-unavailable`,

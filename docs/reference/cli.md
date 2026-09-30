@@ -73,6 +73,8 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli release status`](#cli-release-status) | Show catalogued releases, their executions and history (no cluster access). | none | no |
 | [`piceli release stop`](#cli-release-stop) | Cancel the latest execution of a release (exact owner only). | reads | no |
 | [`piceli render`](#cli-render) | Print the manifests of a typed app, composition or pipeline. Never contacts a cluster. | none | no |
+| [`piceli restore`](#cli-restore) | Put a restore point back into its claims (plan, then --approve HASH). | writes | yes |
+| [`piceli restore-points`](#cli-restore-points) | List a pipeline's restore points, newest first (read-only, offline). | none | no |
 | [`piceli runs`](#cli-runs) | List the deploy runs of a pipeline, newest first, with their state, release, duration and summary files. Read-only (with shared state it reads the local working copy: run `piceli state pull` first). | none | no |
 | [`piceli state export`](#cli-state-export) | Write the release's state to one file (secret material excluded unless asked). | reads | no |
 | [`piceli state import`](#cli-state-import) | Replace the release's state with an export (needs --approve DIGEST). | writes | yes |
@@ -461,7 +463,7 @@ Deploy a pipeline: inputs → build → deliver → plan → apply → checks.
 | --- | --- | --- | --- |
 | `TARGET` | text |  |  |
 | `--plan` | boolean | `False` | Plan every stage and print the combined hash; execute nothing |
-| `--until` | text | `checks` | Stop after this stage: inputs, build, deliver, plan, apply or checks |
+| `--until` | text | `checks` | Stop after this stage: inputs, build, deliver, prerollout (only with a pre-rollout check), backup (with restore_points), plan, apply or checks |
 | `--resume` | boolean | `False` | Continue the latest interrupted or failed run at its failed stage |
 | `--approve` | text |  | Combined hash to execute (from --plan) |
 | `--auto-approve` | boolean | `False` | Plan and execute without confirmation (CI) |
@@ -1354,6 +1356,55 @@ Print the manifests of a typed app, composition or pipeline. Never contacts a cl
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** Never contacts a cluster; secret values are placeholders. --out DIR writes one YAML file per object (a directory for Argo CD or Flux from Git; a Secret needs --secrets external, redacted values and placeholder images are refused) and prints one JSON object; DIR must be absent, empty or a previous --out. A Pipeline renders with its target's namespace and declared nodes, build images as placeholders, and reads no kubeconfig, build spec or state. --env NAME renders one environment of the App (a pipeline's target for it); --diff-env OTHER prints the typed difference between the two environments instead (JSON with --format json). stdout carries the manifests (YAML, or one JSON object with --format json); a refusal is always the JSON rejection object.
+
+(cli-restore)=
+### `piceli restore`
+
+Put a restore point back into its claims (plan, then --approve HASH).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `TARGET` | text | required |  |
+| `--point` | text | required | The restore point id (rp-…) |
+| `--claim` | text (repeatable) |  | Only this claim (repeatable; default: all) |
+| `--env` | text |  | The pipeline's environment |
+| `--approve` | text |  | Restore; HASH is the plan's restore_hash |
+| `--image` | text |  | Helper image pinned by digest (default: RestorePoints(image=) or each writer's image) |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** pipeline module, restore point directory, kubeconfig
+- **Writes:** restore point directory (restores/ receipts)
+- **Cluster:** writes
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** Without --approve it only reads: verifies the archives, checks the claims exist and lists the writers it would stop. With --approve HASH it plans again (restore-plan-changed on any difference), holds the pipeline's state lock, scales the writers to zero and waits until their pods are gone, empties each claim and extracts its archive in a helper Job, checks the content digest in the cluster and scales the writers back. Every file in the claims is replaced; run it again after a failure.
+
+(cli-restore-points)=
+### `piceli restore-points`
+
+List a pipeline's restore points, newest first (read-only, offline).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `TARGET` | text | required |  |
+| `--env` | text |  | The pipeline's environment |
+| `--verify` | boolean | `False` | Read every archive back and check its digests |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** pipeline module, restore point directory
+- **Writes:** nothing (read-only)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Read-only and offline (never the cluster); prints ids, claims, sizes and digests, never file contents. With --verify, exit 1 when an archive does not match its SHA-256 or content digest (each claim's check names the code).
 
 (cli-runs)=
 ### `piceli runs`

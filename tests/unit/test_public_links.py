@@ -25,6 +25,7 @@ LATEST_ONLY = {
     "gitops",
     "maintenance",
     "reference_app",
+    "restore_points",
     "state",
     "when_to_use",
 }

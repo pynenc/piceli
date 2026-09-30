@@ -21,7 +21,7 @@ import json
 import os
 import tempfile
 import uuid
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -81,7 +81,9 @@ class Run:
         return str(self.data["state"])
 
     def stage(self, name: str) -> dict[str, Any]:
-        return dict(self.data["stages"][name])
+        """The stage's record; empty for a stage this run does not have
+        (``backup`` exists only with ``restore_points``)."""
+        return dict(self.data["stages"].get(name) or {})
 
     def save(self) -> None:
         self.data["updated_at"] = now()
@@ -120,7 +122,7 @@ class Run:
         self.save()
 
     def output(self, name: str) -> dict[str, Any]:
-        return dict(self.data["stages"][name].get("output") or {})
+        return dict((self.data["stages"].get(name) or {}).get("output") or {})
 
 
 class Journal:
@@ -159,6 +161,7 @@ class Journal:
         plan: Mapping[str, Any],
         refs: Mapping[str, Any] | None = None,
         approved_by: str | None = None,
+        stages: Sequence[str] = STAGES,
     ) -> Run:
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
         run_id = f"{stamp}-{uuid.uuid4().hex[:8]}"
@@ -172,7 +175,7 @@ class Journal:
             "approval": approval,
             "until": until,
             "plan": dict(plan),
-            "stages": {name: {"state": "pending"} for name in STAGES},
+            "stages": {name: {"state": "pending"} for name in stages},
         }
         if approved_by is not None:
             # "policy": the owner's auto_approve policy approved the run.

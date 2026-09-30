@@ -150,6 +150,14 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["watch", "--state-dir", str(p / "no-such-state")],
         "watch-no-run",
     ),
+    "restore-points": (
+        lambda p: ["restore-points", f"{p / 'missing.py'}:pipeline"],
+        "pipeline-not-found",
+    ),
+    "restore": (
+        lambda p: ["restore", f"{p / 'missing.py'}:pipeline", "--point", "rp-x"],
+        "pipeline-not-found",
+    ),
     "inputs record": (
         lambda p: ["inputs", "record", "--spec", str(p / "junk")],
         "invalid-inputs-spec",

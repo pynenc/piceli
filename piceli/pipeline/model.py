@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 import sys
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple, overload
@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from piceli.artifacts.host_build import HostBuildSpec
     from piceli.k8s.ops.exec_credentials import ExecPolicy
     from piceli.pipeline.secrets import Secrets
+    from piceli.restore.model import RestorePoints
 
 #: Host of the placeholder a build image handle renders to before delivery.
 HANDLE_HOST = "pipeline.piceli.invalid"
@@ -37,6 +38,43 @@ _ALIAS = re.compile(r"[a-z][a-z0-9_-]{0,62}")
 _LABEL = re.compile(r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?")
 _PINNED = re.compile(r"[^@\s]+@sha256:[0-9a-f]{64}")
 STAGES = ("inputs", "build", "deliver", "plan", "apply", "checks")
+#: Every stage a run can have, in run order. ``prerollout`` exists only for a
+#: pipeline whose app declares a pre-rollout check and ``backup`` (restore
+#: points) only for one that declares ``restore_points``, so the runs, plans,
+#: hashes, events and summaries of every other pipeline keep the six stages
+#: above. The checks run first, so a new image is checked before any writer
+#: is stopped; ``backup`` stays before ``plan`` because the executor compares
+#: each object against the plan and stopping writers changes them.
+ALL_STAGES = (
+    "inputs",
+    "build",
+    "deliver",
+    "prerollout",
+    "backup",
+    "plan",
+    "apply",
+    "checks",
+)
+
+
+def ordered_stages(names: Iterable[str]) -> tuple[str, ...]:
+    """``names`` that are stages, in run order."""
+    wanted = set(names)
+    return tuple(name for name in ALL_STAGES if name in wanted)
+
+
+def stages_for(app: Any, *, restore_points: bool = False) -> tuple[str, ...]:
+    """The stages of a run of a pipeline whose app is ``app``.
+
+    ``prerollout`` is added when the app declares a pre-rollout check and
+    ``backup`` when the pipeline declares ``restore_points``.
+    """
+    names = list(STAGES)
+    if getattr(app, "pre_rollouts", ()):
+        names.append("prerollout")
+    if restore_points:
+        names.append("backup")
+    return ordered_stages(names)
 
 
 def _caller_dir() -> Path | None:
@@ -1001,7 +1039,9 @@ class Pipeline:
     The run has six stages, each journaled and skipped when its content
     identity is unchanged: ``inputs`` (identify the sources and staged
     files), ``build`` (containerized builds), ``deliver`` (images to the
-    node or registry, handed off by digest), ``plan`` (a release plan against
+    node or registry, handed off by digest), with ``restore_points`` a
+    ``backup`` stage (a verified restore point of the retained claims the
+    release touches), ``plan`` (a release plan against
     live discovery), ``apply`` (the release engine) and ``checks``.
 
     :param app: The typed :class:`~piceli.app.App`.
@@ -1047,6 +1087,13 @@ class Pipeline:
         deploy --approve-if-policy`` runs a plan without the human hash only
         when every action is inside it. Part of the combined hash; it can
         never allow ``delete``, ``replace`` or ``adopt``.
+    :param restore_points: :class:`~piceli.restore.RestorePoints` (or
+        ``True`` for the defaults): before a release changes the image or
+        storage settings of a workload that writes a retained claim, the
+        ``backup`` stage stops its writers, archives and verifies every such
+        claim (one per StatefulSet replica) and records the restore point;
+        ``piceli restore`` puts one back. Part of the combined hash. See
+        ``docs/restore_points.md``.
 
     Invariants: every image the app uses is a build handle or pinned by
     digest; the release never manages the node-loopback registry.
@@ -1082,6 +1129,7 @@ class Pipeline:
         inherited_owners: Sequence[str] = (),
         cache_budget: str | int | None = None,
         auto_approve: ApprovalPolicy | Mapping[str, Any] | None = None,
+        restore_points: RestorePoints | bool | None = None,
     ) -> None:
         from piceli.app import App
 
@@ -1153,6 +1201,18 @@ class Pipeline:
                 self.cache_budget = parse_size(cache_budget)
             except CacheError as error:
                 raise PipelineError("pipeline-invalid", str(error)) from None
+        from piceli.restore.model import RestorePoints
+
+        if restore_points is True:
+            restore_points = RestorePoints()
+        elif restore_points is False:
+            restore_points = None
+        if restore_points is not None and not isinstance(restore_points, RestorePoints):
+            raise PipelineError(
+                "pipeline-invalid", "restore_points must be RestorePoints() or True"
+            )
+        #: Restore points before stateful changes (``None``: not taken).
+        self.restore_points: RestorePoints | None = restore_points
         try:
             #: The owner's approval policy (``auto_approve``), or ``None``.
             self.auto_approve: ApprovalPolicy | None = ApprovalPolicy.from_value(
@@ -1164,6 +1224,19 @@ class Pipeline:
     @property
     def name(self) -> str:
         return self.app.name
+
+    @property
+    def stages(self) -> tuple[str, ...]:
+        """This pipeline's stages in run order (see :func:`stages_for`)."""
+        return stages_for(self.app, restore_points=self.restore_points is not None)
+
+    @property
+    def restore_point_directory(self) -> Path:
+        """Where this pipeline's restore points live (see ``restore_points``)."""
+        from piceli.restore.model import RestorePoints
+
+        settings = self.restore_points or RestorePoints()
+        return settings.resolve_directory(self.state_dir, self.base)
 
     @property
     def target(self) -> Target:

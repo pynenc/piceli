@@ -930,6 +930,38 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "working copy (piceli state pull first). summary.json follows "
             "docs/schemas/piceli-run-summary-v1.schema.json.",
         ),
+        # ------------------------------------------- 0.9.0 restore points
+        "restore-points": _C(
+            "List a pipeline's restore points (verified claim archives), newest "
+            "first; --verify reads every archive back.",
+            reads=("pipeline module", "restore point directory"),
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            notes="Read-only and offline (never the cluster); prints ids, claims, "
+            "sizes and digests, never file contents. With --verify, exit 1 when "
+            "an archive does not match its SHA-256 or content digest (each "
+            "claim's check names the code).",
+        ),
+        "restore": _C(
+            "Put a restore point back into its claims: plan (exit 3 with the "
+            "restore_hash), then --approve HASH.",
+            reads=("pipeline module", "restore point directory", "kubeconfig"),
+            writes=("restore point directory (restores/ receipts)",),
+            cluster="writes",
+            approval_required=True,
+            safe_to_retry=True,
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2, 3),
+            notes="Without --approve it only reads: verifies the archives, "
+            "checks the claims exist and lists the writers it would stop. With "
+            "--approve HASH it plans again (restore-plan-changed on any "
+            "difference), holds the pipeline's state lock, scales the writers "
+            "to zero and waits until their pods are gone, empties each claim and "
+            "extracts its archive in a helper Job, checks the content digest in "
+            "the cluster and scales the writers back. Every file in the claims "
+            "is replaced; run it again after a failure.",
+        ),
     }
 )
 

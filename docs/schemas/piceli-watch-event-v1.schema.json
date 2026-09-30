@@ -13,7 +13,7 @@
   ],
   "$defs": {
     "stageName": {
-      "enum": ["inputs", "build", "deliver", "plan", "apply", "checks"]
+      "enum": ["inputs", "build", "deliver", "prerollout", "backup", "plan", "apply", "checks"]
     },
     "stageState": {
       "enum": ["pending", "running", "done", "skipped", "failed", "rejected", "interrupted"]
