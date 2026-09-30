@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import html
 import ipaddress
 import re
 import secrets
@@ -15,7 +16,7 @@ from urllib.parse import urlsplit
 
 from authlib.integrations.starlette_client import OAuth
 from starlette.requests import Request
-from starlette.responses import RedirectResponse
+from starlette.responses import HTMLResponse, RedirectResponse
 
 from piceli.services.contracts import Principal
 
@@ -93,16 +94,29 @@ class ClusterSecurity:
     def callback_uri(self) -> str:
         return self.config.origin + self.config.prefix + "/auth/callback"
 
-    def _same_origin(self, request: Request, *, mutation: bool) -> bool:
+    def _same_origin(
+        self, request: Request, *, mutation: bool, api: bool = False
+    ) -> bool:
         if request.headers.get("host") != urlsplit(self.config.origin).netloc:
             return False
         if request.headers.get("origin", self.config.origin) != self.config.origin:
             return False
-        if request.headers.get("sec-fetch-site", "none") not in {
-            "none",
-            "same-origin",
-        }:
-            return False
+        fetch_site = request.headers.get("sec-fetch-site", "none")
+        if fetch_site not in {"none", "same-origin"}:
+            # A redirect back from the identity provider, or a link from
+            # another site, arrives as a cross-site top-level navigation.
+            # Permit only a safe document navigation; API calls,
+            # subresources and mutations still need a same-origin context.
+            navigation = (
+                not api
+                and not mutation
+                and request.method in {"GET", "HEAD"}
+                and request.headers.get("sec-fetch-mode") == "navigate"
+                and request.headers.get("sec-fetch-dest") == "document"
+                and "origin" not in request.headers
+            )
+            if fetch_site not in {"cross-site", "same-site"} or not navigation:
+                return False
         return not mutation or request.headers.get("origin") == self.config.origin
 
     def principal(self, request: Request) -> Principal | None:
@@ -125,7 +139,7 @@ class ClusterSecurity:
 
     def accepted(self, request: Request, *, api: bool) -> bool:
         if not self._same_origin(
-            request, mutation=request.method not in {"GET", "HEAD", "OPTIONS"}
+            request, mutation=request.method not in {"GET", "HEAD", "OPTIONS"}, api=api
         ):
             return False
         return not api or self.principal(request) is not None
@@ -153,7 +167,7 @@ class ClusterSecurity:
                     raise ValueError("OIDC endpoint requires HTTPS")
         return await self.client.authorize_redirect(request, self.callback_uri)
 
-    async def callback(self, request: Request) -> RedirectResponse:
+    async def callback(self, request: Request) -> HTMLResponse:
         # A cross-site top-level GET is expected from the identity provider.
         if request.headers.get("host") != urlsplit(self.config.origin).netloc:
             raise ValueError("invalid callback host")
@@ -187,7 +201,16 @@ class ClusterSecurity:
             self._sessions[hashlib.sha256(session_token.encode()).hexdigest()] = (
                 _Session(principal, csrf, time.time() + max_age)
             )
-        response = RedirectResponse(self.config.prefix + "/applications", 303)
+        # The callback is the end of a cross-site redirect chain, where the
+        # browser withholds SameSite=Strict cookies. Continue with a
+        # navigation from this origin so the new session cookie is sent.
+        target = html.escape(self.config.prefix + "/applications", quote=True)
+        response = HTMLResponse(
+            '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            f'<meta http-equiv="refresh" content="0;url={target}">'
+            "<title>Piceli</title></head><body>"
+            f'<p><a href="{target}">Continue to Piceli</a></p></body></html>'
+        )
         response.set_cookie(
             self.cookie_name,
             session_token,

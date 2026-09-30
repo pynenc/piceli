@@ -206,8 +206,11 @@ def test_signed_oidc_login_pkce_session_csrf_and_bad_nonce(
             callback = browser.get(
                 authorization.headers["location"], follow_redirects=False
             )
-            assert callback.status_code == 303, callback_errors
-            assert callback.headers["location"] == "/applications"
+            assert callback.status_code == 200, callback_errors
+            assert (
+                '<meta http-equiv="refresh" content="0;url=/applications">'
+                in callback.text
+            )
             assert [
                 item["id"]
                 for item in browser.get("/api/v1/applications").json()["items"]
@@ -250,3 +253,124 @@ def test_signed_oidc_login_pkce_session_csrf_and_bad_nonce(
             )
             assert rejected.status_code == 403
             assert browser.get("/api/v1/applications").status_code == 403
+
+
+NAVIGATE = {"Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document"}
+
+
+def test_browser_login_with_fetch_metadata_reaches_the_application(
+    tmp_path: Path,
+) -> None:
+    """The login round trip as a browser sends it, Fetch Metadata included."""
+    (tmp_path / "index.html").write_text("<!doctype html><title>Piceli</title>")
+    with issuer() as (issuer_url, _flags):
+        principal_id = hashlib.sha256(
+            (issuer_url + "\0operator-1").encode()
+        ).hexdigest()
+        service = QueryService(
+            [
+                Registration(
+                    "shop",
+                    "Shop",
+                    KubeconfigTarget(tmp_path / "kc", "explicit", "shop"),
+                )
+            ],
+            scope_policy=ScopePolicy({principal_id: {"shop": frozenset({"inspect"})}}),
+        )
+        security = ClusterSecurity(
+            ClusterSecurityConfig(
+                origin="http://127.0.0.1:8000",
+                issuer=issuer_url,
+                metadata_url=issuer_url + "/.well-known/openid-configuration",
+                client_id="piceli-test",
+                allow_insecure_loopback_test=True,
+            )
+        )
+        app = create_app(service, static_dir=tmp_path, cluster_security=security)
+        cross_site = {**NAVIGATE, "Sec-Fetch-Site": "cross-site"}
+        with TestClient(app, base_url="http://127.0.0.1:8000") as browser:
+            # Opened from a link elsewhere: no cookie yet (SameSite=Strict).
+            opened = browser.get("/applications", headers=cross_site)
+            assert opened.status_code == 200
+            assert "set-cookie" not in opened.headers
+            assert 'content="0;url=http://127.0.0.1:8000/applications"' in opened.text
+            # The same-origin reload finds no session and starts the login.
+            same_origin = {**NAVIGATE, "Sec-Fetch-Site": "same-origin"}
+            reload = browser.get(
+                "/applications", headers=same_origin, follow_redirects=False
+            )
+            assert reload.status_code == 303
+            assert reload.headers["location"] == "/auth/login"
+            login = browser.get(
+                "/auth/login", headers=same_origin, follow_redirects=False
+            )
+            assert login.status_code == 302
+            with httpx.Client() as idp:
+                authorization = idp.get(
+                    login.headers["location"], follow_redirects=False
+                )
+            # The identity provider redirects back: a cross-site navigation.
+            callback = browser.get(
+                authorization.headers["location"],
+                headers=cross_site,
+                follow_redirects=False,
+            )
+            assert callback.status_code == 200
+            assert security.cookie_name in callback.headers.get("set-cookie", "")
+            assert '<meta http-equiv="refresh" content="0;url=/applications">' in (
+                callback.text
+            )
+            # The page then navigates from this origin, cookie included.
+            landed = browser.get("/applications", headers=same_origin)
+            assert landed.status_code == 200
+            assert "<title>Piceli</title>" in landed.text
+            fetch = {"Sec-Fetch-Mode": "cors", "Sec-Fetch-Dest": "empty"}
+            assert (
+                browser.get(
+                    "/api/v1/applications",
+                    headers={**fetch, "Sec-Fetch-Site": "same-origin"},
+                ).status_code
+                == 200
+            )
+            # Everything but a top-level document navigation stays same-origin.
+            for method, path, headers in (
+                (
+                    "GET",
+                    "/api/v1/applications",
+                    {**fetch, "Sec-Fetch-Site": "cross-site"},
+                ),
+                ("GET", "/api/v1/applications", {**cross_site}),
+                (
+                    "GET",
+                    "/applications",
+                    {**cross_site, "Sec-Fetch-Dest": "iframe"},
+                ),
+                (
+                    "GET",
+                    "/applications",
+                    {**cross_site, "Origin": "https://foreign.example"},
+                ),
+                ("GET", "/favicon.svg", {**cross_site, "Sec-Fetch-Dest": "image"}),
+                (
+                    "POST",
+                    "/api/v1/applications/shop/evaluation-preview",
+                    {**cross_site, "Origin": "https://foreign.example"},
+                ),
+                ("POST", "/auth/login", cross_site),
+            ):
+                refused = browser.request(
+                    method, path, headers=headers, follow_redirects=False
+                )
+                assert refused.status_code == 403, (method, path, headers)
+            assert (
+                browser.get(
+                    "/auth/login",
+                    headers={
+                        **NAVIGATE,
+                        "Sec-Fetch-Site": "cross-site",
+                        "Origin": "null",
+                    },
+                    follow_redirects=False,
+                ).status_code
+                == 403
+            )

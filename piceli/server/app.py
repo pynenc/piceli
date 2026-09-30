@@ -254,6 +254,15 @@ def create_app(
             and path not in {f"{url_prefix}/auth/login", callback_path}
             and not path.startswith(f"{url_prefix}/assets/")
         ):
+            if page and request.headers.get("sec-fetch-site") in {
+                "cross-site",
+                "same-site",
+            }:
+                # The browser withheld the SameSite=Strict session cookie on
+                # a navigation from another site; reload from this origin
+                # before deciding that a login is needed.
+                query = f"?{request.url.query}" if request.url.query else ""
+                return secured(_same_origin_reload(origin + path + query))
             return RedirectResponse(f"{url_prefix}/auth/login", 303)
         try:
             if principal is None:
@@ -290,7 +299,7 @@ def create_app(
             return await cluster_security.login(request)
 
         @app.get(f"{url_prefix}/auth/callback", include_in_schema=False)
-        async def cluster_callback(request: Request) -> RedirectResponse:
+        async def cluster_callback(request: Request) -> Response:
             return await cluster_security.callback(request)
 
     @app.exception_handler(QueryError)

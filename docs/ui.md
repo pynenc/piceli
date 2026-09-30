@@ -239,7 +239,12 @@ bytes. It refreshes the projected token before each Kubernetes request. Only
 the named OIDC subjects can inspect the configured namespace and read its
 container logs. This read-only mode does not list Secrets or ConfigMaps.
 Sessions remain in the server process, expire with the signed
-ID token, and require same-origin CSRF protection for writes. This command has
+ID token, and require same-origin CSRF protection for writes. After the identity
+provider redirects back, a short same-origin page continues to the
+application, so the browser sends the new SameSite=Strict session cookie.
+Opening the UI from a link on another site is accepted as a top-level page
+navigation only; API calls, subresources and writes must come from the UI's
+own origin. This command has
 no deployment or server-side port-forward action. An actual in-cluster manual
 deployment requires the isolated cluster renderer, durable installation state
 and remote local-client access still tracked under Wave 4.

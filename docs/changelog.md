@@ -48,6 +48,11 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   `0600` file in the private state directory while the server runs. Other
   local processes and accounts that reach the loopback port get no session.
   `make ui-fake-serve` prints the tokened address for the demo.
+- **Cluster observation login in real browsers:** the OIDC callback now ends
+  with a same-origin page that continues to the application, so the
+  SameSite=Strict session cookie is sent, and a top-level document navigation
+  from another site (the identity provider's redirect or a link) is accepted.
+  API calls, subresources and writes still require a same-origin context.
 - **Explicit rotating Kubernetes token files:** a named absolute `tokenFile`
   kubeconfig credential now refreshes before each API request and fails closed
   when the projected file disappears or becomes invalid. Static tokens retain
