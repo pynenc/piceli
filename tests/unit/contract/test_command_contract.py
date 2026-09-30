@@ -417,6 +417,39 @@ CASES: dict[str, tuple[Argv, str]] = {
         "invalid-access-profile",
     ),
     "explain": (lambda p: ["explain", "no-such-code"], "unknown-error-code"),
+    "gitops enable": (
+        lambda p: [
+            "gitops",
+            "enable",
+            "deploy/app.py:pipeline",
+            "--repo",
+            "https://user:secret@example.com/app.git",
+            "--image",
+            "example.com/piceli@sha256:" + "a" * 64,
+        ],
+        "gitops-repo-invalid",
+    ),
+    "gitops disable": (lambda p: ["gitops", "disable"], "gitops-target-required"),
+    "gitops status": (lambda p: ["gitops", "status"], "gitops-target-required"),
+    "gitops approve": (
+        lambda p: ["gitops", "approve", "wp-1", "not-a-hash", "--state-dir", str(p)],
+        "gitops-request-invalid",
+    ),
+    "gitops run": (
+        lambda p: [
+            "gitops",
+            "run",
+            "--config",
+            str(p / "junk"),
+            "--state-dir",
+            str(p / "state"),
+        ],
+        "gitops-config-invalid",
+    ),
+    "promote": (
+        lambda p: ["promote", "no-commit", "--state-dir", str(p)],
+        "gitops-request-invalid",
+    ),
     "codegen crd": (lambda p: ["codegen", "crd", str(p / "junk")], "crd-invalid"),
 }
 

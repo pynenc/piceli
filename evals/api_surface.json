@@ -4742,12 +4742,14 @@
      "doctor",
      "env",
      "explain",
+     "gitops",
      "heavy",
      "help-json",
      "import",
      "inputs",
      "observe",
      "operator",
+     "promote",
      "publish",
      "release",
      "render",
@@ -5224,6 +5226,106 @@
     ],
     "subcommands": []
    },
+   "gitops": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "approve",
+     "disable",
+     "enable",
+     "run",
+     "status"
+    ]
+   },
+   "gitops approve": {
+    "arguments": [
+     "env",
+     "plan_hash"
+    ],
+    "flags": [
+     "--context",
+     "--kubeconfig",
+     "--namespace",
+     "--state-dir",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "gitops disable": {
+    "arguments": [],
+    "flags": [
+     "--allow-exec",
+     "--approve",
+     "--context",
+     "--delete-state",
+     "--exec-sha256",
+     "--kubeconfig",
+     "--namespace",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "gitops enable": {
+    "arguments": [
+     "pipeline"
+    ],
+    "flags": [
+     "--allow-exec",
+     "--approve",
+     "--branches",
+     "--build-git-secret",
+     "--build-registry",
+     "--build-storage",
+     "--builder-image",
+     "--builder-selector",
+     "--cluster-rbac",
+     "--context",
+     "--credentials-secret",
+     "--env",
+     "--exec-sha256",
+     "--image",
+     "--kubeconfig",
+     "--main-auto-approve",
+     "--main-branch",
+     "--namespace",
+     "--node-registry",
+     "--platform",
+     "--poll",
+     "--repo",
+     "--storage",
+     "--storage-class",
+     "--tags",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "gitops run": {
+    "arguments": [],
+    "flags": [
+     "--config",
+     "--context",
+     "--credentials-dir",
+     "--kubeconfig",
+     "--namespace",
+     "--once",
+     "--service-account",
+     "--state-dir",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "gitops status": {
+    "arguments": [],
+    "flags": [
+     "--context",
+     "--json",
+     "--kubeconfig",
+     "--namespace",
+     "--state-dir",
+     "--transport"
+    ],
+    "subcommands": []
+   },
    "heavy": {
     "arguments": [],
     "flags": [],
@@ -5561,6 +5663,19 @@
      "--kubeconfig",
      "--namespace",
      "--no-include-common-types"
+    ],
+    "subcommands": []
+   },
+   "promote": {
+    "arguments": [
+     "target"
+    ],
+    "flags": [
+     "--context",
+     "--kubeconfig",
+     "--namespace",
+     "--state-dir",
+     "--transport"
     ],
     "subcommands": []
    },
@@ -6023,13 +6138,29 @@
    "generation-precondition-failed",
    "git-timed-out",
    "git-unavailable",
+   "gitops-approval-stale",
    "gitops-artifact-changed",
+   "gitops-cluster-failed",
+   "gitops-config-invalid",
+   "gitops-controller-locked",
    "gitops-empty",
+   "gitops-git-failed",
+   "gitops-image-unpinned",
    "gitops-image-unresolved",
+   "gitops-not-installed",
+   "gitops-pipeline-invalid",
+   "gitops-plan-changed",
+   "gitops-port-unavailable",
+   "gitops-promote-unknown",
    "gitops-push-failed",
+   "gitops-repo-invalid",
+   "gitops-request-invalid",
    "gitops-secret-value",
    "gitops-secrets-present",
+   "gitops-state-invalid",
+   "gitops-step-failed",
    "gitops-target-invalid",
+   "gitops-target-required",
    "grant-expired",
    "grant-mismatch",
    "heavy-command-empty",
@@ -6612,6 +6743,7 @@
    "codegen": {},
    "errors": {},
    "gcp": {},
+   "gitops": {},
    "importing": {},
    "k8s": {},
    "maintenance": {},
@@ -7289,6 +7421,12 @@
   "piceli.gcp.credentials",
   "piceli.gcp.gke",
   "piceli.gitops",
+  "piceli.gitops.config",
+  "piceli.gitops.controller",
+  "piceli.gitops.install",
+  "piceli.gitops.ports",
+  "piceli.gitops.repo",
+  "piceli.gitops.state",
   "piceli.importing",
   "piceli.importing.clean",
   "piceli.importing.codegen",
@@ -7306,6 +7444,7 @@
   "piceli.k8s.cli.contract",
   "piceli.k8s.cli.deploy_pipeline",
   "piceli.k8s.cli.env_push",
+  "piceli.k8s.cli.gitops",
   "piceli.k8s.cli.heavy",
   "piceli.k8s.cli.importing",
   "piceli.k8s.cli.inputs",

@@ -49,6 +49,11 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli doctor`](#cli-doctor) | Check this runner: free disk and memory against what the next build needs (estimated from the last build receipts), and the tools the pipeline uses (docker, docker buildx, kubectl). Exit 1 on a warning. | none | no |
 | [`piceli env push`](#cli-env-push) | Record a laptop-built digest for a branch environment (plan, then --approve HASH). | writes | yes |
 | [`piceli explain`](#cli-explain) | Explain an error code: cause, fix and whether a retry can succeed. | none | no |
+| [`piceli gitops approve`](#cli-gitops-approve) | Approve the pending plan of ENV; the controller applies it on its next poll. | writes | yes |
+| [`piceli gitops disable`](#cli-gitops-disable) | Remove the controller (plan first; --approve HASH removes). Never an environment. | writes | yes |
+| [`piceli gitops enable`](#cli-gitops-enable) | Install the GitOps controller (plan first; --approve HASH installs). | writes | yes |
+| [`piceli gitops run`](#cli-gitops-run) | Run the controller loop (the Deployment's entrypoint); --once for one poll. | writes | no |
+| [`piceli gitops status`](#cli-gitops-status) | Controller health, repository, last poll and every branch's state. | reads | no |
 | [`piceli heavy run`](#cli-heavy-run) | Run COMMAND once the lock is free; exit with its exit code. | none | no |
 | [`piceli heavy status`](#cli-heavy-status) | Show who holds the lock and the most recent receipts. | none | no |
 | [`piceli help-json`](#cli-help-json) | Print the whole CLI tree (commands, options, contracts) as JSON. | none | no |
@@ -72,6 +77,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli operator restore`](#cli-operator-restore) | Safely verify and restore operator state into empty destination. | none | no |
 | [`piceli operator serve`](#cli-operator-serve) | Launch the Piceli Operator dashboard and unified REST API. | reads | no |
 | [`piceli operator status`](#cli-operator-status) | Print classified operator inventory: managed, unmanaged, unknown, and releases. | reads | no |
+| [`piceli promote`](#cli-promote) | Ask the GitOps controller to deploy BRANCH@SHA to the main branch's environment. | writes | no |
 | [`piceli publish`](#cli-publish) | Push the rendered manifests as a Flux OCI artifact (needs --approve DIGEST). | none | yes |
 | [`piceli release apply`](#cli-release-apply) | Execute an approved plan (``--approve HASH``), or plan and confirm. | writes | yes |
 | [`piceli release check`](#cli-release-check) | Run the spec's [[checks]] now against a release; changes nothing. | reads | no |
@@ -838,6 +844,158 @@ Explain an error code: cause, fix and whether a retry can succeed.
 - **Output contract:** conforms
 - **Notes:** `--run ID --spec SPEC` explains a past execution instead, from the local state (same as `piceli release status --spec SPEC --run ID`).
 
+(cli-gitops-approve)=
+### `piceli gitops approve`
+
+Approve the pending plan of ENV; the controller applies it on its next poll.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `ENV` | text | required |  |
+| `PLAN_HASH` | text | required |  |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--state-dir` | path |  | A local controller's state directory instead of a cluster (the one `gitops run --once --state-dir` uses) |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+
+**Contract**
+
+- **Reads:** kubeconfig or --state-dir
+- **Writes:** --state-dir requests (local controller)
+- **Cluster:** writes
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** This is the owner's approval: run it only with the hash the owner approved. Writes a request to the ConfigMap piceli-gitops-requests; a hash the environment is no longer waiting for is dropped (gitops-approval-stale in gitops status).
+
+(cli-gitops-disable)=
+### `piceli gitops disable`
+
+Remove the controller (plan first; --approve HASH removes). Never an environment.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--delete-state` | boolean | `False` | Also delete the state volume (Git mirror, receipts, last-seen commits) |
+| `--approve` | text |  | The plan hash to execute |
+| `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
+| `--exec-sha256` | text |  | Expected sha256:<hex> of the resolved exec plugin file |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+
+**Contract**
+
+- **Reads:** kubeconfig
+- **Writes:** nothing (read-only)
+- **Cluster:** writes
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** Deletes the controller's objects only; keeps the branch environments, the namespace and (without --delete-state) the state volume. Exit 3 with the plan hash until --approve. `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`).
+
+(cli-gitops-enable)=
+### `piceli gitops enable`
+
+Install the GitOps controller (plan first; --approve HASH installs).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `PIPELINE` | text | required |  |
+| `--repo` | text | required | Git URL the controller polls (https://, ssh://, git@host:path); no credentials in it |
+| `--image` | text | required | The Piceli image the controller runs, pinned by digest (registry/repo@sha256:…); see docs/gitops.md to build one |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--branches` | text | `main` | Comma-separated branch globs, e.g. 'main,wp-*' |
+| `--poll` | text | `60s` | Poll interval: 60, 60s, 5m |
+| `--credentials-secret` | text |  | Secret in the controller's namespace with the Git credentials (username/password or ssh-privatekey/known_hosts); mounted, never read |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--env` | text |  | The pipeline's environment, if it has several |
+| `--main-branch` | text | `main` | The branch that deploys on tags |
+| `--tags` | text | `v*` | Tag glob that deploys the main branch |
+| `--main-auto-approve` | boolean | `False` | Owner's opt-in: main deploys without a hash approval when the plan is inside the pipeline's auto_approve policy |
+| `--storage` | text | `10Gi` | Size of the state volume |
+| `--storage-class` | text |  | StorageClass of the state volume |
+| `--cluster-rbac` | boolean | `False` | Also allow ClusterRoles/ClusterRoleBindings (apps that declare them) |
+| `--platform` | text (repeatable) |  | Build platform (repeatable), e.g. linux/arm64 |
+| `--builder-image` | text |  | Image of the cluster build Job, pinned by digest; without it branches deploy only images pushed with `piceli env push` |
+| `--build-git-secret` | text |  | Secret (username/password) the build Job fetches the repository with (default piceli-build-git) |
+| `--builder-selector` | text (repeatable) |  | key=value label of the builder node (repeatable; default piceli.io/builder=true on amd64) |
+| `--build-storage` | text | `20Gi` | Size of a branch's build cache |
+| `--build-registry` | text |  | oci://host[:port]/prefix the build pushes to (default: the pipeline's delivery) |
+| `--node-registry` | text |  | host[:port] nodes pull from, when different |
+| `--approve` | text |  | The plan hash to execute |
+| `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
+| `--exec-sha256` | text |  | Expected sha256:<hex> of the resolved exec plugin file |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+
+**Contract**
+
+- **Reads:** kubeconfig
+- **Writes:** nothing (read-only)
+- **Cluster:** writes
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** Without --approve prints the install plan (Namespace, ServiceAccount, scoped Role/ClusterRole and bindings, state PersistentVolumeClaim, config ConfigMap, one-replica Deployment) and its hash, exit 3. --image must be pinned by digest (gitops-image-unpinned); --repo must carry no credentials (gitops-repo-invalid): they come from the Secret named by --credentials-secret, which is mounted and never read or printed. A changed plan is refused (gitops-plan-changed). `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`).
+
+(cli-gitops-run)=
+### `piceli gitops run`
+
+Run the controller loop (the Deployment's entrypoint); --once for one poll.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--config` | path | required | The controller config (config.json of the ConfigMap) |
+| `--state-dir` | path | required | The controller's state directory (its volume) |
+| `--once` | boolean | `False` | Poll once, print the status and exit |
+| `--service-account` | boolean | `False` | Inside the controller's pod: reach the API with the pod's service account (an explicit kubeconfig is written for it) |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--namespace` | text |  | Publish status and read requests as ConfigMaps in this namespace (else files in --state-dir) |
+| `--credentials-dir` | path |  | The mounted Git credentials Secret |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+
+**Contract**
+
+- **Reads:** --config, git remote, --credentials-dir
+- **Writes:** --state-dir (Git mirror, state, build receipts)
+- **Cluster:** writes
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Deploys branch environments without a per-run approval: only inside the pipeline's auto_approve policy, or a plan hash approved with gitops approve; main only on a new tag or a promotion, and only with an approved hash unless the owner enabled --main-auto-approve. One step at a time, bounded retries with backoff; a failing branch never stops the others. Git output and credentials are never printed.
+
+(cli-gitops-status)=
+### `piceli gitops status`
+
+Controller health, repository, last poll and every branch's state.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--state-dir` | path |  | A local controller's state directory instead of a cluster (the one `gitops run --once --state-dir` uses) |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** kubeconfig or --state-dir
+- **Writes:** nothing (read-only)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Read-only. Reads the ConfigMap piceli-gitops-status and the controller Deployment (or a local --state-dir). Health: healthy, degraded (last poll failed), stale (no poll for 3 intervals), starting, down. gitops-not-installed without a controller.
+
 (cli-heavy-run)=
 ### `piceli heavy run`
 
@@ -1399,6 +1557,31 @@ Print classified operator inventory: managed, unmanaged, unknown, and releases.
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`).
+
+(cli-promote)=
+### `piceli promote`
+
+Ask the GitOps controller to deploy BRANCH@SHA to the main branch's environment.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `TARGET` | text | required |  |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--state-dir` | path |  | A local controller's state directory instead of a cluster (the one `gitops run --once --state-dir` uses) |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+
+**Contract**
+
+- **Reads:** kubeconfig or --state-dir
+- **Writes:** --state-dir requests (local controller)
+- **Cluster:** writes
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Writes a request; the controller accepts only a commit it saw on that branch (gitops-promote-unknown otherwise) and main then waits for gitops approve of its plan hash.
 
 (cli-publish)=
 ### `piceli publish`
