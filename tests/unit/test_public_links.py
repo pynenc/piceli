@@ -21,6 +21,7 @@ LATEST_ONLY = {
     "compatibility",
     "contributing/evals",
     "crds",
+    "deploy_events",
     "environments",
     "gitops",
     "maintenance",
