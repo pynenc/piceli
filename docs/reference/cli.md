@@ -1281,8 +1281,8 @@ Print one workload's logs in an environment (kubectl, explicit context).
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
-- **Output contract:** partial
-- **Notes:** `piceli logs BRANCH WORKLOAD [--previous] [-f] [--tail N]`: stdout carries the log lines (kubectl's), not JSON; a refusal is the JSON rejection object. WORKLOAD is a Deployment, StatefulSet, DaemonSet or Job of the app (env-workload-unknown otherwise).
+- **Output contract:** conforms
+- **Notes:** `piceli logs BRANCH WORKLOAD [--previous] [-f] [--tail N]`: after the checks, output and exit status are kubectl's own (log lines on stdout); a refusal is the JSON rejection object. WORKLOAD is a Deployment, StatefulSet, DaemonSet or Job of the app (env-workload-unknown otherwise).
 
 (cli-observe-forward-command)=
 ### `piceli observe forward-command`

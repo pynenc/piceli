@@ -32,6 +32,29 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   package (the handoff API is unchanged). New error codes `gitops-*`. See
   {ref}`gitops-controller`.
 
+- **Per-branch environments (experimental):** `Pipeline(envs=EnvConfig(prefix=
+  "shop-", branches=["main", "wp-*"], max_envs=3, quota=…, claim_sizes=…,
+  seed_from=…, auto_approve=…))` runs one namespace per Git branch
+  (`<prefix><slug>`, at most 63 characters with a hash suffix; main maps to
+  its own namespace, never created, stopped or deleted). `piceli env up
+  BRANCH` plans (exit 3, `env_hash`) then deploys the branch with the digests
+  given (`--digest`, `--receipt`, or those `piceli env push` recorded),
+  isolated at render time: Services by relative name, no NodePort, hostPort
+  or hostPath, namespace-qualified cluster objects, its own state and
+  generated Secrets, a default-deny NetworkPolicy across namespaces and a
+  ResourceQuota (`env-isolation-*` codes otherwise). Branch claims use
+  `claim_sizes` and start empty; `piceli env seed` (or `--seed-from main`)
+  restores main's latest restore point into them. At most `max_envs`
+  branches run: one more stops the least recently pushed (scaled to zero),
+  or `--wait` refuses (`env-budget-full`). `piceli env down` deletes the
+  branch's claims, namespace and volumes (never main's). `piceli envs
+  [--json]` lists branch, namespace, commit, build and deploy state, health,
+  age and last push (with the GitOps controller's view), `piceli logs ENV
+  WORKLOAD [-f]` and `piceli access ENV --pipeline …` (free local ports).
+  Python API `piceli.envs` (`env_up`, `env_down`, `seed_env`, `list_envs`,
+  `namespace_for`); the GitOps controller deploys and tears down through it.
+  `plan_restore(..., source_namespace=)` restores a point into another
+  namespace. Plans of pipelines without `envs` keep their hashes.
 - **Builds in the cluster (experimental):** `piceli build job MODULE:ATTR
   --commit SHA --image BUILDER@sha256:… --repo URL` (and
   `piceli.artifacts.cluster_build.run_build_job`) runs the pipeline's host

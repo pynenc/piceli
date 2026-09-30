@@ -180,6 +180,135 @@ environment's hash for another, or after any override changed, is refused
 with `pipeline-plan-changed`, even when the rendered manifests happen to be
 the same. Plans of pipelines without environments keep their hashes.
 
+(branch-environments)=
+## Per-branch environments
+
+```{admonition} Maturity: experimental
+:class: note
+
+`EnvConfig`, `piceli env`, `piceli envs` and `piceli logs` are new in 0.13.0.
+```
+
+Named environments above are a few long-lived targets. A pipeline can also run
+**one namespace per Git branch**: every branch that matches a pattern gets its
+own isolated copy of the app next to main, in the same cluster.
+
+```python
+from piceli import EnvConfig, Pipeline
+
+pipeline = Pipeline(
+    app,
+    target,
+    build=images,
+    deliver=NodeLoopbackRegistry(),
+    envs=EnvConfig(
+        prefix="shop-",  # branch wp-login -> namespace shop-wp-login
+        main_namespace="shop",  # default: the target's namespace
+        branches=["main", "wp-*"],
+        max_envs=3,  # running branch environments
+        quota={"pods": "20", "requests.storage": "20Gi"},
+        claim_sizes={"db/data": "1Gi"},  # branch claims are small and start empty
+        seed_from=None,  # "main": seed new environments from main
+        auto_approve=False,  # True: branches need no hash (--approve-if-policy)
+    ),
+)
+```
+
+Declaring `envs` changes nothing for main: its rendering and plan hashes are
+the same, and `piceli deploy` keeps deploying it.
+
+### The namespace of a branch
+
+`<prefix><slug>`: the branch lowercased, every other character run replaced
+by `-` (`wp/Login_Page` → `shop-wp-login-page`). A name over 63 characters is
+cut and ends with `-` and 8 hex of the branch's SHA-256. The main branch maps
+to `main_namespace`, which env commands never create, stop or delete. Two
+branches that map to the same namespace are refused
+(`env-namespace-collision`).
+
+### Bring a branch up
+
+```text
+piceli env up wp-login --pipeline deploy/app.py:pipeline --digest api=127.0.0.1:5000/shop/api@sha256:…
+```
+
+Branch environments never build or deliver: the images come from
+`--digest NAME=REF` (or `NAME=sha256:…`, pulled from the pipeline's
+registry), a build receipt (`--receipt FILE`: a host build, a cluster build
+of `piceli build job`, or `{"images": {NAME: REF}}`), or, with neither, the
+digests `piceli env push` recorded for the branch. Without `--approve` it
+prints the plan and its `env_hash` (exit `3`): the namespace to create, the
+environments the budget stops, the deploy's combined plan and the seed.
+`--approve HASH` runs exactly that plan. `--approve-if-policy` runs a branch
+when the owner declared `EnvConfig(auto_approve=True)`, or when the
+pipeline's `auto_approve` policy allows the deploy and nothing is stopped;
+the main branch only by that policy. A new namespace has nothing to plan
+against: the hash covers the rendered model, and the deploy into it may only
+create objects.
+
+Each branch keeps its own state in `<state_dir>/branches/<namespace>`, so its
+Secrets are generated from the app's declarations in that namespace and never
+copied from main. The environment is recorded in the ConfigMap `piceli-env`
+of its namespace (branch, commit, images, last push, deploy state).
+
+### Isolation
+
+A branch renders into its own namespace, and its plan is refused
+(`env-isolation-*`) when it would reach another environment or the node:
+
+- a Service named absolutely in another namespace
+  (`api.shop.svc.cluster.local`): name Services by their relative name
+  (`default` and `kube-system` stay reachable);
+- a `NodePort` or `LoadBalancer` Service, a `hostPort`, `hostNetwork`,
+  `hostPID`/`hostIPC`, or a `hostPath` volume;
+- a role binding to a subject of another namespace, or a NetworkPolicy peer
+  selecting every namespace or another branch's;
+- a claim bound to a volume the app does not declare, and cluster objects
+  that cannot be renamed (`CustomResourceDefinition`, `Namespace`).
+
+Other cluster-scoped objects get the namespace in their name
+(`reader` → `reader-shop-wp-login`, references rewritten; RBAC declared with
+`cluster_rules=` already is). Every branch also gets a `NetworkPolicy`
+`piceli-env-isolation` that denies traffic across namespaces (its own
+namespace and the cluster DNS stay allowed; `allow_egress=["0.0.0.0/0"]`
+opens the internet) and a `ResourceQuota` of the same name (`quota`; by
+default only counts, which need no pod requests). A controller in another
+namespace (an ingress controller) needs its own allowing policy in the app.
+
+### Data
+
+Branch claims use `claim_sizes` (by workload, `workload/claim template` or
+claim name) and start empty. `piceli env seed wp-login` (or `env up
+--seed-from main`) restores main's latest verified restore point (see
+{doc}`restore_points`) into the branch's claims: it verifies the local
+archives, stops the branch's writers, empties and restores each claim, checks
+its content digest in the cluster and starts the writers again. Main's
+claims are only read from the local archive, never touched.
+
+### Budget and teardown
+
+At most `max_envs` branch environments run. `env up` of one more stops the
+least recently pushed one (its Deployments and StatefulSets scaled to zero,
+recorded; the next `env up` of it starts them again); `--wait` refuses with
+`env-budget-full` instead. `piceli env down wp-login` plans, then with the
+`env_hash` deletes the branch's claims, its namespace and the volumes bound to
+them, and its local state. It refuses the main branch and namespace always
+(`env-main-protected`) and any namespace without this app's
+`piceli.io/env-of` label (`env-namespace-not-managed`).
+
+### One place to look
+
+- `piceli envs --pipeline MODULE:ATTR [--json]`: every environment with its
+  branch, namespace, commit, build and deploy state, health (from the
+  workloads' ready replicas), age and last push, plus the GitOps
+  controller's view of each branch when one runs (see {doc}`gitops`).
+- `piceli logs wp-login api [--previous] [-f]`: one workload's logs in that
+  environment (`kubectl logs` with the explicit context).
+- `piceli access wp-login --pipeline MODULE:ATTR`: the declared forwards of
+  that environment, each on a free local port (main keeps its declared ports).
+
+`--pipeline` can be set once with `PICELI_PIPELINE`.
+
 ## API reference
 
 | Task | Types |
@@ -187,3 +316,4 @@ the same. Plans of pipelines without environments keep their hashes.
 | Declare and apply | {py:class}`~piceli.app.environment.Environment`, {py:class}`~piceli.app.environment.Scaling`, {py:meth}`App.environment <piceli.app.app.App.environment>`, {py:meth}`App.for_environment <piceli.app.app.App.for_environment>`, `App.environments`, `App.selected_environment` |
 | Pipelines | {py:class}`~piceli.pipeline.model.Pipeline` (`target=` mapping, `for_environment`, `environment`, `needs_environment`) |
 | Compare | {py:func}`~piceli.app.environment.environment_diff`, {py:func}`~piceli.app.environment.field_changes` |
+| Per-branch environments | `piceli.envs`: `EnvConfig`, `namespace_for`, `env_up`, `env_down`, `seed_env`, `list_envs`, `EnvStatus` |
