@@ -187,6 +187,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "observe",
     ),
     _E(
+        "ui-experimental-disabled",
+        "Experimental UI path disabled",
+        "This web UI path (in-cluster manual delivery, remote local-client access, or an install manifest that enables either) has not passed its release gate and is disabled by default. Nothing was started or rendered.",
+        "Use `piceli ui serve`, `piceli ui cluster-observe` or `piceli deploy`. To try the unsupported path anyway, set `PICELI_UI_EXPERIMENTAL=1`.",
+        False,
+        "observe",
+    ),
+    _E(
         "ui-state-invalid",
         "Control state cannot be read",
         "Durable service control state is incompatible or its integrity checks failed.",

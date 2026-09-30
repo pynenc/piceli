@@ -12,8 +12,11 @@ import typer
 
 from piceli.cli_contract import reject, say
 from piceli.k8s.cli.ui_remote import connect as connect_remote
+from piceli.k8s.ui_experimental import experimental_enabled
 
-app = typer.Typer(rich_markup_mode=None, help="Piceli delivery web application.")
+app = typer.Typer(
+    rich_markup_mode=None, help="Piceli delivery web application (experimental)."
+)
 
 app.command("connect")(connect_remote)
 
@@ -70,7 +73,11 @@ def serve(
         ),
     ] = None,
 ) -> None:
-    """Register an existing definition or inventory scope and serve the bundled UI."""
+    """Register an existing definition or inventory scope and serve the bundled UI.
+
+    The web UI is experimental. Apps that declare pre-rollout checks are
+    refused (ui-prerollout-unsupported); deploy them with piceli deploy.
+    """
     if host not in {"127.0.0.1", "::1", "localhost"}:
         reject("ui-request-rejected")
     try:
@@ -282,8 +289,21 @@ def cluster_observe(
     ] = "127.0.0.1",
     port: Annotated[int, typer.Option(min=1, max=65535)] = 8000,
     url_prefix: Annotated[str, typer.Option()] = "",
+    experimental: Annotated[
+        bool,
+        typer.Option(
+            help="Allow the unsupported experimental manual delivery and "
+            "local-client access paths (also PICELI_UI_EXPERIMENTAL=1)"
+        ),
+    ] = False,
 ) -> None:
-    """Serve scoped cluster observation and configured manual delivery."""
+    """Serve read-only scoped cluster observation (experimental).
+
+    Manual delivery (deploy grants, definition and renderer options) and
+    local-client access (--authorized-access-sub) have not passed their release
+    gate: they are refused with ui-experimental-disabled unless --experimental
+    or PICELI_UI_EXPERIMENTAL=1 is given, and are unsupported.
+    """
     if (
         host not in {"127.0.0.1", "::1"}
         or not authorized_sub
@@ -302,6 +322,21 @@ def cluster_observe(
         or not set(authorized_access_sub or ()).issubset(set(authorized_sub))
     ):
         reject("ui-invalid-request")
+    if (
+        authorized_deploy_sub
+        or authorized_access_sub
+        or any(
+            value is not None
+            for value in (
+                definition,
+                source_root,
+                source_file,
+                renderer_image,
+                renderer_platform,
+            )
+        )
+    ) and not experimental_enabled(experimental):
+        reject("ui-experimental-disabled")
     try:
         import uvicorn
 

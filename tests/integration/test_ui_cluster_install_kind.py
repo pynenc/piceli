@@ -29,7 +29,9 @@ def test_manual_ui_manifest_is_admitted_by_kubernetes() -> None:
                 'namespace = "shop"', f'namespace = "{namespace}"'
             ),
         )
-        config = replace(_config(), namespace=namespace, manual=manual)
+        config = replace(
+            _config(), namespace=namespace, experimental=True, manual=manual
+        )
         output = kubectl(
             "apply",
             "--dry-run=server",

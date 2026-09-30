@@ -442,6 +442,7 @@ CASES: dict[str, tuple[Argv, str]] = {
             "49152",
             "--kubectl",
             str(p / "missing-kubectl"),
+            "--experimental",
         ],
         "ui-invalid-request",
     ),

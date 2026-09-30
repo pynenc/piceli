@@ -1,8 +1,47 @@
 # Piceli web application
 
-Status: experimental, under implementation. The local application serves a
-bundled React interface from Python. Node is a contributor build dependency;
-the installed wheel needs only `piceli[ui]`. No browser assets load from a CDN.
+Status: **experimental**. The local application serves a bundled React
+interface from Python. Node is a contributor build dependency; the installed
+wheel needs only `piceli[ui]`. No browser assets load from a CDN. Nothing
+changes for users who do not install `piceli[ui]` or run `piceli ui`.
+
+## Status in this release
+
+What works (experimental; interfaces may change):
+
+- `piceli ui serve`: the loopback UI for explicit inventory scopes and existing
+  release definitions. Isolated source evaluation, separate exact source and
+  plan approvals, durable release runs, Activity, Resources, logs and
+  supervised local port forwards.
+- `piceli ui cluster-observe`: authenticated, read-only inspection and logs of
+  one namespace behind an HTTPS gateway with OIDC subject grants.
+- The [installation template](ui_cluster_install.md) in its default read-only
+  profile (single replica, TLS gateway, private PVC).
+
+What the UI refuses:
+
+- An app that declares pre-rollout checks (`app.pre_rollout(...)`) fails with
+  `ui-prerollout-unsupported`: the UI never plans a release that would skip
+  them. Deploy it with `piceli deploy`.
+- A `Pipeline` target (and so restore points, backups and branch
+  environments) is not evaluated by the UI; use `piceli deploy`, `piceli env`
+  or `piceli gitops`.
+
+Disabled by default (**unsupported**): these paths have not passed their
+release gate and fail with `ui-experimental-disabled` unless you pass
+`--experimental` or set `PICELI_UI_EXPERIMENTAL=1`:
+
+- in-cluster manual delivery: `piceli ui cluster-serve` or `cluster-observe`
+  with `--authorized-deploy-sub`, `--definition`, `--source-root`,
+  `--source-file`, `--renderer-image` or `--renderer-platform`;
+- remote local-client access: `--authorized-access-sub` and
+  `piceli ui connect`;
+- install manifests that enable either (`ClusterInstallConfig(manual=...)` or
+  `authorized_access_subjects=...` need `experimental=True`, which adds
+  `--experimental` to the rendered command).
+
+Building images inside the cluster from the UI is not available. Opting in
+does not make these paths supported; use them only in disposable clusters.
 
 ## Try the local UI without a cluster
 
@@ -68,7 +107,7 @@ browser action runs on the UI server host, not on the browser's laptop.
 | GitHub Actions or another CI runner → Kubernetes cluster | `piceli deploy --plan` and `piceli deploy --apply` with exact approval (see {doc}`ci`) | CLI works independently; the UI does not launch CI jobs |
 | Local or remote UI host running a CI-style pipeline definition | The existing `piceli deploy` CLI remains available | Browser plan/apply for pipeline definitions is pending; a release-definition UI run does not stand in for it |
 | Remote machine hosting the local UI → Kubernetes cluster | Run `piceli ui serve` on that machine and reach its loopback listener through an SSH tunnel | Operations and port forwards run on that machine |
-| Authenticated scoped UI → Kubernetes namespace | `piceli ui cluster-observe` or the opt-in `cluster-serve` profile behind an HTTPS/OIDC gateway | Scoped observation; manual delivery and local-client forwarding require separate subject grants and clean kind installation remains pending |
+| Authenticated scoped UI → Kubernetes namespace | `piceli ui cluster-observe` (read-only) behind an HTTPS/OIDC gateway; `cluster-serve` delivery only with `PICELI_UI_EXPERIMENTAL=1` | Scoped observation; manual delivery and local-client forwarding are disabled by default and unsupported |
 | Direct application deployment to a machine without Kubernetes | No Piceli target/provider for this yet | No deployment action is offered |
 
 For the SSH-tunnel case, keep the UI bound to loopback on the remote host and
@@ -257,8 +296,10 @@ provider redirects back, a short same-origin page continues to the
 application, so the browser sends the new SameSite=Strict session cookie.
 Opening the UI from a link on another site is accepted as a top-level page
 navigation only; API calls, subresources and writes must come from the UI's
-own origin. The default profile has no deployment or access grant. An actual in-cluster manual
-deployment is available as the opt-in `cluster-serve` profile when an
+own origin. The default profile has no deployment or access grant. An experimental,
+unsupported in-cluster manual deployment is available, only with
+`--experimental` or `PICELI_UI_EXPERIMENTAL=1`, as the `cluster-serve`
+profile when an
 operator mounts an explicit release definition and allowlisted source files,
 pins a prebuilt renderer image by repository digest, configures deploy grants,
 and grants only the resource kinds that release may write. Source evaluation
@@ -269,7 +310,9 @@ its default and documents this manual profile. The clean kind installation,
 credential-boundary, backup/restore, and remote local-client acceptance gate
 remains open under Wave 4.
 
-Local-client forwarding is separately enabled by repeating
+Local-client forwarding (experimental and unsupported; it also needs
+`--experimental` or `PICELI_UI_EXPERIMENTAL=1` on both the server and
+`piceli ui connect`) is separately enabled by repeating
 `--authorized-access-sub SUBJECT` for subjects already named by
 `--authorized-sub`. The cluster service never binds the user's laptop port.
 An authorized browser creates a short-lived ticket for a selected resource UID;
@@ -279,7 +322,7 @@ URL. On the user's machine, run:
 ```sh
 piceli ui connect --server https://piceli.example.test \
   --ticket TICKET_ID --kubeconfig ./my-cluster.kubeconfig \
-  --context my-cluster --local-port 8080
+  --context my-cluster --local-port 8080 --experimental
 ```
 
 The command prompts for the pairing secret without echo. It checks the

@@ -530,6 +530,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`ui-assets-unavailable`](#error-ui-assets-unavailable) | observe | no |
 | [`ui-evaluation-failed`](#error-ui-evaluation-failed) | observe | no |
 | [`ui-execution-failed`](#error-ui-execution-failed) | observe | no |
+| [`ui-experimental-disabled`](#error-ui-experimental-disabled) | observe | no |
 | [`ui-idempotency-conflict`](#error-ui-idempotency-conflict) | observe | no |
 | [`ui-invalid-request`](#error-ui-invalid-request) | observe | no |
 | [`ui-logs-unavailable`](#error-ui-logs-unavailable) | observe | yes |
@@ -2800,6 +2801,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Deployment did not succeed.** The real deployment engine or configured checks reported failure.
 
 - **Fix:** Inspect the run stages and diagnosis before recovery or a newly reviewed rollback.
+- **Retry-safe:** no
+
+(error-ui-experimental-disabled)=
+### `ui-experimental-disabled`
+
+**Experimental UI path disabled.** This web UI path (in-cluster manual delivery, remote local-client access, or an install manifest that enables either) has not passed its release gate and is disabled by default. Nothing was started or rendered.
+
+- **Fix:** Use `piceli ui serve`, `piceli ui cluster-observe` or `piceli deploy`. To try the unsupported path anyway, set `PICELI_UI_EXPERIMENTAL=1`.
 - **Retry-safe:** no
 
 (error-ui-idempotency-conflict)=

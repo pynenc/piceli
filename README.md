@@ -188,6 +188,10 @@ Next steps:
   codes explained by `piceli explain`, the whole command tree with side
   effects and approval rules from `piceli help-json`, and a public fake
   Kubernetes API (`piceli.testing`) for your own tests.
+- **Web UI (experimental)**: `pip install "piceli[ui]"` and `piceli ui serve`
+  open a local browser UI to inspect an app and deploy it through the same
+  reviewed plans. In-cluster delivery from the UI is disabled by default; see
+  the [web UI page](https://docs.pynenc.org/projects/piceli/en/stable/ui.html).
 
 ## For coding agents
 

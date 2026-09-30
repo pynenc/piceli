@@ -8,8 +8,12 @@ login, scoped observation and logs, with no write verbs in its Role. An
 optional manual-delivery profile mounts an explicit release definition and
 source allowlist, starts `piceli ui cluster-serve`, and adds only the namespace
 resource rules the operator supplies. It grants no universal deployment
-rights. A clean authenticated kind deployment and restart recovery remain
-Wave 4 acceptance work; rendering a manifest is not that gate.
+rights. The whole template is **experimental**. The manual-delivery profile
+and local-client access are also **unsupported and disabled by default**:
+the renderer refuses them with `ui-experimental-disabled` unless the config
+sets `experimental=True`, which adds `--experimental` to the rendered UI
+command. A clean authenticated deployment and restart recovery have not
+passed their release gate; rendering a manifest is not that gate.
 
 Contributors can run `make test-ui-kind-renderer` to build and load a throwaway
 renderer image into a disposable kind cluster. That test checks actual Job
@@ -94,6 +98,7 @@ supported when the identity provider has the matching callback URL.
 and enables a local-client access ticket; it does not grant deployment writes
 or claim that a port opens on the browser's machine. A local client must
 establish the forward separately. Leaving it empty grants no access tickets.
+Setting it requires `experimental=True`.
 
 Review the rendered Role, ClusterRole, NetworkPolicies, projected credentials,
 image digests and Ingress route. With an explicit disposable target, the
@@ -127,7 +132,8 @@ installation itself remain inside the namespace's administrative trust boundary.
 
 ## Optional manual delivery profile
 
-The profile is opt-in. It puts `release.toml` and precisely the listed source
+The profile is experimental, unsupported and requires `experimental=True`
+on `ClusterInstallConfig`. It puts `release.toml` and precisely the listed source
 files in a read-only ConfigMap volume. A credential-free init container checks
 their reviewed SHA-256 digests and copies them as regular, read-only files to
 `/opt/piceli/source`, backed by a private `emptyDir`. This is necessary because
@@ -180,7 +186,7 @@ manual = ManualDeliveryConfig(
         ),
     ),
 )
-# Pass manual=manual to ClusterInstallConfig before rendering.
+# Pass manual=manual and experimental=True to ClusterInstallConfig.
 ```
 
 The deploy subjects must also appear in `authorized_subjects`. The renderer

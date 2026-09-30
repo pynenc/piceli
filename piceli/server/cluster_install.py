@@ -277,6 +277,9 @@ class ClusterInstallConfig:
     dns_namespace: str = "kube-system"
     authorized_access_subjects: tuple[str, ...] = ()
     manual: ManualDeliveryConfig | None = None
+    #: Opt in to the unsupported manual delivery and local-client access
+    #: paths; the rendered UI command then passes ``--experimental``.
+    experimental: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -356,6 +359,13 @@ class ClusterInstallConfig:
             _image(image)
         for value in (*self.api_egress_cidrs, *self.oidc_egress_cidrs):
             _cidr(value)
+        if (
+            self.manual is not None or self.authorized_access_subjects
+        ) and not self.experimental:
+            raise ValueError(
+                "ui-experimental-disabled: manual delivery and local-client "
+                "access are experimental; set experimental=True to render them"
+            )
         if self.manual is not None and (
             self.manual.namespace != self.namespace
             or not set(self.manual.authorized_deploy_subjects)
@@ -437,6 +447,8 @@ def render_cluster_install(config: ClusterInstallConfig) -> tuple[dict, ...]:
         ui_command += ["--authorized-sub", subject]
     for subject in config.authorized_access_subjects:
         ui_command += ["--authorized-access-sub", subject]
+    if config.experimental:
+        ui_command.append("--experimental")
     if manual is not None:
         ui_command += [
             "--definition",

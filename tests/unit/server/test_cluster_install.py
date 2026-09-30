@@ -213,7 +213,9 @@ def test_manual_profile_mounts_reviewed_source_and_only_configured_write_kinds()
     None
 ):
     manual = _manual()
-    objects = render_cluster_install(replace(_config(), manual=manual))
+    objects = render_cluster_install(
+        replace(_config(), experimental=True, manual=manual)
+    )
     deployment = _find(objects, "Deployment", "piceli-ui")
     pod = deployment["spec"]["template"]["spec"]
     command = pod["containers"][0]["command"]
@@ -297,7 +299,7 @@ def test_materialized_nested_configmap_source_is_regular_and_digest_checked(
         source_file_allowlist=("package/__init__.py", "package/composition.py"),
     )
     pod = _find(
-        render_cluster_install(replace(_config(), manual=manual)),
+        render_cluster_install(replace(_config(), experimental=True, manual=manual)),
         "Deployment",
         "piceli-ui",
     )["spec"]["template"]["spec"]
@@ -370,11 +372,14 @@ def test_manual_profile_cannot_escape_source_or_expand_resource_scope() -> None:
         )
     with pytest.raises(ValueError, match="target and subjects"):
         replace(
-            _config(), manual=replace(manual, authorized_deploy_subjects=("other",))
+            _config(),
+            experimental=True,
+            manual=replace(manual, authorized_deploy_subjects=("other",)),
         )
     with pytest.raises(ValueError, match="target and subjects"):
         replace(
             _config(),
+            experimental=True,
             manual=replace(
                 manual,
                 release_definition_toml=manual.release_definition_toml.replace(
@@ -389,13 +394,16 @@ def test_manual_profile_cannot_escape_source_or_expand_resource_scope() -> None:
 
 
 def test_remote_local_client_grant_is_opt_in_and_adds_no_write_role() -> None:
-    config = replace(_config(), authorized_access_subjects=("operator-subject",))
+    config = replace(
+        _config(), experimental=True, authorized_access_subjects=("operator-subject",)
+    )
     objects = render_cluster_install(config)
     command = _find(objects, "Deployment", "piceli-ui")["spec"]["template"]["spec"][
         "containers"
     ][0]["command"]
     assert command[command.index("--authorized-access-sub") + 1] == "operator-subject"
     assert "--authorized-deploy-sub" not in command
+    assert "--experimental" in command
     role = _find(objects, "Role", "piceli-ui")
     assert all(
         verb not in {"create", "patch", "update", "delete"}
@@ -456,3 +464,14 @@ def test_restored_claim_and_url_prefix_change_the_targeted_installation() -> Non
     assert command[command.index("--url-prefix") + 1] == "/piceli"
     ingress = _find(objects, "Ingress", "piceli-ui")
     assert ingress["spec"]["rules"][0]["http"]["paths"][0]["path"] == "/piceli"
+
+
+def test_unfinished_paths_need_the_experimental_opt_in() -> None:
+    with pytest.raises(ValueError, match="ui-experimental-disabled"):
+        replace(_config(), manual=_manual())
+    with pytest.raises(ValueError, match="ui-experimental-disabled"):
+        replace(_config(), authorized_access_subjects=("operator-subject",))
+    command = _find(render_cluster_install(_config()), "Deployment", "piceli-ui")[
+        "spec"
+    ]["template"]["spec"]["containers"][0]["command"]
+    assert "--experimental" not in command
