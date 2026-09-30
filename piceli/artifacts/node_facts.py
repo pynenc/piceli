@@ -23,9 +23,12 @@ this module runs nothing.
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 PAGE_SIZE_LABEL = "piceli.io/page-size"
@@ -189,3 +192,34 @@ def page_size(arch: str, kernel: str, label: Any = None) -> tuple[int, str]:
             if pattern.search(kernel):
                 return size, "kernel"
     return 4096, "architecture"
+
+
+def store_facts(state_dir: Path, facts: NodeFacts) -> None:
+    """Remember a successful read of a node's facts under ``state_dir``.
+
+    A later build uses it while the cluster API is unreachable
+    (:func:`cached_facts`). Best effort: a read-only directory is ignored.
+    """
+    path = state_dir / "node-facts" / f"{facts.node}.json"
+    document = {
+        "facts": facts.to_dict(),
+        "read_at": datetime.now(UTC).isoformat(timespec="seconds"),
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        partial = path.with_suffix(".part")
+        partial.write_text(json.dumps(document, sort_keys=True))
+        partial.replace(path)
+    except OSError:
+        pass
+
+
+def cached_facts(state_dir: Path, node: str) -> tuple[NodeFacts, float] | None:
+    """``(facts, age in seconds)`` of the last successful read of ``node``, if any."""
+    try:
+        document = json.loads((state_dir / "node-facts" / f"{node}.json").read_text())
+        facts = NodeFacts.from_dict(document["facts"])
+        read_at = datetime.fromisoformat(document["read_at"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return facts, max(0.0, (datetime.now(UTC) - read_at).total_seconds())

@@ -104,6 +104,35 @@ class EnvCluster:
         }
         self._call(self._core().create_namespace, body, field_manager=FIELD_MANAGER)
 
+    def label_namespace(
+        self, name: str, labels: Mapping[str, str], annotations: Mapping[str, str]
+    ) -> None:
+        """Add labels and annotations (adopts a namespace ``env push`` created)."""
+        body = {"metadata": {"labels": dict(labels), "annotations": dict(annotations)}}
+        self._call(self._core().patch_namespace, name, body)
+
+    def pushed(self, namespace: str, branch: str) -> dict[str, Any] | None:
+        """The images ``piceli env push`` recorded for ``branch``, if any.
+
+        ``{"images": {name: {digest, pull_ref?}}, "commit"?, "pushed_at"?}``
+        from the ConfigMap ``piceli-env-<slug>``.
+        """
+        from piceli.k8s.cli.env_push import configmap_name
+
+        body = self._call(
+            self._core().read_namespaced_config_map, configmap_name(branch), namespace
+        )
+        if body is None:
+            return None
+        data = dict(body.get("data") or {})
+        try:
+            images = json.loads(data.get("images") or "{}")
+        except ValueError:
+            return None
+        if not isinstance(images, dict) or not images:
+            return None
+        return {**data, "images": images}
+
     def delete_namespace(self, name: str) -> bool:
         return self._call(self._core().delete_namespace, name) is not None
 

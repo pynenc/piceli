@@ -176,3 +176,53 @@ def _delivery(tmp_path: Path, *, newest: bool = False) -> dict[str, Any]:
         key=lambda path: path.stat().st_mtime_ns,
     )
     return json.loads(paths[-1 if newest else 0].read_text())
+
+
+def _outage(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The API refuses the node-facts read (the rest of the plan is unaffected)."""
+
+    def unreachable(self, target, node):  # type: ignore[no-untyped-def]
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(NoDockerBackend, "node_facts", unreachable)
+
+
+def test_an_api_outage_uses_the_cached_node_facts_and_says_so(
+    host_shop, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    """B22: a plan or build after one successful read needs no node read."""
+    _, _, tmp_path = host_shop
+    first = _plan(tmp_path)
+    assert (tmp_path / "state" / "node-facts" / f"{NODE}.json").is_file()
+    _outage(monkeypatch)
+    code, events, result = deploy(tmp_path, "--plan", "--json")
+    assert code == 0, result.stdout + result.stderr
+    assert events[-1]["combined_hash"] == first["hash"]
+    assert "cached" in result.stderr and "unreachable" in result.stderr
+
+
+def test_no_cache_and_no_declared_facts_refuses_with_a_code(
+    host_shop, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    _, _, tmp_path = host_shop
+    _outage(monkeypatch)
+    code, _, result = deploy(tmp_path, "--plan", "--json")
+    assert code != 0
+    assert "node-facts-unavailable" in result.stdout + result.stderr
+
+
+def test_declared_node_facts_need_no_api_and_no_cache(host_shop, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    _, _, tmp_path = host_shop
+    app = tmp_path / "app.py"
+    app.write_text(
+        app.read_text().replace(
+            'cache_dir="cache")',
+            'cache_dir="cache", node_facts={"node": "worker-1", "os": "linux", '
+            '"architecture": "arm64", "kernel_version": "6.6.51+rpt-rpi-2712", '
+            '"page_size": 16384, "page_size_source": "kernel"})',
+        )
+    )
+    _outage(monkeypatch)
+    plan = _plan(tmp_path)
+    assert plan["stages"]["build"]["builds"]["shop"]["node_facts"]["page_size"] == 16384
+    assert not (tmp_path / "state" / "node-facts").exists()

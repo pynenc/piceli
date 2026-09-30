@@ -6,6 +6,30 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ## Version 0.13.0
 
+- **Builds in the cluster (experimental):** `piceli build job MODULE:ATTR
+  --commit SHA --image BUILDER@sha256:… --repo URL` (and
+  `piceli.artifacts.cluster_build.run_build_job`) runs the pipeline's host
+  builds as a Job on a labelled amd64 builder node: Git credentials from a
+  Secret (never printed), arm64 cross-built, the cache on a claim per branch and
+  page size, images pushed by digest to the node registry, the receipt of a
+  local host build plus `delivered` and `job`. Plan first (exit 3, plan hash),
+  then `--approve HASH`; new errors `cluster-build-invalid` and
+  `cluster-build-failed`. `piceli env push BRANCH MODULE:ATTR --receipt FILE`
+  (or `--digest IMAGE=sha256:…`) records a laptop-built digest in the ConfigMap
+  `piceli-env-<branch>` of the branch's namespace (`env-push-invalid`).
+- **Fixed, B25:** an env var named like a token or secret whose value is a
+  file path (an app pointing at a mounted token file) is a plain value: it is
+  no longer redacted into a refused apply (`unresolved private or redacted
+  manifest`). Inline secret values are still redacted.
+- **Fixed, B22:** a host build no longer needs the cluster API for node facts:
+  the last successful read is cached per node in the state directory and used
+  (and reported, with its age) when the API is unreachable, and
+  `Build.spec(..., node_facts={...})` declares them. The plan hash covers the
+  facts used.
+- **Fixed, B28:** the shared host-build target directory is per architecture and
+  page size (`<cache>/target/arm64-16384`), so builds for 4 KiB and 16 KiB
+  pages no longer rebuild jemalloc and everything above it; the first build
+  after upgrading compiles once more.
 - **Registry retention from the CLI (experimental):** `piceli artifacts
   retention --to oci://host[:port]/prefix --receipts …` reports which
   manifests a registry keeps (the last `--keep N` releases, per image, of the

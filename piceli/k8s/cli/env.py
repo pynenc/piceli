@@ -383,7 +383,11 @@ def logs(
 
 
 def register(root: typer.Typer) -> None:
-    """Add ``env`` (``up``, ``down``, ``seed`` …), ``envs`` and ``logs`` to the root."""
+    """Add ``env`` (``up``, ``down``, ``seed``, ``push``), ``envs`` and ``logs`` to the root."""
+    from piceli.k8s.cli.env_push import push
+
+    if "push" not in {command.name for command in app.registered_commands}:
+        app.command("push")(push)
     root.add_typer(app, name="env")
     root.command("envs")(envs)
     root.command("logs")(logs)

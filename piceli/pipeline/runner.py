@@ -588,7 +588,7 @@ class PipelineRunner:
 
     def _node_facts(self, build: Build) -> NodeFacts:
         """The facts of a host build's node (one read-only GET per node and run)."""
-        from piceli.artifacts.node_facts import NodeFactsError
+        from piceli.artifacts.node_facts import NodeFactsError, store_facts
 
         target = self.pipeline.target
         if not target.nodes:
@@ -598,17 +598,41 @@ class PipelineRunner:
                 "target (nodes={alias: node name})",
             )
         _, node = target.node(build.node)
+        if build.node_facts is not None:
+            return build.node_facts
         if node.name not in self._facts:
             try:
-                self._facts[node.name] = self.backend.node_facts(target, node.name)
+                facts = self.backend.node_facts(target, node.name)
             except NodeFactsError as error:
                 raise PipelineError(error.code, str(error)) from None
             except Exception as error:
-                raise PipelineError(
-                    "node-facts-unavailable",
-                    f"could not read node {node.name!r} ({type(error).__name__})",
-                ) from None
+                facts = self._cached_facts(node.name)
+                if facts is None:
+                    raise PipelineError(
+                        "node-facts-unavailable",
+                        f"could not read node {node.name!r} "
+                        f"({type(error).__name__}) and no cached facts exist; "
+                        "declare them with Build.spec(node_facts=...)",
+                    ) from None
+            else:
+                store_facts(self.pipeline.state_dir, facts)
+            self._facts[node.name] = facts
         return self._facts[node.name]
+
+    def _cached_facts(self, node: str) -> NodeFacts | None:
+        """The facts of the last successful read of ``node``, said aloud with their age."""
+        from piceli.artifacts.node_facts import cached_facts
+
+        found = cached_facts(self.pipeline.state_dir, node)
+        if found is None:
+            return None
+        facts, age = found
+        self.say(
+            f"node {node!r}: the API is unreachable; using node facts cached "
+            f"{int(age // 60)} minute(s) ago "
+            f"({facts.architecture}, {facts.page_size} byte pages)"
+        )
+        return facts
 
     def _provenance(self, sources: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
         """What the release records about its sources (commit, dirty, ``--ref``)."""

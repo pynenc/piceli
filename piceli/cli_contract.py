@@ -946,6 +946,53 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "cache).",
         ),
         # ------------------------------------------- 0.8.0 maintenance
+        "build job": _C(
+            "Build the pipeline's host builds at a Git commit as a Job on a "
+            "labelled builder node and print the receipt: plan (exit 3 with the "
+            "plan hash), then --approve HASH.",
+            reads=("pipeline module", "kubeconfig", "node facts"),
+            writes=("node facts cache (state_dir)",),
+            cluster="writes",
+            approval_required=True,
+            safe_to_retry=True,
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2, 3),
+            notes="Without --approve it reads the node facts and prints the Job "
+            "plan only. With --approve HASH it creates the cache claim (per "
+            "branch and page size) if missing and one Job that fetches the "
+            "commit (Git credentials from a Secret, never printed), builds for "
+            "each --platform, pushes by digest to the node registry and prints "
+            "the receipt; the Job is removed afterwards and the cache kept. "
+            "Rejected: cluster-build-invalid; failed: cluster-build-failed.",
+        ),
+        "build job-run": _C(
+            "Inside the build Job: build the host specs of a checked-out "
+            "source and push the images by digest (not for manual use).",
+            reads=("the checked-out source", "PICELI_BUILD_FACTS"),
+            writes=("the build cache directory", "the node registry"),
+            cluster="none",
+            safe_to_retry=True,
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            notes="The command the Job runs; it prints one receipt line on "
+            "stdout. The approval was the plan hash of `build job`.",
+        ),
+        "env push": _C(
+            "Record a laptop-built image digest for a branch environment, "
+            "where `env up` and the controller read it: plan (exit 3 with the "
+            "hash), then --approve HASH.",
+            reads=("pipeline module", "kubeconfig", "the receipt file"),
+            cluster="writes",
+            approval_required=True,
+            safe_to_retry=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2, 3),
+            notes="Writes the ConfigMap piceli-env-<branch> (keys images, "
+            "commit, pushed_at) in the branch environment's namespace, creating "
+            "the namespace when absent. It pushes no image and deploys nothing.",
+        ),
         "cache status": _C(
             "Show the disk Piceli uses per state directory and category, and "
             "its temporary directories.",

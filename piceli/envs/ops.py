@@ -14,6 +14,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import re
 import shutil
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
@@ -95,18 +96,98 @@ def namespace_for(pipeline: Pipeline, branch: str) -> str:
     return env_config(pipeline).namespace_for(branch, main_namespace(pipeline))
 
 
+_DIGEST_ONLY = re.compile(r"sha256:[0-9a-f]{64}")
+
+
+def pull_reference(pipeline: Pipeline, image: str, digest: str) -> str:
+    """Where the nodes pull build ``image`` with ``digest`` from (the delivery's registry)."""
+    from piceli.pipeline.compose import registry_prefix
+    from piceli.pipeline.model import NodeLoopbackRegistry, Registry
+
+    strategy = pipeline.deliver
+    if isinstance(strategy, NodeLoopbackRegistry):
+        prefix = strategy.repository or pipeline.app.name
+        return f"127.0.0.1:{strategy.port}/{prefix}/{image}@{digest}"
+    if isinstance(strategy, Registry):
+        from piceli.artifacts.registry import RegistryTarget
+
+        host = (
+            strategy.node_registry or RegistryTarget.parse(strategy.url + "/x").registry
+        )
+        prefix = registry_prefix(strategy.url)
+        return f"{host}/{prefix + '/' if prefix else ''}{image}@{digest}"
+    raise EnvError(
+        "env-image-invalid",
+        f"image {image!r} is given by digest only and the pipeline has no "
+        "registry delivery to pull it from; give repository@sha256:…",
+    )
+
+
+def _entry_reference(pipeline: Pipeline, name: str, entry: Any) -> str:
+    if isinstance(entry, str):
+        if _DIGEST_ONLY.fullmatch(entry):
+            return pull_reference(pipeline, name, entry)
+        return entry
+    if isinstance(entry, Mapping):
+        delivered = entry.get("delivered")
+        if isinstance(delivered, Mapping) and isinstance(
+            delivered.get("pull_ref"), str
+        ):
+            return str(delivered["pull_ref"])
+        if isinstance(entry.get("pull_ref"), str):
+            return str(entry["pull_ref"])
+        digest = entry.get("manifest_digest") or entry.get("digest")
+        if isinstance(digest, str) and _DIGEST_ONLY.fullmatch(digest):
+            return pull_reference(pipeline, name, digest)
+    raise EnvError(
+        "env-image-invalid", f"image {name!r} has no digest or pull reference"
+    )
+
+
+def receipt_images(receipt: Mapping[str, Any]) -> dict[str, Any]:
+    """The image table of a build receipt, pushed record or plain mapping.
+
+    Accepts ``{"images": {name: ref | {digest, pull_ref?}}}`` (an ``env
+    push`` record, or a plain table), a host-build receipt
+    (``outputs.images.<name>`` with ``digest`` and ``delivered.pull_ref``) and
+    a cluster build receipt (``delivered.<platform>.<name>.pull_ref``; the
+    first of ``platforms``).
+    """
+    delivered = receipt.get("delivered")
+    if isinstance(delivered, Mapping) and delivered:
+        platforms = [p for p in receipt.get("platforms") or () if p in delivered]
+        table = delivered[platforms[0] if platforms else next(iter(delivered))]
+        if isinstance(table, Mapping):
+            return dict(table)
+    outputs = receipt.get("outputs")
+    if isinstance(outputs, Mapping) and isinstance(outputs.get("images"), Mapping):
+        return dict(outputs["images"])
+    table = receipt.get("images")
+    if isinstance(table, str):
+        try:
+            table = json.loads(table)
+        except ValueError:
+            table = None
+    if isinstance(table, Mapping):
+        return dict(table)
+    raise EnvError("env-image-invalid", "the build receipt has no image table")
+
+
 def _images(
-    digests: Mapping[str, str] | None, build_receipt: Mapping[str, Any] | None
+    pipeline: Pipeline,
+    digests: Mapping[str, str] | None,
+    build_receipt: Mapping[str, Any] | None,
 ) -> dict[str, str]:
     from piceli.pipeline.model import pinned
 
-    images: dict[str, str] = {}
+    table: dict[str, Any] = {}
     if build_receipt is not None:
-        table = build_receipt.get("images") or build_receipt.get("digests") or {}
-        if not isinstance(table, Mapping):
-            raise EnvError("env-image-invalid", "the build receipt has no image table")
-        images.update({str(k): str(v) for k, v in table.items()})
-    images.update({str(k): str(v) for k, v in (digests or {}).items()})
+        table.update(receipt_images(build_receipt))
+    table.update(dict(digests or {}))
+    images = {
+        str(name): _entry_reference(pipeline, str(name), entry)
+        for name, entry in table.items()
+    }
     for name, reference in images.items():
         if not pinned(reference):
             raise EnvError(
@@ -147,7 +228,7 @@ def env_pipeline(
     main_ns = main_namespace(pipeline)
     namespace = config.namespace_for(branch, main_ns)
     main = config.is_main(branch)
-    images = _images(digests, build_receipt)
+    images = _images(pipeline, digests, build_receipt)
     if main and not images:
         return pipeline
     alias = pin_alias(pipeline) if pipeline.deliver is not None else None
@@ -194,9 +275,33 @@ def default_cluster(pipeline: Pipeline) -> EnvCluster:
     return EnvCluster(client, request_seconds=float(target.request_seconds))
 
 
-def _owned(namespace: Mapping[str, Any] | None, app: str) -> bool:
+def branch_label(branch: str) -> str:
+    """The ``piceli.io/env-branch`` label value (the slug ``env push`` uses too)."""
+    from piceli.artifacts.cluster_build import slug
+
+    return slug(branch, 63)
+
+
+def _owned(namespace: Mapping[str, Any] | None, app: str, branch: str) -> bool:
+    """This app's environment of ``branch``, or one ``piceli env push`` created for it.
+
+    ``env push`` creates the namespace before the first ``env up`` with the
+    Piceli managed-by label and the branch label only; ``env up`` then adopts
+    it (adds ``piceli.io/env-of``).
+    """
     labels = ((namespace or {}).get("metadata") or {}).get("labels") or {}
-    return labels.get(ENV_OF_LABEL) == app
+    if labels.get(ENV_OF_LABEL) == app:
+        return True
+    return (
+        ENV_OF_LABEL not in labels
+        and labels.get("app.kubernetes.io/managed-by") == "piceli"
+        and labels.get(ENV_BRANCH_LABEL) == branch_label(branch)
+    )
+
+
+def _adopted(namespace: Mapping[str, Any] | None) -> bool:
+    labels = ((namespace or {}).get("metadata") or {}).get("labels") or {}
+    return ENV_OF_LABEL in labels
 
 
 def _branch_of(namespace: Mapping[str, Any]) -> str | None:
@@ -495,13 +600,11 @@ def env_up(
     :raises EnvError: registered ``env-*`` codes; :class:`PipelineError` from
         the deploy itself.
     """
+    from piceli.pipeline.compose import model_fingerprint
     from piceli.pipeline.runner import PipelineRunner
 
     config = env_config(pipeline)
-    derived = env_pipeline(
-        pipeline, branch, digests=digests, build_receipt=build_receipt
-    )
-    namespace = derived.target.namespace
+    namespace = namespace_for(pipeline, branch)
     main = config.is_main(branch)
     envs = cluster or default_cluster(pipeline)
     try:
@@ -513,7 +616,7 @@ def env_up(
                 "never create it",
             )
         if not main and live is not None:
-            if not _owned(live, pipeline.name):
+            if not _owned(live, pipeline.name, branch):
                 raise EnvError(
                     "env-namespace-not-managed",
                     f"namespace {namespace} exists and is not an environment of "
@@ -525,6 +628,15 @@ def env_up(
                     f"namespace {namespace} belongs to another branch with the "
                     "same name once slugged; rename the branch",
                 )
+        pushed: dict[str, Any] | None = None
+        if not digests and build_receipt is None and not main and live is not None:
+            pushed = envs.pushed(namespace, branch)
+            if pushed is not None:
+                build_receipt = pushed
+                commit = commit or pushed.get("commit")
+        derived = env_pipeline(
+            pipeline, branch, digests=digests, build_receipt=build_receipt
+        )
         stop = [] if main else plan_budget(envs, pipeline, namespace)
         if stop and wait:
             raise EnvError(
@@ -536,104 +648,120 @@ def env_up(
         source = seed_from or (config.seed_from if live is None else None)
         seed = _seed_source(pipeline, branch, source) if source else None
         runner = PipelineRunner(derived, say=say, **dict(runner_options or {}))
+        fresh = live is None
+        combined = None
+        if not fresh:
+            with runner.locked(), runner.sources():
+                combined = runner.plan("checks")
+        env_plan = {
+            "schema": PLAN_SCHEMA,
+            "app": pipeline.name,
+            "branch": branch,
+            "namespace": namespace,
+            "main": main,
+            "create_namespace": fresh,
+            "adopt_namespace": not fresh and not main and not _adopted(live),
+            "stop": [item["namespace"] for item in stop],
+            "seed": None
+            if seed is None
+            else {
+                k: seed[k] for k in ("source", "namespace", "point", "record_sha256")
+            },
+            "images": dict(derived.branch_env.images) if derived.branch_env else {},
+            # A new namespace has nothing to plan against yet: the approval
+            # covers the rendered model, and after the namespace is created
+            # the deploy may only create objects (env-plan-changed otherwise).
+            "combined_hash": None if combined is None else combined.combined_hash,
+            **({"model": model_fingerprint(derived)} if fresh else {}),
+        }
+        env_hash = _hash(env_plan)
+        body: dict[str, Any] = {
+            "schema": RESULT_SCHEMA,
+            **{k: v for k, v in env_plan.items() if k != "schema"},
+            "env_hash": env_hash,
+            "commit": commit,
+            **({"deploy": combined.to_dict()} if combined is not None else {}),
+        }
+        if plan_only:
+            return {**body, "state": "planned"}
+        by_config = config.auto_approve and not main
+        if approve is not None:
+            if approve != env_hash:
+                raise EnvError(
+                    "env-plan-changed",
+                    "the approved hash is not the environment's current plan; plan again",
+                )
+        elif not approve_if_policy:
+            return {**body, "state": "approval-required"}
+        elif not by_config and (stop or pipeline.auto_approve is None):
+            return {
+                **body,
+                "state": "approval-required",
+                "reason": "approval-policy-exceeded",
+            }
+        decision = None
+        if approve is None and not by_config and combined is not None:
+            decision = runner.policy_decision(combined)
+            if not decision.allowed:
+                return {
+                    **body,
+                    "state": "approval-required",
+                    "reason": "approval-policy-exceeded",
+                    "policy": decision.to_dict(),
+                }
+        stopped = {}
+        for item in stop:
+            say(
+                f"budget: stopping environment {item['namespace']} (least recently pushed)"
+            )
+            stopped[item["namespace"]] = stop_env(envs, item["namespace"], now=now)
+        labels = {ENV_OF_LABEL: pipeline.name, ENV_BRANCH_LABEL: branch_label(branch)}
+        if fresh:
+            envs.create_namespace(namespace, labels, {ENV_BRANCH_ANNOTATION: branch})
+        elif env_plan["adopt_namespace"]:
+            envs.label_namespace(namespace, labels, {ENV_BRANCH_ANNOTATION: branch})
+        previous = dict(envs.record(namespace) or {})
+        record = {
+            **previous,
+            "branch": branch,
+            "namespace": namespace,
+            "commit": commit,
+            "build": "pushed"
+            if pushed is not None
+            else ("prebuilt" if env_plan["images"] else "pipeline"),
+            "images": env_plan["images"],
+            "pushed_at": _now(now),
+            "created_at": previous.get("created_at") or _now(now),
+            "deploy": "deploying",
+            "state": "running",
+        }
+        envs.write_record(namespace, record)
         with runner.locked(), runner.sources():
-            combined = runner.plan("checks")
-            env_plan = {
-                "schema": PLAN_SCHEMA,
-                "app": pipeline.name,
-                "branch": branch,
-                "namespace": namespace,
-                "main": main,
-                "create_namespace": live is None,
-                "stop": [item["namespace"] for item in stop],
-                "seed": None
-                if seed is None
-                else {
-                    k: seed[k]
-                    for k in ("source", "namespace", "point", "record_sha256")
-                },
-                "images": dict(derived.branch_env.images) if derived.branch_env else {},
-                "combined_hash": combined.combined_hash,
-            }
-            env_hash = _hash(env_plan)
-            body: dict[str, Any] = {
-                "schema": RESULT_SCHEMA,
-                **{k: v for k, v in env_plan.items() if k != "schema"},
-                "env_hash": env_hash,
-                "commit": commit,
-                "deploy": combined.to_dict(),
-            }
-            if plan_only:
-                return {**body, "state": "planned"}
-            decision = None
-            if approve is not None:
-                if approve != env_hash:
-                    raise EnvError(
-                        "env-plan-changed",
-                        "the approved hash is not the environment's current plan; "
-                        "plan again",
-                    )
-            elif not approve_if_policy:
-                return {**body, "state": "approval-required"}
-            elif not (config.auto_approve and not main):
-                if stop or pipeline.auto_approve is None:
-                    return {
-                        **body,
-                        "state": "approval-required",
-                        "reason": "approval-policy-exceeded",
-                    }
-                decision = runner.policy_decision(combined)
-                if not decision.allowed:
-                    return {
-                        **body,
-                        "state": "approval-required",
-                        "reason": "approval-policy-exceeded",
-                        "policy": decision.to_dict(),
-                    }
-            stopped = {}
-            for item in stop:
-                say(
-                    f"budget: stopping environment {item['namespace']} (least recently pushed)"
-                )
-                stopped[item["namespace"]] = stop_env(envs, item["namespace"], now=now)
-            if live is None:
-                envs.create_namespace(
-                    namespace,
-                    {
-                        ENV_OF_LABEL: pipeline.name,
-                        ENV_BRANCH_LABEL: namespace[len(config.prefix) :][:63],
-                    },
-                    {ENV_BRANCH_ANNOTATION: branch},
-                )
-            previous = dict(envs.record(namespace) or {})
-            record = {
-                **previous,
-                "branch": branch,
-                "namespace": namespace,
-                "commit": commit,
-                "build": "prebuilt" if env_plan["images"] else "pipeline",
-                "images": env_plan["images"],
-                "pushed_at": _now(now),
-                "created_at": previous.get("created_at") or _now(now),
-                "deploy": "deploying",
-                "state": "running",
-            }
-            envs.write_record(namespace, record)
             try:
+                if combined is None:
+                    combined = runner.plan("checks")
+                    _only_creates(combined)
+                    if approve is None and not by_config:
+                        decision = runner.policy_decision(combined)
+                        if not decision.allowed:
+                            raise EnvError(
+                                "approval-policy-exceeded",
+                                "the new environment's deploy is outside the owner's "
+                                "approval policy: " + ", ".join(decision.violations),
+                                details={"policy": decision.to_dict()},
+                            )
                 result = runner.execute(
                     combined, combined.combined_hash, policy=decision
                 )
             except PipelineError:
                 envs.write_record(namespace, {**record, "deploy": "failed"})
                 raise
-            started = (
-                _start_stopped(envs, namespace, previous)
-                if previous.get("stopped")
-                else []
-            )
-            record.update({"deploy": result.get("state"), "stopped": []})
-            record.pop("stopped_at", None)
-            envs.write_record(namespace, record)
+        started = (
+            _start_stopped(envs, namespace, previous) if previous.get("stopped") else []
+        )
+        record.update({"deploy": result.get("state"), "stopped": []})
+        record.pop("stopped_at", None)
+        envs.write_record(namespace, record)
         seeded = None
         if seed is not None:
             say(
@@ -656,6 +784,25 @@ def env_up(
     finally:
         if cluster is None:
             envs.close()
+
+
+def _only_creates(combined: Any) -> None:
+    """A deploy into a namespace created just now may only create objects."""
+    release = combined.stages.get("plan") or {}
+    other = sorted(
+        {
+            str(item.get("operation"))
+            for item in release.get("changes") or ()
+            if item.get("operation") not in {"create", "no-op"}
+        }
+    )
+    if other:
+        raise EnvError(
+            "env-plan-changed",
+            "the new environment's deploy would "
+            + ", ".join(other)
+            + " objects; plan again and review",
+        )
 
 
 # -------------------------------------------------------------------- down
@@ -697,7 +844,10 @@ def env_down(
         }
         if live is None:
             return {**body, "state": "absent"}
-        if not _owned(live, pipeline.name) or _branch_of(live) not in {None, branch}:
+        if not _owned(live, pipeline.name, branch) or _branch_of(live) not in {
+            None,
+            branch,
+        }:
             raise EnvError(
                 "env-namespace-not-managed",
                 f"namespace {namespace} is not {pipeline.name}'s environment of "
