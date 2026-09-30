@@ -261,6 +261,11 @@ def serve(
     started only with ``--restore-forwards``, and only those saved for this
     cluster, context and namespace.
     """
+    from piceli.cli_contract import say
+
+    say(
+        "piceli operator serve is a deprecated legacy dashboard; use piceli ui serve for the new application."
+    )
     config = _profile(ui_config)
     access_start: tuple[str, ...] = ()
     if access is not None:

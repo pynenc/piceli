@@ -104,6 +104,10 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli state pull`](#cli-state-pull) | Refresh the local working copy from the shared state (reads the cluster). | reads | no |
 | [`piceli state show`](#cli-state-show) | Show where the state lives, its generation and who holds the release lock. | reads | no |
 | [`piceli status`](#cli-status) | Say whether the app is up and how to reach it. Read-only. | reads | no |
+| [`piceli ui cluster-observe`](#cli-ui-cluster-observe) | Serve scoped cluster observation and configured manual delivery. | writes | yes |
+| [`piceli ui cluster-serve`](#cli-ui-cluster-serve) | Serve scoped cluster observation and configured manual delivery. | writes | yes |
+| [`piceli ui connect`](#cli-ui-connect) | Bind a laptop port for a cluster UI ticket, then supervise it until stopped. | reads | no |
+| [`piceli ui serve`](#cli-ui-serve) | Register an existing definition or inventory scope and serve the bundled UI. | writes | yes |
 | [`piceli watch`](#cli-watch) | Follow a deploy run until it settles: every stage change and progress line, then the outcome. Read-only; reads the local run journal (with shared state run `piceli state pull` first), never the cluster. | none | no |
 
 (cli-access)=
@@ -2233,6 +2237,149 @@ Say whether the app is up and how to reach it. Read-only.
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** Read-only. Exit 0 when every workload is ready, 1 otherwise (including an unreadable cluster). Probes forwards on 127.0.0.1 only. JSON schema: docs/schemas/piceli-status-v1.schema.json.
+
+(cli-ui-cluster-observe)=
+### `piceli ui cluster-observe`
+
+Serve scoped cluster observation and configured manual delivery.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--api-server` | text | required | Explicit in-cluster HTTPS Kubernetes API origin |
+| `--ca-file` | path | required | Mounted service-account CA file |
+| `--token-file` | path | required | Mounted rotating service-account token file |
+| `--namespace` | text | required | One authorized namespace |
+| `--control-dir` | path | required | Private directory for the generated kubeconfig |
+| `--origin` | text | required | Public HTTPS browser origin |
+| `--oidc-issuer` | text | required | Trusted OIDC issuer |
+| `--oidc-metadata-url` | text | required | Explicit OIDC discovery document URL |
+| `--oidc-client-id` | text | required | Registered public OIDC client |
+| `--authorized-sub` | text (repeatable) | required | OIDC subject granted inspection; repeat |
+| `--authorized-deploy-sub` | text (repeatable) |  | OIDC subject granted manual delivery; repeat |
+| `--authorized-access-sub` | text (repeatable) |  | Inspection subject allowed local-client forwarding; repeat |
+| `--definition` | path |  | Mounted release TOML definition |
+| `--source-root` | path |  | Mounted root of allowed source files |
+| `--source-file` | text (repeatable) |  | Allowed source file; repeat |
+| `--renderer-image` | text |  | Immutable repository@sha256 renderer image |
+| `--renderer-platform` | text |  | Renderer platform |
+| `--name` | text | `cluster` | Application display name |
+| `--host` | text | `127.0.0.1` | Loopback bind for a TLS gateway sidecar |
+| `--port` | integer | `8000` |  |
+| `--url-prefix` | text |  |  |
+
+**Contract**
+
+- **Reads:** explicit Kubernetes API origin, projected service-account CA and token files, OIDC issuer metadata
+- **Writes:** private generated kubeconfig, configured durable UI control state, separately approved cluster deployment
+- **Cluster:** writes
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Requires piceli[ui] and a separate HTTPS TLS gateway sidecar. Default subjects inspect one namespace and logs. --authorized-deploy-sub additionally enables exact-plan reviewed manual delivery with a pinned isolated renderer. --authorized-access-sub additionally enables one-time tickets for a separate local client; the server never binds a laptop port. No ambient Kubernetes context.
+
+(cli-ui-cluster-serve)=
+### `piceli ui cluster-serve`
+
+Serve scoped cluster observation and configured manual delivery.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--api-server` | text | required | Explicit in-cluster HTTPS Kubernetes API origin |
+| `--ca-file` | path | required | Mounted service-account CA file |
+| `--token-file` | path | required | Mounted rotating service-account token file |
+| `--namespace` | text | required | One authorized namespace |
+| `--control-dir` | path | required | Private directory for the generated kubeconfig |
+| `--origin` | text | required | Public HTTPS browser origin |
+| `--oidc-issuer` | text | required | Trusted OIDC issuer |
+| `--oidc-metadata-url` | text | required | Explicit OIDC discovery document URL |
+| `--oidc-client-id` | text | required | Registered public OIDC client |
+| `--authorized-sub` | text (repeatable) | required | OIDC subject granted inspection; repeat |
+| `--authorized-deploy-sub` | text (repeatable) |  | OIDC subject granted manual delivery; repeat |
+| `--authorized-access-sub` | text (repeatable) |  | Inspection subject allowed local-client forwarding; repeat |
+| `--definition` | path |  | Mounted release TOML definition |
+| `--source-root` | path |  | Mounted root of allowed source files |
+| `--source-file` | text (repeatable) |  | Allowed source file; repeat |
+| `--renderer-image` | text |  | Immutable repository@sha256 renderer image |
+| `--renderer-platform` | text |  | Renderer platform |
+| `--name` | text | `cluster` | Application display name |
+| `--host` | text | `127.0.0.1` | Loopback bind for a TLS gateway sidecar |
+| `--port` | integer | `8000` |  |
+| `--url-prefix` | text |  |  |
+
+**Contract**
+
+- **Reads:** explicit Kubernetes API origin, projected service-account CA and token files, OIDC issuer metadata, optional mounted release definition and pinned renderer
+- **Writes:** private generated kubeconfig, configured durable UI control state, separately approved cluster deployment
+- **Cluster:** writes
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Requires piceli[ui] and a separate HTTPS TLS gateway sidecar. Observation is default. --authorized-deploy-sub enables reviewed manual delivery; --authorized-access-sub enables local-client tickets. No ambient Kubernetes context or server-side laptop port.
+
+(cli-ui-connect)=
+### `piceli ui connect`
+
+Bind a laptop port for a cluster UI ticket, then supervise it until stopped.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--server` | text | required | Cluster UI HTTPS origin and prefix |
+| `--ticket` | text | required | Pending remote-access ticket ID |
+| `--kubeconfig` | path | required | Explicit local kubeconfig file |
+| `--context` | text | required | Explicit local kubeconfig context |
+| `--local-port` | integer | required |  |
+| `--ca-file` | path |  | Optional trusted UI server CA file |
+| `--kubectl` | path |  | Pinned kubectl executable |
+
+**Contract**
+
+- **Reads:** explicit local kubeconfig and context, one-time UI pairing secret, scoped target and resource identity
+- **Writes:** owned local loopback port-forward process, private local forward ownership record
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Requires piceli[ui], a trusted HTTPS cluster UI and local kubectl. The pairing secret is prompted without echo; no ambient kubeconfig or context. The port exists on the client host only while the supervised command runs.
+
+(cli-ui-serve)=
+### `piceli ui serve`
+
+Register an existing definition or inventory scope and serve the bundled UI.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--kubeconfig` | path |  | Explicit kubeconfig file |
+| `--context` | text |  | Explicit kubeconfig context |
+| `--namespace` | text |  | Inventory namespace |
+| `--definition` | path |  | Existing release TOML definition |
+| `--name` | text | `my-app` | Application display name |
+| `--host` | text | `127.0.0.1` | Loopback bind address |
+| `--port` | integer | `8000` |  |
+| `--url-prefix` | text |  | URL prefix, e.g. /piceli |
+| `--allow-exec`, `--no-allow-exec` | boolean | `False` | Authorize the target's credential plugin |
+| `--exec-sha256` | text |  |  |
+| `--control-dir` | path |  | Private durable UI operation state directory |
+| `--source-root` | path |  | Explicit root of allowed definition source files |
+| `--source-file` | text (repeatable) |  | Allowed relative source file; repeat for each file |
+| `--renderer-image` | text |  | Pinned local isolated renderer image ID (sha256:...) |
+| `--renderer-platform` | text |  | Renderer platform: linux/amd64 or linux/arm64 |
+| `--docker` | path |  | Docker executable to pin for isolated evaluation |
+| `--docker-socket` | path | `/var/run/docker.sock` | Explicit local Docker daemon socket |
+| `--state-dir` | path |  | Private UI state directory (default: $XDG_STATE_HOME/piceli/ui) |
+
+**Contract**
+
+- **Reads:** kubeconfig, release definition, release state, approved source files, pinned Docker renderer
+- **Writes:** configured UI control directory, approved release state
+- **Cluster:** writes
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Requires piceli[ui]. Supply --definition or explicit --kubeconfig, --context and --namespace. Loopback only; no ambient target. Inventory mode reads only. Configured deployment requires separate exact evaluation-preview and deployment-plan approvals in the browser; starting the service approves neither.
 
 (cli-watch)=
 ### `piceli watch`

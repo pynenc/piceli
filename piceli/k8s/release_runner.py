@@ -1016,6 +1016,9 @@ class ReleaseRunner:
         #: Called after every execution journal commit (before the IO it
         #: records): shared state writes the state through here.
         self.checkpoint: Callable[[], None] | None = None
+        #: Durable control-plane admission hook, called before execution history
+        #: and any cluster writes. Raising refuses dispatch; no write has begun.
+        self.before_execution: Callable[[dict[str, Any]], None] | None = None
         self.state = spec.state_dir
         self.history = _History(self.state / "history.json")
         # Restorable copies of objects deleted by ``replace`` (owner-only).
@@ -2168,6 +2171,8 @@ class ReleaseRunner:
                         record, catalog, journal, store, binding.target
                     )
                     session = workflow.reopen(name)
+                    approved_plan = session.revision.plan
+                    approved_snapshot = session.revision.snapshot
                     if session.revision.plan.plan_hash != plan_hash:
                         raise ReleaseError(
                             "stored release does not match the plan",
@@ -2194,15 +2199,14 @@ class ReleaseRunner:
                         policy=pending.get("approval_policy"),
                     )
                     composition = composition_from_archive(record.archive)
-                    if (
-                        build_plan(
-                            composition,
-                            snapshot,
-                            plan_authorization,
-                            private=_private(composition, snapshot, store),
-                        ).plan_hash
-                        != plan_hash
-                    ):
+                    approved_plan = build_plan(
+                        composition,
+                        snapshot,
+                        plan_authorization,
+                        private=_private(composition, snapshot, store),
+                    )
+                    approved_snapshot = snapshot
+                    if approved_plan.plan_hash != plan_hash:
                         raise ReleaseError(
                             "stored evidence does not match the plan",
                             code="stored-evidence-mismatch",
@@ -2242,19 +2246,30 @@ class ReleaseRunner:
                             executor, name, execution_id=execution_id
                         )
 
-                self.history.append(
-                    {
-                        "at": _now().isoformat(),
-                        "release": name,
-                        "intent": pending["intent"],
-                        "mode": pending["mode"],
-                        "plan_hash": plan_hash,
-                        "execution_id": execution_id,
-                        "state": "running",
-                        **({"skip_checks": True} if skip_checks else {}),
-                        **dict(trigger or {}),
-                    }
-                )
+                started = {
+                    "at": _now().isoformat(),
+                    "release": name,
+                    "intent": pending["intent"],
+                    "mode": pending["mode"],
+                    "plan_hash": plan_hash,
+                    "execution_id": execution_id,
+                    "state": "running",
+                    **({"skip_checks": True} if skip_checks else {}),
+                    **dict(trigger or {}),
+                }
+                if self.before_execution is not None:
+                    self.before_execution(
+                        dict(started)
+                        | {
+                            "reviewed": {
+                                "plan": approved_plan.summary(),
+                                "diffs": plan_diffs(approved_plan, approved_snapshot),
+                                "checks": self._checks_policy(),
+                                "expires_at": pending["expires_at"],
+                            }
+                        }
+                    )
+                self.history.append(started)
                 try:
                     result = run()
                 except ValueError as error:
@@ -2341,6 +2356,8 @@ class ReleaseRunner:
                 "declared": [check.label for check in checks],
             }
         images = self._sidecar(name).get("images", {})
+        if self.progress is not None:
+            self.progress("checking release post-deploy checks")
         with self.check_context_factory(self.spec, name, images) as context:
             report: CheckReport = run_checks(checks, context)
         value = report.to_dict()

@@ -16,8 +16,11 @@ repos:
         args: [--allow-multiple-documents]
         # Helm templates are Go templates, not YAML (rendered in tests instead).
         exclude: ^examples/comparisons/helm/webapp/templates/
+      # The bundled UI assets are Vite output (`make ui-build`), kept byte for byte.
       - id: end-of-file-fixer
+        exclude: ^piceli/server/static/assets/
       - id: trailing-whitespace
+        exclude: ^piceli/server/static/assets/
 
   - repo: https://github.com/astral-sh/uv-pre-commit
     rev: 0.8.23

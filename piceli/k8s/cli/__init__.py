@@ -21,6 +21,7 @@ from piceli.k8s.cli.release import app as release_app
 from piceli.k8s.cli.render import render
 from piceli.k8s.cli.restore import register as register_restore_commands
 from piceli.k8s.cli.state import app as state_app
+from piceli.k8s.cli.ui import app as ui_app
 from piceli.k8s.cli.watch import register as register_watch_command
 
 app = typer.Typer(rich_markup_mode=None)
@@ -36,6 +37,7 @@ app.command("publish")(publish)
 app.add_typer(release_app, name="release")
 app.command("render")(render)
 app.add_typer(state_app, name="state")
+app.add_typer(ui_app, name="ui")
 register_contract_commands(app)
 register_access_commands(app)
 register_maintenance_commands(app)

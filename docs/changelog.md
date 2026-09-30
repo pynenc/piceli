@@ -110,6 +110,32 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   `PICELI_HEAVY_LOCK=1`, host builds and Docker `Build.spec` runs take the same
   lock. New error codes `heavy-lock-timeout`, `heavy-command-empty`,
   `heavy-command-missing` ({doc}`heavy_work`).
+- **Web UI (experimental):** the optional `piceli[ui]` extra adds a web
+  application. See {doc}`ui` for what works and what is disabled.
+  - `piceli ui serve` runs a loopback UI for explicit inventory scopes and
+    existing release definitions: isolated source evaluation, exact source
+    and plan approvals before a durable release run, Activity replay,
+    Resources with observations, owner relationships, current and previous
+    container logs and supervised local port forwards. A one-time launch
+    token grants the session; cookies are named per origin; forwards left by
+    a crashed UI are stopped at the next start (`--state-dir`).
+  - Apps that declare `app.pre_rollout(...)` are refused with
+    `ui-prerollout-unsupported`: deploy them with `piceli deploy`, so the UI
+    never skips pre-rollout checks.
+  - `piceli ui cluster-observe` offers authenticated, read-only namespace
+    inspection and logs behind an HTTPS gateway with OIDC subject grants and a
+    rotating projected service-account token file.
+  - Unfinished paths are disabled unless `PICELI_UI_EXPERIMENTAL=1` is set,
+    and are unsupported: in-cluster manual delivery (`piceli ui cluster-serve`
+    with deploy grants), remote local-client access (`--authorized-access-sub`,
+    `piceli ui connect`) and install manifests that enable either. Without the
+    opt-in they fail with the new error code `ui-experimental-disabled`.
+  - `make ui-fake-serve` starts a disposable fake-API demo; `make
+    test-ui-fake` runs the service and browser journeys.
+  - Pipeline recovery propagates a stale or expired plan refusal instead of
+    planning and applying another digest; `piceli access` recognizes macOS
+    framework `Python` executables when stopping its own stale server; a
+    kubeconfig `tokenFile` credential is re-read before each API request.
 
 ## Version 0.12.0
 
