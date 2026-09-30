@@ -309,6 +309,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`release-history-malformed`](#error-release-history-malformed) | release | no |
 | [`release-locked`](#error-release-locked) | state | yes |
 | [`release-owner-mismatch`](#error-release-owner-mismatch) | release | no |
+| [`release-prerollout-unsupported`](#error-release-prerollout-unsupported) | release | no |
 | [`release-refused`](#error-release-refused) | release | no |
 | [`release-state-unavailable`](#error-release-state-unavailable) | release | yes |
 | [`render-model-invalid`](#error-render-model-invalid) | render | no |
@@ -2289,6 +2290,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Release owner mismatch.** The stored release was planned for another owner or field manager than `[release]` now names.
 
 - **Fix:** Restore the original `owner`/`field_manager`, or plan a new release.
+- **Retry-safe:** no
+
+(error-release-prerollout-unsupported)=
+### `release-prerollout-unsupported`
+
+**Pre-rollout checks need piceli deploy.** The release composition returns an App that declares `App.pre_rollout` checks. `piceli release` plans and applies the objects only and cannot run the check Jobs, so it would skip them silently; it refuses the App at plan time, before anything is written.
+
+- **Fix:** Deploy this App with `piceli deploy` (a `Pipeline`), which runs the checks before the workloads change, or remove the `pre_rollout` declarations if the release must go through `piceli release`.
 - **Retry-safe:** no
 
 (error-release-refused)=

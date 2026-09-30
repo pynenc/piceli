@@ -1662,6 +1662,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "release",
     ),
     _E(
+        "release-prerollout-unsupported",
+        "Pre-rollout checks need piceli deploy",
+        "The release composition returns an App that declares `App.pre_rollout` checks. `piceli release` plans and applies the objects only and cannot run the check Jobs, so it would skip them silently; it refuses the App at plan time, before anything is written.",
+        "Deploy this App with `piceli deploy` (a `Pipeline`), which runs the checks before the workloads change, or remove the `pre_rollout` declarations if the release must go through `piceli release`.",
+        False,
+        "release",
+    ),
+    _E(
         "invalid-adopt-entry",
         "Invalid adopt or replace entry",
         "An `--adopt`/`--replace` flag or a `[release] adopt`/`replace` entry is not `Kind/name` or `apiVersion/Kind/name`, or its name is not valid for the kind (a DNS subdomain; RBAC kinds also allow `:`).",

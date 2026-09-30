@@ -4,6 +4,14 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.10.0 (unreleased)
+
+- **`piceli release` refuses an App with pre-rollout checks:** only
+  `piceli deploy` runs `App.pre_rollout` checks, so `piceli release plan` now
+  refuses a composition that returns such an App
+  (`release-prerollout-unsupported`) at plan time, before anything is
+  written, instead of skipping the checks silently.
+
 ## Version 0.9.0
 
 - **Builds without a VM (experimental):** `Build.spec("host-build.toml",
