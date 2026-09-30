@@ -512,6 +512,7 @@ class Build:
         builder: str = "docker",
         node: str | None = None,
         cache_dir: Path | None = None,
+        node_facts: Mapping[str, Any] | None = None,
     ) -> None:
         if (path is None) == (document is None):
             raise PipelineError("pipeline-invalid", "a build needs a path or document")
@@ -526,10 +527,25 @@ class Build:
                 "a host build reads a host-build.toml and builds for its node's "
                 "platform (drop platform=)",
             )
-        if builder == "docker" and (node is not None or cache_dir is not None):
+        if builder == "docker" and (
+            node is not None or cache_dir is not None or node_facts is not None
+        ):
             raise PipelineError(
-                "pipeline-invalid", 'node= and cache_dir= need builder="host"'
+                "pipeline-invalid",
+                'node=, cache_dir= and node_facts= need builder="host"',
             )
+        declared_facts = None
+        if node_facts is not None:
+            from piceli.artifacts.node_facts import NodeFacts, NodeFactsError
+
+            try:
+                declared_facts = (
+                    node_facts
+                    if isinstance(node_facts, NodeFacts)
+                    else NodeFacts.from_dict(node_facts)
+                )
+            except NodeFactsError as error:
+                raise PipelineError(error.code, str(error)) from None
         self.path = path
         self.document = dict(document) if document is not None else None
         self.base = base
@@ -543,6 +559,8 @@ class Build:
         #: Shared stage/target/blob directory of a host build (default:
         #: ``<state_dir>/toolchains/host-build``).
         self.cache_dir = cache_dir
+        #: Declared node facts (``NodeFacts``): a host build then needs no API read.
+        self.node_facts = declared_facts
         self._spec: BuildSpec | HostBuildSpec | None = None
 
     @classmethod
@@ -555,6 +573,7 @@ class Build:
         builder: Literal["docker", "host"] = "docker",
         node: str | None = None,
         cache_dir: str | Path | None = None,
+        node_facts: Mapping[str, Any] | None = None,
     ) -> Build:
         """A build described by a spec file (relative to the declaring file).
 
@@ -574,6 +593,13 @@ class Build:
         :param cache_dir: With ``builder="host"``: the shared stage, target
             and blob directory (relative to the declaring file); default
             ``<state_dir>/toolchains/host-build``. Not part of the plan hash.
+        :param node_facts: With ``builder="host"``: the node's facts
+            (``NodeFacts`` or its dict: ``node``, ``os``, ``architecture``,
+            ``kernel_version``, ``page_size``, ``page_size_source``) declared
+            instead of read from the cluster, so a build needs no API. Without
+            it the facts are read from the node, cached in the state directory
+            on success, and the cache is used (and reported, with its age)
+            when the API is unreachable. The plan hash covers the facts used.
         """
         base = _caller_dir()
         return cls(
@@ -584,6 +610,7 @@ class Build:
             builder=builder,
             node=node,
             cache_dir=_resolve(cache_dir, base) if cache_dir is not None else None,
+            node_facts=node_facts,
         )
 
     @classmethod

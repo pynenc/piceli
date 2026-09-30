@@ -36,6 +36,8 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli artifacts preview-command`](#cli-artifacts-preview-command) | Preview a pinned external build command. | none | no |
 | [`piceli artifacts publish`](#cli-artifacts-publish) | Publish a build's images (every platform in one index) to a registry. | none | yes |
 | [`piceli artifacts retention`](#cli-artifacts-retention) | Report which registry manifests the last releases, pins and live workloads keep, and delete the rest. | reads | yes |
+| [`piceli build job`](#cli-build-job) | Build at a commit as a Job on a builder node (plan, then --approve HASH). | writes | yes |
+| [`piceli build job-run`](#cli-build-job-run) | Inside the build Job: build and push; print the receipt line. | none | no |
 | [`piceli cache prune`](#cli-cache-prune) | Remove what no release, rollback or resume needs: stale temporary directories and partial files, runs beyond --keep-last, unused delivery receipts, and (over --budget) build outputs and logs. | none | no |
 | [`piceli cache status`](#cli-cache-status) | Show the disk used per state directory and category, and Piceli's temporary directories. Read-only. | none | no |
 | [`piceli chart manifests`](#cli-chart-manifests) | Print (or write) plain manifests with a values file applied; no Helm needed. | none | no |
@@ -45,6 +47,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli codegen crd`](#cli-codegen-crd) | Generate pydantic models for one CRD version, from a file or a cluster. | reads | no |
 | [`piceli deploy`](#cli-deploy) | Deploy a pipeline: inputs → build → deliver → plan → apply → checks. | writes | yes |
 | [`piceli doctor`](#cli-doctor) | Check this runner: free disk and memory against what the next build needs (estimated from the last build receipts), and the tools the pipeline uses (docker, docker buildx, kubectl). Exit 1 on a warning. | none | no |
+| [`piceli env push`](#cli-env-push) | Record a laptop-built digest for a branch environment (plan, then --approve HASH). | writes | yes |
 | [`piceli explain`](#cli-explain) | Explain an error code: cause, fix and whether a retry can succeed. | none | no |
 | [`piceli heavy run`](#cli-heavy-run) | Run COMMAND once the lock is free; exit with its exit code. | none | no |
 | [`piceli heavy status`](#cli-heavy-status) | Show who holds the lock and the most recent receipts. | none | no |
@@ -471,6 +474,70 @@ Mutually exclusive: `credentials` / `docker_config`.
 - **Output contract:** conforms
 - **Notes:** Without --delete it only reads. --delete without --approve prints the plan and its hash (exit 3). A digest a running workload uses is never deleted; blobs are freed by the registry's own garbage collection afterwards.
 
+(cli-build-job)=
+### `piceli build job`
+
+Build at a commit as a Job on a builder node (plan, then --approve HASH).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `TARGET` | text | required |  |
+| `--commit` | text | required | Full Git commit id |
+| `--image` | text | required | Builder image, name@sha256:... |
+| `--repo` | text | required | Git remote URL (no credentials) |
+| `--cache-key` | text |  | The branch (default: the commit) |
+| `--platform` | text (repeatable) |  | linux/arm64, linux/amd64 (repeat) |
+| `--git-secret` | text | `piceli-build-git` | Secret with keys username, password |
+| `--selector` | text (repeatable) |  | Builder node label KEY=VALUE (repeat) |
+| `--namespace` | text |  |  |
+| `--storage` | text | `20Gi` | Cache claim size |
+| `--storage-class` | text |  |  |
+| `--timeout` | integer | `3600` | Job deadline in seconds |
+| `--registry-url` | text |  | oci://host[:port]/prefix |
+| `--node-registry` | text |  |  |
+| `--repo-root` | path |  |  |
+| `--receipt-out` | path |  | Where to write the receipt |
+| `--approve` | text |  | The plan hash to execute |
+| `--env` | text |  |  |
+
+**Contract**
+
+- **Reads:** pipeline module, kubeconfig, node facts
+- **Writes:** node facts cache (state_dir)
+- **Cluster:** writes
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** Without --approve it reads the node facts and prints the Job plan only. With --approve HASH it creates the cache claim (per branch and page size) if missing and one Job that fetches the commit (Git credentials from a Secret, never printed), builds for each --platform, pushes by digest to the node registry and prints the receipt; the Job is removed afterwards and the cache kept. Rejected: cluster-build-invalid; failed: cluster-build-failed.
+
+(cli-build-job-run)=
+### `piceli build job-run`
+
+Inside the build Job: build and push; print the receipt line.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--source` | path | required |  |
+| `--cache` | path | required |  |
+| `--out` | path | required |  |
+| `--commit` | text | required |  |
+| `--registry-url` | text | required |  |
+| `--spec` | text (repeatable) | required | host-build.toml (repeat) |
+| `--node-registry` | text |  |  |
+| `--timeout` | integer | `3600` |  |
+
+**Contract**
+
+- **Reads:** the checked-out source, PICELI_BUILD_FACTS
+- **Writes:** the build cache directory, the node registry
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** The command the Job runs; it prints one receipt line on stdout. The approval was the plan hash of `build job`.
+
 (cli-cache-prune)=
 ### `piceli cache prune`
 
@@ -719,6 +786,33 @@ Check this runner: free disk and memory against what the next build needs (estim
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** Read-only; never contacts a cluster. Exit 1 with a warning (runner-disk-low, runner-memory-low, runner-tool-missing); the need is estimated from the last build receipts.
+
+(cli-env-push)=
+### `piceli env push`
+
+Record a laptop-built digest for a branch environment (plan, then --approve HASH).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `BRANCH` | text | required |  |
+| `TARGET` | text | required |  |
+| `--receipt` | path |  | A host-build receipt (JSON) |
+| `--digest` | text (repeatable) |  | IMAGE=sha256:<digest>; repeat per image |
+| `--commit` | text |  | The source commit of the build |
+| `--namespace` | text |  | The environment's namespace (default: from the pipeline's envs) |
+| `--approve` | text |  | The plan hash to execute |
+| `--env` | text |  | The pipeline's environment |
+
+**Contract**
+
+- **Reads:** pipeline module, kubeconfig, the receipt file
+- **Writes:** nothing (read-only)
+- **Cluster:** writes
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** Writes the ConfigMap piceli-env-<branch> (keys images, commit, pushed_at) in the branch environment's namespace, creating the namespace when absent. It pushes no image and deploys nothing.
 
 (cli-explain)=
 ### `piceli explain`

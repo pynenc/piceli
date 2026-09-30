@@ -3454,8 +3454,8 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
     _E(
         "node-facts-unavailable",
         "Node facts unavailable",
-        "A host build reads its node's architecture and kernel version from the Node object (`status.nodeInfo`); the node reports none, an unsupported architecture, or the recorded facts are malformed.",
-        "Check `kubectl get node NODE -o jsonpath='{.status.nodeInfo}'` with the pipeline's kubeconfig; only `amd64` and `arm64` Linux nodes are supported.",
+        "A host build reads its node's architecture and kernel version from the Node object (`status.nodeInfo`); the node reports none, an unsupported architecture, the recorded facts are malformed, or the API is unreachable and no facts were cached from an earlier read or declared.",
+        "Check `kubectl get node NODE -o jsonpath='{.status.nodeInfo}'` with the pipeline's kubeconfig; only `amd64` and `arm64` Linux nodes are supported. Declare the facts with `Build.spec(..., node_facts=...)` to build without the API.",
         False,
         "host-build",
     ),
@@ -3963,6 +3963,31 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "Plan again (`piceli deploy MODULE:ATTR --plan`) and approve the new combined hash.",
         False,
         "restore",
+    ),
+    # --- 0.13.0 cluster builds ---
+    _E(
+        "cluster-build-invalid",
+        "Cluster build input invalid",
+        "A cluster build (`piceli build job`, `run_build_job`) was given an input it refuses: a commit that is not a full Git commit id, an unsupported platform, a builder image that is not pinned by digest, a repository URL with credentials in it, a missing Git Secret (keys `username` and `password`), a pipeline without a host build, or an approved hash that no longer matches the plan.",
+        "Fix the input named in the message. The Git credentials belong in a Secret, never in the URL; plan again (`piceli build job ... --plan`) when the hash changed.",
+        False,
+        "host-build",
+    ),
+    _E(
+        "cluster-build-failed",
+        "Cluster build failed",
+        "The build Job ended without a receipt: it failed, timed out, could not start (image, mount or scheduling) or its delivery to the node registry did not succeed. The Job is removed; the cache claim is kept.",
+        "Read the scrubbed log tail in the output, fix the build or the builder node (labels, image, registry reachability), and run it again; the cache makes a retry cheap.",
+        True,
+        "host-build",
+    ),
+    _E(
+        "env-push-invalid",
+        "Env push input invalid",
+        "`piceli env push` needs exactly one of `--receipt FILE` (a host-build receipt, local or from a cluster build) or `--digest IMAGE=sha256:...`, with a valid image name and digest, for the digests of a branch environment.",
+        "Pass a receipt file, or one or more `--digest IMAGE=sha256:<64 hex>` options.",
+        False,
+        "host-build",
     ),
 )
 

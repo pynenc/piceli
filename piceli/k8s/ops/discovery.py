@@ -151,6 +151,18 @@ def _public_fields(manifest: Mapping[str, Any]) -> frozenset[str]:
     return frozenset(item.strip() for item in value.split(",") if item.strip())
 
 
+_FILE_PATH = re.compile(r"/[A-Za-z0-9._@+-]+(?:/[A-Za-z0-9._@+-]+)*")
+
+
+def _is_file_path(value: Any) -> bool:
+    """An absolute file path (an app pointing at a mounted token file).
+
+    A path names where a secret is mounted; it is not the secret, so a
+    ``*TOKEN*`` variable holding one is a plain value and the apply goes on.
+    """
+    return isinstance(value, str) and _FILE_PATH.fullmatch(value) is not None
+
+
 def _redact(
     value: Any, *, path: tuple[str, ...] = (), public: frozenset[str] = frozenset()
 ) -> tuple[Any, bool]:
@@ -181,7 +193,7 @@ def _redact(
             sensitive = False
         if sensitive and _names_secret(normalized, child):
             sensitive = False
-        if key == "value" and sensitive_env:
+        if key == "value" and sensitive_env and not _is_file_path(child):
             sensitive = True
         if sensitive and ".".join(child_path[1:]) in public:
             sensitive = False

@@ -183,6 +183,25 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["restore", f"{p / 'missing.py'}:pipeline", "--point", "rp-x"],
         "pipeline-not-found",
     ),
+    "build job": (
+        lambda p: (
+            ["build", "job", f"{p / 'missing.py'}:pipeline", "--commit", "a" * 40]
+            + ["--image", "x@sha256:" + "b" * 64, "--repo", "https://git.example/x.git"]
+        ),
+        "pipeline-not-found",
+    ),
+    "build job-run": (
+        lambda p: (
+            ["build", "job-run", "--source", str(p), "--cache", str(p / "c")]
+            + ["--out", str(p / "o"), "--commit", "a" * 40, "--spec", "x.toml"]
+            + ["--registry-url", "oci://127.0.0.1:5000/x"]
+        ),
+        "node-facts-unavailable",
+    ),
+    "env push": (
+        lambda p: ["env", "push", "wp", f"{p / 'missing.py'}:pipeline"],
+        "env-push-invalid",
+    ),
     "inputs record": (
         lambda p: ["inputs", "record", "--spec", str(p / "junk")],
         "invalid-inputs-spec",
