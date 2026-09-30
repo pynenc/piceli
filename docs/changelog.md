@@ -32,6 +32,10 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   the lease watcher for the life of the server. The failing session is ended
   as `failed`, the others keep expiring on time, and a forward is registered
   before its session becomes visible.
+- **A stopped local access session stays stopped:** a Stop that arrives while
+  a forward is being verified is no longer overwritten back to `ready`. Session
+  state changes only from the expected state, and the history bound never
+  evicts a session that is still active.
 - **Explicit rotating Kubernetes token files:** a named absolute `tokenFile`
   kubeconfig credential now refreshes before each API request and fails closed
   when the projected file disappears or becomes invalid. Static tokens retain

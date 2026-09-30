@@ -26,6 +26,8 @@ from piceli.services.query import KubernetesReader, QueryError, QueryService, _r
 from piceli.services.registration import Registration
 
 _log = logging.getLogger("piceli.ui.access")
+_ACTIVE = frozenset({"connecting", "ready"})
+_TERMINAL = frozenset({"stopped", "expired", "failed"})
 
 
 @dataclass
@@ -70,7 +72,8 @@ class AccessService:
             (
                 (identity, owned.closed_at)
                 for identity, owned in self._sessions.items()
-                if owned.closed_at is not None
+                # Only ended sessions count; an active one is never evicted.
+                if owned.closed_at is not None and owned.record.state in _TERMINAL
             ),
             key=lambda item: item[1],
         )
@@ -193,6 +196,10 @@ class AccessService:
                 self._ensure_watcher_locked()
             deadline = time.monotonic() + 8
             while time.monotonic() < deadline:
+                with self._lock:
+                    owned = self._sessions[identity]
+                    if owned.record.state != "connecting":
+                        return owned.record  # stopped, expired or already ready
                 status = self._status(supervisor)
                 if (
                     status is not None
@@ -202,15 +209,16 @@ class AccessService:
                     # A name may be replaced while kubectl starts; do not claim
                     # the selected object if its UID no longer matches.
                     self._verified_resource(application_id, request)
-                    ready = record.model_copy(
-                        update={
-                            "state": "ready",
-                            "endpoint": f"127.0.0.1:{request.local_port}",
-                        }
-                    )
                     with self._lock:
-                        self._sessions[identity].record = ready
-                    return ready
+                        # Compare and set: a Stop that landed during the check
+                        # wins; a stopped session is never re-activated.
+                        self._transition_locked(
+                            owned,
+                            "connecting",
+                            state="ready",
+                            endpoint=f"127.0.0.1:{request.local_port}",
+                        )
+                        return owned.record
                 if status is not None and (
                     status.state == "failed" or status.health == "conflict"
                 ):
@@ -227,8 +235,18 @@ class AccessService:
                 supervisor.close()
             with self._lock:
                 self._starting.pop(identity, None)
-                self._sessions.pop(identity, None)
+                owned_now = self._sessions.get(identity)
+                if owned_now is not None and owned_now.record.state in _ACTIVE:
+                    del self._sessions[identity]
             raise
+
+    @staticmethod
+    def _transition_locked(owned: _Owned, expected: str, **update: Any) -> bool:
+        """Move ``owned`` to ``update`` only from ``expected`` and while not ended."""
+        if owned.record.state != expected or owned.closed_at is not None:
+            return False
+        owned.record = owned.record.model_copy(update=update)
+        return True
 
     def _ensure_watcher_locked(self) -> None:
         if self._thread is None or not self._thread.is_alive():
@@ -277,7 +295,7 @@ class AccessService:
     def _supervise(self, id: str) -> None:
         with self._lock:
             owned = self._sessions.get(id)
-        if owned is None or owned.record.state not in {"connecting", "ready"}:
+        if owned is None or owned.record.state not in _ACTIVE:
             return
         if datetime.fromisoformat(owned.record.expires_at) <= datetime.now(UTC):
             self._end(id, "expired")
@@ -289,14 +307,13 @@ class AccessService:
             self._end(id, "failed")
         elif status.state != "running" or not status.reachable:
             with self._lock:
-                if owned.record.state == "ready":
-                    owned.record = owned.record.model_copy(
-                        update={
-                            "state": "connecting",
-                            "endpoint": None,
-                            "reason": "forward-reconnecting",
-                        }
-                    )
+                self._transition_locked(
+                    owned,
+                    "ready",
+                    state="connecting",
+                    endpoint=None,
+                    reason="forward-reconnecting",
+                )
         else:
             request = AccessStartRequest(
                 resource_id=owned.resource_id,
@@ -312,22 +329,21 @@ class AccessService:
             if live.identity.uid != owned.record.resource.uid:
                 self._end(id, "failed")
                 return
-            if owned.record.state == "connecting":
-                with self._lock:
-                    owned.record = owned.record.model_copy(
-                        update={
-                            "state": "ready",
-                            "endpoint": f"127.0.0.1:{request.local_port}",
-                            "reason": None,
-                        }
-                    )
+            with self._lock:
+                self._transition_locked(
+                    owned,
+                    "connecting",
+                    state="ready",
+                    endpoint=f"127.0.0.1:{request.local_port}",
+                    reason=None,
+                )
 
     def _end(self, id: str, state: str) -> AccessSession:
         with self._lock:
             owned = self._sessions.get(id)
             if owned is None:
                 raise QueryError("ui-not-found")
-            if owned.record.state in {"stopped", "expired", "failed"}:
+            if owned.record.state in _TERMINAL or owned.closed_at is not None:
                 return owned.record
             owned.record = owned.record.model_copy(
                 update={"state": state, "endpoint": None}

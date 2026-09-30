@@ -171,3 +171,61 @@ def test_one_failing_session_does_not_stop_expiry_of_the_others(
         later = access.start("shop", request.model_copy(update={"local_port": 18082}))
         _expire(access, later.id)
         _wait(lambda: access.get("shop", later.id).state == "expired")
+
+
+class _StopDuringRecheck(AccessService):
+    """Stop the session from another thread while start() re-verifies its UID."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.starter: threading.Thread | None = None
+        self.calls = 0
+        self.stopped: list[AccessSession] = []
+
+    def _verified_resource(self, application_id: str, request: AccessStartRequest):  # type: ignore[no-untyped-def]
+        result = super()._verified_resource(application_id, request)
+        if threading.current_thread() is self.starter:
+            self.calls += 1
+            if self.calls == 2:  # the recheck after the forward became ready
+                (pending,) = [
+                    item
+                    for item in self.list(application_id).items
+                    if item.state == "connecting"
+                ]
+                stopper = threading.Thread(
+                    target=lambda: self.stopped.append(
+                        self.stop(application_id, pending.id)
+                    )
+                )
+                stopper.start()
+                stopper.join(10)
+        return result
+
+
+def test_a_stop_during_the_uid_recheck_is_not_overwritten(tmp_path: Path) -> None:
+    with _service(tmp_path, _StopDuringRecheck) as (access, request, stop):
+        access.starter = threading.current_thread()
+        result = access.start("shop", request)
+        assert [item.state for item in access.stopped] == ["stopped"]
+        assert result.state == "stopped"
+        assert result.endpoint is None
+        assert access.get("shop", result.id).state == "stopped"
+        assert Supervisor.instances[-1].closed
+        before = stop.ticks
+        _wait(lambda: stop.ticks >= before + 5)
+        assert access.get("shop", result.id).state == "stopped"
+        # The stopped session holds neither the port nor an active slot.
+        access.starter = None
+        again = access.start("shop", request)
+        assert again.state == "ready"
+
+
+def test_the_history_bound_never_evicts_an_active_session(tmp_path: Path) -> None:
+    with _service(tmp_path) as (access, request, _stop):
+        active = access.start("shop", request)
+        with access._lock:
+            # Even with a stale closing mark, a non-terminal record stays.
+            access._sessions[active.id].closed_at = (
+                time.monotonic() - access._history_seconds - 1
+            )
+        assert access.get("shop", active.id).state == "ready"
