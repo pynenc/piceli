@@ -1220,6 +1220,14 @@ class Pipeline:
             )
         #: Restore points before stateful changes (``None``: not taken).
         self.restore_points: RestorePoints | None = restore_points
+        growth = getattr(self.app, "claim_growth", None)
+        if restore_points is None and callable(growth) and growth():
+            raise PipelineError(
+                "claim-growth-needs-restore-points",
+                "the app grows or moves a claim (ExistingClaim(size=...) or "
+                "migrate_from=), which the deploy's backup stage does after a "
+                "restore point: add restore_points=RestorePoints()",
+            )
         try:
             #: The owner's approval policy (``auto_approve``), or ``None``.
             self.auto_approve: ApprovalPolicy | None = ApprovalPolicy.from_value(

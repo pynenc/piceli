@@ -7,8 +7,9 @@ that copy back with `piceli restore`.
 ```{admonition} Maturity: preview
 :class: note
 
-`RestorePoints`, `Quiesce`, `RestoreVerify`, `piceli restore-points` and
-`piceli restore` (with `--to-new-claim`) are
+`RestorePoints`, `Quiesce`, `RestoreVerify`, `piceli restore-points`,
+`piceli restore` (with `--to-new-claim`) and growing or moving a claim
+(`ExistingClaim(size=...)`, `migrate_from=`) are
 **preview**: tested end to end on `kind`, but names, options and JSON fields
 may still change in a minor release (always with a changelog entry).
 ```
@@ -290,6 +291,113 @@ piceli restore deploy/app.py:pipeline --all --to-new-claim --approve "$hash"
 ```
 
 Exit `1` means a restore point does not verify: alert on it.
+
+## Grow or move a claim
+
+A claim that fills up needs a larger volume. With `restore_points`, the
+deploy's `backup` stage grows a claim or moves its data to a new one, after
+the restore point and while every writer is still stopped. Declare the size
+the claim should have:
+
+```python
+# A StatefulSet: the template's size (claim templates are immutable, so the
+# StatefulSet object is recreated; its pods and claims are orphaned and kept).
+db = app.stateful_set(
+    "db", image=images["db"], replicas=2,
+    volumes={"/var/lib/db": ClaimTemplate("data", size="20Gi")},  # was 10Gi
+)
+pipeline = Pipeline(app, target, restore_points=RestorePoints(),
+                    replace=["StatefulSet/db"], ...)
+
+# An existing claim: the size it should have.
+cache = app.deployment(
+    "cache", image=..., volumes={"/data": ExistingClaim("cache-state", size="4Gi")},
+)
+```
+
+The plan shows, for each claim, one of two steps:
+
+- **Grow in place** when the claim's StorageClass has `allowVolumeExpansion:
+  true`: Piceli patches the claim's requested size and waits until the
+  volume reports it, or until only the node-side file system resize is left
+  (`FileSystemResizePending`, finished by the kubelet when the pod mounts
+  the claim again). A driver that reports the resize infeasible, or no
+  growth within `timeout_seconds`, is `claim-expansion-failed`.
+- **Move** otherwise. A class without expansion (the local-path
+  provisioner, many node-local classes) cannot grow in place, and a claim's
+  class cannot change: the plan is refused with `claim-migration-required`
+  and the declaration that moves the data. A move goes to a claim with
+  another name, so the app names it:
+
+  ```python
+  # Each data-db-<n> moves into a new data-2-db-<n> (20Gi).
+  volumes = {"/var/lib/db": ClaimTemplate("data-2", size="20Gi", migrate_from="data")}
+  # cache-state moves into a new cache-state-2 (8Gi, same class unless given).
+  volumes = {
+      "/data": ExistingClaim(
+          "cache-state-2", size="8Gi", storage_class="fast", migrate_from="cache-state"
+      )
+  }
+  ```
+
+```text
+  backup   grow claim data-db-0 of StatefulSet/db from 10Gi to 20Gi (storage class fast allows expansion)
+  backup   move claim cache-state of Deployment/cache (512Mi) to new claim cache-state-2 (8Gi, storage class local-path); copy, verify, switch at apply; the old claim is kept
+```
+
+A move, after the restore point was taken and verified:
+
+1. **Create the new claim** with the declared size, access modes and class
+   (default: the old claim's), labelled `app.kubernetes.io/managed-by=piceli`
+   and `piceli.io/migration=target`, with the old claim's name in the
+   `piceli.io/migrated-from` annotation.
+2. **Copy.** A helper Job mounts the new claim read-write (pinned to the old
+   volume's node for node-local storage, so the new volume is made there)
+   and extracts the restore point's archive of the old claim into it: the
+   copy is exactly the verified restore point, and the old claim is only
+   ever mounted read-only.
+3. **Verify.** The content digest is computed in the cluster and must equal
+   the restore point's (`claim-migration-mismatch`). When the workload
+   declares `app.restore_verify(...)`, its command runs in a Job with the
+   workload's image and pod settings and the new claim mounted
+   **read-only** at the workload's path (`claim-migration-verify-failed`).
+4. **Mark the old claim** with `piceli.io/migration=source` and the new
+   claim's name in `piceli.io/migrated-to`. It is never deleted: keep it
+   for a rollback, and delete it yourself once the new claim has proved
+   itself (`kubectl delete pvc NAME`).
+5. **Switch.** The release's apply mounts the new claim (a Deployment rolls
+   to it; a StatefulSet is recreated through `replace=`, its claims kept)
+   and starts the writers, which never ran on the old claim after the copy.
+
+When anything fails before the switch (the copy, the digest, the verify
+command), every writer is started again on its **old** claim, the release is
+not applied, and the run fails with the code. The new claim stays and is
+emptied and filled again by the next run, so a failed move is safe to run
+again. Once a workload mounts the new claim, the declaration has nothing
+left to do and later plans show nothing.
+
+Choices and limits:
+
+- A size smaller than the claim's is refused (`claim-shrink-refused`); so is
+  a move into a smaller claim.
+- A new claim name that already exists and was not made by Piceli for that
+  move is refused (`claim-migration-target-exists`).
+- `size=` and `migrate_from=` need `restore_points`
+  (`claim-growth-needs-restore-points`) and a run that reaches the apply
+  (`claim-growth-needs-apply` with `--until backup`). A pipeline without
+  `restore_points` keeps the old behaviour: a larger `ClaimTemplate` changes
+  only the template.
+- The copy goes through the API server twice (the restore point, then into
+  the new claim), like a restore. For volumes of many gigabytes, prefer a
+  class with expansion.
+- An autoscaled writer (no declared `replicas`) is started again on its old
+  claim after the copy and switched by the apply; what it writes in between
+  stays on the old claim.
+- The node-side file system resize of an offline-only CSI driver finishes
+  when the pod starts; the result says `filesystem-resize-pending`.
+- The Kubernetes user needs, besides what restore points need, `patch` and
+  `create` on PersistentVolumeClaims, `get` on StorageClasses and
+  PersistentVolumes.
 
 ## Limits
 

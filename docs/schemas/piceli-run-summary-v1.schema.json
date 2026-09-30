@@ -35,6 +35,21 @@
               "sha256": {"type": ["string", "null"]}
             }
           }
+        },
+        "claim_changes": {
+          "type": "array",
+          "description": "Added in 0.12.0. Claims the backup stage grew in place (expand) or moved to a new claim (migrate): the new claim, its size, the expansion state and the restore verify result.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "action": {"enum": ["expand", "migrate"]},
+              "claim": {"type": "string"},
+              "target": {"type": "string"},
+              "to": {"type": "string"},
+              "state": {"type": "string"},
+              "verify": {"type": "string"}
+            }
+          }
         }
       }
     },

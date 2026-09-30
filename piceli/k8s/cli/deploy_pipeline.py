@@ -247,6 +247,27 @@ def _describe(plan: Any, entry: str) -> None:
                 "replica(s)) until its pods are gone"
                 + (f", after {hooks} quiesce hook(s)" if hooks else "")
             )
+        for step in backup.get("claim_changes", ()):
+            if step["action"] == "expand":
+                say(
+                    f"  backup   grow claim {step['claim']} of {step['workload']} "
+                    f"from {step['from']} to {step['to']} (storage class "
+                    f"{step['storage_class']} allows expansion)"
+                )
+            else:
+                say(
+                    f"  backup   move claim {step['claim']} of {step['workload']} "
+                    f"({step['from']}) to new claim {step['target']} "
+                    f"({step['to']}, storage class {step['storage_class']}); "
+                    "copy, verify, switch at apply; the old claim is kept"
+                    + (
+                        " [new claim exists: filled again]"
+                        if step.get("resume")
+                        else ""
+                    )
+                )
+        for note in backup.get("claim_notes", ()):
+            say(f"  backup   {note}")
     release = stages["plan"]
     if release.get("state") == "planned":
         changes = ", ".join(

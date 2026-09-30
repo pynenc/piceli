@@ -237,6 +237,7 @@ def plan(
     pending: Callable[[str], bool] = lambda _image: False,
     hooks: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
     include: str = "touched",
+    also: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> RestorePlan:
     """The restore point a release needs (see the module doc).
 
@@ -251,6 +252,9 @@ def plan(
         ``"all"``: when the release touches any claim, also every other
         existing claim a declared workload writes (one consistent restore
         point of the whole app).
+    :param also: Existing claims to cover even when their workload does not
+        change (claims the release grows or moves): claim name -> its
+        ``workload``, ``ordinal`` and ``why``.
     :raises RestorePointError: ``restore-point-writer-unsupported`` when a
         writer of a touched claim cannot be stopped (a DaemonSet, Job or
         CronJob, or a workload the release does not declare).
@@ -288,6 +292,19 @@ def plan(
                 {"claim": claim, "workload": ref, "ordinal": ordinal, "why": []},
             )
             entry["why"] = sorted({*entry["why"], *why})
+    for claim, item in sorted((also or {}).items()):
+        if claim not in existing:
+            continue
+        entry = touched.setdefault(
+            claim,
+            {
+                "claim": claim,
+                "workload": item["workload"],
+                "ordinal": item.get("ordinal"),
+                "why": [],
+            },
+        )
+        entry["why"] = sorted({*entry["why"], str(item["why"])})
     if include == "all" and touched:
         for ref, manifest in sorted(wanted.items()):
             for claim, ordinal in _claim_names(manifest, existing):

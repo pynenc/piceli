@@ -4,6 +4,29 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.12.0 (unreleased)
+
+- **Grow or move a retained claim (preview):** with
+  `Pipeline(restore_points=...)`, a release that asks for a larger claim (a
+  larger `ClaimTemplate` size, or the new `ExistingClaim(size=...)`) grows it
+  in the deploy's `backup` stage, after the restore point and with the
+  writers stopped: the claim's size is patched when its StorageClass allows
+  volume expansion, and Piceli waits until the volume has grown. Otherwise
+  the plan is refused with `claim-migration-required` and the declaration
+  that moves the data: `ClaimTemplate("data-2", size=..., migrate_from="data")`
+  or `ExistingClaim("new", size=..., migrate_from="old")`. A move creates the
+  new claim (labelled `piceli.io/migration=target`, annotated
+  `piceli.io/migrated-from`), extracts the restore point's archive of the old
+  claim into it, checks the content digest in the cluster and runs the
+  workload's `restore_verify` command on it read-only; the apply then
+  switches the workload. On any failure before the switch the writers start
+  again on the old claim. The old claim is kept (annotated
+  `piceli.io/migrated-to`), never deleted. A smaller size is refused
+  (`claim-shrink-refused`). The backup stage's plan gains `claim_changes`
+  (and the hash covers them only when present), the run summary's
+  `restore_point` gains `claim_changes`, and the fake API serves
+  StorageClasses. New error codes `claim-*`. See {doc}`restore_points`.
+
 ## Version 0.11.0
 
 - **Prove a restore point without touching live data (preview):**

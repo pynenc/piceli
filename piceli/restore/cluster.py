@@ -411,6 +411,66 @@ class RestoreCluster:
             _request_timeout=self.request_seconds,
         )
 
+    def expandable(self, storage_class: str | None) -> bool:
+        """Whether ``storage_class`` has ``allowVolumeExpansion: true``
+        (``False`` when it is unset, missing or unreadable)."""
+        from kubernetes.client import StorageV1Api
+        from kubernetes.client.exceptions import ApiException
+
+        if not storage_class:
+            return False
+        try:
+            response = StorageV1Api(self.client).read_storage_class(
+                storage_class,
+                _preload_content=False,
+                _request_timeout=self.request_seconds,
+            )
+        except ApiException:
+            return False
+        return bool((json.loads(response.data) or {}).get("allowVolumeExpansion"))
+
+    def _patch_claim(self, name: str, body: Mapping[str, Any]) -> None:
+        """Merge-patch a claim, conditional on its uid and resource version."""
+        from kubernetes.client import CoreV1Api
+
+        current = self.claim(name)
+        if current is None:
+            raise RestorePointError(
+                "claim-expansion-failed", f"claim {name} does not exist", failed=True
+            )
+        metadata = current.get("metadata") or {}
+        patch = json.loads(json.dumps(dict(body)))
+        patch.setdefault("metadata", {}).update(
+            uid=metadata.get("uid"), resourceVersion=metadata.get("resourceVersion")
+        )
+        CoreV1Api(self.client).patch_namespaced_persistent_volume_claim(
+            name,
+            self.namespace,
+            patch,
+            field_manager=FIELD_MANAGER,
+            _content_type="application/merge-patch+json",
+            _request_timeout=self.request_seconds,
+        )
+
+    def expand_claim(self, name: str, size: str) -> None:
+        """Ask for ``size`` (``spec.resources.requests.storage``) on a claim."""
+        self._patch_claim(
+            name, {"spec": {"resources": {"requests": {"storage": size}}}}
+        )
+
+    def annotate_claim(
+        self,
+        name: str,
+        *,
+        labels: Mapping[str, str],
+        annotations: Mapping[str, str],
+    ) -> None:
+        """Add labels and annotations to a claim (nothing else changes)."""
+        self._patch_claim(
+            name,
+            {"metadata": {"labels": dict(labels), "annotations": dict(annotations)}},
+        )
+
     def delete_claim(self, name: str, seconds: float) -> bool:
         """Delete a scratch claim and wait until it is gone; ``True`` when gone.
 
