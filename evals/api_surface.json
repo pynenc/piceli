@@ -3027,11 +3027,13 @@
   "PythonCheck": {
    "attrs": [
     "call",
+    "describe",
     "entry",
     "interval",
     "label",
     "name",
     "public_dict",
+    "referenceable",
     "resolve",
     "retries",
     "timeout",
@@ -3046,6 +3048,7 @@
     "type"
    ],
    "methods": {
+    "describe": [],
     "public_dict": [],
     "resolve": [
      "base"
@@ -5831,6 +5834,7 @@
    "ownership-precondition-failed",
    "pipeline-apply-crashloop",
    "pipeline-apply-not-ready",
+   "pipeline-check-not-referenceable",
    "pipeline-checks-failed",
    "pipeline-checks-unavailable",
    "pipeline-delivery-failed",
@@ -7106,5 +7110,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.10.0"
+ "version": "0.10.1"
 }
