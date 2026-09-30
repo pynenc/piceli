@@ -46,6 +46,21 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   `--include-secrets`, `--include-other-owners` or `--include-cluster-scoped`.
   New error codes `orphans-*`. See {doc}`release_cli`.
 
+## Version 0.10.1
+
+- **`piceli status` lists the StatefulSets of an app that pins a workload to a
+  node:** `App.render` treated the "any node" placeholder used for listing as
+  an empty mapping, so the listing fell back to Deployments only.
+- **`Checks.python(callable)` works in a `Pipeline`:** the plan describes a
+  callable by its entry (`module:function`), as `public_dict` does, so it plans
+  and its hash is stable. A lambda, a local function or another callable
+  without a module-level name is refused at declaration with the new error
+  code `pipeline-check-not-referenceable`.
+- **The text deploy plan shows the `prerollout` stage:** one line per
+  pre-rollout check (workload, command, upgrade claims, the Secrets and
+  ConfigMaps it uses), as the JSON plan already did, so a reviewer approving
+  the hash sees which checks will run.
+
 ## Version 0.10.0
 
 - **Helm chart and manifests for other people's clusters (preview):**

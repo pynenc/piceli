@@ -1689,7 +1689,7 @@ class App(BaseModel):
         """
         if not _NAMESPACE.fullmatch(namespace or ""):
             raise ValueError(f"invalid namespace: {namespace!r}")
-        nodes = nodes or {}
+        nodes = {} if nodes is None else nodes
         labels = self.object_labels
         owners = {
             (kind, item.name): item.component_name

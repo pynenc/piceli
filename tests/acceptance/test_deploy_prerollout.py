@@ -349,3 +349,20 @@ def test_an_unchanged_release_skips_the_check_and_a_resume_reruns_it(guarded) ->
     assert code == 0, result.stdout + result.stderr
     assert events[-1]["stages"]["prerollout"] == "done"
     assert events[-1]["stages"]["apply"] == "done"
+
+
+def test_the_text_plan_prints_one_line_per_prerollout_check(shop) -> None:
+    api, tmp_path = shop
+    with_db(tmp_path, upgrade=True)
+    secret(api)
+    code, _, result = deploy(tmp_path, "--plan")
+    assert code == 0, result.stdout + result.stderr
+    lines = [x for x in result.stderr.splitlines() if "prerollout" in x]
+    text = "\n".join(lines)
+    assert "prerollout db (StatefulSet): check `db check-config`" in text
+    assert "prerollout db (StatefulSet): upgrade `db verify /var/lib/db`" in text
+    assert "Secret/db-config (cluster)" in text
+    assert "Secret/credentials (release)" in text
+    assert all(len(line) <= 100 for line in lines)
+    order = [x.split()[0] for x in result.stderr.splitlines() if x.startswith("  ")]
+    assert order.index("prerollout") < order.index("plan")

@@ -270,6 +270,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`ownership-precondition-failed`](#error-ownership-precondition-failed) | execution | no |
 | [`pipeline-apply-crashloop`](#error-pipeline-apply-crashloop) | pipeline | no |
 | [`pipeline-apply-not-ready`](#error-pipeline-apply-not-ready) | pipeline | yes |
+| [`pipeline-check-not-referenceable`](#error-pipeline-check-not-referenceable) | pipeline | no |
 | [`pipeline-checks-failed`](#error-pipeline-checks-failed) | pipeline | no |
 | [`pipeline-checks-unavailable`](#error-pipeline-checks-unavailable) | pipeline | no |
 | [`pipeline-delivery-failed`](#error-pipeline-delivery-failed) | pipeline | yes |
@@ -3113,6 +3114,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Fix the workload (image, probe, resources) and continue with `piceli deploy MODULE:ATTR --resume`, or deploy the previous source.
 - **Retry-safe:** yes
+
+(error-pipeline-check-not-referenceable)=
+### `pipeline-check-not-referenceable`
+
+**Python check cannot be named in the plan.** A `Checks.python(...)` in the Pipeline calls a lambda, a local function or another object without a module-level name, so the plan and its hash cannot describe it.
+
+- **Fix:** Pass a module-level function, or a `module:function` / `path/file.py:function` entry string.
+- **Retry-safe:** no
 
 (error-pipeline-checks-failed)=
 ### `pipeline-checks-failed`

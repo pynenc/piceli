@@ -1028,9 +1028,16 @@ Delivery = NodeLoopbackRegistry | NodeImport | Registry
 def _checks(value: Any) -> tuple[Any, ...]:
     if value is None:
         return ()
-    if isinstance(value, list | tuple):
-        return tuple(value)
-    return (value,)
+    checks = tuple(value) if isinstance(value, list | tuple) else (value,)
+    for check in checks:
+        if getattr(check, "referenceable", True) is False:
+            raise PipelineError(
+                "pipeline-check-not-referenceable",
+                f"python check {check.label!r} calls a lambda, a local function or "
+                "an object the plan cannot name; use a module-level function or "
+                "a 'module:function' entry",
+            )
+    return checks
 
 
 class Pipeline:

@@ -353,12 +353,30 @@ class PythonCheck(_Check):
         name = getattr(self.call, "__qualname__", type(self.call).__name__)
         return f"{module}:{name}"
 
+    @property
+    def referenceable(self) -> bool:
+        """Whether ``call`` is an entry string or a module-level named function."""
+        if isinstance(self.call, str):
+            return True
+        module = getattr(self.call, "__module__", None)
+        name = getattr(self.call, "__qualname__", None)
+        return (
+            isinstance(module, str)
+            and isinstance(name, str)
+            and "<" not in name
+            and _ENTRY.fullmatch(f"{module}:{name.rpartition('.')[2]}") is not None
+        )
+
     def public_dict(self) -> dict[str, Any]:
         return {
             "name": self.label,
             **self.model_dump(mode="json", exclude={"name", "call"}),
             "call": self.entry,
         }
+
+    def describe(self) -> dict[str, Any]:
+        """The plan's view: the declaration with a callable shown by its entry."""
+        return {**self.model_dump(mode="json", exclude={"call"}), "call": self.entry}
 
     def _default_name(self) -> str:
         return _slug("python", self.entry.rpartition(":")[2])

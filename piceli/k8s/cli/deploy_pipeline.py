@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import signal
 import sys
+import textwrap
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -122,6 +123,49 @@ def _say_wrapped(head: str, text: str) -> None:
     say(line)
 
 
+def _say_line(text: str) -> None:
+    """One plan line, wrapped at spaces to ``HUMAN_WIDTH`` with a hanging indent."""
+    for line in textwrap.wrap(
+        text,
+        HUMAN_WIDTH,
+        initial_indent="  ",
+        subsequent_indent=_INDENT + "  ",
+        break_long_words=False,
+        break_on_hyphens=False,
+    ):
+        say(line)
+
+
+def _describe_prerollout(stage: Any) -> None:
+    """One line per pre-rollout check: what runs, the claims it opens, what it uses."""
+    if not isinstance(stage, dict):
+        return
+    for check in stage.get("checks", ()):
+        head = f"prerollout {check['workload']}"
+        if "kind" not in check:
+            _say_line(f"{head}: {check.get('state', 'not rendered')}")
+            continue
+        head += f" ({check['kind']})"
+        if "check" in check:
+            run = check["check"]
+            _say_line(
+                f"{head}: check `{' '.join(run['command'])}` "
+                f"(timeout {run['timeout_seconds']}s)"
+            )
+        if "upgrade" in check:
+            upgrade = check["upgrade"]
+            claims = ", ".join(upgrade.get("claims") or ()) or "none"
+            _say_line(
+                f"{head}: upgrade `{' '.join(upgrade['command'])}` reads claims "
+                f"{claims} (timeout {upgrade['timeout_seconds']}s)"
+            )
+        uses = ", ".join(
+            f"{use['kind']}/{use['name']} ({use['source']})"
+            for use in check.get("uses", ())
+        )
+        _say_line(f"{head}: uses {uses or 'no Secrets or ConfigMaps'}")
+
+
 def _describe(plan: Any, entry: str) -> None:
     stages = plan.stages
     say(f"deploy plan for {entry} (until {plan.until}):")
@@ -186,6 +230,7 @@ def _describe(plan: Any, entry: str) -> None:
             f"  deliver  mirror {name}@{digest[:19]}: {mirror['action']} "
             f"({mirror['platform']}{unused})"
         )
+    _describe_prerollout(stages.get("prerollout"))
     backup = stages.get("backup")
     if isinstance(backup, dict) and "action" in backup:
         if backup["action"] == "skip":
