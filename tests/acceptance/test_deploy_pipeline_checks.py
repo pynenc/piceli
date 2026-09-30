@@ -103,3 +103,22 @@ def test_resume_at_failed_checks_rolls_back_to_the_previous_release(
     )
     rollback = run["stages"]["checks"]["output"]["rollback"]
     assert rollback["state"] == "ready"
+
+
+def test_a_callable_check_is_planned_with_a_stable_hash(shop) -> None:
+    _, tmp_path = shop
+    text = (tmp_path / "app.py").read_text()
+    (tmp_path / "app.py").write_text(
+        text.replace(
+            "CHECKS = []",
+            "from piceli import Checks\n"
+            "def probe(context):\n    return True\n"
+            "CHECKS = [Checks.python(probe)]",
+        )
+    )
+    code, events, result = deploy(tmp_path, "--plan")
+    assert code == 0, result.stdout + result.stderr
+    planned = events[-1]
+    assert planned["state"] == "planned"
+    code, events, result = deploy(tmp_path, "--plan")
+    assert events[-1]["combined_hash"] == planned["combined_hash"]

@@ -387,6 +387,35 @@ def test_duck_typed_pipeline_target(tmp_path: Path) -> None:
         assert raised.value.code == "access-target-invalid"
 
 
+def test_a_node_pinned_app_still_lists_its_statefulsets(tmp_path: Path) -> None:
+    (tmp_path / "kc").write_text(KUBECONFIG)
+    (tmp_path / "shop_pipeline.py").write_text(
+        textwrap.dedent(
+            f"""
+            from types import SimpleNamespace
+            from piceli import App
+
+            app = App("shop")
+            app.deployment("api", image="{IMAGE}", ports=[8080], node="primary")
+            app.stateful_set("db-a", image="{IMAGE}", ports=[5432], node="primary")
+            app.stateful_set("db-b", image="{IMAGE}", ports=[5432], node="primary")
+
+            class Pipeline:
+                app = app
+                target = SimpleNamespace(kubeconfig="kc", context="demo", namespace="shop")
+
+            pipeline = Pipeline()
+            """
+        )
+    )
+    target = resolve_target("shop_pipeline.py:pipeline", tmp_path)
+    assert target.workloads == (
+        ("Deployment", "api"),
+        ("StatefulSet", "db-a"),
+        ("StatefulSet", "db-b"),
+    )
+
+
 def test_invalid_targets(tmp_path: Path) -> None:
     for entry in ("missing.toml", "nomodule_xyz:thing", "no-colon"):
         with pytest.raises(AccessTargetError):
