@@ -154,6 +154,16 @@ env = { RUST_LOG = "info" }
 
 A full example: `examples/builds/rust-hello/host-build.toml`.
 
+## Several platforms
+
+A `host-build.toml` may declare `platforms = ["linux/amd64", "linux/arm64"]`
+in `[build]`. `piceli artifacts build-spec run --spec host-build.toml` then
+builds every platform (without a node: the platform's facts, 4 KiB pages)
+and joins each image's manifests in an OCI image index; `piceli artifacts
+publish` pushes them for other people's clusters. See
+{doc}`publishing_images`. A deploy still builds for its one node, and the
+node's platform must be in the list.
+
 ## The cache directory
 
 `Build.spec(..., cache_dir="…")` (relative to the declaring file) sets where

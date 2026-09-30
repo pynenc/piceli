@@ -117,6 +117,11 @@ noted.
   out and referenced by name). `piceli chart publish TARGET --to oci://…`
   **without** `--approve` prints the chart's digest (exit `3`); nothing is
   pushed. See {doc}`helm_charts`.
+- `piceli artifacts publish --receipt R --to oci://… --tag V` **without**
+  `--approve`: reads the build receipt and prints the publish plan and its
+  digest (exit `3`); it contacts no registry. `piceli artifacts build-spec
+  preview --spec host-build.toml --platform …` plans a multi-platform host
+  build without running anything. See {doc}`publishing_images`.
 - `piceli codegen crd FILE` (reads the file) and `piceli codegen crd
   --from-cluster --kubeconfig F --context C --crd NAME` (one read of the CRD
   through the explicit context): generate typed models for a custom resource

@@ -196,6 +196,7 @@ testing
 source_identity
 containerized_builds
 host_builds
+publishing_images
 node_delivery
 node_local_registry
 artifact_delivery

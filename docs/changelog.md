@@ -25,6 +25,27 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   refuses a composition that returns such an App
   (`release-prerollout-unsupported`) at plan time, before anything is
   written, instead of skipping the checks silently.
+- **Multi-platform images from one spec (experimental):** a
+  `host-build.toml` declares `build.platforms = ["linux/amd64",
+  "linux/arm64"]` (or `piceli artifacts build-spec run --platform …`, which
+  now also runs host builds): one layer set, SBOM and provenance per
+  platform, built with the platform's facts, and one canonical OCI image
+  index per image; one approval covers every platform. A single-platform
+  build keeps its plan hash. New code `build-platforms-invalid`. See
+  {doc}`publishing_images`.
+- **`piceli artifacts publish` (experimental):** pushes a build's images to a
+  hosted registry for other people's clusters: per-platform manifests by
+  digest (only missing blobs; a second publish sends nothing), one image
+  index, the SBOM and provenance as OCI 1.1 referrers (fallback tag on
+  registries without the referrers API), optional cosign signatures
+  (`--sign-key`, no transparency log) and the version tag last; a tag that
+  names another image is refused (`publish-tag-exists`) unless
+  `--move-tag`. Plan first (exit 3), `--approve <digest>` to push.
+  Credentials from `--credentials FILE` or `--docker-config` (credential
+  helpers). `--values-out` writes the `images.<key>.{repository, tag,
+  digest}` values of the `piceli chart` Helm chart. New codes `publish-*`,
+  `sign-*`, `cosign-tool-required`, `invalid-docker-config`,
+  `credential-helper-failed`.
 
 ## Version 0.9.0
 
