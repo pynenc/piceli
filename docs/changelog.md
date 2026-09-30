@@ -4,7 +4,7 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
-## Version 0.13.0 (unreleased)
+## Version 0.13.0
 
 - **Registry retention from the CLI (experimental):** `piceli artifacts
   retention --to oci://host[:port]/prefix --receipts …` reports which
