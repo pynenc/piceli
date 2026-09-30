@@ -8,8 +8,8 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 - **Registry retention from the CLI (experimental):** `piceli artifacts
   retention --to oci://host[:port]/prefix --receipts …` reports which
-  manifests a registry keeps (the last `--keep N` releases of the publish and
-  delivery receipts, `--pin` digests, the digests running pods use, the
+  manifests a registry keeps (the last `--keep N` releases, per image, of the
+  publish and delivery receipts (`<state_dir>/deliveries/`), `--pin` digests, the digests running pods use, the
   children and referrers of those, tagged manifests no receipt mentions) and
   which are collectable, with the deduplicated bytes they free. `--budget
   10GiB` keeps more releases newest first while the kept bytes stay within it,

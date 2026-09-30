@@ -28,7 +28,11 @@ A manifest (an image, or an image index with its per-platform manifests) is
 
 A release's receipt names a repository and a digest, never a host, so the same
 receipts serve a registry reached directly, through `--via-forward`, or by a
-node address.
+node address. `piceli deploy` writes one delivery receipt per image into
+`<state_dir>/deliveries/`: pass that directory. "Release *k*" is, for every
+repository, its *k*-th newest distinct digest, so `--keep 3` keeps each
+image's last three digests; images that change together line up, and an image
+that did not change in a release keeps its newest digest.
 
 **Budget mode.** `--budget 10GiB` keeps more releases than `--keep`, newest
 first, while everything kept (pinned and live digests included) stays within

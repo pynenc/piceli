@@ -236,6 +236,39 @@ def load_releases(paths: Sequence[Path]) -> list[Release]:
     return [item[2] for item in releases]
 
 
+def generations(releases: Sequence[Release]) -> list[Release]:
+    """Regroup receipts (newest first) into releases, per repository.
+
+    A delivery receipt names one image, a publish receipt several, and an image
+    that did not change has no receipt in a release. So "release k" is, for
+    every repository, its k-th newest distinct digest: ``--keep 3`` keeps each
+    repository's last three digests, and the releases of several images that
+    change together line up.
+    """
+    per_repo: dict[str, list[tuple[str, str, str]]] = {}
+    for release in releases:
+        for repository, digest in release.digests:
+            rows = per_repo.setdefault(repository, [])
+            if all(row[2] != digest for row in rows):
+                rows.append((release.finished_at, release.label, digest))
+    grouped: list[Release] = []
+    for index in range(max((len(rows) for rows in per_repo.values()), default=0)):
+        members = [
+            (repository, rows[index])
+            for repository, rows in sorted(per_repo.items())
+            if len(rows) > index
+        ]
+        newest = max(members, key=lambda item: item[1][0])[1]
+        grouped.append(
+            Release(
+                newest[1],
+                newest[0],
+                tuple(sorted((repo, row[2]) for repo, row in members)),
+            )
+        )
+    return grouped
+
+
 # ------------------------------------------------------------------ live pods
 
 
@@ -638,6 +671,8 @@ def plan_retention(
     live: LiveWorkloads,
 ) -> RetentionPlan:
     """Decide what to keep. Pure: no network."""
+    ledgered = {digest for release in releases for _, digest in release.digests}
+    releases = generations(releases)
     reasons: dict[str, set[str]] = {}
 
     def keep(digest: str, reason: str) -> None:
@@ -651,7 +686,6 @@ def plan_retention(
     for (repo, tag), digest in sorted(inventory.tag_digests.items()):
         if (repo, tag) in live.tags:
             keep(digest, "live")
-    ledgered = {digest for release in releases for _, digest in release.digests}
     if not policy.collect_unledgered:
         referrers = {d for found in inventory.referrers.values() for d in found}
         for digest, info in inventory.manifests.items():

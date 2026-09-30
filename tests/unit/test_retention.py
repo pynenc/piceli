@@ -168,7 +168,12 @@ def test_an_index_keeps_its_children_and_referrers(
             "state": "published",
             "registry": f"127.0.0.1:{registry.port}",
             "finished_at": f"2026-09-{number:02d}",
-            "images": {"api": {"repository": f"x/{REPO}", "digest": index}},
+            "images": {
+                "api": {
+                    "repository": f"127.0.0.1:{registry.port}/{REPO}",
+                    "digest": index,
+                }
+            },
         }
         (tmp_path / "receipts").mkdir(exist_ok=True)
         (tmp_path / "receipts" / f"{number}.json").write_text(json.dumps(receipt))
@@ -180,6 +185,52 @@ def test_an_index_keeps_its_children_and_referrers(
     assert set(plan.kept) == {new, *new_children, new_sbom}
     assert collectable_digests(plan) == {old, *old_children, old_sbom}
     assert plan.kept[new_children[0]] == ("referenced",)
+
+
+def test_delivery_receipts_of_several_images_keep_n_digests_per_image(
+    registry: RetentionRegistry, tmp_path: Path
+) -> None:
+    """``piceli deploy`` writes one receipt per image: three images that change
+    in every release are three receipts per release, and ``--keep 2`` must keep
+    two *releases*, not two receipts. An image that did not change in a release
+    has no receipt there and keeps its newest digest."""
+    receipts = tmp_path / "receipts"
+    receipts.mkdir()
+    digests: dict[tuple[str, int], str] = {}
+    number = 0
+    for release_number in range(1, 5):
+        for image in ("api", "worker", "db"):
+            if image == "db" and release_number != 1:
+                continue  # unchanged after the first release
+            number += 1
+            digest = registry.add_image(
+                f"app/{image}",
+                f"1.{release_number}",
+                [BASE, f"{image}{number}".encode()],
+            )
+            digests[(image, release_number)] = digest
+            (receipts / f"{number:02d}.json").write_text(
+                json.dumps(
+                    {
+                        "state": "succeeded",
+                        "finished_at": f"2026-09-{release_number:02d}T10:00:{number:02d}Z",
+                        "target": {"repository": f"app/{image}"},
+                        "image": {"manifest_digest": digest},
+                    }
+                )
+            )
+    plan, _ = plan_for(registry, tmp_path, RetentionPolicy(keep=2))
+    assert set(plan.kept) == {
+        digests[("api", 4)],
+        digests[("api", 3)],
+        digests[("worker", 4)],
+        digests[("worker", 3)],
+        digests[("db", 1)],
+    }
+    assert collectable_digests(plan) == {
+        digests[(image, n)] for image in ("api", "worker") for n in (1, 2)
+    }
+    assert [item["kept"] for item in plan.releases] == [True, True, False, False]
 
 
 # ----------------------------------------------------------------------- budget
