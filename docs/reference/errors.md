@@ -50,6 +50,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`blob-source-truncated`](#error-blob-source-truncated) | artifacts-registry | yes |
 | [`build-builder-mismatch`](#error-build-builder-mismatch) | host-build | no |
 | [`build-failed`](#error-build-failed) | build-spec | no |
+| [`build-platforms-invalid`](#error-build-platforms-invalid) | host-build | no |
 | [`build-timed-out`](#error-build-timed-out) | build-spec | yes |
 | [`builder-not-approved`](#error-builder-not-approved) | build-spec | no |
 | [`cache-arguments-conflict`](#error-cache-arguments-conflict) | maintenance | no |
@@ -3641,6 +3642,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Build spec written for the other builder.** A `host-build.toml` (`piceli.host-build.v1`) was declared with the docker builder, or a `build.toml` with `builder="host"`.
 
 - **Fix:** Declare a host build spec with `Build.spec(path, builder="host")` and a `build.toml` with `Build.spec(path)`.
+- **Retry-safe:** no
+
+(error-build-platforms-invalid)=
+### `build-platforms-invalid`
+
+**Invalid build platforms.** A multi-platform host build names no platform, names one twice, names one other than `linux/amd64` or `linux/arm64`, or names one that the spec's `build.platform` or `build.platforms` does not allow.
+
+- **Fix:** Declare `build.platforms = ["linux/amd64", "linux/arm64"]` in the host-build.toml or pass `--platform` once per platform, each from the spec's list.
 - **Retry-safe:** no
 
 (error-host-build-invalid)=

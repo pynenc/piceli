@@ -3311,6 +3311,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "host-build",
     ),
     _E(
+        "build-platforms-invalid",
+        "Invalid build platforms",
+        "A multi-platform host build names no platform, names one twice, names one other than `linux/amd64` or `linux/arm64`, or names one that the spec's `build.platform` or `build.platforms` does not allow.",
+        'Declare `build.platforms = ["linux/amd64", "linux/arm64"]` in the host-build.toml or pass `--platform` once per platform, each from the spec\'s list.',
+        False,
+        "host-build",
+    ),
+    _E(
         "node-platform-mismatch",
         "Build platform differs from the node",
         "A host build declares `build.platform`, but the target node reports another architecture.",

@@ -161,6 +161,8 @@ Preview a containerized build and its plan hash.
 | --- | --- | --- | --- |
 | `--spec` | path | required |  |
 | `--inputs` | path |  |  |
+| `--platform` | text |  | host-build.toml only: build for this platform (repeat for a multi-platform image); default the spec's build.platforms |
+| `--cache-dir` | path |  | host-build.toml only: the shared stage/target/blob directory |
 
 **Contract**
 
@@ -181,8 +183,10 @@ Run an approved containerized build and write a receipt.
 | --- | --- | --- | --- |
 | `--spec` | path | required |  |
 | `--inputs` | path |  |  |
+| `--platform` | text |  | host-build.toml only: build for this platform (repeat for a multi-platform image); default the spec's build.platforms |
+| `--cache-dir` | path |  | host-build.toml only: the shared stage/target/blob directory |
 | `--lock` | path |  |  |
-| `--approve-builder` | text | required |  |
+| `--approve-builder` | text |  | build.toml: the builder digest to run (required) |
 | `--approve-plan` | text |  |  |
 | `--allow-network` | boolean | `False` |  |
 | `--out` | path | required |  |
