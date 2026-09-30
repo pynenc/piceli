@@ -28,7 +28,7 @@ def command() -> list[str]:
         return [sys.executable, "-m", "piceli"]
     found = shutil.which("piceli")
     if found is None:
-        raise SystemExit('piceli is not installed: pip install "piceli>=0.10,<0.11"')
+        raise SystemExit('piceli is not installed: pip install "piceli>=0.11,<0.12"')
     return [found]
 
 
