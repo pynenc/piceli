@@ -4,7 +4,9 @@ This page shows how to keep modelling an app in typed Python with Piceli while
 a GitOps controller (Flux or Argo CD) applies it: `piceli publish` pushes the
 rendered manifests as an OCI artifact, and `piceli render --out DIR` writes
 them as files to commit to Git. It also says exactly what Piceli stops doing
-for you once a controller applies.
+for you once a controller applies, and how to run Piceli itself as the
+controller: [one environment per branch](#gitops-controller), deployed from
+Git with the same plans and approvals.
 
 ```{admonition} Maturity: preview
 :class: note
@@ -275,6 +277,140 @@ spec:
 
 Always sign the digest, never the tag.
 
+(gitops-controller)=
+## Piceli's own GitOps controller
+
+```{admonition} Maturity: experimental
+:class: warning
+
+`piceli gitops` and `piceli promote` are new in 0.13.0; options, the status
+document and the RBAC may change in a minor release.
+```
+
+Instead of handing manifests to Flux or Argo CD, a cluster can run Piceli
+itself as the controller: it polls a Git repository and keeps **one
+environment per branch** at the branch's head, reusing `piceli deploy`'s
+plans, approvals, builds and checks. No webhook, no laptop step.
+
+```sh
+piceli gitops enable deploy/app.py:pipeline \
+  --repo https://git.example.com/org/shop.git --branches 'main,wp-*' \
+  --poll 60s --credentials-secret shop-git \
+  --image registry.example.com/piceli@sha256:<digest> \
+  --builder-image registry.example.com/piceli-builder@sha256:<digest> \
+  --kubeconfig cluster.kubeconfig --context my-cluster
+# prints the install plan and its hash, exit 3; then the same command with
+#   --approve sha256:<plan hash>
+```
+
+What the controller does on every poll (`--poll`, default 60s):
+
+| Event | What happens |
+| --- | --- |
+| A branch matching `--branches` (not main) has a new head | Build it in the cluster (a Job on the builder node, cache per branch) or use the images pushed for that exact commit with `piceli env push`, then deploy it to the branch's environment (its own namespace). Every push redeploys. |
+| An untagged push to main | Nothing. |
+| A new tag matching `--tags` (default `v*`) | Main is planned at the tag's commit. Tags that exist when the controller starts are the baseline and deploy nothing. |
+| `piceli promote BRANCH@SHA` | Main is planned at that commit (only a commit the controller saw on that branch). |
+| A branch is deleted (or stops matching) | Its environment is torn down (namespace and claims); main's environment never is. |
+
+Approval stays the owner's:
+
+- A **branch** deploys by itself only when the pipeline declares an
+  `auto_approve=ApprovalPolicy(...)` and the plan is inside it; otherwise the
+  branch waits in `approval-required` with the plan hash.
+- **Main** always waits for a hash approval, unless the owner enabled the
+  controller with `--main-auto-approve` (then main too applies plans inside
+  the policy).
+- `piceli gitops approve BRANCH sha256:<hash>` releases the waiting plan; the
+  controller applies it on its next poll only if the plan is still the same
+  (a new push or a changed plan makes the approval stale:
+  `gitops-approval-stale`).
+
+The controller works **one step at a time**: teardowns first, then deploys,
+oldest push first. A failed step is retried with exponential backoff (30s,
+60s, … capped at 1h) and, after five attempts, left `failed` until the next
+push; a failing branch never blocks the others, and a teardown is retried
+until it succeeds. `piceli gitops status [--json]` shows everything:
+
+```sh
+piceli gitops status --kubeconfig cluster.kubeconfig --context my-cluster
+# gitops controller: healthy (last poll 2026-09-30T10:00:00Z)
+#   repo https://git.example.com/org/shop.git branches main,wp-*
+#   main: approval-required 3f2a91c07d4e; approve: piceli gitops approve main sha256:…
+#   wp-login: deployed 8c1d2e3f4a5b in shop-wp-login
+```
+
+`piceli gitops disable` plans (exit 3) and, with `--approve`, removes the
+controller. It never deletes an environment or the namespace, and keeps the
+state claim unless `--delete-state`.
+
+### The controller image
+
+The controller runs the Piceli CLI (`piceli gitops run`), so it needs an
+image with Piceli (the same version as your CLI) and `git`. `--image` must be
+pinned by digest; the controller never pulls a moving tag. A minimal image:
+
+```dockerfile
+FROM python:3.13-slim
+RUN apt-get update && apt-get install -y --no-install-recommends git openssh-client \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir "piceli==0.13.0"
+USER 65532:65532
+```
+
+Build and push it, then pass `registry/repo@sha256:<digest>` (for example the
+digest `docker buildx build --push` or `piceli artifacts publish` prints).
+Add whatever your pipeline module imports besides Piceli. The build Job uses
+its own image (`--builder-image`, see {doc}`host_builds`); without one, a
+branch deploys only images pushed with `piceli env push`.
+
+### What gets installed
+
+| Object | Purpose |
+| --- | --- |
+| Namespace `piceli-system` (`--namespace`) | The controller's home (never deleted by `disable`). |
+| ServiceAccount, Role and RoleBinding `piceli-gitops` | In its namespace only: ConfigMaps (status, requests), Leases, build Jobs, their Pods and logs, cache claims, Events. |
+| ClusterRole and ClusterRoleBinding `piceli-gitops` | Read nodes; create, read and delete namespaces (one per branch); create RoleBindings that bind **only** `piceli-gitops-deployer` (the `bind` verb is limited to that name). No Secrets, nothing else cluster-wide. |
+| ClusterRole `piceli-gitops-deployer` | The namespaced kinds an app deploys; used only through a RoleBinding in each environment's namespace, so the controller can change nothing outside them. `--cluster-rbac` adds ClusterRoles/ClusterRoleBindings for apps that declare them. |
+| PersistentVolumeClaim `piceli-gitops-state` (`--storage`, `--storage-class`) | The Git mirror, the last-seen commits and tags, build receipts. |
+| ConfigMap `piceli-gitops-config` | The settings (pipeline, repository, globs, poll, build options); never a credential. |
+| Deployment `piceli-gitops` | One replica, `Recreate`, non-root, read-only root filesystem, no privilege escalation; the credentials Secret mounted read-only. |
+
+**Git credentials** stay in a Secret you create in the controller's namespace
+(`--credentials-secret`): `username` and `password` (a token) for HTTPS, or
+`ssh-privatekey` and `known_hosts` for SSH. The controller hands them to Git
+through a credential helper that reads the files, so they appear in no command
+line, environment, log, status or error; a `--repo` URL with credentials in
+it is refused (`gitops-repo-invalid`). The build Job reads its own Secret
+(`--build-git-secret`, default `piceli-build-git`).
+
+```{warning}
+The controller imports the pipeline module of every branch it deploys:
+whoever can push a branch matching `--branches` runs code with the
+controller's rights. Keep the globs narrow and protect those branches as you
+would protect a CI runner's secrets.
+```
+
+### Status and requests (for tools)
+
+The controller publishes its status in the ConfigMap `piceli-gitops-status`
+(key `status.json`, schema `piceli.gitops-status.v1`) of its namespace;
+`piceli gitops status --json` prints it with `health` (`healthy`,
+`degraded`, `stale`, `starting`, `down`) and `deployment_ready`, and
+`piceli envs` reads it (`piceli.gitops.state.read_status`). Per branch,
+`envs.<branch>` holds `commit` (wanted), `deployed_commit`, `state`
+(`pending`, `retrying`, `approval-required`, `deployed`, `failed`,
+`deleting`), `plan_hash`, `reason` (an error code), `attempts`,
+`next_attempt_at`, `pushed_at`, `updated_at`, `namespace` and `trigger`
+(`push`, `tag v1.2.0`, `promote BRANCH@SHA`). Dropped requests are listed in
+`rejected_requests` with their code.
+
+`piceli gitops approve` and `piceli promote` add one key each to the
+ConfigMap `piceli-gitops-requests`; the controller removes a request once it
+handled it. Locally, `piceli gitops run --once --state-dir DIR` (with
+`--kubeconfig`/`--context`) runs one poll, and `status`, `approve` and
+`promote` take `--state-dir DIR` instead of a cluster.
+
 ## Errors
 
 | Code | Meaning |
@@ -287,6 +423,12 @@ Always sign the digest, never the tag.
 | `gitops-artifact-changed` | `--approve` is not this render's digest; publish without it and approve again. |
 | `gitops-push-failed` and the registry codes (`registry-unauthorized`, `registry-unreachable`, …) | The push failed (exit `1`); safe to retry. |
 | `render-out-refused` | `--out` names a directory Piceli did not write, or would overwrite a foreign file. |
+| `gitops-repo-invalid`, `gitops-image-unpinned`, `gitops-config-invalid` | `gitops enable` refused its options: credentials in the URL, an image not pinned by digest, a bad glob or size. |
+| `gitops-plan-changed` | `gitops enable --approve` or `gitops disable --approve` names a hash that is not the current plan's. |
+| `gitops-target-required`, `gitops-not-installed`, `gitops-cluster-failed` | No cluster named, no controller in the namespace, or the API refused a request. |
+| `gitops-approval-stale`, `gitops-promote-unknown`, `gitops-request-invalid` | A request the controller dropped (listed in `rejected_requests` of the status). |
+| `gitops-git-failed`, `gitops-pipeline-invalid`, `gitops-step-failed`, `gitops-port-unavailable` | A poll or a branch step failed; recorded in the status and retried. |
+| `gitops-state-invalid`, `gitops-controller-locked` | The controller's state is unreadable, or another controller holds it. |
 
 `piceli explain <code>` prints the cause and the fix; {doc}`reference/errors`
 lists every code.

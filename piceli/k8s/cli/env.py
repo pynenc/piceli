@@ -311,10 +311,16 @@ def envs(
     rows = [item.to_dict() for item in found]
     for row in rows:
         age = row["age_seconds"]
+        gitops = row.get("gitops") or {}
         say(
             f"{row['branch']:<24} {row['namespace']:<32} {row['state']:<8} "
             f"{row['health']:<9} {(row['commit'] or '-')[:12]:<12} "
             f"{row['deploy'] or '-':<10} {'-' if age is None else f'{age // 3600}h'}"
+            + (
+                f"  gitops {gitops.get('state')} {str(gitops.get('commit') or '')[:12]}"
+                if gitops
+                else ""
+            )
         )
     if as_json:
         emit_json({"schema": LIST_SCHEMA, "app": declared.name, "envs": rows})

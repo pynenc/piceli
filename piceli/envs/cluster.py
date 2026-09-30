@@ -251,6 +251,15 @@ class EnvCluster:
             self.client, namespace, request_seconds=self.request_seconds
         ).scale(kind, name, replicas)
 
+    def gitops_status(self) -> dict[str, Any] | None:
+        """The GitOps controller's published status (``piceli-system``), or ``None``."""
+        from piceli.gitops.state import read_status
+
+        try:
+            return read_status(self.client)
+        except Exception:  # absent, forbidden or unreadable: the envs' own view
+            return None
+
     # -------------------------------------------------------------- claims
     def claims(self, namespace: str) -> list[dict[str, Any]]:
         body = self._call(

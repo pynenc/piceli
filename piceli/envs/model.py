@@ -235,7 +235,9 @@ class EnvStatus:
 
     ``state`` is ``running``, ``stopped`` (scaled to zero by the budget) or
     ``absent`` (the main branch before its first deploy); ``health`` is
-    ``healthy``, ``degraded``, ``stopped`` or ``unknown``.
+    ``healthy``, ``degraded``, ``stopped`` or ``unknown``. ``gitops`` is the
+    controller's entry for the branch (wanted and deployed commit, state,
+    plan hash, reason) when a GitOps controller publishes its status.
     """
 
     branch: str
@@ -250,6 +252,8 @@ class EnvStatus:
     pushed_at: str | None = None
     age_seconds: int | None = None
     workloads: Sequence[Mapping[str, Any]] = ()
+    #: The GitOps controller's view of the branch (``piceli gitops``), if any.
+    gitops: Mapping[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -265,4 +269,5 @@ class EnvStatus:
             "pushed_at": self.pushed_at,
             "age_seconds": self.age_seconds,
             "workloads": [dict(item) for item in self.workloads],
+            "gitops": None if self.gitops is None else dict(self.gitops),
         }

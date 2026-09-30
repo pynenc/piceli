@@ -312,8 +312,21 @@ def _owned(namespace: Mapping[str, Any] | None, app: str, branch: str) -> bool:
     return (
         ENV_OF_LABEL not in labels
         and labels.get("app.kubernetes.io/managed-by") == "piceli"
-        and labels.get(ENV_BRANCH_LABEL) == branch_label(branch)
+        and (
+            labels.get(ENV_BRANCH_LABEL) == branch_label(branch)
+            or labels.get(GITOPS_ENV_LABEL) == _gitops_label(branch)
+        )
     )
+
+
+#: The label the GitOps controller puts on a namespace it prepares.
+GITOPS_ENV_LABEL = "piceli.io/gitops-env"
+
+
+def _gitops_label(branch: str) -> str:
+    """The controller's ``piceli.io/gitops-env`` value for ``branch``."""
+    value = re.sub(r"[^A-Za-z0-9._-]+", "-", branch)[:63].strip("-._")
+    return value or "branch"
 
 
 def _adopted(namespace: Mapping[str, Any] | None) -> bool:
@@ -696,6 +709,8 @@ def env_up(
             "schema": RESULT_SCHEMA,
             **{k: v for k, v in env_plan.items() if k != "schema"},
             "env_hash": env_hash,
+            # The hash the GitOps controller asks the owner to approve.
+            "plan_hash": env_hash,
             "commit": commit,
             **({"deploy": combined.to_dict()} if combined is not None else {}),
         }
@@ -988,6 +1003,10 @@ def list_envs(
     pipeline: Pipeline, *, cluster: Any = None, now: datetime | None = None
 ) -> list[EnvStatus]:
     """Every environment of the pipeline: main first, then branches by name (read-only)."""
+    import dataclasses
+
+    from piceli.gitops.state import env_status
+
     config = env_config(pipeline)
     moment = now or datetime.now(UTC)
     main_ns = main_namespace(pipeline)
@@ -997,6 +1016,8 @@ def list_envs(
             main_live = envs.namespace(main_ns)
         except EnvError:
             main_live = {"metadata": {"name": main_ns}}
+        reader = getattr(envs, "gitops_status", None)
+        document = reader() if callable(reader) else None
         found = [
             _status(envs, config.main_branch, main_ns, main_live, main=True, now=moment)
         ]
@@ -1007,7 +1028,17 @@ def list_envs(
                 continue
             branch = _branch_of(item) or name
             branches.append(_status(envs, branch, name, item, main=False, now=moment))
-        return found + sorted(branches, key=lambda status: status.namespace)
+        shown = {status.branch for status in [*found, *branches]}
+        for branch, entry in sorted(((document or {}).get("envs") or {}).items()):
+            if branch in shown or not isinstance(entry, Mapping):
+                continue
+            # Known to the controller only (pending, building, awaiting approval).
+            namespace = str(entry.get("namespace") or "")
+            branches.append(EnvStatus(branch, namespace, False, "absent", "unknown"))
+        return [
+            dataclasses.replace(status, gitops=env_status(document, status.branch))
+            for status in found + sorted(branches, key=lambda status: status.namespace)
+        ]
     finally:
         if cluster is None:
             envs.close()

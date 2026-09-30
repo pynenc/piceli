@@ -1061,6 +1061,91 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             exit_codes=(0,),
             notes="Read-only; never contacts a cluster.",
         ),
+        "gitops enable": _C(
+            "Plan and, with --approve HASH, install the GitOps controller that "
+            "deploys branches from Git (one environment per branch).",
+            reads=("kubeconfig",),
+            cluster="writes",
+            approval_required=True,
+            contract="conforms",
+            exit_codes=(0, 2, 3),
+            notes="Without --approve prints the install plan (Namespace, "
+            "ServiceAccount, scoped Role/ClusterRole and bindings, state "
+            "PersistentVolumeClaim, config ConfigMap, one-replica Deployment) "
+            "and its hash, exit 3. --image must be pinned by digest "
+            "(gitops-image-unpinned); --repo must carry no credentials "
+            "(gitops-repo-invalid): they come from the Secret named by "
+            "--credentials-secret, which is mounted and never read or printed. "
+            "A changed plan is refused (gitops-plan-changed). " + _EXPLICIT_CONTEXT,
+        ),
+        "gitops disable": _C(
+            "Plan and, with --approve HASH, remove the GitOps controller; never "
+            "an environment.",
+            reads=("kubeconfig",),
+            cluster="writes",
+            approval_required=True,
+            contract="conforms",
+            exit_codes=(0, 2, 3),
+            notes="Deletes the controller's objects only; keeps the branch "
+            "environments, the namespace and (without --delete-state) the state "
+            "volume. Exit 3 with the plan hash until --approve. " + _EXPLICIT_CONTEXT,
+        ),
+        "gitops status": _C(
+            "Show the GitOps controller's health, repository, last poll and "
+            "each branch's commit, state and pending approval.",
+            reads=("kubeconfig or --state-dir",),
+            cluster="reads",
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="Read-only. Reads the ConfigMap piceli-gitops-status and the "
+            "controller Deployment (or a local --state-dir). Health: healthy, "
+            "degraded (last poll failed), stale (no poll for 3 intervals), "
+            "starting, down. gitops-not-installed without a controller.",
+        ),
+        "gitops approve": _C(
+            "Approve the pending plan hash of one branch environment; the "
+            "controller applies it on its next poll.",
+            reads=("kubeconfig or --state-dir",),
+            writes=("--state-dir requests (local controller)",),
+            cluster="writes",
+            approval_required=True,
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="This is the owner's approval: run it only with the hash the "
+            "owner approved. Writes a request to the ConfigMap "
+            "piceli-gitops-requests; a hash the environment is no longer "
+            "waiting for is dropped (gitops-approval-stale in gitops status).",
+        ),
+        "gitops run": _C(
+            "Run the GitOps controller loop (the controller Deployment's "
+            "entrypoint); --once polls once and prints the status.",
+            reads=("--config", "git remote", "--credentials-dir"),
+            writes=("--state-dir (Git mirror, state, build receipts)",),
+            cluster="writes",
+            long_running=True,
+            safe_to_retry=True,
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="Deploys branch environments without a per-run approval: "
+            "only inside the pipeline's auto_approve policy, or a plan hash "
+            "approved with gitops approve; main only on a new tag or a "
+            "promotion, and only with an approved hash unless the owner "
+            "enabled --main-auto-approve. One step at a time, bounded retries "
+            "with backoff; a failing branch never stops the others. Git "
+            "output and credentials are never printed.",
+        ),
+        "promote": _C(
+            "Ask the GitOps controller to deploy BRANCH@SHA to the main "
+            "branch's environment.",
+            reads=("kubeconfig or --state-dir",),
+            writes=("--state-dir requests (local controller)",),
+            cluster="writes",
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="Writes a request; the controller accepts only a commit it "
+            "saw on that branch (gitops-promote-unknown otherwise) and main "
+            "then waits for gitops approve of its plan hash.",
+        ),
         "doctor": _C(
             "Check free disk and memory against the next build's needs, and "
             "the tools the pipeline uses.",

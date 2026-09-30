@@ -190,13 +190,29 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`generation-precondition-failed`](#error-generation-precondition-failed) | execution | no |
 | [`git-timed-out`](#error-git-timed-out) | inputs | yes |
 | [`git-unavailable`](#error-git-unavailable) | inputs | no |
+| [`gitops-approval-stale`](#error-gitops-approval-stale) | gitops | yes |
 | [`gitops-artifact-changed`](#error-gitops-artifact-changed) | gitops | no |
+| [`gitops-cluster-failed`](#error-gitops-cluster-failed) | gitops | yes |
+| [`gitops-config-invalid`](#error-gitops-config-invalid) | gitops | no |
+| [`gitops-controller-locked`](#error-gitops-controller-locked) | gitops | yes |
 | [`gitops-empty`](#error-gitops-empty) | gitops | no |
+| [`gitops-git-failed`](#error-gitops-git-failed) | gitops | yes |
+| [`gitops-image-unpinned`](#error-gitops-image-unpinned) | gitops | no |
 | [`gitops-image-unresolved`](#error-gitops-image-unresolved) | gitops | no |
+| [`gitops-not-installed`](#error-gitops-not-installed) | gitops | no |
+| [`gitops-pipeline-invalid`](#error-gitops-pipeline-invalid) | gitops | yes |
+| [`gitops-plan-changed`](#error-gitops-plan-changed) | gitops | yes |
+| [`gitops-port-unavailable`](#error-gitops-port-unavailable) | gitops | no |
+| [`gitops-promote-unknown`](#error-gitops-promote-unknown) | gitops | no |
 | [`gitops-push-failed`](#error-gitops-push-failed) | gitops | yes |
+| [`gitops-repo-invalid`](#error-gitops-repo-invalid) | gitops | no |
+| [`gitops-request-invalid`](#error-gitops-request-invalid) | gitops | no |
 | [`gitops-secret-value`](#error-gitops-secret-value) | gitops | no |
 | [`gitops-secrets-present`](#error-gitops-secrets-present) | gitops | no |
+| [`gitops-state-invalid`](#error-gitops-state-invalid) | gitops | no |
+| [`gitops-step-failed`](#error-gitops-step-failed) | gitops | yes |
 | [`gitops-target-invalid`](#error-gitops-target-invalid) | gitops | no |
+| [`gitops-target-required`](#error-gitops-target-required) | gitops | no |
 | [`grant-expired`](#error-grant-expired) | build-spec | yes |
 | [`grant-mismatch`](#error-grant-mismatch) | artifacts-input | yes |
 | [`heavy-command-empty`](#error-heavy-command-empty) | maintenance | no |
@@ -3710,7 +3726,15 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Retry-safe:** no
 
 
-## GitOps handoff (`piceli publish`, `piceli render --out`)
+## GitOps handoff (`piceli publish`, `piceli render --out`) and the GitOps controller (`piceli gitops …`, `piceli promote`)
+
+(error-gitops-approval-stale)=
+### `gitops-approval-stale`
+
+**Approval does not match.** `piceli gitops approve ENV HASH` named a plan hash the environment is not waiting for: a newer push or re-plan replaced the plan, or the environment is not waiting for approval.
+
+- **Fix:** Run `piceli gitops status`, review the pending plan and approve the hash it shows.
+- **Retry-safe:** yes
 
 (error-gitops-artifact-changed)=
 ### `gitops-artifact-changed`
@@ -3720,12 +3744,52 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Run `piceli publish` without `--approve`, review the new digest and approve it.
 - **Retry-safe:** no
 
+(error-gitops-cluster-failed)=
+### `gitops-cluster-failed`
+
+**Cluster request failed.** The kubeconfig was refused, the API server was unreachable, or it refused a request of the controller's install, status or requests (the HTTP status is in the message).
+
+- **Fix:** Check the kubeconfig, context and your RBAC in the controller's namespace, then run the command again.
+- **Retry-safe:** yes
+
+(error-gitops-config-invalid)=
+### `gitops-config-invalid`
+
+**Controller settings invalid.** A `piceli gitops enable` option or the controller's config file is invalid: the pipeline entry, a branch or tag glob, `--poll` (10s to 1h), the namespace, a platform, `--storage` or a Secret name.
+
+- **Fix:** Fix the option named in the message and run the command again.
+- **Retry-safe:** no
+
+(error-gitops-controller-locked)=
+### `gitops-controller-locked`
+
+**Controller already running.** Another controller process holds the state directory's lock (the Deployment's pod, or a local `gitops run`).
+
+- **Fix:** Stop the other process, or use another `--state-dir`.
+- **Retry-safe:** yes
+
 (error-gitops-empty)=
 ### `gitops-empty`
 
 **Nothing to hand off.** The render has no object left to publish (for example only Secrets, left out by `--secrets external`).
 
 - **Fix:** Check the target and `--env`; `piceli render` shows what it renders.
+- **Retry-safe:** no
+
+(error-gitops-git-failed)=
+### `gitops-git-failed`
+
+**Git command failed.** `git ls-remote`, `clone`, `fetch` or `checkout` failed or timed out (wrong URL, credentials, host key, network, or a commit missing from the mirror). Git's output is not recorded.
+
+- **Fix:** Check the URL, the credentials Secret (and `known_hosts` for SSH) and the network from the cluster; the controller retries on its next poll.
+- **Retry-safe:** yes
+
+(error-gitops-image-unpinned)=
+### `gitops-image-unpinned`
+
+**Controller image not pinned.** `--image` is not pinned by digest. The controller never runs a moving tag such as `latest`.
+
+- **Fix:** Pass `registry/repo@sha256:<digest>` of a Piceli image (see the GitOps page for how to build one).
 - **Retry-safe:** no
 
 (error-gitops-image-unresolved)=
@@ -3736,6 +3800,46 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Render from a `release.toml` whose `[images]` or receipts pin every image by digest, or deploy the pipeline with `piceli deploy`.
 - **Retry-safe:** no
 
+(error-gitops-not-installed)=
+### `gitops-not-installed`
+
+**No GitOps controller.** The controller's ConfigMap is not in the namespace (`--namespace`, default `piceli-system`): it was never enabled there, or it was disabled.
+
+- **Fix:** Install it with `piceli gitops enable …`, or pass the namespace it runs in.
+- **Retry-safe:** no
+
+(error-gitops-pipeline-invalid)=
+### `gitops-pipeline-invalid`
+
+**Pipeline not loadable.** The pipeline entry does not exist in the commit, raised while importing, or is not a `Pipeline`.
+
+- **Fix:** Fix the pipeline in the branch (it must load with `piceli render PATH:ATTR` at the repository root) and push again.
+- **Retry-safe:** yes
+
+(error-gitops-plan-changed)=
+### `gitops-plan-changed`
+
+**Controller plan changed.** The hash given to `--approve` is not the hash of the current plan: the options or the live objects changed since the plan was reviewed.
+
+- **Fix:** Run the command without `--approve`, review the new plan and approve its hash.
+- **Retry-safe:** yes
+
+(error-gitops-port-unavailable)=
+### `gitops-port-unavailable`
+
+**Environment support missing.** The controller's Piceli has no per-branch environments or cluster builds (an image older than this feature).
+
+- **Fix:** Run the controller with a Piceli image of this version or later (`piceli gitops enable --image …`).
+- **Retry-safe:** no
+
+(error-gitops-promote-unknown)=
+### `gitops-promote-unknown`
+
+**Promotion refused.** `piceli promote BRANCH@SHA` named a commit that is neither the head nor the deployed commit of a branch the controller watches, or the main branch matches no `--branches` glob.
+
+- **Fix:** Promote a commit the controller deployed on that branch (`piceli gitops status` shows them), or enable the controller with the main branch in `--branches`.
+- **Retry-safe:** no
+
 (error-gitops-push-failed)=
 ### `gitops-push-failed`
 
@@ -3743,6 +3847,22 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Check the registry, the repository and `--credentials`, then run the same command again; pushes are content-addressed.
 - **Retry-safe:** yes
+
+(error-gitops-repo-invalid)=
+### `gitops-repo-invalid`
+
+**Repository URL refused.** The `--repo` URL is not an `https://`, `ssh://`, `file://` or `git@host:path` URL, or it carries credentials (`user:password@`), which would end up in the ConfigMap, the status and process lists.
+
+- **Fix:** Pass the URL without credentials and put them in a Secret named by `--credentials-secret` (`username`/`password` or `ssh-privatekey`/`known_hosts`).
+- **Retry-safe:** no
+
+(error-gitops-request-invalid)=
+### `gitops-request-invalid`
+
+**Controller request invalid.** An approval, promotion or pushed image request is malformed (a plan hash that is not `sha256:<64 hex>`, not `BRANCH@SHA`, an unknown kind) or names a branch the controller does not watch. The controller drops it and lists it under `rejected_requests`.
+
+- **Fix:** Fix the arguments (`piceli gitops approve ENV sha256:…`, `piceli promote BRANCH@SHA`) and send it again.
+- **Retry-safe:** no
 
 (error-gitops-secret-value)=
 ### `gitops-secret-value`
@@ -3760,12 +3880,36 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Provide the Secret outside the files (a SOPS-encrypted file, an `ExternalSecret`, or created by hand) and pass `--secrets external` to leave Secrets out.
 - **Retry-safe:** no
 
+(error-gitops-state-invalid)=
+### `gitops-state-invalid`
+
+**Controller state unreadable.** The controller's state or request file is not valid JSON or has an unknown schema (a newer Piceli wrote it, or the volume was edited).
+
+- **Fix:** Run the controller with the Piceli version that wrote the state, or move the state file aside to start over (branch environments are kept).
+- **Retry-safe:** no
+
+(error-gitops-step-failed)=
+### `gitops-step-failed`
+
+**Controller step failed.** A build, deploy or teardown of one branch failed with an error that has no code of its own. The controller retries with backoff and then leaves the branch `failed` until its next push; other branches are not affected.
+
+- **Fix:** Look at `piceli gitops status` and the controller's log, fix the branch and push again.
+- **Retry-safe:** yes
+
 (error-gitops-target-invalid)=
 ### `gitops-target-invalid`
 
 **Invalid publish target.** `--to` is missing or not `oci://host[:port]/repository[:tag]`, or an annotation value (`--source`, `--revision`) is not short printable text.
 
 - **Fix:** Pass `--to oci://registry.example/team/app:tag` (plain HTTP only for a loopback registry).
+- **Retry-safe:** no
+
+(error-gitops-target-required)=
+### `gitops-target-required`
+
+**No cluster or state directory named.** The command needs a cluster (`--kubeconfig FILE --context NAME`; `gitops run` in its pod: `--service-account`) or a local controller (`--state-dir`), and got none or both.
+
+- **Fix:** Pass exactly one: `--kubeconfig` with `--context`, or `--state-dir`.
 - **Retry-safe:** no
 
 
