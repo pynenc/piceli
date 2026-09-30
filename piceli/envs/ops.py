@@ -1,0 +1,882 @@
+"""Bring branch environments up and down, seed them, list them.
+
+Every function takes the declared :class:`~piceli.pipeline.Pipeline` (with
+``envs=EnvConfig(...)``) and a branch name. Changes follow the plan-hash
+approval: without ``approve`` (or an owner policy that allows it) a function
+returns ``{"state": "approval-required", "env_hash": ...}`` and changes
+nothing; ``approve=<env_hash>`` runs exactly that plan.
+
+Importing this module is side-effect free.
+"""
+
+from __future__ import annotations
+
+import copy
+import hashlib
+import json
+import shutil
+from collections.abc import Callable, Mapping
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+from piceli.envs.model import (
+    ENV_BRANCH_ANNOTATION,
+    ENV_BRANCH_LABEL,
+    ENV_OF_LABEL,
+    BranchEnv,
+    EnvConfig,
+    EnvError,
+    EnvStatus,
+)
+from piceli.pipeline.errors import PipelineError
+
+if TYPE_CHECKING:
+    from piceli.envs.cluster import EnvCluster
+    from piceli.pipeline.model import Pipeline
+
+RESULT_SCHEMA = "piceli.env-result.v1"
+PLAN_SCHEMA = "piceli.env-plan.v1"
+LIST_SCHEMA = "piceli.envs.v1"
+Say = Callable[[str], None]
+
+
+def _quiet(_line: str) -> None:
+    return None
+
+
+def _now(now: datetime | None = None) -> str:
+    moment = now or datetime.now(UTC)
+    return moment.isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _parse(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def _hash(body: Mapping[str, Any]) -> str:
+    text = json.dumps(body, sort_keys=True, separators=(",", ":"))
+    return "sha256:" + hashlib.sha256(text.encode()).hexdigest()
+
+
+# ------------------------------------------------------------------ mapping
+
+
+def env_config(pipeline: Pipeline) -> EnvConfig:
+    """The pipeline's :class:`EnvConfig` (``env-not-configured`` without one)."""
+    config = getattr(pipeline, "envs", None)
+    if config is None:
+        raise EnvError(
+            "env-not-configured",
+            f"pipeline {pipeline.name!r} declares no envs=EnvConfig(...)",
+        )
+    if pipeline.needs_environment:
+        raise EnvError(
+            "env-not-configured",
+            "per-branch environments need a pipeline with one target (select "
+            "the environment in a module attribute: pipeline.for_environment(name))",
+        )
+    return config
+
+
+def main_namespace(pipeline: Pipeline) -> str:
+    config = env_config(pipeline)
+    return config.main_namespace or pipeline.target.namespace
+
+
+def namespace_for(pipeline: Pipeline, branch: str) -> str:
+    """The namespace of ``branch`` (see :meth:`EnvConfig.namespace_for`)."""
+    return env_config(pipeline).namespace_for(branch, main_namespace(pipeline))
+
+
+def _images(
+    digests: Mapping[str, str] | None, build_receipt: Mapping[str, Any] | None
+) -> dict[str, str]:
+    from piceli.pipeline.model import pinned
+
+    images: dict[str, str] = {}
+    if build_receipt is not None:
+        table = build_receipt.get("images") or build_receipt.get("digests") or {}
+        if not isinstance(table, Mapping):
+            raise EnvError("env-image-invalid", "the build receipt has no image table")
+        images.update({str(k): str(v) for k, v in table.items()})
+    images.update({str(k): str(v) for k, v in (digests or {}).items()})
+    for name, reference in images.items():
+        if not pinned(reference):
+            raise EnvError(
+                "env-image-invalid",
+                f"image {name!r} is not pinned by digest (repository@sha256:<64 hex>)",
+            )
+    return dict(sorted(images.items()))
+
+
+def env_pipeline(
+    pipeline: Pipeline,
+    branch: str,
+    *,
+    digests: Mapping[str, str] | None = None,
+    build_receipt: Mapping[str, Any] | None = None,
+) -> Pipeline:
+    """The pipeline of one environment.
+
+    For a branch: its namespace, its own state directory
+    (``<state_dir>/branches/<namespace>``), no build, delivery or restore
+    points (images come from ``digests`` or a ``build_receipt``: ``{"images":
+    {name: reference}}``), and the isolation of :mod:`piceli.envs.isolation`
+    at render time. For the main branch: the pipeline itself, or, with
+    images, the same pipeline using them instead of building.
+
+    :raises EnvError: ``env-not-configured``, ``env-branch-not-allowed``,
+        ``env-branch-invalid``, ``env-image-invalid``.
+    """
+    from piceli.pipeline.compose import mirror_references, pin_alias
+
+    config = env_config(pipeline)
+    if not config.allows(branch):
+        raise EnvError(
+            "env-branch-not-allowed",
+            f"branch {branch!r} matches none of the environment patterns "
+            f"{list(config.branches)}",
+        )
+    main_ns = main_namespace(pipeline)
+    namespace = config.namespace_for(branch, main_ns)
+    main = config.is_main(branch)
+    images = _images(digests, build_receipt)
+    if main and not images:
+        return pipeline
+    alias = pin_alias(pipeline) if pipeline.deliver is not None else None
+    node = pipeline.target.nodes.get(alias) if alias is not None else None
+    env = BranchEnv(
+        branch=branch,
+        namespace=namespace,
+        config=config,
+        main_namespace=main_ns,
+        isolated=not main,
+        images=images,
+        pin_node=node.name if node is not None else None,
+        mirrors=mirror_references(pipeline) if pipeline.deliver is not None else {},
+    )
+    derived = copy.copy(pipeline)
+    derived.builds = ()
+    derived.deliver = None
+    derived.branch_env = env
+    if not main:
+        target = copy.copy(pipeline.target)
+        object.__setattr__(target, "namespace", namespace)
+        object.__setattr__(target, "namespace_uid", None)
+        derived._target = target
+        derived.state_dir = pipeline.state_dir / "branches" / namespace
+        derived.restore_points = None
+    return derived
+
+
+# ------------------------------------------------------------------ cluster
+
+
+def default_cluster(pipeline: Pipeline) -> EnvCluster:
+    """An :class:`EnvCluster` through the target's explicit kubeconfig and context."""
+    from piceli.envs.cluster import EnvCluster
+    from piceli.k8s.ops.provider_factory import api_client_from_kubeconfig
+
+    target = pipeline.target
+    client = api_client_from_kubeconfig(
+        target.kubeconfig.absolute(),
+        target.context,
+        transport=target.transport,  # type: ignore[arg-type]
+        exec_policy=target.exec_policy(),
+    )
+    return EnvCluster(client, request_seconds=float(target.request_seconds))
+
+
+def _owned(namespace: Mapping[str, Any] | None, app: str) -> bool:
+    labels = ((namespace or {}).get("metadata") or {}).get("labels") or {}
+    return labels.get(ENV_OF_LABEL) == app
+
+
+def _branch_of(namespace: Mapping[str, Any]) -> str | None:
+    annotations = (namespace.get("metadata") or {}).get("annotations") or {}
+    value = annotations.get(ENV_BRANCH_ANNOTATION)
+    return value if isinstance(value, str) else None
+
+
+def _pushed(record: Mapping[str, Any] | None, namespace: Mapping[str, Any]) -> str:
+    """When an env was last pushed (its record, else the namespace's creation)."""
+    value = (record or {}).get("pushed_at")
+    if isinstance(value, str) and value:
+        return value
+    return str((namespace.get("metadata") or {}).get("creationTimestamp") or "")
+
+
+def plan_budget(
+    cluster: Any, pipeline: Pipeline, namespace: str
+) -> list[dict[str, Any]]:
+    """The branch environments to stop so ``namespace`` fits in ``max_envs``.
+
+    Running environments other than ``namespace``, least recently pushed
+    first. Empty when ``namespace`` already runs or the budget has room.
+    """
+    config = env_config(pipeline)
+    running: list[dict[str, Any]] = []
+    for item in cluster.namespaces(pipeline.name):
+        name = str((item.get("metadata") or {}).get("name"))
+        record = cluster.record(name) or {}
+        if record.get("state") == "stopped":
+            continue
+        if name == namespace:
+            return []
+        running.append(
+            {
+                "namespace": name,
+                "branch": _branch_of(item) or record.get("branch"),
+                "pushed_at": _pushed(record, item),
+            }
+        )
+    excess = len(running) - config.max_envs + 1
+    if excess <= 0:
+        return []
+    running.sort(key=lambda entry: (entry["pushed_at"], entry["namespace"]))
+    return running[:excess]
+
+
+def stop_env(
+    cluster: Any, namespace: str, *, now: datetime | None = None
+) -> list[dict[str, Any]]:
+    """Scale every Deployment and StatefulSet of ``namespace`` to zero; record it."""
+    record = dict(cluster.record(namespace) or {})
+    stopped = list(record.get("stopped") or ())
+    known = {item.get("workload") for item in stopped}
+    for workload in cluster.workloads(namespace):
+        kind = str(workload.get("kind"))
+        name = str((workload.get("metadata") or {}).get("name"))
+        replicas = (workload.get("spec") or {}).get("replicas")
+        replicas = 1 if replicas is None else int(replicas)
+        if not replicas:
+            continue
+        cluster.scale(namespace, kind, name, 0)
+        if f"{kind}/{name}" not in known:
+            stopped.append(
+                {
+                    "workload": f"{kind}/{name}",
+                    "kind": kind,
+                    "name": name,
+                    "replicas": replicas,
+                }
+            )
+    record.update({"state": "stopped", "stopped_at": _now(now), "stopped": stopped})
+    cluster.write_record(namespace, record)
+    return stopped
+
+
+def _start_stopped(
+    cluster: Any, namespace: str, record: Mapping[str, Any]
+) -> list[str]:
+    """Scale back what the budget stopped (the release may keep replicas at zero)."""
+    started = []
+    live = {
+        f"{item.get('kind')}/{(item.get('metadata') or {}).get('name')}": item
+        for item in cluster.workloads(namespace)
+    }
+    for item in record.get("stopped") or ():
+        workload = live.get(str(item.get("workload")))
+        if workload is None or (workload.get("spec") or {}).get("replicas"):
+            continue
+        cluster.scale(namespace, item["kind"], item["name"], int(item["replicas"]))
+        started.append(str(item["workload"]))
+    return started
+
+
+# ------------------------------------------------------------------- seeding
+
+
+def _latest_point(
+    pipeline: Pipeline, namespace: str
+) -> tuple[Path, dict[str, Any]] | None:
+    """The newest verified restore point of ``namespace`` in the main pipeline's store."""
+    from piceli.restore.store import points
+
+    root = pipeline.restore_point_directory
+    for _directory, record in points(root):
+        if record.get("state") == "verified" and record.get("namespace") == namespace:
+            return root, record
+    return None
+
+
+def _seed_source(pipeline: Pipeline, branch: str, source: str) -> dict[str, Any]:
+    config = env_config(pipeline)
+    if config.is_main(branch):
+        raise EnvError(
+            "env-main-protected",
+            "the main branch's claims are never seeded or overwritten by env commands",
+        )
+    if not config.is_main(source):
+        raise EnvError(
+            "env-seed-no-restore-point",
+            f"only the main branch ({config.main_branch}) keeps restore points to "
+            "seed from",
+        )
+    source_ns = main_namespace(pipeline)
+    found = _latest_point(pipeline, source_ns)
+    if found is None:
+        raise EnvError(
+            "env-seed-no-restore-point",
+            f"there is no verified restore point of namespace {source_ns}; take one "
+            "with a deploy of main (restore_points=RestorePoints())",
+        )
+    root, record = found
+    from piceli.restore.store import RECORD, file_sha256
+
+    return {
+        "source": source,
+        "namespace": source_ns,
+        "point": record["id"],
+        "record_sha256": file_sha256(root / str(record["id"]) / RECORD),
+        "root": root,
+    }
+
+
+def _run_seed(
+    pipeline: Pipeline,
+    derived: Pipeline,
+    seed: Mapping[str, Any],
+    *,
+    restore_cluster: Any = None,
+    say: Say = _quiet,
+    plan_only: bool = False,
+) -> dict[str, Any]:
+    from piceli.restore.model import RestorePointError, RestorePoints
+    from piceli.restore.runner import plan_restore, restore
+
+    cluster = restore_cluster
+    if cluster is None:
+        from piceli.pipeline.backend import Backend
+
+        cluster = Backend().restore_cluster(derived.target, say=say)
+    settings = pipeline.restore_points or RestorePoints()
+    try:
+        planned = plan_restore(
+            cluster,
+            Path(seed["root"]),
+            str(seed["point"]),
+            target=derived.target.identity(),
+            source_namespace=str(seed["namespace"]),
+        )
+        if plan_only:
+            return planned
+        return restore(
+            cluster,
+            Path(seed["root"]),
+            planned,
+            image=settings.image,
+            timeout_seconds=settings.timeout_seconds,
+            run_as_user=settings.run_as_user,
+            say=say,
+        )
+    except RestorePointError as error:
+        raise EnvError(
+            error.code, str(error), failed=error.failed, details=error.details
+        ) from None
+    finally:
+        if restore_cluster is None:
+            cluster.close()
+
+
+def seed_env(
+    pipeline: Pipeline,
+    branch: str,
+    source: str = "main",
+    *,
+    approve: str | None = None,
+    approve_if_policy: bool = False,
+    cluster: Any = None,
+    restore_cluster: Any = None,
+    say: Say = _quiet,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Restore ``source``'s latest restore point into ``branch``'s claims.
+
+    Plans the restore (read-only; its ``restore_hash`` is the approval);
+    with the approval (or ``approve_if_policy`` and ``EnvConfig.auto_approve``)
+    stops the env's writers, empties and restores each claim, verifies it
+    in the cluster and starts the writers again. Never writes main's claims.
+
+    :raises EnvError: ``env-main-protected``, ``env-seed-no-restore-point``,
+        ``env-not-found``, ``env-plan-changed`` or a ``restore-point-*`` code.
+    """
+    config = env_config(pipeline)
+    source = source or config.seed_from or config.main_branch
+    seed = _seed_source(pipeline, branch, source)
+    derived = env_pipeline(pipeline, branch)
+    envs = cluster or default_cluster(pipeline)
+    try:
+        if envs.namespace(derived.target.namespace) is None:
+            raise EnvError(
+                "env-not-found",
+                f"branch {branch!r} has no environment; run piceli env up first",
+            )
+        planned = _run_seed(
+            pipeline,
+            derived,
+            seed,
+            restore_cluster=restore_cluster,
+            say=say,
+            plan_only=True,
+        )
+        body = {
+            "schema": RESULT_SCHEMA,
+            "branch": branch,
+            "namespace": derived.target.namespace,
+            "source": {k: seed[k] for k in ("source", "namespace", "point")},
+            "claims": [item["claim"] for item in planned["claims"]],
+            "writers": list(planned["writers"]),
+            "env_hash": planned["restore_hash"],
+        }
+        if approve is None and not (approve_if_policy and config.auto_approve):
+            return {**body, "state": "approval-required"}
+        if approve is not None and approve != planned["restore_hash"]:
+            raise EnvError(
+                "env-plan-changed",
+                "the approved hash is not the current seed plan; plan again",
+            )
+        receipt = _run_seed(
+            pipeline, derived, seed, restore_cluster=restore_cluster, say=say
+        )
+        record = dict(envs.record(derived.target.namespace) or {})
+        record["seeded_from"] = {**body["source"], "at": _now(now)}
+        envs.write_record(derived.target.namespace, record)
+        return {**body, "state": "seeded", "receipt": receipt}
+    finally:
+        if cluster is None:
+            envs.close()
+
+
+# ---------------------------------------------------------------------- up
+
+
+def env_up(
+    pipeline: Pipeline,
+    branch: str,
+    *,
+    commit: str | None = None,
+    digests: Mapping[str, str] | None = None,
+    build_receipt: Mapping[str, Any] | None = None,
+    approve: str | None = None,
+    approve_if_policy: bool = False,
+    plan_only: bool = False,
+    wait: bool = False,
+    seed_from: str | None = None,
+    cluster: Any = None,
+    runner_options: Mapping[str, Any] | None = None,
+    say: Say = _quiet,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Deploy ``branch`` into its environment (created when absent).
+
+    Plans the environment: namespace to create, branch environments the
+    budget stops, the deploy's combined plan and the seed; its ``env_hash``
+    is the approval. Runs with ``approve=<env_hash>``, or with
+    ``approve_if_policy`` when ``EnvConfig.auto_approve`` allows a branch or
+    the pipeline's ``auto_approve`` policy allows the release plan (the only
+    way for the main branch, which is never stopped or created).
+
+    ``wait=True`` refuses (``env-budget-full``) instead of stopping another
+    environment when the budget is full. ``seed_from`` (or
+    ``EnvConfig.seed_from`` for a new environment) restores that branch's
+    latest restore point into the new claims after the deploy.
+
+    Returns ``{"schema": "piceli.env-result.v1", "state": ...}`` with state
+    ``planned``, ``approval-required`` or ``ready``.
+
+    :raises EnvError: registered ``env-*`` codes; :class:`PipelineError` from
+        the deploy itself.
+    """
+    from piceli.pipeline.runner import PipelineRunner
+
+    config = env_config(pipeline)
+    derived = env_pipeline(
+        pipeline, branch, digests=digests, build_receipt=build_receipt
+    )
+    namespace = derived.target.namespace
+    main = config.is_main(branch)
+    envs = cluster or default_cluster(pipeline)
+    try:
+        live = envs.namespace(namespace)
+        if main and live is None:
+            raise EnvError(
+                "env-main-namespace-missing",
+                f"the main namespace {namespace} does not exist; env commands "
+                "never create it",
+            )
+        if not main and live is not None:
+            if not _owned(live, pipeline.name):
+                raise EnvError(
+                    "env-namespace-not-managed",
+                    f"namespace {namespace} exists and is not an environment of "
+                    f"{pipeline.name}",
+                )
+            if _branch_of(live) not in {None, branch}:
+                raise EnvError(
+                    "env-namespace-collision",
+                    f"namespace {namespace} belongs to another branch with the "
+                    "same name once slugged; rename the branch",
+                )
+        stop = [] if main else plan_budget(envs, pipeline, namespace)
+        if stop and wait:
+            raise EnvError(
+                "env-budget-full",
+                f"{config.max_envs} branch environment(s) already run; the next "
+                f"to stop would be {stop[0]['namespace']}",
+                details={"would_stop": stop},
+            )
+        source = seed_from or (config.seed_from if live is None else None)
+        seed = _seed_source(pipeline, branch, source) if source else None
+        runner = PipelineRunner(derived, say=say, **dict(runner_options or {}))
+        with runner.locked(), runner.sources():
+            combined = runner.plan("checks")
+            env_plan = {
+                "schema": PLAN_SCHEMA,
+                "app": pipeline.name,
+                "branch": branch,
+                "namespace": namespace,
+                "main": main,
+                "create_namespace": live is None,
+                "stop": [item["namespace"] for item in stop],
+                "seed": None
+                if seed is None
+                else {
+                    k: seed[k]
+                    for k in ("source", "namespace", "point", "record_sha256")
+                },
+                "images": dict(derived.branch_env.images) if derived.branch_env else {},
+                "combined_hash": combined.combined_hash,
+            }
+            env_hash = _hash(env_plan)
+            body: dict[str, Any] = {
+                "schema": RESULT_SCHEMA,
+                **{k: v for k, v in env_plan.items() if k != "schema"},
+                "env_hash": env_hash,
+                "commit": commit,
+                "deploy": combined.to_dict(),
+            }
+            if plan_only:
+                return {**body, "state": "planned"}
+            decision = None
+            if approve is not None:
+                if approve != env_hash:
+                    raise EnvError(
+                        "env-plan-changed",
+                        "the approved hash is not the environment's current plan; "
+                        "plan again",
+                    )
+            elif not approve_if_policy:
+                return {**body, "state": "approval-required"}
+            elif not (config.auto_approve and not main):
+                if stop or pipeline.auto_approve is None:
+                    return {
+                        **body,
+                        "state": "approval-required",
+                        "reason": "approval-policy-exceeded",
+                    }
+                decision = runner.policy_decision(combined)
+                if not decision.allowed:
+                    return {
+                        **body,
+                        "state": "approval-required",
+                        "reason": "approval-policy-exceeded",
+                        "policy": decision.to_dict(),
+                    }
+            stopped = {}
+            for item in stop:
+                say(
+                    f"budget: stopping environment {item['namespace']} (least recently pushed)"
+                )
+                stopped[item["namespace"]] = stop_env(envs, item["namespace"], now=now)
+            if live is None:
+                envs.create_namespace(
+                    namespace,
+                    {
+                        ENV_OF_LABEL: pipeline.name,
+                        ENV_BRANCH_LABEL: namespace[len(config.prefix) :][:63],
+                    },
+                    {ENV_BRANCH_ANNOTATION: branch},
+                )
+            previous = dict(envs.record(namespace) or {})
+            record = {
+                **previous,
+                "branch": branch,
+                "namespace": namespace,
+                "commit": commit,
+                "build": "prebuilt" if env_plan["images"] else "pipeline",
+                "images": env_plan["images"],
+                "pushed_at": _now(now),
+                "created_at": previous.get("created_at") or _now(now),
+                "deploy": "deploying",
+                "state": "running",
+            }
+            envs.write_record(namespace, record)
+            try:
+                result = runner.execute(
+                    combined, combined.combined_hash, policy=decision
+                )
+            except PipelineError:
+                envs.write_record(namespace, {**record, "deploy": "failed"})
+                raise
+            started = (
+                _start_stopped(envs, namespace, previous)
+                if previous.get("stopped")
+                else []
+            )
+            record.update({"deploy": result.get("state"), "stopped": []})
+            record.pop("stopped_at", None)
+            envs.write_record(namespace, record)
+        seeded = None
+        if seed is not None:
+            say(
+                f"seeding {namespace} from {seed['namespace']} restore point {seed['point']}"
+            )
+            seeded = _run_seed(pipeline, derived, seed, say=say)
+            record["seeded_from"] = {
+                **{k: seed[k] for k in ("source", "namespace", "point")},
+                "at": _now(now),
+            }
+            envs.write_record(namespace, record)
+        return {
+            **body,
+            "state": "ready",
+            "result": result,
+            "stopped": stopped,
+            "started": started,
+            **({"seed": {**body["seed"], "receipt": seeded}} if seeded else {}),
+        }
+    finally:
+        if cluster is None:
+            envs.close()
+
+
+# -------------------------------------------------------------------- down
+
+
+def env_down(
+    pipeline: Pipeline,
+    branch: str,
+    *,
+    approve: str | None = None,
+    approve_if_policy: bool = False,
+    cluster: Any = None,
+    say: Say = _quiet,
+) -> dict[str, Any]:
+    """Delete ``branch``'s environment: its claims, its namespace, its volumes.
+
+    Refuses the main branch and its namespace always (``env-main-protected``),
+    and a namespace that is not this app's environment
+    (``env-namespace-not-managed``). The plan lists the claims and the
+    volumes bound to them; its ``env_hash`` is the approval. Also removes the
+    branch's local state directory. An absent environment is ``absent``.
+    """
+    config = env_config(pipeline)
+    main_ns = main_namespace(pipeline)
+    if config.is_main(branch):
+        raise EnvError(
+            "env-main-protected", "the main branch's environment is never deleted"
+        )
+    namespace = config.namespace_for(branch, main_ns)
+    if namespace == main_ns:
+        raise EnvError("env-main-protected", "the main namespace is never deleted")
+    envs = cluster or default_cluster(pipeline)
+    try:
+        live = envs.namespace(namespace)
+        body: dict[str, Any] = {
+            "schema": RESULT_SCHEMA,
+            "branch": branch,
+            "namespace": namespace,
+        }
+        if live is None:
+            return {**body, "state": "absent"}
+        if not _owned(live, pipeline.name) or _branch_of(live) not in {None, branch}:
+            raise EnvError(
+                "env-namespace-not-managed",
+                f"namespace {namespace} is not {pipeline.name}'s environment of "
+                f"branch {branch!r}; nothing is deleted",
+            )
+        claims = sorted(
+            str((item.get("metadata") or {}).get("name"))
+            for item in envs.claims(namespace)
+        )
+        volumes = sorted(
+            str((item.get("metadata") or {}).get("name"))
+            for item in envs.volumes()
+            if ((item.get("spec") or {}).get("claimRef") or {}).get("namespace")
+            == namespace
+        )
+        plan = {
+            "schema": PLAN_SCHEMA,
+            "app": pipeline.name,
+            "branch": branch,
+            "namespace": namespace,
+            "uid": (live.get("metadata") or {}).get("uid"),
+            "delete": {"claims": claims, "volumes": volumes},
+        }
+        body.update({"delete": plan["delete"], "env_hash": _hash(plan)})
+        if approve is None and not (approve_if_policy and config.auto_approve):
+            return {
+                **body,
+                "state": "approval-required",
+                **({"reason": "approval-policy-exceeded"} if approve_if_policy else {}),
+            }
+        if approve is not None and approve != body["env_hash"]:
+            raise EnvError(
+                "env-plan-changed",
+                "the approved hash is not the environment's current teardown plan",
+            )
+        for claim in claims:
+            envs.delete_claim(namespace, claim)
+        say(f"deleting namespace {namespace} ({len(claims)} claim(s))")
+        envs.delete_namespace(namespace)
+        for volume in volumes:
+            envs.delete_volume(volume)
+        state_dir = pipeline.state_dir / "branches" / namespace
+        if state_dir.is_dir():
+            shutil.rmtree(state_dir, ignore_errors=True)
+        return {**body, "state": "removed"}
+    finally:
+        if cluster is None:
+            envs.close()
+
+
+# -------------------------------------------------------------------- list
+
+
+def _health(
+    record: Mapping[str, Any], workloads: list[dict[str, Any]]
+) -> tuple[str, list[dict[str, Any]]]:
+    rows: list[dict[str, Any]] = []
+    for item in workloads:
+        spec = item.get("spec") or {}
+        status = item.get("status") or {}
+        desired = spec.get("replicas")
+        desired = 1 if desired is None else int(desired)
+        ready = int(status.get("readyReplicas") or 0)
+        rows.append(
+            {
+                "workload": f"{item.get('kind')}/{(item.get('metadata') or {}).get('name')}",
+                "replicas": desired,
+                "ready": ready,
+            }
+        )
+    rows.sort(key=lambda row: row["workload"])
+    if record.get("state") == "stopped":
+        return "stopped", rows
+    if not rows:
+        return "unknown", rows
+    healthy = all(
+        row["replicas"] > 0 and row["ready"] >= row["replicas"] for row in rows
+    )
+    return ("healthy" if healthy else "degraded"), rows
+
+
+def _status(
+    cluster: Any,
+    branch: str,
+    namespace: str,
+    live: Mapping[str, Any] | None,
+    *,
+    main: bool,
+    now: datetime,
+) -> EnvStatus:
+    if live is None:
+        return EnvStatus(branch, namespace, main, "absent", "unknown")
+    try:
+        record = cluster.record(namespace) or {}
+        health, rows = _health(record, cluster.workloads(namespace))
+    except EnvError:
+        record, health, rows = {}, "unknown", []
+    created = str(
+        (live.get("metadata") or {}).get("creationTimestamp") or ""
+    ) or record.get("created_at")
+    started = _parse(created)
+    return EnvStatus(
+        branch=str(record.get("branch") or branch),
+        namespace=namespace,
+        main=main,
+        state="stopped" if record.get("state") == "stopped" else "running",
+        health=health,
+        commit=record.get("commit"),
+        build=record.get("build"),
+        deploy=record.get("deploy"),
+        created_at=created,
+        pushed_at=record.get("pushed_at"),
+        age_seconds=None
+        if started is None
+        else max(0, int((now - started).total_seconds())),
+        workloads=rows,
+    )
+
+
+def list_envs(
+    pipeline: Pipeline, *, cluster: Any = None, now: datetime | None = None
+) -> list[EnvStatus]:
+    """Every environment of the pipeline: main first, then branches by name (read-only)."""
+    config = env_config(pipeline)
+    moment = now or datetime.now(UTC)
+    main_ns = main_namespace(pipeline)
+    envs = cluster or default_cluster(pipeline)
+    try:
+        try:
+            main_live = envs.namespace(main_ns)
+        except EnvError:
+            main_live = {"metadata": {"name": main_ns}}
+        found = [
+            _status(envs, config.main_branch, main_ns, main_live, main=True, now=moment)
+        ]
+        branches = []
+        for item in envs.namespaces(pipeline.name):
+            name = str((item.get("metadata") or {}).get("name"))
+            if name == main_ns:
+                continue
+            branch = _branch_of(item) or name
+            branches.append(_status(envs, branch, name, item, main=False, now=moment))
+        return found + sorted(branches, key=lambda status: status.namespace)
+    finally:
+        if cluster is None:
+            envs.close()
+
+
+# ------------------------------------------------------------ access, logs
+
+
+def free_port() -> int:
+    """A loopback port no process listens on now (the OS picks it)."""
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
+
+
+def env_access_target(
+    pipeline: Pipeline, branch: str, *, port: Callable[[], int] = free_port
+) -> Any:
+    """The :class:`~piceli.k8s.access.AccessTarget` of one environment.
+
+    The main branch keeps its declared local ports; a branch environment's
+    forwards get free local ports, so several environments are reachable at
+    once. Pure apart from probing free ports; reads no cluster.
+    """
+    import dataclasses
+
+    from piceli.k8s.access import access_target_of
+
+    config = env_config(pipeline)
+    derived = env_pipeline(pipeline, branch)
+    resolved = access_target_of(derived, f"{pipeline.name} environment {branch}")
+    if config.is_main(branch):
+        return resolved
+    shortcuts = tuple(
+        item.model_copy(update={"local_port": port()}) for item in resolved.shortcuts
+    )
+    return dataclasses.replace(resolved, shortcuts=shortcuts)

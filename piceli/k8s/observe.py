@@ -1504,8 +1504,12 @@ def kubectl_logs_command(
     tail: int = 200,
     container: str | None = None,
     previous: bool = False,
+    follow: bool = False,
 ) -> list[str]:
-    """Build a shell-free, bounded command for one workload's logs."""
+    """Build a shell-free, bounded command for one workload's logs.
+
+    ``follow`` streams new lines after the last ``tail`` ones (``--follow``).
+    """
     if not _NAME.fullmatch(namespace) or not _LOG_TARGET.fullmatch(target):
         raise ValueError("invalid log namespace or target")
     if not isinstance(tail, int) or isinstance(tail, bool) or not 1 <= tail <= 10_000:
@@ -1518,6 +1522,8 @@ def kubectl_logs_command(
         result.extend(["--container", container])
     if previous:
         result.append("--previous")
+    if follow:
+        result.append("--follow")
     return result
 
 

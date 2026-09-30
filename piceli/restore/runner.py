@@ -342,12 +342,15 @@ def plan_restore(
     *,
     claims: Sequence[str] = (),
     target: Mapping[str, Any],
+    source_namespace: str | None = None,
 ) -> dict[str, Any]:
     """The read-only plan to put ``point`` back, with its hash.
 
     Verifies every selected archive (SHA-256, listing, content digest),
     checks that the claims exist in the namespace, and lists the writers
-    that will be stopped.
+    that will be stopped. ``source_namespace`` restores a point taken in
+    that namespace into the cluster's (a branch environment seeded from
+    main); the plan then records it.
 
     :raises RestorePointError: ``restore-point-unknown``,
         ``restore-point-claim-unknown``, ``restore-point-target-mismatch``,
@@ -360,11 +363,12 @@ def plan_restore(
             "restore-point-not-verified",
             f"restore point {point} is {record.get('state')}, not verified",
         )
-    if record.get("namespace") != cluster.namespace:
+    expected = source_namespace or cluster.namespace
+    if record.get("namespace") != expected:
         raise RestorePointError(
             "restore-point-target-mismatch",
             f"restore point {point} was taken in namespace "
-            f"{record.get('namespace')}, not {cluster.namespace}",
+            f"{record.get('namespace')}, not {expected}",
         )
     entries = _selected(record, claims)
     for entry in entries:
@@ -396,6 +400,7 @@ def plan_restore(
             for entry in entries
         ],
         "writers": [item["workload"] for item in writers],
+        **({"source_namespace": source_namespace} if source_namespace else {}),
     }
     return {
         **body,

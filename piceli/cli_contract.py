@@ -427,7 +427,9 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "line is never printed); when the holder is Piceli's own stale process "
             "for this app it says so and suggests `piceli access stop --stale "
             "TARGET`. Never takes a port over. Stops every forward it started on "
-            "Ctrl-C/SIGTERM/SIGHUP. Exit 1 only when every forward gave up.",
+            "Ctrl-C/SIGTERM/SIGHUP. Exit 1 only when every forward gave up. "
+            "`piceli access BRANCH --pipeline MODULE:ATTR` forwards that branch "
+            "environment's declared ports on free local ports.",
         ),
         "access stop": _C(
             "Stop Piceli's own stale forwards and servers for the app (--stale).",
@@ -1086,6 +1088,110 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "command read-only with the workload's image, writes a receipt "
             "with PASS or FAIL per claim (exit 1 on any FAIL), and deletes the "
             "scratch claims unless --keep.",
+        ),
+        # ----------------------------------------------- environments
+        "env up": _C(
+            "Deploy a branch into its own namespace (EnvConfig): plan (exit 3 "
+            "with the env_hash), then --approve HASH.",
+            reads=(
+                "pipeline module (--pipeline or $PICELI_PIPELINE)",
+                "kubeconfig",
+                "state_dir",
+                "build receipt (--receipt)",
+            ),
+            writes=(
+                "<state_dir>/branches/<namespace> (journal, release state, secrets)",
+            ),
+            cluster="writes",
+            approval_required=True,
+            safe_to_retry=True,
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2, 3),
+            notes="The branch's namespace is <prefix><slug> (at most 63 "
+            "characters, hash suffix when cut); main maps to the main "
+            "namespace, which is never created. Branch environments never "
+            "build: images come from --digest NAME=REF or --receipt. The app is "
+            "isolated at render time (relative Service names, no NodePort, "
+            "hostPort or hostPath, namespace-qualified cluster objects, its own "
+            "generated Secrets) and gets a default-deny NetworkPolicy across "
+            "namespaces and a ResourceQuota. The plan (--plan, or without an "
+            "approval) lists the namespace to create, the environments the "
+            "budget stops (max_envs, least recently pushed first; scaled to "
+            "zero, kept), the deploy's combined plan and the seed "
+            "(--seed-from main). --approve-if-policy runs a branch when "
+            "EnvConfig(auto_approve=True), or when the pipeline's auto_approve "
+            "policy allows the deploy and nothing is stopped; main only by the "
+            "policy. --wait refuses with env-budget-full instead of stopping.",
+        ),
+        "env down": _C(
+            "Delete a branch environment: its claims, namespace and volumes "
+            "(approval by env_hash; never main's).",
+            reads=("pipeline module (--pipeline or $PICELI_PIPELINE)", "kubeconfig"),
+            writes=("<state_dir>/branches/<namespace> (removed)",),
+            cluster="writes",
+            approval_required=True,
+            safe_to_retry=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2, 3),
+            notes="Refuses the main branch and the main namespace always "
+            "(env-main-protected) and a namespace without this app's "
+            "piceli.io/env-of label or of another branch "
+            "(env-namespace-not-managed). The plan lists the claims and the "
+            "volumes bound to them; with --approve HASH (or --approve-if-policy "
+            "and EnvConfig(auto_approve=True)) it deletes the claims, the "
+            "namespace and those volumes. An absent environment prints state "
+            "absent (exit 0).",
+        ),
+        "env seed": _C(
+            "Restore main's latest restore point into a branch environment's "
+            "claims (approval by env_hash).",
+            reads=(
+                "pipeline module (--pipeline or $PICELI_PIPELINE)",
+                "restore point directory",
+                "kubeconfig",
+            ),
+            writes=("restore point directory (restores/ receipts)",),
+            cluster="writes",
+            approval_required=True,
+            safe_to_retry=True,
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2, 3),
+            notes="Uses the restore machinery of `piceli restore`: verifies the "
+            "archives, stops the branch's writers, empties and restores each "
+            "claim, checks the content digest in the cluster and starts the "
+            "writers again. Never reads or writes main's claims (the archives "
+            "are local). Refuses the main branch (env-main-protected).",
+        ),
+        "envs": _C(
+            "List every environment: branch, namespace, commit, build and "
+            "deploy state, health, age, last push.",
+            reads=("pipeline module (--pipeline or $PICELI_PIPELINE)", "kubeconfig"),
+            cluster="reads",
+            contract="conforms",
+            notes="Read-only. Human table on stderr; --json prints one "
+            "piceli.envs.v1 object (envs[]: branch, namespace, main, state "
+            "running|stopped|absent, health healthy|degraded|stopped|unknown, "
+            "commit, build, deploy, created_at, pushed_at, age_seconds, "
+            "workloads).",
+        ),
+        "logs": _C(
+            "Print one workload's logs in an environment (kubectl logs with the "
+            "explicit context).",
+            reads=(
+                "pipeline module (--pipeline or $PICELI_PIPELINE)",
+                "kubeconfig",
+                "kubectl",
+            ),
+            cluster="reads",
+            long_running=True,
+            contract="partial",
+            exit_codes=(0, 1, 2),
+            notes="`piceli logs BRANCH WORKLOAD [--previous] [-f] [--tail N]`: "
+            "stdout carries the log lines (kubectl's), not JSON; a refusal is "
+            "the JSON rejection object. WORKLOAD is a Deployment, StatefulSet, "
+            "DaemonSet or Job of the app (env-workload-unknown otherwise).",
         ),
     }
 )

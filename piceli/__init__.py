@@ -87,6 +87,9 @@ _CHECKS_EXPORTS = frozenset({"Checks"})
 # ``app.quiesce(...)``.
 _RESTORE_EXPORTS = frozenset({"Quiesce", "RestorePoints", "RestoreVerify"})
 
+# Per-branch environments for ``Pipeline(envs=...)``.
+_ENVS_EXPORTS = frozenset({"EnvConfig"})
+
 if TYPE_CHECKING:
     from piceli.app import (  # noqa: F401
         Access,
@@ -137,6 +140,7 @@ if TYPE_CHECKING:
         Workload,
     )
     from piceli.checks import Checks  # noqa: F401
+    from piceli.envs import EnvConfig  # noqa: F401
     from piceli.pipeline import (  # noqa: F401
         ApprovalPolicy,
         AwsSecret,
@@ -175,6 +179,10 @@ def __getattr__(name: str) -> Any:
         from piceli import restore
 
         return getattr(restore, name)
+    if name in _ENVS_EXPORTS:
+        from piceli import envs
+
+        return getattr(envs, name)
     raise AttributeError(f"module 'piceli' has no attribute {name!r}")
 
 
@@ -186,5 +194,6 @@ def __dir__() -> list[str]:
             *_PIPELINE_EXPORTS,
             *_CHECKS_EXPORTS,
             *_RESTORE_EXPORTS,
+            *_ENVS_EXPORTS,
         ]
     )
