@@ -3,7 +3,8 @@
 A snapshot is a gzip-compressed tar of the directory's durable files: run
 journals, receipts, the release catalog, the execution journal, the secret
 store, stored discovery and backups. Excluded are files that only make sense
-on the machine that wrote them: lock files, temporary files (``.name.*``),
+on the machine that wrote them: restore point archives
+(``restore-points/``), lock files, temporary files (``.name.*``),
 SQLite side files (``-journal``, ``-wal``, ``-shm``) and build outputs and
 logs (``builds/<name>/outputs/``, ``builds/<name>/build.log``).
 
@@ -39,6 +40,8 @@ LOCAL_SUFFIXES = (".lock", "-journal", "-wal", "-shm")
 #: encryption key is given.
 PRIVATE_NAMES = ("secrets.sqlite", "journal.sqlite")
 PRIVATE_DIRECTORIES = ("backups", "plans")
+#: The default restore point directory (``RestorePoints``): never snapshotted.
+RESTORE_POINTS = "restore-points"
 PRIVATE_SUFFIXES = (".discovery.json",)
 SQLITE_HEADER = b"SQLite format 3\x00"
 #: Largest snapshot accepted when unpacking (uncompressed bytes).
@@ -57,6 +60,9 @@ def excluded(relative: PurePosixPath) -> bool:
     if not parts or any(part.startswith(".") for part in parts):
         return True
     if parts[-1].endswith(LOCAL_SUFFIXES):
+        return True
+    # Restore point archives hold claim data: they stay on the runner.
+    if RESTORE_POINTS in parts[:-1]:
         return True
     # builds/<name>/outputs/… and builds/<name>/build.log: rebuilt or not needed.
     return (

@@ -153,7 +153,16 @@ noted.
   pushes or applies. Before the images exist it also previews the release
   with placeholder images (`stages.plan.preview`), and refuses with the
   `blocking` objects when the release would need adoption or replacement. With `--ref SOURCE=REV` it also checks the commit out
-  into a temporary git worktree, removed before it exits.
+  into a temporary git worktree, removed before it exits. A host build
+  (`Build.spec(..., builder="host")`) also reads its node's facts (one
+  read-only `GET` of the Node) and hashes the declared host tools; nothing
+  runs.
+- `piceli deploy MODULE:ATTR --plan` of an app that declares
+  `App.pre_rollout(...)` also lists the `prerollout` stage: the check commands
+  and every Secret and ConfigMap the check pod reads. It reads Secrets,
+  ConfigMaps and claims of the target namespace (key names only, never
+  values) and refuses with `prerollout-mount-missing` or
+  `prerollout-claim-exclusive` (exit `2`) before anything is built.
 - `piceli state show --spec …` (where the state lives, its generation, the
   release lock's holder; never prints content), `piceli state pull --spec …`
   (refreshes the local working copy of shared state) and
@@ -169,6 +178,11 @@ noted.
   it. Exit `0` ready or stopped, `1` failed, interrupted, rolled back or
   `--timeout` (`watch-timeout`), `2` no run (`watch-no-run`). Use it, not
   polling the cluster, to report a release's progress ({ref}`watch`).
+- `piceli restore-points MODULE:ATTR [--verify] --json`: list the pipeline's
+  restore points (verified archives of retained claims taken by the deploy's
+  `backup` stage) with ids, claims, sizes and digests; `--verify` reads every
+  archive back (exit `1` when one does not match). Read-only and offline;
+  never prints what a claim holds ({doc}`restore_points`).
 - `piceli observe forward-save`, `piceli operator backup`: write a local
   preferences file or backup archive.
 - `piceli cache status [MODULE:ATTR | --state-dir DIR] --json`, `piceli
@@ -192,6 +206,7 @@ Ask before running these, and show the owner what will happen first.
 | Command | Changes | Approve with |
 | --- | --- | --- |
 | `piceli deploy` | Builds images, pushes them to a registry or node, applies a release | `--approve <combined hash>` from `piceli deploy MODULE:ATTR --plan`, after the owner reviewed that plan (or `--apply <plan file> --approve <its hash>` on another runner); `--resume` continues an approved run; `--approve-if-policy` only when the owner declared an `auto_approve` policy (see below) |
+| `piceli restore` | Replaces every file of the restore point's claims (stops their writers, then starts them again) | `--approve <restore_hash>` printed by `piceli restore MODULE:ATTR --point ID` without `--approve`, after the owner chose that restore point and agreed to lose what the claims hold now |
 | `piceli state import` | Replaces the release's state (local directory or the shared state in the namespace) | `--approve <import digest>` printed by `piceli state import` without `--approve`, after the owner agreed to replace the state |
 | `piceli release apply` | The cluster | `--approve <plan hash>` from `release plan`, after the owner reviewed that plan; `--approve-if-policy` only with the owner's `[release] auto_approve` |
 | `piceli release rollback` | The cluster | `--approve <plan hash>` from `release rollback <target>` without `--approve` |
@@ -269,7 +284,10 @@ result).
    data is kept, `stages.deliver.registry.existing`), the release's
    `create`/`adopt`/`replace`/`apply`/`delete` lines and the checks. While
    the images are not built or delivered, those lines come from `stages.plan.preview`, computed with placeholder images
-   (`approvable: false`). The combined hash then approves the build, the
+   (`approvable: false`). A build with `builder: host`
+   (`stages.build.builds.<name>`) runs its `tools` on this machine as the
+   owner's user, outside any container: say so, with the `node_facts` it
+   compiles for. The combined hash then approves the build, the
    delivery and a release that adopts, replaces or deletes at most what the
    preview showed. Never pass the preview's `preview_hash` to `--approve`
    (refused with `pipeline-preview-not-approvable`). If the owner wants to
@@ -378,12 +396,23 @@ never build. The approval rules above apply unchanged:
    command, configuration or Secret must change first, or the owner rolls
    back (`piceli release rollback previous`, which needs approval). Later,
    `piceli release status --spec … --run ID` shows the same causes.
-6. `access-port-conflict` with `conflicts[].holder` `piceli-forward` or
+6. `prerollout-failed`, `prerollout-timeout`, `prerollout-not-startable`
+   (from `piceli deploy`, stage `prerollout`): a check Job with the new image
+   and the workload's real Secrets and mounts failed **before** `apply`, so
+   the running pods are unchanged. Read `stages.prerollout.output.checks[]` in
+   the run summary (`kind` `config` or `upgrade`, `exit_code`, `category`,
+   `log_tail`, already scrubbed) and report it. Do not retry unchanged: the
+   image, command or mounted object must change first. Never add or remove
+   a `pre_rollout` declaration to get a release through: the owner decides.
+   The check Job is deleted by Piceli; if `piceli` was killed, Jobs labelled
+   `piceli.io/pre-rollout` expire after ten minutes and the next run removes
+   them.
+7. `access-port-conflict` with `conflicts[].holder` `piceli-forward` or
    `piceli-server`: Piceli's own process for this app holds the port (often
    a `piceli access` left running). Ask the owner before running the
    suggested `piceli access stop --stale TARGET`. With `holder` `other`,
    report the pid; never stop another process.
-7. `immutable-field-changed` (a Job's pod template, or a StatefulSet's
+8. `immutable-field-changed` (a Job's pod template, or a StatefulSet's
    service name, pod management, selector or claim templates would change):
    do not add `--replace` yourself. Show the owner the `blocking` entry;
    replacing deletes and recreates the object (a Job runs again). Plan with

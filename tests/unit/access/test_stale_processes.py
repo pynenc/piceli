@@ -267,6 +267,20 @@ def test_holder_check_uses_the_target_forwards(tmp_path: Path) -> None:
     assert check(PortOwner(local, 4242, argv.replace("demo", "x"), None)).kind == OTHER
 
 
+def _kill_fake_kubectl(script: Path) -> None:
+    """Kill every process running ``script`` (its path is unique to the test)."""
+    listing = subprocess.run(
+        ["ps", "-A", "-o", "pid=,args="], capture_output=True, text=True, check=False
+    ).stdout
+    for line in listing.splitlines():
+        pid, _, args = line.strip().partition(" ")
+        if str(script) in args and pid.isdigit() and int(pid) != os.getpid():
+            try:
+                os.kill(int(pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
 @pytest.mark.skipif(
     not (sys.platform.startswith("linux") or shutil.which("lsof")),
     reason="needs /proc or lsof to find a port's owner",
@@ -274,71 +288,78 @@ def test_holder_check_uses_the_target_forwards(tmp_path: Path) -> None:
 def test_cli_access_stop_stale_stops_a_leftover_piceli_access(
     tmp_path: Path, fake_kubectl: Path, upstream: int
 ) -> None:
-    local, dashboard = _free_port(), _free_port()
-    spec = write_spec(tmp_path, local=local, upstream=upstream)
-    process = subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "piceli",
-            "access",
-            str(spec),
-            "--only",
-            "api",
-            "--json",
-            "--kubectl",
-            str(fake_kubectl),
-            "--poll",
-            "0.2",
-            "--dashboard",
-            str(dashboard),
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        cwd=REPO,
-        env={**os.environ, "PICELI__UI_CONFIG": ""},
-    )
     try:
-        events = _read_events(process, lambda event: event.get("health") == "healthy")
-        assert events and events[-1].get("health") == "healthy", events
-        # A second access sees the dashboard port held by piceli for this app.
-        second = CliRunner().invoke(
-            app,
+        local, dashboard = _free_port(), _free_port()
+        spec = write_spec(tmp_path, local=local, upstream=upstream)
+        process = subprocess.Popen(
             [
+                sys.executable,
+                "-m",
+                "piceli",
                 "access",
                 str(spec),
                 "--only",
                 "api",
+                "--json",
                 "--kubectl",
                 str(fake_kubectl),
+                "--poll",
+                "0.2",
                 "--dashboard",
                 str(dashboard),
             ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=REPO,
+            env={**os.environ, "PICELI__UI_CONFIG": ""},
         )
-        assert second.exit_code == 2
-        # The fake kubectl is not a real kubectl: its port shows as foreign,
-        # by pid only (a real kubectl forward is covered by the kind test).
-        assert json.loads(second.stdout)["conflicts"][0]["owner"]["command"] is None
-        stop = CliRunner().invoke(
-            app, ["access", "stop", "--stale", str(spec), "--port", str(dashboard)]
-        )
-        assert stop.exit_code == 0, stop.stdout + stop.stderr
-        body = json.loads(stop.stdout)
-        assert [(item["port"], item["pid"]) for item in body["stopped"]] == [
-            (dashboard, process.pid)
-        ]
-        assert body["stopped"][0]["holder"] == "piceli-server"
-        assert [item["port"] for item in body["left"]] == [local]
-        assert body["left"][0]["owner"]["command"] is None
-        process.wait(timeout=15)
-        assert process.returncode is not None
+        try:
+            events = _read_events(
+                process, lambda event: event.get("health") == "healthy"
+            )
+            assert events and events[-1].get("health") == "healthy", events
+            # A second access sees the dashboard port held by piceli for this app.
+            second = CliRunner().invoke(
+                app,
+                [
+                    "access",
+                    str(spec),
+                    "--only",
+                    "api",
+                    "--kubectl",
+                    str(fake_kubectl),
+                    "--dashboard",
+                    str(dashboard),
+                ],
+            )
+            assert second.exit_code == 2
+            # The fake kubectl is not a real kubectl: its port shows as foreign,
+            # by pid only (a real kubectl forward is covered by the kind test).
+            assert json.loads(second.stdout)["conflicts"][0]["owner"]["command"] is None
+            stop = CliRunner().invoke(
+                app, ["access", "stop", "--stale", str(spec), "--port", str(dashboard)]
+            )
+            assert stop.exit_code == 0, stop.stdout + stop.stderr
+            body = json.loads(stop.stdout)
+            assert [(item["port"], item["pid"]) for item in body["stopped"]] == [
+                (dashboard, process.pid)
+            ]
+            assert body["stopped"][0]["holder"] == "piceli-server"
+            assert [item["port"] for item in body["left"]] == [local]
+            assert body["left"][0]["owner"]["command"] is None
+            process.wait(timeout=15)
+            assert process.returncode is not None
+        finally:
+            if process.poll() is None:
+                process.send_signal(signal.SIGKILL)
+                process.wait(timeout=5)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and access_module.local_port_in_use(local):
+            time.sleep(0.05)
+        assert not access_module.local_port_in_use(local)
+        assert not access_module.local_port_in_use(dashboard)
     finally:
-        if process.poll() is None:
-            process.send_signal(signal.SIGKILL)
-            process.wait(timeout=5)
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline and access_module.local_port_in_use(local):
-        time.sleep(0.05)
-    assert not access_module.local_port_in_use(local)
-    assert not access_module.local_port_in_use(dashboard)
+        # A failure above must not leave the fake kubectl (started in its own
+        # session by piceli access) holding the port for later runs.
+        _kill_fake_kubectl(fake_kubectl)

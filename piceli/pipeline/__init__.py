@@ -8,8 +8,9 @@ optional :class:`Build` objects whose images the app uses as
 :class:`NodeImport` or :class:`Registry`), secret generators
 (:class:`Secrets`), post-deploy checks and the owner's
 :class:`ApprovalPolicy` (``auto_approve=``). ``piceli deploy`` runs
-``inputs → build → deliver → plan → apply → checks`` as one journaled,
-resumable run in which every stage is skipped when its content is unchanged.
+``inputs → build → deliver → [prerollout →] [backup →] plan → apply →
+checks`` as one journaled, resumable run in which every stage is skipped
+when its content is unchanged.
 See ``docs/deploy.md``.
 
 Importing this package reads no file and contacts nothing; the runner and
@@ -22,6 +23,7 @@ from piceli.approval_policy import ApprovalPolicy
 from piceli.pipeline.checks import CheckContext, CheckReportLike, CheckRunner
 from piceli.pipeline.errors import PipelineError
 from piceli.pipeline.model import (
+    ALL_STAGES,
     STAGES,
     Build,
     ImageHandle,
@@ -48,6 +50,7 @@ if TYPE_CHECKING:
     from piceli.pipeline.runner import CombinedPlan, PipelineRunner
 
 __all__ = [
+    "ALL_STAGES",
     "STAGES",
     "ApprovalPolicy",
     "AwsSecret",

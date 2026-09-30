@@ -33,6 +33,7 @@ _APP_EXPORTS = frozenset(
         "Mount",
         "NetworkPolicy",
         "PodDefaults",
+        "PreRollout",
         "Probe",
         "Resource",
         "Resources",
@@ -47,6 +48,7 @@ _APP_EXPORTS = frozenset(
         "ServiceAccount",
         "ServicePort",
         "StatefulSet",
+        "UpgradeCheck",
         "Workload",
     }
 )
@@ -78,6 +80,10 @@ _PIPELINE_EXPORTS = frozenset(
 # ``piceli.pipeline.CheckContext``, so the runner API stays in its package.
 _CHECKS_EXPORTS = frozenset({"Checks"})
 
+# Restore points of retained data for ``Pipeline(restore_points=...)`` and
+# ``app.quiesce(...)``.
+_RESTORE_EXPORTS = frozenset({"Quiesce", "RestorePoints"})
+
 if TYPE_CHECKING:
     from piceli.app import (  # noqa: F401
         Access,
@@ -106,6 +112,7 @@ if TYPE_CHECKING:
         Mount,
         NetworkPolicy,
         PodDefaults,
+        PreRollout,
         Probe,
         Resource,
         Resources,
@@ -120,6 +127,7 @@ if TYPE_CHECKING:
         ServiceAccount,
         ServicePort,
         StatefulSet,
+        UpgradeCheck,
         Workload,
     )
     from piceli.checks import Checks  # noqa: F401
@@ -141,6 +149,7 @@ if TYPE_CHECKING:
         TlsCa,
         Vault,
     )
+    from piceli.restore import Quiesce, RestorePoints  # noqa: F401
 
 
 def __getattr__(name: str) -> Any:
@@ -156,8 +165,20 @@ def __getattr__(name: str) -> Any:
         from piceli import checks
 
         return getattr(checks, name)
+    if name in _RESTORE_EXPORTS:
+        from piceli import restore
+
+        return getattr(restore, name)
     raise AttributeError(f"module 'piceli' has no attribute {name!r}")
 
 
 def __dir__() -> list[str]:
-    return sorted([*globals(), *_APP_EXPORTS, *_PIPELINE_EXPORTS, *_CHECKS_EXPORTS])
+    return sorted(
+        [
+            *globals(),
+            *_APP_EXPORTS,
+            *_PIPELINE_EXPORTS,
+            *_CHECKS_EXPORTS,
+            *_RESTORE_EXPORTS,
+        ]
+    )

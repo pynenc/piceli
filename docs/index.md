@@ -166,10 +166,12 @@ kubernetes_model/index
 :caption: Deploy and operate
 
 deploy
+pre_rollout_checks
 ci
 gitops
 state
 maintenance
+restore_points
 typed_apps
 crds
 environments
@@ -192,6 +194,7 @@ testing
 
 source_identity
 containerized_builds
+host_builds
 node_delivery
 node_local_registry
 artifact_delivery

@@ -85,7 +85,11 @@
     "override",
     "owner",
     "pod_defaults",
+    "pre_rollout",
+    "pre_rollouts",
     "probe",
+    "quiesce",
+    "quiesce_hooks",
     "release_selector",
     "render",
     "resource",
@@ -316,6 +320,16 @@
      "item",
      "patch"
     ],
+    "pre_rollout": [
+     "command",
+     "timeout_seconds",
+     "upgrade",
+     "workload"
+    ],
+    "quiesce": [
+     "workload"
+    ],
+    "quiesce_hooks": [],
     "render": [
      "namespace",
      "nodes"
@@ -406,6 +420,7 @@
     "ingress": "Ingress",
     "job": "Job",
     "network_policy": "NetworkPolicy",
+    "pre_rollout": "PreRollout",
     "render": "DeploymentComposition",
     "resource": "Resource",
     "secret": "Secret",
@@ -667,9 +682,12 @@
    ],
    "init": [
     "base",
+    "builder",
+    "cache_dir",
     "document",
     "images",
     "lock",
+    "node",
     "path",
     "platform"
    ],
@@ -695,7 +713,10 @@
     "image_names": [],
     "load": [],
     "spec": [
+     "builder",
+     "cache_dir",
      "lock",
+     "node",
      "path",
      "platform"
     ]
@@ -1711,6 +1732,7 @@
     "fail_pods",
     "handler",
     "inject",
+    "job_result",
     "managers",
     "put",
     "route",
@@ -1723,6 +1745,8 @@
    "methods": {
     "add_node": [
      "architecture",
+     "kernel_version",
+     "labels",
      "name",
      "uid"
     ],
@@ -1739,6 +1763,15 @@
     ],
     "handler": [],
     "inject": null,
+    "job_result": [
+     "container",
+     "events",
+     "exit_code",
+     "logs",
+     "message",
+     "prefix",
+     "waiting"
+    ],
     "managers": [
      "kind",
      "name"
@@ -2774,6 +2807,8 @@
     "handles",
     "name",
     "needs_environment",
+    "restore_point_directory",
+    "stages",
     "target"
    ],
    "init": [
@@ -2790,6 +2825,7 @@
     "inherited_owners",
     "owner",
     "replace",
+    "restore_points",
     "rollback_on_failed_checks",
     "secrets",
     "state",
@@ -2924,6 +2960,28 @@
     "to_dict": []
    }
   },
+  "PreRollout": {
+   "attr_types": {
+    "upgrade": "UpgradeCheck"
+   },
+   "attrs": [
+    "command",
+    "describe",
+    "timeout_seconds",
+    "upgrade",
+    "workload"
+   ],
+   "init": [
+    "command",
+    "timeout_seconds",
+    "upgrade",
+    "workload"
+   ],
+   "methods": {
+    "describe": []
+   },
+   "pydantic": true
+  },
   "Probe": {
    "attrs": [
     "action",
@@ -2994,6 +3052,51 @@
     ]
    },
    "pydantic": true
+  },
+  "Quiesce": {
+   "attrs": [
+    "action",
+    "command",
+    "container",
+    "describe",
+    "exec",
+    "expect",
+    "http",
+    "method",
+    "path",
+    "port",
+    "timeout_seconds"
+   ],
+   "init": [
+    "action",
+    "command",
+    "container",
+    "expect",
+    "method",
+    "path",
+    "port",
+    "timeout_seconds"
+   ],
+   "methods": {
+    "describe": [],
+    "exec": [
+     "command",
+     "container",
+     "timeout_seconds"
+    ],
+    "http": [
+     "expect",
+     "method",
+     "path",
+     "port",
+     "timeout_seconds"
+    ]
+   },
+   "pydantic": true,
+   "returns": {
+    "exec": "Quiesce",
+    "http": "Quiesce"
+   }
   },
   "RandomSecretSpec": {
    "attrs": [
@@ -3611,6 +3714,32 @@
    "methods": {
     "delay": [
      "attempt"
+    ]
+   },
+   "pydantic": true
+  },
+  "RestorePoints": {
+   "attrs": [
+    "describe",
+    "directory",
+    "image",
+    "include",
+    "resolve_directory",
+    "run_as_user",
+    "timeout_seconds"
+   ],
+   "init": [
+    "directory",
+    "image",
+    "include",
+    "run_as_user",
+    "timeout_seconds"
+   ],
+   "methods": {
+    "describe": [],
+    "resolve_directory": [
+     "base",
+     "state_dir"
     ]
    },
    "pydantic": true
@@ -4323,6 +4452,20 @@
    "methods": {},
    "pydantic": true
   },
+  "UpgradeCheck": {
+   "attrs": [
+    "command",
+    "timeout_seconds",
+    "volumes"
+   ],
+   "init": [
+    "command",
+    "timeout_seconds",
+    "volumes"
+   ],
+   "methods": {},
+   "pydantic": true
+  },
   "VaultSecretSpec": {
    "attrs": [
     "address",
@@ -4466,6 +4609,8 @@
      "publish",
      "release",
      "render",
+     "restore",
+     "restore-points",
      "runs",
      "state",
      "status",
@@ -5220,6 +5365,31 @@
     ],
     "subcommands": []
    },
+   "restore": {
+    "arguments": [
+     "target"
+    ],
+    "flags": [
+     "--approve",
+     "--claim",
+     "--env",
+     "--image",
+     "--json",
+     "--point"
+    ],
+    "subcommands": []
+   },
+   "restore-points": {
+    "arguments": [
+     "target"
+    ],
+    "flags": [
+     "--env",
+     "--json",
+     "--verify"
+    ],
+    "subcommands": []
+   },
    "runs": {
     "arguments": [
      "target"
@@ -5331,9 +5501,14 @@
    "auth-provider-refused",
    "authorization-expired",
    "backup-refused",
+   "base-image-invalid",
+   "base-image-unavailable",
+   "base-layer-unsupported",
+   "base-platform-unavailable",
    "blob-digest-mismatch",
    "blob-not-found",
    "blob-source-truncated",
+   "build-builder-mismatch",
    "build-failed",
    "build-timed-out",
    "builder-not-approved",
@@ -5435,6 +5610,9 @@
    "gitops-target-invalid",
    "grant-expired",
    "grant-mismatch",
+   "host-build-invalid",
+   "host-output-missing",
+   "host-tool-missing",
    "identity-mismatch",
    "image-declared-twice",
    "image-digest-mismatch",
@@ -5515,9 +5693,12 @@
    "no-previous-release",
    "no-release-applied",
    "no-saved-forwards",
+   "node-facts-unavailable",
    "node-identity-mismatch",
    "node-not-found",
    "node-options-on-registry-target",
+   "node-page-size-invalid",
+   "node-platform-mismatch",
    "node-query-failed",
    "node-registry-required",
    "not-found",
@@ -5561,6 +5742,12 @@
    "plan-not-approved",
    "plan-not-found",
    "plan-release-mismatch",
+   "prerollout-claim-exclusive",
+   "prerollout-failed",
+   "prerollout-mount-missing",
+   "prerollout-not-startable",
+   "prerollout-timeout",
+   "prerollout-unavailable",
    "promote-refused",
    "provider-error",
    "rbac-denied",
@@ -5599,6 +5786,25 @@
    "resource-requires-adoption",
    "resource-scope-mismatch",
    "response-byte-limit",
+   "restore-plan-changed",
+   "restore-point-archive-invalid",
+   "restore-point-archive-missing",
+   "restore-point-checksum-mismatch",
+   "restore-point-claim-missing",
+   "restore-point-claim-unknown",
+   "restore-point-copy-failed",
+   "restore-point-exists",
+   "restore-point-helper-failed",
+   "restore-point-not-verified",
+   "restore-point-plan-changed",
+   "restore-point-quiesce-failed",
+   "restore-point-restart-failed",
+   "restore-point-restore-failed",
+   "restore-point-restore-mismatch",
+   "restore-point-target-mismatch",
+   "restore-point-unknown",
+   "restore-point-writer-unsupported",
+   "restore-point-writers-remain",
    "restore-refused",
    "resume-refused",
    "retained-adoption-precondition-failed",
@@ -5802,8 +6008,14 @@
    "PodDefaults": {
     "class": "PodDefaults"
    },
+   "PreRollout": {
+    "class": "PreRollout"
+   },
    "Probe": {
     "class": "Probe"
+   },
+   "Quiesce": {
+    "class": "Quiesce"
    },
    "Random": {
     "params": [
@@ -5820,6 +6032,9 @@
    },
    "Resources": {
     "class": "Resources"
+   },
+   "RestorePoints": {
+    "class": "RestorePoints"
    },
    "Route": {
     "class": "Route"
@@ -5900,6 +6115,9 @@
     ],
     "returns": "TlsCaSpec"
    },
+   "UpgradeCheck": {
+    "class": "UpgradeCheck"
+   },
    "Vault": {
     "params": [
      "address",
@@ -5933,6 +6151,7 @@
    "maintenance": {},
    "pipeline": {},
    "process_group": {},
+   "restore": {},
    "state": {},
    "telemetry": {},
    "tempfiles": {},
@@ -6021,6 +6240,9 @@
    "PodDefaults": {
     "class": "PodDefaults"
    },
+   "PreRollout": {
+    "class": "PreRollout"
+   },
    "Probe": {
     "class": "Probe"
    },
@@ -6062,6 +6284,9 @@
    },
    "StatefulSet": {
     "class": "StatefulSet"
+   },
+   "UpgradeCheck": {
+    "class": "UpgradeCheck"
    },
    "Workload": {
     "class": "Workload"
@@ -6343,6 +6568,7 @@
    }
   },
   "piceli.pipeline": {
+   "ALL_STAGES": {},
    "ApprovalPolicy": {
     "class": "ApprovalPolicy"
    },
@@ -6538,10 +6764,12 @@
   "piceli.app.environment",
   "piceli.app.kinds",
   "piceli.app.model",
+  "piceli.app.prerollout",
   "piceli.app.render",
   "piceli.app.resource",
   "piceli.approval_policy",
   "piceli.artifacts",
+  "piceli.artifacts.attestations",
   "piceli.artifacts.base_image",
   "piceli.artifacts.build_context",
   "piceli.artifacts.build_dockerfile",
@@ -6550,11 +6778,15 @@
   "piceli.artifacts.delivery",
   "piceli.artifacts.delivery_inputs",
   "piceli.artifacts.gc",
+  "piceli.artifacts.host_build",
+  "piceli.artifacts.host_execution",
   "piceli.artifacts.image_manifest",
   "piceli.artifacts.local_import",
   "piceli.artifacts.mirror",
+  "piceli.artifacts.node_facts",
   "piceli.artifacts.node_transport",
   "piceli.artifacts.oci",
+  "piceli.artifacts.oci_layers",
   "piceli.artifacts.plan",
   "piceli.artifacts.process",
   "piceli.artifacts.registry",
@@ -6596,6 +6828,7 @@
   "piceli.k8s.cli.publish",
   "piceli.k8s.cli.release",
   "piceli.k8s.cli.render",
+  "piceli.k8s.cli.restore",
   "piceli.k8s.cli.state",
   "piceli.k8s.cli.watch",
   "piceli.k8s.config",
@@ -6678,6 +6911,9 @@
   "piceli.pipeline.model",
   "piceli.pipeline.operate",
   "piceli.pipeline.planfile",
+  "piceli.pipeline.prerollout",
+  "piceli.pipeline.prerollout_cluster",
+  "piceli.pipeline.prerollout_stage",
   "piceli.pipeline.refs",
   "piceli.pipeline.registry_takeover",
   "piceli.pipeline.runner",
@@ -6685,6 +6921,12 @@
   "piceli.pipeline.summary",
   "piceli.process_group",
   "piceli.reference_docs",
+  "piceli.restore",
+  "piceli.restore.cluster",
+  "piceli.restore.model",
+  "piceli.restore.plan",
+  "piceli.restore.runner",
+  "piceli.restore.store",
   "piceli.settings",
   "piceli.state",
   "piceli.state.archive",
@@ -6730,5 +6972,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.8.1"
+ "version": "0.9.0"
 }

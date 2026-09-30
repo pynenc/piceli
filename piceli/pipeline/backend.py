@@ -1,6 +1,7 @@
 """Side effects of the build and deliver stages behind one replaceable seam.
 
-:class:`Backend` runs the pinned ``docker`` for builds and image queries, the
+:class:`Backend` runs the pinned ``docker`` for builds and image queries (or,
+for a host build, the host toolchain and OCI archives: no docker at all), the
 registry and node delivery modules, and creates release runners. Tests pass
 a fake backend; the stages themselves never spawn a process directly.
 
@@ -19,12 +20,16 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from piceli.artifacts.build_spec import BuildGrant, BuildSpec, DockerTool
+    from piceli.artifacts.host_build import HostBuildGrant, HostBuildSpec
+    from piceli.artifacts.node_facts import NodeFacts
     from piceli.artifacts.process import ToolPin
     from piceli.artifacts.source_identity import InputsLock, InputsSpec
     from piceli.k8s.release_runner import ReleaseRunner
     from piceli.k8s.release_spec import ReleaseSpec
     from piceli.pipeline.checks import CheckRunner
     from piceli.pipeline.model import Target
+    from piceli.pipeline.prerollout_cluster import PreRolloutCluster
+    from piceli.restore.cluster import RestoreCluster
 
 GRANT_SECONDS = 3600.0
 
@@ -126,8 +131,8 @@ class Backend:
 
     def build(
         self,
-        spec: BuildSpec,
-        grant: BuildGrant,
+        spec: BuildSpec | HostBuildSpec,
+        grant: BuildGrant | HostBuildGrant,
         output_dir: Path,
         *,
         inputs: InputsSpec | None,
@@ -135,6 +140,20 @@ class Backend:
         log: Path,
         progress: Callable[[str], None],
     ) -> dict[str, Any]:
+        from piceli.artifacts.host_build import HostBuildGrant, HostBuildSpec
+
+        if isinstance(spec, HostBuildSpec):
+            # No container engine: the host toolchain and OCI archives.
+            assert isinstance(grant, HostBuildGrant)
+            return spec.run(
+                grant,
+                output_dir,
+                inputs=inputs,
+                lock=lock,
+                log=log,
+                progress=progress,
+            ).to_dict()
+        assert not isinstance(grant, HostBuildGrant)
         receipt = spec.run(
             grant,
             output_dir,
@@ -213,13 +232,27 @@ class Backend:
         return found
 
     def registry_deliver(
-        self, route: RegistryRoute, image_id: str, repository: str
+        self,
+        route: RegistryRoute,
+        image_id: str,
+        repository: str,
+        *,
+        archive: Path | None = None,
     ) -> dict[str, Any]:
-        from piceli.artifacts.delivery import DeliveryGrant, DockerImageSource
+        """Push one image by digest; only blobs the registry lacks are sent.
+
+        ``archive`` is the OCI image-layout tar of a host build: then no
+        docker is needed. Otherwise the image is read from the local engine.
+        """
+        from piceli.artifacts.delivery import (
+            ArchiveSource,
+            DeliveryGrant,
+            DockerImageSource,
+        )
         from piceli.artifacts.registry import RegistryTarget
         from piceli.artifacts.registry_delivery import RegistryDelivery
 
-        tool, sock = self.docker()
+        tool, sock = self.docker() if archive is None else (None, None)
         port = free_port()
         url = route.url(repository, port)
         delivery = RegistryDelivery(
@@ -230,7 +263,9 @@ class Backend:
             forward=self._registry_forward(route) if route.forward else None,
         )
         return delivery.deliver(
-            DockerImageSource(image_id),
+            ArchiveSource(archive.absolute())
+            if archive is not None
+            else DockerImageSource(image_id),
             RegistryTarget.parse(url),
             DeliveryGrant(image_id, url, time.time() + GRANT_SECONDS),
             node_registry=route.node_registry,
@@ -338,14 +373,47 @@ class Backend:
             client.close()
         return f"{info.get('operatingSystem') or 'linux'}/{info.get('architecture')}"
 
+    def node_facts(self, target: Target, node: str) -> NodeFacts:
+        """Architecture, kernel and page size of ``node`` (read-only, one GET)."""
+        import json
+
+        from kubernetes.client import CoreV1Api
+
+        from piceli.artifacts.node_facts import NodeFacts
+
+        client = self._api(target)
+        try:
+            response = CoreV1Api(client).read_node(
+                node, _preload_content=False, _request_timeout=target.request_seconds
+            )
+            document = json.loads(response.data)
+        finally:
+            client.close()
+        return NodeFacts.from_node(document)
+
+    def restore_cluster(
+        self, target: Target, say: Callable[[str], None] | None = None
+    ) -> RestoreCluster:
+        """The restore point operations for ``target``'s namespace
+        (:mod:`piceli.restore.cluster`); close it after use."""
+        from piceli.restore.cluster import RestoreCluster
+
+        return RestoreCluster(
+            self._api(target),
+            target.namespace,
+            say=say,
+            request_seconds=float(target.request_seconds),
+        )
+
     # ------------------------------------------------------------- node
-    def _node_delivery(self, url: str) -> tuple[Any, Any]:
+    def _node_delivery(self, url: str, *, docker: bool = True) -> tuple[Any, Any]:
         from piceli.artifacts.delivery import NodeDelivery
         from piceli.artifacts.delivery_inputs import discover_tool
         from piceli.artifacts.node_transport import NodeTarget
 
         target = NodeTarget.parse(url)
-        tool, sock = self.docker()
+        needs_docker = docker or target.transport == "docker"
+        tool, sock = self.docker() if needs_docker else (None, None)
         ssh = discover_tool("ssh") if target.transport == "ssh" else None
         return NodeDelivery(docker=tool, docker_socket=sock, ssh=ssh), target
 
@@ -357,13 +425,27 @@ class Backend:
             return False
         return image is not None and image_id in image.config_digests
 
-    def node_deliver(self, url: str, image_id: str, reference: str) -> dict[str, Any]:
-        from piceli.artifacts.delivery import DeliveryGrant, DockerImageSource
+    def node_deliver(
+        self,
+        url: str,
+        image_id: str,
+        reference: str,
+        *,
+        archive: Path | None = None,
+    ) -> dict[str, Any]:
+        """Import one image into the node; ``archive`` as for :meth:`registry_deliver`."""
+        from piceli.artifacts.delivery import (
+            ArchiveSource,
+            DeliveryGrant,
+            DockerImageSource,
+        )
 
-        delivery, target = self._node_delivery(url)
+        delivery, target = self._node_delivery(url, docker=archive is None)
         return dict(
             delivery.deliver(
-                DockerImageSource(image_id),
+                ArchiveSource(archive.absolute())
+                if archive is not None
+                else DockerImageSource(image_id),
                 target,
                 DeliveryGrant(image_id, url, time.time() + GRANT_SECONDS),
                 reference=reference,
@@ -375,6 +457,20 @@ class Backend:
         from piceli.k8s.release_runner import ReleaseRunner
 
         return ReleaseRunner(spec)
+
+    # ------------------------------------------------------- pre-rollout
+    def prerollout_cluster(
+        self, target: Target, *, poll_seconds: float = 2.0
+    ) -> PreRolloutCluster:
+        """The cluster reads and Job runs of the pre-rollout stage (target-bound)."""
+        from piceli.pipeline.prerollout_cluster import PreRolloutCluster
+
+        return PreRolloutCluster(
+            self._api(target),
+            target.namespace,
+            request_seconds=target.request_seconds,
+            poll_seconds=poll_seconds,
+        )
 
     # ----------------------------------------------------------- checks
     def check_runner(self) -> CheckRunner:

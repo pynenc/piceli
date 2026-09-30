@@ -66,6 +66,8 @@ __all__ = [
     "write_kubeconfig",
 ]
 
+#: The reason a failed Job of :meth:`FakeAPI.job_result` reports.
+JOB_FAILURE = "BackoffLimitExceeded"
 #: The one target every fake server represents: cluster UID and namespace.
 TARGET = PlanTarget("acceptance-cluster", "piceli-test")
 #: Served resources by plural: ``(apiVersion, kind, namespaced)``.
@@ -438,6 +440,9 @@ class FakeAPI:
       at ``/api/v1/namespaces/NS/events`` (``fieldSelector`` on
       ``involvedObject.kind``/``name``).
 
+    - ``job_results``: ``{Job name prefix: outcome}`` for Jobs a client creates
+      (see :meth:`job_result`); a Job without a match completes when
+      :attr:`ready` is true, as before.
     - ``intercept``: an optional ``(request, phase) -> bool`` called for
       every request with ``phase`` ``"received"`` (before the server acts on
       it) and ``"committed"`` (after it acted, before the response). Returning
@@ -478,6 +483,7 @@ class FakeAPI:
         self.intercept: Callable[[dict[str, Any], str], bool] | None = None
         self.pod_failures: dict[str, dict[str, Any]] = {}
         self.pod_logs: dict[tuple[str, str, bool], str] = {}
+        self.job_results: dict[str, dict[str, Any]] = {}
         self.events: list[dict[str, Any]] = []
         self.put(manifest("Namespace", "kube-system"), uid="cluster-uid")
         self.put(manifest("Namespace", namespace), uid="namespace-uid")
@@ -509,16 +515,29 @@ class FakeAPI:
         return stored
 
     def add_node(
-        self, name: str, *, architecture: str = "arm64", uid: str | None = None
+        self,
+        name: str,
+        *,
+        architecture: str = "arm64",
+        uid: str | None = None,
+        kernel_version: str | None = None,
+        labels: dict[str, str] | None = None,
     ) -> dict[str, Any]:
-        """Serve a Node (identity and ``status.nodeInfo``) for node-pinned releases."""
+        """Serve a Node (identity and ``status.nodeInfo``) for node-pinned releases.
+
+        ``kernel_version`` and ``labels`` feed the node facts a host build reads.
+        """
+        info = {"architecture": architecture, "operatingSystem": "linux"}
+        if kernel_version is not None:
+            info["kernelVersion"] = kernel_version
+        metadata: dict[str, Any] = {"name": name, "uid": uid or uuid.uuid4().hex}
+        if labels:
+            metadata["labels"] = dict(labels)
         node = {
             "apiVersion": "v1",
             "kind": "Node",
-            "metadata": {"name": name, "uid": uid or uuid.uuid4().hex},
-            "status": {
-                "nodeInfo": {"architecture": architecture, "operatingSystem": "linux"}
-            },
+            "metadata": metadata,
+            "status": {"nodeInfo": info},
         }
         with self.lock:
             self.nodes[name] = node
@@ -602,6 +621,106 @@ class FakeAPI:
                 "init": init,
                 "events": tuple(events),
             }
+
+    def job_result(
+        self,
+        prefix: str,
+        *,
+        exit_code: int = 0,
+        logs: str = "",
+        waiting: str | None = None,
+        message: str = "",
+        events: tuple[tuple[str, str], ...] = (),
+        container: str = "check",
+    ) -> None:
+        """Decide how Jobs whose name starts with ``prefix`` end (0.9.0).
+
+        The fake creates one pod per Job, ``<job>-x1`` with the label
+        ``job-name``, whose ``container`` (default ``check``) exited with
+        ``exit_code`` (the Job then reports ``Complete`` for ``0`` and
+        ``Failed`` otherwise) and whose log is ``logs``. With ``waiting`` (a
+        container waiting reason such as ``CreateContainerConfigError``) the
+        pod never starts and the Job stays active; ``events`` are
+        ``(reason, message)`` Warning events of that pod (for example
+        ``FailedMount``). Deleting the Job deletes its pods.
+        """
+        with self.lock:
+            self.job_results[prefix] = {
+                "exit_code": exit_code,
+                "logs": logs,
+                "waiting": waiting,
+                "message": message,
+                "events": tuple(events),
+                "container": container,
+            }
+
+    def _job_result(self, name: str) -> dict[str, Any] | None:
+        for prefix, result in self.job_results.items():
+            if name.startswith(prefix):
+                return result
+        return None
+
+    def _job_pod(self, value: dict[str, Any], result: dict[str, Any]) -> None:
+        """The pod of a Job registered with :meth:`job_result` (idempotent)."""
+        metadata = value["metadata"]
+        pod_name = f"{metadata['name']}-x1"
+        if ("Pod", pod_name) in self.objects:
+            return
+        template = (value.get("spec") or {}).get("template") or {}
+        labels = dict((template.get("metadata") or {}).get("labels") or {})
+        labels["job-name"] = metadata["name"]
+        name = result["container"]
+        if result["waiting"]:
+            state: dict[str, Any] = {
+                "waiting": {"reason": result["waiting"], "message": result["message"]}
+            }
+            phase = "Pending"
+        else:
+            state = {
+                "terminated": {
+                    "exitCode": result["exit_code"],
+                    "reason": "Completed" if result["exit_code"] == 0 else "Error",
+                }
+            }
+            phase = "Succeeded" if result["exit_code"] == 0 else "Failed"
+        self.version += 1
+        self.objects[("Pod", pod_name)] = {
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "metadata": {
+                "name": pod_name,
+                "namespace": self.namespace,
+                "uid": uuid.uuid4().hex,
+                "resourceVersion": str(self.version),
+                "labels": labels,
+                "ownerReferences": [
+                    {"kind": "Job", "name": metadata["name"], "uid": metadata["uid"]}
+                ],
+            },
+            "spec": copy.deepcopy(template.get("spec") or {}),
+            "status": {
+                "phase": phase,
+                "containerStatuses": [
+                    {"name": name, "ready": False, "restartCount": 0, "state": state}
+                ],
+            },
+        }
+        if result["logs"]:
+            self.pod_logs[(pod_name, name, False)] = result["logs"]
+        for index, (reason, message) in enumerate(result["events"]):
+            self.events.append(
+                {
+                    "apiVersion": "v1",
+                    "kind": "Event",
+                    "metadata": {"name": f"{pod_name}.{index}"},
+                    "involvedObject": {"kind": "Pod", "name": pod_name},
+                    "type": "Warning",
+                    "reason": reason,
+                    "message": message,
+                    "count": 1,
+                    "lastTimestamp": f"2026-01-01T00:00:{index:02d}Z",
+                }
+            )
 
     def _materialize_pods(self, value: dict[str, Any]) -> None:
         """Create the failing pods of a workload registered with :meth:`fail_pods`."""
@@ -828,11 +947,29 @@ class FakeAPI:
                 "updatedNumberScheduled": 1,
             }
         elif value["kind"] == "Job":
-            value["status"] = {
-                "conditions": [{"type": "Complete", "status": "True"}]
-                if self.ready
-                else []
-            }
+            result = self._job_result(value["metadata"]["name"])
+            if result is not None and "uid" in value["metadata"]:
+                self._job_pod(value, result)
+            if result is not None:
+                if result["waiting"]:
+                    conditions: list[dict[str, Any]] = []
+                elif result["exit_code"] == 0:
+                    conditions = [{"type": "Complete", "status": "True"}]
+                else:
+                    conditions = [
+                        {
+                            "type": "Failed",
+                            "status": "True",
+                            "reason": JOB_FAILURE,
+                        }
+                    ]
+                value["status"] = {"conditions": conditions}
+            else:
+                value["status"] = {
+                    "conditions": [{"type": "Complete", "status": "True"}]
+                    if self.ready
+                    else []
+                }
         elif value["kind"] == "Namespace":
             value["status"] = {"phase": "Active"}
         elif value["kind"] == "PersistentVolumeClaim":
@@ -1134,6 +1271,14 @@ class FakeAPI:
                 self._terminating[(kind, name)] = self.terminating_reads
                 return 200, copy.deepcopy(current)
             del self.objects[(kind, name)]
+            if kind == "Job":
+                for key in [
+                    key
+                    for key, pod in self.objects.items()
+                    if key[0] == "Pod"
+                    and pod["metadata"].get("labels", {}).get("job-name") == name
+                ]:
+                    del self.objects[key]
             self.version += 1
             return 200, {"kind": "Status", "status": "Success"}
         metadata = body["metadata"]

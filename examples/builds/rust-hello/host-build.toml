@@ -1,0 +1,41 @@
+# Build the same service on the host, without a container VM (Docker
+# Desktop can stay closed). `piceli deploy` reads the target node's facts at
+# plan time; `{rust_arch}` becomes `aarch64` or `x86_64`.
+#
+#   Build.spec("host-build.toml", builder="host")    # in a Pipeline
+#
+# Needs on PATH: cargo (rustup, with the target added:
+# `rustup target add aarch64-unknown-linux-gnu`), cargo-zigbuild and zig,
+# for example `nix shell nixpkgs#zig nixpkgs#cargo-zigbuild`.
+revision = "piceli.host-build.v1"
+name = "rust-hello"
+inputs = "inputs.toml"
+
+[build]
+tools = ["cargo", "cargo-zigbuild", "zig"]
+# glibc 2.36 is the base image's (Debian bookworm). The target directory is
+# shared by every host build that uses the same cache (CARGO_TARGET_DIR).
+commands = [
+    ["cargo", "zigbuild", "--release", "--locked", "--offline",
+     "--target", "{rust_arch}-unknown-linux-gnu.2.36",
+     "--manifest-path", "app/Cargo.toml"],
+]
+env = { CARGO_TERM_COLOR = "never", CARGO_INCREMENTAL = "0" }
+timeout_seconds = 1800
+
+# Staged into <cache>/stage/rust-hello/app, synchronised between builds.
+[context.app]
+source = "piceli"
+path = "examples/builds/rust-hello"
+include = ["Cargo.toml", "Cargo.lock", "src/**/*.rs"]
+max_files = 64
+max_bytes = 1048576
+
+[[output.image]]
+name = "rust-hello"
+repository = "piceli-examples/rust-hello"
+base = { image = "docker.io/library/debian:bookworm-slim", digest = "sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171" }
+# Relative to the shared target directory; one layer per entry.
+target_files = { "{rust_arch}-unknown-linux-gnu/release/rust-hello" = "/usr/local/bin/rust-hello" }
+user = "65532:65532"
+entrypoint = ["/usr/local/bin/rust-hello"]

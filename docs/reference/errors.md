@@ -41,9 +41,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`auth-provider-refused`](#error-auth-provider-refused) | target | no |
 | [`authorization-expired`](#error-authorization-expired) | execution | no |
 | [`backup-refused`](#error-backup-refused) | observe | no |
+| [`base-image-invalid`](#error-base-image-invalid) | host-build | no |
+| [`base-image-unavailable`](#error-base-image-unavailable) | host-build | yes |
+| [`base-layer-unsupported`](#error-base-layer-unsupported) | host-build | no |
+| [`base-platform-unavailable`](#error-base-platform-unavailable) | host-build | no |
 | [`blob-digest-mismatch`](#error-blob-digest-mismatch) | artifacts-registry | yes |
 | [`blob-not-found`](#error-blob-not-found) | artifacts-registry | no |
 | [`blob-source-truncated`](#error-blob-source-truncated) | artifacts-registry | yes |
+| [`build-builder-mismatch`](#error-build-builder-mismatch) | host-build | no |
 | [`build-failed`](#error-build-failed) | build-spec | no |
 | [`build-timed-out`](#error-build-timed-out) | build-spec | yes |
 | [`builder-not-approved`](#error-builder-not-approved) | build-spec | no |
@@ -145,6 +150,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`gitops-target-invalid`](#error-gitops-target-invalid) | gitops | no |
 | [`grant-expired`](#error-grant-expired) | build-spec | yes |
 | [`grant-mismatch`](#error-grant-mismatch) | artifacts-input | yes |
+| [`host-build-invalid`](#error-host-build-invalid) | host-build | no |
+| [`host-output-missing`](#error-host-output-missing) | host-build | no |
+| [`host-tool-missing`](#error-host-tool-missing) | host-build | no |
 | [`identity-mismatch`](#error-identity-mismatch) | kubernetes | no |
 | [`image-declared-twice`](#error-image-declared-twice) | images | no |
 | [`image-digest-mismatch`](#error-image-digest-mismatch) | images | no |
@@ -225,9 +233,12 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`no-previous-release`](#error-no-previous-release) | release | no |
 | [`no-release-applied`](#error-no-release-applied) | release | no |
 | [`no-saved-forwards`](#error-no-saved-forwards) | observe | no |
+| [`node-facts-unavailable`](#error-node-facts-unavailable) | host-build | no |
 | [`node-identity-mismatch`](#error-node-identity-mismatch) | kubernetes | no |
 | [`node-not-found`](#error-node-not-found) | kubernetes | no |
 | [`node-options-on-registry-target`](#error-node-options-on-registry-target) | artifacts-input | no |
+| [`node-page-size-invalid`](#error-node-page-size-invalid) | host-build | no |
+| [`node-platform-mismatch`](#error-node-platform-mismatch) | host-build | no |
 | [`node-query-failed`](#error-node-query-failed) | artifacts-delivery | yes |
 | [`node-registry-required`](#error-node-registry-required) | artifacts-input | no |
 | [`not-found`](#error-not-found) | kubernetes | no |
@@ -271,6 +282,12 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`plan-not-approved`](#error-plan-not-approved) | build-spec | no |
 | [`plan-not-found`](#error-plan-not-found) | release | no |
 | [`plan-release-mismatch`](#error-plan-release-mismatch) | release | no |
+| [`prerollout-claim-exclusive`](#error-prerollout-claim-exclusive) | pipeline | no |
+| [`prerollout-failed`](#error-prerollout-failed) | pipeline | no |
+| [`prerollout-mount-missing`](#error-prerollout-mount-missing) | pipeline | no |
+| [`prerollout-not-startable`](#error-prerollout-not-startable) | pipeline | no |
+| [`prerollout-timeout`](#error-prerollout-timeout) | pipeline | yes |
+| [`prerollout-unavailable`](#error-prerollout-unavailable) | pipeline | no |
 | [`promote-refused`](#error-promote-refused) | observe | no |
 | [`provider-error`](#error-provider-error) | kubernetes | yes |
 | [`rbac-denied`](#error-rbac-denied) | kubernetes | no |
@@ -309,6 +326,25 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`resource-requires-adoption`](#error-resource-requires-adoption) | release | no |
 | [`resource-scope-mismatch`](#error-resource-scope-mismatch) | release | no |
 | [`response-byte-limit`](#error-response-byte-limit) | kubernetes | no |
+| [`restore-plan-changed`](#error-restore-plan-changed) | restore | no |
+| [`restore-point-archive-invalid`](#error-restore-point-archive-invalid) | restore | no |
+| [`restore-point-archive-missing`](#error-restore-point-archive-missing) | restore | no |
+| [`restore-point-checksum-mismatch`](#error-restore-point-checksum-mismatch) | restore | no |
+| [`restore-point-claim-missing`](#error-restore-point-claim-missing) | restore | no |
+| [`restore-point-claim-unknown`](#error-restore-point-claim-unknown) | restore | no |
+| [`restore-point-copy-failed`](#error-restore-point-copy-failed) | restore | yes |
+| [`restore-point-exists`](#error-restore-point-exists) | restore | yes |
+| [`restore-point-helper-failed`](#error-restore-point-helper-failed) | restore | yes |
+| [`restore-point-not-verified`](#error-restore-point-not-verified) | restore | no |
+| [`restore-point-plan-changed`](#error-restore-point-plan-changed) | restore | no |
+| [`restore-point-quiesce-failed`](#error-restore-point-quiesce-failed) | restore | yes |
+| [`restore-point-restart-failed`](#error-restore-point-restart-failed) | restore | yes |
+| [`restore-point-restore-failed`](#error-restore-point-restore-failed) | restore | yes |
+| [`restore-point-restore-mismatch`](#error-restore-point-restore-mismatch) | restore | yes |
+| [`restore-point-target-mismatch`](#error-restore-point-target-mismatch) | restore | no |
+| [`restore-point-unknown`](#error-restore-point-unknown) | restore | no |
+| [`restore-point-writer-unsupported`](#error-restore-point-writer-unsupported) | restore | no |
+| [`restore-point-writers-remain`](#error-restore-point-writers-remain) | restore | yes |
 | [`restore-refused`](#error-restore-refused) | observe | no |
 | [`resume-refused`](#error-resume-refused) | release | no |
 | [`retained-adoption-precondition-failed`](#error-retained-adoption-precondition-failed) | execution | no |
@@ -411,7 +447,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 **Unknown stage.** `--until` names a stage that does not exist.
 
-- **Fix:** Use one of inputs, build, deliver, plan, apply or checks.
+- **Fix:** Use one of inputs, build, deliver, prerollout (with a pre-rollout check), backup (with `restore_points`), plan, apply or checks.
 - **Retry-safe:** no
 
 (error-explain-run-needs-spec)=
@@ -3161,6 +3197,54 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Fix the local problem, then continue with `piceli deploy MODULE:ATTR --resume`.
 - **Retry-safe:** yes
 
+(error-prerollout-claim-exclusive)=
+### `prerollout-claim-exclusive`
+
+**Upgrade check cannot share a ReadWriteOncePod claim.** The upgrade check mounts the workload's retained claim read-only in a second pod, but the claim is `ReadWriteOncePod` and a running pod holds it: Kubernetes allows only one pod to use it, so the check pod could never start.
+
+- **Fix:** Use `ReadWriteOnce` for a claim the upgrade check must open beside the running pod, drop `UpgradeCheck` for that workload, or check the store from inside the workload (a startup check).
+- **Retry-safe:** no
+
+(error-prerollout-failed)=
+### `prerollout-failed`
+
+**Pre-rollout check failed.** The check Job (new image, the workload's real Secrets, mounts and security context) exited non-zero. Nothing of the release was applied, so the running pods are unchanged. The run summary keeps the exit code and a bounded, scrubbed tail of the log.
+
+- **Fix:** Read `stages.prerollout.output.checks` in the run (`piceli runs`, `piceli watch --json`), fix the image or the configuration and deploy again.
+- **Retry-safe:** no
+
+(error-prerollout-mount-missing)=
+### `prerollout-mount-missing`
+
+**Pre-rollout check would fail to start.** A workload with a pre-rollout check (`App.pre_rollout`) reads a Secret or ConfigMap (environment, `envFrom` or a mount) that the release does not create and that is absent from the cluster or lacks the referenced key. The check Job would fail to start, and so would the workload's pods. Planning refuses it; a run refuses it before creating the Job.
+
+- **Fix:** Create the Secret or ConfigMap (or add the key) in the target namespace, or declare it on the app so the release creates it, then plan again.
+- **Retry-safe:** no
+
+(error-prerollout-not-startable)=
+### `prerollout-not-startable`
+
+**Pre-rollout check pod could not start.** The check pod never started: a Secret or ConfigMap could not be mounted or read, the image could not be pulled, or the pod could not be scheduled (for example a ReadWriteOnce claim on another node). The workload's own pods would fail the same way. Nothing of the release was applied.
+
+- **Fix:** See `category` and `reason` in `stages.prerollout.output.checks` (`mount`, `image`, `scheduling`), fix the object, image or claim, and deploy again.
+- **Retry-safe:** no
+
+(error-prerollout-timeout)=
+### `prerollout-timeout`
+
+**Pre-rollout check timed out.** The check Job did not finish within its `timeout_seconds` (image pull, mount and command included). Nothing of the release was applied. The Job was removed.
+
+- **Fix:** Raise `timeout_seconds` on `App.pre_rollout` if the check is legitimately slow, or fix what makes it hang, then deploy again.
+- **Retry-safe:** yes
+
+(error-prerollout-unavailable)=
+### `prerollout-unavailable`
+
+**Pre-rollout check Job could not be created.** The Kubernetes API refused to create the check Job (missing permission to create Jobs, quota or admission policy). The check is required, so the release is not applied.
+
+- **Fix:** Grant the deploying identity permission to create, read and delete Jobs and to read Pods and their logs in the target namespace, or remove the pre-rollout check.
+- **Retry-safe:** no
+
 
 ## Shared deployment state and release locks (`state = "cluster"`, `piceli state …`)
 
@@ -3506,3 +3590,249 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Pass `--to oci://registry.example/team/app:tag` (plain HTTP only for a loopback registry).
 - **Retry-safe:** no
+
+
+## Builds without a container VM (`Build.spec(builder="host")`) and target node facts
+
+(error-base-image-invalid)=
+### `base-image-invalid`
+
+**Base image refused.** The base image reference is malformed, or its registry served a manifest, config or layer whose bytes do not hash to the pinned digest.
+
+- **Fix:** Pin the base as `image@sha256:<digest>` of an image index or manifest the registry serves, then build again.
+- **Retry-safe:** no
+
+(error-base-image-unavailable)=
+### `base-image-unavailable`
+
+**Base image unreachable.** The base image's registry could not be reached or refused the anonymous pull.
+
+- **Fix:** Check the network and the registry, then retry; blobs already fetched are kept in the host build cache.
+- **Retry-safe:** yes
+
+(error-base-layer-unsupported)=
+### `base-layer-unsupported`
+
+**Base image layer type unsupported.** The base image uses layers a host build cannot append to (only `tar` and `tar+gzip` layers, no foreign `urls`).
+
+- **Fix:** Pin a base image published with gzip layers.
+- **Retry-safe:** no
+
+(error-base-platform-unavailable)=
+### `base-platform-unavailable`
+
+**Base image lacks the node platform.** The pinned base image (index) has no manifest for the node's platform, or its config reports another platform.
+
+- **Fix:** Pin a base image that publishes the node's platform (`linux/arm64` or `linux/amd64`).
+- **Retry-safe:** no
+
+(error-build-builder-mismatch)=
+### `build-builder-mismatch`
+
+**Build spec written for the other builder.** A `host-build.toml` (`piceli.host-build.v1`) was declared with the docker builder, or a `build.toml` with `builder="host"`.
+
+- **Fix:** Declare a host build spec with `Build.spec(path, builder="host")` and a `build.toml` with `Build.spec(path)`.
+- **Retry-safe:** no
+
+(error-host-build-invalid)=
+### `host-build-invalid`
+
+**Host build output inconsistent.** Two entries of one image layer claim the same path, or the assembled image did not read back with the digests it was written with.
+
+- **Fix:** Give each image file its own destination; if the error persists, delete the host build cache directory and build again.
+- **Retry-safe:** no
+
+(error-host-output-missing)=
+### `host-output-missing`
+
+**Host build output missing.** A path named by an image's `files` or `target_files` does not exist after the build, is not a file or directory tree, or holds a symlink that leaves it.
+
+- **Fix:** Check the build commands and the paths in `[[output.image]]` (`target_files` are relative to the shared target directory; placeholders such as `{rust_arch}` are substituted).
+- **Retry-safe:** no
+
+(error-host-tool-missing)=
+### `host-tool-missing`
+
+**Host tool not found.** A tool named in a host build's `build.tools` is not on `PATH` (or is not a regular file) when the pipeline plans.
+
+- **Fix:** Install the tool or put it on `PATH` (for example `nix shell nixpkgs#zig nixpkgs#cargo-zigbuild`), then plan again.
+- **Retry-safe:** no
+
+(error-node-facts-unavailable)=
+### `node-facts-unavailable`
+
+**Node facts unavailable.** A host build reads its node's architecture and kernel version from the Node object (`status.nodeInfo`); the node reports none, an unsupported architecture, or the recorded facts are malformed.
+
+- **Fix:** Check `kubectl get node NODE -o jsonpath='{.status.nodeInfo}'` with the pipeline's kubeconfig; only `amd64` and `arm64` Linux nodes are supported.
+- **Retry-safe:** no
+
+(error-node-page-size-invalid)=
+### `node-page-size-invalid`
+
+**Node page-size label invalid.** The node label `piceli.io/page-size` is not `4096`, `16384` or `65536`.
+
+- **Fix:** Run `getconf PAGESIZE` on the node and set the label to that value, or remove the label to use the kernel-release rule.
+- **Retry-safe:** no
+
+(error-node-platform-mismatch)=
+### `node-platform-mismatch`
+
+**Build platform differs from the node.** A host build declares `build.platform`, but the target node reports another architecture.
+
+- **Fix:** Remove `build.platform` (the node's platform is used) or build for the node the pipeline targets (`Build.spec(..., node=ALIAS)`).
+- **Retry-safe:** no
+
+
+## Restore points of retained data (`restore_points=`, `piceli restore-points`, `piceli restore`)
+
+(error-restore-plan-changed)=
+### `restore-plan-changed`
+
+**Restore plan changed.** `piceli restore --approve HASH` was given a hash that is not the restore plan's current hash (the record, the claims or the writers changed).
+
+- **Fix:** Run `piceli restore MODULE:ATTR --point ID` without `--approve`, review the plan and approve its hash.
+- **Retry-safe:** no
+
+(error-restore-point-archive-invalid)=
+### `restore-point-archive-invalid`
+
+**Archive is not valid.** A restore point archive could not be read as a gzip tarball, or holds an absolute or parent-relative path, a device or another special file.
+
+- **Fix:** Do not restore it. Take a new restore point; keep the archive for inspection.
+- **Retry-safe:** no
+
+(error-restore-point-archive-missing)=
+### `restore-point-archive-missing`
+
+**Archive is missing.** The record of a restore point names an archive file that is not in its directory.
+
+- **Fix:** Restore the file from your copy of the restore point directory, or use another restore point (`piceli restore-points`).
+- **Retry-safe:** no
+
+(error-restore-point-checksum-mismatch)=
+### `restore-point-checksum-mismatch`
+
+**Archive does not verify.** An archive's SHA-256 differs from its record, or its content digest differs from the digest computed from the claim in the cluster: the file changed or the copy is incomplete.
+
+- **Fix:** Do not restore it. Use another restore point, or restore the file from your copy.
+- **Retry-safe:** no
+
+(error-restore-point-claim-missing)=
+### `restore-point-claim-missing`
+
+**Claim does not exist.** A claim of the restore point does not exist in the target namespace, so there is nothing to restore into. Piceli never creates claims.
+
+- **Fix:** Create the claim (or run the release that creates it), then plan the restore again.
+- **Retry-safe:** no
+
+(error-restore-point-claim-unknown)=
+### `restore-point-claim-unknown`
+
+**Claim not in restore point.** `--claim` names a claim the restore point has no archive of.
+
+- **Fix:** List the restore point's claims with `piceli restore-points MODULE:ATTR --json` and pass one of them.
+- **Retry-safe:** no
+
+(error-restore-point-copy-failed)=
+### `restore-point-copy-failed`
+
+**Claim copy failed.** Streaming a claim's archive or content digest from the helper pod failed: the exec was refused or unavailable, the command exited non-zero, or it ran longer than `timeout_seconds`. The partial archive was removed and the writers were started again.
+
+- **Fix:** Check that the helper image has the tools listed in the docs and that the runner may use `pods/exec`; retry, or raise `timeout_seconds` for large claims.
+- **Retry-safe:** yes
+
+(error-restore-point-exists)=
+### `restore-point-exists`
+
+**Archive already exists.** An archive with the same restore point id and claim already exists. Restore points are never overwritten.
+
+- **Fix:** Run again: every run takes a new restore point id.
+- **Retry-safe:** yes
+
+(error-restore-point-helper-failed)=
+### `restore-point-helper-failed`
+
+**Helper pod did not run.** The helper Job that mounts a claim for the copy did not get a running pod in time (image not pullable, no node can mount the claim, or the pod ended), or no image was known for it. The writers were started again.
+
+- **Fix:** Check the Job's events (`kubectl describe job piceli-...`); declare `RestorePoints(image='...@sha256:...')` with an image that has `sh`, `tar`, `gzip`, `find`, `sort`, `sha256sum` and `head`.
+- **Retry-safe:** yes
+
+(error-restore-point-not-verified)=
+### `restore-point-not-verified`
+
+**Restore point not verified.** The restore point's record is not in state `verified` (its run failed or was interrupted before every archive was verified).
+
+- **Fix:** Use a verified restore point (`piceli restore-points`).
+- **Retry-safe:** no
+
+(error-restore-point-plan-changed)=
+### `restore-point-plan-changed`
+
+**Restore point differs from the plan.** At run time the release touches claims (or needs writers stopped) that the approved plan's backup stage did not show, for example after delivery. Nothing was stopped or copied.
+
+- **Fix:** Plan again (`piceli deploy MODULE:ATTR --plan`) and approve the new combined hash.
+- **Retry-safe:** no
+
+(error-restore-point-quiesce-failed)=
+### `restore-point-quiesce-failed`
+
+**Quiesce hook failed.** A quiesce hook (`app.quiesce`) did not succeed in a writer pod: the HTTP request answered another status or no answer, or the command exited non-zero or timed out. Its output is never shown. Writers already stopped were started again.
+
+- **Fix:** Check the hook against a running pod, fix it or the app, then run again (`piceli deploy --resume` continues the run).
+- **Retry-safe:** yes
+
+(error-restore-point-restart-failed)=
+### `restore-point-restart-failed`
+
+**Writer not started again.** A writer that was scaled to zero for a restore point or restore could not be scaled back. The other writers were started.
+
+- **Fix:** Scale it back by hand to the replica count the restore point record names (`kubectl scale`).
+- **Retry-safe:** yes
+
+(error-restore-point-restore-failed)=
+### `restore-point-restore-failed`
+
+**Restore failed.** Extracting an archive into a claim failed (the helper exited non-zero, the exec was unavailable or timed out). The claim may be partly restored; the writers were started again.
+
+- **Fix:** Fix the cause (image tools, `pods/exec` permission, `timeout_seconds`) and run the same restore again; it empties the claim first.
+- **Retry-safe:** yes
+
+(error-restore-point-restore-mismatch)=
+### `restore-point-restore-mismatch`
+
+**Restored claim does not verify.** After the extraction, the content digest computed from the claim in the cluster differs from the restore point's. The writers were started again.
+
+- **Fix:** Run the restore again; if it persists, look for another writer of the claim.
+- **Retry-safe:** yes
+
+(error-restore-point-target-mismatch)=
+### `restore-point-target-mismatch`
+
+**Restore point from another namespace.** The restore point was taken in another namespace than the pipeline's target.
+
+- **Fix:** Select the matching environment (`--env`) or pipeline.
+- **Retry-safe:** no
+
+(error-restore-point-unknown)=
+### `restore-point-unknown`
+
+**Unknown restore point.** No restore point with that id exists in the pipeline's restore point directory, or its record is unreadable.
+
+- **Fix:** List them with `piceli restore-points MODULE:ATTR` and pass one of the ids.
+- **Retry-safe:** no
+
+(error-restore-point-writer-unsupported)=
+### `restore-point-writer-unsupported`
+
+**Writer cannot be stopped.** A claim the release touches (or a restore touches) is mounted writably by a workload Piceli cannot stop for a consistent copy: a DaemonSet, Job or CronJob, or a workload the release does not declare. Nothing was stopped or copied.
+
+- **Fix:** Stop that workload yourself (or mount the claim read-only in it), then plan again.
+- **Retry-safe:** no
+
+(error-restore-point-writers-remain)=
+### `restore-point-writers-remain`
+
+**Writer pods still exist.** After the writers were scaled to zero, pods (running or terminating) still mounted a claim writably when the restore point's `timeout_seconds` passed. Nothing was copied; the writers were started again.
+
+- **Fix:** Find the pods named in the message (`kubectl get pods`), wait for or remove them, or raise `RestorePoints(timeout_seconds=...)`, then run again.
+- **Retry-safe:** yes

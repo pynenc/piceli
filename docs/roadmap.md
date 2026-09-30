@@ -68,6 +68,8 @@ Every feature page starts with its maturity, and this table lists them all:
 | Managed-cluster credentials: exec plugins for GKE, EKS, AKS, OIDC (`[target] allow_exec`) | {doc}`managed_clusters` | preview |
 | Source identity (`piceli inputs`) | {doc}`source_identity` | preview |
 | Containerized builds (`piceli artifacts build-spec`) | {doc}`containerized_builds` | preview |
+| Pre-rollout and upgrade checks before a workload changes (`App.pre_rollout`, `UpgradeCheck`, the `prerollout` deploy stage) | {doc}`pre_rollout_checks` | experimental |
+| Builds without a VM and target node facts (`Build.spec(builder="host")`) | {doc}`host_builds` | experimental |
 | Deterministic OCI builds (artifact API) | {doc}`artifact_delivery` | preview |
 | Image delivery (`piceli artifacts deliver`) | {doc}`node_delivery` | preview |
 | Node-local registry template | {doc}`node_local_registry` | preview |

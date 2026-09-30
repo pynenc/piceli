@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING, Any
 
 from piceli.pipeline.errors import PipelineError
 from piceli.pipeline.journal import now, write_private
-from piceli.pipeline.model import STAGES
+from piceli.pipeline.model import ALL_STAGES
 
 if TYPE_CHECKING:
     from piceli.pipeline.model import Pipeline
@@ -200,7 +200,7 @@ def load_plan_document(path: Path) -> dict[str, Any]:
         isinstance(document.get("combined_hash"), str)
         and bool(_HASH.fullmatch(document["combined_hash"])),
         isinstance(document.get("entry"), str) and bool(document["entry"]),
-        document.get("until") in STAGES,
+        document.get("until") in ALL_STAGES,
         isinstance(document.get("reapply"), bool),
         isinstance(document.get("pipeline"), dict),
         isinstance(document.get("stages"), dict),

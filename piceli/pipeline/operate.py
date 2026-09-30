@@ -125,11 +125,16 @@ def delivered_images(
             receipt = _build_receipt(pipeline, spec.name)
             if receipt is None:
                 continue
-            if (
-                current
-                and receipt.get("plan_hash") != spec.plan(spec.load_inputs()).plan_hash
-            ):
-                continue
+            if current:
+                if spec.builder_kind == "host":
+                    # Planned with the facts it was built for: no cluster read.
+                    from piceli.artifacts.host_build import HostBuildSpec
+                    from piceli.artifacts.node_facts import NodeFacts
+
+                    assert isinstance(spec, HostBuildSpec)
+                    spec = spec.for_node(NodeFacts.from_dict(receipt.get("node_facts")))
+                if receipt.get("plan_hash") != spec.plan(spec.load_inputs()).plan_hash:
+                    continue
             outputs = (receipt.get("outputs") or {}).get("images") or {}
         except PipelineError:
             raise

@@ -14,10 +14,10 @@ from __future__ import annotations
 
 import re
 import sys
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple, overload
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, overload
 
 from piceli.approval_policy import ApprovalPolicy, ApprovalPolicyError
 from piceli.pipeline.errors import PipelineError
@@ -26,8 +26,10 @@ if TYPE_CHECKING:
     from piceli.app import App
     from piceli.app.environment import Environment
     from piceli.artifacts.build_spec import BuildSpec
+    from piceli.artifacts.host_build import HostBuildSpec
     from piceli.k8s.ops.exec_credentials import ExecPolicy
     from piceli.pipeline.secrets import Secrets
+    from piceli.restore.model import RestorePoints
 
 #: Host of the placeholder a build image handle renders to before delivery.
 HANDLE_HOST = "pipeline.piceli.invalid"
@@ -36,6 +38,43 @@ _ALIAS = re.compile(r"[a-z][a-z0-9_-]{0,62}")
 _LABEL = re.compile(r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?")
 _PINNED = re.compile(r"[^@\s]+@sha256:[0-9a-f]{64}")
 STAGES = ("inputs", "build", "deliver", "plan", "apply", "checks")
+#: Every stage a run can have, in run order. ``prerollout`` exists only for a
+#: pipeline whose app declares a pre-rollout check and ``backup`` (restore
+#: points) only for one that declares ``restore_points``, so the runs, plans,
+#: hashes, events and summaries of every other pipeline keep the six stages
+#: above. The checks run first, so a new image is checked before any writer
+#: is stopped; ``backup`` stays before ``plan`` because the executor compares
+#: each object against the plan and stopping writers changes them.
+ALL_STAGES = (
+    "inputs",
+    "build",
+    "deliver",
+    "prerollout",
+    "backup",
+    "plan",
+    "apply",
+    "checks",
+)
+
+
+def ordered_stages(names: Iterable[str]) -> tuple[str, ...]:
+    """``names`` that are stages, in run order."""
+    wanted = set(names)
+    return tuple(name for name in ALL_STAGES if name in wanted)
+
+
+def stages_for(app: Any, *, restore_points: bool = False) -> tuple[str, ...]:
+    """The stages of a run of a pipeline whose app is ``app``.
+
+    ``prerollout`` is added when the app declares a pre-rollout check and
+    ``backup`` when the pipeline declares ``restore_points``.
+    """
+    names = list(STAGES)
+    if getattr(app, "pre_rollouts", ()):
+        names.append("prerollout")
+    if restore_points:
+        names.append("backup")
+    return ordered_stages(names)
 
 
 def _caller_dir() -> Path | None:
@@ -470,16 +509,41 @@ class Build:
         images: Sequence[str] | None = None,
         lock: Path | None = None,
         platform: str | None = None,
+        builder: str = "docker",
+        node: str | None = None,
+        cache_dir: Path | None = None,
     ) -> None:
         if (path is None) == (document is None):
             raise PipelineError("pipeline-invalid", "a build needs a path or document")
+        if builder not in BUILDERS:
+            raise PipelineError(
+                "pipeline-invalid",
+                f"builder must be one of {sorted(BUILDERS)}, not {builder!r}",
+            )
+        if builder == "host" and (document is not None or platform is not None):
+            raise PipelineError(
+                "pipeline-invalid",
+                "a host build reads a host-build.toml and builds for its node's "
+                "platform (drop platform=)",
+            )
+        if builder == "docker" and (node is not None or cache_dir is not None):
+            raise PipelineError(
+                "pipeline-invalid", 'node= and cache_dir= need builder="host"'
+            )
         self.path = path
         self.document = dict(document) if document is not None else None
         self.base = base
         self.declared_images = tuple(images) if images is not None else None
         self.lock = lock
         self.platform = platform
-        self._spec: BuildSpec | None = None
+        #: ``"docker"`` (BuildKit, the default) or ``"host"`` (no container VM).
+        self.builder = builder
+        #: Target node alias whose facts a host build reads (default: the only one).
+        self.node = node
+        #: Shared stage/target/blob directory of a host build (default:
+        #: ``<state_dir>/toolchains/host-build``).
+        self.cache_dir = cache_dir
+        self._spec: BuildSpec | HostBuildSpec | None = None
 
     @classmethod
     def spec(
@@ -488,15 +552,28 @@ class Build:
         *,
         lock: str | Path | None = None,
         platform: str | None = None,
+        builder: Literal["docker", "host"] = "docker",
+        node: str | None = None,
+        cache_dir: str | Path | None = None,
     ) -> Build:
-        """A build described by a ``build.toml`` (relative to the declaring file).
+        """A build described by a spec file (relative to the declaring file).
 
-        :param path: The build spec.
+        :param path: The build spec: a ``build.toml`` (``builder="docker"``)
+            or a ``host-build.toml`` (``builder="host"``).
         :param lock: Optional ``inputs`` lock the sources must match.
         :param platform: Build for this platform (``linux/amd64``,
             ``linux/arm64``) instead of the spec's ``platforms``, for example
             to build a published example for your own nodes. Part of the plan
-            hash.
+            hash. Docker builds only: a host build uses its node's platform.
+        :param builder: ``"docker"`` (default): BuildKit in the local Docker
+            engine. ``"host"``: the host toolchain, no container VM (see
+            :doc:`host_builds`); the plan reads the target node's facts.
+        :param node: With ``builder="host"``: the target node alias whose
+            facts (architecture, page size) the build uses; default the only
+            declared node.
+        :param cache_dir: With ``builder="host"``: the shared stage, target
+            and blob directory (relative to the declaring file); default
+            ``<state_dir>/toolchains/host-build``. Not part of the plan hash.
         """
         base = _caller_dir()
         return cls(
@@ -504,6 +581,9 @@ class Build:
             base=base,
             lock=_resolve(lock, base) if lock is not None else None,
             platform=platform,
+            builder=builder,
+            node=node,
+            cache_dir=_resolve(cache_dir, base) if cache_dir is not None else None,
         )
 
     @classmethod
@@ -626,12 +706,16 @@ class Build:
             )
         return ImageHandle(image)
 
-    def load(self) -> BuildSpec:
+    def load(self) -> BuildSpec | HostBuildSpec:
         """Parse and validate the build spec (reads the spec file once)."""
+        if self._spec is None and self.builder == "host":
+            assert self.path is not None
+            self._spec = load_host_spec(self.path)
         if self._spec is None:
             from piceli.artifacts.build_spec import BuildSpec
 
             if self.path is not None:
+                check_builder(self.path, "docker")
                 spec = BuildSpec.from_toml(self.path)
             else:
                 assert self.document is not None
@@ -653,7 +737,41 @@ class Build:
 
     def __repr__(self) -> str:
         where = self.path.name if self.path else "dockerfile"
-        return f"Build({where})"
+        suffix = ", builder='host'" if self.builder == "host" else ""
+        return f"Build({where}{suffix})"
+
+
+#: The declared builders of :meth:`Build.spec`.
+BUILDERS = frozenset({"docker", "host"})
+_REVISIONS = {"docker": "piceli.build-spec.v1", "host": "piceli.host-build.v1"}
+
+
+def check_builder(path: Path, builder: str) -> None:
+    """Refuse a spec file written for the other builder (clear error, early)."""
+    import tomllib
+
+    try:
+        revision = tomllib.loads(path.read_text()).get("revision")
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return  # the spec parser reports it with its own code
+    for other, expected in _REVISIONS.items():
+        if other != builder and revision == expected:
+            hint = (
+                'Build.spec(path, builder="host")'
+                if other == "host"
+                else "Build.spec(path) (the default docker builder)"
+            )
+            raise PipelineError(
+                "build-builder-mismatch",
+                f"{path.name} is a {expected} spec; declare it with {hint}",
+            )
+
+
+def load_host_spec(path: Path) -> HostBuildSpec:
+    from piceli.artifacts.host_build import HostBuildSpec
+
+    check_builder(path, "host")
+    return HostBuildSpec.from_toml(path)
 
 
 # ---------------------------------------------------------------- delivery
@@ -921,7 +1039,9 @@ class Pipeline:
     The run has six stages, each journaled and skipped when its content
     identity is unchanged: ``inputs`` (identify the sources and staged
     files), ``build`` (containerized builds), ``deliver`` (images to the
-    node or registry, handed off by digest), ``plan`` (a release plan against
+    node or registry, handed off by digest), with ``restore_points`` a
+    ``backup`` stage (a verified restore point of the retained claims the
+    release touches), ``plan`` (a release plan against
     live discovery), ``apply`` (the release engine) and ``checks``.
 
     :param app: The typed :class:`~piceli.app.App`.
@@ -967,6 +1087,13 @@ class Pipeline:
         deploy --approve-if-policy`` runs a plan without the human hash only
         when every action is inside it. Part of the combined hash; it can
         never allow ``delete``, ``replace`` or ``adopt``.
+    :param restore_points: :class:`~piceli.restore.RestorePoints` (or
+        ``True`` for the defaults): before a release changes the image or
+        storage settings of a workload that writes a retained claim, the
+        ``backup`` stage stops its writers, archives and verifies every such
+        claim (one per StatefulSet replica) and records the restore point;
+        ``piceli restore`` puts one back. Part of the combined hash. See
+        ``docs/restore_points.md``.
 
     Invariants: every image the app uses is a build handle or pinned by
     digest; the release never manages the node-loopback registry.
@@ -1002,6 +1129,7 @@ class Pipeline:
         inherited_owners: Sequence[str] = (),
         cache_budget: str | int | None = None,
         auto_approve: ApprovalPolicy | Mapping[str, Any] | None = None,
+        restore_points: RestorePoints | bool | None = None,
     ) -> None:
         from piceli.app import App
 
@@ -1073,6 +1201,18 @@ class Pipeline:
                 self.cache_budget = parse_size(cache_budget)
             except CacheError as error:
                 raise PipelineError("pipeline-invalid", str(error)) from None
+        from piceli.restore.model import RestorePoints
+
+        if restore_points is True:
+            restore_points = RestorePoints()
+        elif restore_points is False:
+            restore_points = None
+        if restore_points is not None and not isinstance(restore_points, RestorePoints):
+            raise PipelineError(
+                "pipeline-invalid", "restore_points must be RestorePoints() or True"
+            )
+        #: Restore points before stateful changes (``None``: not taken).
+        self.restore_points: RestorePoints | None = restore_points
         try:
             #: The owner's approval policy (``auto_approve``), or ``None``.
             self.auto_approve: ApprovalPolicy | None = ApprovalPolicy.from_value(
@@ -1084,6 +1224,19 @@ class Pipeline:
     @property
     def name(self) -> str:
         return self.app.name
+
+    @property
+    def stages(self) -> tuple[str, ...]:
+        """This pipeline's stages in run order (see :func:`stages_for`)."""
+        return stages_for(self.app, restore_points=self.restore_points is not None)
+
+    @property
+    def restore_point_directory(self) -> Path:
+        """Where this pipeline's restore points live (see ``restore_points``)."""
+        from piceli.restore.model import RestorePoints
+
+        settings = self.restore_points or RestorePoints()
+        return settings.resolve_directory(self.state_dir, self.base)
 
     @property
     def target(self) -> Target:
