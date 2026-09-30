@@ -2764,6 +2764,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "pipeline",
     ),
     _E(
+        "pipeline-check-not-referenceable",
+        "Python check cannot be named in the plan",
+        "A `Checks.python(...)` in the Pipeline calls a lambda, a local function or another object without a module-level name, so the plan and its hash cannot describe it.",
+        "Pass a module-level function, or a `module:function` / `path/file.py:function` entry string.",
+        False,
+        "pipeline",
+    ),
+    _E(
         "pipeline-checks-unavailable",
         "Checks runner unavailable",
         "The pipeline declares checks but `piceli.checks` is not available in this installation.",

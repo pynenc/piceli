@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
-from piceli import App
+from piceli import App, Checks
 from piceli.k8s.cli import app as cli
 from piceli.k8s.release import ReleaseRecord, ReleaseSource
 from piceli.k8s.release_spec import ImageRef, NodeRef, ReleaseContext
@@ -340,6 +340,40 @@ def test_describe_check_prefers_describe_then_dataclass() -> None:
 
     assert describe_check(Described()) == {"type": "http", "path": "/x"}
     assert describe_check(object())["type"] == "object"
+
+
+def _probe(context: Any) -> bool:
+    return True
+
+
+def test_a_callable_python_check_is_described_by_its_entry() -> None:
+    described = describe_check(Checks.python(_probe, name="probe"))
+    assert described["call"] == f"{__name__}:_probe"
+    assert json.dumps(described, sort_keys=True) == json.dumps(
+        describe_check(Checks.python(_probe, name="probe")), sort_keys=True
+    )
+
+
+def test_a_callable_check_plans_in_a_pipeline() -> None:
+    pipeline = _pipeline(checks=[Checks.python(_probe)])
+    assert pipeline.checks[0].entry.endswith(":_probe")
+
+
+@pytest.mark.parametrize("local", ["lambda", "nested", "partial"])
+def test_a_callable_that_has_no_entry_is_refused_at_declaration(local: str) -> None:
+    import functools
+
+    def nested(context: Any) -> bool:
+        return True
+
+    call: Any = {
+        "lambda": lambda context: True,
+        "nested": nested,
+        "partial": functools.partial(_probe),
+    }[local]
+    with pytest.raises(PipelineError) as raised:
+        _pipeline(checks=Checks.python(call))
+    assert raised.value.code == "pipeline-check-not-referenceable"
 
 
 # ----------------------------------------------------------------- journal
