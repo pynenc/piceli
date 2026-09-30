@@ -79,6 +79,7 @@ TYPES: Mapping[str, tuple[str, str, bool]] = {
     "replicasets": ("apps/v1", "ReplicaSet", True),
     "persistentvolumeclaims": ("v1", "PersistentVolumeClaim", True),
     "persistentvolumes": ("v1", "PersistentVolume", False),
+    "storageclasses": ("storage.k8s.io/v1", "StorageClass", False),
     "namespaces": ("v1", "Namespace", False),
     "deployments": ("apps/v1", "Deployment", True),
     "statefulsets": ("apps/v1", "StatefulSet", True),

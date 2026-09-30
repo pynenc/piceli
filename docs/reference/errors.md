@@ -78,6 +78,15 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`check-timed-out`](#error-check-timed-out) | checks | yes |
 | [`checks-rollback-failed`](#error-checks-rollback-failed) | checks | no |
 | [`checks-rollback-unavailable`](#error-checks-rollback-unavailable) | checks | no |
+| [`claim-expansion-failed`](#error-claim-expansion-failed) | restore | yes |
+| [`claim-growth-needs-apply`](#error-claim-growth-needs-apply) | restore | no |
+| [`claim-growth-needs-restore-points`](#error-claim-growth-needs-restore-points) | restore | no |
+| [`claim-migration-failed`](#error-claim-migration-failed) | restore | yes |
+| [`claim-migration-mismatch`](#error-claim-migration-mismatch) | restore | yes |
+| [`claim-migration-required`](#error-claim-migration-required) | restore | no |
+| [`claim-migration-target-exists`](#error-claim-migration-target-exists) | restore | no |
+| [`claim-migration-verify-failed`](#error-claim-migration-verify-failed) | restore | yes |
+| [`claim-shrink-refused`](#error-claim-shrink-refused) | restore | no |
 | [`cluster-identity-changed`](#error-cluster-identity-changed) | release | no |
 | [`cluster-identity-unreadable`](#error-cluster-identity-unreadable) | kubernetes | yes |
 | [`codegen-cluster-read-failed`](#error-codegen-cluster-read-failed) | codegen | yes |
@@ -3802,6 +3811,78 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 
 ## Restore points of retained data (`restore_points=`, `piceli restore-points`, `piceli restore`)
+
+(error-claim-expansion-failed)=
+### `claim-expansion-failed`
+
+**Claim did not grow.** After the restore point, Piceli asked for the larger size, but the storage driver reported the expansion infeasible or the claim did not reach the size within `timeout_seconds`. The writers were started again on the claim; the requested size may stay on it.
+
+- **Fix:** Check the claim's events and conditions (`kubectl describe pvc NAME`) and the CSI driver; plan and deploy again once it can grow, or move the data with `migrate_from=`.
+- **Retry-safe:** yes
+
+(error-claim-growth-needs-apply)=
+### `claim-growth-needs-apply`
+
+**Claim growth needs the apply.** The release grows or moves a claim, but the run stops before the apply (`--until backup`): the apply switches the workload to the new claim and starts it. Nothing was stopped or copied.
+
+- **Fix:** Run the deploy without `--until backup` (or with `--until apply` or later).
+- **Retry-safe:** no
+
+(error-claim-growth-needs-restore-points)=
+### `claim-growth-needs-restore-points`
+
+**Claim growth needs restore points.** The app declares `ExistingClaim(expand_to=...)` or `migrate_from=`, which the deploy's `backup` stage carries out after a restore point, but the pipeline has no `restore_points`.
+
+- **Fix:** Add `restore_points=RestorePoints()` to the `Pipeline`.
+- **Retry-safe:** no
+
+(error-claim-migration-failed)=
+### `claim-migration-failed`
+
+**Claim copy failed.** Copying the restore point's archive of the old claim into the new claim failed (helper Job, stream or extraction). The workload was not switched: its writers were started again on the old claim. The new claim stays, labelled `piceli.io/migration=target`.
+
+- **Fix:** Fix the cause (image, scheduling on the old claim's node, room on the new volume) and deploy again: the new claim is emptied and filled again.
+- **Retry-safe:** yes
+
+(error-claim-migration-mismatch)=
+### `claim-migration-mismatch`
+
+**Claim copy does not match.** The new claim's content digest, computed in the cluster after the copy, differs from the restore point's digest of the old claim. The workload was not switched: its writers were started again on the old claim.
+
+- **Fix:** Check the new volume (room, file names with newlines or backslashes) and deploy again; the old claim is untouched.
+- **Retry-safe:** yes
+
+(error-claim-migration-required)=
+### `claim-migration-required`
+
+**Claim cannot grow in place.** The release asks for a larger claim (or another storage class) and the claim's StorageClass does not allow volume expansion (`allowVolumeExpansion`), or a class cannot change on an existing claim. Nothing was changed.
+
+- **Fix:** Move the data to a new claim: `ClaimTemplate("<name>-2", size=..., migrate_from="<name>")` with `replace=["StatefulSet/<name>"]`, or `ExistingClaim("<new>", size=..., migrate_from="<old>")` (the message shows the declaration), then plan again.
+- **Retry-safe:** no
+
+(error-claim-migration-target-exists)=
+### `claim-migration-target-exists`
+
+**New claim name is taken.** A claim with the name a move would create already exists and was not made by Piceli for this move (no `piceli.io/migrated-from` annotation naming the old claim), or two moves name the same new claim. Nothing was changed.
+
+- **Fix:** Choose another name for the new claim (`ClaimTemplate` name or `ExistingClaim` claim) and plan again.
+- **Retry-safe:** no
+
+(error-claim-migration-verify-failed)=
+### `claim-migration-verify-failed`
+
+**Moved claim did not verify.** The workload's `restore_verify` command did not pass on the new claim (mounted read-only), or its Job could not start. Its output is not shown. The workload was not switched: its writers were started again on the old claim.
+
+- **Fix:** Run the check by hand on the new claim, fix the cause and deploy again; the old claim is untouched.
+- **Retry-safe:** yes
+
+(error-claim-shrink-refused)=
+### `claim-shrink-refused`
+
+**A claim would shrink.** The release asks for a smaller claim than the live one (a smaller `ClaimTemplate` size, `ExistingClaim(expand_to=...)` below the claim's size, or a move into a smaller claim). Kubernetes never shrinks a volume and Piceli never discards data to fit. Nothing was changed.
+
+- **Fix:** Keep the claim's current size in the app, or move the data to a new, smaller claim by hand.
+- **Retry-safe:** no
 
 (error-restore-options-invalid)=
 ### `restore-options-invalid`

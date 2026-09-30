@@ -182,6 +182,7 @@ class _Work:
     platforms: tuple[str, ...] | None = None
     mirrors: dict[str, dict[str, Any]] = field(default_factory=dict)
     restore_plan: Any = None
+    claim_plan: Any = None
 
 
 @dataclass
@@ -1123,15 +1124,35 @@ class PipelineRunner:
     def _restore_plan(self, work: _Work) -> tuple[Any, list[dict[str, Any]]]:
         """The restore point this release needs, against live state (read-only)."""
         from piceli.pipeline.model import handle_image
+        from piceli.restore.claims import plan_claims
         from piceli.restore.model import RestorePointError
         from piceli.restore.plan import plan
 
         desired = self._desired_workloads(work)
         cluster = self.backend.restore_cluster(self.pipeline.target)
+        classes: dict[str | None, bool] = {}
+
+        def expandable(name: str | None) -> bool:
+            if name not in classes:
+                classes[name] = cluster.expandable(name)
+            return classes[name]
+
         try:
             live, claims = cluster.workloads(), cluster.claims()
+            growth = getattr(self.pipeline.app, "claim_growth", None)
+            try:
+                claim_plan = plan_claims(
+                    desired,
+                    live,
+                    claims,
+                    declared=growth() if callable(growth) else {},
+                    expandable=expandable,
+                )
+            except RestorePointError as error:
+                raise PipelineError(error.code, str(error)) from None
         finally:
             cluster.close()
+        work.claim_plan = claim_plan
         try:
             result = plan(
                 desired,
@@ -1142,6 +1163,7 @@ class PipelineRunner:
                 include=self.pipeline.restore_points.include
                 if self.pipeline.restore_points is not None
                 else "touched",
+                also=claim_plan.touched(),
             )
         except RestorePointError as error:
             raise PipelineError(error.code, str(error)) from None
@@ -1171,7 +1193,18 @@ class PipelineRunner:
                 else {}
             ),
         }
-        return stage, {"settings": settings.describe(), "restore": result.identity()}
+        hashed: dict[str, Any] = {
+            "settings": settings.describe(),
+            "restore": result.identity(),
+        }
+        claim_plan = work.claim_plan
+        if claim_plan is not None and not claim_plan.empty:
+            # Only when a claim grows or moves, so other plans keep their hashes.
+            stage["claim_changes"] = list(claim_plan.steps)
+            hashed["claims"] = claim_plan.identity()
+        if claim_plan is not None and claim_plan.notes:
+            stage["claim_notes"] = list(claim_plan.notes)
+        return stage, hashed
 
     def _plan_plan(
         self, work: _Work, reapply: bool
@@ -2007,6 +2040,18 @@ class PipelineRunner:
         extra = sorted(
             {item["claim"] for item in result.claims} - allowed_claims
         ) + sorted({item["workload"] for item in result.writers} - allowed_writers)
+        claim_plan = work.claim_plan
+        steps = list(claim_plan.steps) if claim_plan is not None else []
+        approved_steps = [
+            json.dumps(item, sort_keys=True)
+            for item in self.run.data["plan"]["hashed"].get("backup", {}).get("claims")
+            or ()
+        ]
+        extra += sorted(
+            f"claim {item['claim']} ({item['action']})"
+            for item in (claim_plan.identity() if claim_plan is not None else [])
+            if json.dumps(item, sort_keys=True) not in approved_steps
+        )
         if extra:
             raise PipelineError(
                 "restore-point-plan-changed",
@@ -2032,9 +2077,18 @@ class PipelineRunner:
             and self.run.data.get("until") != "backup"
             else set()
         )
+        if steps and keep != declared:
+            # A move is switched by the apply; a run that ends before it
+            # leaves the workloads on their old claims.
+            raise PipelineError(
+                "claim-growth-needs-apply",
+                "the release grows or moves a claim, which only a run that "
+                "goes on to the apply may do; run without --until backup",
+            )
         cluster = self.backend.restore_cluster(
             self.pipeline.target, say=self._progress("[backup] ")
         )
+        grown: list[dict[str, Any]] = []
         try:
             record = take(
                 cluster,
@@ -2048,9 +2102,14 @@ class PipelineRunner:
                     "run_id": self.run.run_id,
                     "combined_hash": self.run.data.get("combined_hash"),
                 },
-                keep_stopped=keep,
+                # Every writer stays stopped while claims grow or move.
+                keep_stopped=(
+                    {item["workload"] for item in result.writers} if steps else keep
+                ),
                 say=self._progress("[backup] "),
             )
+            if steps:
+                grown = self._grow_claims(cluster, record, steps, keep)
         except RestorePointError as error:
             raise PipelineError(error.code, str(error), failed=True) from None
         finally:
@@ -2079,7 +2138,66 @@ class PipelineRunner:
             ],
             "stopped": record["writers"],
             "left_stopped": record.get("left_stopped", []),
+            **({"claim_changes": grown} if grown else {}),
         }
+
+    def _grow_claims(
+        self,
+        cluster: Any,
+        record: dict[str, Any],
+        steps: list[dict[str, Any]],
+        keep: set[str],
+    ) -> list[dict[str, Any]]:
+        """Grow or move the planned claims while every writer is stopped.
+
+        On success the writers the release does not start are started again;
+        on any failure every writer is started again on its old claims (the
+        workloads were not switched) and the error propagates.
+        """
+        from piceli.restore.claims import grow
+        from piceli.restore.runner import _Writers
+
+        settings = self.pipeline.restore_points
+        assert settings is not None
+        say = self._progress("[backup] ")
+        writers = _Writers(cluster, say)
+        writers.stopped = list(record["writers"])
+        directory = self.pipeline.restore_point_directory / str(record["id"])
+        try:
+            jobs = self._cluster()
+            try:
+                grown = grow(
+                    cluster,
+                    steps,
+                    record=record,
+                    directory=directory,
+                    workloads={
+                        item["workload"]: cluster.workload(item["kind"], item["name"])
+                        for item in writers.stopped
+                    },
+                    verifies=self.pipeline.app.restore_verifies(),
+                    jobs=jobs,
+                    app=self.pipeline.app.name,
+                    image=settings.image,
+                    timeout_seconds=settings.timeout_seconds,
+                    run_as_user=settings.run_as_user,
+                    say=say,
+                )
+            finally:
+                close = getattr(jobs, "close", None)
+                if callable(close):
+                    close()
+        except BaseException:
+            writers.start()
+            record["left_stopped"] = []
+            raise
+        started = writers.start(keep)
+        record["left_stopped"] = [
+            item["workload"]
+            for item in writers.stopped
+            if item["workload"] not in started and item["replicas"]
+        ]
+        return grown
 
     def _start_stopped_writers(self) -> None:
         """Start writers the backup stage left stopped when no apply started them.

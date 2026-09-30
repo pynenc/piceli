@@ -35,6 +35,11 @@ class FakeCluster:
         self.undeletable: set[str] = set()
         self.storage_class: str | None = "standard"
         self.affinity: dict[str, Any] | None = None
+        #: Live claims by name (claim growth tests), with their spec/status.
+        self.pvcs: dict[str, dict[str, Any]] = {}
+        self.poll_seconds = 0.0
+        #: How many polls a claim takes to report its new capacity.
+        self.resize_polls = 1
 
     def claim_dir(self, claim: str) -> Path:
         path = self.root / "claims" / claim
@@ -122,6 +127,16 @@ class FakeCluster:
 
     # scratch claims (restore --to-new-claim)
     def claim(self, name: str) -> dict[str, Any] | None:
+        if name in self.pvcs:
+            live = self.pvcs[name]
+            pending = live.get("_polls", 0)
+            if pending:
+                live["_polls"] = pending - 1
+                if pending == 1:
+                    live.setdefault("status", {})["capacity"] = {
+                        "storage": live["spec"]["resources"]["requests"]["storage"]
+                    }
+            return {key: value for key, value in live.items() if key != "_polls"}
         if name in self.scratch:
             return self.scratch[name]
         if name not in self.claim_names:
@@ -144,7 +159,32 @@ class FakeCluster:
     def create_claim(self, manifest: Mapping[str, Any]) -> None:
         name = manifest["metadata"]["name"]
         self.calls.append(f"create claim {name}")
+        if self.pvcs:
+            self.pvcs[name] = {**dict(manifest), "status": {"phase": "Bound"}}
+            return
         self.scratch[name] = dict(manifest)
+
+    # claim growth
+    def expandable(self, storage_class: str | None) -> bool:
+        return storage_class == "expandable"
+
+    def expand_claim(self, name: str, size: str) -> None:
+        self.calls.append(f"expand {name} {size}")
+        live = self.pvcs[name]
+        live["spec"]["resources"]["requests"]["storage"] = size
+        live["_polls"] = self.resize_polls
+
+    def annotate_claim(
+        self,
+        name: str,
+        *,
+        labels: Mapping[str, str],
+        annotations: Mapping[str, str],
+    ) -> None:
+        self.calls.append(f"annotate {name}")
+        metadata = self.pvcs[name].setdefault("metadata", {})
+        metadata.setdefault("labels", {}).update(labels)
+        metadata.setdefault("annotations", {}).update(annotations)
 
     def delete_claim(self, name: str, seconds: float) -> bool:
         self.calls.append(f"delete claim {name}")
