@@ -4597,6 +4597,7 @@
      "access",
      "artifacts",
      "cache",
+     "chart",
      "codegen",
      "deploy",
      "doctor",
@@ -4802,6 +4803,82 @@
      "--json",
      "--keep-last",
      "--state-dir"
+    ],
+    "subcommands": []
+   },
+   "chart": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "manifests",
+     "package",
+     "publish",
+     "render"
+    ]
+   },
+   "chart manifests": {
+    "arguments": [
+     "target"
+    ],
+    "flags": [
+     "--app-version",
+     "--env",
+     "--install-namespace",
+     "--name",
+     "--namespace",
+     "--out",
+     "--spec",
+     "--values",
+     "--version",
+     "-f"
+    ],
+    "subcommands": []
+   },
+   "chart package": {
+    "arguments": [
+     "target"
+    ],
+    "flags": [
+     "--app-version",
+     "--env",
+     "--name",
+     "--namespace",
+     "--out",
+     "--spec",
+     "--version"
+    ],
+    "subcommands": []
+   },
+   "chart publish": {
+    "arguments": [
+     "target"
+    ],
+    "flags": [
+     "--app-version",
+     "--approve",
+     "--ca-file",
+     "--credentials",
+     "--env",
+     "--name",
+     "--namespace",
+     "--spec",
+     "--to",
+     "--version"
+    ],
+    "subcommands": []
+   },
+   "chart render": {
+    "arguments": [
+     "target"
+    ],
+    "flags": [
+     "--app-version",
+     "--env",
+     "--name",
+     "--namespace",
+     "--out",
+     "--spec",
+     "--version"
     ],
     "subcommands": []
    },
@@ -5516,6 +5593,14 @@
    "cache-budget-invalid",
    "cache-over-budget",
    "cancelled",
+   "chart-artifact-changed",
+   "chart-empty",
+   "chart-invalid",
+   "chart-out-refused",
+   "chart-push-failed",
+   "chart-secret-value",
+   "chart-target-invalid",
+   "chart-values-invalid",
    "check-api-unavailable",
    "check-callable-invalid",
    "check-exec-unavailable",
@@ -6794,6 +6879,7 @@
   "piceli.artifacts.runnable",
   "piceli.artifacts.source_identity",
   "piceli.bounds",
+  "piceli.chart",
   "piceli.checks",
   "piceli.checks.context",
   "piceli.checks.model",
@@ -6816,6 +6902,7 @@
   "piceli.k8s.automation",
   "piceli.k8s.cli",
   "piceli.k8s.cli.access",
+  "piceli.k8s.cli.chart",
   "piceli.k8s.cli.cluster_access",
   "piceli.k8s.cli.codegen",
   "piceli.k8s.cli.contract",

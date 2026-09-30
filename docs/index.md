@@ -169,6 +169,7 @@ deploy
 pre_rollout_checks
 ci
 gitops
+helm_charts
 state
 maintenance
 restore_points

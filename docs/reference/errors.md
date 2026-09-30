@@ -56,6 +56,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`cache-budget-invalid`](#error-cache-budget-invalid) | maintenance | no |
 | [`cache-over-budget`](#error-cache-over-budget) | maintenance | no |
 | [`cancelled`](#error-cancelled) | artifacts-delivery | yes |
+| [`chart-artifact-changed`](#error-chart-artifact-changed) | chart | no |
+| [`chart-empty`](#error-chart-empty) | chart | no |
+| [`chart-invalid`](#error-chart-invalid) | chart | no |
+| [`chart-out-refused`](#error-chart-out-refused) | chart | no |
+| [`chart-push-failed`](#error-chart-push-failed) | chart | yes |
+| [`chart-secret-value`](#error-chart-secret-value) | chart | no |
+| [`chart-target-invalid`](#error-chart-target-invalid) | chart | no |
+| [`chart-values-invalid`](#error-chart-values-invalid) | chart | no |
 | [`check-api-unavailable`](#error-check-api-unavailable) | checks | yes |
 | [`check-callable-invalid`](#error-check-callable-invalid) | checks | no |
 | [`check-exec-unavailable`](#error-check-exec-unavailable) | checks | no |
@@ -3836,3 +3844,70 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Find the pods named in the message (`kubectl get pods`), wait for or remove them, or raise `RestorePoints(timeout_seconds=...)`, then run again.
 - **Retry-safe:** yes
+
+
+## Helm charts and manifests with values (`piceli chart …`)
+
+(error-chart-artifact-changed)=
+### `chart-artifact-changed`
+
+**Chart changed since approval.** `--approve` does not match the digest of this chart: the model, the options or the version changed.
+
+- **Fix:** Run `piceli chart publish` without `--approve`, review the new digest and approve it.
+- **Retry-safe:** no
+
+(error-chart-empty)=
+### `chart-empty`
+
+**Nothing to chart.** The render has no object left for a chart (Secrets are never part of it).
+
+- **Fix:** Check the target and `--env`; `piceli render` shows what it renders.
+- **Retry-safe:** no
+
+(error-chart-invalid)=
+### `chart-invalid`
+
+**Invalid chart.** The chart name or version is invalid (a name is lowercase letters, digits and `-`, starting with a letter; a version is SemVer 2), no name could be derived from the render, or a mapping key holds `{{`.
+
+- **Fix:** Pass `--name my-app` and `--version 1.2.3`; `piceli render` shows the objects.
+- **Retry-safe:** no
+
+(error-chart-out-refused)=
+### `chart-out-refused`
+
+**Chart output refused.** `--out` is missing, holds files `piceli chart render` did not write, or an archive of the same name and version with other content exists.
+
+- **Fix:** Pass a new or empty directory, or the directory of a previous chart render (it holds `.piceli-chart`); bump `--version` for changed content.
+- **Retry-safe:** no
+
+(error-chart-push-failed)=
+### `chart-push-failed`
+
+**Chart push failed.** The registry refused or broke off the push. The detail is withheld because it could contain server messages.
+
+- **Fix:** Check the registry, the path and `--credentials`, then run the same command again; pushes are content-addressed.
+- **Retry-safe:** yes
+
+(error-chart-secret-value)=
+### `chart-secret-value`
+
+**Secret value outside a Secret.** An object other than a Secret holds a value Piceli redacts or injects at apply time; a chart never carries secret values.
+
+- **Fix:** Move the value into a Secret (the chart references it by name) or, if it is not secret, list the field in the `piceli.io/public-fields` annotation.
+- **Retry-safe:** no
+
+(error-chart-target-invalid)=
+### `chart-target-invalid`
+
+**Invalid chart publish target.** `--to` is missing, not `oci://host[:port]/path`, or names a tag (the chart is pushed as `path/<name>:<version>`).
+
+- **Fix:** Pass `--to oci://registry.example/team/charts` (plain HTTP only for a loopback registry).
+- **Retry-safe:** no
+
+(error-chart-values-invalid)=
+### `chart-values-invalid`
+
+**Values do not match the chart.** A values file is not a YAML mapping, or the merged values break the chart's schema (a missing required image, an unknown key, a wrong type or format). The message names the path and the rule, never the value.
+
+- **Fix:** Fix the values file; `values.schema.json` of `piceli chart render` documents every key.
+- **Retry-safe:** no

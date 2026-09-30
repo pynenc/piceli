@@ -86,6 +86,29 @@ CASES: dict[str, tuple[Argv, str]] = {
         "gitops-target-invalid",
     ),
     **{
+        f"chart {command}": (
+            lambda p, command=command: [
+                "chart",
+                command,
+                str(p / "missing.py") + ":app",
+                "--out",
+                str(p / "o"),
+            ],
+            "render-target-invalid",
+        )
+        for command in ("render", "package", "manifests")
+    },
+    "chart publish": (
+        lambda p: [
+            "chart",
+            "publish",
+            str(p / "missing.py") + ":app",
+            "--to",
+            "http://x",
+        ],
+        "chart-target-invalid",
+    ),
+    **{
         f"state {command}": (
             lambda p, command=command, extra=extra: [
                 "state",

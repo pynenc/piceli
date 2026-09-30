@@ -35,6 +35,9 @@ schedule. Choose deliberately.
 | Builds and image delivery | yes | no; render from a spec whose images are pinned by digest |
 | `piceli status`, `piceli access` | yes | `status` reads a Piceli release's state, so it does not see a controller's objects; `access` port forwards still work |
 
+To let other people install the app on their own clusters with Helm or
+plain YAML, see {doc}`helm_charts`.
+
 Do not run both on the same objects: a Piceli release and a controller would
 fight over the fields.
 
