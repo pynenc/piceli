@@ -59,6 +59,7 @@ AREAS: Mapping[str, str] = MappingProxyType(
         "restore": "Restore points of retained data (`restore_points=`, `piceli restore-points`, `piceli restore`)",
         # --- 0.10.0 ---
         "chart": "Helm charts and manifests with values (`piceli chart …`)",
+        "publish": "Publishing multi-platform images to a hosted registry (`piceli artifacts publish`)",
     }
 )
 
@@ -3375,6 +3376,70 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "Run `getconf PAGESIZE` on the node and set the label to that value, or remove the label to use the kernel-release rule.",
         False,
         "host-build",
+    ),
+    _E(
+        "publish-invalid",
+        "Invalid publish request",
+        "`--to` is not `oci://host[:port]/prefix` (a tag belongs in `--tag`), the version tag is not a valid OCI tag (a `+` is not allowed), `--image` names an image the build did not produce, or two images would land in the same repository (the last path segment of their repositories is equal).",
+        "Fix the option: `--to oci://registry.example/prefix --tag 1.4.0`; rename a repository in the build spec so each image has its own last segment.",
+        False,
+        "publish",
+    ),
+    _E(
+        "publish-not-approved",
+        "Publish plan not approved",
+        "`--approve` is missing or is not the digest of this exact publish plan (receipt, images, registry, tag, attestations and signing key). Something changed since the plan was printed, or the digest belongs to another plan.",
+        "Run `piceli artifacts publish` without `--approve`, review the plan, and pass its `digest` to `--approve`.",
+        True,
+        "publish",
+    ),
+    _E(
+        "publish-tag-exists",
+        "Version tag names another image",
+        "The version tag already names another image index in the target repository. Publishing would silently replace what clients install for that version.",
+        "Publish under a new version tag, or pass `--move-tag` (part of the approved plan) when replacing it is intended; the receipt records the previous digest.",
+        False,
+        "publish",
+    ),
+    _E(
+        "publish-verification-failed",
+        "Published image did not verify",
+        "Reading back what the registry serves did not match what was pushed: the tag does not name the index, a manifest's bytes or config differ, a platform manifest is missing, an attestation is not listed as a referrer, or the index differs from the one the build recorded.",
+        "Check that nothing else writes to the repository at the same time and that the registry supports OCI image indexes, then publish again (pushes are content-addressed, so a retry is safe).",
+        True,
+        "publish",
+    ),
+    _E(
+        "publish-input-changed",
+        "Build output changed since the build",
+        "An SBOM or provenance file named by the build receipt is missing or its sha256 differs from the receipt, so it no longer describes the build.",
+        "Rebuild (`piceli artifacts build-spec run`) and publish the new receipt.",
+        False,
+        "publish",
+    ),
+    _E(
+        "publish-failed",
+        "Publishing an image failed",
+        "Pushing one platform's image failed for a reason the delivery could not name.",
+        "Read the delivery `reason` in the receipt when present, fix the registry access, and publish again (safe to retry).",
+        True,
+        "publish",
+    ),
+    _E(
+        "invalid-docker-config",
+        "Invalid Docker config",
+        "`--docker-config` is not an absolute path to a readable Docker `config.json` of at most 1 MiB, its `auths` entry for the registry is not base64 `user:password`, or a credential helper name is not a plain name.",
+        "Pass the path of a valid Docker `config.json` (`docker login` writes one), or use `--credentials FILE`.",
+        False,
+        "publish",
+    ),
+    _E(
+        "credential-helper-failed",
+        "Credential helper failed",
+        "The Docker credential helper named for the registry (`docker-credential-<name>`) is not on `PATH`, failed or did not answer with `Username`/`Secret` JSON. Its output is never printed.",
+        "Run `docker-credential-<name> get` yourself (registry host on stdin) to check it, log in again, or use `--credentials FILE`.",
+        True,
+        "publish",
     ),
     _E(
         "build-platforms-invalid",

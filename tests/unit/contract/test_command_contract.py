@@ -244,6 +244,13 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["artifacts", "build-spec", "preview", "--spec", str(p / "no.toml")],
         "spec-unreadable",
     ),
+    "artifacts publish": (
+        lambda p: (
+            ["artifacts", "publish", "--receipt", str(p / "no.json")]
+            + ["--to", "oci://127.0.0.1:9/x", "--tag", "1.0.0"]
+        ),
+        "publish-invalid",
+    ),
     "artifacts build-spec run": (
         lambda p: (
             ["artifacts", "build-spec", "run", "--spec", str(p / "no.toml")]

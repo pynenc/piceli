@@ -96,6 +96,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`context-symlink`](#error-context-symlink) | build-spec | no |
 | [`crd-invalid`](#error-crd-invalid) | codegen | no |
 | [`crd-not-found`](#error-crd-not-found) | codegen | no |
+| [`credential-helper-failed`](#error-credential-helper-failed) | publish | yes |
 | [`credentials-file-not-private`](#error-credentials-file-not-private) | artifacts-input | no |
 | [`cross-origin-location-refused`](#error-cross-origin-location-refused) | artifacts-registry | no |
 | [`deadline-exceeded`](#error-deadline-exceeded) | kubernetes | yes |
@@ -192,6 +193,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`invalid-composition`](#error-invalid-composition) | release | no |
 | [`invalid-credentials-file`](#error-invalid-credentials-file) | artifacts-input | no |
 | [`invalid-delivery-input`](#error-invalid-delivery-input) | artifacts-input | no |
+| [`invalid-docker-config`](#error-invalid-docker-config) | publish | no |
 | [`invalid-dry-run-response`](#error-invalid-dry-run-response) | kubernetes | yes |
 | [`invalid-field-ownership-evidence`](#error-invalid-field-ownership-evidence) | execution | no |
 | [`invalid-force`](#error-invalid-force) | kubernetes | no |
@@ -299,6 +301,12 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`prerollout-unavailable`](#error-prerollout-unavailable) | pipeline | no |
 | [`promote-refused`](#error-promote-refused) | observe | no |
 | [`provider-error`](#error-provider-error) | kubernetes | yes |
+| [`publish-failed`](#error-publish-failed) | publish | yes |
+| [`publish-input-changed`](#error-publish-input-changed) | publish | no |
+| [`publish-invalid`](#error-publish-invalid) | publish | no |
+| [`publish-not-approved`](#error-publish-not-approved) | publish | yes |
+| [`publish-tag-exists`](#error-publish-tag-exists) | publish | no |
+| [`publish-verification-failed`](#error-publish-verification-failed) | publish | yes |
 | [`rbac-denied`](#error-rbac-denied) | kubernetes | no |
 | [`readiness-timeout`](#error-readiness-timeout) | execution | no |
 | [`readiness-unsupported`](#error-readiness-unsupported) | execution | no |
@@ -3929,3 +3937,70 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Fix the values file; `values.schema.json` of `piceli chart render` documents every key.
 - **Retry-safe:** no
+
+
+## Publishing multi-platform images to a hosted registry (`piceli artifacts publish`)
+
+(error-credential-helper-failed)=
+### `credential-helper-failed`
+
+**Credential helper failed.** The Docker credential helper named for the registry (`docker-credential-<name>`) is not on `PATH`, failed or did not answer with `Username`/`Secret` JSON. Its output is never printed.
+
+- **Fix:** Run `docker-credential-<name> get` yourself (registry host on stdin) to check it, log in again, or use `--credentials FILE`.
+- **Retry-safe:** yes
+
+(error-invalid-docker-config)=
+### `invalid-docker-config`
+
+**Invalid Docker config.** `--docker-config` is not an absolute path to a readable Docker `config.json` of at most 1 MiB, its `auths` entry for the registry is not base64 `user:password`, or a credential helper name is not a plain name.
+
+- **Fix:** Pass the path of a valid Docker `config.json` (`docker login` writes one), or use `--credentials FILE`.
+- **Retry-safe:** no
+
+(error-publish-failed)=
+### `publish-failed`
+
+**Publishing an image failed.** Pushing one platform's image failed for a reason the delivery could not name.
+
+- **Fix:** Read the delivery `reason` in the receipt when present, fix the registry access, and publish again (safe to retry).
+- **Retry-safe:** yes
+
+(error-publish-input-changed)=
+### `publish-input-changed`
+
+**Build output changed since the build.** An SBOM or provenance file named by the build receipt is missing or its sha256 differs from the receipt, so it no longer describes the build.
+
+- **Fix:** Rebuild (`piceli artifacts build-spec run`) and publish the new receipt.
+- **Retry-safe:** no
+
+(error-publish-invalid)=
+### `publish-invalid`
+
+**Invalid publish request.** `--to` is not `oci://host[:port]/prefix` (a tag belongs in `--tag`), the version tag is not a valid OCI tag (a `+` is not allowed), `--image` names an image the build did not produce, or two images would land in the same repository (the last path segment of their repositories is equal).
+
+- **Fix:** Fix the option: `--to oci://registry.example/prefix --tag 1.4.0`; rename a repository in the build spec so each image has its own last segment.
+- **Retry-safe:** no
+
+(error-publish-not-approved)=
+### `publish-not-approved`
+
+**Publish plan not approved.** `--approve` is missing or is not the digest of this exact publish plan (receipt, images, registry, tag, attestations and signing key). Something changed since the plan was printed, or the digest belongs to another plan.
+
+- **Fix:** Run `piceli artifacts publish` without `--approve`, review the plan, and pass its `digest` to `--approve`.
+- **Retry-safe:** yes
+
+(error-publish-tag-exists)=
+### `publish-tag-exists`
+
+**Version tag names another image.** The version tag already names another image index in the target repository. Publishing would silently replace what clients install for that version.
+
+- **Fix:** Publish under a new version tag, or pass `--move-tag` (part of the approved plan) when replacing it is intended; the receipt records the previous digest.
+- **Retry-safe:** no
+
+(error-publish-verification-failed)=
+### `publish-verification-failed`
+
+**Published image did not verify.** Reading back what the registry serves did not match what was pushed: the tag does not name the index, a manifest's bytes or config differ, a platform manifest is missing, an attestation is not listed as a referrer, or the index differs from the one the build recorded.
+
+- **Fix:** Check that nothing else writes to the repository at the same time and that the registry supports OCI image indexes, then publish again (pushes are content-addressed, so a retry is safe).
+- **Retry-safe:** yes
