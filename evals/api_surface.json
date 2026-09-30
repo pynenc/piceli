@@ -4738,6 +4738,7 @@
      "deploy",
      "doctor",
      "explain",
+     "heavy",
      "help-json",
      "import",
      "inputs",
@@ -5116,6 +5117,32 @@
      "--json",
      "--run",
      "--spec"
+    ],
+    "subcommands": []
+   },
+   "heavy": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "run",
+     "status"
+    ]
+   },
+   "heavy run": {
+    "arguments": [
+     "command"
+    ],
+    "flags": [
+     "--name",
+     "--wait"
+    ],
+    "subcommands": []
+   },
+   "heavy status": {
+    "arguments": [],
+    "flags": [
+     "--json",
+     "--limit"
     ],
     "subcommands": []
    },
@@ -5898,6 +5925,9 @@
    "gitops-target-invalid",
    "grant-expired",
    "grant-mismatch",
+   "heavy-command-empty",
+   "heavy-command-missing",
+   "heavy-lock-timeout",
    "host-build-invalid",
    "host-output-missing",
    "host-tool-missing",
@@ -7160,6 +7190,7 @@
   "piceli.k8s.cli.codegen",
   "piceli.k8s.cli.contract",
   "piceli.k8s.cli.deploy_pipeline",
+  "piceli.k8s.cli.heavy",
   "piceli.k8s.cli.importing",
   "piceli.k8s.cli.inputs",
   "piceli.k8s.cli.maintenance",
@@ -7243,6 +7274,7 @@
   "piceli.maintenance",
   "piceli.maintenance.cache",
   "piceli.maintenance.doctor",
+  "piceli.maintenance.heavy",
   "piceli.pipeline",
   "piceli.pipeline.backend",
   "piceli.pipeline.checks",

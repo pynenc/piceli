@@ -99,9 +99,7 @@ def test_killed_holder_releases_the_lock(tmp_path: Path) -> None:
 
 def test_exit_code_and_signal_are_preserved(tmp_path: Path) -> None:
     state = tmp_path / "state"
-    failing = piceli(
-        state, "heavy", "run", "--", PY, "-c", "import sys; sys.exit(7)"
-    )
+    failing = piceli(state, "heavy", "run", "--", PY, "-c", "import sys; sys.exit(7)")
     out, _ = failing.communicate(timeout=60)
     assert failing.returncode == 7
     assert last_json(out)["exit_code"] == 7

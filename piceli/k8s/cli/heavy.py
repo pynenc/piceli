@@ -27,6 +27,13 @@ app = typer.Typer(
 )
 
 
+def _stderr_fd() -> int | None:
+    try:
+        return sys.stderr.fileno()
+    except (AttributeError, OSError, ValueError):  # captured, e.g. in tests
+        return None
+
+
 @app.command(
     "run",
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
@@ -61,7 +68,7 @@ def run(
             name=name,
             wait=wait,
             on_wait=waiting,
-            stdout=sys.stderr.fileno(),
+            stdout=_stderr_fd(),
         )
     except heavy.HeavyError as error:
         reject(error.code, str(error))
