@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 import uuid
@@ -9,6 +10,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from piceli.artifacts.process import ToolPin
 from piceli.k8s.observe import ForwardSupervisor
@@ -22,6 +24,8 @@ from piceli.services.contracts import (
 )
 from piceli.services.query import KubernetesReader, QueryError, QueryService, _resource
 from piceli.services.registration import Registration
+
+_log = logging.getLogger("piceli.ui.access")
 
 
 @dataclass
@@ -37,6 +41,8 @@ class AccessService:
 
     _history_limit = 128
     _history_seconds = 600
+    _active_limit = 16
+    _watch_interval = 1.0
 
     def __init__(
         self,
@@ -50,6 +56,9 @@ class AccessService:
         self.supervisor_factory = supervisor_factory
         self._lock = threading.RLock()
         self._sessions: dict[str, _Owned] = {}
+        # Local ports of forwards being started: counted as active, but not
+        # published until their supervisor has registered the forward.
+        self._starting: dict[str, int] = {}
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         query.access_capability = self.capability
@@ -132,24 +141,40 @@ class AccessService:
             raise QueryError("ui-operation-unavailable", 409) from None
         with self._lock:
             self._prune_locked()
-            active = [
-                owned.record
+            active_ports = [
+                owned.record.local_port
                 for owned in self._sessions.values()
                 if owned.record.state in {"connecting", "ready"}
-            ]
-            if len(active) >= 16:
+            ] + list(self._starting.values())
+            if len(active_ports) >= self._active_limit:
                 raise QueryError("ui-operation-conflict", 409)
-            if any(item.local_port == request.local_port for item in active):
+            if request.local_port in active_ports:
                 raise QueryError("ui-access-port-conflict", 409)
             identity = uuid.uuid4().hex
-            shortcut = UiShortcut(
-                id="ui-" + identity,
-                label="Local access",
-                target=f"{resource.identity.kind.lower()}/{resource.identity.name}",
-                namespace=resource.identity.namespace,
-                local_port=request.local_port,
-                remote_port=request.remote_port,
-            )
+            self._starting[identity] = request.local_port
+        shortcut = UiShortcut(
+            id="ui-" + identity,
+            label="Local access",
+            target=f"{resource.identity.kind.lower()}/{resource.identity.name}",
+            namespace=resource.identity.namespace,
+            local_port=request.local_port,
+            remote_port=request.remote_port,
+        )
+        record = AccessSession(
+            id=identity,
+            application_id=application_id,
+            resource=resource.identity,
+            principal_id=self.query._principal().id,
+            binding_location="server",
+            state="connecting",
+            expires_at=(
+                datetime.now(UTC) + timedelta(seconds=request.duration_seconds)
+            ).isoformat(),
+            local_port=request.local_port,
+            remote_port=request.remote_port,
+        )
+        supervisor: ForwardSupervisor | None = None
+        try:
             supervisor = self.supervisor_factory(
                 kubeconfig=registration.target.kubeconfig,
                 context=registration.target.context,
@@ -157,32 +182,23 @@ class AccessService:
                 shortcuts=(shortcut,),
                 namespace=registration.target.namespace,
             )
-            record = AccessSession(
-                id=identity,
-                application_id=application_id,
-                resource=resource.identity,
-                principal_id=self.query._principal().id,
-                binding_location="server",
-                state="connecting",
-                expires_at=(
-                    datetime.now(UTC) + timedelta(seconds=request.duration_seconds)
-                ).isoformat(),
-                local_port=request.local_port,
-                remote_port=request.remote_port,
-            )
-            self._sessions[identity] = _Owned(record, supervisor, request.resource_id)
-            if self._thread is None:
-                self._stop.clear()
-                self._thread = threading.Thread(
-                    target=self._watch, name="piceli-ui-access", daemon=True
-                )
-                self._thread.start()
-        try:
+            # Register (and start) the forward before the watcher can see the
+            # record, so a published session always has a supervised status.
             supervisor.quick_start(shortcut.id, registration.target.namespace)
+            with self._lock:
+                self._starting.pop(identity, None)
+                self._sessions[identity] = _Owned(
+                    record, supervisor, request.resource_id
+                )
+                self._ensure_watcher_locked()
             deadline = time.monotonic() + 8
             while time.monotonic() < deadline:
-                status = supervisor.statuses()[0]
-                if status.state == "running" and status.reachable:
+                status = self._status(supervisor)
+                if (
+                    status is not None
+                    and status.state == "running"
+                    and status.reachable
+                ):
                     # A name may be replaced while kubectl starts; do not claim
                     # the selected object if its UID no longer matches.
                     self._verified_resource(application_id, request)
@@ -195,7 +211,9 @@ class AccessService:
                     with self._lock:
                         self._sessions[identity].record = ready
                     return ready
-                if status.state == "failed" or status.health == "conflict":
+                if status is not None and (
+                    status.state == "failed" or status.health == "conflict"
+                ):
                     code = (
                         "ui-access-port-conflict"
                         if status.health == "conflict"
@@ -205,67 +223,110 @@ class AccessService:
                 time.sleep(0.1)
             raise QueryError("ui-access-failed", 503)
         except BaseException:
-            supervisor.close()
+            if supervisor is not None:
+                supervisor.close()
             with self._lock:
+                self._starting.pop(identity, None)
                 self._sessions.pop(identity, None)
             raise
 
+    def _ensure_watcher_locked(self) -> None:
+        if self._thread is None or not self._thread.is_alive():
+            self._stop.clear()
+            self._thread = threading.Thread(
+                target=self._watch, name="piceli-ui-access", daemon=True
+            )
+            self._thread.start()
+
+    @staticmethod
+    def _status(supervisor: ForwardSupervisor) -> Any:
+        statuses = supervisor.statuses()
+        return statuses[0] if statuses else None
+
     def _watch(self) -> None:
-        while not self._stop.wait(1):
-            with self._lock:
-                self._prune_locked()
-                ids = list(self._sessions)
-            for id in ids:
-                with self._lock:
-                    owned = self._sessions.get(id)
-                if owned is None or owned.record.state not in {"connecting", "ready"}:
-                    continue
-                if datetime.fromisoformat(owned.record.expires_at) <= datetime.now(UTC):
-                    self._end(id, "expired")
-                    continue
-                status = owned.supervisor.statuses()[0]
-                if status.state == "failed" or status.health == "conflict":
+        while not self._stop.wait(self._watch_interval):
+            try:
+                self._tick()
+            except Exception as error:  # never let supervision end silently
+                _log.warning(
+                    "access supervision step failed (%s)", type(error).__name__
+                )
+
+    def _tick(self) -> None:
+        """One supervision pass; a failure in one session never skips the others."""
+        with self._lock:
+            self._prune_locked()
+            ids = list(self._sessions)
+        for id in ids:
+            try:
+                self._supervise(id)
+            except Exception as error:
+                # A session that cannot be supervised is ended rather than left
+                # holding a tunnel with no lease enforcement.
+                _log.warning(
+                    "access session supervision failed (%s)", type(error).__name__
+                )
+                try:
                     self._end(id, "failed")
-                elif status.state != "running" or not status.reachable:
-                    with self._lock:
-                        if owned.record.state == "ready":
-                            owned.record = owned.record.model_copy(
-                                update={
-                                    "state": "connecting",
-                                    "endpoint": None,
-                                    "reason": "forward-reconnecting",
-                                }
-                            )
-                else:
-                    request = AccessStartRequest(
-                        resource_id=owned.resource_id,
-                        resource_uid=owned.record.resource.uid or "",
-                        local_port=owned.record.local_port or 1,
-                        remote_port=owned.record.remote_port or 1,
+                except Exception as end_error:
+                    _log.warning(
+                        "access session could not be ended (%s)",
+                        type(end_error).__name__,
                     )
-                    try:
-                        _, live = self._verified_resource(
-                            owned.record.application_id, request
-                        )
-                    except QueryError:
-                        self._end(id, "failed")
-                        continue
-                    if live.identity.uid != owned.record.resource.uid:
-                        self._end(id, "failed")
-                        continue
-                    if owned.record.state == "connecting":
-                        with self._lock:
-                            owned.record = owned.record.model_copy(
-                                update={
-                                    "state": "ready",
-                                    "endpoint": f"127.0.0.1:{request.local_port}",
-                                    "reason": None,
-                                }
-                            )
+
+    def _supervise(self, id: str) -> None:
+        with self._lock:
+            owned = self._sessions.get(id)
+        if owned is None or owned.record.state not in {"connecting", "ready"}:
+            return
+        if datetime.fromisoformat(owned.record.expires_at) <= datetime.now(UTC):
+            self._end(id, "expired")
+            return
+        status = self._status(owned.supervisor)
+        if status is None:
+            return  # registered but not yet reporting: still connecting
+        if status.state == "failed" or status.health == "conflict":
+            self._end(id, "failed")
+        elif status.state != "running" or not status.reachable:
+            with self._lock:
+                if owned.record.state == "ready":
+                    owned.record = owned.record.model_copy(
+                        update={
+                            "state": "connecting",
+                            "endpoint": None,
+                            "reason": "forward-reconnecting",
+                        }
+                    )
+        else:
+            request = AccessStartRequest(
+                resource_id=owned.resource_id,
+                resource_uid=owned.record.resource.uid or "",
+                local_port=owned.record.local_port or 1,
+                remote_port=owned.record.remote_port or 1,
+            )
+            try:
+                _, live = self._verified_resource(owned.record.application_id, request)
+            except QueryError:
+                self._end(id, "failed")
+                return
+            if live.identity.uid != owned.record.resource.uid:
+                self._end(id, "failed")
+                return
+            if owned.record.state == "connecting":
+                with self._lock:
+                    owned.record = owned.record.model_copy(
+                        update={
+                            "state": "ready",
+                            "endpoint": f"127.0.0.1:{request.local_port}",
+                            "reason": None,
+                        }
+                    )
 
     def _end(self, id: str, state: str) -> AccessSession:
         with self._lock:
-            owned = self._sessions[id]
+            owned = self._sessions.get(id)
+            if owned is None:
+                raise QueryError("ui-not-found")
             if owned.record.state in {"stopped", "expired", "failed"}:
                 return owned.record
             owned.record = owned.record.model_copy(

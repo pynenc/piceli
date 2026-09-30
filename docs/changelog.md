@@ -27,6 +27,11 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 - **Local access retention:** completed port-forward sessions retain a bounded
   ten-minute, 128-record history; active forwards remain supervised and old
   supervisor references are released.
+- **Local access supervision survives failures:** an error while supervising
+  one forward (a slow `kubectl` start, a failed status read) no longer stops
+  the lease watcher for the life of the server. The failing session is ended
+  as `failed`, the others keep expiring on time, and a forward is registered
+  before its session becomes visible.
 - **Explicit rotating Kubernetes token files:** a named absolute `tokenFile`
   kubeconfig credential now refreshes before each API request and fails closed
   when the projected file disappears or becomes invalid. Static tokens retain
