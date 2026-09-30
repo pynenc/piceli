@@ -13,7 +13,10 @@ function service() {
   const client = createClient<paths>({ baseUrl: `${window.location.origin}${basePath()}`, credentials: 'same-origin', fetch: request => globalThis.fetch(request), headers: { Accept: 'application/json' } });
   client.use({ onRequest({ request }) {
     if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) {
-      const token = document.cookie.split(';').map(value => value.trim()).find(value => value.startsWith('piceli_csrf='))?.slice('piceli_csrf='.length);
+      // The server names its own CSRF cookie: other local UIs' cookies for
+      // the same host are visible here too.
+      const name = document.querySelector('meta[name="piceli-csrf-cookie"]')?.getAttribute('content');
+      const token = name ? document.cookie.split(';').map(value => value.trim()).find(value => value.startsWith(`${name}=`))?.slice(name.length + 1) : undefined;
       if (token) request.headers.set('X-Piceli-CSRF', decodeURIComponent(token));
     }
     return request;

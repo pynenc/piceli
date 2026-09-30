@@ -11,6 +11,7 @@ that host.
 from __future__ import annotations
 
 import copy
+import hashlib
 import hmac
 import ipaddress
 import logging
@@ -58,14 +59,26 @@ class LocalSecurity:
             raise ValueError("invalid UI URL prefix")
 
     @property
-    def cookie_name(self) -> str:
-        # Per-origin port/prefix session name avoids sibling local servers.
-        import hashlib
+    def _cookie_suffix(self) -> str:
+        return hashlib.sha256((self.origin + self.prefix).encode()).hexdigest()[:12]
 
-        return (
-            "piceli_session_"
-            + hashlib.sha256((self.origin + self.prefix).encode()).hexdigest()[:12]
-        )
+    @property
+    def cookie_name(self) -> str:
+        """The session cookie, named per origin (host and port) and prefix.
+
+        Browsers do not isolate cookies by port: a cookie for ``127.0.0.1`` is
+        sent to every loopback port, including a forwarded workload opened in
+        the same browser. Distinct names keep two local UIs from overwriting
+        each other; they do not hide the values. The session cookie is
+        HttpOnly, and the Host, Origin, Fetch Metadata and CSRF checks
+        together, not the CSRF token alone, guard every request.
+        """
+        return "piceli_session_" + self._cookie_suffix
+
+    @property
+    def csrf_cookie_name(self) -> str:
+        """The script-readable CSRF cookie, named like :attr:`cookie_name`."""
+        return "piceli_csrf_" + self._cookie_suffix
 
     def launch_url(self) -> str:
         """The one address that grants a browser this server's session."""

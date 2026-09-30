@@ -53,6 +53,11 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   SameSite=Strict session cookie is sent, and a top-level document navigation
   from another site (the identity provider's redirect or a link) is accepted.
   API calls, subresources and writes still require a same-origin context.
+- **Separate cookies per local UI:** the CSRF cookie is now named per server
+  origin and prefix like the session cookie, and the page names it in a
+  `piceli-csrf-cookie` meta tag, so a second local UI on another port no
+  longer breaks the first one's writes. The cluster observation cookies are
+  named per origin as well.
 - **Explicit rotating Kubernetes token files:** a named absolute `tokenFile`
   kubeconfig credential now refreshes before each API request and fails closed
   when the projected file disappears or becomes invalid. Static tokens retain

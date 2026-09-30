@@ -117,6 +117,17 @@ the UI and grants nothing. Anyone who can read your terminal, the token file
 or your browser profile can act as you; treat the launch address like a
 password.
 
+Browsers do not isolate cookies by port: cookies for `127.0.0.1` are sent to
+every loopback port, including a forwarded workload you open in the same
+browser, and a page on another loopback port can read the script-readable
+CSRF cookie. Each server therefore names its session and CSRF cookies after
+its own origin and prefix (`piceli_session_…`, `piceli_csrf_…`, `Path=/` or the
+URL prefix, `SameSite=Strict`, the session cookie `HttpOnly`), so two local
+UIs do not overwrite each other, and the page reads only its own CSRF cookie.
+The CSRF token alone is not the guard: every request must also carry the
+exact Host, the UI's own Origin and same-origin Fetch Metadata, which a page on
+another port cannot forge.
+
 To enable deployment for a release definition, also configure the durable
 control directory, an explicit allowlist of source files, and a trusted local
 renderer image by immutable Docker image ID. For example:

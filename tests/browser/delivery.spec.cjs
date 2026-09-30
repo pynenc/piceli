@@ -12,7 +12,8 @@ async function unusedLoopbackPort() {
 // Every request reaches the local authenticated service; no Playwright routes.
 async function request(page, path, body) {
   return page.evaluate(async ({ path, body }) => {
-    const token = document.cookie.split('; ').find(value => value.startsWith('piceli_csrf='))?.slice('piceli_csrf='.length);
+    const name = document.querySelector('meta[name="piceli-csrf-cookie"]')?.getAttribute('content');
+    const token = document.cookie.split('; ').find(value => value.startsWith(`${name}=`))?.slice(name.length + 1);
     const response = await fetch(`/api/v1/${path}`, body === undefined ? {} : {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Piceli-CSRF': decodeURIComponent(token || '') },

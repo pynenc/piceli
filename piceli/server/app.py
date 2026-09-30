@@ -211,7 +211,7 @@ def create_app(
             path=url_prefix or "/",
         )
         response.set_cookie(
-            "piceli_csrf",
+            local.csrf_cookie_name,
             local.csrf,
             httponly=False,
             samesite="strict",
@@ -683,6 +683,12 @@ def create_app(
             return _error("ui-assets-unavailable", 503)
         document = index.read_text()
         base = f'<base href="{html.escape(url_prefix + "/", quote=True)}">'
+        # Name this server's CSRF cookie: the browser also holds other local
+        # UIs' cookies for the same host.
+        base += (
+            '<meta name="piceli-csrf-cookie" content="'
+            f'{html.escape(security.csrf_cookie_name, quote=True)}">'
+        )
         if "<head>" in document:
             document = document.replace("<head>", "<head>" + base, 1)
         else:

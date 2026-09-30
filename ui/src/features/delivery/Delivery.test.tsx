@@ -17,7 +17,10 @@ let requests: { path: string; body: Record<string, unknown>; csrf: string | null
 let failAdmission: boolean;
 let currentOperation: Operation;
 beforeEach(() => {
-  requests = []; failAdmission = false; currentOperation = operation; sessionStorage.clear(); document.cookie = 'piceli_csrf=test-csrf; path=/';
+  requests = []; failAdmission = false; currentOperation = operation; sessionStorage.clear();
+  // Another local UI's CSRF cookie for the same host is visible too; the page names its own.
+  document.cookie = 'piceli_csrf_other=other-csrf; path=/'; document.cookie = 'piceli_csrf_this=test-csrf; path=/';
+  const meta = document.createElement('meta'); meta.name = 'piceli-csrf-cookie'; meta.content = 'piceli_csrf_this'; document.head.append(meta);
   vi.stubGlobal('fetch', vi.fn(async (request: Request) => {
     const path = new URL(request.url).pathname;
     if (request.method === 'POST') {
@@ -39,7 +42,7 @@ beforeEach(() => {
     return Response.json(app);
   }));
 });
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); document.cookie = 'piceli_csrf=; Max-Age=0; path=/'; });
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); document.cookie = 'piceli_csrf_other=; Max-Age=0; path=/'; document.cookie = 'piceli_csrf_this=; Max-Age=0; path=/'; document.querySelector('meta[name="piceli-csrf-cookie"]')?.remove(); });
 function open(path: string) { const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } } }); render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[path]}><App /></MemoryRouter></QueryClientProvider>); }
 
 describe('exact-plan delivery', () => {

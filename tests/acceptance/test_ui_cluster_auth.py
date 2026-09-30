@@ -224,7 +224,7 @@ def test_signed_oidc_login_pkce_session_csrf_and_bad_nonce(
                     json={"intent": "deploy"},
                     headers={
                         "Origin": "http://127.0.0.1:8000",
-                        "X-Piceli-CSRF": browser.cookies["piceli_csrf"],
+                        "X-Piceli-CSRF": browser.cookies[security.csrf_cookie_name],
                     },
                 ).status_code
                 == 409

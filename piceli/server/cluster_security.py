@@ -71,10 +71,12 @@ class _Session:
 class ClusterSecurity:
     """Server-held sessions; browser cookies never contain provider tokens."""
 
-    cookie_name = "piceli_cluster_session"
-
     def __init__(self, config: ClusterSecurityConfig) -> None:
         self.config = config
+        suffix = hashlib.sha256((config.origin + config.prefix).encode()).hexdigest()
+        # Named per origin and prefix, like the local UI's cookies.
+        self.cookie_name = "piceli_cluster_session_" + suffix[:12]
+        self.csrf_cookie_name = "piceli_csrf_" + suffix[:12]
         self.oauth = OAuth()
         self.client = self.oauth.register(
             "piceli",
@@ -221,7 +223,7 @@ class ClusterSecurity:
             path=self.config.prefix or "/",
         )
         response.set_cookie(
-            "piceli_csrf",
+            self.csrf_cookie_name,
             csrf,
             max_age=max_age,
             httponly=False,

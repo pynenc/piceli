@@ -135,7 +135,12 @@ def service(
 def headers(client: TestClient) -> dict[str, str]:
     return {
         "Origin": str(client.base_url).rstrip("/"),
-        "X-Piceli-CSRF": client.cookies["piceli_csrf"],
+        # Named per server origin; this client talks to one server.
+        "X-Piceli-CSRF": next(
+            value
+            for name, value in client.cookies.items()
+            if name.startswith("piceli_csrf_")
+        ),
     }
 
 
