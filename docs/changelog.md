@@ -4,7 +4,7 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
-## Version 0.12.0 (unreleased)
+## Version 0.12.0
 
 - **Grow or move a retained claim (preview):** with
   `Pipeline(restore_points=...)`, a release that asks for a larger claim (a
