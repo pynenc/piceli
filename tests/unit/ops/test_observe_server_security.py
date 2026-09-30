@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from piceli.artifacts.gc import ImageSpaceInventory
 from piceli.k8s.observe import InventoryReport, PreferenceStore
 from piceli.k8s.observe_server import MAX_BODY_BYTES, LocalObserveServer
 from piceli.k8s.operator_state import FileStateStore, UserStore
@@ -35,6 +36,7 @@ def server(tmp_path: Path) -> Iterator[LocalObserveServer]:
         state_store=state,
         kubeconfig=tmp_path / "kubeconfig",
         context="lab",
+        artifact_inventory=ImageSpaceInventory(entries=()),
         kubectl="definitely-not-kubectl",
     )
     thread = threading.Thread(target=instance.serve_forever, daemon=True)
