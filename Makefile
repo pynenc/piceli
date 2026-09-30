@@ -26,14 +26,15 @@ test: ## Unit + acceptance tests in parallel (no cluster needed)
 
 .PHONY: test-unit
 test-unit: ## Unit tests only
-	uv run pytest tests/unit
+	uv run pytest -n auto tests/unit
 
 .PHONY: test-acceptance
 test-acceptance: ## Fault-injected API acceptance tests (no cluster needed)
-	uv run pytest tests/acceptance
+	uv run pytest -n auto tests/acceptance
 
 .PHONY: test-integration
 test-integration: ## Integration tests on the kind cluster named by PICELI_KIND_KUBECONFIG/PICELI_KIND_CONTEXT
+	# kind tests share one cluster: they run serially
 	uv run pytest tests/integration
 
 .PHONY: skill-check
@@ -42,11 +43,11 @@ skill-check: ## Fresh-agent check: run the agent skill's walkthrough from a copy
 
 .PHONY: evals-check
 evals-check: ## Self-tests of the cross-model eval harness (mock models, no keys, no network)
-	uv run --frozen pytest evals/tests
+	uv run --frozen pytest -n auto evals/tests
 
 .PHONY: coverage
 coverage: ## Unit + acceptance tests with an HTML coverage report
-	uv run pytest --cov --cov-report=term --cov-report=html
+	uv run pytest -n auto --cov --cov-report=term --cov-report=html
 
 .PHONY: docs-reference
 docs-reference: ## Regenerate docs/reference/{errors,cli}.md from code
@@ -87,14 +88,14 @@ ui-fake-serve: ## Open a read-only local UI with a disposable fake Kubernetes AP
 	uv run --frozen --extra ui python tests/browser/serve_ui.py --port $(PICELI_UI_FAKE_PORT)
 
 test-ui: ## Run service and legacy UI acceptance checks against the fake API
-	uv run --frozen --extra ui pytest tests/unit/test_ui_contracts.py tests/acceptance/test_ui_truthfulness.py tests/acceptance/test_ui_service.py
+	uv run --frozen --extra ui pytest -n auto tests/unit/test_ui_contracts.py tests/acceptance/test_ui_truthfulness.py tests/acceptance/test_ui_service.py
 
 test-ui-fake: ## Run fake-API UI service and browser journeys (requires Chromium)
 	$(MAKE) test-ui
 	PICELI_UI_TEST_PORT=$(PICELI_UI_FAKE_TEST_PORT) $(MAKE) test-browser
 
 test-ui-package: ## Verify installed wheel/sdist offline assets without Node
-	uv run --frozen --extra ui pytest tests/acceptance/test_ui_packaging.py
+	uv run --frozen --extra ui pytest -n auto tests/acceptance/test_ui_packaging.py
 
 test-browser: ## Run real-service browser journeys with temporary artifacts
 	uv run --frozen --extra ui python tests/browser/run.py
