@@ -16,7 +16,7 @@ These features are available as Python library APIs, and some of them through
 - `GitBranchWatcher` has no built-in Git resolver yet; you must supply one.
 - `health_aware_rollback` and `dependency_safe_partial_release` are library
   functions only. No CLI command or REST endpoint calls them.
-- The web UI's *rollback* action only changes the selected catalog entry. It does
+- The legacy web UI's *Select release* action only changes the selected catalog entry. It does
   not deploy anything.
 - REST calls enforce roles (`viewer` is read-only) but not yet the per-operation
   and per-namespace scopes of `StandingPolicy`.

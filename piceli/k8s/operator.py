@@ -200,7 +200,7 @@ def build_operator_report(
     for ref in sorted(declared_refs):
         try:
             obs = reader.get(ref)
-        except Exception as error:
+        except Exception:
             unknown.append(
                 ManagedResource(
                     ref=ref,
@@ -208,7 +208,7 @@ def build_operator_report(
                     state="unknown",
                     session_id=session_id,
                     release_name=active_release_name,
-                    error=f"{type(error).__name__}: {error}",
+                    error="ui-observation-unavailable",
                 )
             )
             continue

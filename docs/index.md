@@ -206,6 +206,7 @@ artifact_delivery
 deployment_planning
 operations_lens
 operator_workflow
+ui
 ```
 
 ```{toctree}

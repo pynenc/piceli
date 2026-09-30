@@ -115,6 +115,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`environment-required`](#error-environment-required) | environments | no |
 | [`environment-unknown`](#error-environment-unknown) | environments | no |
 | [`environment-unsupported`](#error-environment-unsupported) | environments | no |
+| [`evaluation-approval`](#error-evaluation-approval) | render | no |
+| [`evaluation-config`](#error-evaluation-config) | render | no |
+| [`evaluation-expired`](#error-evaluation-expired) | render | no |
+| [`evaluation-interrupted`](#error-evaluation-interrupted) | render | no |
+| [`evaluation-output`](#error-evaluation-output) | render | no |
+| [`evaluation-renderer`](#error-evaluation-renderer) | render | no |
+| [`evaluation-source`](#error-evaluation-source) | render | no |
+| [`evaluation-unsupported`](#error-evaluation-unsupported) | render | no |
 | [`exec-auth-not-allowed`](#error-exec-auth-not-allowed) | target | no |
 | [`exec-command-not-found`](#error-exec-command-not-found) | target | no |
 | [`exec-command-unsafe`](#error-exec-command-unsafe) | target | no |
@@ -135,6 +143,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`forward-options-without-forward`](#error-forward-options-without-forward) | artifacts-input | no |
 | [`forward-port-conflict`](#error-forward-port-conflict) | observe | yes |
 | [`forward-port-in-use`](#error-forward-port-in-use) | artifacts-delivery | yes |
+| [`forward-reconnecting`](#error-forward-reconnecting) | access | yes |
 | [`forward-target-not-loopback`](#error-forward-target-not-loopback) | artifacts-input | no |
 | [`forward-unavailable`](#error-forward-unavailable) | artifacts-delivery | yes |
 | [`forward-unhealthy`](#error-forward-unhealthy) | observe | yes |
@@ -393,6 +402,23 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`too-many-redirects`](#error-too-many-redirects) | artifacts-registry | yes |
 | [`tool-pin-mismatch`](#error-tool-pin-mismatch) | artifacts-input | no |
 | [`transport-error`](#error-transport-error) | kubernetes | yes |
+| [`ui-access-failed`](#error-ui-access-failed) | access | yes |
+| [`ui-access-port-conflict`](#error-ui-access-port-conflict) | access | no |
+| [`ui-approval-mismatch`](#error-ui-approval-mismatch) | observe | no |
+| [`ui-assets-unavailable`](#error-ui-assets-unavailable) | observe | no |
+| [`ui-evaluation-failed`](#error-ui-evaluation-failed) | observe | no |
+| [`ui-execution-failed`](#error-ui-execution-failed) | observe | no |
+| [`ui-idempotency-conflict`](#error-ui-idempotency-conflict) | observe | no |
+| [`ui-invalid-request`](#error-ui-invalid-request) | observe | no |
+| [`ui-logs-unavailable`](#error-ui-logs-unavailable) | observe | yes |
+| [`ui-not-found`](#error-ui-not-found) | observe | no |
+| [`ui-observation-unavailable`](#error-ui-observation-unavailable) | observe | yes |
+| [`ui-operation-conflict`](#error-ui-operation-conflict) | observe | yes |
+| [`ui-operation-interrupted`](#error-ui-operation-interrupted) | observe | no |
+| [`ui-operation-unavailable`](#error-ui-operation-unavailable) | observe | no |
+| [`ui-plan-stale`](#error-ui-plan-stale) | observe | no |
+| [`ui-request-rejected`](#error-ui-request-rejected) | observe | no |
+| [`ui-state-invalid`](#error-ui-state-invalid) | observe | no |
 | [`uid-version-precondition-failed`](#error-uid-version-precondition-failed) | execution | no |
 | [`undiscovered-api`](#error-undiscovered-api) | kubernetes | no |
 | [`unknown-error-code`](#error-unknown-error-code) | cli | no |
@@ -1964,6 +1990,70 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 ## Typed apps and `piceli render`
 
+(error-evaluation-approval)=
+### `evaluation-approval`
+
+**Evaluation approval changed.** The approved source, renderer or input identities no longer match the frozen preview.
+
+- **Fix:** Create and approve another evaluation preview.
+- **Retry-safe:** no
+
+(error-evaluation-config)=
+### `evaluation-config`
+
+**Renderer configuration refused.** The renderer image, platform, tool, socket or limits are invalid.
+
+- **Fix:** Configure an explicit pinned local Docker renderer and bounded limits.
+- **Retry-safe:** no
+
+(error-evaluation-expired)=
+### `evaluation-expired`
+
+**Evaluation preview expired.** The frozen evaluation authorization expired before execution.
+
+- **Fix:** Create and approve another evaluation preview.
+- **Retry-safe:** no
+
+(error-evaluation-interrupted)=
+### `evaluation-interrupted`
+
+**Evaluation interrupted.** A previous render started without a trustworthy completion result or was stopped.
+
+- **Fix:** Review a new preview before running source again.
+- **Retry-safe:** no
+
+(error-evaluation-output)=
+### `evaluation-output`
+
+**Renderer output refused.** The renderer returned invalid, private or unbounded composition data.
+
+- **Fix:** Correct the definition to return supported public resources and symbolic secret bindings.
+- **Retry-safe:** no
+
+(error-evaluation-renderer)=
+### `evaluation-renderer`
+
+**Isolated renderer failed.** The configured isolated renderer was unavailable, exceeded limits or failed.
+
+- **Fix:** Check the pinned local renderer and its bounds; review another preview before retrying.
+- **Retry-safe:** no
+
+(error-evaluation-source)=
+### `evaluation-source`
+
+**Source selection refused.** The source selection contains an unsafe, private, unselected or oversized input.
+
+- **Fix:** Select only public definition files under the explicit source root, then preview again.
+- **Retry-safe:** no
+
+(error-evaluation-unsupported)=
+### `evaluation-unsupported`
+
+**Evaluation capability unavailable.** The definition requires a code execution capability not supported by this isolated renderer.
+
+- **Fix:** Use a supported definition or the existing explicitly approved CLI workflow.
+- **Retry-safe:** no
+
 (error-render-model-invalid)=
 ### `render-model-invalid`
 
@@ -2509,6 +2599,126 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Stop the other writer (for example `piceli operator serve`), then retry.
 - **Retry-safe:** yes
 
+(error-ui-approval-mismatch)=
+### `ui-approval-mismatch`
+
+**Approval does not match.** The submitted digest differs from the immutable preview or plan.
+
+- **Fix:** Review the displayed preview or plan and approve its exact digest.
+- **Retry-safe:** no
+
+(error-ui-assets-unavailable)=
+### `ui-assets-unavailable`
+
+**UI assets unavailable.** The installed package lacks bundled browser assets.
+
+- **Fix:** Install a Piceli wheel containing the UI assets.
+- **Retry-safe:** no
+
+(error-ui-evaluation-failed)=
+### `ui-evaluation-failed`
+
+**Definition evaluation failed.** The isolated renderer refused or failed to evaluate the approved source.
+
+- **Fix:** Check the source and renderer configuration, then review a new evaluation preview.
+- **Retry-safe:** no
+
+(error-ui-execution-failed)=
+### `ui-execution-failed`
+
+**Deployment did not succeed.** The real deployment engine or configured checks reported failure.
+
+- **Fix:** Inspect the run stages and diagnosis before recovery or a newly reviewed rollback.
+- **Retry-safe:** no
+
+(error-ui-idempotency-conflict)=
+### `ui-idempotency-conflict`
+
+**Request key already used.** An idempotency key was used with different request inputs.
+
+- **Fix:** Retry the original request unchanged or use a new key for the new request.
+- **Retry-safe:** no
+
+(error-ui-invalid-request)=
+### `ui-invalid-request`
+
+**Invalid UI request.** The request does not match the service contract.
+
+- **Fix:** Check request fields and use the matching UI version.
+- **Retry-safe:** no
+
+(error-ui-logs-unavailable)=
+### `ui-logs-unavailable`
+
+**Container logs unavailable.** The selected pod's container logs could not be read.
+
+- **Fix:** Check pod lifecycle and log-read permission, then refresh the source list.
+- **Retry-safe:** yes
+
+(error-ui-not-found)=
+### `ui-not-found`
+
+**UI resource not found.** The resource is absent or outside the configured scope.
+
+- **Fix:** Refresh the selected application.
+- **Retry-safe:** no
+
+(error-ui-observation-unavailable)=
+### `ui-observation-unavailable`
+
+**Observation unavailable.** The service could not observe the configured scope.
+
+- **Fix:** Check target connectivity and permissions, then refresh.
+- **Retry-safe:** yes
+
+(error-ui-operation-conflict)=
+### `ui-operation-conflict`
+
+**Release operation in progress.** Another admitted operation owns this release scope.
+
+- **Fix:** Inspect the existing operation and wait for its completion or acknowledged cancellation.
+- **Retry-safe:** yes
+
+(error-ui-operation-interrupted)=
+### `ui-operation-interrupted`
+
+**Operation interrupted.** The worker stopped before authoritative execution and check evidence established an outcome.
+
+- **Fix:** Inspect journal evidence and use an offered recovery action; do not blindly repeat the deployment.
+- **Retry-safe:** no
+
+(error-ui-operation-unavailable)=
+### `ui-operation-unavailable`
+
+**Operation unavailable.** The registered definition or renderer cannot perform this operation.
+
+- **Fix:** Configure a supported release definition and a pinned isolated renderer.
+- **Retry-safe:** no
+
+(error-ui-plan-stale)=
+### `ui-plan-stale`
+
+**Plan needs another review.** The approved source, execution inputs, target, or live preconditions changed, or the plan expired.
+
+- **Fix:** Create and review a new plan before deployment.
+- **Retry-safe:** no
+
+(error-ui-request-rejected)=
+### `ui-request-rejected`
+
+**UI request rejected.** The request does not have a valid local session or origin.
+
+- **Fix:** Open the UI at its configured local address.
+- **Retry-safe:** no
+
+(error-ui-state-invalid)=
+### `ui-state-invalid`
+
+**Control state cannot be read.** Durable service control state is incompatible or its integrity checks failed.
+
+- **Fix:** Restore the documented service backup or repair the state before starting another worker.
+- **Retry-safe:** no
+
 (error-unknown-forward)=
 ### `unknown-forward`
 
@@ -2707,6 +2917,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Use an id from `piceli status TARGET --json` (`access.forwards[].id`); it defaults to the Service name.
 - **Retry-safe:** no
 
+(error-forward-reconnecting)=
+### `forward-reconnecting`
+
+**Local forward reconnecting.** An owned loopback forward temporarily lost its ready probe.
+
+- **Fix:** Wait for Piceli to revalidate the target and reconnect, or stop the session.
+- **Retry-safe:** yes
+
 (error-status-checks-unreadable)=
 ### `status-checks-unreadable`
 
@@ -2737,6 +2955,22 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Release state unreadable.** The release state directory (catalog, journal or history) could not be read.
 
 - **Fix:** Check `[release] state_dir` and run `piceli release status --spec release.toml`.
+- **Retry-safe:** no
+
+(error-ui-access-failed)=
+### `ui-access-failed`
+
+**Local access unavailable.** The supervised forward did not bind and pass its health probe.
+
+- **Fix:** Check target connectivity and permissions, then start a new session.
+- **Retry-safe:** yes
+
+(error-ui-access-port-conflict)=
+### `ui-access-port-conflict`
+
+**Local port occupied.** Another process already owns the requested loopback port.
+
+- **Fix:** Choose another local port or stop the process that owns it; Piceli will not adopt it.
 - **Retry-safe:** no
 
 

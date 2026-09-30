@@ -6,6 +6,43 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ## Version 0.9.0 (unreleased)
 
+- **Web application (experimental):** adds the optional `piceli[ui]` service
+  and `piceli ui serve` for explicit inventory scopes and existing release
+  definitions. Source evaluation is isolated; exact source and plan approvals
+  precede a durable release run. Activity replays scoped run events, while
+  Resources shows shared observations, owner relationships, bounded current and
+  previous container logs, and supervised local port forwards. See {doc}`ui`
+  for the currently implemented scope. Cluster authentication and native Git
+  reconciliation remain outside this local release slice.
+- **Local UI trial and execution context:** `make ui-fake-serve` starts a
+  visible, disposable fake-API demo; `make test-ui-fake` runs service and
+  browser journeys. The Applications screen distinguishes local from scoped UI,
+  explicit Kubernetes scopes and currently available actions. Local startup no
+  longer imports OIDC support unnecessarily; the UI extra installs `httpx2`
+  for Authlib's supported HTTP client path. A safe top-level navigation from an
+  external link now opens the loopback UI without granting cross-site API
+  access. Localhost page navigation redirects to the configured 127.0.0.1
+  origin without relaxing the API host guard. The bundled favicon and Chrome
+  DevTools probe no longer produce avoidable missing-resource responses.
+- **Local access retention:** completed port-forward sessions retain a bounded
+  ten-minute, 128-record history; active forwards remain supervised and old
+  supervisor references are released.
+- **Explicit rotating Kubernetes token files:** a named absolute `tokenFile`
+  kubeconfig credential now refreshes before each API request and fails closed
+  when the projected file disappears or becomes invalid. Static tokens retain
+  their previous behavior.
+- **Cluster observation preview:** `piceli ui cluster-observe` offers
+  authenticated, read-only namespace inspection and logs behind an HTTPS TLS
+  gateway with an explicit projected service-account credential and OIDC
+  subject grants. In-cluster manual deployment is not yet implemented.
+- **Legacy UI truthfulness:** presence is labelled inventory, catalog selection
+  no longer reports executed rollback, and unconfigured artifact inventory has
+  unknown totals. Observation errors omit private provider exception text.
+- **Access process recognition:** recognizes macOS framework `Python` executable
+  names when stopping Piceli's own stale server for the exact target.
+- **Recovery approval:** pipeline recovery propagates a stale or expired plan
+  refusal instead of silently planning and applying another digest.
+
 - **Builds without a VM (experimental):** `Build.spec("host-build.toml",
   builder="host")` builds with the host toolchain (for Rust `cargo` or
   `cargo zigbuild` for `linux/arm64` from macOS), so Docker Desktop can stay

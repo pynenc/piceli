@@ -127,6 +127,30 @@ def test_piceli_servers_for_the_same_target(tmp_path: Path) -> None:
     assert _check(None).kind == "unknown"
 
 
+@pytest.mark.parametrize("interpreter", ["Python", "python", "python3", "python3.12"])
+def test_framework_python_is_recognized_only_for_the_exact_piceli_target(
+    interpreter: str,
+) -> None:
+    command = f"/framework/MacOS/{interpreter} -m piceli observe serve --kubeconfig {KUBECONFIG} --context demo"
+    assert _check(PortOwner(9000, 42, command)).kind == PICELI_SERVER
+    assert (
+        _check(
+            PortOwner(9000, 42, command.replace("--context demo", "--context other"))
+        ).kind
+        == OTHER
+    )
+    assert (
+        _check(
+            PortOwner(
+                9000,
+                42,
+                command.replace(interpreter + " -m", interpreter + "-unrelated -m"),
+            )
+        ).kind
+        == OTHER
+    )
+
+
 def test_conflicts_keep_the_command_of_piceli_processes_only() -> None:
     mine = Holder(PICELI_FORWARD, PortOwner(18090, 4242, ARGV, PICELI), 77)
     conflict = PortConflict("api", 18090, True, mine.owner, mine)

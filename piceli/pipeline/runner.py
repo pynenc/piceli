@@ -1915,8 +1915,6 @@ class PipelineRunner:
 
     # --------------------------------------------------------- stage: apply
     def _run_apply(self, reapply: bool, resuming: bool) -> tuple[str, dict[str, Any]]:
-        from piceli.k8s.release_runner import ReleaseError
-
         work = self._work
         assert work is not None and self.run is not None
         planned = self.run.output("plan")
@@ -1952,18 +1950,11 @@ class PipelineRunner:
                 self.say(f"[apply] {release}: resuming the interrupted execution")
                 outcome = runner.resume(release)
         if outcome is None:
-            try:
-                self.say(f"[apply] {release}: applying")
-                outcome = runner.apply(plan_hash)
-            except ReleaseError:
-                if not resuming:
-                    raise
-                try:
-                    result = runner.plan()
-                except ReleaseError as error:
-                    raise app_release_refusal(error) from None
-                work.release_plan = result
-                outcome = runner.apply(result.plan_hash)
+            # A refusal (including stale/expired approval) cannot authorize a
+            # replacement plan. Recovery must retain the recorded plan hash;
+            # the caller can explicitly plan and approve another run.
+            self.say(f"[apply] {release}: applying")
+            outcome = runner.apply(plan_hash)
         output = {
             "release": outcome.get("release", release),
             "execution": outcome["execution"],

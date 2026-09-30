@@ -655,6 +655,7 @@ _PAGE_HTML = """<!doctype html>
   </nav>
 
   <main>
+    <p id="observation-status" role="status">Loading observations…</p>
     <!-- Top Quick Launch Bar -->
     <section class="quick-launch-section" data-testid="quick-launch-bar">
       <div class="quick-launch-header">
@@ -691,15 +692,16 @@ _PAGE_HTML = """<!doctype html>
       </div>
 
       <div class="section-box" data-testid="section-deployment-plan">
-        <h2>Desired vs Live Deployment Plan</h2>
+        <h2>Resource inventory</h2>
+        <p>Presence is observation only. Use a release plan to review field changes before deployment.</p>
         <table class="fixed">
           <colgroup>
             <col style="width: 110px"><col style="width: 13%"><col style="width: 24%"><col style="width: 26%"><col>
           </colgroup>
           <thead>
-            <tr><th>Action</th><th>Kind</th><th>Name</th><th>Reason</th><th>Image / Phase</th></tr>
+            <tr><th>Presence</th><th>Kind</th><th>Name</th><th>Reason</th><th>Image / Phase</th></tr>
           </thead>
-          <tbody id="tbl-plan" data-testid="tbl-plan"><tr><td colspan="5" style="color: var(--muted);">Loading plan...</td></tr></tbody>
+          <tbody id="tbl-plan" data-testid="tbl-plan"><tr><td colspan="5" style="color: var(--muted);">Loading inventory...</td></tr></tbody>
         </table>
       </div>
 
@@ -812,15 +814,15 @@ _PAGE_HTML = """<!doctype html>
       <div class="metrics">
         <div class="metric-card" data-testid="metric-art-total">
           <div class="metric-title">Total Image Space</div>
-          <div class="metric-value" id="art-total">0 B</div>
+          <div class="metric-value" id="art-total">Unknown</div>
         </div>
         <div class="metric-card" data-testid="metric-art-prot">
           <div class="metric-title">Protected Space</div>
-          <div class="metric-value" id="art-prot" style="color: var(--success);">0 B</div>
+          <div class="metric-value" id="art-prot" style="color: var(--success);">Unknown</div>
         </div>
         <div class="metric-card" data-testid="metric-art-reclaim">
           <div class="metric-title">Reclaimable Space</div>
-          <div class="metric-value" id="art-reclaim" style="color: var(--warning);">0 B</div>
+          <div class="metric-value" id="art-reclaim" style="color: var(--warning);">Unknown</div>
         </div>
       </div>
       <div class="section-box">
@@ -1049,10 +1051,15 @@ _PAGE_HTML = """<!doctype html>
       };
       if (body) opts.body = JSON.stringify(body);
       const res = await fetch(url, opts);
-      return res.json();
+      const result = await res.json();
+      if (method === 'GET' && (!res.ok || result.error)) throw new Error('Observation unavailable');
+      return result;
     }
 
+    let loadingAll = false;
     async function loadAll() {
+      if (loadingAll) return;
+      loadingAll = true;
       try {
         const [status, releases, forwards, artifacts, auto, shortcutsData] = await Promise.all([
           req('/v1/status'),
@@ -1064,6 +1071,11 @@ _PAGE_HTML = """<!doctype html>
         ]);
 
         currentNamespace = status.namespace || PAGE.namespace || '';
+        document.getElementById('observation-status').textContent = status.error
+          ? 'Observation unavailable. Previously displayed data may be stale.'
+          : ((status.scan_errors || []).length || (status.unknown || []).length)
+            ? 'Partial observation: some resources could not be read.'
+            : 'Observed at ' + new Date().toLocaleTimeString();
         document.getElementById('hdr-ns').textContent = 'Namespace: ' + (currentNamespace || '(unset)');
         const addNsInput = document.getElementById('add-fwd-ns');
         if (addNsInput && !addNsInput.value) addNsInput.value = currentNamespace;
@@ -1077,7 +1089,7 @@ _PAGE_HTML = """<!doctype html>
         (status.managed || []).forEach(r => {
           const state = r.state || 'unknown';
           const derived = r.derived_from;
-          const action = derived ? 'derived' : (state === 'present' ? 'no-op' : (state === 'missing' ? 'create' : 'inspect'));
+          const action = derived ? 'derived' : state;
           const reason = derived ? 'created by ' + derived : (state === 'present' ? 'declared and live' : (state === 'missing' ? 'declared but absent' : (r.error || 'reader could not prove state')));
           planRows.push({
             action,
@@ -1110,13 +1122,13 @@ _PAGE_HTML = """<!doctype html>
         });
         document.getElementById('tbl-plan').innerHTML = planRows.map(row => `
           <tr>
-            <td><span class="badge badge-${esc(row.action === 'no-op' ? 'present' : row.action === 'create' ? 'unknown' : row.action)}">${esc(row.action)}</span></td>
+            <td><span class="badge badge-${esc(row.action)}">${esc(row.action)}</span></td>
             <td><span class="clip" title="${esc(row.kind)}">${esc(row.kind)}</span></td>
             <td><code class="clip" title="${esc(row.name)}">${esc(row.name)}</code></td>
             <td>${esc(row.reason)}</td>
             <td>${row.images.length ? imageCells(row.images) : `<code class="clip">${esc(row.detail)}</code>`}</td>
           </tr>
-        `).join('') || '<tr><td colspan="5" style="color:var(--muted);">No deployment plan available</td></tr>';
+        `).join('') || '<tr><td colspan="5" style="color:var(--muted);">No observed resources</td></tr>';
 
         // Render Quick Shortcuts Cards
         const shortcuts = shortcutsData.shortcuts || [];
@@ -1168,7 +1180,7 @@ _PAGE_HTML = """<!doctype html>
             ${tier.components.map(comp => {
               const res = managedMap.get(comp.name);
               const isPresent = res && res.state === 'present';
-              const phase = res?.observed?.phase || (isPresent ? 'Running' : 'Not Deployed');
+              const phase = res?.observed?.phase || (isPresent ? 'Present (health unknown)' : 'Unknown');
               const images = (res?.observed?.images || []).join(', ') || 'canonical';
               const shortcut = comp.shortcut ? shortcuts.find(s => s.id === comp.shortcut) : null;
               const compUrl = shortcut ? shortcut.url : '';
@@ -1178,8 +1190,8 @@ _PAGE_HTML = """<!doctype html>
                 <div class="comp-item" data-testid="topology-card-${esc(comp.name)}">
                   <div class="comp-header">
                     <span class="comp-name">${esc(comp.name)}</span>
-                    <span class="badge ${isPresent ? 'badge-running' : 'badge-stopped'}">
-                      <span class="pulse-dot ${isPresent ? 'pulse-running' : 'pulse-stopped'}"></span>${esc(phase)}
+                    <span class="badge badge-stopped">
+                      <span class="pulse-dot pulse-stopped"></span>${esc(phase)}
                     </span>
                   </div>
                   <div class="comp-desc">${esc(comp.description)}</div>
@@ -1233,7 +1245,7 @@ _PAGE_HTML = """<!doctype html>
             <td><code>${esc(rel.artifact_digest ? rel.artifact_digest.slice(0, 24) + '...' : '-')}</code></td>
             <td>${rel.is_active ? '<span class="badge badge-present">Active</span>' : '<span class="badge badge-stopped">Historical</span>'}</td>
             <td>
-              <button class="btn btn-sec" data-action="rollback" data-name="${esc(rel.name)}">Rollback</button>
+              <button class="btn btn-sec" data-action="rollback" data-name="${esc(rel.name)}" ${releases.selection_available ? '' : 'disabled title="Release workflow is not configured"'}>Select release</button>
             </td>
           </tr>
         `).join('') || '<tr><td colspan="6" style="color:var(--muted);">No releases catalogued</td></tr>';
@@ -1267,7 +1279,8 @@ _PAGE_HTML = """<!doctype html>
         }).join('') || '<tr><td colspan="9" style="color:var(--muted);">No forwards supervised. Use shortcuts above or add one below.</td></tr>';
 
         // Artifacts
-        if (artifacts.total_bytes !== undefined) {
+        document.querySelector('[data-testid="btn-run-gc"]').disabled = artifacts.available === false;
+        if (artifacts.available !== false && artifacts.total_bytes != null) {
           document.getElementById('art-total').textContent = (artifacts.total_bytes / 1e6).toFixed(1) + ' MB';
           document.getElementById('art-prot').textContent = (artifacts.protected_bytes / 1e6).toFixed(1) + ' MB';
           document.getElementById('art-reclaim').textContent = (artifacts.reclaimable_bytes / 1e6).toFixed(1) + ' MB';
@@ -1280,6 +1293,9 @@ _PAGE_HTML = """<!doctype html>
               <td>${e.is_protected ? '<span class="badge badge-present">Protected</span>' : '<span class="badge badge-unmanaged">Reclaimable</span>'}</td>
             </tr>
           `).join('');
+        } else {
+          ['art-total', 'art-prot', 'art-reclaim'].forEach(id => document.getElementById(id).textContent = 'Unavailable');
+          document.getElementById('tbl-artifacts').innerHTML = '<tr><td colspan="5">Artifact inventory is not configured.</td></tr>';
         }
 
         // Policies
@@ -1293,7 +1309,9 @@ _PAGE_HTML = """<!doctype html>
         `).join('') || '<tr><td colspan="4" style="color:var(--muted);">No standing policies</td></tr>';
 
       } catch (err) {
-        console.error('Failed to load operator state:', err);
+        document.getElementById('observation-status').textContent = 'Disconnected. Previously displayed observations are stale.';
+      } finally {
+        loadingAll = false;
       }
     }
 
@@ -1372,12 +1390,12 @@ _PAGE_HTML = """<!doctype html>
     }
 
     async function rollbackRelease(name) {
-      if (!confirm('Rollback to release ' + name + '?')) return;
+      if (!confirm('Select catalog release ' + name + '? This does not deploy or roll back workloads.')) return;
       const res = await req('/v1/releases/rollback', 'POST', { target_release_name: name });
       if (res.error) {
-        showToast('Rollback error: ' + res.error, 'error');
+        showToast('Selection error: ' + res.error, 'error');
       } else {
-        showToast('Rollback complete to: ' + name, 'success');
+        showToast('Catalog selected: ' + name + '. No deployment was executed.', 'success');
       }
       loadAll();
     }
@@ -1811,7 +1829,14 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
                             "is_active": (r.name == selected_name),
                         }
                     )
-            self._json(200, {"selected": selected_name, "releases": records})
+            self._json(
+                200,
+                {
+                    "selected": selected_name,
+                    "releases": records,
+                    "selection_available": self.server.workflow is not None,
+                },
+            )
             return
         if self.path == "/v1/artifacts":
             if self.server.artifact_inventory:
@@ -1820,11 +1845,12 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
                 self._json(
                     200,
                     {
-                        "total_images": 0,
+                        "available": False,
+                        "total_images": None,
                         "entries": [],
-                        "total_bytes": 0,
-                        "protected_bytes": 0,
-                        "reclaimable_bytes": 0,
+                        "total_bytes": None,
+                        "protected_bytes": None,
+                        "reclaimable_bytes": None,
                     },
                 )
             return
@@ -1841,7 +1867,14 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
                             "require_pr_approval": p.require_pr_approval,
                         }
                     )
-            self._json(200, {"policies": policies_data, "watched_branches": []})
+            self._json(
+                200,
+                {
+                    "policies": policies_data,
+                    "watched_branches": [],
+                    "reconciliation_available": False,
+                },
+            )
             return
         if self.path == "/v1/pods":
             self._handle_pods()
@@ -1857,7 +1890,7 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
                 except Exception as e:
                     self._error(500, "log-read-failed", e)
             else:
-                self._json(200, {"lines": ["Log reader adapter not attached."]})
+                self._json(400, {"error": "ui-observation-unavailable"})
             return
 
         self._json(404, {"error": "not-found"})
@@ -2129,7 +2162,15 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
                 return
             try:
                 self.server.workflow.catalog.select(tgt)
-                self._json(200, {"ok": True, "rolled_back_to": tgt})
+                self._json(
+                    200,
+                    {
+                        "ok": True,
+                        "action": "catalog-selection",
+                        "selected": tgt,
+                        "deployed": False,
+                    },
+                )
             except Exception as e:
                 self._error(400, "rollback-failed", e)
             return
@@ -2137,9 +2178,7 @@ class LocalObserveHandler(BaseHTTPRequestHandler):
         if self.path == "/v1/artifacts/gc":
             inv = self.server.artifact_inventory
             if not inv:
-                self._json(
-                    200, {"pruned_digests": [], "freed_bytes": 0, "dry_run": True}
-                )
+                self._json(409, {"error": "ui-observation-unavailable"})
                 return
             dry_run = payload.get("dry_run", True)
             ttl = payload.get("retention_ttl_seconds", 86400)

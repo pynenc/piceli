@@ -1046,6 +1046,33 @@ class FakeAPI:
         path = request["path"]
         method = request["method"]
         query = request["query"]
+        if method == "GET" and path == "/version":
+            return 200, {"major": "1", "minor": "37", "gitVersion": "v1.37.0"}
+        if method == "GET" and path == "/api":
+            return 200, {"kind": "APIVersions", "versions": ["v1"]}
+        if method == "GET" and path == "/apis":
+            # The dynamic client discovers group versions before requesting
+            # their APIResourceLists. Derive them from this fixture's types,
+            # including caller-defined CRDs, instead of a second static list.
+            groups: dict[str, list[dict[str, str]]] = {}
+            for api_version in sorted({item[0] for item in self.types.values()}):
+                if "/" in api_version:
+                    group, version = api_version.split("/", 1)
+                    groups.setdefault(group, []).append(
+                        {"groupVersion": api_version, "version": version}
+                    )
+            return 200, {
+                "apiVersion": "v1",
+                "kind": "APIGroupList",
+                "groups": [
+                    {
+                        "name": name,
+                        "versions": versions,
+                        "preferredVersion": versions[0],
+                    }
+                    for name, versions in groups.items()
+                ],
+            }
         for version in sorted({item[0] for item in self.types.values()}):
             root = ("/apis/" if "/" in version else "/api/") + version
             if path == root:

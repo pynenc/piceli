@@ -43,6 +43,7 @@ from piceli.k8s.ops.exec_credentials import (
     ExecPolicy,
     ProviderFactoryError,
     TlsMaterialError,
+    TokenFileCredentialSource,
     resolve_plugin,
     tls_context,
 )
@@ -58,6 +59,7 @@ __all__ = [
     "ProviderFactoryError",
     "api_client_from_kubeconfig",
     "build_provider",
+    "credential_file_paths",
     "credential_plugin",
     "read_cluster_identity",
     "verify_exec_user",
@@ -77,6 +79,7 @@ _STATIC_USER_KEYS = frozenset(
         "client-key",
         "client-key-data",
         "token",
+        "tokenFile",
     }
 )
 
@@ -333,6 +336,20 @@ def verify_exec_user(
     return plugin.summary()
 
 
+def credential_file_paths(target: KubeconfigTarget) -> tuple[Path, ...]:
+    """Files named by an explicit context that must never enter source staging."""
+    path, entries = _entries_for(
+        target.kubeconfig, target.context, target.transport, target.exec_policy
+    )
+    base = path.resolve().parent
+    result = []
+    for key in ("tokenFile", "client-key", "client-certificate"):
+        value = entries.user.get(key)
+        if isinstance(value, str) and value:
+            result.append(Path(value) if Path(value).is_absolute() else base / value)
+    return tuple(result)
+
+
 def _entries_for(
     kubeconfig: Path, context: str, transport: str, policy: ExecPolicy
 ) -> tuple[Path, _Entries]:
@@ -405,12 +422,13 @@ def _pem_data(user: Mapping[str, Any], key: str) -> bytes | None:
 
 
 def _static_client(path: Path, entries: _Entries) -> Any:
-    """An ``ApiClient`` for a static token or client certificate.
+    """An ``ApiClient`` for a static or rotating token, or client certificate.
 
     The SDK's kubeconfig loader is bypassed: it writes certificate data to
     temporary files. Here ``*-data`` fields go to OpenSSL through pipes, the
     CA is read in memory, and files the kubeconfig names are used in place.
-    No refresh hook is installed (a static token cannot be refreshed).
+    A named tokenFile is read at each request so projected service-account
+    token rotation cannot leave a long-lived client using an expired token.
     """
     from kubernetes.client import ApiClient
 
@@ -418,6 +436,22 @@ def _static_client(path: Path, entries: _Entries) -> Any:
     user = entries.user
     configuration = _configuration(entries.cluster)
     token = user.get("token")
+    token_file = user.get("tokenFile")
+    if token_file is not None:
+        if token is not None or any(
+            user.get(name)
+            for name in (
+                "client-certificate",
+                "client-certificate-data",
+                "client-key",
+                "client-key-data",
+            )
+        ):
+            raise ProviderFactoryError(
+                "tokenFile cannot be combined with other credentials"
+            )
+        if not isinstance(token_file, str) or not Path(token_file).is_absolute():
+            raise ProviderFactoryError("tokenFile must be an explicit absolute path")
     if token is not None:
         if not isinstance(token, str) or not token or "\n" in token:
             raise ProviderFactoryError("kubeconfig token is invalid")
@@ -443,6 +477,10 @@ def _static_client(path: Path, entries: _Entries) -> Any:
         raise ProviderFactoryError(str(error)) from None
     client = ApiClient(configuration)
     client.rest_client.pool_manager = _direct_pool(context, configuration)
+    if token_file is not None:
+        TokenFileCredentialSource(
+            Path(token_file), configuration, client.rest_client.pool_manager
+        ).attach()
     return client
 
 

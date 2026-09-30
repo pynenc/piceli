@@ -4,6 +4,8 @@
 
 Rules for agents:
 
+- `piceli ui serve --definition release.toml` registers an existing explicit-target definition; inventory-only use requires `--kubeconfig`, `--context` and `--namespace`. Requires `piceli[ui]`; long-running loopback service needs the owner's go-ahead. Legacy `operator serve` remains deprecated. Presence is not health or a deployment diff; catalog selection is not rollback. See docs/ui.md for implementation scope.
+
 - Run `piceli help-json` for every command's options, side effects, approval rules and retry safety; do not guess flags.
 - Plan before apply and never approve on the owner's behalf: show the owner the plan (`piceli deploy … --plan`, `piceli release plan`) and run `--approve <hash>` only after they approved that exact hash. Before the images exist, `deploy --plan` shows a release preview with placeholder images (`stages.plan.preview`, `approvable: false`): approve the `combined_hash`, never the `preview_hash`. Never add `--auto-approve` unless the owner said this is an unattended CI run for this exact target.
 - An owner may declare an approval policy in reviewed code (`Pipeline(..., auto_approve=ApprovalPolicy(...))`, `[release] auto_approve = {...}`); then `piceli deploy … --approve-if-policy` and `piceli release apply … --approve-if-policy` run a plan only when every action is inside it, otherwise exit 3 with `approval-policy-exceeded` and the hash for the owner. `delete`, `replace` and `adopt` always need the hash. Never add or widen a policy yourself; no flag can pass one.
