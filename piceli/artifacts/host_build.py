@@ -11,8 +11,8 @@ is needed:
   compiler's incremental state stays valid).
 * Commands run on the host with a minimal environment: ``PATH`` holds only
   the directories of the declared tools (each pinned by sha256 in the plan)
-  and the system default; ``CARGO_TARGET_DIR`` is ``<cache>/target``, shared
-  by every host build that uses the same cache directory.
+  and the system default; ``CARGO_TARGET_DIR`` is ``<cache>/target/<arch>-<page size>``, shared
+  by every host build of that architecture and page size that uses the same cache directory.
 * Each image is a digest-pinned base pulled over OCI Distribution plus one
   deterministic layer per declared file mapping
   (:mod:`piceli.artifacts.oci_layers`), written as an OCI image-layout tar

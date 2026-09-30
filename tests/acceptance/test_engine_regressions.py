@@ -122,3 +122,30 @@ def test_real_secret_values_are_still_redacted():
     assert public["spec"]["template"]["spec"]["serviceAccountToken"] == "<redacted>"
     secret, redacted = public_manifest(manifest("Secret", "credentials", value="x"))
     assert redacted and secret["data"] == {"password": "<redacted>"}
+
+
+def test_a_token_variable_holding_a_file_path_is_public_and_applies(
+    local_api, tmp_path
+):
+    """B25: ``*TOKEN*`` env names whose value is a mounted file path are plain values."""
+    api, provider = local_api
+    worker = manifest("Deployment", "worker")
+    container = worker["spec"]["template"]["spec"]["containers"][0]
+    container["env"] = [
+        {"name": "METRICS_TOKEN", "value": "/var/run/secrets/metrics/token"},
+        {"name": "API_TOKEN", "value": "plain-token"},
+    ]
+    public, _ = public_manifest(worker)
+    env = public["spec"]["template"]["spec"]["containers"][0]["env"]
+    assert env[0] == {
+        "name": "METRICS_TOKEN",
+        "value": "/var/run/secrets/metrics/token",
+    }
+    assert env[1]["value"] == "<redacted>"  # an inline secret is still redacted
+    worker["spec"]["template"]["spec"]["containers"][0]["env"].pop()
+    run = executor(provider, tmp_path)
+    plan, snapshot, grant = prepare(provider, [worker])
+    assert run.run("token-file", plan, snapshot, grant)["state"] == "ready"
+    [created] = mutations(api)
+    env = created["body"]["spec"]["template"]["spec"]["containers"][0]["env"]
+    assert env == [{"name": "METRICS_TOKEN", "value": "/var/run/secrets/metrics/token"}]

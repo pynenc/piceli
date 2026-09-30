@@ -701,6 +701,7 @@
     "images",
     "lock",
     "node",
+    "node_facts",
     "path",
     "platform"
    ],
@@ -730,6 +731,7 @@
      "cache_dir",
      "lock",
      "node",
+     "node_facts",
      "path",
      "platform"
     ]
@@ -4732,11 +4734,13 @@
     "subcommands": [
      "access",
      "artifacts",
+     "build",
      "cache",
      "chart",
      "codegen",
      "deploy",
      "doctor",
+     "env",
      "explain",
      "heavy",
      "help-json",
@@ -4972,6 +4976,53 @@
     ],
     "subcommands": []
    },
+   "build": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "job",
+     "job-run"
+    ]
+   },
+   "build job": {
+    "arguments": [
+     "target"
+    ],
+    "flags": [
+     "--approve",
+     "--cache-key",
+     "--commit",
+     "--env",
+     "--git-secret",
+     "--image",
+     "--namespace",
+     "--node-registry",
+     "--platform",
+     "--receipt-out",
+     "--registry-url",
+     "--repo",
+     "--repo-root",
+     "--selector",
+     "--storage",
+     "--storage-class",
+     "--timeout"
+    ],
+    "subcommands": []
+   },
+   "build job-run": {
+    "arguments": [],
+    "flags": [
+     "--cache",
+     "--commit",
+     "--node-registry",
+     "--out",
+     "--registry-url",
+     "--source",
+     "--spec",
+     "--timeout"
+    ],
+    "subcommands": []
+   },
    "cache": {
     "arguments": [],
     "flags": [],
@@ -5136,6 +5187,28 @@
      "--env",
      "--json",
      "--state-dir"
+    ],
+    "subcommands": []
+   },
+   "env": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "push"
+    ]
+   },
+   "env push": {
+    "arguments": [
+     "branch",
+     "target"
+    ],
+    "flags": [
+     "--approve",
+     "--commit",
+     "--digest",
+     "--env",
+     "--namespace",
+     "--receipt"
     ],
     "subcommands": []
    },
@@ -5871,6 +5944,8 @@
    "claim-migration-target-exists",
    "claim-migration-verify-failed",
    "claim-shrink-refused",
+   "cluster-build-failed",
+   "cluster-build-invalid",
    "cluster-identity-changed",
    "cluster-identity-unreadable",
    "codegen-cluster-read-failed",
@@ -5917,6 +5992,7 @@
    "dockerfile-unpinned",
    "dry-run-limit-exceeded",
    "dry-run-placeholder-image",
+   "env-push-invalid",
    "environment-invalid",
    "environment-required",
    "environment-unknown",
@@ -7174,6 +7250,7 @@
   "piceli.artifacts.build_dockerfile",
   "piceli.artifacts.build_spec",
   "piceli.artifacts.cli",
+  "piceli.artifacts.cluster_build",
   "piceli.artifacts.delivery",
   "piceli.artifacts.delivery_inputs",
   "piceli.artifacts.gc",
@@ -7222,11 +7299,13 @@
   "piceli.k8s.automation",
   "piceli.k8s.cli",
   "piceli.k8s.cli.access",
+  "piceli.k8s.cli.build",
   "piceli.k8s.cli.chart",
   "piceli.k8s.cli.cluster_access",
   "piceli.k8s.cli.codegen",
   "piceli.k8s.cli.contract",
   "piceli.k8s.cli.deploy_pipeline",
+  "piceli.k8s.cli.env_push",
   "piceli.k8s.cli.heavy",
   "piceli.k8s.cli.importing",
   "piceli.k8s.cli.inputs",
