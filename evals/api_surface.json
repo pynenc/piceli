@@ -2407,6 +2407,7 @@
      "transferred_managers"
     ],
     "delete": [
+     "allow_retained",
      "deadline",
      "dry_run",
      "identity",
@@ -5343,6 +5344,7 @@
      "apply",
      "check",
      "diff",
+     "orphans",
      "plan",
      "preview",
      "resume",
@@ -5385,6 +5387,21 @@
      "--env",
      "--exit-code",
      "--replace",
+     "--spec"
+    ],
+    "subcommands": []
+   },
+   "release orphans": {
+    "arguments": [],
+    "flags": [
+     "--approve",
+     "--env",
+     "--include-claims",
+     "--include-cluster-scoped",
+     "--include-other-owners",
+     "--include-secrets",
+     "--json",
+     "--prune",
      "--spec"
     ],
     "subcommands": []
@@ -5852,6 +5869,11 @@
    "nothing-to-stop",
    "operation-identity-mismatch",
    "operator-state-unavailable",
+   "orphans-approve-without-prune",
+   "orphans-delete-failed",
+   "orphans-execution-running",
+   "orphans-no-release",
+   "orphans-plan-changed",
    "output-invalid",
    "ownership-precondition-failed",
    "pipeline-apply-crashloop",
@@ -7032,6 +7054,7 @@
   "piceli.k8s.ops.revision",
   "piceli.k8s.ops.secret_versions",
   "piceli.k8s.ops.session",
+  "piceli.k8s.orphans",
   "piceli.k8s.port_owner",
   "piceli.k8s.release",
   "piceli.k8s.release_runner",

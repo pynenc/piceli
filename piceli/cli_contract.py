@@ -566,6 +566,23 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "run id) with the causes recorded when it failed (pod reasons, exit "
             "codes, redacted log tails, events).",
         ),
+        "release orphans": _C(
+            "List the objects with the app's ownership labels that no current "
+            "release owns; --prune deletes them after approval.",
+            contract="conforms",
+            reads=_RELEASE_READS,
+            cluster="writes",
+            approval_required=True,
+            exit_codes=_RELEASE_EXIT,
+            notes="Read-only without --prune. --prune prints the plan hash over "
+            "the exact set (UIDs and resourceVersions) and exits 3; --prune "
+            "--approve HASH deletes that set, or refuses when it changed "
+            "(orphans-plan-changed). Never prunes claims, Secrets, objects of "
+            "another owner or cluster-scoped objects unless --include-claims, "
+            "--include-secrets, --include-other-owners or "
+            "--include-cluster-scoped; never an object without Piceli's owner "
+            "annotation." + _ENV_NOTE,
+        ),
         # -------------------------------------------------------- state
         "state show": _C(
             "Show where a release's state lives, its generation and the lock holder.",
