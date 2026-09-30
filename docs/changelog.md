@@ -42,6 +42,11 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   names when stopping Piceli's own stale server for the exact target.
 - **Recovery approval:** pipeline recovery propagates a stale or expired plan
   refusal instead of silently planning and applying another digest.
+- **Pre-rollout checks in the web UI:** the browser deploy path cannot run
+  the 0.9.0 `prerollout` stage yet, so evaluating an app that declares
+  `app.pre_rollout(...)` now fails with `ui-prerollout-unsupported` instead of
+  planning a release that would skip its checks. Deploy such apps with
+  `piceli deploy`.
 
 ## Version 0.9.0
 

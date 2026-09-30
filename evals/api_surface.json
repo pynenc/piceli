@@ -5955,6 +5955,7 @@
    "ui-operation-interrupted",
    "ui-operation-unavailable",
    "ui-plan-stale",
+   "ui-prerollout-unsupported",
    "ui-request-rejected",
    "ui-state-invalid",
    "uid-version-precondition-failed",

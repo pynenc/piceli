@@ -131,6 +131,13 @@ from the same local state appear as imported history with the provenance the
 engine recorded; their original browser plan is not available. Inventory-only
 registrations remain read-only.
 
+The browser deploy path does not run pre-rollout checks yet. When the evaluated
+app declares `app.pre_rollout(...)`, the evaluation fails with
+`ui-prerollout-unsupported` and no plan is produced; deploy that app with
+`piceli deploy`, which runs its `prerollout` stage. Restore points
+(`Pipeline(restore_points=...)`) belong to pipeline definitions, which the
+browser cannot deploy yet, so the UI never takes or skips a `backup` stage.
+
 Health, desired/live relation, operation state and observation freshness are
 separate facts. A present resource does not establish health or an unchanged
 deployment. Denied resource kinds produce partial inventory; unavailable

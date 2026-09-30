@@ -501,3 +501,97 @@ def test_expired_sources_are_removed_on_restart(
     assert not stage.exists()
     with pytest.raises(EvaluationError, match="evaluation-approval"):
         restarted.render(preview.id, preview.digest)
+
+
+def _rendering_docker(
+    evaluator: DockerEvaluator, output: bytes
+) -> Any:  # a fake docker whose renderer prints ``output``
+    def docker(arguments: list[str], **kwargs: Any) -> bytes:
+        if arguments[:2] == ["image", "inspect"]:
+            return json.dumps(
+                [
+                    {
+                        "Id": evaluator.renderer.image_id,
+                        "Os": "linux",
+                        "Architecture": "arm64",
+                    }
+                ]
+            ).encode()
+        if arguments[0] == "start":
+            return output
+        if arguments[0] == "inspect":
+            return b'{"ExitCode": 0,"OOMKilled":false,"Running":false}'
+        return b""
+
+    return docker
+
+
+@pytest.mark.parametrize(
+    "output,code",
+    [
+        (b'{"components": [], "pre_rollout_checks": 1}', "ui-prerollout-unsupported"),
+        (b'{"components": [], "pre_rollout_checks": -1}', "evaluation-output"),
+        (b'{"components": [], "pre_rollout_checks": true}', "evaluation-output"),
+        (b'{"components": [], "pre_rollout_checks": "1"}', "evaluation-output"),
+    ],
+)
+def test_apps_with_pre_rollout_checks_are_refused_not_planned(
+    evaluator: DockerEvaluator,
+    spec: ReleaseSpec,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    output: bytes,
+    code: str,
+) -> None:
+    preview = evaluator.preview("web", source(tmp_path), derive_render_inputs(spec))
+    monkeypatch.setattr(evaluator, "_docker", _rendering_docker(evaluator, output))
+    evaluator.renderer.socket.touch()
+    monkeypatch.setattr("piceli.services.evaluation.stat.S_ISSOCK", lambda mode: True)
+    with pytest.raises(EvaluationError, match=code):
+        evaluator.render(preview.id, preview.digest)
+
+
+def test_an_app_without_pre_rollout_checks_still_renders(
+    evaluator: DockerEvaluator,
+    spec: ReleaseSpec,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    preview = evaluator.preview("web", source(tmp_path), derive_render_inputs(spec))
+    output = b'{"components": [], "pre_rollout_checks": 0}'
+    monkeypatch.setattr(evaluator, "_docker", _rendering_docker(evaluator, output))
+    evaluator.renderer.socket.touch()
+    monkeypatch.setattr("piceli.services.evaluation.stat.S_ISSOCK", lambda mode: True)
+    assert evaluator.render(preview.id, preview.digest).components == ()
+
+
+@pytest.mark.parametrize("declared", [0, 1])
+def test_render_worker_reports_the_pre_rollout_check_count(
+    spec: ReleaseSpec,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    declared: int,
+) -> None:
+    from piceli import App
+    from piceli.services import render_worker
+
+    app = App("shop")
+    api = app.deployment("api", image="example/api:1")
+    if declared:
+        app.pre_rollout(api, ["api", "check"])
+    monkeypatch.setattr(render_worker, "load_target", lambda entry, base: app)
+    request = tmp_path / "request.json"
+    request.write_text(
+        json.dumps(
+            {
+                "entrypoint": "compose.py:app",
+                "inputs": derive_render_inputs(spec).to_dict(),
+            }
+        )
+    )
+    monkeypatch.setattr("sys.argv", ["render_worker", str(request)])
+    assert render_worker.main() == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["pre_rollout_checks"] == declared
+    assert result["components"]

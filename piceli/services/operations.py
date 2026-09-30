@@ -35,6 +35,10 @@ if TYPE_CHECKING:
     from piceli.services.evaluation import DockerEvaluator, SourceSelection
 
 
+# Evaluation refusals reported by their own code instead of the generic one.
+_EVALUATION_REFUSALS = frozenset({"ui-prerollout-unsupported"})
+
+
 class _CancelledBeforeDispatch(Exception):
     pass
 
@@ -632,10 +636,13 @@ class OperationService:
             )
             self.store.put("plan", plan.model_dump(mode="json"), private=material)
             raw.update(state="succeeded", plan_id=plan.id, updated_at=now())
-        except Exception:
+        except Exception as error:
+            code = getattr(error, "code", None)
             raw.update(
                 state="interrupted" if self._stop.is_set() else "failed",
-                error_code="ui-evaluation-failed",
+                error_code=(
+                    code if code in _EVALUATION_REFUSALS else "ui-evaluation-failed"
+                ),
                 updated_at=now(),
             )
         self.store.update("evaluation", raw)

@@ -173,6 +173,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "observe",
     ),
     _E(
+        "ui-prerollout-unsupported",
+        "Pre-rollout checks not supported from the UI",
+        "The evaluated app declares pre-rollout checks (`app.pre_rollout`). The web UI deploy path cannot run them yet, so it refuses to plan the release instead of skipping them. Nothing was planned or applied.",
+        "Deploy this app with `piceli deploy`, which runs the `prerollout` stage.",
+        False,
+        "observe",
+    ),
+    _E(
         "ui-state-invalid",
         "Control state cannot be read",
         "Durable service control state is incompatible or its integrity checks failed.",

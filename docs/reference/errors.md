@@ -442,6 +442,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`ui-operation-interrupted`](#error-ui-operation-interrupted) | observe | no |
 | [`ui-operation-unavailable`](#error-ui-operation-unavailable) | observe | no |
 | [`ui-plan-stale`](#error-ui-plan-stale) | observe | no |
+| [`ui-prerollout-unsupported`](#error-ui-prerollout-unsupported) | observe | no |
 | [`ui-request-rejected`](#error-ui-request-rejected) | observe | no |
 | [`ui-state-invalid`](#error-ui-state-invalid) | observe | no |
 | [`uid-version-precondition-failed`](#error-uid-version-precondition-failed) | execution | no |
@@ -2726,6 +2727,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Plan needs another review.** The approved source, execution inputs, target, or live preconditions changed, or the plan expired.
 
 - **Fix:** Create and review a new plan before deployment.
+- **Retry-safe:** no
+
+(error-ui-prerollout-unsupported)=
+### `ui-prerollout-unsupported`
+
+**Pre-rollout checks not supported from the UI.** The evaluated app declares pre-rollout checks (`app.pre_rollout`). The web UI deploy path cannot run them yet, so it refuses to plan the release instead of skipping them. Nothing was planned or applied.
+
+- **Fix:** Deploy this app with `piceli deploy`, which runs the `prerollout` stage.
 - **Retry-safe:** no
 
 (error-ui-request-rejected)=

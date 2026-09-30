@@ -860,8 +860,17 @@ class DockerEvaluator:
                 if state["ExitCode"] != 0 or state["OOMKilled"] or state["Running"]:
                     raise EvaluationError("evaluation-renderer")
                 result = json.loads(output)
-                if set(result) != {"components"}:
+                checks = result.pop("pre_rollout_checks", 0)
+                if (
+                    set(result) != {"components"}
+                    or type(checks) is not int
+                    or checks < 0
+                ):
                     raise EvaluationError("evaluation-output")
+                if checks:
+                    # Pre-rollout checks run only in `piceli deploy`; never
+                    # plan a release that would skip them.
+                    raise EvaluationError("ui-prerollout-unsupported")
                 rendered = RenderedComposition.from_dict(
                     {
                         "preview_id": preview_id,

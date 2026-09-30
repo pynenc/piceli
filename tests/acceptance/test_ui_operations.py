@@ -676,3 +676,41 @@ def test_failed_standing_policy_rollback_is_a_separate_failed_operation(
             assert children[0]["state"] == "failed"
             assert children[0]["engine_execution_id"] == "failed-rollback"
             assert children[0]["deployment_outcome"] == "failed"
+
+
+def test_an_app_with_pre_rollout_checks_is_refused_with_its_own_code(
+    tmp_path: Path,
+) -> None:
+    from piceli.services.evaluation import EvaluationError
+
+    def refuse(*args: Any, **kwargs: Any) -> RenderedComposition:
+        raise EvaluationError("ui-prerollout-unsupported")
+
+    with fake_cluster() as cluster:
+        config = cluster.kubeconfig(tmp_path / "kubeconfig")
+        query, operations = service(tmp_path, config, cluster.namespace)
+        operations.evaluator.render = refuse  # type: ignore[method-assign]
+        with TestClient(
+            create_app(query, operations=operations), base_url=ORIGIN
+        ) as client:
+            assert client.get("/").status_code == 200
+            preview = post(
+                client,
+                "/applications/shop/evaluation-preview",
+                {"intent": "deploy"},
+                200,
+            )
+            evaluation = post(
+                client,
+                "/applications/shop/evaluations",
+                {
+                    "preview_id": preview["id"],
+                    "approved_digest": preview["digest"],
+                    "idempotency_key": "refused",
+                },
+            )
+            result = wait(client, "/evaluations/" + evaluation["id"])
+            assert result["state"] == "failed"
+            assert result["error_code"] == "ui-prerollout-unsupported"
+            assert result.get("plan_id") is None
+            assert ("Deployment", "worker") not in cluster.api.objects

@@ -9,7 +9,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from piceli.app.render import load_target, placeholder_inputs, render_target
+from piceli.app.render import load_target, placeholder_inputs, render_app_target
 from piceli.k8s.ops.plan import DeploymentComposition
 from piceli.services.evaluation import RenderInputs
 
@@ -59,11 +59,14 @@ def main() -> int:
         context = inputs.context(placeholder_inputs(list(inputs.secret_names)))
         phase = "source"
         with contextlib.redirect_stdout(sys.stderr):
-            composition = render_target(
+            composition, app = render_app_target(
                 load_target(request["entrypoint"], Path("/source")), context
             )
             phase = "serialize"
             result = serialize(composition, inputs)
+            # Only the count leaves the container: the service refuses to plan
+            # an app whose pre-rollout checks the UI deploy path cannot run.
+            result["pre_rollout_checks"] = len(app.pre_rollouts) if app else 0
         sys.stdout.write(json.dumps(result, separators=(",", ":"), allow_nan=False))
         return 0
     except BaseException as error:
