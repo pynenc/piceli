@@ -4,7 +4,7 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
-## Version 0.10.0 (unreleased)
+## Version 0.10.0
 
 - **Helm chart and manifests for other people's clusters (preview):**
   `piceli chart render|package|manifests|publish` renders the same `App`
