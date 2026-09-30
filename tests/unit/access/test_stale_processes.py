@@ -210,8 +210,12 @@ def test_stop_stale_rechecks_and_reports_a_port_still_held() -> None:
     assert [item["pid"] for item in result["failed"]] == [4242]
 
 
-@pytest.mark.parametrize("pid", [MagicMock().pid, 1, 0, -5, os.getpid(), "42"])
+@pytest.mark.parametrize("pid", [MagicMock().pid, 1, 0, -5, "self", "42"])
 def test_terminate_refuses_what_is_not_a_real_process(pid: object) -> None:
+    # "self": our own pid, resolved at run time (a pid in the test id would
+    # differ between parallel workers).
+    if pid == "self":
+        pid = os.getpid()
     assert access_module._terminate(pid) is False
 
 

@@ -64,6 +64,7 @@ piceli = "piceli.__main__:main"
 test = [
     "pytest>=8.3",
     "pytest-timeout>=2.3",
+    "pytest-xdist>=3.6",
     "pytest-asyncio>=0.24",
     "pytest-cov>=6.0",
     "jsonschema>=4.23",

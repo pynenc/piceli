@@ -21,8 +21,8 @@ typecheck: ## Run mypy
 	uv run mypy
 
 .PHONY: test
-test: ## Unit + acceptance tests (no cluster needed)
-	uv run pytest
+test: ## Unit + acceptance tests in parallel (no cluster needed)
+	uv run pytest -n auto
 
 .PHONY: test-unit
 test-unit: ## Unit tests only
