@@ -219,8 +219,10 @@ class AccessService:
                         self._transition_locked(
                             owned,
                             "connecting",
-                            state="ready",
-                            endpoint=f"127.0.0.1:{request.local_port}",
+                            {
+                                "state": "ready",
+                                "endpoint": f"127.0.0.1:{request.local_port}",
+                            },
                         )
                         return owned.record
                 if status is not None and (
@@ -245,7 +247,9 @@ class AccessService:
             raise
 
     @staticmethod
-    def _transition_locked(owned: _Owned, expected: str, **update: Any) -> bool:
+    def _transition_locked(
+        owned: _Owned, expected: str, update: dict[str, Any]
+    ) -> bool:
         """Move ``owned`` to ``update`` only from ``expected`` and while not ended."""
         if owned.record.state != expected or owned.closed_at is not None:
             return False
@@ -314,9 +318,11 @@ class AccessService:
                 self._transition_locked(
                     owned,
                     "ready",
-                    state="connecting",
-                    endpoint=None,
-                    reason="forward-reconnecting",
+                    {
+                        "state": "connecting",
+                        "endpoint": None,
+                        "reason": "forward-reconnecting",
+                    },
                 )
         else:
             request = AccessStartRequest(
@@ -337,9 +343,11 @@ class AccessService:
                 self._transition_locked(
                     owned,
                     "connecting",
-                    state="ready",
-                    endpoint=f"127.0.0.1:{request.local_port}",
-                    reason=None,
+                    {
+                        "state": "ready",
+                        "endpoint": f"127.0.0.1:{request.local_port}",
+                        "reason": None,
+                    },
                 )
 
     def _end(self, id: str, state: str) -> AccessSession:
