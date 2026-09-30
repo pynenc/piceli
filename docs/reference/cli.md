@@ -635,6 +635,7 @@ Deploy a pipeline: inputs → build → deliver → plan → apply → checks.
 | `--ref` | text (repeatable) |  | Build SOURCE from commit REV (branch, tag or SHA) in a temporary worktree instead of the working tree; repeatable. A bare REV pins every source when they are one repository |
 | `--out` | path |  | With --plan: also write the portable plan file here (apply it on any runner with --apply FILE --approve HASH) |
 | `--apply` | path |  | Apply the plan file written by --plan --out (needs --approve with its combined hash); re-plans and refuses any change |
+| `--otlp-endpoint` | text |  | Send this run's events (a trace with one span per stage and a result log record) to an OTLP/HTTP endpoint; the standard OTEL_EXPORTER_OTLP_* variables also enable it. Never fails a deploy |
 | `--env` | text |  | Environment to deploy: the app's overrides and the pipeline's target for it (required when the pipeline has one target per environment); the combined hash covers its name and values |
 
 **Contract**
@@ -1261,6 +1262,7 @@ Execute an approved plan (``--approve HASH``), or plan and confirm.
 | `--skip-checks` | boolean | `False` | Do not run the spec's [[checks]] after readiness (emergencies only; recorded in the release history) |
 | `--env` | text |  | Environment of a pipeline (--spec MODULE:ATTR): its app overrides, target and state (required when the pipeline has one target per environment) |
 | `--approve-if-policy` | boolean | `False` | Plan and execute only when every action is inside the spec's [release] auto_approve policy (declared by the owner); otherwise print the plan hash to approve and exit 3 |
+| `--otlp-endpoint` | text |  | Send this run's events (a trace and a result log record) to an OTLP/HTTP endpoint; the standard OTEL_EXPORTER_OTLP_* variables also enable it. Never fails the command |
 
 **Contract**
 
@@ -1438,6 +1440,7 @@ Re-plan and re-apply an earlier release against current cluster state.
 | `--adopt-all-desired` | boolean | `False` | Authorize adopting every existing unmanaged object the composition declares (each is listed in the plan and bound to its hash) |
 | `--skip-checks` | boolean | `False` | Do not run the spec's [[checks]] after readiness (emergencies only; recorded in the release history) |
 | `--env` | text |  | Environment of a pipeline (--spec MODULE:ATTR): its app overrides, target and state (required when the pipeline has one target per environment) |
+| `--otlp-endpoint` | text |  | Send this run's events (a trace and a result log record) to an OTLP/HTTP endpoint; the standard OTEL_EXPORTER_OTLP_* variables also enable it. Never fails the command |
 
 **Contract**
 

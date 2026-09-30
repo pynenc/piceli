@@ -222,6 +222,8 @@ noted.
 
 Ask before running these, and show the owner what will happen first.
 
+Exporting deploy events (`--otlp-endpoint`, or `OTEL_EXPORTER_OTLP_*` in the environment) adds no approval: it only sends names, hashes, commits, digests and fixed error codes to the endpoint the owner configured, and a failure is one warning line that never changes the deploy result. Never invent an endpoint or put headers or tokens on the command line; see {doc}`deploy_events`.
+
 | Command | Changes | Approve with |
 | --- | --- | --- |
 | `piceli deploy` | Builds images, pushes them to a registry or node, applies a release | `--approve <combined hash>` from `piceli deploy MODULE:ATTR --plan`, after the owner reviewed that plan (or `--apply <plan file> --approve <its hash>` on another runner); `--resume` continues an approved run; `--approve-if-policy` only when the owner declared an `auto_approve` policy (see below) |
