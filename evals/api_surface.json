@@ -93,6 +93,8 @@
     "release_selector",
     "render",
     "resource",
+    "restore_verifies",
+    "restore_verify",
     "secret",
     "selected_environment",
     "service",
@@ -345,6 +347,11 @@
      "public",
      "scope",
      "spec"
+    ],
+    "restore_verifies": [],
+    "restore_verify": [
+     "verify",
+     "workload"
     ],
     "secret": [
      "component",
@@ -3744,6 +3751,21 @@
    },
    "pydantic": true
   },
+  "RestoreVerify": {
+   "attrs": [
+    "command",
+    "describe",
+    "timeout_seconds"
+   ],
+   "init": [
+    "command",
+    "timeout_seconds"
+   ],
+   "methods": {
+    "describe": []
+   },
+   "pydantic": true
+  },
   "Route": {
    "attrs": [
     "match",
@@ -5478,12 +5500,15 @@
      "target"
     ],
     "flags": [
+     "--all",
      "--approve",
      "--claim",
      "--env",
      "--image",
      "--json",
-     "--point"
+     "--keep",
+     "--point",
+     "--to-new-claim"
     ],
     "subcommands": []
    },
@@ -5913,6 +5938,7 @@
    "resource-requires-adoption",
    "resource-scope-mismatch",
    "response-byte-limit",
+   "restore-options-invalid",
    "restore-plan-changed",
    "restore-point-archive-invalid",
    "restore-point-archive-missing",
@@ -5933,6 +5959,14 @@
    "restore-point-writer-unsupported",
    "restore-point-writers-remain",
    "restore-refused",
+   "restore-verify-cleanup-failed",
+   "restore-verify-failed",
+   "restore-verify-mismatch",
+   "restore-verify-plan-changed",
+   "restore-verify-scratch-exists",
+   "restore-verify-scratch-failed",
+   "restore-verify-scratch-unsupported",
+   "restore-verify-workload-missing",
    "resume-refused",
    "retained-adoption-precondition-failed",
    "retained-content-differs",
@@ -6164,6 +6198,9 @@
    },
    "RestorePoints": {
     "class": "RestorePoints"
+   },
+   "RestoreVerify": {
+    "class": "RestoreVerify"
    },
    "Route": {
     "class": "Route"
@@ -7061,6 +7098,7 @@
   "piceli.restore.plan",
   "piceli.restore.runner",
   "piceli.restore.store",
+  "piceli.restore.verify",
   "piceli.settings",
   "piceli.state",
   "piceli.state.archive",

@@ -345,6 +345,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`resource-requires-adoption`](#error-resource-requires-adoption) | release | no |
 | [`resource-scope-mismatch`](#error-resource-scope-mismatch) | release | no |
 | [`response-byte-limit`](#error-response-byte-limit) | kubernetes | no |
+| [`restore-options-invalid`](#error-restore-options-invalid) | restore | no |
 | [`restore-plan-changed`](#error-restore-plan-changed) | restore | no |
 | [`restore-point-archive-invalid`](#error-restore-point-archive-invalid) | restore | no |
 | [`restore-point-archive-missing`](#error-restore-point-archive-missing) | restore | no |
@@ -365,6 +366,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`restore-point-writer-unsupported`](#error-restore-point-writer-unsupported) | restore | no |
 | [`restore-point-writers-remain`](#error-restore-point-writers-remain) | restore | yes |
 | [`restore-refused`](#error-restore-refused) | observe | no |
+| [`restore-verify-cleanup-failed`](#error-restore-verify-cleanup-failed) | restore | yes |
+| [`restore-verify-failed`](#error-restore-verify-failed) | restore | yes |
+| [`restore-verify-mismatch`](#error-restore-verify-mismatch) | restore | yes |
+| [`restore-verify-plan-changed`](#error-restore-verify-plan-changed) | restore | no |
+| [`restore-verify-scratch-exists`](#error-restore-verify-scratch-exists) | restore | yes |
+| [`restore-verify-scratch-failed`](#error-restore-verify-scratch-failed) | restore | yes |
+| [`restore-verify-scratch-unsupported`](#error-restore-verify-scratch-unsupported) | restore | no |
+| [`restore-verify-workload-missing`](#error-restore-verify-workload-missing) | restore | no |
 | [`resume-refused`](#error-resume-refused) | release | no |
 | [`retained-adoption-precondition-failed`](#error-retained-adoption-precondition-failed) | execution | no |
 | [`retained-content-differs`](#error-retained-content-differs) | release | no |
@@ -3722,6 +3731,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 ## Restore points of retained data (`restore_points=`, `piceli restore-points`, `piceli restore`)
 
+(error-restore-options-invalid)=
+### `restore-options-invalid`
+
+**Restore options do not fit.** `piceli restore` needs `--point ID` or `--all`; `--all` and `--keep` only go with `--to-new-claim` (a restore into the live claims takes one point).
+
+- **Fix:** Name one restore point with `--point`, or add `--to-new-claim`.
+- **Retry-safe:** no
+
 (error-restore-plan-changed)=
 ### `restore-plan-changed`
 
@@ -3873,6 +3890,70 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Find the pods named in the message (`kubectl get pods`), wait for or remove them, or raise `RestorePoints(timeout_seconds=...)`, then run again.
 - **Retry-safe:** yes
+
+(error-restore-verify-cleanup-failed)=
+### `restore-verify-cleanup-failed`
+
+**Scratch claim not deleted.** A scratch claim created for the verify could not be deleted (or did not go away in time). It holds a copy of restored data.
+
+- **Fix:** Delete it with `kubectl delete pvc NAME` (the error and the receipt name it; label `piceli.io/scratch=true`).
+- **Retry-safe:** yes
+
+(error-restore-verify-failed)=
+### `restore-verify-failed`
+
+**Restore verify failed.** At least one claim is FAIL: its copy did not restore, did not match, or the app's read-only verify command did not exit 0 (or could not start). The command's output is never printed. Live data was not touched; the scratch claims were deleted unless `--keep`.
+
+- **Fix:** Read each claim's `result`, `reason` and `verify` state in the receipt; run it again with `--keep` and inspect the scratch claim yourself.
+- **Retry-safe:** yes
+
+(error-restore-verify-mismatch)=
+### `restore-verify-mismatch`
+
+**Restored copy does not match.** After extracting the archive into its scratch claim, the content digest computed in the cluster differs from the restore point's. Live data was not touched; the scratch claims were deleted.
+
+- **Fix:** Run it again; if it persists, the archive or the storage is damaged: take a new restore point.
+- **Retry-safe:** yes
+
+(error-restore-verify-plan-changed)=
+### `restore-verify-plan-changed`
+
+**Restore verify plan changed.** `piceli restore --to-new-claim --approve HASH` was given a hash that is not the verify plan's current hash (the record, the source claims, the declared verify commands or the workloads' images changed). Nothing was created.
+
+- **Fix:** Run the command again without `--approve`, review the plan and approve its hash.
+- **Retry-safe:** no
+
+(error-restore-verify-scratch-exists)=
+### `restore-verify-scratch-exists`
+
+**Scratch claim already exists.** A scratch claim the verify plan would create already exists, usually kept by an earlier `--keep` run. Nothing was created.
+
+- **Fix:** Delete the scratch claim (label `piceli.io/scratch=true`) with `kubectl delete pvc NAME`, then plan again.
+- **Retry-safe:** yes
+
+(error-restore-verify-scratch-failed)=
+### `restore-verify-scratch-failed`
+
+**Restore into scratch claim failed.** The archive could not be extracted into a scratch claim (the helper pod did not start, the claim did not bind, or the extraction exited non-zero). Live claims and writers were not touched; the scratch claims were deleted.
+
+- **Fix:** Read the per-claim `reason` in the receipt, check the storage class and the helper image (`--image`), then run it again.
+- **Retry-safe:** yes
+
+(error-restore-verify-scratch-unsupported)=
+### `restore-verify-scratch-unsupported`
+
+**No scratch claim like this one.** The source claim is bound to a static volume (empty storage class) or has no size, so Piceli cannot create a scratch claim of the same shape. Nothing was created.
+
+- **Fix:** Verify with `piceli restore-points --verify` (offline), or give the claim a storage class that provisions volumes.
+- **Retry-safe:** no
+
+(error-restore-verify-workload-missing)=
+### `restore-verify-workload-missing`
+
+**Verify workload missing.** A workload declares `app.restore_verify(...)` but it does not exist in the namespace, or no longer mounts the restored claim, so there is no image and mount path to verify with. Nothing was created.
+
+- **Fix:** Deploy the workload first, or restrict the verify to other claims with `--claim`.
+- **Retry-safe:** no
 
 
 ## Helm charts and manifests with values (`piceli chart …`)

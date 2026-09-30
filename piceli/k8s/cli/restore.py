@@ -126,7 +126,10 @@ def restore_points(
 
 def restore(
     target: TargetArgument,
-    point: Annotated[str, typer.Option("--point", help="The restore point id (rp-…)")],
+    point: Annotated[
+        str | None,
+        typer.Option("--point", help="The restore point id (rp-…)", show_default=False),
+    ] = None,
     claim: Annotated[
         list[str] | None,
         typer.Option("--claim", help="Only this claim (repeatable; default: all)"),
@@ -144,9 +147,31 @@ def restore(
             "or each writer's image)",
         ),
     ] = None,
+    to_new_claim: Annotated[
+        bool,
+        typer.Option(
+            "--to-new-claim",
+            help="Restore into scratch claims and run the app's restore_verify "
+            "checks; live claims and writers are not touched",
+        ),
+    ] = False,
+    all_points: Annotated[
+        bool,
+        typer.Option("--all", help="With --to-new-claim: every verified restore point"),
+    ] = False,
+    keep: Annotated[
+        bool,
+        typer.Option(
+            "--keep", help="With --to-new-claim: keep the scratch claims afterwards"
+        ),
+    ] = False,
     as_json: JsonOption = False,
 ) -> None:
-    """Put a restore point back into its claims (plan, then --approve HASH)."""
+    """Put a restore point back into its claims (plan, then --approve HASH).
+
+    With --to-new-claim, restore it into scratch claims instead and verify
+    the copy (plan, then --approve HASH).
+    """
     from piceli.pipeline.backend import Backend
     from piceli.restore.model import RestorePointError, RestorePoints
     from piceli.restore.runner import plan_restore
@@ -154,6 +179,13 @@ def restore(
     from piceli.state import session
     from piceli.state.scopes import pipeline_scope
 
+    if (point is None) == (not all_points) or (
+        (all_points or keep) and not to_new_claim
+    ):
+        reject(
+            "restore-options-invalid",
+            "give --point ID or --all; --all and --keep need --to-new-claim",
+        )
     pipeline = _pipeline(target, env)
     settings = pipeline.restore_points or RestorePoints()
     if image is not None:
@@ -165,6 +197,19 @@ def restore(
                 "--image must be pinned by digest (repository@sha256:<64 hex>)",
             )
     directory = pipeline.restore_point_directory
+    if to_new_claim:
+        _verify(
+            target,
+            pipeline,
+            settings,
+            [point] if point is not None else None,
+            tuple(claim or ()),
+            image,
+            keep,
+            approve,
+        )
+        return
+    assert point is not None
     cluster = Backend().restore_cluster(pipeline.target, say=say)
     try:
         try:
@@ -218,6 +263,134 @@ def restore(
         say(f"restored {len(receipt['claims'])} claim(s) from {point}")
         emit_json({"schema": RESULT_SCHEMA, "state": "restored", "receipt": receipt})
         _ = as_json
+    finally:
+        cluster.close()
+
+
+VERIFY_SCHEMA = "piceli.restore-verify-result.v1"
+
+
+def _verify(
+    target: str,
+    pipeline: Any,
+    settings: Any,
+    points: list[str] | None,
+    claims: tuple[str, ...],
+    image: str | None,
+    keep: bool,
+    approve: str | None,
+) -> None:
+    """``restore --to-new-claim``: plan (exit 3), then restore into scratch
+    claims and verify; exit 1 when any claim is FAIL."""
+    import hashlib
+
+    from piceli.pipeline.backend import Backend
+    from piceli.restore.model import RestorePointError
+    from piceli.restore.runner import _canonical
+    from piceli.restore.verify import plan_verify, selected_points, verify
+
+    directory = pipeline.restore_point_directory
+    backend = Backend()
+    cluster = backend.restore_cluster(pipeline.target, say=say)
+    try:
+        wanted = points if points is not None else list(selected_points(directory))
+        try:
+            plans = [
+                plan_verify(
+                    cluster,
+                    directory,
+                    item,
+                    declared=pipeline.app.restore_verifies(),
+                    claims=claims,
+                    target=pipeline.target.identity(),
+                    image=settings.image,
+                    keep=keep,
+                )
+                for item in wanted
+            ]
+        except RestorePointError as error:
+            reject(error.code, str(error))
+        digest = (
+            plans[0]["verify_hash"]
+            if points is not None
+            else "sha256:"
+            + hashlib.sha256(
+                _canonical([item["verify_hash"] for item in plans]).encode()
+            ).hexdigest()
+        )
+        for planned in plans:
+            say(
+                f"restore point {planned['point']}: {len(planned['claims'])} "
+                f"claim(s), {planned['bytes']} bytes into scratch claims"
+                + (" (kept afterwards)" if keep else "")
+            )
+            for item in planned["claims"]:
+                say(f"  {item['claim']} -> {item['scratch_claim']} ({item['size']})")
+            for check in planned["checks"]:
+                say(f"  verify {check['workload']}: {' '.join(check['command'])}")
+        if not plans:
+            say(f"no verified restore points in {directory}")
+        if approve is None:
+            say("live claims and writers are not touched; approve with:")
+            which = "--all" if points is None else f"--point {points[0]}"
+            say(
+                f"  piceli restore {target} {which} --to-new-claim "
+                f"{'--keep ' if keep else ''}--approve {digest}"
+            )
+            emit_json(
+                {
+                    "schema": VERIFY_SCHEMA,
+                    "state": "approval-required",
+                    "verify_hash": digest,
+                    "plans": plans,
+                }
+            )
+            raise typer.Exit(EXIT_APPROVAL)
+        if approve != digest:
+            reject(
+                "restore-verify-plan-changed",
+                "the approved hash is not the verify plan's current hash; plan again",
+                verify_hash=digest,
+            )
+        jobs = backend.prerollout_cluster(pipeline.target)
+        receipts = []
+        try:
+            for planned in plans:
+                try:
+                    receipts.append(
+                        verify(
+                            cluster,
+                            jobs,
+                            directory,
+                            planned,
+                            app=pipeline.app.name,
+                            timeout_seconds=settings.timeout_seconds,
+                            run_as_user=settings.run_as_user,
+                            say=say,
+                        )
+                    )
+                except RestorePointError as error:
+                    fail(error.code, str(error), **error.details)
+        finally:
+            jobs.close()
+        passed = all(item["state"] == "passed" for item in receipts)
+        for receipt in receipts:
+            for item in receipt["claims"]:
+                say(
+                    f"{receipt['point']} {item['claim']}: {item['result']}"
+                    + (f" ({item['reason']})" if item.get("reason") else "")
+                )
+        emit_json(
+            {
+                "schema": VERIFY_SCHEMA,
+                "state": "passed" if passed else "failed",
+                **({} if passed else {"reason": "restore-verify-failed"}),
+                "verify_hash": digest,
+                "receipts": receipts,
+            }
+        )
+        if not passed:
+            raise typer.Exit(EXIT_FAILED)
     finally:
         cluster.close()
 

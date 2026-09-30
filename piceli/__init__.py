@@ -82,7 +82,7 @@ _CHECKS_EXPORTS = frozenset({"Checks"})
 
 # Restore points of retained data for ``Pipeline(restore_points=...)`` and
 # ``app.quiesce(...)``.
-_RESTORE_EXPORTS = frozenset({"Quiesce", "RestorePoints"})
+_RESTORE_EXPORTS = frozenset({"Quiesce", "RestorePoints", "RestoreVerify"})
 
 if TYPE_CHECKING:
     from piceli.app import (  # noqa: F401
@@ -149,7 +149,7 @@ if TYPE_CHECKING:
         TlsCa,
         Vault,
     )
-    from piceli.restore import Quiesce, RestorePoints  # noqa: F401
+    from piceli.restore import Quiesce, RestorePoints, RestoreVerify  # noqa: F401
 
 
 def __getattr__(name: str) -> Any:
