@@ -34,8 +34,13 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli artifacts pin`](#cli-artifacts-pin) | Pin one public source file by digest. | none | no |
 | [`piceli artifacts preview`](#cli-artifacts-preview) | Preview a deterministic OCI build plan (no tools run). | none | no |
 | [`piceli artifacts preview-command`](#cli-artifacts-preview-command) | Preview a pinned external build command. | none | no |
+| [`piceli artifacts publish`](#cli-artifacts-publish) | Publish a build's images (every platform in one index) to a registry. | none | yes |
 | [`piceli cache prune`](#cli-cache-prune) | Remove what no release, rollback or resume needs: stale temporary directories and partial files, runs beyond --keep-last, unused delivery receipts, and (over --budget) build outputs and logs. | none | no |
 | [`piceli cache status`](#cli-cache-status) | Show the disk used per state directory and category, and Piceli's temporary directories. Read-only. | none | no |
+| [`piceli chart manifests`](#cli-chart-manifests) | Print (or write) plain manifests with a values file applied; no Helm needed. | none | no |
+| [`piceli chart package`](#cli-chart-package) | Write the chart archive <name>-<version>.tgz (byte-identical per chart). | none | no |
+| [`piceli chart publish`](#cli-chart-publish) | Push the chart to an OCI registry as helm push does (needs --approve DIGEST). | none | yes |
+| [`piceli chart render`](#cli-chart-render) | Write the app as a Helm chart directory (Chart.yaml, values, schema, templates). | none | no |
 | [`piceli codegen crd`](#cli-codegen-crd) | Generate pydantic models for one CRD version, from a file or a cluster. | reads | no |
 | [`piceli deploy`](#cli-deploy) | Deploy a pipeline: inputs → build → deliver → plan → apply → checks. | writes | yes |
 | [`piceli doctor`](#cli-doctor) | Check this runner: free disk and memory against what the next build needs (estimated from the last build receipts), and the tools the pipeline uses (docker, docker buildx, kubectl). Exit 1 on a warning. | none | no |
@@ -163,6 +168,8 @@ Preview a containerized build and its plan hash.
 | --- | --- | --- | --- |
 | `--spec` | path | required |  |
 | `--inputs` | path |  |  |
+| `--platform` | text |  | host-build.toml only: build for this platform (repeat for a multi-platform image); default the spec's build.platforms |
+| `--cache-dir` | path |  | host-build.toml only: the shared stage/target/blob directory |
 
 **Contract**
 
@@ -183,8 +190,10 @@ Run an approved containerized build and write a receipt.
 | --- | --- | --- | --- |
 | `--spec` | path | required |  |
 | `--inputs` | path |  |  |
+| `--platform` | text |  | host-build.toml only: build for this platform (repeat for a multi-platform image); default the spec's build.platforms |
+| `--cache-dir` | path |  | host-build.toml only: the shared stage/target/blob directory |
 | `--lock` | path |  |  |
-| `--approve-builder` | text | required |  |
+| `--approve-builder` | text |  | build.toml: the builder digest to run (required) |
 | `--approve-plan` | text |  |  |
 | `--allow-network` | boolean | `False` |  |
 | `--out` | path | required |  |
@@ -374,6 +383,47 @@ Preview a pinned external build command.
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 
+(cli-artifacts-publish)=
+### `piceli artifacts publish`
+
+Publish a build's images (every platform in one index) to a registry.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--receipt` | path | required |  |
+| `--output-dir` | path |  | the build's output directory (default: the receipt's directory) |
+| `--to` | text | required | oci://host[:port]/prefix |
+| `--tag` | text | required | the version tag, e.g. 1.4.0 |
+| `--image` | text |  | publish only this image |
+| `--no-attestations` | boolean | `False` | do not attach the SBOM and provenance |
+| `--move-tag` | boolean | `False` |  |
+| `--approve` | text |  | the plan digest printed without --approve |
+| `--credentials` | path |  |  |
+| `--docker-config` | path |  |  |
+| `--ca-file` | path |  |  |
+| `--docker` | path |  |  |
+| `--docker-sha256` | text |  |  |
+| `--docker-socket` | path |  |  |
+| `--out` | path |  | write the publish receipt here |
+| `--values-out` | path |  | write the Helm values fragment (images.<key>.repository/tag/digest) |
+| `--sign-key` | path |  | sign with cosign and this private key file (cosign generate-key-pair) |
+| `--cosign` | path |  |  |
+| `--cosign-sha256` | text |  |  |
+| `--timeout` | float | `1800` |  |
+
+Mutually exclusive: `credentials` / `docker_config`.
+
+**Contract**
+
+- **Reads:** build receipt and its outputs, credentials file or Docker config, docker (Docker builds only)
+- **Writes:** OCI registry (blobs, manifests, index, attestations, tag), --out receipt, --values-out
+- **Cluster:** none
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** Without --approve it prints the plan and its digest (exit 3) and contacts nothing. Pushes are content-addressed; a version tag that names another image is refused unless --move-tag.
+
 (cli-cache-prune)=
 ### `piceli cache prune`
 
@@ -422,6 +472,119 @@ Show the disk used per state directory and category, and Piceli's temporary dire
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** Read-only; never contacts a cluster. Categories: builds (outputs and logs), toolchains, blobs, receipts, runs (journals and summaries), release (never pruned), other, temp (partial files). reclaimable_bytes is what cache prune with --keep-last would free.
+
+(cli-chart-manifests)=
+### `piceli chart manifests`
+
+Print (or write) plain manifests with a values file applied; no Helm needed.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `TARGET` | text |  |  |
+| `--values`, `-f` | path (repeatable) |  | YAML values file merged over the chart defaults (repeatable; later files win), as for helm install --values |
+| `--out` | path |  | Write one YAML file per object (as render --out) instead of printing |
+| `--install-namespace` | text |  | Namespace the manifests install into (default: the render's) |
+| `--spec` | path |  | release.toml, as for `piceli render` |
+| `--namespace` | text |  | Namespace to render into; the chart installs into the release namespace (--namespace of helm) instead |
+| `--env` | text |  | Render this environment of the App |
+| `--name` | text |  | Chart name (default: the App name, its app.kubernetes.io/part-of label) |
+| `--version` | text | `0.1.0` | Chart version (SemVer 2) |
+| `--app-version` | text |  | appVersion of Chart.yaml (default: the chart version) |
+
+**Contract**
+
+- **Reads:** module/app file, release.toml (optional), local receipts, values files
+- **Writes:** --out directory
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Never contacts a cluster. Values merge over the chart defaults like Helm (null removes a key) and are validated against the chart schema (chart-values-invalid). Prints YAML, or with --out writes one file per object like render --out and prints one JSON object. Secrets are left out (provided by the client).
+
+(cli-chart-package)=
+### `piceli chart package`
+
+Write the chart archive <name>-<version>.tgz (byte-identical per chart).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `TARGET` | text |  |  |
+| `--out` | path | `.` | Directory for <name>-<version>.tgz (created if absent) |
+| `--spec` | path |  | release.toml, as for `piceli render` |
+| `--namespace` | text |  | Namespace to render into; the chart installs into the release namespace (--namespace of helm) instead |
+| `--env` | text |  | Render this environment of the App |
+| `--name` | text |  | Chart name (default: the App name, its app.kubernetes.io/part-of label) |
+| `--version` | text | `0.1.0` | Chart version (SemVer 2) |
+| `--app-version` | text |  | appVersion of Chart.yaml (default: the chart version) |
+
+**Contract**
+
+- **Reads:** module/app file, release.toml (optional), local receipts
+- **Writes:** --out directory (<name>-<version>.tgz)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Never contacts a cluster. The same render, name and version always give the same bytes and digest; an existing archive with other content is refused (bump --version).
+
+(cli-chart-publish)=
+### `piceli chart publish`
+
+Push the chart to an OCI registry as helm push does (needs --approve DIGEST).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `TARGET` | text |  |  |
+| `--to` | text |  | oci://host[:port]/path; the chart goes to path/<name>:<version> |
+| `--spec` | path |  | release.toml, as for `piceli render` |
+| `--namespace` | text |  | Namespace to render into; the chart installs into the release namespace (--namespace of helm) instead |
+| `--env` | text |  | Render this environment of the App |
+| `--name` | text |  | Chart name (default: the App name, its app.kubernetes.io/part-of label) |
+| `--version` | text | `0.1.0` | Chart version (SemVer 2) |
+| `--app-version` | text |  | appVersion of Chart.yaml (default: the chart version) |
+| `--approve` | text |  | The digest printed without --approve; pushes it |
+| `--credentials` | path |  | Private JSON file: {"username", "password"} or {"token"} |
+| `--ca-file` | path |  | CA bundle for a TLS registry |
+
+**Contract**
+
+- **Reads:** module/app file, release.toml (optional), local receipts, credentials file
+- **Writes:** OCI registry (chart blobs, manifest, version tag)
+- **Cluster:** none
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** Never contacts a cluster. --to oci://host[:port]/path pushes path/<name>:<version> (config application/vnd.cncf.helm.config.v1+json, layer application/vnd.cncf.helm.chart.content.v1.tar+gzip). Without --approve it prints the deterministic digest and exits 3; --approve DIGEST pushes by digest, then the tag, and reads both back. Credentials only from --credentials FILE, never printed.
+
+(cli-chart-render)=
+### `piceli chart render`
+
+Write the app as a Helm chart directory (Chart.yaml, values, schema, templates).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `TARGET` | text |  |  |
+| `--out` | path |  | Chart directory to write; absent, empty or a previous chart render |
+| `--spec` | path |  | release.toml, as for `piceli render` |
+| `--namespace` | text |  | Namespace to render into; the chart installs into the release namespace (--namespace of helm) instead |
+| `--env` | text |  | Render this environment of the App |
+| `--name` | text |  | Chart name (default: the App name, its app.kubernetes.io/part-of label) |
+| `--version` | text | `0.1.0` | Chart version (SemVer 2) |
+| `--app-version` | text |  | appVersion of Chart.yaml (default: the chart version) |
+
+**Contract**
+
+- **Reads:** module/app file, release.toml (optional), local receipts
+- **Writes:** --out chart directory
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Never contacts a cluster. Renders like `piceli render`; images, pull secrets, replicas, resources, node selectors, storage, hosts, ConfigMap keys and Secret names become values, documented and validated by values.schema.json. Secrets are never rendered: the chart reads existing Secrets by name. Objects holding redacted or apply-time secret values are refused. Deterministic. --out must be absent, empty or a previous chart render (.piceli-chart).
 
 (cli-codegen-crd)=
 ### `piceli codegen crd`

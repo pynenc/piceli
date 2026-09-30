@@ -52,7 +52,10 @@ autodoc2_packages = [{"path": "../piceli"}]
 # Builtins such as `type`/`bytes` in annotations collide with same-named model
 # fields (e.g. HealthProbe.type); these ambiguity warnings are not doc errors.
 suppress_warnings = ["ref.python"]
-autodoc2_hidden_regexes = [r"piceli\.k8s\.templates\.auxiliary\.names\..*_REGEX"]
+autodoc2_hidden_regexes = [
+    r"piceli\.k8s\.templates\.auxiliary\.names\..*_REGEX",
+    r"piceli\.chart\._(DNS_SUBDOMAIN|HOST)",
+]
 
 
 # -- MyST settings ---------------------------------------------------

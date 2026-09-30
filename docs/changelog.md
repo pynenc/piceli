@@ -26,7 +26,9 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   DevTools probe no longer produce avoidable missing-resource responses.
 - **Local access retention:** completed port-forward sessions retain a bounded
   ten-minute, 128-record history; active forwards remain supervised and old
-  supervisor references are released.
+  supervisor references are released. A forward's post-start identity check
+  now reads its selected resource kind directly instead of rescanning the
+  entire application inventory.
 - **Local access supervision survives failures:** an error while supervising
   one forward (a slow `kubectl` start, a failed status read) no longer stops
   the lease watcher for the life of the server. The failing session is ended
@@ -78,6 +80,49 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   `app.pre_rollout(...)` now fails with `ui-prerollout-unsupported` instead of
   planning a release that would skip its checks. Deploy such apps with
   `piceli deploy`.
+
+## Version 0.10.0
+
+- **Helm chart and manifests for other people's clusters (preview):**
+  `piceli chart render|package|manifests|publish` renders the same `App`
+  (or `Pipeline`) as a Helm chart whose templates, with the default values,
+  render the objects `piceli render` prints (plus the `helm.sh/chart` and
+  `app.kubernetes.io/managed-by` labels), a byte-identical chart archive, an
+  OCI chart in the `helm push` layout (approval by digest), or plain
+  manifests with a values file applied and validated by Piceli. Values cover
+  images (repository, tag, digest), `imagePullSecrets`, replicas,
+  resources, node selectors, storage classes and sizes, existing claims,
+  Ingress and HTTPRoute hosts, ConfigMap keys and Secret names;
+  `values.schema.json` documents and validates them. Secrets are never
+  rendered: the chart references existing Secrets by name. An unbuilt
+  pipeline image is a required value. New error codes `chart-*`. See
+  {doc}`helm_charts`.
+- **`piceli release` refuses an App with pre-rollout checks:** only
+  `piceli deploy` runs `App.pre_rollout` checks, so `piceli release plan` now
+  refuses a composition that returns such an App
+  (`release-prerollout-unsupported`) at plan time, before anything is
+  written, instead of skipping the checks silently.
+- **Multi-platform images from one spec (experimental):** a
+  `host-build.toml` declares `build.platforms = ["linux/amd64",
+  "linux/arm64"]` (or `piceli artifacts build-spec run --platform …`, which
+  now also runs host builds): one layer set, SBOM and provenance per
+  platform, built with the platform's facts, and one canonical OCI image
+  index per image; one approval covers every platform. A single-platform
+  build keeps its plan hash. New code `build-platforms-invalid`. See
+  {doc}`publishing_images`.
+- **`piceli artifacts publish` (experimental):** pushes a build's images to a
+  hosted registry for other people's clusters: per-platform manifests by
+  digest (only missing blobs; a second publish sends nothing), one image
+  index, the SBOM and provenance as OCI 1.1 referrers (fallback tag on
+  registries without the referrers API), optional cosign signatures
+  (`--sign-key`, no transparency log) and the version tag last; a tag that
+  names another image is refused (`publish-tag-exists`) unless
+  `--move-tag`. Plan first (exit 3), `--approve <digest>` to push.
+  Credentials from `--credentials FILE` or `--docker-config` (credential
+  helpers). `--values-out` writes the `images.<key>.{repository, tag,
+  digest}` values of the `piceli chart` Helm chart. New codes `publish-*`,
+  `sign-*`, `cosign-tool-required`, `invalid-docker-config`,
+  `credential-helper-failed`.
 
 ## Version 0.9.0
 

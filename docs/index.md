@@ -169,6 +169,7 @@ deploy
 pre_rollout_checks
 ci
 gitops
+helm_charts
 state
 maintenance
 restore_points
@@ -195,6 +196,7 @@ testing
 source_identity
 containerized_builds
 host_builds
+publishing_images
 node_delivery
 node_local_registry
 artifact_delivery

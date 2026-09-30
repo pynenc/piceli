@@ -464,17 +464,26 @@ def _static_client(path: Path, entries: _Entries) -> Any:
     if key is None and user.get("client-key"):
         key_file = base / str(user["client-key"])
     ca_data, ca_file = _ca(entries.cluster, base)
-    try:
-        context = tls_context(
-            ca_data,
-            ca_file,
-            cert=cert,
-            key=key,
-            cert_file=cert_file,
-            key_file=key_file,
-        )
-    except TlsMaterialError as error:
-        raise ProviderFactoryError(str(error)) from None
+    # The explicit loopback test transport has no TLS handshake. Loading the
+    # host's certificate store for every short-lived fake-API client is both
+    # unnecessary and expensive (especially on macOS). Keep validating any
+    # TLS material a caller supplied, even though HTTP cannot use it.
+    if configuration.host.startswith("http://") and all(
+        value is None for value in (ca_data, ca_file, cert, key, cert_file, key_file)
+    ):
+        context = None
+    else:
+        try:
+            context = tls_context(
+                ca_data,
+                ca_file,
+                cert=cert,
+                key=key,
+                cert_file=cert_file,
+                key_file=key_file,
+            )
+        except TlsMaterialError as error:
+            raise ProviderFactoryError(str(error)) from None
     client = ApiClient(configuration)
     client.rest_client.pool_manager = _direct_pool(context, configuration)
     if token_file is not None:

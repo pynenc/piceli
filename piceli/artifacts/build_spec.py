@@ -2007,16 +2007,32 @@ def digest_stream(stream: Any) -> str:
 def add_build_spec_commands(subparsers: Any) -> None:
     """Register ``build-spec preview|run`` on an argparse subparsers object."""
     command = subparsers.add_parser(
-        "build-spec", help="containerized builds from a declarative build.toml"
+        "build-spec",
+        help="builds from a declarative build.toml (Docker) or host-build.toml",
     )
     actions = command.add_subparsers(dest="build_spec_command", required=True)
     for name in ("preview", "run"):
         action = actions.add_parser(name)
         action.add_argument("--spec", type=Path, required=True)
         action.add_argument("--inputs", type=Path)
+        action.add_argument(
+            "--platform",
+            action="append",
+            dest="platforms",
+            help="host-build.toml only: build for this platform (repeat for a "
+            "multi-platform image); default the spec's build.platforms",
+        )
+        action.add_argument(
+            "--cache-dir",
+            type=Path,
+            help="host-build.toml only: the shared stage/target/blob directory",
+        )
         if name == "run":
             action.add_argument("--lock", type=Path)
-            action.add_argument("--approve-builder", required=True)
+            action.add_argument(
+                "--approve-builder",
+                help="build.toml: the builder digest to run (required)",
+            )
             action.add_argument("--approve-plan")
             action.add_argument("--allow-network", action="store_true")
             action.add_argument("--out", type=Path, required=True)
@@ -2082,6 +2098,16 @@ def run_build_spec_command(
     carries only a fixed reason code, never paths, output or secrets.
     """
     try:
+        if _spec_revision(args.spec) == "piceli.host-build.v1":
+            return _run_host_build_command(args, runner=runner)
+        if args.platforms or args.cache_dir:
+            raise BuildSpecError(
+                "build-platforms-invalid",
+                "--platform and --cache-dir are for a host-build.toml; a "
+                "build.toml declares build.platforms",
+            )
+        if getattr(args, "approve_builder", "") is None:
+            raise BuildSpecError("builder-not-approved", "give --approve-builder")
         spec = BuildSpec.from_toml(args.spec)
         inputs = InputsSpec.from_toml(args.inputs) if args.inputs else None
         if args.build_spec_command == "preview":
@@ -2129,6 +2155,51 @@ def run_build_spec_command(
     except (ValueError, KeyError, TypeError, OSError):
         # Never echo private paths, process output or attacker-controlled text.
         return _result_error("invalid-or-unavailable-build-input")
+
+
+def _spec_revision(path: Path) -> Any:
+    """The ``revision`` of a spec file (``None`` when unreadable: parsed later)."""
+    try:
+        return tomllib.loads(path.read_text()).get("revision")
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return None
+
+
+def _run_host_build_command(args: argparse.Namespace, *, runner: Runner | None) -> int:
+    """``build-spec preview|run`` of a host-build.toml (one or more platforms)."""
+    from piceli.artifacts.host_build import HostBuildGrant, HostBuildSpec
+    from piceli.artifacts.multi_platform import MultiPlatformHostBuild
+
+    spec = HostBuildSpec.from_toml(args.spec)
+    if args.cache_dir is not None:
+        spec = spec.with_cache_dir(args.cache_dir.absolute())
+    build = MultiPlatformHostBuild(spec, tuple(args.platforms or ()))
+    inputs = InputsSpec.from_toml(args.inputs) if args.inputs else None
+    if args.build_spec_command == "preview":
+        print(json.dumps(build.plan(inputs).preview(), sort_keys=True))
+        return 0
+    if args.approve_builder is not None:
+        raise BuildSpecError(
+            "build-builder-mismatch", "a host build has no builder image to approve"
+        )
+    if args.approve_plan is None:
+        raise BuildSpecError("plan-not-approved", "give --approve-plan")
+    if args.max_seconds <= 0 or args.max_seconds > 86_400:
+        raise BuildSpecError("invalid-grant", "invalid grant duration")
+    lock = InputsLock.from_json(args.lock.read_text()) if args.lock else None
+    receipt = build.run(
+        HostBuildGrant(args.approve_plan, time.time() + args.max_seconds),
+        args.output_dir or args.out.resolve().parent,
+        inputs=inputs,
+        lock=lock,
+        runner=runner,
+        log=args.log,
+        progress=None if args.progress == "quiet" else _progress_line,
+        raw_output=_raw_output if args.progress == "plain" else None,
+    )
+    _write_atomic(args.out, receipt.to_json())
+    print(json.dumps(receipt.to_dict(), sort_keys=True))
+    return 0
 
 
 def _result_error(reason: str, *, failed: bool = False, **fields: Any) -> int:

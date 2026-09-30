@@ -403,6 +403,7 @@ class HostExecution:
         return {
             "image_id": built.config.digest,
             "digest": built.manifest.digest,
+            "manifest_size": built.manifest.size,
             "platform": platform,
             "ref": f"{image.repository}@{built.manifest.digest}",
             "archive": f"images/{image.name}.oci.tar",

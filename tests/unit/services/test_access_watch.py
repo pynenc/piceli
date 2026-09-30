@@ -14,7 +14,7 @@ from typing import Any
 
 from piceli.k8s.ops.provider_factory import KubeconfigTarget
 from piceli.services.access import AccessService
-from piceli.services.contracts import AccessSession, AccessStartRequest
+from piceli.services.contracts import AccessSession, AccessStartRequest, Resource
 from piceli.services.query import QueryService
 from piceli.services.registration import Registration
 from piceli.testing import fake_cluster, manifest
@@ -179,26 +179,31 @@ class _StopDuringRecheck(AccessService):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.starter: threading.Thread | None = None
-        self.calls = 0
         self.stopped: list[AccessSession] = []
 
-    def _verified_resource(self, application_id: str, request: AccessStartRequest):  # type: ignore[no-untyped-def]
-        result = super()._verified_resource(application_id, request)
+    def _recheck_resource(
+        self,
+        registration: Registration,
+        selected: Resource,
+        request: AccessStartRequest,
+    ) -> Resource:
+        result = super()._recheck_resource(registration, selected, request)
         if threading.current_thread() is self.starter:
-            self.calls += 1
-            if self.calls == 2:  # the recheck after the forward became ready
-                (pending,) = [
-                    item
-                    for item in self.list(application_id).items
-                    if item.state == "connecting"
-                ]
-                stopper = threading.Thread(
-                    target=lambda: self.stopped.append(
-                        self.stop(application_id, pending.id)
-                    )
+            # The watcher may mark it ready before the starter finishes its
+            # UID recheck. Stop either live state at this point; the starter
+            # must not resurrect it afterward.
+            (pending,) = [
+                item
+                for item in self.list(registration.id).items
+                if item.state in {"connecting", "ready"}
+            ]
+            stopper = threading.Thread(
+                target=lambda: self.stopped.append(
+                    self.stop(registration.id, pending.id)
                 )
-                stopper.start()
-                stopper.join(10)
+            )
+            stopper.start()
+            stopper.join(10)
         return result
 
 

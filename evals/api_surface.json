@@ -4597,6 +4597,7 @@
      "access",
      "artifacts",
      "cache",
+     "chart",
      "codegen",
      "deploy",
      "doctor",
@@ -4644,7 +4645,8 @@
      "inspect",
      "pin",
      "preview",
-     "preview-command"
+     "preview-command",
+     "publish"
     ]
    },
    "artifacts build": {
@@ -4667,7 +4669,9 @@
    "artifacts build-spec preview": {
     "arguments": [],
     "flags": [
+     "--cache-dir",
      "--inputs",
+     "--platform",
      "--spec"
     ],
     "subcommands": []
@@ -4678,6 +4682,7 @@
      "--allow-network",
      "--approve-builder",
      "--approve-plan",
+     "--cache-dir",
      "--docker",
      "--docker-sha256",
      "--inputs",
@@ -4686,6 +4691,7 @@
      "--max-seconds",
      "--out",
      "--output-dir",
+     "--platform",
      "--progress",
      "--spec"
     ],
@@ -4773,6 +4779,32 @@
     ],
     "subcommands": []
    },
+   "artifacts publish": {
+    "arguments": [],
+    "flags": [
+     "--approve",
+     "--ca-file",
+     "--cosign",
+     "--cosign-sha256",
+     "--credentials",
+     "--docker",
+     "--docker-config",
+     "--docker-sha256",
+     "--docker-socket",
+     "--image",
+     "--move-tag",
+     "--no-attestations",
+     "--out",
+     "--output-dir",
+     "--receipt",
+     "--sign-key",
+     "--tag",
+     "--timeout",
+     "--to",
+     "--values-out"
+    ],
+    "subcommands": []
+   },
    "cache": {
     "arguments": [],
     "flags": [],
@@ -4803,6 +4835,82 @@
      "--json",
      "--keep-last",
      "--state-dir"
+    ],
+    "subcommands": []
+   },
+   "chart": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "manifests",
+     "package",
+     "publish",
+     "render"
+    ]
+   },
+   "chart manifests": {
+    "arguments": [
+     "target"
+    ],
+    "flags": [
+     "--app-version",
+     "--env",
+     "--install-namespace",
+     "--name",
+     "--namespace",
+     "--out",
+     "--spec",
+     "--values",
+     "--version",
+     "-f"
+    ],
+    "subcommands": []
+   },
+   "chart package": {
+    "arguments": [
+     "target"
+    ],
+    "flags": [
+     "--app-version",
+     "--env",
+     "--name",
+     "--namespace",
+     "--out",
+     "--spec",
+     "--version"
+    ],
+    "subcommands": []
+   },
+   "chart publish": {
+    "arguments": [
+     "target"
+    ],
+    "flags": [
+     "--app-version",
+     "--approve",
+     "--ca-file",
+     "--credentials",
+     "--env",
+     "--name",
+     "--namespace",
+     "--spec",
+     "--to",
+     "--version"
+    ],
+    "subcommands": []
+   },
+   "chart render": {
+    "arguments": [
+     "target"
+    ],
+    "flags": [
+     "--app-version",
+     "--env",
+     "--name",
+     "--namespace",
+     "--out",
+     "--spec",
+     "--version"
     ],
     "subcommands": []
    },
@@ -5564,12 +5672,21 @@
    "blob-source-truncated",
    "build-builder-mismatch",
    "build-failed",
+   "build-platforms-invalid",
    "build-timed-out",
    "builder-not-approved",
    "cache-arguments-conflict",
    "cache-budget-invalid",
    "cache-over-budget",
    "cancelled",
+   "chart-artifact-changed",
+   "chart-empty",
+   "chart-invalid",
+   "chart-out-refused",
+   "chart-push-failed",
+   "chart-secret-value",
+   "chart-target-invalid",
+   "chart-values-invalid",
    "check-api-unavailable",
    "check-callable-invalid",
    "check-exec-unavailable",
@@ -5599,8 +5716,10 @@
    "context-empty",
    "context-missing",
    "context-symlink",
+   "cosign-tool-required",
    "crd-invalid",
    "crd-not-found",
+   "credential-helper-failed",
    "credentials-file-not-private",
    "cross-origin-location-refused",
    "deadline-exceeded",
@@ -5706,6 +5825,7 @@
    "invalid-composition",
    "invalid-credentials-file",
    "invalid-delivery-input",
+   "invalid-docker-config",
    "invalid-dry-run-response",
    "invalid-field-ownership-evidence",
    "invalid-force",
@@ -5813,6 +5933,12 @@
    "prerollout-unavailable",
    "promote-refused",
    "provider-error",
+   "publish-failed",
+   "publish-input-changed",
+   "publish-invalid",
+   "publish-not-approved",
+   "publish-tag-exists",
+   "publish-verification-failed",
    "rbac-denied",
    "readiness-timeout",
    "readiness-unsupported",
@@ -5832,6 +5958,7 @@
    "release-history-malformed",
    "release-locked",
    "release-owner-mismatch",
+   "release-prerollout-unsupported",
    "release-refused",
    "release-state-unavailable",
    "render-model-invalid",
@@ -5896,6 +6023,8 @@
    "secret-template-invalid",
    "secret-unknown-reference",
    "server-target-identity-mismatch",
+   "sign-failed",
+   "sign-key-invalid",
    "smoke-env-secret",
    "smoke-failed",
    "smoke-output-mismatch",
@@ -6866,17 +6995,21 @@
   "piceli.artifacts.image_manifest",
   "piceli.artifacts.local_import",
   "piceli.artifacts.mirror",
+  "piceli.artifacts.multi_platform",
   "piceli.artifacts.node_facts",
   "piceli.artifacts.node_transport",
   "piceli.artifacts.oci",
   "piceli.artifacts.oci_layers",
   "piceli.artifacts.plan",
   "piceli.artifacts.process",
+  "piceli.artifacts.publish",
   "piceli.artifacts.registry",
   "piceli.artifacts.registry_delivery",
   "piceli.artifacts.runnable",
+  "piceli.artifacts.signing",
   "piceli.artifacts.source_identity",
   "piceli.bounds",
+  "piceli.chart",
   "piceli.checks",
   "piceli.checks.context",
   "piceli.checks.model",
@@ -6899,6 +7032,7 @@
   "piceli.k8s.automation",
   "piceli.k8s.cli",
   "piceli.k8s.cli.access",
+  "piceli.k8s.cli.chart",
   "piceli.k8s.cli.cluster_access",
   "piceli.k8s.cli.codegen",
   "piceli.k8s.cli.contract",
@@ -7076,5 +7210,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.9.0"
+ "version": "0.10.0"
 }

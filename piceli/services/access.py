@@ -111,6 +111,17 @@ class AccessService:
         registration = self.query.registration(application_id)
         if not self.capability(registration, selected).allowed:
             raise QueryError("ui-operation-unavailable", 409)
+        if request.remote_port not in selected.ports:
+            raise QueryError("ui-invalid-request", 422)
+        return registration, selected
+
+    def _recheck_resource(
+        self,
+        registration: Registration,
+        selected: Resource,
+        request: AccessStartRequest,
+    ) -> Resource:
+        """Recheck the selected kind after kubectl starts, without a full inventory scan."""
         reader = KubernetesReader(registration)
         try:
             self.query._pin_target(registration, reader)
@@ -135,7 +146,7 @@ class AccessService:
         live = _resource(registration, raw)
         if request.remote_port not in live.ports:
             raise QueryError("ui-invalid-request", 422)
-        return registration, live
+        return live
 
     def start(self, application_id: str, request: AccessStartRequest) -> AccessSession:
         if self.tool is None:
@@ -212,7 +223,7 @@ class AccessService:
                 ):
                     # A name may be replaced while kubectl starts; do not claim
                     # the selected object if its UID no longer matches.
-                    self._verified_resource(application_id, request)
+                    self._recheck_resource(registration, resource, request)
                     with self._lock:
                         # Compare and set: a Stop that landed during the check
                         # wins; a stopped session is never re-activated.

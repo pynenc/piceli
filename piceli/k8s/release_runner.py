@@ -1086,6 +1086,8 @@ class ReleaseRunner:
         function: Callable[..., DeploymentComposition],
         images: Mapping[str, ImageRef],
         nodes: Mapping[str, NodeRef],
+        *,
+        refuse_prerollout: bool = False,
     ) -> Callable[[Mapping[str, SecretVersionRef]], DeploymentComposition]:
         def factory(refs: Mapping[str, SecretVersionRef]) -> DeploymentComposition:
             from piceli.app.app import App
@@ -1093,6 +1095,20 @@ class ReleaseRunner:
             context = self.spec.context(images, refs, nodes)
             try:
                 composition = function(context)
+                if (
+                    refuse_prerollout
+                    and isinstance(composition, App)
+                    and composition.pre_rollouts
+                ):
+                    # Only `piceli deploy` runs the check Jobs; a release
+                    # would skip them silently.
+                    names = sorted(item.workload for item in composition.pre_rollouts)
+                    raise ReleaseSpecError(
+                        f"the App declares pre-rollout checks for {names}; "
+                        "`piceli release` cannot run them: deploy it with "
+                        "`piceli deploy`",
+                        code="release-prerollout-unsupported",
+                    )
                 if isinstance(composition, App):
                     # Returning the App keeps its access declarations visible
                     # to `piceli access` / `piceli status`; render it here.
@@ -1420,7 +1436,9 @@ class ReleaseRunner:
             try:
                 self._check_target(catalog, binding.target)
                 self._prune_expired_plans()
-                factory = self._factory(function, images, self._nodes(binding))
+                factory = self._factory(
+                    function, images, self._nodes(binding), refuse_prerollout=True
+                )
                 if rollback_to is None:
                     composition, material = self._preview_composition(factory)
                     if rotate:

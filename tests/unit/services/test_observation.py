@@ -146,12 +146,17 @@ def test_watch_error_marks_snapshot_stale_then_relists_with_reset() -> None:
     try:
         rows, stale = hub.observe(scope, RelistingReader(scope), "v1", "Pod")
         assert not stale and rows[0]["metadata"]["uid"] == "1"
+        # A list count advances before the watch thread publishes its new
+        # snapshot. Wait for the relist's reset event so the next observe()
+        # reads that committed snapshot instead of starting a third list.
         deadline = time.monotonic() + 4
-        while RelistingReader.lists < 2 and time.monotonic() < deadline:
+        while time.monotonic() < deadline:
+            events, _, reset = hub.events("one", "0")
+            if not reset and sum(item.kind == "reset" for item in events) >= 2:
+                break
             time.sleep(0.01)
-        assert RelistingReader.lists >= 2
-        events, _, reset = hub.events("one", "0")
-        assert not reset and any(item.kind == "reset" for item in events)
+        assert RelistingReader.lists == 2
+        assert not reset and sum(item.kind == "reset" for item in events) >= 2
         latest, stale = hub.observe(scope, RelistingReader(scope), "v1", "Pod")
         assert not stale and latest[0]["metadata"]["uid"] == "2"
     finally:

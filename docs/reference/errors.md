@@ -50,12 +50,21 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`blob-source-truncated`](#error-blob-source-truncated) | artifacts-registry | yes |
 | [`build-builder-mismatch`](#error-build-builder-mismatch) | host-build | no |
 | [`build-failed`](#error-build-failed) | build-spec | no |
+| [`build-platforms-invalid`](#error-build-platforms-invalid) | host-build | no |
 | [`build-timed-out`](#error-build-timed-out) | build-spec | yes |
 | [`builder-not-approved`](#error-builder-not-approved) | build-spec | no |
 | [`cache-arguments-conflict`](#error-cache-arguments-conflict) | maintenance | no |
 | [`cache-budget-invalid`](#error-cache-budget-invalid) | maintenance | no |
 | [`cache-over-budget`](#error-cache-over-budget) | maintenance | no |
 | [`cancelled`](#error-cancelled) | artifacts-delivery | yes |
+| [`chart-artifact-changed`](#error-chart-artifact-changed) | chart | no |
+| [`chart-empty`](#error-chart-empty) | chart | no |
+| [`chart-invalid`](#error-chart-invalid) | chart | no |
+| [`chart-out-refused`](#error-chart-out-refused) | chart | no |
+| [`chart-push-failed`](#error-chart-push-failed) | chart | yes |
+| [`chart-secret-value`](#error-chart-secret-value) | chart | no |
+| [`chart-target-invalid`](#error-chart-target-invalid) | chart | no |
+| [`chart-values-invalid`](#error-chart-values-invalid) | chart | no |
 | [`check-api-unavailable`](#error-check-api-unavailable) | checks | yes |
 | [`check-callable-invalid`](#error-check-callable-invalid) | checks | no |
 | [`check-exec-unavailable`](#error-check-exec-unavailable) | checks | no |
@@ -85,8 +94,10 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`context-empty`](#error-context-empty) | build-spec | no |
 | [`context-missing`](#error-context-missing) | build-spec | no |
 | [`context-symlink`](#error-context-symlink) | build-spec | no |
+| [`cosign-tool-required`](#error-cosign-tool-required) | publish | no |
 | [`crd-invalid`](#error-crd-invalid) | codegen | no |
 | [`crd-not-found`](#error-crd-not-found) | codegen | no |
+| [`credential-helper-failed`](#error-credential-helper-failed) | publish | yes |
 | [`credentials-file-not-private`](#error-credentials-file-not-private) | artifacts-input | no |
 | [`cross-origin-location-refused`](#error-cross-origin-location-refused) | artifacts-registry | no |
 | [`deadline-exceeded`](#error-deadline-exceeded) | kubernetes | yes |
@@ -192,6 +203,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`invalid-composition`](#error-invalid-composition) | release | no |
 | [`invalid-credentials-file`](#error-invalid-credentials-file) | artifacts-input | no |
 | [`invalid-delivery-input`](#error-invalid-delivery-input) | artifacts-input | no |
+| [`invalid-docker-config`](#error-invalid-docker-config) | publish | no |
 | [`invalid-dry-run-response`](#error-invalid-dry-run-response) | kubernetes | yes |
 | [`invalid-field-ownership-evidence`](#error-invalid-field-ownership-evidence) | execution | no |
 | [`invalid-force`](#error-invalid-force) | kubernetes | no |
@@ -299,6 +311,12 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`prerollout-unavailable`](#error-prerollout-unavailable) | pipeline | no |
 | [`promote-refused`](#error-promote-refused) | observe | no |
 | [`provider-error`](#error-provider-error) | kubernetes | yes |
+| [`publish-failed`](#error-publish-failed) | publish | yes |
+| [`publish-input-changed`](#error-publish-input-changed) | publish | no |
+| [`publish-invalid`](#error-publish-invalid) | publish | no |
+| [`publish-not-approved`](#error-publish-not-approved) | publish | yes |
+| [`publish-tag-exists`](#error-publish-tag-exists) | publish | no |
+| [`publish-verification-failed`](#error-publish-verification-failed) | publish | yes |
 | [`rbac-denied`](#error-rbac-denied) | kubernetes | no |
 | [`readiness-timeout`](#error-readiness-timeout) | execution | no |
 | [`readiness-unsupported`](#error-readiness-unsupported) | execution | no |
@@ -318,6 +336,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`release-history-malformed`](#error-release-history-malformed) | release | no |
 | [`release-locked`](#error-release-locked) | state | yes |
 | [`release-owner-mismatch`](#error-release-owner-mismatch) | release | no |
+| [`release-prerollout-unsupported`](#error-release-prerollout-unsupported) | release | no |
 | [`release-refused`](#error-release-refused) | release | no |
 | [`release-state-unavailable`](#error-release-state-unavailable) | release | yes |
 | [`render-model-invalid`](#error-render-model-invalid) | render | no |
@@ -382,6 +401,8 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`secret-template-invalid`](#error-secret-template-invalid) | secrets | no |
 | [`secret-unknown-reference`](#error-secret-unknown-reference) | secrets | no |
 | [`server-target-identity-mismatch`](#error-server-target-identity-mismatch) | kubernetes | no |
+| [`sign-failed`](#error-sign-failed) | publish | yes |
+| [`sign-key-invalid`](#error-sign-key-invalid) | publish | no |
 | [`smoke-env-secret`](#error-smoke-env-secret) | build-spec | no |
 | [`smoke-failed`](#error-smoke-failed) | build-spec | no |
 | [`smoke-output-mismatch`](#error-smoke-output-mismatch) | build-spec | no |
@@ -2382,6 +2403,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Restore the original `owner`/`field_manager`, or plan a new release.
 - **Retry-safe:** no
 
+(error-release-prerollout-unsupported)=
+### `release-prerollout-unsupported`
+
+**Pre-rollout checks need piceli deploy.** The release composition returns an App that declares `App.pre_rollout` checks. `piceli release` plans and applies the objects only and cannot run the check Jobs, so it would skip them silently; it refuses the App at plan time, before anything is written.
+
+- **Fix:** Deploy this App with `piceli deploy` (a `Pipeline`), which runs the checks before the workloads change, or remove the `pre_rollout` declarations if the release must go through `piceli release`.
+- **Retry-safe:** no
+
 (error-release-refused)=
 ### `release-refused`
 
@@ -3877,6 +3906,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Declare a host build spec with `Build.spec(path, builder="host")` and a `build.toml` with `Build.spec(path)`.
 - **Retry-safe:** no
 
+(error-build-platforms-invalid)=
+### `build-platforms-invalid`
+
+**Invalid build platforms.** A multi-platform host build names no platform, names one twice, names one other than `linux/amd64` or `linux/arm64`, or names one that the spec's `build.platform` or `build.platforms` does not allow.
+
+- **Fix:** Declare `build.platforms = ["linux/amd64", "linux/arm64"]` in the host-build.toml or pass `--platform` once per platform, each from the spec's list.
+- **Retry-safe:** no
+
 (error-host-build-invalid)=
 ### `host-build-invalid`
 
@@ -4079,3 +4116,161 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Find the pods named in the message (`kubectl get pods`), wait for or remove them, or raise `RestorePoints(timeout_seconds=...)`, then run again.
 - **Retry-safe:** yes
+
+
+## Helm charts and manifests with values (`piceli chart …`)
+
+(error-chart-artifact-changed)=
+### `chart-artifact-changed`
+
+**Chart changed since approval.** `--approve` does not match the digest of this chart: the model, the options or the version changed.
+
+- **Fix:** Run `piceli chart publish` without `--approve`, review the new digest and approve it.
+- **Retry-safe:** no
+
+(error-chart-empty)=
+### `chart-empty`
+
+**Nothing to chart.** The render has no object left for a chart (Secrets are never part of it).
+
+- **Fix:** Check the target and `--env`; `piceli render` shows what it renders.
+- **Retry-safe:** no
+
+(error-chart-invalid)=
+### `chart-invalid`
+
+**Invalid chart.** The chart name or version is invalid (a name is lowercase letters, digits and `-`, starting with a letter; a version is SemVer 2), no name could be derived from the render, or a mapping key holds `{{`.
+
+- **Fix:** Pass `--name my-app` and `--version 1.2.3`; `piceli render` shows the objects.
+- **Retry-safe:** no
+
+(error-chart-out-refused)=
+### `chart-out-refused`
+
+**Chart output refused.** `--out` is missing, holds files `piceli chart render` did not write, or an archive of the same name and version with other content exists.
+
+- **Fix:** Pass a new or empty directory, or the directory of a previous chart render (it holds `.piceli-chart`); bump `--version` for changed content.
+- **Retry-safe:** no
+
+(error-chart-push-failed)=
+### `chart-push-failed`
+
+**Chart push failed.** The registry refused or broke off the push. The detail is withheld because it could contain server messages.
+
+- **Fix:** Check the registry, the path and `--credentials`, then run the same command again; pushes are content-addressed.
+- **Retry-safe:** yes
+
+(error-chart-secret-value)=
+### `chart-secret-value`
+
+**Secret value outside a Secret.** An object other than a Secret holds a value Piceli redacts or injects at apply time; a chart never carries secret values.
+
+- **Fix:** Move the value into a Secret (the chart references it by name) or, if it is not secret, list the field in the `piceli.io/public-fields` annotation.
+- **Retry-safe:** no
+
+(error-chart-target-invalid)=
+### `chart-target-invalid`
+
+**Invalid chart publish target.** `--to` is missing, not `oci://host[:port]/path`, or names a tag (the chart is pushed as `path/<name>:<version>`).
+
+- **Fix:** Pass `--to oci://registry.example/team/charts` (plain HTTP only for a loopback registry).
+- **Retry-safe:** no
+
+(error-chart-values-invalid)=
+### `chart-values-invalid`
+
+**Values do not match the chart.** A values file is not a YAML mapping, or the merged values break the chart's schema (a missing required image, an unknown key, a wrong type or format). The message names the path and the rule, never the value.
+
+- **Fix:** Fix the values file; `values.schema.json` of `piceli chart render` documents every key.
+- **Retry-safe:** no
+
+
+## Publishing multi-platform images to a hosted registry (`piceli artifacts publish`)
+
+(error-cosign-tool-required)=
+### `cosign-tool-required`
+
+**cosign not found.** Signing needs the `cosign` binary (3.0 or later) on `PATH` or given with `--cosign`, and it is not there or not a regular executable.
+
+- **Fix:** Install cosign (`nix shell nixpkgs#cosign`, a release binary or a package), or pass `--cosign PATH`.
+- **Retry-safe:** no
+
+(error-credential-helper-failed)=
+### `credential-helper-failed`
+
+**Credential helper failed.** The Docker credential helper named for the registry (`docker-credential-<name>`) is not on `PATH`, failed or did not answer with `Username`/`Secret` JSON. Its output is never printed.
+
+- **Fix:** Run `docker-credential-<name> get` yourself (registry host on stdin) to check it, log in again, or use `--credentials FILE`.
+- **Retry-safe:** yes
+
+(error-invalid-docker-config)=
+### `invalid-docker-config`
+
+**Invalid Docker config.** `--docker-config` is not an absolute path to a readable Docker `config.json` of at most 1 MiB, its `auths` entry for the registry is not base64 `user:password`, or a credential helper name is not a plain name.
+
+- **Fix:** Pass the path of a valid Docker `config.json` (`docker login` writes one), or use `--credentials FILE`.
+- **Retry-safe:** no
+
+(error-publish-failed)=
+### `publish-failed`
+
+**Publishing an image failed.** Pushing one platform's image failed for a reason the delivery could not name.
+
+- **Fix:** Read the delivery `reason` in the receipt when present, fix the registry access, and publish again (safe to retry).
+- **Retry-safe:** yes
+
+(error-publish-input-changed)=
+### `publish-input-changed`
+
+**Build output changed since the build.** An SBOM or provenance file named by the build receipt is missing or its sha256 differs from the receipt, so it no longer describes the build.
+
+- **Fix:** Rebuild (`piceli artifacts build-spec run`) and publish the new receipt.
+- **Retry-safe:** no
+
+(error-publish-invalid)=
+### `publish-invalid`
+
+**Invalid publish request.** `--to` is not `oci://host[:port]/prefix` (a tag belongs in `--tag`), the version tag is not a valid OCI tag (a `+` is not allowed), `--image` names an image the build did not produce, or two images would land in the same repository (the last path segment of their repositories is equal).
+
+- **Fix:** Fix the option: `--to oci://registry.example/prefix --tag 1.4.0`; rename a repository in the build spec so each image has its own last segment.
+- **Retry-safe:** no
+
+(error-publish-not-approved)=
+### `publish-not-approved`
+
+**Publish plan not approved.** `--approve` is missing or is not the digest of this exact publish plan (receipt, images, registry, tag, attestations and signing key). Something changed since the plan was printed, or the digest belongs to another plan.
+
+- **Fix:** Run `piceli artifacts publish` without `--approve`, review the plan, and pass its `digest` to `--approve`.
+- **Retry-safe:** yes
+
+(error-publish-tag-exists)=
+### `publish-tag-exists`
+
+**Version tag names another image.** The version tag already names another image index in the target repository. Publishing would silently replace what clients install for that version.
+
+- **Fix:** Publish under a new version tag, or pass `--move-tag` (part of the approved plan) when replacing it is intended; the receipt records the previous digest.
+- **Retry-safe:** no
+
+(error-publish-verification-failed)=
+### `publish-verification-failed`
+
+**Published image did not verify.** Reading back what the registry serves did not match what was pushed: the tag does not name the index, a manifest's bytes or config differ, a platform manifest is missing, an attestation is not listed as a referrer, or the index differs from the one the build recorded.
+
+- **Fix:** Check that nothing else writes to the repository at the same time and that the registry supports OCI image indexes, then publish again (pushes are content-addressed, so a retry is safe).
+- **Retry-safe:** yes
+
+(error-sign-failed)=
+### `sign-failed`
+
+**Signing failed.** `cosign sign` exited with an error for one of the published digests: a wrong key password (`COSIGN_PASSWORD`), a cosign older than 3.0, or the registry refused the signature. Its output is not printed. The version tag was not moved.
+
+- **Fix:** Check the key and its password (`cosign sign --key cosign.key <image>@<digest>` by hand shows the cause), then publish again (safe to retry).
+- **Retry-safe:** yes
+
+(error-sign-key-invalid)=
+### `sign-key-invalid`
+
+**Invalid signing key.** `--sign-key` is not an absolute path to a regular file of at most 64 KiB readable only by its owner (mode 0600), or the key changed since the plan was printed.
+
+- **Fix:** `chmod 600 cosign.key` (from `cosign generate-key-pair`), then plan and approve again.
+- **Retry-safe:** no
