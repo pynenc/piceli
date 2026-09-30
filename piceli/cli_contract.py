@@ -984,6 +984,34 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "removes nothing. Exit 1 (cache-over-budget) when a state directory "
             "is still over the budget. Always prints one JSON object.",
         ),
+        "heavy run": _C(
+            "Run a command under the machine-wide heavy-work lock and write a receipt.",
+            reads=("the given command's working directory", "git (HEAD, status)"),
+            writes=(
+                "the per-user heavy state directory (lock, holder record, "
+                "receipts, bounded)",
+            ),
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            long_running=True,
+            safe_to_retry=False,
+            notes="Runs exactly the command given after --, without a shell and "
+            "with the caller's own authority (like time or flock); Piceli "
+            "executes nothing else, so there is no plan or approval. The "
+            "command's exit code is the exit code (128+N for signal N), so 2 "
+            "may also be the command's own; stdout holds the receipt JSON only "
+            "(the child's stdout goes to stderr). Crash-safe OS lock (flock): a "
+            "killed holder releases it. Receipts hold the redacted command, "
+            "cwd, git commit, times, exit code and peak memory; never the "
+            "environment. Rejected: heavy-lock-timeout after --wait.",
+        ),
+        "heavy status": _C(
+            "Show who holds the heavy-work lock and the recent receipts.",
+            reads=("the per-user heavy state directory",),
+            contract="conforms",
+            exit_codes=(0,),
+            notes="Read-only; never contacts a cluster.",
+        ),
         "doctor": _C(
             "Check free disk and memory against the next build's needs, and "
             "the tools the pipeline uses.",

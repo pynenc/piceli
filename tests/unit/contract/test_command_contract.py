@@ -78,6 +78,7 @@ CASES: dict[str, tuple[Argv, str]] = {
             "orphans",
         )
     },
+    "heavy run": (lambda p: ["heavy", "run"], "heavy-command-empty"),
     "render": (
         lambda p: ["render", str(p / "missing.py") + ":app"],
         "render-target-invalid",
@@ -415,8 +416,8 @@ def test_every_conforming_command_has_a_rejection_case() -> None:
     conforming = {
         path for path, item in COMMANDS.items() if item.contract == "conforms"
     }
-    # help-json has no rejection path: it takes no input.
-    assert conforming - {"help-json"} == set(CASES)
+    # help-json and heavy status have no rejection path: they take no input.
+    assert conforming - {"help-json", "heavy status"} == set(CASES)
 
 
 def test_no_command_is_partial() -> None:

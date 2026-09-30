@@ -173,6 +173,7 @@ gitops
 helm_charts
 state
 maintenance
+heavy_work
 restore_points
 typed_apps
 crds
