@@ -11,6 +11,7 @@ them into ``ResourceIntent`` objects.
 
 from __future__ import annotations
 
+import ipaddress
 import re
 from collections.abc import Mapping, Sequence
 from typing import Annotated, Any, ClassVar, Literal
@@ -18,6 +19,7 @@ from typing import Annotated, Any, ClassVar, Literal
 from pydantic import (
     AfterValidator,
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     InstanceOf,
@@ -1328,22 +1330,237 @@ class Service(_Model):
         }
 
 
+class NetworkPort(_Model):
+    """One port (or ``port`` to ``end_port`` range) and protocol of a rule."""
+
+    port: PortNumber
+    protocol: Protocol = "TCP"
+    end_port: PortNumber | None = None
+
+    @model_validator(mode="after")
+    def _range(self) -> NetworkPort:
+        if self.end_port is not None and self.end_port < self.port:
+            raise ValueError(
+                f"port range {self.port}-{self.end_port}: end_port must not be "
+                "below port"
+            )
+        return self
+
+    def manifest(self) -> dict[str, Any]:
+        return _compact(port=self.port, protocol=self.protocol, endPort=self.end_port)
+
+
+def _cidr(value: str) -> Any:
+    try:
+        return ipaddress.ip_network(value, strict=True)
+    except ValueError:
+        raise ValueError(
+            f"{value!r} is not a CIDR such as '10.0.0.0/8' (host bits must be zero)"
+        ) from None
+
+
+class NetworkPeer(_Model):
+    """Who a rule talks to: pods, namespaces, or an IP range.
+
+    Build one with :meth:`pods`, :meth:`namespace` or :meth:`cidr`. Pod and
+    namespace selectors must have labels: an empty selector would match
+    everything. A peer with both pod and namespace labels matches the pods
+    with those labels *in* the matching namespaces.
+    """
+
+    pod_labels: Labels | None = None
+    namespace_labels: Labels | None = None
+    cidr_block: str | None = None
+    cidr_except: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def _shape(self) -> NetworkPeer:
+        selectors = [
+            ("pod_labels", self.pod_labels),
+            ("namespace_labels", self.namespace_labels),
+        ]
+        for field, labels in selectors:
+            if labels is not None and not labels:
+                raise ValueError(
+                    f"{field} needs labels; an empty selector would match every "
+                    "pod or namespace"
+                )
+        if self.cidr_block is not None:
+            if self.pod_labels or self.namespace_labels:
+                raise ValueError("a CIDR peer cannot also select pods or namespaces")
+            network = _cidr(self.cidr_block)
+            for item in self.cidr_except:
+                inner = _cidr(item)
+                if inner.version != network.version or not inner.subnet_of(network):
+                    raise ValueError(
+                        f"except {item!r} must be a smaller range inside "
+                        f"{self.cidr_block!r}"
+                    )
+                if inner == network:
+                    raise ValueError(f"except {item!r} excludes the whole range")
+        elif self.cidr_except:
+            raise ValueError("except needs a CIDR")
+        elif self.pod_labels is None and self.namespace_labels is None:
+            raise ValueError("a peer needs pod labels, namespace labels or a CIDR")
+        return self
+
+    @classmethod
+    def pods(cls, labels: Mapping[str, str]) -> NetworkPeer:
+        """Pods of the policy's own namespace with these labels."""
+        return cls(pod_labels=dict(labels))
+
+    @classmethod
+    def workload(cls, workload: Workload) -> NetworkPeer:
+        """The pods of a workload (its selector), in the policy's namespace."""
+        return cls(pod_labels=workload.selector_labels)
+
+    @classmethod
+    def namespace(
+        cls,
+        name: str | None = None,
+        *,
+        labels: Mapping[str, str] | None = None,
+        pods: Mapping[str, str] | None = None,
+    ) -> NetworkPeer:
+        """Namespaces by name (``kubernetes.io/metadata.name``) or by ``labels``.
+
+        With ``pods``, only those pods of the matching namespaces.
+        """
+        if (name is None) == (labels is None):
+            raise ValueError("pass either a namespace name or labels=")
+        selected = (
+            {"kubernetes.io/metadata.name": name}
+            if name is not None
+            else dict(labels or {})
+        )
+        return cls(
+            namespace_labels=selected,
+            pod_labels=dict(pods) if pods is not None else None,
+        )
+
+    @classmethod
+    def cidr(cls, block: str, *, except_: Sequence[str] = ()) -> NetworkPeer:
+        """An IP range, minus the ``except_`` sub-ranges."""
+        return cls(cidr_block=block, cidr_except=tuple(except_))
+
+    def manifest(self) -> dict[str, Any]:
+        if self.cidr_block is not None:
+            return {
+                "ipBlock": _compact(
+                    cidr=self.cidr_block, **{"except": list(self.cidr_except) or None}
+                )
+            }
+        return _compact(
+            namespaceSelector=(
+                {"matchLabels": self.namespace_labels}
+                if self.namespace_labels
+                else None
+            ),
+            podSelector=({"matchLabels": self.pod_labels} if self.pod_labels else None),
+        )
+
+
+def _ports(value: Any) -> Any:
+    return tuple(
+        {"port": item} if isinstance(item, int) and not isinstance(item, bool) else item
+        for item in (value or ())
+    )
+
+
+class NetworkRule(_Model):
+    """One allowed set of ``peers`` (ingress sources or egress destinations) on ``ports``.
+
+    ``ports`` take plain numbers (TCP) or :class:`NetworkPort` (protocol, range).
+    Peers without ports allow every port; ports without peers allow every
+    peer. A rule with neither is refused: name ``NetworkPeer.cidr("0.0.0.0/0")``
+    to mean everything.
+    """
+
+    peers: tuple[NetworkPeer, ...] = ()
+    ports: Annotated[tuple[NetworkPort, ...], BeforeValidator(_ports)] = ()
+
+    @model_validator(mode="after")
+    def _not_open(self) -> NetworkRule:
+        if not self.peers and not self.ports:
+            raise ValueError(
+                "a network rule needs peers or ports; to allow everything say so "
+                "with NetworkPeer.cidr('0.0.0.0/0')"
+            )
+        return self
+
+    @classmethod
+    def dns(cls) -> NetworkRule:
+        """Egress to the cluster DNS (``kube-dns`` in ``kube-system``) on port 53.
+
+        A policy that restricts egress blocks name resolution unless it
+        allows DNS; add this rule to it.
+        """
+        return cls(
+            peers=(NetworkPeer.namespace("kube-system", pods={"k8s-app": "kube-dns"}),),
+            ports=(NetworkPort(port=53, protocol="UDP"), NetworkPort(port=53)),
+        )
+
+    def manifest(self, direction: str) -> dict[str, Any]:
+        return _compact(
+            **{
+                direction: [peer.manifest() for peer in self.peers] or None,
+                "ports": [port.manifest() for port in self.ports] or None,
+            }
+        )
+
+
+PolicyType = Literal["Ingress", "Egress"]
+
+
 class NetworkPolicy(_Model):
-    """Ingress rules for selected pods, declared with ``app.network_policy``.
+    """Ingress and egress rules for selected pods, declared with ``app.network_policy``.
 
     ``pod_selector`` picks the protected pods (one Deployment's selector, or
     any labels, such as ``app.release_selector`` for every pod of the app).
     With no ``allow_from`` and no ``ports`` all ingress is denied. With
     ``allow_from`` (pod label sets in the same namespace), only matching pods
     may connect (on ``ports``, or any port). With only ``ports``, any source
-    may connect on those ports.
+    may connect on those ports. ``ingress`` adds typed rules
+    (:class:`NetworkRule`: namespaces, CIDRs, protocols).
+
+    ``egress`` rules restrict what the pods may connect to; once a pod is
+    selected by an Egress policy, everything else is denied, DNS included
+    (add :meth:`NetworkRule.dns`). ``policy_types`` is derived when empty:
+    ``Ingress``, plus ``Egress`` when egress rules exist; a policy that
+    declares egress rules and no ingress arguments is ``Egress`` only.
+    Declare ``policy_types=("Egress",)`` with no rules to deny all egress.
     """
 
     name: Name
     pod_selector: Labels = Field(min_length=1)
     allow_from: tuple[Labels, ...] = ()
     ports: tuple[PortNumber, ...] = ()
+    ingress: tuple[NetworkRule, ...] = ()
+    egress: tuple[NetworkRule, ...] = ()
+    policy_types: tuple[PolicyType, ...] = ()
     component: Name
+
+    @model_validator(mode="after")
+    def _types(self) -> NetworkPolicy:
+        if len(set(self.policy_types)) != len(self.policy_types):
+            raise ValueError("policy_types lists a type twice")
+        if self.policy_types:
+            if self.egress and "Egress" not in self.policy_types:
+                raise ValueError("egress rules need 'Egress' in policy_types")
+            if self._ingress_declared() and "Ingress" not in self.policy_types:
+                raise ValueError("ingress rules need 'Ingress' in policy_types")
+        return self
+
+    def _ingress_declared(self) -> bool:
+        return bool(self.allow_from or self.ports or self.ingress)
+
+    @property
+    def effective_policy_types(self) -> list[str]:
+        if self.policy_types:
+            return [kind for kind in ("Ingress", "Egress") if kind in self.policy_types]
+        if self.egress and not self._ingress_declared():
+            return ["Egress"]
+        return ["Ingress", "Egress"] if self.egress else ["Ingress"]
 
     @property
     def component_name(self) -> str:
@@ -1365,17 +1582,23 @@ class NetworkPolicy(_Model):
                     or None,
                 )
             )
+        rules.extend(rule.manifest("from") for rule in self.ingress)
+        types = self.effective_policy_types
+        spec: dict[str, Any] = {
+            "podSelector": {"matchLabels": self.pod_selector},
+            "policyTypes": types,
+        }
+        if "Ingress" in types:
+            spec["ingress"] = rules
+        if "Egress" in types:
+            spec["egress"] = [rule.manifest("to") for rule in self.egress]
         return {
             "apiVersion": "networking.k8s.io/v1",
             "kind": "NetworkPolicy",
             "metadata": _compact(
                 name=self.name, namespace=namespace, labels=dict(labels) or None
             ),
-            "spec": {
-                "podSelector": {"matchLabels": self.pod_selector},
-                "policyTypes": ["Ingress"],
-                "ingress": rules,
-            },
+            "spec": spec,
         }
 
 

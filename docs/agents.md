@@ -105,7 +105,11 @@ noted.
   `--out DIR` writes one YAML file per object into `DIR` (a directory the
   owner commits for Argo CD or Flux; it must be absent, empty or a previous
   `--out`); a Secret is refused unless `--secrets external`. See
-  {doc}`gitops`.
+  {doc}`gitops`. When you write a network policy, `app.network_policy(…,
+  egress=[…])` denies every other destination, DNS included: add
+  `allow_dns=True`, and check the rendered policy with `piceli render` (a bad
+  CIDR, port or unknown workload is `render-target-invalid`; see
+  {doc}`typed_apps`).
 - `piceli publish TARGET --to oci://…` **without** `--approve`: renders,
   packages the Flux OCI artifact and prints its digest (exit `3`); nothing
   is pushed.
