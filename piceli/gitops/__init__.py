@@ -28,6 +28,11 @@ given, so the files must be complete and must never carry secret material.
 - A placeholder image (a pipeline build that has not run) is refused
   (``gitops-image-unresolved``).
 
+Piceli's own GitOps controller (``piceli gitops``) lives in the submodules:
+:mod:`piceli.gitops.config`, :mod:`~piceli.gitops.repo`,
+:mod:`~piceli.gitops.controller`, :mod:`~piceli.gitops.state`,
+:mod:`~piceli.gitops.install` and :mod:`~piceli.gitops.ports`.
+
 Importing this module opens no socket and reads no file.
 """
 

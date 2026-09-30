@@ -30,7 +30,6 @@ from piceli.gitops.state import (
     approve_request,
     controller_lock,
     promote_request,
-    push_request,
 )
 from piceli.k8s.cli import app
 
@@ -110,6 +109,7 @@ class FakePorts:
         self.policy = policy
         self.calls: list[tuple[Any, ...]] = []
         self.fail_builds: set[str] = set()
+        self.pushed: dict[str, dict[str, Any]] = {}
         self.active = 0
         self.max_active = 0
 
@@ -122,8 +122,15 @@ class FakePorts:
         )
 
     def build(
-        self, pipeline: Any, commit: str, *, cache_key: str, platforms: Any
+        self,
+        pipeline: Any,
+        commit: str,
+        *,
+        cache_key: str,
+        platforms: Any,
+        checkout: Path,
     ) -> Mapping[str, Any]:
+        assert (checkout / "VERSION").is_file()
         self.calls.append(("build", cache_key, commit))
         if commit in self.fail_builds:
             raise RuntimeError(f"builder said {SECRET}")
@@ -131,6 +138,12 @@ class FakePorts:
 
     def prepare_env(self, pipeline: Any, branch: str) -> str:
         return "app-" + branch
+
+    def pushed_images(
+        self, pipeline: Any, branch: str, namespace: str
+    ) -> Mapping[str, Any] | None:
+        assert namespace == "app-" + branch
+        return self.pushed.get(branch)
 
     def env_up(
         self,
@@ -349,15 +362,22 @@ def test_failed_build_backs_off_then_gives_up_without_blocking_others(
     assert SECRET not in everything
 
 
-def test_pushed_digest_skips_the_build(tmp_path: Path, repo: Repo) -> None:
+def test_pushed_digest_of_the_current_commit_skips_the_build(
+    tmp_path: Path, repo: Repo
+) -> None:
     ports = FakePorts()
-    controller, channel, _ = make(tmp_path, repo, ports)
-    sha = repo.push_branch("wp-5", "laptop")
-    digests = {"web": "sha256:" + "c" * 64}
-    channel.add_request(*push_request("wp-5", sha, digests=digests))
+    controller, _, _ = make(tmp_path, repo, ports)
+    old = repo.push_branch("wp-5", "laptop")
+    images = {"web": {"digest": "sha256:" + "c" * 64}}
+    ports.pushed["wp-5"] = {"commit": old, "images": images}
     controller.poll_once()
     assert ports.kinds("build") == []
-    assert ports.kinds("up") == [("up", "wp-5", sha, APPROVE_POLICY, digests)]
+    assert ports.kinds("up") == [("up", "wp-5", old, APPROVE_POLICY, images)]
+    # A digest pushed for an older commit is not used for a new push.
+    new = repo.push_branch("wp-5", "newer")
+    controller.poll_once()
+    assert ports.kinds("build") == [("build", "wp-5", new)]
+    assert ports.kinds("up")[-1] == ("up", "wp-5", new, APPROVE_POLICY, None)
 
 
 def test_git_failure_is_recorded_not_raised(tmp_path: Path, repo: Repo) -> None:
@@ -448,7 +468,7 @@ def test_https_credentials_reach_git_only_through_files(tmp_path: Path) -> None:
     assert SECRET not in str(error.value)
     call = seen[0]
     assert SECRET not in " ".join(call["argv"])
-    assert SECRET not in json.dumps({k: v for k, v in call["env"].items()})
+    assert SECRET not in json.dumps(dict(call["env"]))
     assert any("credential.helper=!f()" in arg for arg in call["argv"])
 
 

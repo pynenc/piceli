@@ -14,7 +14,7 @@ import fnmatch
 import json
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +34,24 @@ _DURATION = re.compile(r"(\d+)\s*([smh]?)")
 _SCHEMES = ("https://", "ssh://", "file://")
 _SCP = re.compile(r"[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:[^/].*|[A-Za-z0-9.-]+:[^/].*")
 _PLATFORM = re.compile(r"[a-z0-9]+/[a-z0-9]+(?:/[a-z0-9]+)?")
+_PINNED = re.compile(r"[a-z0-9][a-z0-9./:_-]*@sha256:[0-9a-f]{64}")
+_QUANTITY = re.compile(r"[0-9]+(?:Ki|Mi|Gi|Ti)")
+_SELECTOR_KEY = re.compile(r"(?:[a-z0-9.-]{1,253}/)?[A-Za-z0-9][A-Za-z0-9._-]{0,62}")
+_SELECTOR_VALUE = re.compile(r"[A-Za-z0-9._-]{0,63}")
+
+
+def parse_selector(values: Sequence[str]) -> tuple[tuple[str, str], ...]:
+    """``key=value`` labels (``--builder-selector``)."""
+    pairs: list[tuple[str, str]] = []
+    for item in values:
+        key, sep, value = item.partition("=")
+        if not sep:
+            raise GitOpsError(
+                "gitops-config-invalid",
+                f"--builder-selector takes key=value, got {item!r}",
+            )
+        pairs.append((key.strip(), value.strip()))
+    return tuple(sorted(pairs))
 
 
 def parse_duration(value: str | int) -> int:
@@ -119,7 +137,18 @@ class ControllerConfig:
     :param max_attempts: Failed attempts of one commit before it is left
         ``failed`` until the next push.
     :param backoff_seconds: First retry delay; doubles per attempt (capped).
-    :param platforms: Build platforms passed to the cluster build.
+    :param platforms: Build platforms passed to the cluster build (default
+        ``linux/arm64`` and ``linux/amd64``).
+    :param builder_image: The cluster build's image, pinned by digest; without
+        it a branch deploys only images pushed with ``piceli env push``.
+    :param build_git_secret: The Secret (``username``/``password``) the build
+        Job fetches the repository with (default ``piceli-build-git``).
+    :param builder_selector: Labels of the builder node (default: the
+        cluster build's, ``piceli.io/builder=true`` on ``amd64``).
+    :param build_storage: Size of a branch's build cache claim.
+    :param build_registry: ``oci://host[:port]/prefix`` the build pushes to
+        (default: the pipeline's delivery).
+    :param node_registry: ``host[:port]`` nodes pull from, when different.
     :param namespace: The controller's namespace.
     """
 
@@ -135,7 +164,12 @@ class ControllerConfig:
     backoff_seconds: int = 30
     platforms: tuple[str, ...] = ()
     namespace: str = DEFAULT_NAMESPACE
-    extra: Mapping[str, Any] = field(default_factory=dict, compare=False)
+    builder_image: str | None = None
+    build_git_secret: str | None = None
+    builder_selector: tuple[tuple[str, str], ...] = ()
+    build_storage: str = "20Gi"
+    build_registry: str | None = None
+    node_registry: str | None = None
 
     def __post_init__(self) -> None:
         if not _ENTRY.fullmatch(self.pipeline) or ".." in self.pipeline.split(":")[0]:
@@ -162,6 +196,20 @@ class ControllerConfig:
             raise GitOpsError("gitops-config-invalid", "invalid tag glob")
         if not _LABEL.fullmatch(self.namespace):
             raise GitOpsError("gitops-config-invalid", "invalid controller namespace")
+        if self.builder_image is not None and not _PINNED.fullmatch(self.builder_image):
+            raise GitOpsError(
+                "gitops-image-unpinned",
+                "--builder-image must be pinned by digest: repo@sha256:<64 hex>",
+            )
+        if not _QUANTITY.fullmatch(self.build_storage):
+            raise GitOpsError(
+                "gitops-config-invalid", "--build-storage must be like 20Gi"
+            )
+        for key, value in self.builder_selector:
+            if not _SELECTOR_KEY.fullmatch(key) or not _SELECTOR_VALUE.fullmatch(value):
+                raise GitOpsError(
+                    "gitops-config-invalid", f"invalid builder selector {key}={value}"
+                )
         for platform in self.platforms:
             if not _PLATFORM.fullmatch(platform):
                 raise GitOpsError(
@@ -191,6 +239,14 @@ class ControllerConfig:
             "backoff_seconds": self.backoff_seconds,
             "platforms": list(self.platforms),
             "namespace": self.namespace,
+            "build": {
+                "builder_image": self.builder_image,
+                "git_secret": self.build_git_secret,
+                "selector": dict(self.builder_selector),
+                "storage": self.build_storage,
+                "registry": self.build_registry,
+                "node_registry": self.node_registry,
+            },
         }
 
     @classmethod
@@ -199,6 +255,7 @@ class ControllerConfig:
             raise GitOpsError(
                 "gitops-config-invalid", "unknown controller config schema"
             )
+        build = value.get("build") or {}
         try:
             return cls(
                 pipeline=value["pipeline"],
@@ -213,6 +270,12 @@ class ControllerConfig:
                 backoff_seconds=int(value.get("backoff_seconds", 30)),
                 platforms=tuple(value.get("platforms") or ()),
                 namespace=value.get("namespace", DEFAULT_NAMESPACE),
+                builder_image=build.get("builder_image"),
+                build_git_secret=build.get("git_secret"),
+                builder_selector=tuple(sorted((build.get("selector") or {}).items())),
+                build_storage=build.get("storage") or "20Gi",
+                build_registry=build.get("registry"),
+                node_registry=build.get("node_registry"),
             )
         except (KeyError, TypeError, ValueError) as error:
             if isinstance(error, GitOpsError):

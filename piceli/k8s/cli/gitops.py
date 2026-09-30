@@ -281,6 +281,47 @@ def enable(
             "--platform", help="Build platform (repeatable), e.g. linux/arm64"
         ),
     ] = None,
+    builder_image: Annotated[
+        str | None,
+        typer.Option(
+            "--builder-image",
+            help="Image of the cluster build Job, pinned by digest; without it "
+            "branches deploy only images pushed with `piceli env push`",
+        ),
+    ] = None,
+    build_git_secret: Annotated[
+        str | None,
+        typer.Option(
+            "--build-git-secret",
+            help="Secret (username/password) the build Job fetches the "
+            "repository with (default piceli-build-git)",
+        ),
+    ] = None,
+    builder_selector: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--builder-selector",
+            help="key=value label of the builder node (repeatable; default "
+            "piceli.io/builder=true on amd64)",
+        ),
+    ] = None,
+    build_storage: Annotated[
+        str, typer.Option("--build-storage", help="Size of a branch's build cache")
+    ] = "20Gi",
+    build_registry: Annotated[
+        str | None,
+        typer.Option(
+            "--build-registry",
+            help="oci://host[:port]/prefix the build pushes to (default: the "
+            "pipeline's delivery)",
+        ),
+    ] = None,
+    node_registry: Annotated[
+        str | None,
+        typer.Option(
+            "--node-registry", help="host[:port] nodes pull from, when different"
+        ),
+    ] = None,
     approve: Annotated[
         str | None, typer.Option("--approve", help="The plan hash to execute")
     ] = None,
@@ -289,7 +330,11 @@ def enable(
     transport: TransportOption = "https",
 ) -> None:
     """Install the GitOps controller (plan first; --approve HASH installs)."""
-    from piceli.gitops.config import ControllerConfig, parse_duration
+    from piceli.gitops.config import (
+        ControllerConfig,
+        parse_duration,
+        parse_selector,
+    )
     from piceli.gitops.install import InstallSettings, plan_objects, render_controller
 
     with _guard():
@@ -303,6 +348,12 @@ def enable(
             tags=tags,
             main_auto_approve=main_auto_approve,
             platforms=tuple(platform or ()),
+            builder_image=builder_image,
+            build_git_secret=build_git_secret,
+            builder_selector=parse_selector(builder_selector or []),
+            build_storage=build_storage,
+            build_registry=build_registry,
+            node_registry=node_registry,
             namespace=namespace,
         )
         settings = InstallSettings(
@@ -320,8 +371,12 @@ def enable(
         repo=repo, branches=branches, poll=poll, image=image,
         credentials_secret=credentials_secret, env=env, main_branch=main_branch,
         tags=tags, storage=storage, storage_class=storage_class,
+        builder_image=builder_image, build_git_secret=build_git_secret,
+        build_storage=build_storage, build_registry=build_registry,
+        node_registry=node_registry,
         flags={"--main-auto-approve": main_auto_approve, "--cluster-rbac": cluster_rbac, "--allow-exec": allow_exec},
-        platforms=platform or [], transport=transport,
+        repeat={"--platform": platform or [], "--builder-selector": builder_selector or []},
+        transport=transport,
     )  # fmt: skip
     with _api(kubeconfig, context, transport, allow_exec, exec_sha256) as api:
         with _guard():
@@ -342,7 +397,7 @@ def _command_line(
     namespace: str,
     *,
     flags: dict[str, bool],
-    platforms: list[str],
+    repeat: dict[str, list[str]],
     transport: str,
     **options: str | None,
 ) -> str:
@@ -358,12 +413,14 @@ def _command_line(
         "main_branch": "main",
         "tags": "v*",
         "storage": "10Gi",
+        "build_storage": "20Gi",
     }
     for key, value in options.items():
         if value is not None and defaults.get(key) != value:
             parts += ["--" + key.replace("_", "-"), value]
-    for platform in platforms:
-        parts += ["--platform", platform]
+    for option, values in repeat.items():
+        for value in values:
+            parts += [option, value]
     parts += [flag for flag, on in flags.items() if on]
     if transport != "https":
         parts += ["--transport", transport]
@@ -424,7 +481,7 @@ def disable(
     command = _command_line(
         "piceli gitops disable", None, kubeconfig, context, namespace,
         flags={"--delete-state": delete_state, "--allow-exec": allow_exec},
-        platforms=[], transport=transport,
+        repeat={}, transport=transport,
     )  # fmt: skip
     with _api(kubeconfig, context, transport, allow_exec, exec_sha256) as api:
         with _guard():
@@ -492,8 +549,9 @@ def status(
                 deployment = Api(api_client).call(
                     f"/apis/apps/v1/namespaces/{namespace}/deployments/{NAME}", "GET"
                 )
+            rollout = (deployment or {}).get("status") or {}
             ready = bool(
-                ((deployment or {}).get("status") or {}).get("availableReplicas")
+                rollout.get("availableReplicas") or rollout.get("readyReplicas")
             )
     health = _health(document, ready, time.time())
     body: dict[str, Any] = {
@@ -652,7 +710,7 @@ def run(
         )
         channel, closer = _run_channel(target, namespace, state_dir, transport)
         try:
-            ports = _ports(target, state_dir, config.namespace, transport)
+            ports = _ports(target, state_dir, config, transport)
             controller = Controller(
                 config,
                 state_dir=state_dir,
@@ -701,7 +759,7 @@ def _run_channel(
 
 
 def _ports(
-    target: tuple[Path, str] | None, state_dir: Path, namespace: str, transport: str
+    target: tuple[Path, str] | None, state_dir: Path, config: Any, transport: str
 ) -> Any:
     from piceli.gitops.ports import DefaultPorts
 
@@ -712,7 +770,13 @@ def _ports(
             "or --kubeconfig FILE --context NAME",
         )
     return DefaultPorts(
-        target[0], target[1], state_dir, namespace=namespace, transport=transport
+        target[0],
+        target[1],
+        state_dir,
+        namespace=config.namespace,
+        config=config,
+        transport=transport,
+        log=say,
     )
 
 
@@ -757,7 +821,7 @@ def _forever(
         started = time.time()
         try:
             refresh()
-        except Exception as error:  # noqa: BLE001 - never crash-loop on a refresh
+        except Exception as error:  # never crash-loop on a refresh
             say(f"service account refresh failed ({type(error).__name__})")
         controller.poll_once()
         deadline = started + controller.config.poll_seconds

@@ -401,6 +401,11 @@ class Api:
             response = self.client.call_api(
                 path,
                 method,
+                query_params=(
+                    [("fieldManager", "piceli-gitops")]
+                    if method in {"POST", "PATCH"}
+                    else []
+                ),
                 header_params={"Accept": "application/json", "Content-Type": content},
                 body=body,
                 auth_settings=["BearerToken"],
@@ -446,8 +451,8 @@ def connect(
         client = api_client_from_kubeconfig(
             kubeconfig,
             context,
-            transport=transport,
-            exec_policy=exec_policy,  # type: ignore[arg-type]
+            transport=transport,  # type: ignore[arg-type]
+            exec_policy=exec_policy,
         )
     except ValueError as error:
         raise GitOpsError(

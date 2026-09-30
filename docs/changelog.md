@@ -6,6 +6,32 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ## Version 0.13.0
 
+- **Piceli as the GitOps controller (experimental):** `piceli gitops enable
+  deploy/app.py:pipeline --repo URL --branches 'main,wp-*' --image
+  REPO@sha256:…` plans (exit 3) and, with `--approve HASH`, installs a
+  one-replica controller in `piceli-system`: a ServiceAccount with a
+  namespaced Role, a ClusterRole limited to reading nodes, managing
+  namespaces and binding only the `piceli-gitops-deployer` role in each
+  environment's namespace, a state claim (Git mirror, last-seen commits,
+  receipts) and a Deployment running `piceli gitops run` from a
+  digest-pinned image. It polls the repository (`--poll`, no webhook) and
+  keeps one environment per matching branch at its head: builds in the
+  cluster (`--builder-image`) or uses the digest `piceli env push` recorded
+  for that commit, then deploys when the plan is inside the pipeline's
+  `auto_approve` policy, else waits with the plan hash for `piceli gitops
+  approve ENV HASH`. Main deploys only on a new `v*` tag or `piceli promote
+  BRANCH@SHA`, always with a hash approval unless the owner passed
+  `--main-auto-approve`; an untagged push to main does nothing. A deleted
+  branch tears its environment down (never main's). One step at a time,
+  bounded retries with backoff, a failing branch never stops the others.
+  Git credentials come only from a mounted Secret (`--credentials-secret`)
+  and are never printed. `piceli gitops status [--json]` (health, last
+  poll, per-branch commit, state and pending hash; also published in the
+  ConfigMap `piceli-gitops-status` for `piceli envs`) and `piceli gitops
+  disable` (never removes an environment). `piceli.gitops` becomes a
+  package (the handoff API is unchanged). New error codes `gitops-*`. See
+  {ref}`gitops-controller`.
+
 - **Builds in the cluster (experimental):** `piceli build job MODULE:ATTR
   --commit SHA --image BUILDER@sha256:… --repo URL` (and
   `piceli.artifacts.cluster_build.run_build_job`) runs the pipeline's host

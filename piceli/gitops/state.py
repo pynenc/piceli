@@ -10,8 +10,8 @@ Three documents, none of them holding a secret:
   ``status.json``) in the controller's namespace; ``piceli gitops status``
   and ``piceli envs`` read it (:func:`read_status`).
 - **requests**: what people ask the controller to do: approve a plan hash
-  (``piceli gitops approve``), promote a commit to main (``piceli promote``),
-  use a laptop-built image (``piceli env push``). In the cluster it is the
+  (``piceli gitops approve``) or promote a commit to main (``piceli
+  promote``). In the cluster it is the
   ConfigMap ``piceli-gitops-requests``, one key per request; the controller
   removes a request once it handled it.
 
@@ -42,7 +42,7 @@ STATUS_CONFIGMAP = "piceli-gitops-status"
 REQUESTS_CONFIGMAP = "piceli-gitops-requests"
 STATUS_KEY = "status.json"
 #: Request kinds (the prefix of their key).
-REQUEST_KINDS = ("approve", "promote", "push")
+REQUEST_KINDS = ("approve", "promote")
 #: Env states a status may carry.
 ENV_STATES = (
     "pending",
@@ -86,7 +86,6 @@ def new_state() -> dict[str, Any]:
         "envs": {},
         "tags": {},
         "baseline": False,
-        "pushes": {},
         "rejected": [],
         "last_poll": None,
         "last_error": None,
@@ -140,8 +139,6 @@ def request(kind: str, **fields: Any) -> tuple[str, dict[str, Any]]:
     """A request document and its key (``<kind>.<digest>``).
 
     ``approve``: ``env``, ``plan_hash``. ``promote``: ``branch``, ``commit``.
-    ``push``: ``branch``, ``commit`` and ``digests`` (image name to
-    ``sha256:…``) or ``receipt`` (a build receipt).
     """
     if kind not in REQUEST_KINDS:
         raise GitOpsError("gitops-request-invalid", f"unknown request kind {kind!r}")
@@ -172,26 +169,6 @@ def promote_request(target: str) -> tuple[str, dict[str, Any]]:
             "promote takes BRANCH@SHA (a hex commit id of 7 to 40 characters)",
         )
     return request("promote", branch=branch, commit=commit)
-
-
-def push_request(
-    branch: str,
-    commit: str,
-    *,
-    digests: Mapping[str, str] | None = None,
-    receipt: Mapping[str, Any] | None = None,
-) -> tuple[str, dict[str, Any]]:
-    """Use images built elsewhere (``piceli env push``) for ``branch@commit``."""
-    if (digests is None) == (receipt is None):
-        raise GitOpsError(
-            "gitops-request-invalid", "a push names digests or a receipt, not both"
-        )
-    fields: dict[str, Any] = {"branch": branch, "commit": commit}
-    if digests is not None:
-        fields["digests"] = dict(sorted(digests.items()))
-    else:
-        fields["receipt"] = dict(receipt or {})
-    return request("push", **fields)
 
 
 class Channel(Protocol):
@@ -280,6 +257,11 @@ class ConfigMapChannel:
             response = self.client.call_api(
                 path,
                 method,
+                query_params=(
+                    [("fieldManager", "piceli-gitops")]
+                    if method in {"POST", "PATCH"}
+                    else []
+                ),
                 header_params={"Accept": "application/json", "Content-Type": content},
                 body=body,
                 auth_settings=["BearerToken"],

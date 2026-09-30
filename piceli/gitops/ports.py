@@ -6,7 +6,9 @@ deploys; the work itself belongs to other modules:
 - loading the ``Pipeline`` of a commit (:func:`piceli.app.render.load_target`),
   pointed at the controller's own kubeconfig and state directory;
 - building its images in the cluster
-  (:func:`piceli.artifacts.cluster_build.run_build_job`);
+  (:func:`piceli.artifacts.cluster_build.run_build_job`), unless a laptop
+  pushed the images for that commit (``piceli env push``: the ConfigMap
+  ``piceli-env-<branch slug>`` in the environment's namespace);
 - per-branch environments (:mod:`piceli.envs`: ``env_up``, ``env_down``,
   ``namespace_for``).
 
@@ -21,12 +23,13 @@ Importing this module is side-effect free.
 from __future__ import annotations
 
 import copy
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
 from piceli.gitops import GitOpsError
+from piceli.gitops.config import ControllerConfig
 
 #: ``approve`` values the controller passes to :meth:`Ports.env_up`.
 APPROVE_POLICY = "policy"
@@ -92,8 +95,23 @@ class Ports(Protocol):
         *,
         cache_key: str,
         platforms: Sequence[str],
+        checkout: Path,
     ) -> Mapping[str, Any]:
-        """Build the pipeline's images for ``commit``; a build receipt."""
+        """Build the pipeline's images for ``commit``; a build receipt.
+
+        ``cache_key`` is the branch (one build cache per branch), ``checkout``
+        the commit's working tree (the repository root).
+        """
+        ...
+
+    def pushed_images(
+        self, pipeline: Any, branch: str, namespace: str
+    ) -> Mapping[str, Any] | None:
+        """Images pushed from a laptop for the branch (``piceli env push``).
+
+        ``{"commit": sha or None, "images": {name: {"digest": …,
+        "pull_ref"?: …}}}`` or ``None``.
+        """
         ...
 
     def prepare_env(self, pipeline: Any, branch: str) -> str | None:
@@ -107,7 +125,7 @@ class Ports(Protocol):
         *,
         commit: str,
         receipt: Mapping[str, Any] | None,
-        digests: Mapping[str, str] | None,
+        digests: Mapping[str, Any] | None,
         approve: str | None,
     ) -> EnvOutcome:
         """Deploy ``commit`` to the branch environment.
@@ -164,13 +182,17 @@ class DefaultPorts:
         state_dir: Path,
         *,
         namespace: str,
+        config: ControllerConfig,
         transport: str = "https",
+        log: Callable[[str], None] = lambda _: None,
     ) -> None:
         self.kubeconfig = kubeconfig
         self.context = context
         self.state_dir = state_dir
         self.namespace = namespace
+        self.config = config
         self.transport = transport
+        self.log = log
 
     def load_pipeline(self, checkout: Path, entry: str, env: str | None) -> Any:
         from piceli.app.render import RenderError, load_target
@@ -202,19 +224,68 @@ class DefaultPorts:
         *,
         cache_key: str,
         platforms: Sequence[str],
+        checkout: Path,
     ) -> Mapping[str, Any]:
-        try:
-            from piceli.artifacts.cluster_build import (  # type: ignore[import-not-found,unused-ignore]
-                run_build_job,
-            )
-        except ImportError:
-            raise GitOpsError(
-                "gitops-port-unavailable", "cluster builds are not available"
-            ) from None
-        receipt = run_build_job(
-            pipeline, commit, cache_key=cache_key, platforms=tuple(platforms)
+        from piceli.artifacts.cluster_build import (
+            DEFAULT_PLATFORMS,
+            ClusterBuildConfig,
+            run_build_job,
         )
-        return dict(receipt) if isinstance(receipt, Mapping) else _as_dict(receipt)
+        from piceli.pipeline import PipelineError
+
+        config = self.config
+        if config.builder_image is None:
+            raise GitOpsError(
+                "gitops-config-invalid",
+                "no --builder-image: this controller deploys only images pushed "
+                "with piceli env push",
+            )
+        settings: dict[str, Any] = {
+            "image": config.builder_image,
+            "repo": config.repo,
+            "namespace": self.namespace,
+            "storage": config.build_storage,
+            "repo_root": checkout,
+            "registry_url": config.build_registry,
+            "node_registry": config.node_registry,
+        }
+        if config.build_git_secret:
+            settings["git_secret"] = config.build_git_secret
+        if config.builder_selector:
+            settings["selector"] = dict(config.builder_selector)
+        try:
+            receipt = run_build_job(
+                pipeline,
+                commit,
+                cache_key=cache_key,
+                platforms=tuple(platforms) or DEFAULT_PLATFORMS,
+                config=ClusterBuildConfig(**settings),
+                approve=None,  # the controller applies the owner's settings
+                say=self.log,
+            )
+        except PipelineError as error:
+            raise GitOpsError(error.code, str(error)) from None
+        return dict(receipt)
+
+    def pushed_images(
+        self, pipeline: Any, branch: str, namespace: str
+    ) -> Mapping[str, Any] | None:
+        import json
+
+        from piceli.gitops.install import connect
+        from piceli.k8s.cli.env_push import configmap_name
+
+        name = configmap_name(branch)
+        with connect(self.kubeconfig, self.context, transport=self.transport) as api:
+            found = api.call(f"/api/v1/namespaces/{namespace}/configmaps/{name}", "GET")
+        data = (found or {}).get("data") or {} if isinstance(found, dict) else {}
+        try:
+            images = json.loads(data.get("images") or "null")
+        except ValueError:
+            return None
+        if not isinstance(images, dict) or not images:
+            return None
+        return {"commit": data.get("commit"), "images": images}
 
     def _envs(self) -> Any:
         try:
@@ -246,7 +317,7 @@ class DefaultPorts:
         *,
         commit: str,
         receipt: Mapping[str, Any] | None,
-        digests: Mapping[str, str] | None,
+        digests: Mapping[str, Any] | None,
         approve: str | None,
     ) -> EnvOutcome:
         kwargs: dict[str, Any] = {"commit": commit, "approve": approve}
@@ -258,10 +329,3 @@ class DefaultPorts:
 
     def env_down(self, pipeline: Any, branch: str) -> None:
         self._envs().env_down(pipeline, branch)
-
-
-def _as_dict(value: Any) -> dict[str, Any]:
-    to_dict = getattr(value, "to_dict", None)
-    if callable(to_dict):
-        return dict(to_dict())
-    raise GitOpsError("gitops-step-failed", "the build returned no receipt")

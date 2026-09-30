@@ -5,7 +5,7 @@ One poll (:meth:`Controller.poll_once`):
 1. ``git ls-remote`` the repository (no webhook; a failure is recorded and
    the next poll tries again).
 2. Handle requests: an approval of a pending plan hash, a promotion
-   ``branch@sha`` to main, images pushed for a branch commit.
+   ``branch@sha`` to main.
 3. Work out what should run: every branch matching the globs (except main)
    at its head; main only at the commit of a **new** tag matching ``v*`` or
    of a promotion (an untagged push to main does nothing); a branch that
@@ -198,8 +198,6 @@ class Controller:
                 self._approve(key, body)
             elif kind == "promote":
                 self._promote(key, body, refs)
-            elif kind == "push":
-                self._push(key, body)
             else:
                 self._reject(
                     key,
@@ -275,21 +273,6 @@ class Controller:
             return
         self._want(self.config.main_branch, full, f"promote {branch}@{full[:12]}")
 
-    def _push(self, key: str, body: Mapping[str, Any]) -> None:
-        branch = str(body.get("branch"))
-        if not self.config.watches(branch):
-            self._reject(
-                key,
-                body,
-                GitOpsError("gitops-request-invalid", "the branch is not watched"),
-            )
-            return
-        self.state["pushes"][branch] = {
-            "commit": body.get("commit"),
-            "digests": body.get("digests"),
-            "receipt": body.get("receipt"),
-        }
-
     # ------------------------------------------------------------ desired
     def _desired(self, refs: RemoteRefs) -> None:
         main = self.config.main_branch
@@ -355,13 +338,19 @@ class Controller:
             namespace = self.ports.prepare_env(pipeline, branch)
             if namespace:
                 record["namespace"] = namespace
-            pushed = self.state["pushes"].get(branch) or {}
-            digests: Mapping[str, str] | None = None
+            # A digest pushed from a laptop (`piceli env push`) for exactly
+            # this commit wins over a build.
+            pushed = (
+                self.ports.pushed_images(pipeline, branch, namespace)
+                if namespace
+                else None
+            )
+            digests: Mapping[str, Any] | None = None
             receipt: Mapping[str, Any] | None = None
-            if pushed.get("commit") == commit:
-                digests, receipt = pushed.get("digests"), pushed.get("receipt")
-            if digests is None and receipt is None:
-                receipt = self._receipt(pipeline, branch, commit)
+            if pushed and pushed.get("commit") == commit and pushed.get("images"):
+                digests = dict(pushed["images"])
+            else:
+                receipt = self._receipt(pipeline, branch, commit, tree)
             approve: str | None = record.get("approved_hash")
             if approve is None and getattr(pipeline, "auto_approve", None) is not None:
                 if not main or self.config.main_auto_approve:
@@ -378,7 +367,9 @@ class Controller:
             )
         self._outcome(record, outcome)
 
-    def _receipt(self, pipeline: Any, branch: str, commit: str) -> Mapping[str, Any]:
+    def _receipt(
+        self, pipeline: Any, branch: str, commit: str, tree: Path
+    ) -> Mapping[str, Any]:
         """The build receipt of ``commit``: kept on the volume, built once."""
         path = self.state_dir / "receipts" / f"{slug(branch)}-{commit}.json"
         from piceli.gitops.state import read_json
@@ -390,8 +381,9 @@ class Controller:
             self.ports.build(
                 pipeline,
                 commit,
-                cache_key=slug(branch),
+                cache_key=branch,
                 platforms=self.config.platforms,
+                checkout=tree,
             )
         )
         write_json(path, receipt)
@@ -445,7 +437,6 @@ class Controller:
             )
             self.ports.env_down(pipeline, branch)
         del self._envs()[branch]
-        self.state["pushes"].pop(branch, None)
         self.log(f"{branch}: environment removed")
 
     def _step(self, record: dict[str, Any], refs: RemoteRefs) -> None:

@@ -4091,6 +4091,7 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "Stop the other process, or use another `--state-dir`.",
         True,
         "gitops",
+    ),
     # --- 0.13.0 cluster builds ---
     _E(
         "cluster-build-invalid",
