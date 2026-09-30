@@ -37,6 +37,17 @@ _ALIAS = re.compile(r"[a-z][a-z0-9_-]{0,62}")
 _LABEL = re.compile(r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?")
 _PINNED = re.compile(r"[^@\s]+@sha256:[0-9a-f]{64}")
 STAGES = ("inputs", "build", "deliver", "plan", "apply", "checks")
+#: Every stage a run can have. ``prerollout`` (after ``plan``, before ``apply``)
+#: exists only for a pipeline whose app declares a pre-rollout check, so the
+#: runs, events and summaries of every other pipeline keep the six stages above.
+ALL_STAGES = ("inputs", "build", "deliver", "plan", "prerollout", "apply", "checks")
+
+
+def stages_for(app: Any) -> tuple[str, ...]:
+    """The stages of a run of a pipeline whose app is ``app``."""
+    if getattr(app, "pre_rollouts", ()):
+        return ALL_STAGES
+    return STAGES
 
 
 def _caller_dir() -> Path | None:

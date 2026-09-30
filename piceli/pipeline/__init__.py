@@ -22,6 +22,7 @@ from piceli.approval_policy import ApprovalPolicy
 from piceli.pipeline.checks import CheckContext, CheckReportLike, CheckRunner
 from piceli.pipeline.errors import PipelineError
 from piceli.pipeline.model import (
+    ALL_STAGES,
     STAGES,
     Build,
     ImageHandle,
@@ -48,6 +49,7 @@ if TYPE_CHECKING:
     from piceli.pipeline.runner import CombinedPlan, PipelineRunner
 
 __all__ = [
+    "ALL_STAGES",
     "STAGES",
     "ApprovalPolicy",
     "AwsSecret",

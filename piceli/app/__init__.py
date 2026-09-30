@@ -55,6 +55,7 @@ from piceli.app.model import (
     ServicePort,
     Workload,
 )
+from piceli.app.prerollout import PreRollout, UpgradeCheck
 from piceli.app.resource import Resource
 from piceli.k8s.ui_config import HealthProbe
 
@@ -85,6 +86,7 @@ __all__ = [
     "Mount",
     "NetworkPolicy",
     "PodDefaults",
+    "PreRollout",
     "Probe",
     "Resource",
     "Resources",
@@ -99,5 +101,6 @@ __all__ = [
     "ServiceAccount",
     "ServicePort",
     "StatefulSet",
+    "UpgradeCheck",
     "Workload",
 ]

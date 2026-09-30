@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from piceli.pipeline.journal import Run, write_private
-from piceli.pipeline.model import STAGES
+from piceli.pipeline.model import ALL_STAGES, STAGES
 
 SCHEMA = "piceli.run-summary.v1"
 #: Changed field paths listed per object (the count is always complete).
@@ -181,9 +181,14 @@ def _checks(run: Run) -> dict[str, Any] | None:
     return value
 
 
+def _names(stages: Any) -> list[str]:
+    """The run's stages in order: the six always, ``prerollout`` when it ran."""
+    return [name for name in ALL_STAGES if name in STAGES or name in stages]
+
+
 def _failure(run: Run) -> dict[str, Any] | None:
     stages = run.data.get("stages") or {}
-    for name in STAGES:
+    for name in _names(stages):
         stage = _dict(stages.get(name))
         if stage.get("state") not in _FAILED:
             continue
@@ -218,7 +223,7 @@ def build(run: Run, state_dir: Path) -> dict[str, Any]:
     stages_data = data.get("stages") or {}
     stages: dict[str, Any] = {}
     total = 0.0
-    for name in STAGES:
+    for name in _names(stages_data):
         stage = _dict(stages_data.get(name))
         entry: dict[str, Any] = {"state": stage.get("state", "pending")}
         seconds = stage.get("seconds")

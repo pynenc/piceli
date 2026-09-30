@@ -33,6 +33,7 @@ _APP_EXPORTS = frozenset(
         "Mount",
         "NetworkPolicy",
         "PodDefaults",
+        "PreRollout",
         "Probe",
         "Resource",
         "Resources",
@@ -47,6 +48,7 @@ _APP_EXPORTS = frozenset(
         "ServiceAccount",
         "ServicePort",
         "StatefulSet",
+        "UpgradeCheck",
         "Workload",
     }
 )
@@ -106,6 +108,7 @@ if TYPE_CHECKING:
         Mount,
         NetworkPolicy,
         PodDefaults,
+        PreRollout,
         Probe,
         Resource,
         Resources,
@@ -120,6 +123,7 @@ if TYPE_CHECKING:
         ServiceAccount,
         ServicePort,
         StatefulSet,
+        UpgradeCheck,
         Workload,
     )
     from piceli.checks import Checks  # noqa: F401

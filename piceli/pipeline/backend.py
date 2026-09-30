@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from piceli.k8s.release_spec import ReleaseSpec
     from piceli.pipeline.checks import CheckRunner
     from piceli.pipeline.model import Target
+    from piceli.pipeline.prerollout_cluster import PreRolloutCluster
 
 GRANT_SECONDS = 3600.0
 
@@ -441,6 +442,20 @@ class Backend:
         from piceli.k8s.release_runner import ReleaseRunner
 
         return ReleaseRunner(spec)
+
+    # ------------------------------------------------------- pre-rollout
+    def prerollout_cluster(
+        self, target: Target, *, poll_seconds: float = 2.0
+    ) -> PreRolloutCluster:
+        """The cluster reads and Job runs of the pre-rollout stage (target-bound)."""
+        from piceli.pipeline.prerollout_cluster import PreRolloutCluster
+
+        return PreRolloutCluster(
+            self._api(target),
+            target.namespace,
+            request_seconds=target.request_seconds,
+            poll_seconds=poll_seconds,
+        )
 
     # ----------------------------------------------------------- checks
     def check_runner(self) -> CheckRunner:

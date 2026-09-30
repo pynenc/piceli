@@ -157,6 +157,12 @@ noted.
   (`Build.spec(..., builder="host")`) also reads its node's facts (one
   read-only `GET` of the Node) and hashes the declared host tools; nothing
   runs.
+- `piceli deploy MODULE:ATTR --plan` of an app that declares
+  `App.pre_rollout(...)` also lists the `prerollout` stage: the check commands
+  and every Secret and ConfigMap the check pod reads. It reads Secrets,
+  ConfigMaps and claims of the target namespace (key names only, never
+  values) and refuses with `prerollout-mount-missing` or
+  `prerollout-claim-exclusive` (exit `2`) before anything is built.
 - `piceli state show --spec …` (where the state lives, its generation, the
   release lock's holder; never prints content), `piceli state pull --spec …`
   (refreshes the local working copy of shared state) and
@@ -384,12 +390,23 @@ never build. The approval rules above apply unchanged:
    command, configuration or Secret must change first, or the owner rolls
    back (`piceli release rollback previous`, which needs approval). Later,
    `piceli release status --spec … --run ID` shows the same causes.
-6. `access-port-conflict` with `conflicts[].holder` `piceli-forward` or
+6. `prerollout-failed`, `prerollout-timeout`, `prerollout-not-startable`
+   (from `piceli deploy`, stage `prerollout`): a check Job with the new image
+   and the workload's real Secrets and mounts failed **before** `apply`, so
+   the running pods are unchanged. Read `stages.prerollout.output.checks[]` in
+   the run summary (`kind` `config` or `upgrade`, `exit_code`, `category`,
+   `log_tail`, already scrubbed) and report it. Do not retry unchanged: the
+   image, command or mounted object must change first. Never add or remove
+   a `pre_rollout` declaration to get a release through: the owner decides.
+   The check Job is deleted by Piceli; if `piceli` was killed, Jobs labelled
+   `piceli.io/pre-rollout` expire after ten minutes and the next run removes
+   them.
+7. `access-port-conflict` with `conflicts[].holder` `piceli-forward` or
    `piceli-server`: Piceli's own process for this app holds the port (often
    a `piceli access` left running). Ask the owner before running the
    suggested `piceli access stop --stale TARGET`. With `holder` `other`,
    report the pid; never stop another process.
-7. `immutable-field-changed` (a Job's pod template, or a StatefulSet's
+8. `immutable-field-changed` (a Job's pod template, or a StatefulSet's
    service name, pod management, selector or claim templates would change):
    do not add `--replace` yourself. Show the owner the `blocking` entry;
    replacing deletes and recreates the object (a Job runs again). Plan with
