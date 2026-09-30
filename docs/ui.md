@@ -14,19 +14,23 @@ make ui-install ui-build
 make ui-fake-serve
 ```
 
-Open `http://127.0.0.1:4177/applications` as printed. If you enter
+The terminal prints a launch address such as
+`http://127.0.0.1:4177/?token=…`; open it once in your browser. The server
+exchanges the token for a session cookie and redirects to the same page
+without it; after that `http://127.0.0.1:4177/applications` opens directly in
+that browser. The token is also written, mode `0600`, to
+`~/.local/state/piceli/ui/launch-token-4177` (under `$XDG_STATE_HOME` when
+set) while the demo runs, and removed when it stops. If you enter
 `localhost:4177`, page navigation redirects to the configured address while
-API requests stay restricted to that exact origin. The terminal prints the
-address and Uvicorn's startup status; it stays occupied
-while the server runs. Press
-Ctrl+C to stop it. `PICELI_UI_FAKE_PORT=4180 make ui-fake-serve` selects another
+API requests stay restricted to that exact origin. The terminal stays occupied
+while the server runs. Press Ctrl+C to stop it. `PICELI_UI_FAKE_PORT=4180 make ui-fake-serve` selects another
 loopback port. This demo uses a disposable fake Kubernetes API and an
 inventory-only registration. You can inspect observed resources, but it cannot
 approve or execute a deployment. It never reads your ambient kubeconfig.
 After updating the server code or browser assets, stop and restart this
-foreground process; it does not reload changes automatically. Opening the URL
-from an external link is supported, while API requests still require the local
-session established by that page.
+foreground process; it does not reload changes automatically. Once the browser has the session,
+opening the UI from an external link is supported; API requests still require
+that session.
 
 To run the fake-API service and real-browser journeys together, install
 Playwright's Chromium through the locked frontend toolchain and run:
@@ -67,7 +71,9 @@ browser action runs on the UI server host, not on the browser's laptop.
 
 For the SSH-tunnel case, keep the UI bound to loopback on the remote host and
 forward the same port from your laptop, for example
-`ssh -L 8000:127.0.0.1:8000 my-host`. Open `http://127.0.0.1:8000` locally.
+`ssh -L 8000:127.0.0.1:8000 my-host`. Open the launch address that
+`piceli ui serve` printed on the remote host (`http://127.0.0.1:8000/?token=…`)
+in your laptop's browser; the token travels only inside the tunnel.
 The release definition and explicit Kubernetes credentials live on the remote
 UI host. Port-forward sessions also bind there. This is a local UI process on a
 remote host, not a publicly hosted multi-user service.
@@ -94,11 +100,22 @@ piceli ui serve --kubeconfig ./my-cluster.kubeconfig \
   --context kind-my-cluster --namespace shop --name shop
 ```
 
-Open the printed loopback address. `--url-prefix /piceli` hosts the application
-under that prefix, including deep links and API routes. Local sessions are
-same-origin and scoped to the configured host. This mode is a loopback server,
-including when started on a remote host behind an SSH tunnel. It is not a
-public multi-user server.
+Open the printed launch address (`http://127.0.0.1:8000/?token=…`) once.
+`--url-prefix /piceli` hosts the application under that prefix, including deep
+links and API routes. Local sessions are same-origin and scoped to the
+configured host. This mode is a loopback server, including when started on a
+remote host behind an SSH tunnel. It is not a public multi-user server.
+
+Who is trusted: the local user who started the server. A browser gets the
+session only by opening the launch address, whose token is new for every start,
+compared in constant time, never written to the server log, and kept in a
+`0600` file in the private state directory (`--state-dir`) while the server
+runs. Any other local process or account that can reach the loopback port,
+including other accounts on a remote host serving through an SSH tunnel, gets
+no session and no CSRF token: a page without the session shows how to open
+the UI and grants nothing. Anyone who can read your terminal, the token file
+or your browser profile can act as you; treat the launch address like a
+password.
 
 To enable deployment for a release definition, also configure the durable
 control directory, an explicit allowlist of source files, and a trusted local

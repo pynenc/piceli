@@ -49,8 +49,10 @@ class Assets(HTMLParser):
 origin = "http://127.0.0.1:8000"
 evidence = []
 for prefix in ("", "/piceli"):
-    with TestClient(create_app(QueryService([]), origin=origin, url_prefix=prefix), base_url=origin) as client:
-        root = client.get(prefix + "/")
+    app = create_app(QueryService([]), origin=origin, url_prefix=prefix)
+    with TestClient(app, base_url=origin) as client:
+        assert client.get(prefix + "/").status_code == 401
+        root = client.get(prefix + "/?token=" + app.state.security.launch_token)
         assert root.status_code == 200, root.text
         assert "text/html" in root.headers["content-type"]
         parsed = Assets()

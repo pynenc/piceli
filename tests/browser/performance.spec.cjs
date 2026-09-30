@@ -1,4 +1,4 @@
-const { test, expect, chromium } = require('./runtime.cjs');
+const { test, expect, chromium, openLaunchUrl } = require('./session.cjs');
 const { performance } = require('node:perf_hooks');
 const os = require('node:os');
 
@@ -18,6 +18,7 @@ test('measure ten browsers against the 50-app/5,000-object fixture', async ({}, 
       });
       browsers.push(browser);
       const context = await browser.newContext({ viewport: testInfo.project.use.viewport });
+      await openLaunchUrl(context, testInfo.project.use.baseURL);
       const page = await context.newPage();
       pages.push(page);
       const cdp = await context.newCDPSession(page);

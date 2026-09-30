@@ -1,4 +1,4 @@
-const { test, expect } = require('./runtime.cjs');
+const { test, expect } = require('./session.cjs');
 const net = require('node:net');
 
 async function unusedLoopbackPort() {

@@ -203,10 +203,28 @@ def serve(
             access=access,
             logs=logs,
         )
+        from piceli.k8s.ui_state import write_launch_token
+        from piceli.server.security import uvicorn_log_config
+
+        token_file = write_launch_token(
+            private_state, port, server.state.security.launch_token
+        )
     except (ValueError, OSError):
         reject("ui-invalid-request")
-    say(f"Piceli UI: {origin}{url_prefix}/")
-    uvicorn.run(server, host=host, port=port, log_level="warning")
+    try:
+        # Like a notebook server: only a browser that opens this address gets
+        # the local session. The token is also in a 0600 file while running.
+        say(f"Piceli UI: {server.state.security.launch_url()}")
+        say(f"Launch token file: {token_file}")
+        uvicorn.run(
+            server,
+            host=host,
+            port=port,
+            log_level="warning",
+            log_config=uvicorn_log_config(),
+        )
+    finally:
+        token_file.unlink(missing_ok=True)
 
 
 @app.command("cluster-observe")

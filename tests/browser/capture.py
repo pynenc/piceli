@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import signal
 import subprocess
 import sys
@@ -11,7 +12,7 @@ import tempfile
 import time
 from contextlib import suppress
 from pathlib import Path
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
 CAPTURE = r"""
@@ -22,7 +23,7 @@ const path = require('node:path');
   const files = [];
   for (const [name,width,height] of [['desktop',1280,800],['tablet',768,1024],['phone',390,844]]) {
     const page = await browser.newPage({viewport:{width,height},reducedMotion:'reduce'});
-    await page.goto(process.argv[2] + '/applications/shop/resources');
+    await page.goto(process.argv[2] + '/applications/shop/resources?token=' + encodeURIComponent(process.env.PICELI_UI_LAUNCH_TOKEN));
     await page.getByRole('button',{name:'Inspect Deployment web in piceli-test',exact:true}).waitFor();
     const resource = path.join(process.argv[1],name+'-resources.png');
     await page.screenshot({path:resource,fullPage:true});
@@ -62,7 +63,11 @@ def main() -> None:
     port = os.environ.get("PICELI_UI_TEST_PORT", "4177")
     origin = f"http://127.0.0.1:{port}"
     with tempfile.TemporaryDirectory(prefix="piceli-ui-review-") as directory:
-        env = {**os.environ, "TMPDIR": directory}
+        env = {
+            **os.environ,
+            "TMPDIR": directory,
+            "PICELI_UI_LAUNCH_TOKEN": secrets.token_urlsafe(32),
+        }
         server = subprocess.Popen(
             [sys.executable, "tests/browser/serve_ui.py", "--port", port],
             cwd=root,
@@ -77,6 +82,11 @@ def main() -> None:
                     with urlopen(origin, timeout=1) as response:
                         assert response.status == 200
                     break
+                except HTTPError as error:
+                    # Without the launch token the page answers 401: it is up.
+                    if error.code == 401:
+                        break
+                    raise
                 except URLError:
                     if server.poll() is not None or time.monotonic() > deadline:
                         raise RuntimeError(

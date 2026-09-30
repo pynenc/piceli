@@ -83,7 +83,7 @@ ui-check: ## Check the browser contract and TypeScript application
 ui-build: ## Bundle offline browser assets into the Python package
 	cd ui && npm run build
 
-ui-fake-serve: ## Open a read-only local UI with a disposable fake Kubernetes API
+ui-fake-serve: ## Open a read-only local UI with a disposable fake Kubernetes API (prints its launch URL)
 	uv run --frozen --extra ui python tests/browser/serve_ui.py --port $(PICELI_UI_FAKE_PORT)
 
 test-ui: ## Run service and legacy UI acceptance checks against the fake API

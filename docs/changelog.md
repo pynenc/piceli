@@ -41,6 +41,13 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   directory (new `--state-dir`, default `$XDG_STATE_HOME/piceli/ui`) and, at
   startup, stops those whose server was killed. A process is signalled only
   when its pid still has the recorded start time and command line.
+- **Local UI launch token:** `piceli ui serve` now prints a launch address
+  (`http://127.0.0.1:PORT/?token=…`) and grants the session and CSRF cookies
+  only to a browser that opens it; the token is dropped from the address by a
+  redirect, compared in constant time, redacted from server logs and kept in a
+  `0600` file in the private state directory while the server runs. Other
+  local processes and accounts that reach the loopback port get no session.
+  `make ui-fake-serve` prints the tokened address for the demo.
 - **Explicit rotating Kubernetes token files:** a named absolute `tokenFile`
   kubeconfig credential now refreshes before each API request and fails closed
   when the projected file disappears or becomes invalid. Static tokens retain

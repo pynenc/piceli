@@ -1,4 +1,21 @@
-const { test, expect } = require('./runtime.cjs');
+const { test, expect } = require('./session.cjs');
+
+test('only the launch URL opens the UI, and its token leaves the address', async ({ browser }, testInfo) => {
+  const baseURL = testInfo.project.use.baseURL;
+  const context = await browser.newContext({ baseURL });
+  try {
+    const page = await context.newPage();
+    const refused = await page.goto('/applications');
+    expect(refused.status()).toBe(401);
+    await expect(page.getByRole('heading', { name: 'Open Piceli from its launch address' })).toBeVisible();
+    expect(await context.cookies()).toEqual([]);
+    await page.goto(`/applications?token=${encodeURIComponent(process.env.PICELI_UI_LAUNCH_TOKEN)}`);
+    await expect(page).toHaveURL(new URL('/applications', baseURL).href);
+    await expect(page.getByRole('heading', { name: 'Applications', exact: true })).toBeVisible();
+  } finally {
+    await context.close();
+  }
+});
 
 test('external link can open the loopback UI without granting cross-site API access', async ({ page }) => {
   const target = new URL('/applications', test.info().project.use.baseURL).href;

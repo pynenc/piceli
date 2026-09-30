@@ -56,7 +56,12 @@ def test_session_origin_host_and_fetch_metadata(tmp_path: Path) -> None:
             "Sec-Fetch-Mode": "navigate",
             "Sec-Fetch-Dest": "document",
         }
+        # Accepted: without a session it reloads from the origin, granting nothing.
         assert client.get("/applications", headers=navigation).status_code == 200
+        assert not client.cookies
+        token = app.state.security.launch_token
+        launched = client.get(f"/applications?token={token}", headers=navigation)
+        assert launched.status_code == 200
         assert client.cookies
         assert (
             client.get(
@@ -124,6 +129,11 @@ def test_prefix_deep_links_and_missing_assets(tmp_path: Path) -> None:
     (tmp_path / "assets" / "app-hash.js").write_text("console.log('bundled')")
     app = create_app(QueryService([]), static_dir=tmp_path, url_prefix="/piceli")
     with TestClient(app, base_url="http://127.0.0.1:8000") as client:
+        launch = client.get(
+            f"/piceli/?token={app.state.security.launch_token}",
+            follow_redirects=False,
+        )
+        assert launch.headers["location"] == "http://127.0.0.1:8000/piceli/"
         response = client.get("/piceli/applications/shop/resources")
         assert response.status_code == 200
         assert "Piceli" in response.text

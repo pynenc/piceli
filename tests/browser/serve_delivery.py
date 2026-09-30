@@ -194,6 +194,7 @@ def serve(directory: Path, config: RendererConfig, port: int) -> None:
             operations=operations,
             access=access,
             logs=logs,
+            launch_token=os.environ["PICELI_UI_LAUNCH_TOKEN"],
         )
 
         def registered(id: str) -> Path:

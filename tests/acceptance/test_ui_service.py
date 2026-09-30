@@ -65,7 +65,11 @@ def _client(service: QueryService, directory: Path, *, prefix: str = "") -> Test
 
 
 def _bootstrap(client: TestClient, prefix: str = "") -> None:
-    response = client.get(prefix + "/")
+    # Without the launch token a page grants nothing.
+    assert client.get(prefix + "/").status_code == 401
+    assert not client.cookies
+    token = client.app.state.security.launch_token  # type: ignore[attr-defined]
+    response = client.get(f"{prefix}/?token={token}")
     assert response.status_code == 200
     assert client.cookies
     cookie = response.headers.get("set-cookie", "").lower()

@@ -8,6 +8,8 @@ Kubernetes discovery, planning, writes, journal and state are real.
 from __future__ import annotations
 
 import json
+import os
+import secrets
 import socket
 import subprocess
 import sys
@@ -186,7 +188,7 @@ def test_exact_approval_duplicate_admission_and_restart_do_not_repeat_writes(
         with TestClient(
             create_app(query, operations=operations), base_url=ORIGIN
         ) as client:
-            assert client.get("/").status_code == 200
+            assert launch(client).status_code == 200
             reviewed = plan(client)
             assert ("Deployment", "worker") not in cluster.api.objects
             body = {
@@ -221,7 +223,7 @@ def test_exact_approval_duplicate_admission_and_restart_do_not_repeat_writes(
         with TestClient(
             create_app(query, operations=restarted), base_url=ORIGIN
         ) as client:
-            client.get("/")
+            launch(client)
             recovered = client.get(API + "/operations/" + admitted["id"]).json()
             assert recovered["state"] == "succeeded"
             assert (
@@ -252,7 +254,7 @@ def test_live_resource_appearing_after_review_is_never_overwritten(
         with TestClient(
             create_app(query, operations=operations), base_url=ORIGIN
         ) as client:
-            client.get("/")
+            launch(client)
             reviewed = plan(client)
             foreign = manifest("Deployment", "worker")
             foreign["spec"]["replicas"] = 7
@@ -273,6 +275,12 @@ def test_live_resource_appearing_after_review_is_never_overwritten(
             )
 
 
+def launch(client: TestClient) -> httpx.Response:
+    """Open the launch URL once, as a browser does, to get the local session."""
+    token = client.app.state.security.launch_token  # type: ignore[attr-defined]
+    return client.get(f"/?token={token}")
+
+
 def _child_server(
     directory: str, kubeconfig: str, namespace: str, descriptor: int
 ) -> None:
@@ -284,7 +292,12 @@ def _child_server(
     query, operations = service(
         Path(directory), Path(kubeconfig), namespace, readiness=20
     )
-    app = create_app(query, operations=operations, origin=origin)
+    app = create_app(
+        query,
+        operations=operations,
+        origin=origin,
+        launch_token=os.environ["PICELI_UI_LAUNCH_TOKEN"],
+    )
     uvicorn.Server(uvicorn.Config(app, log_level="warning")).run(sockets=[listener])
 
 
@@ -296,6 +309,7 @@ def child_server(
         listener.bind(("127.0.0.1", 0))
         listener.listen(128)
         origin = f"http://127.0.0.1:{listener.getsockname()[1]}"
+        token = secrets.token_urlsafe(32)
         code = (
             "import sys; from tests.acceptance.test_ui_operations import _child_server; "
             "_child_server(sys.argv[1],sys.argv[2],sys.argv[3],int(sys.argv[4]))"
@@ -313,6 +327,7 @@ def child_server(
             pass_fds=(listener.fileno(),),
             stdout=output,
             stderr=output,
+            env={**os.environ, "PICELI_UI_LAUNCH_TOKEN": token},
         )
         try:
             with httpx.Client(base_url=origin, timeout=2) as client:
@@ -320,7 +335,8 @@ def child_server(
                 while time.monotonic() < deadline:
                     assert process.poll() is None, "API process exited during startup"
                     try:
-                        if client.get("/").status_code == 200:
+                        launched = client.get(f"/?token={token}", follow_redirects=True)
+                        if launched.status_code == 200:
                             break
                     except httpx.TransportError:
                         pass
@@ -504,7 +520,7 @@ def test_cancelling_failed_parent_fences_standing_policy_rollback_before_write(
         with TestClient(
             create_app(query, operations=operations), base_url=ORIGIN
         ) as client:
-            client.get("/")
+            launch(client)
             reviewed = plan(client)
             admitted = post(
                 client,
@@ -559,7 +575,7 @@ def test_lease_loss_after_execution_start_never_invents_success(
         with TestClient(
             create_app(query, operations=operations), base_url=ORIGIN
         ) as client:
-            client.get("/")
+            launch(client)
             reviewed = plan(client)
             admitted = post(
                 client,
@@ -582,7 +598,7 @@ def test_lease_loss_after_execution_start_never_invents_success(
         with TestClient(
             create_app(query, operations=restarted), base_url=ORIGIN
         ) as client:
-            client.get("/")
+            launch(client)
             assert (
                 client.get(API + "/operations/" + admitted["id"]).json()["state"]
                 == "failed"
@@ -652,7 +668,7 @@ def test_failed_standing_policy_rollback_is_a_separate_failed_operation(
         with TestClient(
             create_app(query, operations=operations), base_url=ORIGIN
         ) as client:
-            client.get("/")
+            launch(client)
             reviewed = plan(client)
             admitted = post(
                 client,
@@ -693,7 +709,7 @@ def test_an_app_with_pre_rollout_checks_is_refused_with_its_own_code(
         with TestClient(
             create_app(query, operations=operations), base_url=ORIGIN
         ) as client:
-            assert client.get("/").status_code == 200
+            assert launch(client).status_code == 200
             preview = post(
                 client,
                 "/applications/shop/evaluation-preview",

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import threading
 import time
 from collections.abc import Awaitable, Callable
@@ -79,6 +80,7 @@ def main() -> None:
         query,
         origin=f"http://127.0.0.1:{options.port}",
         logs=LogService(query),
+        launch_token=os.environ["PICELI_UI_LAUNCH_TOKEN"],
     )
 
     @app.middleware("http")

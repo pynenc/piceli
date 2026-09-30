@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import tempfile
+from contextlib import ExitStack
 from pathlib import Path
 
 import uvicorn
 
 from piceli.k8s.ops.provider_factory import KubeconfigTarget
+from piceli.k8s.ui_state import private_ui_state_dir, write_launch_token
 from piceli.server.app import create_app
+from piceli.server.security import uvicorn_log_config
 from piceli.services.query import QueryService
 from piceli.services.registration import Registration
 from piceli.testing import fake_cluster, manifest
@@ -39,16 +43,42 @@ def main() -> None:
                     transport="loopback-http",
                 ),
             )
+            # Test runners pass their own token and never print it.
+            given = os.environ.get("PICELI_UI_LAUNCH_TOKEN")
             app = create_app(
-                QueryService([registration]), origin=f"http://127.0.0.1:{options.port}"
+                QueryService([registration]),
+                origin=f"http://127.0.0.1:{options.port}",
+                launch_token=given,
             )
-            print(
-                f"Starting Piceli fake UI at http://127.0.0.1:{options.port}/applications "
-                "(read-only demo; press Ctrl+C to stop)",
-                file=sys.stderr,
-                flush=True,
-            )
-            uvicorn.run(app, host="127.0.0.1", port=options.port, log_level="info")
+            security = app.state.security
+            with ExitStack() as cleanup:
+                if given:
+                    address = (
+                        f"http://127.0.0.1:{options.port}/applications "
+                        "(launch token from PICELI_UI_LAUNCH_TOKEN)"
+                    )
+                else:
+                    token_file = write_launch_token(
+                        private_ui_state_dir(), options.port, security.launch_token
+                    )
+                    cleanup.callback(token_file.unlink, missing_ok=True)
+                    address = (
+                        f"{security.launch_url()}\n"
+                        f"Launch token file (removed on exit): {token_file}"
+                    )
+                print(
+                    f"Starting Piceli fake UI at {address}\n"
+                    "Read-only demo; press Ctrl+C to stop.",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                uvicorn.run(
+                    app,
+                    host="127.0.0.1",
+                    port=options.port,
+                    log_level="info",
+                    log_config=uvicorn_log_config(),
+                )
             assert all(request["method"] == "GET" for request in cluster.api.requests)
 
 

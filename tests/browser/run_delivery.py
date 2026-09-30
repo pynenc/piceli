@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import signal
 import subprocess
 import sys
@@ -29,6 +30,7 @@ def main() -> int:
                 "PICELI_DELIVERY_RENDERER": str(config),
                 "PICELI_UI_TEST_OUTPUT": str(directory / "results"),
                 "TMPDIR": temporary,
+                "PICELI_UI_LAUNCH_TOKEN": secrets.token_urlsafe(32),
             }
             process = subprocess.Popen(
                 [

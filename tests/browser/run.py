@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 import signal
 import subprocess
 import sys
@@ -24,6 +25,8 @@ def main() -> int:
             **os.environ,
             "PICELI_UI_TEST_OUTPUT": directory,
             "TMPDIR": directory,
+            # The server and the browser fixture share it; it is never printed.
+            "PICELI_UI_LAUNCH_TOKEN": secrets.token_urlsafe(32),
         }
         process = subprocess.Popen(
             [

@@ -94,6 +94,31 @@ def _error(code: str, status: int) -> JSONResponse:
     )
 
 
+def _launch_required() -> HTMLResponse:
+    """A page without the local session: say how to open the UI, grant nothing."""
+    return HTMLResponse(
+        '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+        "<title>Piceli</title></head><body><main>"
+        "<h1>Open Piceli from its launch address</h1>"
+        "<p>This local UI accepts only a browser that opened the address "
+        "printed by <code>piceli ui serve</code> when it started (it ends in "
+        "<code>?token=</code>). Open that address in this browser once.</p>"
+        "</main></body></html>",
+        status_code=401,
+    )
+
+
+def _same_origin_reload(target: str) -> HTMLResponse:
+    """Navigate again from this origin, so the browser sends its session cookie."""
+    escaped = html.escape(target, quote=True)
+    return HTMLResponse(
+        '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+        f'<meta http-equiv="refresh" content="0;url={escaped}">'
+        "<title>Piceli</title></head><body>"
+        f'<p><a href="{escaped}">Continue to Piceli</a></p></body></html>'
+    )
+
+
 def create_app(
     service: QueryService,
     *,
@@ -104,11 +129,14 @@ def create_app(
     access: AccessService | None = None,
     logs: LogService | None = None,
     cluster_security: ClusterSecurity | None = None,
+    launch_token: str | None = None,
 ) -> FastAPI:
     """Create a local app. The caller owns the server's loopback listener.
 
-    Browser navigation establishes an HttpOnly session cookie. API calls require
-    that cookie; all routes reject foreign Host, Origin and Fetch Metadata.
+    Opening the launch URL (``app.state.security.launch_url()``, containing a
+    secret ``launch_token``) establishes an HttpOnly session cookie; without
+    it a page gets no session and no CSRF token. API calls require that
+    cookie; all routes reject foreign Host, Origin and Fetch Metadata.
     State-changing routes additionally require Origin and X-Piceli-CSRF.
     """
     if cluster_security is not None:
@@ -121,6 +149,8 @@ def create_app(
         ):
             raise ValueError("cluster service boundary is incomplete")
         security = cluster_security
+    elif launch_token is not None:
+        security = LocalSecurity(origin, url_prefix, launch_token=launch_token)
     else:
         security = LocalSecurity(origin, url_prefix)
     assets = (static_dir or Path(__file__).parent / "static").resolve()
@@ -147,6 +177,7 @@ def create_app(
         lifespan=lifespan,
     )
     app.state.service = service
+    app.state.security = security
     if cluster_security is not None:
         app.add_middleware(
             SessionMiddleware,
@@ -161,12 +192,41 @@ def create_app(
     event_guard = threading.Lock()
     event_clients = 0
 
+    def secured(response: Response) -> Response:
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'"
+        )
+        response.headers.setdefault("Cache-Control", "no-store")
+        return response
+
+    def with_local_session(response: Response, local: LocalSecurity) -> Response:
+        response.set_cookie(
+            local.cookie_name,
+            local.session,
+            httponly=True,
+            samesite="strict",
+            secure=origin.startswith("https:"),
+            path=url_prefix or "/",
+        )
+        response.set_cookie(
+            "piceli_csrf",
+            local.csrf,
+            httponly=False,
+            samesite="strict",
+            secure=origin.startswith("https:"),
+            path=url_prefix or "/",
+        )
+        return response
+
     @app.middleware("http")
     async def local_boundary(request: Request, call_next: Any) -> Response:
         path = request.url.path
         is_api = path == f"{url_prefix}/api" or path.startswith(f"{url_prefix}/api/")
-        if isinstance(security, LocalSecurity):
-            canonical = security.canonical_navigation(request, api=is_api)
+        local = security if isinstance(security, LocalSecurity) else None
+        if local is not None:
+            canonical = local.canonical_navigation(request, api=is_api)
             if canonical is not None:
                 return RedirectResponse(canonical, status_code=307)
         callback_path = f"{url_prefix}/auth/callback"
@@ -174,6 +234,18 @@ def create_app(
             cluster_security is not None and path == callback_path
         ) and not security.accepted(request, api=is_api):
             return _error("ui-request-rejected", 403)
+        page = not is_api and request.method in {"GET", "HEAD"}
+        if local is not None and page and "token" in request.query_params:
+            # The launch URL: exchange its secret once for this browser's
+            # session, then drop it from the address bar and history.
+            tokens = request.query_params.getlist("token")
+            if len(tokens) != 1 or not local.launch_token_matches(tokens[0]):
+                return secured(_error("ui-request-rejected", 403))
+            return secured(
+                with_local_session(
+                    RedirectResponse(local.without_token(request), 303), local
+                )
+            )
         principal = cluster_security.principal(request) if cluster_security else None
         if (
             cluster_security is not None
@@ -196,36 +268,20 @@ def create_app(
                 and path in {f"{url_prefix}/auth/login", callback_path}
                 else _error("ui-observation-unavailable", 503)
             )
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["Referrer-Policy"] = "no-referrer"
-        response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'"
-        )
-        response.headers.setdefault("Cache-Control", "no-store")
         if (
-            cluster_security is None
-            and not is_api
-            and request.method in {"GET", "HEAD"}
+            local is not None
+            and page
             and response.headers.get("content-type", "").startswith("text/html")
         ):
-            assert isinstance(security, LocalSecurity)
-            response.set_cookie(
-                security.cookie_name,
-                security.session,
-                httponly=True,
-                samesite="strict",
-                secure=origin.startswith("https:"),
-                path=url_prefix or "/",
-            )
-            response.set_cookie(
-                "piceli_csrf",
-                security.csrf,
-                httponly=False,
-                samesite="strict",
-                secure=origin.startswith("https:"),
-                path=url_prefix or "/",
-            )
-        return response
+            if local.has_session(request):
+                response = with_local_session(response, local)
+            elif request.headers.get("sec-fetch-site") in {"cross-site", "same-site"}:
+                # A browser withholds the SameSite=Strict session cookie on a
+                # navigation from another site; reload from this origin.
+                response = _same_origin_reload(local.without_token(request))
+            else:
+                response = _launch_required()
+        return secured(response)
 
     if cluster_security is not None:
 

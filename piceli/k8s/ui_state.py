@@ -33,3 +33,24 @@ def private_ui_state_dir(explicit: Path | None = None) -> Path:
         raise ValueError("UI state directory is not a private directory")
     os.chmod(directory, 0o700)
     return directory
+
+
+def launch_token_file(directory: Path, port: int) -> Path:
+    """Where ``piceli ui serve`` on ``port`` keeps its launch token while running."""
+    return directory / f"launch-token-{port}"
+
+
+def write_launch_token(directory: Path, port: int, token: str) -> Path:
+    """Write the launch token for ``port`` (mode ``0600``); return its path."""
+    path = launch_token_file(directory, port)
+    path.unlink(missing_ok=True)
+    descriptor = os.open(
+        path,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    try:
+        os.write(descriptor, token.encode() + b"\n")
+    finally:
+        os.close(descriptor)
+    return path

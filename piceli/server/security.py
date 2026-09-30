@@ -1,13 +1,24 @@
-"""Loopback browser boundary: exact authority, same origin and scoped session."""
+"""Loopback browser boundary: exact authority, same origin and scoped session.
+
+Who is trusted: the local user who started ``piceli ui serve`` and can read
+the launch URL it prints (or its ``0600`` token file). A browser gets the
+session only by opening that URL once; any other local process or account
+that merely reaches the loopback port gets no session and no CSRF token. On a
+remote host behind an SSH tunnel the same holds for the other accounts on
+that host.
+"""
 
 from __future__ import annotations
 
+import copy
 import hmac
 import ipaddress
+import logging
 import re
 import secrets
 from dataclasses import dataclass, field
-from urllib.parse import urlsplit
+from typing import Any
+from urllib.parse import urlencode, urlsplit
 
 from starlette.requests import Request
 
@@ -18,8 +29,13 @@ class LocalSecurity:
     prefix: str = ""
     session: str = field(default_factory=lambda: secrets.token_urlsafe(32), repr=False)
     csrf: str = field(default_factory=lambda: secrets.token_urlsafe(32), repr=False)
+    launch_token: str = field(
+        default_factory=lambda: secrets.token_urlsafe(32), repr=False
+    )
 
     def __post_init__(self) -> None:
+        if not _LAUNCH_TOKEN.fullmatch(self.launch_token):
+            raise ValueError("invalid UI launch token")
         parsed = urlsplit(self.origin)
         try:
             local = (
@@ -50,6 +66,31 @@ class LocalSecurity:
             "piceli_session_"
             + hashlib.sha256((self.origin + self.prefix).encode()).hexdigest()[:12]
         )
+
+    def launch_url(self) -> str:
+        """The one address that grants a browser this server's session."""
+        return f"{self.origin}{self.prefix}/?token={self.launch_token}"
+
+    def launch_token_matches(self, value: str) -> bool:
+        return hmac.compare_digest(
+            value.encode("utf-8"), self.launch_token.encode("utf-8")
+        )
+
+    def has_session(self, request: Request) -> bool:
+        return hmac.compare_digest(
+            request.cookies.get(self.cookie_name, "").encode("utf-8"),
+            self.session.encode("utf-8"),
+        )
+
+    def without_token(self, request: Request) -> str:
+        """The requested URL on the configured origin, minus its launch token."""
+        query = [
+            (key, value)
+            for key, value in request.query_params.multi_items()
+            if key != "token"
+        ]
+        target = self.origin + request.url.path
+        return target + (f"?{urlencode(query)}" if query else "")
 
     def canonical_navigation(self, request: Request, *, api: bool) -> str | None:
         """Send a loopback host alias to the configured origin before bootstrap."""
@@ -94,10 +135,7 @@ class LocalSecurity:
             )
             if fetch_site not in {"cross-site", "same-site"} or not navigation:
                 return False
-        if api and not hmac.compare_digest(
-            request.cookies.get(self.cookie_name, "").encode("utf-8"),
-            self.session.encode("utf-8"),
-        ):
+        if api and not self.has_session(request):
             return False
         if request.method not in {"GET", "HEAD", "OPTIONS"}:
             if request.headers.get("origin") != self.origin:
@@ -108,3 +146,38 @@ class LocalSecurity:
             ):
                 return False
         return True
+
+
+_LAUNCH_TOKEN = re.compile(r"[A-Za-z0-9_-]{32,128}")
+_TOKEN_IN_TEXT = re.compile(r"([?&]token=)[^&\s\"']*")
+
+
+def redact_launch_token(text: str) -> str:
+    """``text`` with the value of any ``token=`` query parameter replaced."""
+    return _TOKEN_IN_TEXT.sub(r"\1[redacted]", text)
+
+
+class RedactLaunchToken(logging.Filter):
+    """Keep the launch token out of server logs (for example access lines)."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str):
+            record.msg = redact_launch_token(record.msg)
+        if isinstance(record.args, tuple):
+            record.args = tuple(
+                redact_launch_token(item) if isinstance(item, str) else item
+                for item in record.args
+            )
+        return True
+
+
+def uvicorn_log_config() -> dict[str, Any]:
+    """Uvicorn's default logging with the launch token redacted from every line."""
+    from uvicorn.config import LOGGING_CONFIG
+
+    config = copy.deepcopy(LOGGING_CONFIG)
+    config.setdefault("filters", {})["piceli_redact_token"] = {"()": RedactLaunchToken}
+    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        logger = config.setdefault("loggers", {}).setdefault(name, {})
+        logger["filters"] = [*logger.get("filters", []), "piceli_redact_token"]
+    return config

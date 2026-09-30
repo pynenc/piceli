@@ -18,6 +18,11 @@ Chromium browser through that locked toolchain, or set
 `PICELI_BROWSER_EXECUTABLE` to an existing compatible Chromium executable.
 `PICELI_UI_TEST_PORT` overrides the reserved default loopback port, 4177.
 
+The runner generates a launch token and passes it to the server and to the
+browser fixture (`session.cjs`) through `PICELI_UI_LAUNCH_TOKEN` only; every
+browser context opens the launch URL once before its journey, as a user does,
+and the token is never printed.
+
 Desktop (1280×800), tablet (768×1024), and phone (390×844) run serially against
 the real service. Additional Playwright arguments follow the command, for
 example `--project phone`. Reports, profiles, server state, and subprocesses
