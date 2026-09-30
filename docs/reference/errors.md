@@ -87,6 +87,8 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`claim-migration-target-exists`](#error-claim-migration-target-exists) | restore | no |
 | [`claim-migration-verify-failed`](#error-claim-migration-verify-failed) | restore | yes |
 | [`claim-shrink-refused`](#error-claim-shrink-refused) | restore | no |
+| [`cluster-build-failed`](#error-cluster-build-failed) | host-build | yes |
+| [`cluster-build-invalid`](#error-cluster-build-invalid) | host-build | no |
 | [`cluster-identity-changed`](#error-cluster-identity-changed) | release | no |
 | [`cluster-identity-unreadable`](#error-cluster-identity-unreadable) | kubernetes | yes |
 | [`codegen-cluster-read-failed`](#error-codegen-cluster-read-failed) | codegen | yes |
@@ -133,6 +135,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`dockerfile-unpinned`](#error-dockerfile-unpinned) | build-spec | no |
 | [`dry-run-limit-exceeded`](#error-dry-run-limit-exceeded) | kubernetes | no |
 | [`dry-run-placeholder-image`](#error-dry-run-placeholder-image) | kubernetes | no |
+| [`env-push-invalid`](#error-env-push-invalid) | host-build | no |
 | [`environment-invalid`](#error-environment-invalid) | environments | no |
 | [`environment-required`](#error-environment-required) | environments | no |
 | [`environment-unknown`](#error-environment-unknown) | environments | no |
@@ -3792,6 +3795,30 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Declare `build.platforms = ["linux/amd64", "linux/arm64"]` in the host-build.toml or pass `--platform` once per platform, each from the spec's list.
 - **Retry-safe:** no
 
+(error-cluster-build-failed)=
+### `cluster-build-failed`
+
+**Cluster build failed.** The build Job ended without a receipt: it failed, timed out, could not start (image, mount or scheduling) or its delivery to the node registry did not succeed. The Job is removed; the cache claim is kept.
+
+- **Fix:** Read the scrubbed log tail in the output, fix the build or the builder node (labels, image, registry reachability), and run it again; the cache makes a retry cheap.
+- **Retry-safe:** yes
+
+(error-cluster-build-invalid)=
+### `cluster-build-invalid`
+
+**Cluster build input invalid.** A cluster build (`piceli build job`, `run_build_job`) was given an input it refuses: a commit that is not a full Git commit id, an unsupported platform, a builder image that is not pinned by digest, a repository URL with credentials in it, a missing Git Secret (keys `username` and `password`), a pipeline without a host build, or an approved hash that no longer matches the plan.
+
+- **Fix:** Fix the input named in the message. The Git credentials belong in a Secret, never in the URL; plan again (`piceli build job ... --plan`) when the hash changed.
+- **Retry-safe:** no
+
+(error-env-push-invalid)=
+### `env-push-invalid`
+
+**Env push input invalid.** `piceli env push` needs exactly one of `--receipt FILE` (a host-build receipt, local or from a cluster build) or `--digest IMAGE=sha256:...`, with a valid image name and digest, for the digests of a branch environment.
+
+- **Fix:** Pass a receipt file, or one or more `--digest IMAGE=sha256:<64 hex>` options.
+- **Retry-safe:** no
+
 (error-host-build-invalid)=
 ### `host-build-invalid`
 
@@ -3819,9 +3846,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-node-facts-unavailable)=
 ### `node-facts-unavailable`
 
-**Node facts unavailable.** A host build reads its node's architecture and kernel version from the Node object (`status.nodeInfo`); the node reports none, an unsupported architecture, or the recorded facts are malformed.
+**Node facts unavailable.** A host build reads its node's architecture and kernel version from the Node object (`status.nodeInfo`); the node reports none, an unsupported architecture, the recorded facts are malformed, or the API is unreachable and no facts were cached from an earlier read or declared.
 
-- **Fix:** Check `kubectl get node NODE -o jsonpath='{.status.nodeInfo}'` with the pipeline's kubeconfig; only `amd64` and `arm64` Linux nodes are supported.
+- **Fix:** Check `kubectl get node NODE -o jsonpath='{.status.nodeInfo}'` with the pipeline's kubeconfig; only `amd64` and `arm64` Linux nodes are supported. Declare the facts with `Build.spec(..., node_facts=...)` to build without the API.
 - **Retry-safe:** no
 
 (error-node-page-size-invalid)=

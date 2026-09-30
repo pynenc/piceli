@@ -113,7 +113,9 @@ def test_host_build_runs_only_declared_tools_and_no_container_engine(
     assert all("docker" not in " ".join(argv) for argv in runner.argv)
     env = runner.env[0]
     assert "DOCKER_HOST" not in env
-    assert env["CARGO_TARGET_DIR"] == str((tmp_path / "cache" / "target").absolute())
+    assert env["CARGO_TARGET_DIR"] == str(
+        (tmp_path / "cache" / "target" / "arm64-16384").absolute()
+    )
     assert env["LG_PAGE"] == "14"
     assert receipt["builder"]["kind"] == "host"
     assert receipt["node_facts"]["page_size"] == 16384
@@ -277,3 +279,25 @@ def test_commands_keep_shell_braces_and_substitute_placeholders(
     plan = spec(project, tmp_path / "cache").plan()
     assert "${LG_PAGE}" in plan.commands[0][2]
     assert "{rust_arch}" not in plan.commands[0][2]
+
+
+def test_two_page_sizes_keep_separate_target_directories(
+    project: Path, tmp_path: Path
+) -> None:
+    """B28: one shared cache must not make 4K and 16K builds rebuild each other."""
+    cache = tmp_path / "cache"
+    targets = {}
+    for facts in (FACTS_16K, FACTS_4K):
+        item = spec(project, cache, facts)
+        runner = Recorder()
+        grant = HostBuildGrant(item.plan().plan_hash, time.time() + 600)
+        item.run(
+            grant,
+            tmp_path / f"out-{facts.page_size}-{facts.architecture}",
+            runner=runner,
+        )
+        targets[(facts.architecture, facts.page_size)] = runner.env[0][
+            "CARGO_TARGET_DIR"
+        ]
+    assert len(set(targets.values())) == 2
+    assert all(Path(value).is_dir() for value in targets.values())
