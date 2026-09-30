@@ -1200,14 +1200,20 @@ class KubernetesProvider:
         deadline: float | None = None,
         propagation: str = "Orphan",
         dry_run: bool = False,
+        allow_retained: bool = False,
     ) -> None:
         """Delete with UID and resourceVersion preconditions (never a retained kind).
+
+        ``allow_retained`` lifts the refusal for claims and Secrets only, for
+        an explicit, approved prune of leftover objects; releases never set it.
 
         ``propagation`` is ``Orphan`` (dependents are kept) unless a replace
         chooses ``Background`` for a workload controller (see
         :func:`piceli.k8s.ops.plan.replace_propagation`).
         """
-        if identity.kind in RETAINED_KINDS:
+        if identity.kind in RETAINED_KINDS and not (
+            allow_retained and identity.kind in {"Secret", "PersistentVolumeClaim"}
+        ):
             raise ProviderError("retained-resource")
         if propagation not in {"Orphan", "Background"}:
             raise ProviderError("invalid-propagation")
