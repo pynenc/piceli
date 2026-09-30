@@ -5507,6 +5507,7 @@
      "--renderer-platform",
      "--source-file",
      "--source-root",
+     "--state-dir",
      "--url-prefix"
     ],
     "subcommands": []
@@ -6944,6 +6945,7 @@
   "piceli.k8s.ops.revision",
   "piceli.k8s.ops.secret_versions",
   "piceli.k8s.ops.session",
+  "piceli.k8s.owned_processes",
   "piceli.k8s.port_owner",
   "piceli.k8s.release",
   "piceli.k8s.release_runner",
@@ -6980,6 +6982,7 @@
   "piceli.k8s.templates.deployable.stateful_set",
   "piceli.k8s.templates.deployable.volume",
   "piceli.k8s.ui_config",
+  "piceli.k8s.ui_state",
   "piceli.k8s.utils",
   "piceli.k8s.utils.utils_object",
   "piceli.maintenance",
