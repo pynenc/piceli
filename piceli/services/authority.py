@@ -8,7 +8,7 @@ closed. Grants are installation configuration, never repository source data.
 from __future__ import annotations
 
 import threading
-from collections.abc import Iterator, Mapping
+from collections.abc import Collection, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 
@@ -64,6 +64,12 @@ class ScopePolicy:
             return action in self._grants.get(principal_id, {}).get(
                 application_id, frozenset()
             )
+
+    def has_grant(self, principal_id: str, applications: Collection[str]) -> bool:
+        """Only configured applications with at least one action admit a login."""
+        with self._lock:
+            scopes = self._grants.get(principal_id, {})
+            return any(bool(scopes.get(application)) for application in applications)
 
     def revision(self) -> int:
         with self._lock:

@@ -19,8 +19,10 @@ The terminal prints a launch address such as
 exchanges the token for a session cookie and redirects to the same page
 without it; after that `http://127.0.0.1:4177/applications` opens directly in
 that browser. The token is also written, mode `0600`, to
-`~/.local/state/piceli/ui/launch-token-4177` (under `$XDG_STATE_HOME` when
-set) while the demo runs, and removed when it stops. If you enter
+`~/.local/state/piceli/ui/launch-token-4177-<instance>` (under `$XDG_STATE_HOME`
+when set) while the demo runs, and removed when it stops. The terminal prints
+the exact file path; separate server attempts never overwrite each other's
+tokens. If you enter
 `localhost:4177`, page navigation redirects to the configured address while
 API requests stay restricted to that exact origin. The terminal stays occupied
 while the server runs. Press Ctrl+C to stop it. `PICELI_UI_FAKE_PORT=4180 make ui-fake-serve` selects another
@@ -66,7 +68,7 @@ browser action runs on the UI server host, not on the browser's laptop.
 | GitHub Actions or another CI runner → Kubernetes cluster | `piceli deploy --plan` and `piceli deploy --apply` with exact approval (see {doc}`ci`) | CLI works independently; the UI does not launch CI jobs |
 | Local or remote UI host running a CI-style pipeline definition | The existing `piceli deploy` CLI remains available | Browser plan/apply for pipeline definitions is pending; a release-definition UI run does not stand in for it |
 | Remote machine hosting the local UI → Kubernetes cluster | Run `piceli ui serve` on that machine and reach its loopback listener through an SSH tunnel | Operations and port forwards run on that machine |
-| Authenticated scoped UI → Kubernetes namespace | `piceli ui cluster-observe` behind an HTTPS/OIDC gateway | Read-only observation today; an in-cluster install and manual deployment are pending |
+| Authenticated scoped UI → Kubernetes namespace | `piceli ui cluster-observe` or the opt-in `cluster-serve` profile behind an HTTPS/OIDC gateway | Scoped observation; manual delivery and local-client forwarding require separate subject grants and clean kind installation remains pending |
 | Direct application deployment to a machine without Kubernetes | No Piceli target/provider for this yet | No deployment action is offered |
 
 For the SSH-tunnel case, keep the UI bound to loopback on the remote host and
@@ -228,7 +230,7 @@ CLI and through the new web workflow when isolated rendering is configured.
 The implementation tracker records the release gates. Native Git delivery and
 in-cluster manual deployment are not available in this local interface.
 
-An experimental **read-only** cluster observation command is available for an
+An experimental cluster observation command is available for an
 installation that supplies a projected service-account token, its CA file, an
 explicit Kubernetes API origin and a public HTTPS OIDC client. It binds only
 to loopback for a separately configured TLS gateway sidecar:
@@ -248,17 +250,50 @@ piceli ui cluster-observe \
 The command generates a private kubeconfig containing file paths, not token
 bytes. It refreshes the projected token before each Kubernetes request. Only
 the named OIDC subjects can inspect the configured namespace and read its
-container logs. This read-only mode does not list Secrets or ConfigMaps.
+container logs. The default observation profile does not list Secrets or ConfigMaps.
 Sessions remain in the server process, expire with the signed
 ID token, and require same-origin CSRF protection for writes. After the identity
 provider redirects back, a short same-origin page continues to the
 application, so the browser sends the new SameSite=Strict session cookie.
 Opening the UI from a link on another site is accepted as a top-level page
 navigation only; API calls, subresources and writes must come from the UI's
-own origin. This command has
-no deployment or server-side port-forward action. An actual in-cluster manual
-deployment requires the isolated cluster renderer, durable installation state
-and remote local-client access still tracked under Wave 4.
+own origin. The default profile has no deployment or access grant. An actual in-cluster manual
+deployment is available as the opt-in `cluster-serve` profile when an
+operator mounts an explicit release definition and allowlisted source files,
+pins a prebuilt renderer image by repository digest, configures deploy grants,
+and grants only the resource kinds that release may write. Source evaluation
+uses a token-free Job selected by a deny-egress NetworkPolicy; the browser
+reviews its frozen evaluation and the resulting exact release plan separately.
+The [installation template](ui_cluster_install.md) keeps read-only mode as
+its default and documents this manual profile. The clean kind installation,
+credential-boundary, backup/restore, and remote local-client acceptance gate
+remains open under Wave 4.
+
+Local-client forwarding is separately enabled by repeating
+`--authorized-access-sub SUBJECT` for subjects already named by
+`--authorized-sub`. The cluster service never binds the user's laptop port.
+An authorized browser creates a short-lived ticket for a selected resource UID;
+its one-time pairing secret appears only in the issuance response, never in a
+URL. On the user's machine, run:
+
+```sh
+piceli ui connect --server https://piceli.example.test \
+  --ticket TICKET_ID --kubeconfig ./my-cluster.kubeconfig \
+  --context my-cluster --local-port 8080
+```
+
+The command prompts for the pairing secret without echo. It checks the
+cluster, namespace and resource UID using the explicit local credentials,
+starts an owned `kubectl port-forward`, probes the loopback port, and reports
+readiness through a separate expiring lease. The service labels that state
+**client-reported ready** because it cannot probe the user's laptop. Stopping
+the command, losing the lease, replacing the selected resource or revoking its
+grant ends the connection. The resource inspector's Access panel issues a
+ticket, displays its one-time pairing secret and local-client command, polls
+status, and lets the operator stop it. The secret stays in that browser view;
+navigating away requires a new ticket. If the client is
+killed before it can stop its forward, its private ownership record lets the
+next Piceli UI or client start reap that orphaned process.
 
 Contributors can run `make test-ui-performance` to measure the server's shared
 observation fixture: 50 applications, 5,000 resources in three scopes and ten

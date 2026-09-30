@@ -11,8 +11,11 @@ from typing import Annotated
 import typer
 
 from piceli.cli_contract import reject, say
+from piceli.k8s.cli.ui_remote import connect as connect_remote
 
 app = typer.Typer(rich_markup_mode=None, help="Piceli delivery web application.")
+
+app.command("connect")(connect_remote)
 
 
 @app.command()
@@ -227,6 +230,7 @@ def serve(
         token_file.unlink(missing_ok=True)
 
 
+@app.command("cluster-serve")
 @app.command("cluster-observe")
 def cluster_observe(
     api_server: Annotated[
@@ -249,6 +253,29 @@ def cluster_observe(
     authorized_sub: Annotated[
         list[str], typer.Option(help="OIDC subject granted inspection; repeat")
     ],
+    authorized_deploy_sub: Annotated[
+        list[str] | None,
+        typer.Option(help="OIDC subject granted manual delivery; repeat"),
+    ] = None,
+    authorized_access_sub: Annotated[
+        list[str] | None,
+        typer.Option(help="Inspection subject allowed local-client forwarding; repeat"),
+    ] = None,
+    definition: Annotated[
+        Path | None, typer.Option(help="Mounted release TOML definition")
+    ] = None,
+    source_root: Annotated[
+        Path | None, typer.Option(help="Mounted root of allowed source files")
+    ] = None,
+    source_file: Annotated[
+        list[str] | None, typer.Option(help="Allowed source file; repeat")
+    ] = None,
+    renderer_image: Annotated[
+        str | None, typer.Option(help="Immutable repository@sha256 renderer image")
+    ] = None,
+    renderer_platform: Annotated[
+        str | None, typer.Option(help="Renderer platform")
+    ] = None,
     name: Annotated[str, typer.Option(help="Application display name")] = "cluster",
     host: Annotated[
         str, typer.Option(help="Loopback bind for a TLS gateway sidecar")
@@ -256,13 +283,23 @@ def cluster_observe(
     port: Annotated[int, typer.Option(min=1, max=65535)] = 8000,
     url_prefix: Annotated[str, typer.Option()] = "",
 ) -> None:
-    """Serve authenticated, read-only cluster observation through a TLS gateway."""
+    """Serve scoped cluster observation and configured manual delivery."""
     if (
         host not in {"127.0.0.1", "::1"}
         or not authorized_sub
         or len(authorized_sub) > 100
         or any(not subject or len(subject) > 256 for subject in authorized_sub)
         or not all(path.is_absolute() for path in (ca_file, token_file, control_dir))
+        or any(
+            not subject or len(subject) > 256
+            for subject in (authorized_deploy_sub or ())
+        )
+        or not set(authorized_deploy_sub or ()).issubset(set(authorized_sub))
+        or any(
+            not subject or len(subject) > 256
+            for subject in (authorized_access_sub or ())
+        )
+        or not set(authorized_access_sub or ()).issubset(set(authorized_sub))
     ):
         reject("ui-invalid-request")
     try:
@@ -278,6 +315,7 @@ def cluster_observe(
         from piceli.services.logs import LogService
         from piceli.services.query import QueryService
         from piceli.services.registration import Registration
+        from piceli.services.remote_access import RemoteAccessService
     except ImportError:
         say("Install piceli[ui] to serve the web application.")
         reject("ui-assets-unavailable")
@@ -291,7 +329,58 @@ def cluster_observe(
             namespace,
         )
         target = identity.write_kubeconfig(control_dir / "target.kubeconfig")
-        registration = Registration("cluster", name, target)
+        delivery_requested = any(
+            value is not None
+            for value in (
+                definition,
+                source_root,
+                source_file,
+                renderer_image,
+                renderer_platform,
+            )
+        ) or bool(authorized_deploy_sub)
+        if delivery_requested:
+            if (
+                definition is None
+                or source_root is None
+                or not source_file
+                or renderer_image is None
+                or renderer_platform is None
+                or not authorized_deploy_sub
+                or not definition.is_absolute()
+                or not source_root.is_absolute()
+            ):
+                reject("ui-invalid-request")
+            from piceli.k8s.ops.provider_factory import (
+                api_client_from_kubeconfig,
+                read_cluster_identity,
+            )
+            from piceli.k8s.release_spec import ReleaseSpec
+
+            api = api_client_from_kubeconfig(target.kubeconfig, target.context)
+            try:
+                observed = read_cluster_identity(api, target)
+            finally:
+                api.close()
+            target = replace(
+                target,
+                cluster_uid=observed.cluster_uid,
+                namespace_uid=observed.namespace_uid,
+            )
+            spec = ReleaseSpec.from_toml(definition)
+            declared = spec.kubeconfig_target()
+            if (
+                declared.kubeconfig.resolve() != target.kubeconfig.resolve()
+                or declared.context != target.context
+                or declared.namespace != target.namespace
+                or not spec.state_dir.resolve().is_relative_to(control_dir.resolve())
+            ):
+                reject("ui-invalid-request")
+            registration = replace(
+                Registration.from_release("cluster", name, spec), target=target
+            )
+        else:
+            registration = Registration("cluster", name, target)
         registration = replace(
             registration,
             kinds=tuple(
@@ -300,14 +389,83 @@ def cluster_observe(
                 if item[1] not in {"Secret", "ConfigMap"}
             ),
         )
+        delivery_actions = frozenset(
+            {
+                "inspect",
+                "logs",
+                "activity",
+                "evaluate",
+                "plan",
+                "deploy",
+                "rollback",
+                "resume",
+                "cancel",
+            }
+        )
         grants = {
             hashlib.sha256((oidc_issuer + "\0" + subject).encode()).hexdigest(): {
-                registration.id: frozenset({"inspect", "logs"})
+                registration.id: (
+                    delivery_actions
+                    if subject in (authorized_deploy_sub or ())
+                    else frozenset({"inspect", "logs"})
+                )
+                | (
+                    frozenset({"access"})
+                    if subject in (authorized_access_sub or ())
+                    else frozenset()
+                )
             }
             for subject in authorized_sub
         }
         query = QueryService([registration], scope_policy=ScopePolicy(grants))
         logs = LogService(query)
+        remote_access = RemoteAccessService(query) if authorized_access_sub else None
+        operations = None
+        if delivery_requested:
+            assert source_root is not None
+            assert source_file is not None
+            assert renderer_image is not None
+            assert renderer_platform is not None
+            from piceli.services.cluster_evaluation import (
+                KubernetesJobEvaluator,
+                KubernetesRendererConfig,
+            )
+            from piceli.services.evaluation import SourceSelection, denied_paths
+            from piceli.services.operations import OperationService
+            from piceli.services.store import Store
+
+            source_root = source_root.resolve(strict=True)
+            state = control_dir.resolve()
+            entrypoint = spec.model.release.composition
+            module, separator, attribute = entrypoint.rpartition(":")
+            if module.endswith(".py") or "/" in module:
+                module = (
+                    spec.resolve(Path(module))
+                    .resolve(strict=True)
+                    .relative_to(source_root)
+                    .as_posix()
+                )
+                entrypoint = module + separator + attribute
+            selection = SourceSelection(
+                root=source_root,
+                files=tuple(source_file),
+                entrypoint=entrypoint,
+                forbidden_paths=(*denied_paths(spec), state, ca_file, token_file),
+            )
+            operations = OperationService(
+                query,
+                Store(state / "operations.sqlite3"),
+                KubernetesJobEvaluator(
+                    state / "evaluations",
+                    KubernetesRendererConfig(
+                        image_id=renderer_image,
+                        platform=renderer_platform,
+                        target=target,
+                    ),
+                ),
+                {registration.id: selection},
+                principal=None,
+            )
         security = ClusterSecurity(
             ClusterSecurityConfig(
                 origin=origin,
@@ -322,9 +480,14 @@ def cluster_observe(
             origin=origin,
             url_prefix=url_prefix,
             logs=logs,
+            operations=operations,
+            remote_access=remote_access,
             cluster_security=security,
         )
     except (ValueError, OSError):
         reject("ui-invalid-request")
-    say(f"Piceli cluster observation: {origin}{url_prefix}/ (read-only)")
+    mode = "manual delivery" if operations is not None else "observation"
+    if remote_access is not None:
+        mode += " + local-client access"
+    say(f"Piceli cluster UI: {origin}{url_prefix}/ ({mode})")
     uvicorn.run(server, host=host, port=port, log_level="warning")

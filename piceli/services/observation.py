@@ -18,6 +18,29 @@ Key = tuple[str, str, str]
 logger = logging.getLogger(__name__)
 
 
+def _cache_row(raw: dict[str, Any], kind: str) -> dict[str, Any]:
+    """Keep only the identity fields needed for sensitive object observation."""
+    if kind not in {"Secret", "ConfigMap"}:
+        return raw
+    metadata = raw.get("metadata") or {}
+    return {
+        "apiVersion": raw.get("apiVersion"),
+        "kind": raw.get("kind"),
+        "metadata": {
+            key: metadata[key]
+            for key in (
+                "name",
+                "namespace",
+                "uid",
+                "resourceVersion",
+                "generation",
+                "ownerReferences",
+            )
+            if key in metadata
+        },
+    }
+
+
 @dataclass
 class _Entry:
     registration: Registration
@@ -151,7 +174,10 @@ class ObservationHub:
             getattr(reader, "watch", None)
         )
         if not watchable:
-            return reader.list(api_version, kind, registration.target.namespace), False
+            return [
+                _cache_row(raw, kind)
+                for raw in reader.list(api_version, kind, registration.target.namespace)
+            ], False
         with self._condition:
             entry = self._entries.get(key)
             if entry is not None and not fresh and not entry.stale:
@@ -168,7 +194,10 @@ class ObservationHub:
                     return list(entry.rows.values()), False
             self._loading.add(key)
         try:
-            rows = reader.list(api_version, kind, registration.target.namespace)
+            rows = [
+                _cache_row(raw, kind)
+                for raw in reader.list(api_version, kind, registration.target.namespace)
+            ]
             version = getattr(reader, "last_versions", {}).get(
                 (api_version, kind, registration.target.namespace), ""
             )
@@ -237,7 +266,10 @@ class ObservationHub:
                     version = entry.version
                 try:
                     if not version:
-                        rows = reader.list(api_version, kind, namespace)
+                        rows = [
+                            _cache_row(raw, kind)
+                            for raw in reader.list(api_version, kind, namespace)
+                        ]
                         version = getattr(reader, "last_versions", {}).get(
                             (api_version, kind, namespace), ""
                         )
@@ -274,7 +306,7 @@ class ObservationHub:
                             if action == "DELETED":
                                 entry.rows.pop(name, None)
                             else:
-                                entry.rows[name] = raw
+                                entry.rows[name] = _cache_row(raw, kind)
                             if len(entry.rows) > 1000:
                                 raise ValueError("watch exceeded object limit")
                             if isinstance(current, str):

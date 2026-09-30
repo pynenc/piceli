@@ -8,13 +8,14 @@ import json
 import threading
 import time
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
+import httpx2
 import pytest
 from fastapi.testclient import TestClient
 from joserfc import jwk, jwt
@@ -32,7 +33,13 @@ def issuer() -> Iterator[tuple[str, dict[str, bool]]]:
     signing_key = jwk.RSAKey.generate_key(2048, parameters={"kid": "test-key"})
     wrong_key = jwk.RSAKey.generate_key(2048, parameters={"kid": "test-key"})
     flows: dict[str, dict[str, str]] = {}
-    flags = {"bad_nonce": False, "bad_signature": False}
+    flags = {
+        "bad_nonce": False,
+        "bad_signature": False,
+        "bad_audience": False,
+        "extra_audience": False,
+        "bad_azp": False,
+    }
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_args: Any) -> None:
@@ -48,7 +55,9 @@ def issuer() -> Iterator[tuple[str, dict[str, bool]]]:
 
         def do_GET(self) -> None:
             parsed = urlsplit(self.path)
-            base = f"http://127.0.0.1:{self.server.server_port}"
+            base = (
+                f"http://127.0.0.1:{cast(ThreadingHTTPServer, self.server).server_port}"
+            )
             if parsed.path == "/.well-known/openid-configuration":
                 return self.send_json(
                     {
@@ -116,14 +125,23 @@ def issuer() -> Iterator[tuple[str, dict[str, bool]]]:
             ):
                 self.send_error(400)
                 return
-            base = f"http://127.0.0.1:{self.server.server_port}"
+            base = (
+                f"http://127.0.0.1:{cast(ThreadingHTTPServer, self.server).server_port}"
+            )
             now = int(time.time())
             token = jwt.encode(
                 {"alg": "RS256", "kid": "test-key"},
                 {
                     "iss": base,
                     "sub": "operator-1",
-                    "aud": "piceli-test",
+                    "aud": (
+                        "another-client"
+                        if flags["bad_audience"]
+                        else ["piceli-test", "another-client"]
+                        if flags["extra_audience"]
+                        else "piceli-test"
+                    ),
+                    **({"azp": "another-client"} if flags["bad_azp"] else {}),
                     "iat": now,
                     "exp": now + 300,
                     "nonce": "wrong" if flags["bad_nonce"] else flow["nonce"],
@@ -256,6 +274,113 @@ def test_signed_oidc_login_pkce_session_csrf_and_bad_nonce(
 
 
 NAVIGATE = {"Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document"}
+
+
+def complete_login(browser: TestClient) -> httpx2.Response:
+    login = browser.get("/auth/login", follow_redirects=False)
+    assert login.status_code == 302
+    with httpx.Client() as idp:
+        authorization = idp.get(login.headers["location"], follow_redirects=False)
+    assert authorization.status_code == 302
+    return browser.get(authorization.headers["location"], follow_redirects=False)
+
+
+@pytest.mark.parametrize("claim", ["bad_audience", "extra_audience", "bad_azp"])
+def test_oidc_rejects_wrong_or_shared_audience(tmp_path: Path, claim: str) -> None:
+    (tmp_path / "index.html").write_text("<!doctype html><title>Piceli</title>")
+    with issuer() as (issuer_url, flags):
+        principal_id = hashlib.sha256(
+            (issuer_url + "\0operator-1").encode()
+        ).hexdigest()
+        service = QueryService(
+            [
+                Registration(
+                    "shop",
+                    "Shop",
+                    KubeconfigTarget(tmp_path / "kc", "explicit", "shop"),
+                )
+            ],
+            scope_policy=ScopePolicy({principal_id: {"shop": frozenset({"inspect"})}}),
+        )
+        security = ClusterSecurity(
+            ClusterSecurityConfig(
+                origin="http://127.0.0.1:8000",
+                issuer=issuer_url,
+                metadata_url=issuer_url + "/.well-known/openid-configuration",
+                client_id="piceli-test",
+                allow_insecure_loopback_test=True,
+            )
+        )
+        flags[claim] = True
+        app = create_app(service, static_dir=tmp_path, cluster_security=security)
+        with TestClient(app, base_url="http://127.0.0.1:8000") as browser:
+            assert complete_login(browser).status_code == 403
+            assert security.cookie_name not in browser.cookies
+            assert browser.get("/api/v1/applications").status_code == 403
+
+
+def test_oidc_grant_requirement_session_cap_and_csrf_logout(tmp_path: Path) -> None:
+    (tmp_path / "index.html").write_text("<!doctype html><title>Piceli</title>")
+    with issuer() as (issuer_url, _flags):
+        principal_id = hashlib.sha256(
+            (issuer_url + "\0operator-1").encode()
+        ).hexdigest()
+        policy = ScopePolicy({})
+        service = QueryService(
+            [
+                Registration(
+                    "shop",
+                    "Shop",
+                    KubeconfigTarget(tmp_path / "kc", "explicit", "shop"),
+                )
+            ],
+            scope_policy=policy,
+        )
+        security = ClusterSecurity(
+            ClusterSecurityConfig(
+                origin="http://127.0.0.1:8000",
+                issuer=issuer_url,
+                metadata_url=issuer_url + "/.well-known/openid-configuration",
+                client_id="piceli-test",
+                allow_insecure_loopback_test=True,
+            )
+        )
+        app = create_app(service, static_dir=tmp_path, cluster_security=security)
+        with ExitStack() as stack:
+            browsers = [
+                stack.enter_context(TestClient(app, base_url="http://127.0.0.1:8000"))
+                for _ in range(security.max_sessions_per_principal + 1)
+            ]
+            assert complete_login(browsers[0]).status_code == 403
+            assert security.cookie_name not in browsers[0].cookies
+            policy.replace({principal_id: {"shop": frozenset({"inspect"})}})
+            for browser in browsers:
+                assert complete_login(browser).status_code == 200
+            assert browsers[0].get("/api/v1/applications").status_code == 403
+            for browser in browsers[1:]:
+                assert browser.get("/api/v1/applications").status_code == 200
+            latest = browsers[-1]
+            assert latest.post("/auth/logout").status_code == 403
+            assert (
+                latest.post(
+                    "/auth/logout", headers={"Origin": "http://127.0.0.1:8000"}
+                ).status_code
+                == 403
+            )
+            assert (
+                latest.post(
+                    "/auth/logout",
+                    headers={
+                        "Origin": "http://127.0.0.1:8000",
+                        "X-Piceli-CSRF": latest.cookies[security.csrf_cookie_name],
+                    },
+                ).status_code
+                == 204
+            )
+            assert security.cookie_name not in latest.cookies
+            assert latest.get("/api/v1/applications").status_code == 403
+            policy.replace({})
+            assert browsers[1].get("/api/v1/applications").json()["items"] == []
 
 
 def test_browser_login_with_fetch_metadata_reaches_the_application(

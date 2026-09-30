@@ -12,8 +12,29 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   precede a durable release run. Activity replays scoped run events, while
   Resources shows shared observations, owner relationships, bounded current and
   previous container logs, and supervised local port forwards. See {doc}`ui`
-  for the currently implemented scope. Cluster authentication and native Git
-  reconciliation remain outside this local release slice.
+  for the currently implemented scope. Native Git reconciliation remains
+  outside this local release slice.
+- **Cluster manual delivery preview:** `piceli ui cluster-serve` can register
+  one mounted release definition and allowlisted source with scoped OIDC
+  deploy grants. Evaluation stages public source and inputs in a bounded
+  ConfigMap and executes them in a pinned, token-free Kubernetes Job selected
+  by a deny-egress policy; a separate exact plan approval still precedes
+  deployment. The single-replica install renderer defaults to read-only and
+  requires explicit resource-kind rules for manual delivery. The clean kind
+  installation and credential-boundary gate remains pending.
+- **Scoped dispatcher authority:** admitted evaluations and operations
+  persist their actor and target scope, and background recovery uses trusted
+  store lookups rather than request identity. A completed OIDC grant does not
+  let another principal read its plan or operation; grant revocation blocks
+  new reads, streams and mutations.
+- **Cluster session hardening:** signed OIDC ID tokens must name exactly this
+  client as audience, login requires an application grant, each principal has
+  a bounded session count, and logout requires the same-origin CSRF token.
+- **Remote local-client access preview:** `--authorized-access-sub` grants
+  resource-scoped one-time tickets separately from observation and deployment.
+  `piceli ui connect` claims a ticket with an explicit local kubeconfig and
+  context, owns and probes a loopback forward, and reports an expiring lease.
+  The cluster service never binds or claims a laptop port of its own.
 - **Local UI trial and execution context:** `make ui-fake-serve` starts a
   visible, disposable fake-API demo; `make test-ui-fake` runs service and
   browser journeys. The Applications screen distinguishes local from scoped UI,
@@ -29,6 +50,11 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   supervisor references are released. A forward's post-start identity check
   now reads its selected resource kind directly instead of rescanning the
   entire application inventory.
+- **Local access follows a live pod:** the supervised Service and Deployment
+  forwards use the same live-pod resolver as `piceli access` during a rollout.
+  Access leases use a monotonic deadline, periodic rechecks read only the
+  selected resource kind, and shutdown closes sessions under one shared
+  time limit.
 - **Local access supervision survives failures:** an error while supervising
   one forward (a slow `kubectl` start, a failed status read) no longer stops
   the lease watcher for the life of the server. The failing session is ended
@@ -67,7 +93,8 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 - **Cluster observation preview:** `piceli ui cluster-observe` offers
   authenticated, read-only namespace inspection and logs behind an HTTPS TLS
   gateway with an explicit projected service-account credential and OIDC
-  subject grants. In-cluster manual deployment is not yet implemented.
+  subject grants. The separate `cluster-serve` manual profile is experimental
+  until its disposable-kind installation and recovery gate passes.
 - **Legacy UI truthfulness:** presence is labelled inventory, catalog selection
   no longer reports executed rollback, and unconfigured artifact inventory has
   unknown totals. Observation errors omit private provider exception text.

@@ -143,6 +143,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/applications/{application_id}/remote-access": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Remote Access */
+        get: operations["list_remote_access_api_v1_applications__application_id__remote_access_get"];
+        put?: never;
+        /** Issue Remote Access */
+        post: operations["issue_remote_access_api_v1_applications__application_id__remote_access_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/applications/{application_id}/remote-access/{ticket_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Remote Access Ticket */
+        get: operations["remote_access_ticket_api_v1_applications__application_id__remote_access__ticket_id__get"];
+        put?: never;
+        post?: never;
+        /** Stop Remote Access */
+        delete: operations["stop_remote_access_api_v1_applications__application_id__remote_access__ticket_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/applications/{application_id}/resources": {
         parameters: {
             query?: never;
@@ -364,6 +400,57 @@ export interface paths {
         get: operations["plan_api_v1_plans__plan_id__get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/remote-access/{ticket_id}/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Claim Remote Access */
+        post: operations["claim_remote_access_api_v1_remote_access__ticket_id__claim_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/remote-access/{ticket_id}/heartbeat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Remote Access Heartbeat */
+        post: operations["remote_access_heartbeat_api_v1_remote_access__ticket_id__heartbeat_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/remote-access/{ticket_id}/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Release Remote Access */
+        post: operations["release_remote_access_api_v1_remote_access__ticket_id__release_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -844,6 +931,55 @@ export interface components {
             selected: boolean;
             /** State */
             state: string;
+        };
+        /** RemoteAccessClaimRequest */
+        RemoteAccessClaimRequest: {
+            /** Pairing Secret */
+            pairing_secret: string;
+        };
+        /** RemoteAccessHeartbeatRequest */
+        RemoteAccessHeartbeatRequest: {
+            /** Lease Secret */
+            lease_secret: string;
+            /** Local Port */
+            local_port?: number | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "connecting" | "ready" | "failed";
+        };
+        /** RemoteAccessLease */
+        RemoteAccessLease: {
+            /** Lease Secret */
+            lease_secret: string;
+            session: components["schemas"]["AccessSession"];
+            target: components["schemas"]["Target"];
+        };
+        /** RemoteAccessReleaseRequest */
+        RemoteAccessReleaseRequest: {
+            /** Lease Secret */
+            lease_secret: string;
+        };
+        /** RemoteAccessStartRequest */
+        RemoteAccessStartRequest: {
+            /**
+             * Duration Seconds
+             * @default 900
+             */
+            duration_seconds: number;
+            /** Remote Port */
+            remote_port: number;
+            /** Resource Id */
+            resource_id: string;
+            /** Resource Uid */
+            resource_uid: string;
+        };
+        /** RemoteAccessTicket */
+        RemoteAccessTicket: {
+            /** Pairing Secret */
+            pairing_secret: string;
+            session: components["schemas"]["AccessSession"];
         };
         /** Resource */
         Resource: {
@@ -1361,6 +1497,136 @@ export interface operations {
             };
         };
     };
+    list_remote_access_api_v1_applications__application_id__remote_access_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                application_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    issue_remote_access_api_v1_applications__application_id__remote_access_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                application_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemoteAccessStartRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemoteAccessTicket"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remote_access_ticket_api_v1_applications__application_id__remote_access__ticket_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                application_id: string;
+                ticket_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessSession"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stop_remote_access_api_v1_applications__application_id__remote_access__ticket_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                application_id: string;
+                ticket_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessSession"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     resources_api_v1_applications__application_id__resources_get: {
         parameters: {
             query?: {
@@ -1755,6 +2021,111 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PlanRecord"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    claim_remote_access_api_v1_remote_access__ticket_id__claim_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ticket_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemoteAccessClaimRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemoteAccessLease"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remote_access_heartbeat_api_v1_remote_access__ticket_id__heartbeat_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ticket_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemoteAccessHeartbeatRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessSession"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    release_remote_access_api_v1_remote_access__ticket_id__release_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ticket_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemoteAccessReleaseRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessSession"];
                 };
             };
             /** @description Validation Error */

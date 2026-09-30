@@ -32,6 +32,7 @@ from piceli.services.registration import Registration
 from piceli.services.store import Store, digest, now
 
 if TYPE_CHECKING:
+    from piceli.services.cluster_evaluation import KubernetesJobEvaluator
     from piceli.services.evaluation import DockerEvaluator, SourceSelection
 
 
@@ -61,22 +62,27 @@ def _failure_code(error: Exception) -> str:
 
 
 class OperationService:
-    """One local principal and dispatcher; browser disconnects do not cancel work."""
+    """One dispatcher; requests authorize admission, workers use stored grants."""
 
     def __init__(
         self,
         query: QueryService,
         store: Store,
-        evaluator: DockerEvaluator,
+        evaluator: DockerEvaluator | KubernetesJobEvaluator,
         sources: Mapping[str, SourceSelection],
         *,
-        principal: Principal,
+        principal: Principal | None,
         engine: EngineAdapter | None = None,
     ) -> None:
-        if principal.kind != "local" or principal.id != "local":
-            raise ValueError("local service requires its explicit local principal")
-        if query.scope_policy is not None:
-            raise ValueError("cluster operation dispatcher is not configured")
+        if query.scope_policy is None:
+            if (
+                principal is None
+                or principal.kind != "local"
+                or principal.id != "local"
+            ):
+                raise ValueError("local service requires its explicit local principal")
+        elif principal is not None:
+            raise ValueError("scoped operation dispatcher uses admitted request actors")
         self.query, self.store, self.evaluator = query, store, evaluator
         self.sources = dict(sources)
         self.principal = principal
@@ -117,6 +123,22 @@ class OperationService:
             raise QueryError("ui-operation-unavailable", 409)
         return registration
 
+    def _worker_registration(self, id: str) -> Registration:
+        """Trusted internal lookup after durable request-scoped admission."""
+        try:
+            return self.query.registrations[id]
+        except KeyError:
+            raise QueryError("ui-state-invalid", 409) from None
+
+    def _worker_plan(
+        self, id: str, *, application_id: str, approved_digest: str
+    ) -> PlanRecord:
+        raw, _ = self.store.get("plan", id)
+        plan = PlanRecord.model_validate(raw)
+        if plan.application_id != application_id or plan.digest != approved_digest:
+            raise QueryError("ui-state-invalid", 409)
+        return plan
+
     def _actor(self) -> str:
         return self.query._principal().id
 
@@ -139,6 +161,8 @@ class OperationService:
         if not self._renderer_ready:
             self._renderer_ready = self.evaluator.available()
         registration = self._registration(application_id)
+        if request.intent == "rollback":
+            self.query.registration(application_id, action="rollback")
         if (request.intent == "rollback") != (request.release is not None):
             raise QueryError("ui-invalid-request", 422)
         try:
@@ -173,6 +197,12 @@ class OperationService:
                 **request.model_dump(),
             }
         )
+        raw, private = self.store.get("preview", request.preview_id)
+        preview = EvaluationPreview.model_validate(raw)
+        if preview.application_id != application_id:
+            raise QueryError("ui-not-found")
+        if preview.intent == "rollback":
+            self.query.registration(application_id, action="rollback")
         duplicate = self.store.idempotent(
             request.idempotency_key,
             fingerprint,
@@ -181,10 +211,6 @@ class OperationService:
         )
         if duplicate is not None:
             return Evaluation.model_validate(duplicate)
-        raw, private = self.store.get("preview", request.preview_id)
-        preview = EvaluationPreview.model_validate(raw)
-        if preview.application_id != application_id:
-            raise QueryError("ui-not-found")
         if preview.digest != request.approved_digest:
             raise QueryError("ui-approval-mismatch", 409)
         if not unexpired(preview.expires_at):
@@ -220,9 +246,18 @@ class OperationService:
         return PlanRecord.model_validate(raw)
 
     def admit(self, application_id: str, request: OperationRequest) -> Operation:
-        registration = self._registration(application_id, action="deploy")
+        registration = self._registration(application_id, action="plan")
+        raw, private = self.store.get("plan", request.plan_id)
+        plan = PlanRecord.model_validate(raw)
+        if plan.application_id != application_id:
+            raise QueryError("ui-not-found")
+        self.query.registration(application_id, action=plan.intent)
         fingerprint = digest(
-            {"action": "deploy", "application": application_id, **request.model_dump()}
+            {
+                "action": plan.intent,
+                "application": application_id,
+                **request.model_dump(),
+            }
         )
         duplicate = self.store.idempotent(
             request.idempotency_key,
@@ -232,10 +267,6 @@ class OperationService:
         )
         if duplicate is not None:
             return self._public(Operation.model_validate(duplicate))
-        raw, private = self.store.get("plan", request.plan_id)
-        plan = PlanRecord.model_validate(raw)
-        if plan.application_id != application_id:
-            raise QueryError("ui-not-found")
         if plan.digest != request.approved_digest:
             raise QueryError("ui-approval-mismatch", 409)
         self.engine.validate(plan, private)
@@ -560,7 +591,11 @@ class OperationService:
             operation = Operation.model_validate(raw)
             if operation.engine_execution_id:
                 try:
-                    plan = self.plan(operation.plan_id)
+                    plan = self._worker_plan(
+                        operation.plan_id,
+                        application_id=operation.application_id,
+                        approved_digest=operation.approved_digest,
+                    )
                     _, private = self.store.get("plan", plan.id)
                     evidence = self.engine.inspect(
                         plan, private, operation.engine_execution_id
@@ -628,7 +663,7 @@ class OperationService:
                 preview.id, preview.digest, cancel=self._cancel
             )
             plan, material = self.engine.plan(
-                self._registration(raw["application_id"]),
+                self._worker_registration(raw["application_id"]),
                 thaw_spec(private["spec"]),
                 rendered,
                 preview,
@@ -655,7 +690,11 @@ class OperationService:
             raw.update(state="running", updated_at=now())
             self.store.update("operation", raw)
         operation = Operation.model_validate(raw)
-        plan = self.plan(operation.plan_id)
+        plan = self._worker_plan(
+            operation.plan_id,
+            application_id=operation.application_id,
+            approved_digest=operation.approved_digest,
+        )
         _, private = self.store.get("plan", plan.id)
         children: list[str] = []
 
@@ -678,7 +717,7 @@ class OperationService:
                         application_id=operation.application_id,
                         plan_id=child_plan.id,
                         approved_digest=child_plan.digest,
-                        actor=self.principal.id,
+                        actor=operation.actor,
                         trigger="ui",
                         state="running",
                         created_at=now(),
@@ -786,7 +825,11 @@ class OperationService:
         execution = outcome.get("execution") or {}
         release_state = outcome.get("release_state", execution.get("state"))
         deployed = execution.get("state") == "ready"
-        plan = self.plan(current["plan_id"])
+        plan = self._worker_plan(
+            current["plan_id"],
+            application_id=current["application_id"],
+            approved_digest=current["approved_digest"],
+        )
         checks_declared = bool(plan.checks.get("names"))
         checks = outcome.get("checks") or {}
         checked = checks.get("passed") is True

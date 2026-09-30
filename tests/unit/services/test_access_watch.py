@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import threading
 import time
@@ -31,6 +32,7 @@ class Supervisor:
         self.started = False
         self.closed = False
         self.explode = False
+        self.owner_resolver = _kwargs.get("owner_resolver")
         self.instances.append(self)
 
     def quick_start(self, _id: str, _namespace: str) -> None:
@@ -73,6 +75,7 @@ def _wait(condition: Callable[[], bool], seconds: float = 5.0) -> None:
 def _expire(access: AccessService, session_id: str) -> None:
     with access._lock:
         owned = access._sessions[session_id]
+        owned.deadline = time.monotonic() - 1
         owned.record = owned.record.model_copy(
             update={
                 "expires_at": (datetime.now(UTC) - timedelta(seconds=5)).isoformat()
@@ -82,7 +85,10 @@ def _expire(access: AccessService, session_id: str) -> None:
 
 @contextmanager
 def _service(
-    tmp_path: Path, factory: type[AccessService] = AccessService
+    tmp_path: Path,
+    factory: type[AccessService] = AccessService,
+    *,
+    reader_factory: Any = None,
 ) -> Iterator[tuple[Any, AccessStartRequest, _CountingStop]]:
     Supervisor.instances.clear()
     Supervisor.gate = None
@@ -109,6 +115,11 @@ def _service(
             query,
             kubectl=Path(sys.executable),
             supervisor_factory=Supervisor,  # type: ignore[arg-type]
+            **(
+                {"workload_reader_factory": reader_factory}
+                if reader_factory is not None
+                else {}
+            ),
         )
         stop = _CountingStop()
         access._stop = stop
@@ -128,6 +139,138 @@ def _service(
         finally:
             access.close()
             query.close()
+
+
+def test_service_forward_follows_ready_pod_and_releases_reader(tmp_path: Path) -> None:
+    class Reader:
+        instances: list[Reader] = []
+
+        def __init__(self, **_kwargs: Any) -> None:
+            self.closed = False
+            self.instances.append(self)
+
+        def workload(
+            self, kind: str, _namespace: str, _name: str
+        ) -> dict[str, Any] | None:
+            return {"spec": {"selector": {"app": "api"}}} if kind == "Service" else None
+
+        def pods(self, _namespace: str, _selector: Any) -> list[dict[str, Any]]:
+            return [
+                {
+                    "metadata": {
+                        "name": "pod-old",
+                        "creationTimestamp": "2026-01-01T00:00:00Z",
+                    },
+                    "status": {
+                        "phase": "Running",
+                        "conditions": [{"type": "Ready", "status": "True"}],
+                    },
+                },
+                {
+                    "metadata": {
+                        "name": "pod-new",
+                        "creationTimestamp": "2026-01-02T00:00:00Z",
+                    },
+                    "status": {
+                        "phase": "Running",
+                        "conditions": [{"type": "Ready", "status": "True"}],
+                    },
+                },
+            ]
+
+        def close(self) -> None:
+            self.closed = True
+
+    Reader.instances.clear()
+    with _service(tmp_path, reader_factory=Reader) as (access, request, _stop):
+        session = access.start("shop", request)
+        resolver = Supervisor.instances[-1].owner_resolver
+        assert callable(resolver)
+        assert resolver("default", "service/api") == ["pod-new", "pod-old"]
+        access.stop("shop", session.id)
+        assert Reader.instances[-1].closed
+
+
+def test_close_has_one_shared_teardown_deadline(tmp_path: Path) -> None:
+    with _service(tmp_path) as (access, request, _stop):
+        first = access.start("shop", request)
+        second = access.start("shop", request.model_copy(update={"local_port": 18081}))
+        gate = threading.Event()
+        original = [instance.close for instance in Supervisor.instances]
+        for instance, close in zip(Supervisor.instances, original, strict=True):
+            instance.close = lambda close=close: (gate.wait(5), close())  # type: ignore[method-assign]
+        access._close_timeout = 0.1
+        started = time.monotonic()
+        access.close()
+        assert time.monotonic() - started < 0.5
+        assert access.get("shop", first.id).state == "stopped"
+        assert access.get("shop", second.id).state == "stopped"
+        gate.set()
+        _wait(lambda: all(item.closed for item in Supervisor.instances))
+
+
+def test_mixed_churn_keeps_watcher_live_and_bounded(tmp_path: Path) -> None:
+    """Parallel leases, slow starts, failures and expiry share one watcher."""
+    cycles = int(os.environ.get("PICELI_UI_MIXED_CHURN_CYCLES", "30"))
+    assert 1 <= cycles <= 5000
+    with _service(tmp_path) as (access, request, stop):
+        ports = (18080, 18081, 18082)
+        active = {
+            port: access.start("shop", request.model_copy(update={"local_port": port}))
+            for port in ports
+        }
+        for index in range(cycles):
+            port = ports[index % len(ports)]
+            session = active[port]
+            if index % 3 == 0:
+                access.stop("shop", session.id)
+                expected = "stopped"
+            elif index % 3 == 1:
+                _expire(access, session.id)
+                expected = "expired"
+            else:
+                with access._lock:
+                    access._sessions[session.id].supervisor.explode = True  # type: ignore[attr-defined]
+                expected = "failed"
+            _wait(
+                lambda session_id=session.id, state=expected: (
+                    access.get("shop", session_id).state == state
+                )
+            )
+            before = stop.ticks
+            if index % 10 == 0:
+                Supervisor.gate = threading.Event()
+                Supervisor.entered = threading.Event()
+                result: list[AccessSession] = []
+                worker = threading.Thread(
+                    target=lambda target_port=port, sink=result: sink.append(
+                        access.start(
+                            "shop",
+                            request.model_copy(update={"local_port": target_port}),
+                        )
+                    )
+                )
+                worker.start()
+                assert Supervisor.entered.wait(5)
+                _wait(lambda prior=before: stop.ticks >= prior + 3)
+                Supervisor.gate.set()
+                worker.join(10)
+                Supervisor.gate = None
+                Supervisor.entered = None
+                assert result and result[0].state == "ready"
+                active[port] = result[0]
+            else:
+                active[port] = access.start(
+                    "shop", request.model_copy(update={"local_port": port})
+                )
+            assert access._thread is not None and access._thread.is_alive()
+            assert len(access._sessions) <= access._history_limit + len(ports)
+        for session in active.values():
+            access.stop("shop", session.id)
+        assert all(
+            owned.record.state in {"stopped", "expired", "failed"}
+            for owned in access._sessions.values()
+        )
 
 
 def test_a_slow_forward_start_does_not_kill_the_lease_watcher(tmp_path: Path) -> None:

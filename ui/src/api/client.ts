@@ -1,6 +1,6 @@
 import createClient from 'openapi-fetch';
 import type { paths } from './openapi';
-import type { ServiceError, PlanRequest, EvaluationRequest, OperationRequest, RecoveryRequest, CancelRequest, AccessStartRequest } from './generated';
+import type { ServiceError, PlanRequest, EvaluationRequest, OperationRequest, RecoveryRequest, CancelRequest, AccessStartRequest, RemoteAccessStartRequest } from './generated';
 
 export class ApiError extends Error {
   constructor(public status: number, public detail: ServiceError) { super(detail.message); }
@@ -57,6 +57,9 @@ export const api = {
   accessSessions: (application_id: string, signal?: AbortSignal) => service().GET('/api/v1/applications/{application_id}/access-sessions', { params: { path: { application_id } }, signal }).then(data),
   startAccess: (application_id: string, body: AccessStartRequest) => service().POST('/api/v1/applications/{application_id}/access-sessions', { params: { path: { application_id } }, body: { ...body, duration_seconds: body.duration_seconds ?? 900 } }).then(data),
   stopAccess: (application_id: string, session_id: string) => service().DELETE('/api/v1/applications/{application_id}/access-sessions/{session_id}', { params: { path: { application_id, session_id } } }).then(data),
+  remoteAccessSessions: (application_id: string, signal?: AbortSignal) => service().GET('/api/v1/applications/{application_id}/remote-access', { params: { path: { application_id } }, signal }).then(data),
+  issueRemoteAccess: (application_id: string, body: RemoteAccessStartRequest) => service().POST('/api/v1/applications/{application_id}/remote-access', { params: { path: { application_id } }, body: { ...body, duration_seconds: body.duration_seconds ?? 900 } }).then(data),
+  stopRemoteAccess: (application_id: string, ticket_id: string) => service().DELETE('/api/v1/applications/{application_id}/remote-access/{ticket_id}', { params: { path: { application_id, ticket_id } } }).then(data),
 
 };
 export const applicationPath = (id: string) => `/applications/${encodeURIComponent(id)}`;

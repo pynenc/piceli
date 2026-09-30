@@ -8,6 +8,7 @@ to the current user. Importing this module is side-effect free.
 from __future__ import annotations
 
 import os
+import secrets
 import stat
 from pathlib import Path
 
@@ -35,22 +36,32 @@ def private_ui_state_dir(explicit: Path | None = None) -> Path:
     return directory
 
 
-def launch_token_file(directory: Path, port: int) -> Path:
-    """Where ``piceli ui serve`` on ``port`` keeps its launch token while running."""
-    return directory / f"launch-token-{port}"
+def launch_token_file(directory: Path, port: int, instance_id: str) -> Path:
+    """A private token path for one server instance on ``port``."""
+    return directory / f"launch-token-{port}-{instance_id}"
 
 
 def write_launch_token(directory: Path, port: int, token: str) -> Path:
-    """Write the launch token for ``port`` (mode ``0600``); return its path."""
-    path = launch_token_file(directory, port)
-    path.unlink(missing_ok=True)
-    descriptor = os.open(
-        path,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
-        0o600,
-    )
-    try:
-        os.write(descriptor, token.encode() + b"\n")
-    finally:
-        os.close(descriptor)
-    return path
+    """Write a server's launch token in a new ``0600`` file; return its path.
+
+    Another process may already be serving the same port. Never remove or
+    overwrite that process's token before the new process attempts to bind.
+    """
+    for _ in range(3):
+        path = launch_token_file(directory, port, secrets.token_hex(12))
+        try:
+            descriptor = os.open(
+                path,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
+        except FileExistsError:
+            continue
+        try:
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(token.encode() + b"\n")
+        except BaseException:
+            path.unlink(missing_ok=True)
+            raise
+        return path
+    raise FileExistsError("Could not create a unique UI launch token file")

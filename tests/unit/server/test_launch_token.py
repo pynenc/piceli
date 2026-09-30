@@ -199,7 +199,8 @@ def test_ui_serve_prints_the_launch_address_and_removes_its_token_file(
 
     def run(server, **kwargs):  # type: ignore[no-untyped-def]
         token = server.state.security.launch_token
-        path = tmp_path / "state" / "launch-token-8123"
+        (path,) = (tmp_path / "state").glob("launch-token-8123-*")
+        seen["path"] = path
         seen["file"] = path.read_text().strip() == token
         seen["mode"] = path.stat().st_mode & 0o777
         seen["token"] = token
@@ -229,4 +230,17 @@ def test_ui_serve_prints_the_launch_address_and_removes_its_token_file(
     assert seen["file"] is True and seen["mode"] == 0o600
     assert seen["filters"] == ["piceli_redact_token"]
     assert result.output.count(f"http://127.0.0.1:8123/?token={seen['token']}") == 1
-    assert not (tmp_path / "state" / "launch-token-8123").exists()
+    assert not seen["path"].exists()
+
+
+def test_a_second_server_cannot_replace_the_first_servers_token(tmp_path: Path) -> None:
+    from piceli.k8s.ui_state import write_launch_token
+
+    first = write_launch_token(tmp_path, 8123, "first-token")
+    second = write_launch_token(tmp_path, 8123, "second-token")
+    assert first != second
+    assert first.read_text() == "first-token\n"
+    assert second.read_text() == "second-token\n"
+    second.unlink()
+    assert first.read_text() == "first-token\n"
+    first.unlink()

@@ -349,3 +349,35 @@ class AccessStartRequest(Record):
 
 class AccessPage(Record):
     items: list[AccessSession]
+
+
+class RemoteAccessStartRequest(Record):
+    resource_id: str
+    resource_uid: str
+    remote_port: int = Field(ge=1, le=65535)
+    duration_seconds: int = Field(default=900, ge=30, le=3600)
+
+
+class RemoteAccessTicket(Record):
+    session: AccessSession
+    pairing_secret: str
+
+
+class RemoteAccessClaimRequest(Record):
+    pairing_secret: str = Field(min_length=40, max_length=128)
+
+
+class RemoteAccessLease(Record):
+    session: AccessSession
+    target: Target
+    lease_secret: str
+
+
+class RemoteAccessHeartbeatRequest(Record):
+    lease_secret: str = Field(min_length=40, max_length=128)
+    state: Literal["connecting", "ready", "failed"]
+    local_port: int | None = Field(default=None, ge=1, le=65535)
+
+
+class RemoteAccessReleaseRequest(Record):
+    lease_secret: str = Field(min_length=40, max_length=128)

@@ -58,14 +58,14 @@ function Applications({ capabilities }: { capabilities?: Capabilities }) {
 }
 function RuntimeContext({ capabilities }: { capabilities: Capabilities }) {
   const cluster = capabilities.mode === 'cluster';
-  const delivery = capabilities.actions.plan?.allowed === true && capabilities.actions.deploy?.allowed === true;
+  const delivery = capabilities.actions.plan?.allowed === true && (capabilities.actions.deploy?.allowed === true || capabilities.actions.rollback?.allowed === true);
   const inspect = capabilities.actions.inspect?.allowed === true;
   return <section className="panel runtime-panel" aria-label="Execution environment">
     <h2>Execution environment</h2>
     <div className="runtime-facts">
       <div><strong>UI server</strong><span>{cluster ? 'Authenticated service' : 'Local process'}</span><p>{cluster ? 'Enabled actions run on this service host.' : 'Actions and port forwards run on the host serving this UI.'}</p></div>
       <div><strong>Deployment target</strong><span>{capabilities.targets.length} Kubernetes {capabilities.targets.length === 1 ? 'scope' : 'scopes'}</span><p>Targets use explicitly configured credentials; the cluster may be on another machine.</p></div>
-      <div><strong>Available here</strong><span>{delivery ? 'Review and deploy' : inspect ? 'Observation' : 'No accessible scopes'}</span><p>{delivery ? 'Open an application to review its exact plan before deployment.' : inspect ? 'Deployment is unavailable in this session.' : 'No application scope is authorized in this session.'}</p></div>
+      <div><strong>Available here</strong><span>{delivery ? capabilities.actions.deploy?.allowed ? 'Review and deploy' : 'Review and roll back' : inspect ? 'Observation' : 'No accessible scopes'}</span><p>{delivery ? 'Open an application to review its exact plan before a change.' : inspect ? 'Deployment is unavailable in this session.' : 'No application scope is authorized in this session.'}</p></div>
     </div>
     {!cluster && <p className="small muted">Piceli CLI can also deploy from a CI runner. This UI does not start CI jobs.</p>}
   </section>;

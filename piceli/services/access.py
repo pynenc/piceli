@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from piceli.artifacts.process import ToolPin
+from piceli.k8s.access import KubernetesWorkloadReader, LivePodResolver
 from piceli.k8s.observe import ForwardSupervisor
 from piceli.k8s.owned_processes import OwnedProcessRegistry
 from piceli.k8s.ui_config import UiShortcut
@@ -35,7 +36,9 @@ _TERMINAL = frozenset({"stopped", "expired", "failed"})
 class _Owned:
     record: AccessSession
     supervisor: ForwardSupervisor
-    resource_id: str
+    resource: Resource
+    deadline: float
+    reader: Any | None = None
     closed_at: float | None = None
 
 
@@ -46,6 +49,7 @@ class AccessService:
     _history_seconds = 600
     _active_limit = 16
     _watch_interval = 1.0
+    _close_timeout = 5.0
 
     def __init__(
         self,
@@ -53,11 +57,13 @@ class AccessService:
         *,
         kubectl: Path | None,
         supervisor_factory: Callable[..., ForwardSupervisor] = ForwardSupervisor,
+        workload_reader_factory: Callable[..., Any] = KubernetesWorkloadReader,
         registry: OwnedProcessRegistry | None = None,
     ) -> None:
         self.query = query
         self.tool = ToolPin.capture(kubectl) if kubectl is not None else None
         self.supervisor_factory = supervisor_factory
+        self.workload_reader_factory = workload_reader_factory
         self.registry = registry
         self._lock = threading.RLock()
         self._sessions: dict[str, _Owned] = {}
@@ -177,6 +183,7 @@ class AccessService:
             local_port=request.local_port,
             remote_port=request.remote_port,
         )
+        deadline = time.monotonic() + request.duration_seconds
         record = AccessSession(
             id=identity,
             application_id=application_id,
@@ -191,13 +198,32 @@ class AccessService:
             remote_port=request.remote_port,
         )
         supervisor: ForwardSupervisor | None = None
+        workload_reader: Any | None = None
         try:
+            if resource.identity.kind in {"Service", "Deployment"}:
+                try:
+                    workload_reader = self.workload_reader_factory(
+                        kubeconfig=registration.target.kubeconfig,
+                        context=registration.target.context,
+                        transport=registration.target.transport,
+                        timeout=5.0,
+                        exec_policy=registration.target.exec_policy,
+                    )
+                except (OSError, ValueError):
+                    # The explicit kubectl target remains authoritative. The
+                    # forward still works without proactive pod replacement.
+                    workload_reader = None
             supervisor = self.supervisor_factory(
                 kubeconfig=registration.target.kubeconfig,
                 context=registration.target.context,
                 kubectl=str(self.tool.path),
                 shortcuts=(shortcut,),
                 namespace=registration.target.namespace,
+                **(
+                    {"owner_resolver": LivePodResolver(workload_reader)}
+                    if workload_reader is not None
+                    else {}
+                ),
                 **({"registry": self.registry} if self.registry is not None else {}),
             )
             # Register (and start) the forward before the watcher can see the
@@ -206,7 +232,11 @@ class AccessService:
             with self._lock:
                 self._starting.pop(identity, None)
                 self._sessions[identity] = _Owned(
-                    record, supervisor, request.resource_id
+                    record,
+                    supervisor,
+                    resource,
+                    deadline,
+                    workload_reader,
                 )
                 self._ensure_watcher_locked()
             deadline = time.monotonic() + 8
@@ -250,6 +280,8 @@ class AccessService:
         except BaseException:
             if supervisor is not None:
                 supervisor.close()
+            if workload_reader is not None:
+                workload_reader.close()
             with self._lock:
                 self._starting.pop(identity, None)
                 owned_now = self._sessions.get(identity)
@@ -316,7 +348,7 @@ class AccessService:
             owned = self._sessions.get(id)
         if owned is None or owned.record.state not in _ACTIVE:
             return
-        if datetime.fromisoformat(owned.record.expires_at) <= datetime.now(UTC):
+        if time.monotonic() >= owned.deadline:
             self._end(id, "expired")
             return
         status = self._status(owned.supervisor)
@@ -337,13 +369,14 @@ class AccessService:
                 )
         else:
             request = AccessStartRequest(
-                resource_id=owned.resource_id,
+                resource_id=owned.resource.id,
                 resource_uid=owned.record.resource.uid or "",
                 local_port=owned.record.local_port or 1,
                 remote_port=owned.record.remote_port or 1,
             )
             try:
-                _, live = self._verified_resource(owned.record.application_id, request)
+                registration = self.query.registrations[owned.record.application_id]
+                live = self._recheck_resource(registration, owned.resource, request)
             except QueryError:
                 self._end(id, "failed")
                 return
@@ -373,6 +406,8 @@ class AccessService:
             )
             owned.closed_at = time.monotonic()
         owned.supervisor.close()
+        if owned.reader is not None:
+            owned.reader.close()
         with self._lock:
             self._prune_locked()
         return owned.record
@@ -415,8 +450,29 @@ class AccessService:
                 for id, owned in self._sessions.items()
                 if owned.record.state in {"connecting", "ready"}
             ]
-        for id in ids:
-            self._end(id, "stopped")
+
+        # One slow kubectl teardown must not hold the server's shutdown for
+        # every other session. Each owned forward still gets a close attempt.
+        def finish(id: str) -> None:
+            try:
+                self._end(id, "stopped")
+            except Exception as error:
+                _log.warning("access close failed (%s)", type(error).__name__)
+
+        workers = [
+            threading.Thread(
+                target=finish,
+                args=(id,),
+                name="piceli-ui-access-close",
+                daemon=True,
+            )
+            for id in ids
+        ]
+        for worker in workers:
+            worker.start()
+        deadline = time.monotonic() + self._close_timeout
+        for worker in workers:
+            worker.join(timeout=max(0, deadline - time.monotonic()))
         if self._thread is not None:
-            self._thread.join(timeout=5)
+            self._thread.join(timeout=max(0, deadline - time.monotonic()))
             self._thread = None

@@ -234,7 +234,8 @@ Ask before running these, and show the owner what will happen first.
 | `piceli artifacts execute-command` | Runs a pinned tool | `--approve-plan <hash>` |
 | `piceli artifacts import-local` | The local Docker image store | `--approve-digest <digest>` |
 | `piceli operator approve`, `piceli operator promote`, `piceli operator restore` | Operator state, catalog or files | The owner's go-ahead |
-| `piceli access`, `piceli ui serve`, `piceli observe serve`, `piceli operator serve`, `piceli observe forward-run`, `piceli observe forwards apply`, `piceli observe logs-run` | Long-running local processes and ports | The owner's go-ahead |
+| `piceli access`, `piceli ui serve`, `piceli ui connect`, `piceli observe serve`, `piceli operator serve`, `piceli observe forward-run`, `piceli observe forwards apply`, `piceli observe logs-run` | Long-running local processes and ports | The owner's go-ahead |
+| `piceli ui cluster-observe`, `piceli ui cluster-serve` | A long-running authenticated service in a named Kubernetes namespace; `cluster-serve` can admit reviewed deployment operations | The owner's approval of the installation, target and grants |
 | `piceli access stop --stale` | Stops Piceli's own local processes for the app (a forward or dashboard the owner may still be using in another terminal); never another process | The owner's go-ahead |
 
 Never add `--auto-approve` unless the owner has said that this run is an

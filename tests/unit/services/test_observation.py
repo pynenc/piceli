@@ -121,6 +121,71 @@ def test_same_credential_boundary_shares_one_watch_across_registrations() -> Non
         hub.close()
 
 
+def test_sensitive_objects_are_projected_before_shared_cache() -> None:
+    updates: queue.Queue[tuple[str, dict[str, Any]]] = queue.Queue()
+
+    class SecretReader(Reader):
+        def __init__(self, registration: Registration) -> None:
+            super().__init__(registration)
+            self.last_versions = {("v1", "Secret", "shop"): "1"}
+
+        def list(self, _api: str, _kind: str, _namespace: str) -> list[dict[str, Any]]:
+            return [
+                {
+                    "apiVersion": "v1",
+                    "kind": "Secret",
+                    "metadata": {
+                        "name": "key",
+                        "namespace": "shop",
+                        "uid": "old",
+                        "resourceVersion": "1",
+                    },
+                    "data": {"password": "sensitive"},
+                    "stringData": {"password": "sensitive"},
+                }
+            ]
+
+        def watch(
+            self, _api: str, _kind: str, _namespace: str, _version: str
+        ) -> list[tuple[str, dict[str, Any]]]:
+            try:
+                return [updates.get(timeout=0.1)]
+            except queue.Empty:
+                return []
+
+    scope = registration("one")
+    hub = ObservationHub(SecretReader, idle_seconds=5)
+    try:
+        rows, _ = hub.observe(scope, SecretReader(scope), "v1", "Secret")
+        assert "sensitive" not in str(rows)
+        assert "sensitive" not in str(hub._entries)
+        updates.put(
+            (
+                "MODIFIED",
+                {
+                    "apiVersion": "v1",
+                    "kind": "Secret",
+                    "metadata": {
+                        "name": "key",
+                        "namespace": "shop",
+                        "uid": "new",
+                        "resourceVersion": "2",
+                    },
+                    "data": {"password": "changed-sensitive"},
+                },
+            )
+        )
+        deadline = time.monotonic() + 2
+        while hub.cursor() == "0" and time.monotonic() < deadline:
+            time.sleep(0.01)
+        latest, _ = hub.observe(scope, SecretReader(scope), "v1", "Secret")
+        assert latest[0]["metadata"]["uid"] == "new"
+        assert "changed-sensitive" not in str(latest)
+        assert "changed-sensitive" not in str(hub._entries)
+    finally:
+        hub.close()
+
+
 def test_watch_error_marks_snapshot_stale_then_relists_with_reset() -> None:
     class RelistingReader(Reader):
         lists = 0

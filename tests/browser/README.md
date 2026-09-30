@@ -33,6 +33,18 @@ This read-only suite does not establish deployment/recovery, in-cluster
 authentication, Kubernetes watches, accessibility certification, or performance
 budgets. Those need their later delivery-wave acceptance targets.
 
+`make test-browser-cluster-oidc` runs a separate Chromium journey against a
+disposable self-signed HTTPS UI and local OIDC issuer. The issuer checks the
+authorization-code PKCE challenge and signs the ID token. The browser follows
+the cross-site callback, checks the secure SameSite=Strict session and CSRF
+cookies, reads one scoped resource through the fake Kubernetes API, then
+revokes the grant and confirms that the API denies that resource. The runner
+creates separate temporary directories for the certificate, fake kubeconfig,
+browser reports and profiles, and removes them and its subprocesses on exit.
+Chromium accepts only this fixture's throwaway certificate. This covers the
+browser login and cookie continuation; a real IdP, TLS gateway and kind
+installation still need their separate acceptance run.
+
 `make test-ui-browser-performance` runs a separate synthetic scale fixture with
 ten Chromium processes, 100 ms added API latency, fourfold CPU throttling and
 50 registrations/5,000 objects across three scopes. It measures desktop and

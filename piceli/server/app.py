@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import html
 import json
+import re
 import threading
 import time
 import uuid
@@ -12,6 +13,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -49,6 +51,12 @@ from piceli.services.contracts import (
     PlanRequest,
     RecoveryRequest,
     ReleasePage,
+    RemoteAccessClaimRequest,
+    RemoteAccessHeartbeatRequest,
+    RemoteAccessLease,
+    RemoteAccessReleaseRequest,
+    RemoteAccessStartRequest,
+    RemoteAccessTicket,
     Resource,
     ResourcePage,
     ServiceError,
@@ -60,6 +68,7 @@ if TYPE_CHECKING:
     from piceli.services.access import AccessService
     from piceli.services.logs import LogService
     from piceli.services.operations import OperationService
+    from piceli.services.remote_access import RemoteAccessService
 
 
 def _error(code: str, status: int) -> JSONResponse:
@@ -127,6 +136,7 @@ def create_app(
     static_dir: Path | None = None,
     operations: OperationService | None = None,
     access: AccessService | None = None,
+    remote_access: RemoteAccessService | None = None,
     logs: LogService | None = None,
     cluster_security: ClusterSecurity | None = None,
     launch_token: str | None = None,
@@ -140,18 +150,35 @@ def create_app(
     State-changing routes additionally require Origin and X-Piceli-CSRF.
     """
     if cluster_security is not None:
+        from piceli.services.cluster_evaluation import KubernetesJobEvaluator
+
         if (
             service.scope_policy is None
             or cluster_security.config.origin != origin
             or cluster_security.config.prefix != url_prefix
-            or operations is not None
             or access is not None
+            or (remote_access is not None and remote_access.query is not service)
+            or (
+                operations is not None
+                and (
+                    operations.query is not service
+                    or operations.principal is not None
+                    or not isinstance(operations.evaluator, KubernetesJobEvaluator)
+                )
+            )
         ):
             raise ValueError("cluster service boundary is incomplete")
+        cluster_security.bind_scope_policy(
+            service.scope_policy, service.registrations.keys()
+        )
         security = cluster_security
     elif launch_token is not None:
+        if remote_access is not None:
+            raise ValueError("remote access requires cluster security")
         security = LocalSecurity(origin, url_prefix, launch_token=launch_token)
     else:
+        if remote_access is not None:
+            raise ValueError("remote access requires cluster security")
         security = LocalSecurity(origin, url_prefix)
     assets = (static_dir or Path(__file__).parent / "static").resolve()
 
@@ -164,6 +191,8 @@ def create_app(
         finally:
             if access is not None:
                 access.close()
+            if remote_access is not None:
+                remote_access.close()
             if operations is not None:
                 operations.close()
             service.close()
@@ -189,6 +218,9 @@ def create_app(
             path=url_prefix or "/",
         )
     api = f"{url_prefix}/api/v1"
+    client_path = re.compile(
+        re.escape(api) + r"/remote-access/[0-9a-f]{32}/(?:claim|heartbeat|release)"
+    )
     event_guard = threading.Lock()
     event_clients = 0
 
@@ -223,16 +255,41 @@ def create_app(
     @app.middleware("http")
     async def local_boundary(request: Request, call_next: Any) -> Response:
         path = request.url.path
-        is_api = path == f"{url_prefix}/api" or path.startswith(f"{url_prefix}/api/")
+        client_request = (
+            cluster_security is not None
+            and request.method == "POST"
+            and client_path.fullmatch(path) is not None
+        )
+        is_api = (
+            path == f"{url_prefix}/api"
+            or path.startswith(f"{url_prefix}/api/")
+            or (cluster_security is not None and path == f"{url_prefix}/auth/logout")
+        )
         local = security if isinstance(security, LocalSecurity) else None
         if local is not None:
             canonical = local.canonical_navigation(request, api=is_api)
             if canonical is not None:
                 return RedirectResponse(canonical, status_code=307)
         callback_path = f"{url_prefix}/auth/callback"
-        if not (
-            cluster_security is not None and path == callback_path
-        ) and not security.accepted(request, api=is_api):
+        if client_request:
+            # The CLI uses a one-time pairing secret or a distinct lease secret.
+            # It has no browser cookie; only these exact paths bypass that cookie.
+            client_accepted = (
+                request.headers.get("host") == urlsplit(origin).netloc
+                and request.headers.get("origin", origin) == origin
+                and request.headers.get("sec-fetch-site", "none")
+                in {"none", "same-origin"}
+                and request.headers.get("content-type", "").split(";", 1)[0]
+                == "application/json"
+            )
+        else:
+            client_accepted = False
+        if client_request and not client_accepted:
+            return _error("ui-request-rejected", 403)
+        if not client_request and not (
+            (cluster_security is not None and path == callback_path)
+            or security.accepted(request, api=is_api)
+        ):
             return _error("ui-request-rejected", 403)
         page = not is_api and request.method in {"GET", "HEAD"}
         if local is not None and page and "token" in request.query_params:
@@ -301,6 +358,10 @@ def create_app(
         @app.get(f"{url_prefix}/auth/callback", include_in_schema=False)
         async def cluster_callback(request: Request) -> Response:
             return await cluster_security.callback(request)
+
+        @app.post(f"{url_prefix}/auth/logout", include_in_schema=False)
+        async def cluster_logout(request: Request) -> Response:
+            return cluster_security.logout(request)
 
     @app.exception_handler(QueryError)
     async def query_error(_request: Request, error: QueryError) -> JSONResponse:
@@ -564,6 +625,66 @@ def create_app(
     )
     def stop_access(application_id: str, session_id: str) -> AccessSession:
         return local_access().stop(application_id, session_id)
+
+    def remote_connections() -> RemoteAccessService:
+        if remote_access is None:
+            raise QueryError("ui-operation-unavailable", 409)
+        return remote_access
+
+    @app.post(
+        f"{api}/applications/{{application_id}}/remote-access",
+        response_model=RemoteAccessTicket,
+        status_code=201,
+    )
+    def issue_remote_access(
+        application_id: str, body: RemoteAccessStartRequest
+    ) -> RemoteAccessTicket:
+        return remote_connections().issue(application_id, body)
+
+    @app.get(
+        f"{api}/applications/{{application_id}}/remote-access",
+        response_model=AccessPage,
+    )
+    def list_remote_access(application_id: str) -> AccessPage:
+        return remote_connections().list(application_id)
+
+    @app.get(
+        f"{api}/applications/{{application_id}}/remote-access/{{ticket_id}}",
+        response_model=AccessSession,
+    )
+    def remote_access_ticket(application_id: str, ticket_id: str) -> AccessSession:
+        return remote_connections().get(application_id, ticket_id)
+
+    @app.delete(
+        f"{api}/applications/{{application_id}}/remote-access/{{ticket_id}}",
+        response_model=AccessSession,
+    )
+    def stop_remote_access(application_id: str, ticket_id: str) -> AccessSession:
+        return remote_connections().stop(application_id, ticket_id)
+
+    @app.post(
+        f"{api}/remote-access/{{ticket_id}}/claim", response_model=RemoteAccessLease
+    )
+    def claim_remote_access(
+        ticket_id: str, body: RemoteAccessClaimRequest
+    ) -> RemoteAccessLease:
+        return remote_connections().claim(ticket_id, body)
+
+    @app.post(
+        f"{api}/remote-access/{{ticket_id}}/heartbeat", response_model=AccessSession
+    )
+    def remote_access_heartbeat(
+        ticket_id: str, body: RemoteAccessHeartbeatRequest
+    ) -> AccessSession:
+        return remote_connections().heartbeat(ticket_id, body)
+
+    @app.post(
+        f"{api}/remote-access/{{ticket_id}}/release", response_model=AccessSession
+    )
+    def release_remote_access(
+        ticket_id: str, body: RemoteAccessReleaseRequest
+    ) -> AccessSession:
+        return remote_connections().release(ticket_id, body)
 
     @app.get(f"{api}/events")
     async def events(

@@ -421,6 +421,14 @@ class DockerEvaluator:
             self.recover_interrupted()
             self._prune()
 
+    def _boundary_warning(self) -> str:
+        return (
+            "Approved Python executes inside the configured Docker isolation boundary."
+        )
+
+    def _tool_identity(self) -> str:
+        return self.renderer.docker.sha256
+
     @contextmanager
     def _admission(self) -> Iterator[None]:
         with (self.store / "admission.lock").open("a+b") as lock:
@@ -447,12 +455,16 @@ class DockerEvaluator:
                     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except BlockingIOError:
                     continue
+                record: dict[str, Any] = {}
                 try:
-                    record = json.loads((stage / "record.json").read_bytes())
+                    loaded = json.loads((stage / "record.json").read_bytes())
+                    if not isinstance(loaded, dict):
+                        raise ValueError("invalid evaluation record")
+                    record = loaded
                     expired = datetime.fromisoformat(
                         record["preview"]["expires_at"]
                     ) <= datetime.now(UTC)
-                except (OSError, ValueError, KeyError):
+                except (OSError, ValueError, KeyError, TypeError):
                     expired = True
                 if expired:
                     self._discard_source(stage)
@@ -465,7 +477,11 @@ class DockerEvaluator:
         stages = [stage for stage in stages if stage.exists()]
         if len(stages) >= 128:
             for stage in sorted(stages, key=lambda item: item.stat().st_mtime):
-                record = json.loads((stage / "record.json").read_bytes())
+                try:
+                    loaded = json.loads((stage / "record.json").read_bytes())
+                    record = loaded if isinstance(loaded, dict) else {}
+                except (OSError, ValueError):
+                    record = {}
                 if record.get("state") in {"succeeded", "failed", "interrupted"}:
                     shutil.rmtree(stage)
                     stages.remove(stage)
@@ -632,11 +648,9 @@ class DockerEvaluator:
                     "source_bytes": self.renderer.max_source_bytes,
                     "files": self.renderer.max_files,
                 },
-                "warnings": [
-                    "Approved Python executes inside the configured Docker isolation boundary."
-                ],
+                "warnings": [self._boundary_warning()],
                 "platform": self.renderer.platform,
-                "tool": self.renderer.docker.sha256,
+                "tool": self._tool_identity(),
             }
             preview = EvaluationPreview(
                 **{k: v for k, v in material.items() if k not in {"platform", "tool"}},

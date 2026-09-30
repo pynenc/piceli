@@ -1324,6 +1324,150 @@
         "title": "ReleaseSummary",
         "type": "object"
       },
+      "RemoteAccessClaimRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "pairing_secret": {
+            "maxLength": 128,
+            "minLength": 40,
+            "title": "Pairing Secret",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pairing_secret"
+        ],
+        "title": "RemoteAccessClaimRequest",
+        "type": "object"
+      },
+      "RemoteAccessHeartbeatRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "lease_secret": {
+            "maxLength": 128,
+            "minLength": 40,
+            "title": "Lease Secret",
+            "type": "string"
+          },
+          "local_port": {
+            "anyOf": [
+              {
+                "maximum": 65535.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Local Port"
+          },
+          "state": {
+            "enum": [
+              "connecting",
+              "ready",
+              "failed"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "lease_secret",
+          "state"
+        ],
+        "title": "RemoteAccessHeartbeatRequest",
+        "type": "object"
+      },
+      "RemoteAccessLease": {
+        "additionalProperties": false,
+        "properties": {
+          "lease_secret": {
+            "title": "Lease Secret",
+            "type": "string"
+          },
+          "session": {
+            "$ref": "#/components/schemas/AccessSession"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          }
+        },
+        "required": [
+          "session",
+          "target",
+          "lease_secret"
+        ],
+        "title": "RemoteAccessLease",
+        "type": "object"
+      },
+      "RemoteAccessReleaseRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "lease_secret": {
+            "maxLength": 128,
+            "minLength": 40,
+            "title": "Lease Secret",
+            "type": "string"
+          }
+        },
+        "required": [
+          "lease_secret"
+        ],
+        "title": "RemoteAccessReleaseRequest",
+        "type": "object"
+      },
+      "RemoteAccessStartRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "duration_seconds": {
+            "default": 900,
+            "maximum": 3600.0,
+            "minimum": 30.0,
+            "title": "Duration Seconds",
+            "type": "integer"
+          },
+          "remote_port": {
+            "maximum": 65535.0,
+            "minimum": 1.0,
+            "title": "Remote Port",
+            "type": "integer"
+          },
+          "resource_id": {
+            "title": "Resource Id",
+            "type": "string"
+          },
+          "resource_uid": {
+            "title": "Resource Uid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "resource_id",
+          "resource_uid",
+          "remote_port"
+        ],
+        "title": "RemoteAccessStartRequest",
+        "type": "object"
+      },
+      "RemoteAccessTicket": {
+        "additionalProperties": false,
+        "properties": {
+          "pairing_secret": {
+            "title": "Pairing Secret",
+            "type": "string"
+          },
+          "session": {
+            "$ref": "#/components/schemas/AccessSession"
+          }
+        },
+        "required": [
+          "session",
+          "pairing_secret"
+        ],
+        "title": "RemoteAccessTicket",
+        "type": "object"
+      },
       "Resource": {
         "additionalProperties": false,
         "properties": {
@@ -2264,6 +2408,186 @@
         "summary": "Releases"
       }
     },
+    "/api/v1/applications/{application_id}/remote-access": {
+      "get": {
+        "operationId": "list_remote_access_api_v1_applications__application_id__remote_access_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "application_id",
+            "required": true,
+            "schema": {
+              "title": "Application Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Remote Access"
+      },
+      "post": {
+        "operationId": "issue_remote_access_api_v1_applications__application_id__remote_access_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "application_id",
+            "required": true,
+            "schema": {
+              "title": "Application Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RemoteAccessStartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RemoteAccessTicket"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Issue Remote Access"
+      }
+    },
+    "/api/v1/applications/{application_id}/remote-access/{ticket_id}": {
+      "delete": {
+        "operationId": "stop_remote_access_api_v1_applications__application_id__remote_access__ticket_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "application_id",
+            "required": true,
+            "schema": {
+              "title": "Application Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "ticket_id",
+            "required": true,
+            "schema": {
+              "title": "Ticket Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessSession"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stop Remote Access"
+      },
+      "get": {
+        "operationId": "remote_access_ticket_api_v1_applications__application_id__remote_access__ticket_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "application_id",
+            "required": true,
+            "schema": {
+              "title": "Application Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "ticket_id",
+            "required": true,
+            "schema": {
+              "title": "Ticket Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessSession"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remote Access Ticket"
+      }
+    },
     "/api/v1/applications/{application_id}/resources": {
       "get": {
         "operationId": "resources_api_v1_applications__application_id__resources_get",
@@ -2887,6 +3211,153 @@
           }
         },
         "summary": "Plan"
+      }
+    },
+    "/api/v1/remote-access/{ticket_id}/claim": {
+      "post": {
+        "operationId": "claim_remote_access_api_v1_remote_access__ticket_id__claim_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ticket_id",
+            "required": true,
+            "schema": {
+              "title": "Ticket Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RemoteAccessClaimRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RemoteAccessLease"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Claim Remote Access"
+      }
+    },
+    "/api/v1/remote-access/{ticket_id}/heartbeat": {
+      "post": {
+        "operationId": "remote_access_heartbeat_api_v1_remote_access__ticket_id__heartbeat_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ticket_id",
+            "required": true,
+            "schema": {
+              "title": "Ticket Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RemoteAccessHeartbeatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessSession"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remote Access Heartbeat"
+      }
+    },
+    "/api/v1/remote-access/{ticket_id}/release": {
+      "post": {
+        "operationId": "release_remote_access_api_v1_remote_access__ticket_id__release_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ticket_id",
+            "required": true,
+            "schema": {
+              "title": "Ticket Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RemoteAccessReleaseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessSession"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Release Remote Access"
       }
     }
   }

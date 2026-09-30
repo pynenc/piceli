@@ -10,14 +10,16 @@ import re
 import secrets
 import threading
 import time
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
 
 from authlib.integrations.starlette_client import OAuth
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, RedirectResponse
+from starlette.responses import HTMLResponse, RedirectResponse, Response
 
+from piceli.services.authority import ScopePolicy
 from piceli.services.contracts import Principal
 
 
@@ -71,6 +73,8 @@ class _Session:
 class ClusterSecurity:
     """Server-held sessions; browser cookies never contain provider tokens."""
 
+    max_sessions_per_principal = 5
+
     def __init__(self, config: ClusterSecurityConfig) -> None:
         self.config = config
         suffix = hashlib.sha256((config.origin + config.prefix).encode()).hexdigest()
@@ -91,6 +95,22 @@ class ClusterSecurity:
         self.login_cookie_key = secrets.token_urlsafe(48)
         self._lock = threading.RLock()
         self._sessions: dict[str, _Session] = {}
+        self._scope_policy: ScopePolicy | None = None
+        self._applications: frozenset[str] = frozenset()
+
+    def bind_scope_policy(
+        self, policy: ScopePolicy, applications: Collection[str]
+    ) -> None:
+        """Bind login eligibility to the same revocable policy as API reads."""
+        with self._lock:
+            if self._scope_policy is not None and self._scope_policy is not policy:
+                raise ValueError("cluster security already has a different policy")
+            self._scope_policy = policy
+            self._applications = frozenset(applications)
+
+    def _has_grant(self, principal_id: str) -> bool:
+        policy = self._scope_policy
+        return policy is not None and policy.has_grant(principal_id, self._applications)
 
     @property
     def callback_uri(self) -> str:
@@ -179,6 +199,11 @@ class ClusterSecurity:
             raise ValueError("verified ID token is required")
         if info.get("iss") != self.config.issuer:
             raise ValueError("OIDC issuer mismatch")
+        audience = info.get("aud")
+        if audience != self.config.client_id and audience != [self.config.client_id]:
+            raise ValueError("OIDC audience mismatch")
+        if info.get("azp", self.config.client_id) != self.config.client_id:
+            raise ValueError("OIDC authorized party mismatch")
         expiry = info.get("exp")
         if not isinstance(expiry, int) or expiry <= time.time():
             raise ValueError("OIDC ID token expired")
@@ -191,13 +216,24 @@ class ClusterSecurity:
             name=str(display)[:128],
             kind="oidc",
         )
+        if not self._has_grant(principal.id):
+            raise ValueError("OIDC principal has no application grant")
         session_token = secrets.token_urlsafe(32)
         csrf = secrets.token_urlsafe(32)
         max_age = min(3600, max(1, int(expiry - time.time())))
         with self._lock:
+            if not self._has_grant(principal.id):
+                raise ValueError("OIDC principal grant was revoked")
             for key, value in list(self._sessions.items()):
                 if value.expires_at <= time.time():
                     del self._sessions[key]
+            same_principal = [
+                key
+                for key, value in self._sessions.items()
+                if value.principal.id == principal.id
+            ]
+            for key in same_principal[: -self.max_sessions_per_principal + 1]:
+                del self._sessions[key]
             if len(self._sessions) >= 1000:
                 raise ValueError("cluster session capacity reached")
             self._sessions[hashlib.sha256(session_token.encode()).hexdigest()] = (
@@ -235,3 +271,15 @@ class ClusterSecurity:
 
     def live(self, request: Request, principal: Principal) -> bool:
         return self.principal(request) == principal
+
+    def logout(self, request: Request) -> Response:
+        """Revoke this session after the same-origin CSRF check."""
+        if self.principal(request) is None:
+            return Response(status_code=403)
+        token = request.cookies.get(self.cookie_name, "")
+        with self._lock:
+            self._sessions.pop(hashlib.sha256(token.encode()).hexdigest(), None)
+        response = Response(status_code=204)
+        for name in (self.cookie_name, self.csrf_cookie_name, "piceli_oidc_flow"):
+            response.delete_cookie(name, path=self.config.prefix or "/")
+        return response

@@ -60,7 +60,7 @@ docs: ## Build the documentation (warnings are errors)
 build: ## Build sdist and wheel into dist/
 	uv build
 
-.PHONY: ui-contract ui-contract-check ui-install ui-check ui-build ui-fake-serve test-ui test-ui-fake test-ui-package test-browser test-browser-delivery test-ui-kind-delivery test-ui-performance test-ui-browser-performance test-ui-soak test-ui-access-retention-smoke test-ui-access-retention-bound test-ui-access-retention
+.PHONY: ui-contract ui-contract-check ui-install ui-check ui-build ui-fake-serve test-ui test-ui-fake test-ui-package test-browser test-browser-cluster-oidc test-browser-delivery test-ui-kind-delivery test-ui-kind-renderer test-ui-kind-runtime test-ui-performance test-ui-browser-performance test-ui-soak test-ui-access-retention-smoke test-ui-access-retention-bound test-ui-access-retention
 
 PICELI_UI_FAKE_PORT ?= 4177
 PICELI_UI_FAKE_TEST_PORT ?= 4184
@@ -99,11 +99,20 @@ test-ui-package: ## Verify installed wheel/sdist offline assets without Node
 test-browser: ## Run real-service browser journeys with temporary artifacts
 	uv run --frozen --extra ui python tests/browser/run.py
 
+test-browser-cluster-oidc: ## Run signed OIDC login and grant revocation in Chromium over disposable HTTPS
+	uv run --frozen --extra ui python tests/browser/run_cluster_oidc.py
+
 test-browser-delivery: ## Run approved deploy/recovery browser journeys at three viewports
 	uv run --frozen --extra ui python tests/browser/run_delivery.py
 
 test-ui-kind-delivery: ## Run a browser deploy/change/rollback in a disposable kind cluster
 	uv run --frozen --extra ui python scripts/ui_kind.py uv run --frozen --extra ui python tests/browser/run_delivery.py --project=desktop
+
+test-ui-kind-renderer: ## Run the token-free renderer Job in a disposable kind cluster
+	uv run --frozen --extra ui python scripts/ui_kind.py uv run --frozen --extra ui python -m pytest -q tests/integration/test_ui_renderer_job_kind.py
+
+test-ui-kind-runtime: ## Boot the installed UI and verify PVC survives a Pod restart in disposable kind
+	uv run --frozen --extra ui python scripts/ui_kind.py uv run --frozen --extra ui python -m pytest -q tests/integration/test_ui_cluster_runtime_kind.py
 
 test-ui-performance: ## Measure the shared-observation 50-app/5,000-object/10-client fixture
 	uv run --frozen python tests/performance/ui_observation_fixture.py
