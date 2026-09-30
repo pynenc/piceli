@@ -4,7 +4,7 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
-## Version 0.9.0 (unreleased)
+## Version 0.9.0
 
 - **Builds without a VM (experimental):** `Build.spec("host-build.toml",
   builder="host")` builds with the host toolchain (for Rust `cargo` or
@@ -33,23 +33,14 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   additionally opens the workload's retained claims (one Job per StatefulSet
   ordinal) **read-only**, pinned to the node of the running pod for
   `ReadWriteOnce` claims. New `prerollout` deploy stage (only for apps that
-  declare a check, after `deliver`; `--until prerollout`), shown in the plan with
-  the Secrets and ConfigMaps the pod reads; planning refuses a missing Secret
-  or key. Check Jobs are always removed (also on interrupt; a TTL covers a
+  declare a check, after `deliver`; `--until prerollout`), shown in the plan
+  with the Secrets and ConfigMaps the pod reads; planning refuses a missing
+  Secret or key. Check Jobs are always removed (also on interrupt; a TTL covers a
   killed deployer); the run summary keeps the exit code and a scrubbed,
   bounded log tail. Declaring a check renders no object, so plan hashes of
   existing apps do not change, and the stage lists of apps without a check
   keep their six stages. `piceli.testing.FakeAPI.job_result(...)` decides how
   check Jobs end in tests. See {doc}`pre_rollout_checks`.
-- New error codes: `prerollout-mount-missing`, `prerollout-claim-exclusive`,
-  `prerollout-failed`, `prerollout-timeout`, `prerollout-not-startable`,
-  `prerollout-unavailable`.
-- New error codes: `node-facts-unavailable`, `node-page-size-invalid`,
-  `node-platform-mismatch`, `host-tool-missing`, `host-output-missing`,
-  `host-build-invalid`, `base-image-invalid`, `base-image-unavailable`,
-  `base-platform-unavailable`, `base-layer-unsupported`,
-  `build-builder-mismatch`. The deploy plan's docker builds gain an additive
-  `builder_kind: "docker"` field; hashes of existing plans do not change.
 - **Restore points of retained data:** `Pipeline(restore_points=RestorePoints())`
   adds a `backup` stage before the release plan. When a release changes the
   image or storage settings of a workload that writes a retained claim, the
@@ -66,7 +57,7 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   `restore_points` are unchanged (no `backup` stage, same hashes); the deploy,
   watch and summary schemas add the `backup` stage name (additive). New codes
   `restore-point-*`, `restore-plan-changed`. Restore point archives never
-  enter a state snapshot. See `docs/restore_points.md`.
+  enter a state snapshot. See {doc}`restore_points`.
 - **Stage order:** a run's stages are `inputs, build, deliver, prerollout,
   backup, plan, apply, checks`, each optional stage present only when
   declared. A new image passes its pre-rollout checks (including the
@@ -74,6 +65,15 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   stopped for a restore point, and the restore point is taken before the
   release plan. Pipelines that declare neither keep their six stages and
   their plan hashes.
+- New error codes: `prerollout-mount-missing`, `prerollout-claim-exclusive`,
+  `prerollout-failed`, `prerollout-timeout`, `prerollout-not-startable`,
+  `prerollout-unavailable`.
+- New error codes: `node-facts-unavailable`, `node-page-size-invalid`,
+  `node-platform-mismatch`, `host-tool-missing`, `host-output-missing`,
+  `host-build-invalid`, `base-image-invalid`, `base-image-unavailable`,
+  `base-platform-unavailable`, `base-layer-unsupported`,
+  `build-builder-mismatch`. The deploy plan's docker builds gain an additive
+  `builder_kind: "docker"` field; hashes of existing plans do not change.
 
 ## Version 0.8.1
 
