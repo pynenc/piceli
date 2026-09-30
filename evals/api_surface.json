@@ -4781,7 +4781,8 @@
      "pin",
      "preview",
      "preview-command",
-     "publish"
+     "publish",
+     "retention"
     ]
    },
    "artifacts build": {
@@ -4937,6 +4938,36 @@
      "--timeout",
      "--to",
      "--values-out"
+    ],
+    "subcommands": []
+   },
+   "artifacts retention": {
+    "arguments": [],
+    "flags": [
+     "--approve",
+     "--budget",
+     "--ca-file",
+     "--collect-unledgered",
+     "--context",
+     "--credentials",
+     "--delete",
+     "--docker-config",
+     "--forward-remote-port",
+     "--keep",
+     "--kubeconfig",
+     "--kubectl",
+     "--kubectl-sha256",
+     "--live-file",
+     "--live-namespace",
+     "--namespace",
+     "--out",
+     "--pin",
+     "--pin-file",
+     "--receipts",
+     "--repository",
+     "--timeout",
+     "--to",
+     "--via-forward"
     ],
     "subcommands": []
    },
@@ -6058,6 +6089,7 @@
    "receipt-unmatched",
    "recreated-object",
    "reference-required",
+   "registry-delete-disabled",
    "registry-digest-mismatch",
    "registry-error",
    "registry-forbidden",
@@ -6122,6 +6154,9 @@
    "retained-content-differs",
    "retained-content-precondition-failed",
    "retained-resource",
+   "retention-invalid",
+   "retention-live-unknown",
+   "retention-not-approved",
    "rotate-not-valid-for-rollback",
    "runner-disk-low",
    "runner-memory-low",
@@ -7127,6 +7162,8 @@
   "piceli.artifacts.publish",
   "piceli.artifacts.registry",
   "piceli.artifacts.registry_delivery",
+  "piceli.artifacts.retention",
+  "piceli.artifacts.retention_cli",
   "piceli.artifacts.runnable",
   "piceli.artifacts.signing",
   "piceli.artifacts.source_identity",

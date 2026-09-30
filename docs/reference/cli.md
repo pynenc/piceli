@@ -35,6 +35,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli artifacts preview`](#cli-artifacts-preview) | Preview a deterministic OCI build plan (no tools run). | none | no |
 | [`piceli artifacts preview-command`](#cli-artifacts-preview-command) | Preview a pinned external build command. | none | no |
 | [`piceli artifacts publish`](#cli-artifacts-publish) | Publish a build's images (every platform in one index) to a registry. | none | yes |
+| [`piceli artifacts retention`](#cli-artifacts-retention) | Report which registry manifests the last releases, pins and live workloads keep, and delete the rest. | reads | yes |
 | [`piceli cache prune`](#cli-cache-prune) | Remove what no release, rollback or resume needs: stale temporary directories and partial files, runs beyond --keep-last, unused delivery receipts, and (over --budget) build outputs and logs. | none | no |
 | [`piceli cache status`](#cli-cache-status) | Show the disk used per state directory and category, and Piceli's temporary directories. Read-only. | none | no |
 | [`piceli chart manifests`](#cli-chart-manifests) | Print (or write) plain manifests with a values file applied; no Helm needed. | none | no |
@@ -422,6 +423,51 @@ Mutually exclusive: `credentials` / `docker_config`.
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
 - **Notes:** Without --approve it prints the plan and its digest (exit 3) and contacts nothing. Pushes are content-addressed; a version tag that names another image is refused unless --move-tag.
+
+(cli-artifacts-retention)=
+### `piceli artifacts retention`
+
+Report which registry manifests the last releases, pins and live workloads keep, and delete the rest.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--to` | text | required | oci://host[:port]/prefix to inspect |
+| `--receipts` | path |  | publish or delivery receipts, JSON Lines journals or directories of them |
+| `--keep` | integer | `3` | releases kept (minimum) |
+| `--budget` | text |  | keep more releases, newest first, up to e.g. 10GiB |
+| `--pin` | text |  | a digest to keep |
+| `--pin-file` | path |  | digests to keep, one per line |
+| `--collect-unledgered` | boolean | `False` | also collect tagged manifests no receipt mentions |
+| `--repository` | text |  | a repository to inspect (registries without a catalog) |
+| `--kubeconfig` | path |  | reads live pods; with --context |
+| `--context` | text |  |  |
+| `--live-namespace` | text |  | default: all namespaces |
+| `--live-file` | path |  | digests in use, one per line or JSON |
+| `--via-forward` | text |  | service/NAME, deployment/NAME or pod/NAME |
+| `--namespace` | text |  | namespace of the forward target |
+| `--forward-remote-port` | integer | `5000` |  |
+| `--kubectl` | path |  |  |
+| `--kubectl-sha256` | text |  |  |
+| `--delete` | boolean | `False` |  |
+| `--approve` | text |  | the plan hash printed without --approve |
+| `--credentials` | path |  |  |
+| `--docker-config` | path |  |  |
+| `--ca-file` | path |  |  |
+| `--out` | path |  | write the report or receipt here |
+| `--timeout` | float | `120` |  |
+
+Mutually exclusive: `credentials` / `docker_config`.
+
+**Contract**
+
+- **Reads:** publish and delivery receipts, credentials file or Docker config, kubeconfig (live pods, with --context)
+- **Writes:** OCI registry (manifest deletes, only with --delete --approve), --out
+- **Cluster:** reads
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** Without --delete it only reads. --delete without --approve prints the plan and its hash (exit 3). A digest a running workload uses is never deleted; blobs are freed by the registry's own garbage collection afterwards.
 
 (cli-cache-prune)=
 ### `piceli cache prune`

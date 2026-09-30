@@ -389,8 +389,10 @@ class StreamedOciRegistryClient:
         monolithic_max: int = _MONOLITHIC_MAX,
         actions: str = "pull,push",
     ) -> None:
-        if actions not in {"pull", "pull,push"}:
-            raise ValueError("registry scope actions must be 'pull' or 'pull,push'")
+        if actions not in {"pull", "pull,push", "pull,delete"}:
+            raise ValueError(
+                "registry scope actions must be 'pull', 'pull,push' or 'pull,delete'"
+            )
         self.endpoint = endpoint
         self.actions = actions
         self.chunk_size = chunk_size
@@ -889,6 +891,67 @@ class StreamedOciRegistryClient:
             raise RegistryError("registry-digest-mismatch")
         return digest, bool(response.headers.get("oci-subject"))
 
+    def list_repositories(self) -> list[str] | None:
+        """Repository names (``/v2/_catalog``, paginated); ``None`` if not served.
+
+        Hosted registries often hide or forbid the catalog: the caller then
+        needs another source of repository names.
+        """
+        names: list[str] = []
+        path: str | None = "/v2/_catalog?n=1000"
+        for _ in range(1000):
+            if path is None:
+                return names
+            try:
+                response = self._call("GET", path, max_body=_MAX_MANIFEST)
+            except RegistryError as error:
+                if error.status in {401, 403}:
+                    return None
+                raise
+            if response.status in {404, 405, 501}:
+                return None
+            if response.status != 200:
+                raise RegistryError("registry-error", response.status)
+            names.extend(_names(response.body, "repositories"))
+            path = _next_link(response.headers.get("link"))
+        raise RegistryError("registry-response-too-large")
+
+    def list_tags(self, repository: str) -> list[str]:
+        """Every tag of ``repository`` (paginated); ``[]`` for an unknown one."""
+        tags: list[str] = []
+        path: str | None = f"/v2/{repository}/tags/list?n=1000"
+        for _ in range(1000):
+            if path is None:
+                return tags
+            response = self._call("GET", path, repository, max_body=_MAX_MANIFEST)
+            if response.status == 404:
+                return tags
+            if response.status != 200:
+                raise RegistryError("registry-error", response.status)
+            tags.extend(_names(response.body, "tags"))
+            path = _next_link(response.headers.get("link"))
+        raise RegistryError("registry-response-too-large")
+
+    def delete_manifest(self, repository: str, digest: str) -> bool:
+        """``DELETE`` a manifest by digest; ``False`` when it was already gone.
+
+        A registry that does not allow deletes answers 405 (or 400 ``UNSUPPORTED``):
+        ``registry-delete-disabled``.
+        """
+        validate_digest(digest)
+        response = self._call(
+            "DELETE", f"/v2/{repository}/manifests/{digest}", repository
+        )
+        if response.status in {200, 202, 204}:
+            return True
+        if response.status == 404:
+            return False
+        if response.status in {405, 501} or (
+            response.status == 400 and b"UNSUPPORTED" in response.body
+        ):
+            raise RegistryError("registry-delete-disabled", response.status)
+        raise RegistryError("registry-error", response.status)
+
     def referrers(self, repository: str, digest: str) -> list[dict[str, object]] | None:
         """The referrers of ``digest`` (OCI 1.1 API); ``None`` when unsupported."""
         validate_digest(digest)
@@ -910,6 +973,31 @@ class StreamedOciRegistryClient:
         if not isinstance(manifests, list):
             raise RegistryError("registry-error")
         return [item for item in manifests if isinstance(item, dict)]
+
+
+def _names(body: bytes, key: str) -> list[str]:
+    """The string list ``key`` of a registry listing (``null`` counts as empty)."""
+    try:
+        value = json.loads(body)
+    except ValueError:
+        raise RegistryError("registry-error") from None
+    items = value.get(key) if isinstance(value, dict) else None
+    if items is None:
+        return []
+    if not isinstance(items, list) or not all(isinstance(i, str) for i in items):
+        raise RegistryError("registry-error")
+    return items
+
+
+def _next_link(header: str | None) -> str | None:
+    """The ``rel="next"`` target of a pagination ``Link`` header, as a path."""
+    if not header:
+        return None
+    for part in header.split(","):
+        match = re.fullmatch(r'\s*<([^>]+)>\s*;\s*rel="?next"?\s*', part)
+        if match:
+            return match.group(1)
+    return None
 
 
 def _default_port(scheme: str) -> int:

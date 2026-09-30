@@ -60,6 +60,8 @@ AREAS: Mapping[str, str] = MappingProxyType(
         # --- 0.10.0 ---
         "chart": "Helm charts and manifests with values (`piceli chart …`)",
         "publish": "Publishing multi-platform images to a hosted registry (`piceli artifacts publish`)",
+        # --- 0.13.0 ---
+        "retention": "Registry retention (`piceli artifacts retention`)",
     }
 )
 
@@ -3448,6 +3450,38 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "Fix the option: `--to oci://registry.example/prefix --tag 1.4.0`; rename a repository in the build spec so each image has its own last segment.",
         False,
         "publish",
+    ),
+    _E(
+        "retention-invalid",
+        "Invalid retention input",
+        "A `piceli artifacts retention` input is malformed: `--keep` below 1, an unreadable or invalid `--budget` (use `10GiB`, `500MB`), a pin that is not a `sha256:` digest, a receipt that is not JSON, or an option combination that does not go together (`--approve` without `--delete`, `--kubeconfig` without `--context`).",
+        "Correct the option named in the command's help and run it again; nothing was changed.",
+        False,
+        "retention",
+    ),
+    _E(
+        "retention-live-unknown",
+        "Live workload digests unknown",
+        "Deleting needs to know which digests running workloads use. Either no source was given (`--kubeconfig` with `--context`, or `--live-file`) or reading the pods failed. An unknown inventory never licenses a deletion.",
+        "Pass `--kubeconfig FILE --context NAME` (the cluster whose workloads pull from this registry) or `--live-file`, and check that the context can list pods.",
+        True,
+        "retention",
+    ),
+    _E(
+        "retention-not-approved",
+        "Retention plan not approved",
+        "`--approve` is not the hash of the plan computed now. The registry, the receipts, the pins, the keep policy or the live workloads changed since the plan was printed, so the set of manifests to delete is not the one that was reviewed.",
+        "Run `piceli artifacts retention --delete` without `--approve`, review the new plan and pass its `digest` to `--approve`.",
+        True,
+        "retention",
+    ),
+    _E(
+        "registry-delete-disabled",
+        "Registry does not allow deletes",
+        "The registry refused `DELETE` on a manifest (HTTP 405 or `UNSUPPORTED`). Distribution registries delete only with `REGISTRY_STORAGE_DELETE_ENABLED=true` (`storage.delete.enabled`); hosted registries have their own retention settings.",
+        "Enable deletes on the registry (Piceli's node-local registry already does), or use the hosted registry's own lifecycle policy. Manifests deleted before the refusal are listed in the receipt.",
+        False,
+        "retention",
     ),
     _E(
         "publish-not-approved",

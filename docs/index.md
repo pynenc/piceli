@@ -200,6 +200,7 @@ host_builds
 publishing_images
 node_delivery
 node_local_registry
+registry_retention
 artifact_delivery
 ```
 

@@ -46,6 +46,7 @@ from piceli.artifacts.process import (
 )
 from piceli.artifacts.registry import RegistryCredentials, RegistryTarget
 from piceli.artifacts.registry_delivery import RegistryDelivery, RegistryForward
+from piceli.artifacts.retention_cli import add_retention_command, run_retention_command
 from piceli.cli_contract import Rejected, reject
 from piceli.errors import ERRORS
 from piceli.k8s.ops.bounds import strict_json
@@ -110,6 +111,7 @@ def build_parser() -> argparse.ArgumentParser:
     cmd.add_argument("--kubectl-sha256")
     add_build_spec_commands(sub)
     add_publish_command(sub)
+    add_retention_command(sub)
     return parser
 
 
@@ -166,6 +168,8 @@ def main(arguments: list[str] | None = None) -> int:
         return run_build_spec_command(args)
     if args.command == "publish":
         return run_publish_command(args)
+    if args.command == "retention":
+        return run_retention_command(args)
     try:
         if args.command == "pin":
             result = SourcePin.capture(

@@ -126,6 +126,11 @@ noted.
   digest (exit `3`); it contacts no registry. `piceli artifacts build-spec
   preview --spec host-build.toml --platform …` plans a multi-platform host
   build without running anything. See {doc}`publishing_images`.
+- `piceli artifacts retention --to oci://… --receipts DIR` (without
+  `--delete`): reads a registry (and, with `--kubeconfig`/`--context`, the
+  cluster's pod specs) and prints which manifests the last releases, pins and
+  live workloads keep and which are collectable, with the reclaimable bytes.
+  It changes nothing. See {doc}`registry_retention`.
 - `piceli codegen crd FILE` (reads the file) and `piceli codegen crd
   --from-cluster --kubeconfig F --context C --crd NAME` (one read of the CRD
   through the explicit context): generate typed models for a custom resource
@@ -246,6 +251,7 @@ Exporting deploy events (`--otlp-endpoint`, or `OTEL_EXPORTER_OTLP_*` in the env
 | `piceli chart publish` | A registry (the Helm chart, which other people then install with Helm) | `--approve <digest>` printed by `piceli chart publish` without `--approve`, after the owner reviewed the chart, its version and the target; see {doc}`helm_charts` |
 | `piceli artifacts build-spec run` | Runs a build, writes outputs and images | `--approve-builder <digest>` and `--approve-plan <hash>` (a `host-build.toml`: `--approve-plan` only) |
 | `piceli artifacts publish` | A hosted registry: images of every platform, their index, attestations, signatures, the version tag | `--approve <digest>` (printed without it) |
+| `piceli artifacts retention` | With `--delete`, a registry: deletes the manifests no release, pin or live workload needs (blobs are freed by the registry's garbage collection) | `--approve <plan hash>` printed by `--delete` without `--approve`, after the owner reviewed the exact deletion list; never a digest a running workload uses; see {doc}`registry_retention` |
 | `piceli artifacts execute-command` | Runs a pinned tool | `--approve-plan <hash>` |
 | `piceli artifacts import-local` | The local Docker image store | `--approve-digest <digest>` |
 | `piceli operator approve`, `piceli operator promote`, `piceli operator restore` | Operator state, catalog or files | The owner's go-ahead |
