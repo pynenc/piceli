@@ -60,6 +60,12 @@ def serve(
     docker_socket: Annotated[
         Path, typer.Option(help="Explicit local Docker daemon socket")
     ] = Path("/var/run/docker.sock"),
+    state_dir: Annotated[
+        Path | None,
+        typer.Option(
+            help="Private UI state directory (default: $XDG_STATE_HOME/piceli/ui)"
+        ),
+    ] = None,
 ) -> None:
     """Register an existing definition or inventory scope and serve the bundled UI."""
     if host not in {"127.0.0.1", "::1", "localhost"}:
@@ -101,12 +107,22 @@ def serve(
             )
             registration = Registration(id="my-app", name=name, target=target)
         query = QueryService([registration])
+        from piceli.k8s.owned_processes import OwnedProcessRegistry
+        from piceli.k8s.ui_state import private_ui_state_dir
         from piceli.services.access import AccessService
         from piceli.services.logs import LogService
 
+        private_state = private_ui_state_dir(state_dir)
+        forwards = OwnedProcessRegistry(private_state / "forwards")
+        # Forwards left running by a UI server that crashed or was killed.
+        reaped = forwards.reap_orphans()
+        if reaped:
+            say(f"Stopped {len(reaped)} port forward(s) left by a previous Piceli UI.")
         kubectl_path = shutil.which("kubectl")
         access = AccessService(
-            query, kubectl=Path(kubectl_path) if kubectl_path else None
+            query,
+            kubectl=Path(kubectl_path) if kubectl_path else None,
+            registry=forwards,
         )
         logs = LogService(query)
         operations = None

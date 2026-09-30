@@ -1597,6 +1597,7 @@ Register an existing definition or inventory scope and serve the bundled UI.
 | `--renderer-platform` | text |  | Renderer platform: linux/amd64 or linux/arm64 |
 | `--docker` | path |  | Docker executable to pin for isolated evaluation |
 | `--docker-socket` | path | `/var/run/docker.sock` | Explicit local Docker daemon socket |
+| `--state-dir` | path |  | Private UI state directory (default: $XDG_STATE_HOME/piceli/ui) |
 
 **Contract**
 

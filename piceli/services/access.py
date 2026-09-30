@@ -14,6 +14,7 @@ from typing import Any
 
 from piceli.artifacts.process import ToolPin
 from piceli.k8s.observe import ForwardSupervisor
+from piceli.k8s.owned_processes import OwnedProcessRegistry
 from piceli.k8s.ui_config import UiShortcut
 from piceli.services.contracts import (
     AccessPage,
@@ -52,10 +53,12 @@ class AccessService:
         *,
         kubectl: Path | None,
         supervisor_factory: Callable[..., ForwardSupervisor] = ForwardSupervisor,
+        registry: OwnedProcessRegistry | None = None,
     ) -> None:
         self.query = query
         self.tool = ToolPin.capture(kubectl) if kubectl is not None else None
         self.supervisor_factory = supervisor_factory
+        self.registry = registry
         self._lock = threading.RLock()
         self._sessions: dict[str, _Owned] = {}
         # Local ports of forwards being started: counted as active, but not
@@ -184,6 +187,7 @@ class AccessService:
                 kubectl=str(self.tool.path),
                 shortcuts=(shortcut,),
                 namespace=registration.target.namespace,
+                **({"registry": self.registry} if self.registry is not None else {}),
             )
             # Register (and start) the forward before the watcher can see the
             # record, so a published session always has a supervised status.

@@ -36,6 +36,11 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   a forward is being verified is no longer overwritten back to `ready`. Session
   state changes only from the expected state, and the history bound never
   evicts a session that is still active.
+- **Forwards left by a crashed UI are stopped at the next start:** `piceli ui
+  serve` records each `kubectl port-forward` it starts in a private state
+  directory (new `--state-dir`, default `$XDG_STATE_HOME/piceli/ui`) and, at
+  startup, stops those whose server was killed. A process is signalled only
+  when its pid still has the recorded start time and command line.
 - **Explicit rotating Kubernetes token files:** a named absolute `tokenFile`
   kubeconfig credential now refreshes before each API request and fails closed
   when the projected file disappears or becomes invalid. Static tokens retain

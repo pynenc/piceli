@@ -167,6 +167,20 @@ Ended access sessions remain visible briefly for diagnosis: the local server
 retains at most 128 terminal records for ten minutes, then releases their
 supervisor references. Active sessions are not evicted by this history limit.
 
+Each forward the UI starts is recorded in its private state directory
+(`--state-dir`, by default `$XDG_STATE_HOME/piceli/ui` or
+`~/.local/state/piceli/ui`, mode `0700`): the process id and a fingerprint of
+its start time and command line. A graceful stop (Ctrl+C) stops every forward.
+If the server is killed (`kill -9`) or crashes, its `kubectl port-forward`
+children keep running until the next `piceli ui serve` with the same state
+directory, which stops them before serving. It stops only a recorded process
+whose owner is gone and whose pid still has the recorded fingerprint; a pid
+reused by another process, or a forward of another running UI, is left alone.
+`piceli access stop --stale` does not recognise UI forwards: it looks only at
+the ports an app declares, and UI forwards use ports chosen in the browser.
+Until the next start, find a leftover by its port (`lsof -iTCP:PORT`) and
+stop it yourself.
+
 `make test-ui-access-retention-smoke` exercises a few real supervised local
 forward lifecycles through the disposable fake API.
 `make test-ui-access-retention-bound` runs 129 sessions to cross the terminal
