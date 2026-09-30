@@ -33,7 +33,7 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   additionally opens the workload's retained claims (one Job per StatefulSet
   ordinal) **read-only**, pinned to the node of the running pod for
   `ReadWriteOnce` claims. New `prerollout` deploy stage (only for apps that
-  declare a check, after `plan`; `--until prerollout`), shown in the plan with
+  declare a check, after `deliver`; `--until prerollout`), shown in the plan with
   the Secrets and ConfigMaps the pod reads; planning refuses a missing Secret
   or key. Check Jobs are always removed (also on interrupt; a TTL covers a
   killed deployer); the run summary keeps the exit code and a scrubbed,
@@ -67,6 +67,13 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   watch and summary schemas add the `backup` stage name (additive). New codes
   `restore-point-*`, `restore-plan-changed`. Restore point archives never
   enter a state snapshot. See `docs/restore_points.md`.
+- **Stage order:** a run's stages are `inputs, build, deliver, prerollout,
+  backup, plan, apply, checks`, each optional stage present only when
+  declared. A new image passes its pre-rollout checks (including the
+  read-only upgrade check next to the running writer) before any writer is
+  stopped for a restore point, and the restore point is taken before the
+  release plan. Pipelines that declare neither keep their six stages and
+  their plan hashes.
 
 ## Version 0.8.1
 

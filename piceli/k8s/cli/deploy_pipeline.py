@@ -48,9 +48,9 @@ STAGE_NAMES = (
     "inputs",
     "build",
     "deliver",
+    "prerollout",
     "backup",
     "plan",
-    "prerollout",
     "apply",
     "checks",
 )
@@ -334,9 +334,9 @@ def deploy(
         typer.Option(
             "--until",
             help=(
-                "Stop after this stage: inputs, build, deliver, backup (with "
-                "restore_points), plan, prerollout (only with a pre-rollout "
-                "check), apply or checks"
+                "Stop after this stage: inputs, build, deliver, prerollout (only "
+                "with a pre-rollout check), backup (with restore_points), plan, "
+                "apply or checks"
             ),
         ),
     ] = "checks",

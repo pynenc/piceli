@@ -1,4 +1,4 @@
-"""One journaled, resumable ``piceli deploy`` run: inputs → build → deliver → [backup →] plan → apply → checks.
+"""One journaled, resumable ``piceli deploy`` run: inputs → build → deliver → [prerollout →] [backup →] plan → apply → checks.
 
 Planning (:meth:`PipelineRunner.plan`) computes every stage's plan without
 changing anything outside the state directory and binds them into one
@@ -20,6 +20,12 @@ is unchanged:
     the node (config digest behind the content tag) already has it. Images
     are handed to the release by the delivery receipt's immutable reference,
     never by tag.
+``prerollout`` (only when the app declares ``App.pre_rollout``)
+    Runs each declared check as a Job with the delivered image and the
+    workload's real pod settings (:mod:`piceli.pipeline.prerollout_stage`)
+    before anything changes: before ``backup`` stops a writer (an upgrade
+    check opens the claim next to the running pod that holds it) and before
+    ``apply``. A failing check ends the run with the pods unchanged.
 ``backup`` (only with ``Pipeline(restore_points=...)``)
     Plans which retained claims the release touches (workloads whose image or
     storage settings change, one claim per StatefulSet replica) and, when

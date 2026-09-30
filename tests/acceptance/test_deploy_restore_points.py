@@ -253,3 +253,53 @@ def test_more_claims_at_run_time_than_approved_are_refused(shop) -> None:
         ]
         == OLD
     )
+
+
+def test_a_failing_pre_rollout_check_stops_the_run_before_any_writer_stops(
+    shop,
+) -> None:
+    api, tmp_path, fake = shop
+    checked = PIPELINE.replace(
+        'app.deployment("web"',
+        'app.pre_rollout(db, ["db", "check-config"])\napp.deployment("web"',
+    )
+    write_app(tmp_path, checked.replace("IMAGE", OLD))
+    code, events, result = deploy(tmp_path, "--auto-approve", "--json")
+    assert code == 0, result.stdout + result.stderr
+    assert {"prerollout", "backup"} <= set(events[-1]["stages"])
+    _claims(api, fake)
+    before = json.loads(json.dumps(api.objects[("StatefulSet", "db")]))
+
+    write_app(tmp_path, checked.replace("IMAGE", NEW))
+    api.job_result("db-cfg", exit_code=3, logs="store format 2 expected\n")
+    code, events, result = deploy(tmp_path, "--auto-approve", "--json")
+    assert code == 1, result.stdout + result.stderr
+    final = events[-1]
+    assert (final["state"], final["reason"], final["stage"]) == (
+        "failed",
+        "prerollout-failed",
+        "prerollout",
+    )
+    assert final["stages"]["backup"] == "pending"
+    assert final["stages"]["apply"] == "pending"
+    # No hook ran and no writer was scaled down (nor started again).
+    assert fake.calls == []
+    assert "restore_point" not in final
+    points = tmp_path / "state" / "restore-points"
+    assert not points.exists() or not any(points.iterdir())
+    stateful = api.objects[("StatefulSet", "db")]
+    assert stateful["spec"]["replicas"] == before["spec"]["replicas"] == 2
+    assert stateful["metadata"]["generation"] == before["metadata"]["generation"]
+    assert stateful["spec"]["template"]["spec"]["containers"][0]["image"] == OLD
+
+    # Once the check passes, the same run order takes the restore point,
+    # then plans and applies the release from the stopped state.
+    api.job_result("db-cfg", exit_code=0)
+    code, events, result = deploy(tmp_path, "--auto-approve", "--json")
+    assert code == 0, result.stdout + result.stderr
+    final = events[-1]
+    assert final["stages"]["prerollout"] == "done"
+    assert final["stages"]["backup"] == "done"
+    assert fake.calls[:2] == ["hook StatefulSet/db exec", "scale StatefulSet/db 0"]
+    stateful = api.objects[("StatefulSet", "db")]
+    assert stateful["spec"]["template"]["spec"]["containers"][0]["image"] == NEW

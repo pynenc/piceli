@@ -103,8 +103,8 @@ Limits of that design:
 
 ## In the plan
 
-`piceli deploy MODULE:ATTR --plan` gains a `prerollout` stage (after `plan`,
-before `apply`) **only when the app declares a check**. It lists, per check,
+`piceli deploy MODULE:ATTR --plan` gains a `prerollout` stage (after
+`deliver`, before `plan` and `apply`) **only when the app declares a check**. It lists, per check,
 the workload, the commands and timeouts, and every Secret and ConfigMap the
 pod reads, marked `source: cluster` (must exist now) or `source: release`
 (created or changed by this release). The declaration is covered by the
@@ -119,7 +119,10 @@ work, with exit `2` and before any build or delivery:
 
 ## At run time
 
-The stage runs after the release plan and before `apply`:
+The stage runs after `deliver`, with the delivered images, and before
+anything changes. With restore points ({doc}`restore_points`) it runs before
+the `backup` stage, so no writer is stopped for a release whose checks fail,
+and an upgrade check still finds the running pod that holds its claim:
 
 1. It removes check Jobs of this app that an interrupted run left behind.
 2. For every declared check whose workload the release changes, it re-reads the

@@ -47,7 +47,10 @@ pipeline = Pipeline(
 )
 ```
 
-The run gains a `backup` stage between `deliver` and `plan`. A pipeline
+The run gains a `backup` stage between `deliver` and `plan`. When the app
+also declares a pre-rollout check ({doc}`pre_rollout_checks`), the
+`prerollout` stage runs first (`deliver`, `prerollout`, `backup`, `plan`):
+no writer is stopped until the new image has passed its checks. A pipeline
 without `restore_points` has no `backup` stage, and its plans and hashes are
 unchanged.
 

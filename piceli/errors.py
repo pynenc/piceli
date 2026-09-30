@@ -2860,7 +2860,7 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "deploy-stage-unknown",
         "Unknown stage",
         "`--until` names a stage that does not exist.",
-        "Use one of inputs, build, deliver, plan, apply or checks.",
+        "Use one of inputs, build, deliver, prerollout (with a pre-rollout check), backup (with `restore_points`), plan, apply or checks.",
         False,
         "cli",
     ),

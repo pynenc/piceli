@@ -38,17 +38,20 @@ _ALIAS = re.compile(r"[a-z][a-z0-9_-]{0,62}")
 _LABEL = re.compile(r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?")
 _PINNED = re.compile(r"[^@\s]+@sha256:[0-9a-f]{64}")
 STAGES = ("inputs", "build", "deliver", "plan", "apply", "checks")
-#: Every stage a run can have, in run order. ``backup`` (restore points) exists
-#: only for a pipeline that declares ``restore_points`` and ``prerollout`` only
-#: for one whose app declares a pre-rollout check, so the runs, plans, hashes,
-#: events and summaries of every other pipeline keep the six stages above.
+#: Every stage a run can have, in run order. ``prerollout`` exists only for a
+#: pipeline whose app declares a pre-rollout check and ``backup`` (restore
+#: points) only for one that declares ``restore_points``, so the runs, plans,
+#: hashes, events and summaries of every other pipeline keep the six stages
+#: above. The checks run first, so a new image is checked before any writer
+#: is stopped; ``backup`` stays before ``plan`` because the executor compares
+#: each object against the plan and stopping writers changes them.
 ALL_STAGES = (
     "inputs",
     "build",
     "deliver",
+    "prerollout",
     "backup",
     "plan",
-    "prerollout",
     "apply",
     "checks",
 )

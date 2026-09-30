@@ -461,7 +461,7 @@ Deploy a pipeline: inputs → build → deliver → plan → apply → checks.
 | --- | --- | --- | --- |
 | `TARGET` | text |  |  |
 | `--plan` | boolean | `False` | Plan every stage and print the combined hash; execute nothing |
-| `--until` | text | `checks` | Stop after this stage: inputs, build, deliver, backup (with restore_points), plan, prerollout (only with a pre-rollout check), apply or checks |
+| `--until` | text | `checks` | Stop after this stage: inputs, build, deliver, prerollout (only with a pre-rollout check), backup (with restore_points), plan, apply or checks |
 | `--resume` | boolean | `False` | Continue the latest interrupted or failed run at its failed stage |
 | `--approve` | text |  | Combined hash to execute (from --plan) |
 | `--auto-approve` | boolean | `False` | Plan and execute without confirmation (CI) |

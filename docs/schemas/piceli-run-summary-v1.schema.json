@@ -181,6 +181,6 @@
     "seconds": {"type": "number", "description": "Sum of the stage timings."}
   },
   "$defs": {
-    "stageName": {"enum": ["inputs", "build", "deliver", "backup", "plan", "prerollout", "apply", "checks"]}
+    "stageName": {"enum": ["inputs", "build", "deliver", "prerollout", "backup", "plan", "apply", "checks"]}
   }
 }

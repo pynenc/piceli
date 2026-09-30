@@ -1,4 +1,4 @@
-"""The ``prerollout`` stage: plan the declared checks, run them before ``apply``.
+"""The ``prerollout`` stage: plan the declared checks, run them before any change.
 
 The stage exists only for a pipeline whose app declares a pre-rollout check
 (:meth:`piceli.app.App.pre_rollout`). Planning reads the cluster (never writes)
