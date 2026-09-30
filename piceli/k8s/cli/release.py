@@ -139,6 +139,17 @@ EXIT_REFUSED = 2
 EXIT_APPROVAL = 3
 
 
+OtlpOption = Annotated[
+    str | None,
+    typer.Option(
+        "--otlp-endpoint",
+        help="Send this run's events (a trace and a result log record) to an "
+        "OTLP/HTTP endpoint; the standard OTEL_EXPORTER_OTLP_* variables also "
+        "enable it. Never fails the command",
+    ),
+]
+
+
 def _emit(value: dict[str, Any]) -> None:
     typer.echo(json.dumps(value, sort_keys=True, indent=2))
 
@@ -486,6 +497,61 @@ def _finish(outcome: dict[str, Any]) -> None:
         raise typer.Exit(EXIT_NOT_READY)
 
 
+def _timed_apply(
+    events: Any,
+    runner: Any,
+    plan_hash: str,
+    skip_checks: bool,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """``runner.apply`` recording the apply stage's bounds for the events."""
+    import time
+
+    start = time.time_ns()
+    try:
+        outcome: dict[str, Any] = runner.apply(
+            plan_hash, skip_checks=skip_checks, **kwargs
+        )
+    except BaseException:
+        if events is not None:
+            events.add_stage("apply", "failed", start, time.time_ns())
+        raise
+    if events is not None:
+        ok = (outcome.get("execution") or {}).get("state") == "ready"
+        events.add_stage("apply", "done" if ok else "failed", start, time.time_ns())
+    return outcome
+
+
+def _export_release(
+    events: Any, outcome: dict[str, Any], plan_hash: str | None
+) -> None:
+    """Send a release apply/rollback's events (never raises)."""
+    import time
+
+    execution = outcome.get("execution") or {}
+    state = outcome.get("release_state", execution.get("state"))
+    failed = state != "ready" and outcome.get("intent") != "stop"
+    checks = outcome.get("checks")
+    if isinstance(checks, dict):
+        now = time.time_ns()
+        passed = bool(checks.get("passed"))
+        events.add_stage("checks", "done" if passed else "failed", now, now)
+    category = execution.get("failure_category")
+    reason = "check-failed" if state == "checks-failed" else category
+    events.attributes["piceli.plan.hash"] = plan_hash
+    events.attributes["piceli.release.intent"] = outcome.get("intent")
+    rollback = outcome.get("rollback")
+    rolled_back = isinstance(rollback, dict) and rollback.get("state") == "rolled-back"
+    events.finish(
+        {
+            "state": "rolled-back" if rolled_back else "failed" if failed else "ready",
+            "release": outcome.get("release"),
+            "reason": reason if failed and isinstance(reason, str) else None,
+        },
+        rollback=rollback if isinstance(rollback, dict) else None,
+    )
+
+
 def _plan_then_execute(
     spec: str,
     *,
@@ -500,6 +566,7 @@ def _plan_then_execute(
     skip_checks: bool = False,
     env: str | None = None,
     approve_if_policy: bool = False,
+    otlp_endpoint: str | None = None,
 ) -> None:
     if approve_if_policy and (
         approve is not None
@@ -527,18 +594,39 @@ def _plan_then_execute(
             "--approve cannot be combined with planning flags",
             code="approve-with-planning-flags",
         )
+    events: Any = None
+    plan_hash = approve
     try:
         # A rollback re-applies a catalogued release (its recorded images).
         with _locked_runner(spec, current=rollback_to is None, env=env) as runner:
+            from piceli.deploy_events import recorder as events_recorder
+
+            model = getattr(getattr(runner, "spec", None), "model", None)
+            events = events_recorder(
+                otlp_endpoint,
+                kind="release",
+                say=_say,
+                attributes={
+                    "piceli.app": getattr(
+                        getattr(model, "release", None), "name", None
+                    ),
+                    "k8s.namespace.name": getattr(
+                        getattr(model, "target", None), "namespace", None
+                    ),
+                    "piceli.environment": env,
+                },
+            )
             if approve is not None:
                 expected = None
                 if rollback_to is not None:
                     expected = runner.resolve_rollback_target(rollback_to)
-                outcome = runner.apply(
+                outcome = _timed_apply(
+                    events,
+                    runner,
                     approve,
+                    skip_checks,
                     expected_intent="rollback" if rollback_to is not None else None,
                     expected_release=expected,
-                    skip_checks=skip_checks,
                 )
             else:
                 if approve_if_policy:
@@ -575,12 +663,18 @@ def _plan_then_execute(
                 elif not auto_approve and not _confirm(result):
                     _emit({"state": "approval-required", **result.to_dict()})
                     raise typer.Exit(EXIT_APPROVAL)
-                outcome = runner.apply(result.plan_hash, skip_checks=skip_checks)
+                plan_hash = result.plan_hash
+                outcome = _timed_apply(events, runner, result.plan_hash, skip_checks)
                 if approve_if_policy:
                     outcome = {**outcome, "approved_by": "policy"}
     except _refusals() as error:
+        if events is not None:
+            events.attributes["piceli.plan.hash"] = plan_hash
+            events.finish({"state": "rejected", "reason": getattr(error, "code", None)})
         _refuse(error)
         return
+    if events is not None:
+        _export_release(events, outcome, plan_hash)
     _finish(outcome)
 
 
@@ -699,6 +793,7 @@ def apply(
     skip_checks: SkipChecksOption = False,
     env: EnvOption = None,
     approve_if_policy: ApproveIfPolicyOption = False,
+    otlp_endpoint: OtlpOption = None,
 ) -> None:
     """Execute an approved plan (``--approve HASH``), or plan and confirm.
 
@@ -725,6 +820,7 @@ def apply(
         adopt_all_desired=adopt_all_desired,
         skip_checks=skip_checks,
         approve_if_policy=approve_if_policy,
+        otlp_endpoint=otlp_endpoint,
     )
 
 
@@ -741,6 +837,7 @@ def rollback(
     adopt_all_desired: AdoptAllOption = False,
     skip_checks: SkipChecksOption = False,
     env: EnvOption = None,
+    otlp_endpoint: OtlpOption = None,
 ) -> None:
     """Re-plan and re-apply an earlier release against current cluster state.
 
@@ -757,6 +854,7 @@ def rollback(
         replace=replace,
         adopt_all_desired=adopt_all_desired,
         skip_checks=skip_checks,
+        otlp_endpoint=otlp_endpoint,
     )
 
 

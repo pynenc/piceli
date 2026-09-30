@@ -2932,6 +2932,22 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "pipeline",
     ),
     _E(
+        "deploy-events-config-invalid",
+        "Deploy events configuration unusable",
+        "Export of deploy events was asked for (`--otlp-endpoint` or `OTEL_EXPORTER_OTLP_*`) but the endpoint, headers, protocol, timeout or service name is malformed. Printed as a warning: the deploy itself is not affected and nothing is exported.",
+        "Fix the OTLP endpoint (`http(s)://host:port`, no credentials in the URL), `OTEL_EXPORTER_OTLP_HEADERS` (`key=value,…`) and `OTEL_EXPORTER_OTLP_PROTOCOL` (`http/protobuf` or `http/json`).",
+        False,
+        "pipeline",
+    ),
+    _E(
+        "deploy-events-export-failed",
+        "Deploy events not exported",
+        "The OTLP endpoint was unreachable, answered with an error or did not answer within the bound (3 s by default, `OTEL_EXPORTER_OTLP_TIMEOUT`, at most 10 s). Printed as a warning: the deploy itself is not affected and the events are not retried.",
+        "Check the endpoint and its network path from the runner; the next run exports its own events.",
+        True,
+        "pipeline",
+    ),
+    _E(
         "deploy-plan-file-mismatch",
         "Plan file does not match",
         "`--approve` is not the plan file's combined hash, or the plan file was made for another pipeline, owner or declared target.",
