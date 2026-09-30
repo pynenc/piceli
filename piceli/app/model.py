@@ -454,18 +454,19 @@ class ExistingClaim(_Volume):
     refuses any composition that also manages a claim with this name.
 
     Growing or moving the claim is the one exception, and only with
-    ``Pipeline(restore_points=...)``: ``size`` asks the deploy's ``backup``
-    stage to expand the claim in place (its storage class must allow volume
-    expansion), and ``migrate_from`` asks it to copy the data of another
-    claim into this new one before the release mounts it (the old claim is
-    kept). Both are planned, shown and approved with the deploy's combined
+    ``Pipeline(restore_points=...)``: ``expand_to`` asks the deploy's
+    ``backup`` stage to expand the claim in place (its storage class must
+    allow volume expansion), and ``migrate_from`` asks it to create this
+    claim with ``size`` and copy the data of another claim into it before
+    the release mounts it (the old claim is kept). Both are planned, shown and approved with the deploy's combined
     hash; neither renders anything. See ``docs/restore_points.md``.
 
     :param claim: Name of the existing PersistentVolumeClaim.
     :param name: Volume name; defaults to the claim name.
     :param read_only: Mount read-only.
-    :param size: The size the claim should have, such as ``"8Gi"``; a larger
-        size than the live claim's grows it (never shrinks it).
+    :param expand_to: The size the existing claim should grow to, such as
+        ``"8Gi"`` (never shrinks it).
+    :param size: With ``migrate_from``: the size of the claim Piceli creates.
     :param storage_class: With ``migrate_from``: the new claim's
         ``storageClassName`` (default: the old claim's).
     :param migrate_from: An existing claim whose data moves into ``claim``
@@ -482,6 +483,7 @@ class ExistingClaim(_Volume):
     kind: Literal["existing-claim"] = "existing-claim"
     claim: ObjectName
     read_only: bool = False
+    expand_to: Quantity | None = None
     size: Quantity | None = None
     storage_class: ObjectName | None = None
     migrate_from: ObjectName | None = None
@@ -498,6 +500,14 @@ class ExistingClaim(_Volume):
                 raise ValueError("migrate_from names another claim than claim")
             if self.read_only:
                 raise ValueError("a claim migrated into is mounted writably")
+            if self.expand_to is not None:
+                raise ValueError("give expand_to= or migrate_from=, not both")
+        elif self.size is not None:
+            raise ValueError(
+                "an existing claim has no size= (Piceli does not create it); "
+                "use expand_to= to grow it, or migrate_from= with size= to "
+                "move its data into a new claim"
+            )
         elif self.storage_class is not None:
             raise ValueError(
                 "storage_class= only goes with migrate_from= (a claim's class "
@@ -507,11 +517,12 @@ class ExistingClaim(_Volume):
 
     def growth(self) -> dict[str, Any] | None:
         """The declared size or migration (``None`` when neither is set)."""
-        if self.size is None:
+        size = self.size if self.migrate_from is not None else self.expand_to
+        if size is None:
             return None
         return {
             "claim": self.claim,
-            "size": str(self.size),
+            "size": str(size),
             **({"storage_class": self.storage_class} if self.storage_class else {}),
             **({"migrate_from": self.migrate_from} if self.migrate_from else {}),
         }

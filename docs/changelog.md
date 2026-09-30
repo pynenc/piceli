@@ -8,7 +8,7 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 - **Grow or move a retained claim (preview):** with
   `Pipeline(restore_points=...)`, a release that asks for a larger claim (a
-  larger `ClaimTemplate` size, or the new `ExistingClaim(size=...)`) grows it
+  larger `ClaimTemplate` size, or the new `ExistingClaim(expand_to=...)`) grows it
   in the deploy's `backup` stage, after the restore point and with the
   writers stopped: the claim's size is patched when its StorageClass allows
   volume expansion, and Piceli waits until the volume has grown. Otherwise

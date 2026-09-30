@@ -1224,7 +1224,7 @@ class Pipeline:
         if restore_points is None and callable(growth) and growth():
             raise PipelineError(
                 "claim-growth-needs-restore-points",
-                "the app grows or moves a claim (ExistingClaim(size=...) or "
+                "the app grows or moves a claim (ExistingClaim(expand_to=...) or "
                 "migrate_from=), which the deploy's backup stage does after a "
                 "restore point: add restore_points=RestorePoints()",
             )

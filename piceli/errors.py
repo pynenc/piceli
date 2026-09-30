@@ -3829,7 +3829,7 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
     _E(
         "claim-shrink-refused",
         "A claim would shrink",
-        "The release asks for a smaller claim than the live one (a smaller `ClaimTemplate` size, `ExistingClaim(size=...)` below the claim's size, or a move into a smaller claim). Kubernetes never shrinks a volume and Piceli never discards data to fit. Nothing was changed.",
+        "The release asks for a smaller claim than the live one (a smaller `ClaimTemplate` size, `ExistingClaim(expand_to=...)` below the claim's size, or a move into a smaller claim). Kubernetes never shrinks a volume and Piceli never discards data to fit. Nothing was changed.",
         "Keep the claim's current size in the app, or move the data to a new, smaller claim by hand.",
         False,
         "restore",
@@ -3885,7 +3885,7 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
     _E(
         "claim-growth-needs-restore-points",
         "Claim growth needs restore points",
-        "The app declares `ExistingClaim(size=...)` or `migrate_from=`, which the deploy's `backup` stage carries out after a restore point, but the pipeline has no `restore_points`.",
+        "The app declares `ExistingClaim(expand_to=...)` or `migrate_from=`, which the deploy's `backup` stage carries out after a restore point, but the pipeline has no `restore_points`.",
         "Add `restore_points=RestorePoints()` to the `Pipeline`.",
         False,
         "restore",

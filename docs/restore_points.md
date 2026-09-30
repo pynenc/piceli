@@ -9,7 +9,7 @@ that copy back with `piceli restore`.
 
 `RestorePoints`, `Quiesce`, `RestoreVerify`, `piceli restore-points`,
 `piceli restore` (with `--to-new-claim`) and growing or moving a claim
-(`ExistingClaim(size=...)`, `migrate_from=`) are
+(`ExistingClaim(expand_to=...)`, `migrate_from=`) are
 **preview**: tested end to end on `kind`, but names, options and JSON fields
 may still change in a minor release (always with a changelog entry).
 ```
@@ -311,7 +311,7 @@ pipeline = Pipeline(app, target, restore_points=RestorePoints(),
 
 # An existing claim: the size it should have.
 cache = app.deployment(
-    "cache", image=..., volumes={"/data": ExistingClaim("cache-state", size="4Gi")},
+    "cache", image=..., volumes={"/data": ExistingClaim("cache-state", expand_to="4Gi")},
 )
 ```
 

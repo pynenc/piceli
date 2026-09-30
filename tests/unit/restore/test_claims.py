@@ -116,7 +116,7 @@ def test_a_larger_template_without_expansion_asks_for_a_migration() -> None:
         ),
         (
             cache_app(ExistingClaim("cache-state")),
-            cache_app(ExistingClaim("cache-state", size="1Gi")),
+            cache_app(ExistingClaim("cache-state", expand_to="1Gi")),
             [pvc("cache-state", "2Gi", "expandable")],
         ),
         (
@@ -206,7 +206,7 @@ def test_an_existing_claim_move_is_covered_by_the_restore_point() -> None:
 
 def test_an_existing_claim_that_grows_in_place_stops_its_unchanged_writer() -> None:
     old = cache_app(ExistingClaim("cache-state"))
-    new = cache_app(ExistingClaim("cache-state", size="4Gi"))
+    new = cache_app(ExistingClaim("cache-state", expand_to="4Gi"))
     claims = [pvc("cache-state", "1Gi", "expandable")]
     steps = plan_claims(
         workloads(new),
@@ -265,7 +265,7 @@ def test_claim_growth_declarations_are_validated() -> None:
     with pytest.raises(ValueError, match="needs size"):
         ExistingClaim("b", migrate_from="a")
     with pytest.raises(ValueError, match="only goes with migrate_from"):
-        ExistingClaim("a", size="1Gi", storage_class="fast")
+        ExistingClaim("a", expand_to="1Gi", storage_class="fast")
     with pytest.raises(ValueError, match="another"):
         ClaimTemplate("data", size="1Gi", migrate_from="data")
     with pytest.raises(ValueError, match="writably"):
@@ -323,7 +323,7 @@ def _grow(
 
 def test_an_expansion_patches_the_claim_and_waits_until_it_grew(tmp_path) -> None:
     before = cache_app(ExistingClaim("cache-state"))
-    after = cache_app(ExistingClaim("cache-state", size="4Gi"))
+    after = cache_app(ExistingClaim("cache-state", expand_to="4Gi"))
     fake = FakeCluster(tmp_path, workloads(before))
     fake.pvcs["cache-state"] = pvc("cache-state", "1Gi", "expandable")
     fake.claim_names = ["cache-state"]

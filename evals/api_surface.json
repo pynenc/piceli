@@ -1723,6 +1723,7 @@
   "ExistingClaim": {
    "attrs": [
     "claim",
+    "expand_to",
     "growth",
     "kind",
     "migrate_from",
@@ -1735,6 +1736,7 @@
    ],
    "init": [
     "claim",
+    "expand_to",
     "kind",
     "migrate_from",
     "name",
