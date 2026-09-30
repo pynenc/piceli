@@ -150,6 +150,13 @@ def add_publish_command(sub: Any) -> None:
         type=Path,
         help="write the Helm values fragment (images.<key>.repository/tag/digest)",
     )
+    cmd.add_argument(
+        "--sign-key",
+        type=Path,
+        help="sign with cosign and this private key file (cosign generate-key-pair)",
+    )
+    cmd.add_argument("--cosign", type=Path)
+    cmd.add_argument("--cosign-sha256")
     cmd.add_argument("--timeout", type=float, default=1800)
 
 
@@ -416,6 +423,17 @@ def run_publish_command(args: argparse.Namespace, **seams: Any) -> int:
     from piceli.cli_contract import EXIT_APPROVAL, emit_json, say
 
     try:
+        signer = None
+        if args.sign_key is not None:
+            from piceli.artifacts.signing import CosignSigner
+
+            signer = CosignSigner(
+                discover_tool("cosign", args.cosign, args.cosign_sha256),
+                args.sign_key.absolute(),
+                **seams.pop("signer_options", {}),
+            )
+        elif args.cosign is not None or args.cosign_sha256 is not None:
+            raise PublishError("publish-invalid", "--cosign needs --sign-key")
         receipt = BuildReceipt.from_json(args.receipt.read_text())
         output_dir = args.output_dir or args.receipt.absolute().parent
         plan = PublishPlan.from_receipt(
@@ -426,6 +444,7 @@ def run_publish_command(args: argparse.Namespace, **seams: Any) -> int:
             images=args.images,
             attach=not args.no_attestations,
             move_tag=args.move_tag,
+            signing=signer.public() if signer is not None else None,
         )
         if args.approve is None or args.approve != plan.digest:
             if args.approve is not None:
@@ -446,6 +465,9 @@ def run_publish_command(args: argparse.Namespace, **seams: Any) -> int:
             credentials = docker_config_credentials(
                 args.docker_config.absolute(), plan.target.registry
             )
+        if signer is not None:  # cosign reaches the registry like the push
+            signer.credentials = credentials
+            signer.ca_file = args.ca_file.absolute() if args.ca_file else None
         docker, socket = (None, None)
         if any(
             item.archive is None for image in plan.images for item in image.platforms
@@ -456,6 +478,7 @@ def run_publish_command(args: argparse.Namespace, **seams: Any) -> int:
             ca_file=args.ca_file.absolute() if args.ca_file is not None else None,
             docker=docker,
             docker_socket=socket,
+            signer=signer,
             timeout=args.timeout,
             **seams,
         )

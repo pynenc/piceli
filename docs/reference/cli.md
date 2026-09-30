@@ -404,6 +404,9 @@ Publish a build's images (every platform in one index) to a registry.
 | `--docker-socket` | path |  |  |
 | `--out` | path |  | write the publish receipt here |
 | `--values-out` | path |  | write the Helm values fragment (images.<key>.repository/tag/digest) |
+| `--sign-key` | path |  | sign with cosign and this private key file (cosign generate-key-pair) |
+| `--cosign` | path |  |  |
+| `--cosign-sha256` | text |  |  |
 | `--timeout` | float | `1800` |  |
 
 Mutually exclusive: `credentials` / `docker_config`.

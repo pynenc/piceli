@@ -60,6 +60,7 @@ DYNAMIC = {
     "docker-tool-required",
     "ssh-tool-required",
     "kubectl-tool-required",
+    "cosign-tool-required",
     # delivery.NodeDelivery: "import-" + RunResult.state
     "import-failed",
     "import-timed-out",

@@ -94,6 +94,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`context-empty`](#error-context-empty) | build-spec | no |
 | [`context-missing`](#error-context-missing) | build-spec | no |
 | [`context-symlink`](#error-context-symlink) | build-spec | no |
+| [`cosign-tool-required`](#error-cosign-tool-required) | publish | no |
 | [`crd-invalid`](#error-crd-invalid) | codegen | no |
 | [`crd-not-found`](#error-crd-not-found) | codegen | no |
 | [`credential-helper-failed`](#error-credential-helper-failed) | publish | yes |
@@ -391,6 +392,8 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`secret-template-invalid`](#error-secret-template-invalid) | secrets | no |
 | [`secret-unknown-reference`](#error-secret-unknown-reference) | secrets | no |
 | [`server-target-identity-mismatch`](#error-server-target-identity-mismatch) | kubernetes | no |
+| [`sign-failed`](#error-sign-failed) | publish | yes |
+| [`sign-key-invalid`](#error-sign-key-invalid) | publish | no |
 | [`smoke-env-secret`](#error-smoke-env-secret) | build-spec | no |
 | [`smoke-failed`](#error-smoke-failed) | build-spec | no |
 | [`smoke-output-mismatch`](#error-smoke-output-mismatch) | build-spec | no |
@@ -3941,6 +3944,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 ## Publishing multi-platform images to a hosted registry (`piceli artifacts publish`)
 
+(error-cosign-tool-required)=
+### `cosign-tool-required`
+
+**cosign not found.** Signing needs the `cosign` binary (3.0 or later) on `PATH` or given with `--cosign`, and it is not there or not a regular executable.
+
+- **Fix:** Install cosign (`nix shell nixpkgs#cosign`, a release binary or a package), or pass `--cosign PATH`.
+- **Retry-safe:** no
+
 (error-credential-helper-failed)=
 ### `credential-helper-failed`
 
@@ -4004,3 +4015,19 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Check that nothing else writes to the repository at the same time and that the registry supports OCI image indexes, then publish again (pushes are content-addressed, so a retry is safe).
 - **Retry-safe:** yes
+
+(error-sign-failed)=
+### `sign-failed`
+
+**Signing failed.** `cosign sign` exited with an error for one of the published digests: a wrong key password (`COSIGN_PASSWORD`), a cosign older than 3.0, or the registry refused the signature. Its output is not printed. The version tag was not moved.
+
+- **Fix:** Check the key and its password (`cosign sign --key cosign.key <image>@<digest>` by hand shows the cause), then publish again (safe to retry).
+- **Retry-safe:** yes
+
+(error-sign-key-invalid)=
+### `sign-key-invalid`
+
+**Invalid signing key.** `--sign-key` is not an absolute path to a regular file of at most 64 KiB readable only by its owner (mode 0600), or the key changed since the plan was printed.
+
+- **Fix:** `chmod 600 cosign.key` (from `cosign generate-key-pair`), then plan and approve again.
+- **Retry-safe:** no
