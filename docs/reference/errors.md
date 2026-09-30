@@ -335,6 +335,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`receipt-unmatched`](#error-receipt-unmatched) | images | no |
 | [`recreated-object`](#error-recreated-object) | execution | no |
 | [`reference-required`](#error-reference-required) | artifacts-input | no |
+| [`registry-delete-disabled`](#error-registry-delete-disabled) | retention | no |
 | [`registry-digest-mismatch`](#error-registry-digest-mismatch) | artifacts-registry | no |
 | [`registry-error`](#error-registry-error) | artifacts-registry | yes |
 | [`registry-forbidden`](#error-registry-forbidden) | artifacts-registry | no |
@@ -399,6 +400,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`retained-content-differs`](#error-retained-content-differs) | release | no |
 | [`retained-content-precondition-failed`](#error-retained-content-precondition-failed) | execution | no |
 | [`retained-resource`](#error-retained-resource) | execution | no |
+| [`retention-invalid`](#error-retention-invalid) | retention | no |
+| [`retention-live-unknown`](#error-retention-live-unknown) | retention | yes |
+| [`retention-not-approved`](#error-retention-not-approved) | retention | yes |
 | [`rotate-not-valid-for-rollback`](#error-rotate-not-valid-for-rollback) | release | no |
 | [`runner-disk-low`](#error-runner-disk-low) | maintenance | yes |
 | [`runner-memory-low`](#error-runner-memory-low) | maintenance | yes |
@@ -4292,3 +4296,38 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** `chmod 600 cosign.key` (from `cosign generate-key-pair`), then plan and approve again.
 - **Retry-safe:** no
+
+
+## Registry retention (`piceli artifacts retention`)
+
+(error-registry-delete-disabled)=
+### `registry-delete-disabled`
+
+**Registry does not allow deletes.** The registry refused `DELETE` on a manifest (HTTP 405 or `UNSUPPORTED`). Distribution registries delete only with `REGISTRY_STORAGE_DELETE_ENABLED=true` (`storage.delete.enabled`); hosted registries have their own retention settings.
+
+- **Fix:** Enable deletes on the registry (Piceli's node-local registry already does), or use the hosted registry's own lifecycle policy. Manifests deleted before the refusal are listed in the receipt.
+- **Retry-safe:** no
+
+(error-retention-invalid)=
+### `retention-invalid`
+
+**Invalid retention input.** A `piceli artifacts retention` input is malformed: `--keep` below 1, an unreadable or invalid `--budget` (use `10GiB`, `500MB`), a pin that is not a `sha256:` digest, a receipt that is not JSON, or an option combination that does not go together (`--approve` without `--delete`, `--kubeconfig` without `--context`).
+
+- **Fix:** Correct the option named in the command's help and run it again; nothing was changed.
+- **Retry-safe:** no
+
+(error-retention-live-unknown)=
+### `retention-live-unknown`
+
+**Live workload digests unknown.** Deleting needs to know which digests running workloads use. Either no source was given (`--kubeconfig` with `--context`, or `--live-file`) or reading the pods failed. An unknown inventory never licenses a deletion.
+
+- **Fix:** Pass `--kubeconfig FILE --context NAME` (the cluster whose workloads pull from this registry) or `--live-file`, and check that the context can list pods.
+- **Retry-safe:** yes
+
+(error-retention-not-approved)=
+### `retention-not-approved`
+
+**Retention plan not approved.** `--approve` is not the hash of the plan computed now. The registry, the receipts, the pins, the keep policy or the live workloads changed since the plan was printed, so the set of manifests to delete is not the one that was reviewed.
+
+- **Fix:** Run `piceli artifacts retention --delete` without `--approve`, review the new plan and pass its `digest` to `--approve`.
+- **Retry-safe:** yes

@@ -253,6 +253,12 @@ CASES: dict[str, tuple[Argv, str]] = {
         ),
         "publish-invalid",
     ),
+    "artifacts retention": (
+        lambda p: (
+            ["artifacts", "retention", "--to", "oci://127.0.0.1:9/x", "--keep", "0"]
+        ),
+        "retention-invalid",
+    ),
     "artifacts build-spec run": (
         lambda p: (
             ["artifacts", "build-spec", "run", "--spec", str(p / "no.toml")]

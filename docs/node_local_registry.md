@@ -146,6 +146,10 @@ registry is compatible, or recreates it with `replace="old-registry"`; see
 
 ## Garbage collection
 
+`piceli artifacts retention` decides which manifests to delete (the last releases,
+pinned and live digests are kept) and deletes them with approval; this job
+then frees the space. See {doc}`registry_retention`.
+
 Deleting a manifest (`DELETE /v2/<repo>/manifests/<digest>`) removes the
 reference, not the layers. `registry garbage-collect` removes blobs that no
 manifest references. With `--delete-untagged` (the default here) it also removes

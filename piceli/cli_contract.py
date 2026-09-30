@@ -739,6 +739,27 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "and contacts nothing. Pushes are content-addressed; a version tag "
             "that names another image is refused unless --move-tag.",
         ),
+        "artifacts retention": _C(
+            "Report which registry manifests the last releases, pins and live workloads keep, and delete the rest.",
+            contract="conforms",
+            reads=(
+                "publish and delivery receipts",
+                "credentials file or Docker config",
+                "kubeconfig (live pods, with --context)",
+            ),
+            writes=(
+                "OCI registry (manifest deletes, only with --delete --approve)",
+                "--out",
+            ),
+            cluster="reads",
+            approval_required=True,
+            safe_to_retry=True,
+            exit_codes=(0, 1, 2, 3),
+            notes="Without --delete it only reads. --delete without --approve "
+            "prints the plan and its hash (exit 3). A digest a running workload "
+            "uses is never deleted; blobs are freed by the registry's own "
+            "garbage collection afterwards.",
+        ),
         # ------------------------------------------------------ observe
         "observe status": _C(
             "Compare a session archive with live cluster state.",

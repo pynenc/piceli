@@ -6,6 +6,26 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ## Version 0.13.0 (unreleased)
 
+- **Registry retention from the CLI (experimental):** `piceli artifacts
+  retention --to oci://host[:port]/prefix --receipts …` reports which
+  manifests a registry keeps (the last `--keep N` releases, per image, of the
+  publish and delivery receipts (`<state_dir>/deliveries/`), `--pin` digests, the digests running pods use, the
+  children and referrers of those, tagged manifests no receipt mentions) and
+  which are collectable, with the deduplicated bytes they free. `--budget
+  10GiB` keeps more releases newest first while the kept bytes stay within it,
+  never fewer than `--keep`. `--delete` prints the plan and its hash (exit 3);
+  `--delete --approve HASH` deletes exactly that list by digest through the
+  registry API, refuses (`retention-not-approved`) when the plan changed, never
+  deletes a digest a workload uses (running pods and the pod templates of
+  Deployments, StatefulSets, DaemonSets, ReplicaSets, Jobs and CronJobs, so
+  scaled-to-zero workloads and CronJobs between runs are safe; the output says
+  which kind keeps each digest), and needs a live source
+  (`--kubeconfig`/`--context` or `--live-file`, else `retention-live-unknown`).
+  A registry that refuses deletes is `registry-delete-disabled`. Blob space is
+  freed by the registry's own garbage collection (without `--delete-untagged`).
+  The registry client gains `list_repositories`, `list_tags` and
+  `delete_manifest`. New error codes `retention-*` and
+  `registry-delete-disabled`. See {doc}`registry_retention`.
 - **Machine-wide lock for heavy work (`piceli heavy`):** `piceli heavy run
   [--name N] [--wait SECONDS] -- COMMAND...` runs a command under an OS-level
   lock (`flock` in a per-user state directory, released by the OS when the
