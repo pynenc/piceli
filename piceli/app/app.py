@@ -1700,6 +1700,32 @@ class App(BaseModel):
             for key, verify in sorted(self._restore_verify.items())
         }
 
+    def claim_growth(self) -> dict[str, list[dict[str, Any]]]:
+        """Declared claim growth and moves per ``Kind/name`` (JSON-safe).
+
+        One entry per ``ExistingClaim`` with ``size=`` (``claim``, ``size``
+        and, for a move, ``migrate_from``, ``storage_class``) and per
+        ``ClaimTemplate`` with ``migrate_from=`` (``template``,
+        ``migrate_from``). Carried out by a deploy's ``backup`` stage; empty
+        for an app that declares none.
+        """
+        found: dict[str, list[dict[str, Any]]] = {}
+        for item in self._objects:
+            kind = kind_of(item)
+            if kind not in {"Deployment", "StatefulSet"}:
+                continue
+            entries: dict[str, dict[str, Any]] = {}
+            for container in getattr(item, "containers", ()):
+                for mount in container.volumes.values():
+                    volume = getattr(mount, "volume", mount)
+                    growth = getattr(volume, "growth", None)
+                    value = growth() if callable(growth) else None
+                    if value is not None:
+                        entries[json.dumps(value, sort_keys=True)] = value
+            if entries:
+                found[f"{kind}/{item.name}"] = [entries[key] for key in sorted(entries)]
+        return dict(sorted(found.items()))
+
     # --------------------------------------------------------------- render
 
     def composition(self, ctx: ContextLike) -> DeploymentComposition:

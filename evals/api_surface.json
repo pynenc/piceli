@@ -64,6 +64,7 @@
     "add",
     "added_components",
     "autoscaler",
+    "claim_growth",
     "composition",
     "config",
     "cron_job",
@@ -122,6 +123,7 @@
      "scale_down_stabilization_seconds",
      "workload"
     ],
+    "claim_growth": [],
     "composition": [
      "ctx"
     ],
@@ -879,7 +881,9 @@
   "ClaimTemplate": {
    "attrs": [
     "access_modes",
+    "growth",
     "kind",
+    "migrate_from",
     "name",
     "read_only",
     "size",
@@ -891,12 +895,14 @@
    "init": [
     "access_modes",
     "kind",
+    "migrate_from",
     "name",
     "read_only",
     "size",
     "storage_class"
    ],
    "methods": {
+    "growth": [],
     "source": [],
     "template": [],
     "volume_name": [
@@ -1717,19 +1723,29 @@
   "ExistingClaim": {
    "attrs": [
     "claim",
+    "expand_to",
+    "growth",
     "kind",
+    "migrate_from",
     "name",
     "read_only",
+    "size",
     "source",
+    "storage_class",
     "volume_name"
    ],
    "init": [
     "claim",
+    "expand_to",
     "kind",
+    "migrate_from",
     "name",
-    "read_only"
+    "read_only",
+    "size",
+    "storage_class"
    ],
    "methods": {
+    "growth": [],
     "source": [],
     "volume_name": [
      "mount_path"
@@ -5788,6 +5804,15 @@
    "check-timed-out",
    "checks-rollback-failed",
    "checks-rollback-unavailable",
+   "claim-expansion-failed",
+   "claim-growth-needs-apply",
+   "claim-growth-needs-restore-points",
+   "claim-migration-failed",
+   "claim-migration-mismatch",
+   "claim-migration-required",
+   "claim-migration-target-exists",
+   "claim-migration-verify-failed",
+   "claim-shrink-refused",
    "cluster-identity-changed",
    "cluster-identity-unreadable",
    "codegen-cluster-read-failed",
@@ -7238,6 +7263,7 @@
   "piceli.process_group",
   "piceli.reference_docs",
   "piceli.restore",
+  "piceli.restore.claims",
   "piceli.restore.cluster",
   "piceli.restore.model",
   "piceli.restore.plan",

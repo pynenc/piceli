@@ -453,21 +453,79 @@ class ExistingClaim(_Volume):
     release); a pod that mounts a missing claim stays ``Pending``. Rendering
     refuses any composition that also manages a claim with this name.
 
+    Growing or moving the claim is the one exception, and only with
+    ``Pipeline(restore_points=...)``: ``expand_to`` asks the deploy's
+    ``backup`` stage to expand the claim in place (its storage class must
+    allow volume expansion), and ``migrate_from`` asks it to create this
+    claim with ``size`` and copy the data of another claim into it before
+    the release mounts it (the old claim is kept). Both are planned, shown and approved with the deploy's combined
+    hash; neither renders anything. See ``docs/restore_points.md``.
+
     :param claim: Name of the existing PersistentVolumeClaim.
     :param name: Volume name; defaults to the claim name.
     :param read_only: Mount read-only.
+    :param expand_to: The size the existing claim should grow to, such as
+        ``"8Gi"`` (never shrinks it).
+    :param size: With ``migrate_from``: the size of the claim Piceli creates.
+    :param storage_class: With ``migrate_from``: the new claim's
+        ``storageClassName`` (default: the old claim's).
+    :param migrate_from: An existing claim whose data moves into ``claim``
+        (created by the deploy, with ``size``) before the release switches
+        the workload to it.
 
     Example::
 
         volumes={"/data": ExistingClaim("cache-state")}
+        volumes={"/data": ExistingClaim("cache-state-2", size="8Gi",
+                                        migrate_from="cache-state")}
     """
 
     kind: Literal["existing-claim"] = "existing-claim"
     claim: ObjectName
     read_only: bool = False
+    expand_to: Quantity | None = None
+    size: Quantity | None = None
+    storage_class: ObjectName | None = None
+    migrate_from: ObjectName | None = None
 
     def __init__(self, claim: str, /, **data: Any) -> None:
         super().__init__(**{"claim": claim, **data})
+
+    @model_validator(mode="after")
+    def _growth(self) -> ExistingClaim:
+        if self.migrate_from is not None:
+            if self.size is None:
+                raise ValueError("migrate_from needs size= for the new claim")
+            if self.migrate_from == self.claim:
+                raise ValueError("migrate_from names another claim than claim")
+            if self.read_only:
+                raise ValueError("a claim migrated into is mounted writably")
+            if self.expand_to is not None:
+                raise ValueError("give expand_to= or migrate_from=, not both")
+        elif self.size is not None:
+            raise ValueError(
+                "an existing claim has no size= (Piceli does not create it); "
+                "use expand_to= to grow it, or migrate_from= with size= to "
+                "move its data into a new claim"
+            )
+        elif self.storage_class is not None:
+            raise ValueError(
+                "storage_class= only goes with migrate_from= (a claim's class "
+                "cannot change in place)"
+            )
+        return self
+
+    def growth(self) -> dict[str, Any] | None:
+        """The declared size or migration (``None`` when neither is set)."""
+        size = self.size if self.migrate_from is not None else self.expand_to
+        if size is None:
+            return None
+        return {
+            "claim": self.claim,
+            "size": str(size),
+            **({"storage_class": self.storage_class} if self.storage_class else {}),
+            **({"migrate_from": self.migrate_from} if self.migrate_from else {}),
+        }
 
     def _default_name(self, mount_path: str) -> str:
         return self.claim.replace(".", "-")[:63]
@@ -497,17 +555,28 @@ class ClaimTemplate(_Volume):
     for deletion and scale-down, and a release deletes or replaces a
     StatefulSet with ``Orphan`` propagation: the claims and their data outlive
     it. A template is immutable once the StatefulSet exists (changing it
-    needs ``--replace StatefulSet/<name>``; existing claims keep their size).
+    needs ``replace=["StatefulSet/<name>"]``, which deletes and recreates the
+    StatefulSet object only, pods and claims orphaned and kept). Without
+    ``restore_points`` existing claims keep their size; with
+    ``Pipeline(restore_points=...)`` a larger ``size`` grows every existing
+    claim of the template (when its storage class allows expansion), and
+    ``migrate_from`` copies each replica's claim of an older template into
+    this template's new claim. See ``docs/restore_points.md``.
 
     :param name: Template (and volume) name.
     :param size: Requested storage, such as ``"1Gi"``.
     :param storage_class: ``storageClassName``; the cluster default when unset.
     :param access_modes: Access modes; ``ReadWriteOnce`` by default.
     :param read_only: Mount read-only.
+    :param migrate_from: The template this one replaces: each existing
+        ``<migrate_from>-<stateful set>-<ordinal>`` claim is copied into a new
+        ``<name>-<stateful set>-<ordinal>`` claim before the release switches
+        the StatefulSet to this template (the old claims are kept).
 
     Example::
 
         volumes={"/var/lib/db": ClaimTemplate("data", size="1Gi")}
+        volumes={"/var/lib/db": ClaimTemplate("data-2", size="8Gi", migrate_from="data")}
     """
 
     kind: Literal["claim-template"] = "claim-template"
@@ -518,9 +587,25 @@ class ClaimTemplate(_Volume):
         default=("ReadWriteOnce",), min_length=1
     )
     read_only: bool = False
+    migrate_from: Name | None = None
 
     def __init__(self, name: str, /, **data: Any) -> None:
         super().__init__(**{"name": name, **data})
+
+    @model_validator(mode="after")
+    def _growth(self) -> ClaimTemplate:
+        if self.migrate_from is not None:
+            if self.migrate_from == self.name:
+                raise ValueError("migrate_from names another template than name")
+            if self.read_only:
+                raise ValueError("a claim template migrated into is mounted writably")
+        return self
+
+    def growth(self) -> dict[str, Any] | None:
+        """The declared migration (``None`` when there is none)."""
+        if self.migrate_from is None:
+            return None
+        return {"template": self.name, "migrate_from": self.migrate_from}
 
     def source(self) -> dict[str, Any]:
         raise ValueError(

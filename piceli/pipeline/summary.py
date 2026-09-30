@@ -294,6 +294,16 @@ def build(run: Run, state_dir: Path) -> dict[str, Any]:
                 for item in backup.get("claims") or ()
             ],
         }
+        if backup.get("claim_changes"):
+            # Added in 0.12.0: claims grown in place or moved to a new claim.
+            summary["restore_point"]["claim_changes"] = [
+                {
+                    key: _dict(item).get(key)
+                    for key in ("action", "claim", "target", "to", "state", "verify")
+                    if _dict(item).get(key) is not None
+                }
+                for item in backup.get("claim_changes") or ()
+            ]
     if data.get("approved_by") == "policy":
         # Executed under the owner's auto_approve policy, not a human hash.
         summary["approved_by"] = "policy"
