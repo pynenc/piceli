@@ -48,3 +48,37 @@ def test_live_digests_come_from_the_pods_of_the_cluster(
     live = LiveWorkloads.from_pods(pods)
     assert live.known and live.digests == {RUNNING, INIT}
     assert ("app/web", "1") in live.tags
+
+
+def test_templates_of_scaled_to_zero_and_scheduled_workloads_are_live(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(fake_api.TYPES, "pods", ("v1", "Pod", True))
+    zero, cron = "sha256:" + "c" * 64, "sha256:" + "d" * 64
+
+    def template(image: str) -> dict:
+        return {"spec": {"containers": [{"name": "c", "image": image}]}}
+
+    with serve() as (api, url):
+        kubeconfig = write_kubeconfig(url, tmp_path / "kubeconfig")
+        meta = {"namespace": TARGET.namespace}
+        api.objects[("Deployment", "idle")] = {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": {"name": "idle", **meta},
+            "spec": {"replicas": 0, "template": template(f"r/app/idle@{zero}")},
+        }
+        api.objects[("CronJob", "nightly")] = {
+            "apiVersion": "batch/v1",
+            "kind": "CronJob",
+            "metadata": {"name": "nightly", **meta},
+            "spec": {
+                "schedule": "0 3 * * *",
+                "jobTemplate": {"spec": {"template": template(f"r/app/job@{cron}")}},
+            },
+        }
+        items = read_live_pods(
+            kubeconfig, "fake", [TARGET.namespace], transport="loopback-http"
+        )
+    live = LiveWorkloads.from_objects(items)
+    assert live.by[zero] == {"deployment"} and live.by[cron] == {"cronjob"}

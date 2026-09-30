@@ -26,6 +26,7 @@ from piceli.artifacts.retention import (
     collect_inventory,
     delete_collectable,
     live_digests_from_pods,
+    live_images,
     load_releases,
     parse_size,
     plan_retention,
@@ -408,6 +409,73 @@ def test_a_tag_only_pod_keeps_the_tags_digest(
     live = LiveWorkloads(True, frozenset(), frozenset({(REPO, "1.1")}))
     plan, _ = plan_for(registry, tmp_path, RetentionPolicy(keep=1), live)
     assert plan.kept[digests[1]] == ("live",)
+
+
+def _workloads(a: str, b: str, c: str) -> list[dict[str, Any]]:
+    def template(image: str) -> dict[str, Any]:
+        return {"spec": {"containers": [{"image": image}]}}
+
+    return [
+        {  # scaled to zero: no pod exists
+            "kind": "Deployment",
+            "spec": {
+                "replicas": 0,
+                "template": template(f"127.0.0.1:5000/app/api@{a}"),
+            },
+        },
+        {  # between runs: no Job and no pod exist
+            "kind": "CronJob",
+            "spec": {"jobTemplate": {"spec": {"template": template(f"x/app/job@{b}")}}},
+        },
+        {"kind": "ReplicaSet", "spec": {"template": template(f"x/app/old@{c}")}},
+        {"kind": "StatefulSet", "spec": {"template": template("x.io/app/db:7")}},
+        {"kind": "DaemonSet", "spec": {"template": template("x.io/app/agent:1")}},
+        {"kind": "Job", "spec": {"template": template("x.io/app/once:2")}},
+    ]
+
+
+def test_live_images_include_workload_pod_templates() -> None:
+    a, b, c = ("sha256:" + x * 64 for x in "abc")
+    digests, tags = live_images(_workloads(a, b, c))
+    assert digests == {a: {"deployment"}, b: {"cronjob"}, c: {"replicaset"}}
+    assert tags == {
+        ("app/db", "7"): {"statefulset"},
+        ("app/agent", "1"): {"daemonset"},
+        ("app/once", "2"): {"job"},
+    }
+
+
+def _template(kind: str, image: str) -> dict[str, Any]:
+    pod = {"spec": {"containers": [{"image": image}]}}
+    if kind == "CronJob":
+        return {"kind": kind, "spec": {"jobTemplate": {"spec": {"template": pod}}}}
+    return {"kind": kind, "spec": {"replicas": 0, "template": pod}}
+
+
+def test_a_cronjob_only_and_a_scaled_to_zero_digest_are_kept(
+    registry: RetentionRegistry, tmp_path: Path
+) -> None:
+    digests = {n: release(registry, tmp_path, n) for n in range(1, 6)}
+    plan, _ = plan_for(registry, tmp_path, RetentionPolicy(keep=1))
+    assert {digests[1], digests[2], digests[3]} <= collectable_digests(plan)
+    live = LiveWorkloads.from_objects(
+        [
+            _template("Deployment", f"h/app/api@{digests[1]}"),
+            _template("CronJob", f"h/app/api@{digests[2]}"),
+            _template("StatefulSet", "h.io/app/api:1.3"),  # a tag, resolved
+        ]
+    )
+    plan, inventory = plan_for(registry, tmp_path, RetentionPolicy(keep=1), live)
+    assert set(plan.kept) == {digests[5], digests[1], digests[2], digests[3]}
+    assert plan.live_by[digests[1]] == ("deployment",)
+    assert plan.live_by[digests[2]] == ("cronjob",)
+    assert plan.live_by[digests[3]] == ("statefulset",)
+    assert collectable_digests(plan) == {digests[4]}
+    report = plan.public(inventory)
+    assert report["live"]["by"] == {"cronjob": 1, "deployment": 1}
+    rows = {row["digest"]: row for row in report["manifests"]}
+    assert rows[digests[2]]["live_by"] == ["cronjob"]
+    assert rows[digests[4]]["live_by"] == []
 
 
 def test_sizes_and_policy_are_validated() -> None:

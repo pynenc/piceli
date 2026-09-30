@@ -7,8 +7,9 @@ manifest, whether it is **kept** or **collectable**:
 * the last ``keep`` **releases** (newest first; from the publish and delivery
   receipts you give it) keep every digest they name;
 * **pinned** digests (``--pin``, ``--pin-file``) are always kept;
-* **live** digests, read from the pod specs of a cluster (or a file), are
-  always kept: a digest a running workload uses is never deleted;
+* **live** digests, read from the pods and the pod templates (Deployments,
+  StatefulSets, DaemonSets, ReplicaSets, Jobs, CronJobs) of a cluster, or a
+  file, are always kept: a digest a running workload uses is never deleted;
 * the children of a kept index, and the referrers (SBOM, provenance,
   signatures) of a kept manifest, are kept with it;
 * a tagged manifest that no receipt mentions is **unledgered**: kept unless
@@ -269,36 +270,75 @@ def generations(releases: Sequence[Release]) -> list[Release]:
     return grouped
 
 
-# ------------------------------------------------------------------ live pods
+# ------------------------------------------------------------ live workloads
+
+WORKLOAD_KINDS = (
+    "Pod",
+    "Deployment",
+    "StatefulSet",
+    "DaemonSet",
+    "ReplicaSet",
+    "Job",
+    "CronJob",
+)
 
 
-def live_digests_from_pods(
-    pods: Iterable[Mapping[str, Any]],
-) -> tuple[frozenset[str], frozenset[tuple[str, str]]]:
-    """``(digests, (repository path, tag) pairs)`` that the given pods run.
+def _pod_specs(item: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    """The pod spec of a Pod, or the pod template's spec of a workload."""
+    spec = item.get("spec") or {}
+    if item.get("kind") == "CronJob":
+        spec = ((spec.get("jobTemplate") or {}).get("spec")) or {}
+    if item.get("kind") not in {None, "Pod"}:
+        spec = (spec.get("template") or {}).get("spec") or {}
+    return [spec]
 
-    Every container, init container and ephemeral container counts, in any
-    phase: the spec's image (``…@sha256:…``) and the status's ``imageID``.
-    A tag-only image is returned as a pair so the tag's digest can be kept.
+
+def live_images(
+    items: Iterable[Mapping[str, Any]],
+) -> tuple[dict[str, set[str]], dict[tuple[str, str], set[str]]]:
+    """``({digest: kinds}, {(repository path, tag): kinds})`` the objects use.
+
+    ``items`` are pods (every container, init and ephemeral container, in any
+    phase: the spec's image and the status's ``imageID``) and the pod templates
+    of Deployments, StatefulSets, DaemonSets, ReplicaSets (old ones kept for
+    rollout history included), Jobs and CronJobs, so an image a scaled-to-zero
+    workload or a CronJob between runs will pull is live too. An object
+    without a ``kind`` is a pod. A tag-only image is returned as a pair so
+    the tag's digest can be kept.
     """
-    digests: set[str] = set()
-    tags: set[tuple[str, str]] = set()
-    for pod in pods:
-        spec = pod.get("spec") or {}
-        status = pod.get("status") or {}
-        for key in ("containers", "initContainers", "ephemeralContainers"):
-            for container in spec.get(key) or ():
-                _image(str(container.get("image", "")), digests, tags)
+    digests: dict[str, set[str]] = {}
+    tags: dict[tuple[str, str], set[str]] = {}
+    for item in items:
+        kind = str(item.get("kind") or "Pod")
+        found: set[str] = set()
+        found_tags: set[tuple[str, str]] = set()
+        for spec in _pod_specs(item):
+            for key in ("containers", "initContainers", "ephemeralContainers"):
+                for container in spec.get(key) or ():
+                    _image(str(container.get("image", "")), found, found_tags)
+        status = item.get("status") or {} if kind == "Pod" else {}
         for key in (
             "containerStatuses",
             "initContainerStatuses",
             "ephemeralContainerStatuses",
         ):
-            for item in status.get(key) or ():
-                _image(str(item.get("image", "")), digests, tags)
-                match = _IMAGE_ID.search(str(item.get("imageID", "")))
+            for entry in status.get(key) or ():
+                _image(str(entry.get("image", "")), found, found_tags)
+                match = _IMAGE_ID.search(str(entry.get("imageID", "")))
                 if match:
-                    digests.add(match.group("digest"))
+                    found.add(match.group("digest"))
+        for digest in found:
+            digests.setdefault(digest, set()).add(kind.lower())
+        for pair in found_tags:
+            tags.setdefault(pair, set()).add(kind.lower())
+    return digests, tags
+
+
+def live_digests_from_pods(
+    pods: Iterable[Mapping[str, Any]],
+) -> tuple[frozenset[str], frozenset[tuple[str, str]]]:
+    """``(digests, (repository path, tag) pairs)`` of :func:`live_images`."""
+    digests, tags = live_images(pods)
     return frozenset(digests), frozenset(tags)
 
 
@@ -328,15 +368,27 @@ class LiveWorkloads:
     digests: frozenset[str] = frozenset()
     tags: frozenset[tuple[str, str]] = frozenset()
     source: str | None = None
+    by: Mapping[str, frozenset[str]] = field(default_factory=dict)  # digest -> kinds
+    tag_by: Mapping[tuple[str, str], frozenset[str]] = field(default_factory=dict)
 
     @classmethod
     def unknown(cls) -> LiveWorkloads:
         return cls(False)
 
     @classmethod
-    def from_pods(cls, pods: Iterable[Mapping[str, Any]]) -> LiveWorkloads:
-        digests, tags = live_digests_from_pods(pods)
-        return cls(True, digests, tags, "cluster")
+    def from_objects(cls, items: Iterable[Mapping[str, Any]]) -> LiveWorkloads:
+        """Pods and workload pod templates (see :func:`live_images`)."""
+        digests, tags = live_images(items)
+        return cls(
+            True,
+            frozenset(digests),
+            frozenset(tags),
+            "cluster",
+            {d: frozenset(k) for d, k in digests.items()},
+            {t: frozenset(k) for t, k in tags.items()},
+        )
+
+    from_pods = from_objects
 
     @classmethod
     def from_file(cls, path: Path) -> LiveWorkloads:
@@ -355,7 +407,24 @@ class LiveWorkloads:
             isinstance(item, str) and _DIGEST.fullmatch(item) for item in items
         ):
             raise RetentionError(code="retention-invalid")
-        return cls(True, frozenset(items), frozenset(), "file")
+        return cls(
+            True,
+            frozenset(items),
+            frozenset(),
+            "file",
+            {item: frozenset({"file"}) for item in items},
+        )
+
+
+_LISTS = (
+    ("CoreV1Api", "pod", "Pod"),
+    ("AppsV1Api", "deployment", "Deployment"),
+    ("AppsV1Api", "stateful_set", "StatefulSet"),
+    ("AppsV1Api", "daemon_set", "DaemonSet"),
+    ("AppsV1Api", "replica_set", "ReplicaSet"),
+    ("BatchV1Api", "job", "Job"),
+    ("BatchV1Api", "cron_job", "CronJob"),
+)
 
 
 def read_live_pods(
@@ -366,40 +435,40 @@ def read_live_pods(
     transport: str = "https",
     timeout: float = 30.0,
 ) -> list[dict[str, Any]]:
-    """Every pod of ``namespaces`` (default: all), read with an explicit context."""
-    from kubernetes.client import CoreV1Api
+    """Pods and the pod templates of Deployments, StatefulSets, DaemonSets,
+    ReplicaSets, Jobs and CronJobs in ``namespaces`` (default: all), read with
+    an explicit context. Each item carries its ``kind``. Any failed list (for
+    example a missing permission) raises: the inventory would be incomplete."""
+    from kubernetes import client as k8s
 
     from piceli.k8s.ops.provider_factory import api_client_from_kubeconfig
 
-    client = api_client_from_kubeconfig(
+    api_client = api_client_from_kubeconfig(
         kubeconfig,
         context,
         transport=transport,  # type: ignore[arg-type]
     )
     try:
-        api = CoreV1Api(client)
-        pods: list[dict[str, Any]] = []
+        items: list[dict[str, Any]] = []
         # Raw JSON: only image fields are read, so a field the typed client
         # does not know (or requires) cannot fail the read.
-        responses = (
-            [
-                api.list_pod_for_all_namespaces(
-                    _preload_content=False, _request_timeout=timeout
-                )
-            ]
-            if not namespaces
-            else [
-                api.list_namespaced_pod(
-                    name, _preload_content=False, _request_timeout=timeout
-                )
-                for name in namespaces
-            ]
-        )
-        for response in responses:
-            pods.extend(json.loads(response.data).get("items") or ())
-        return pods
+        for api_name, noun, kind in _LISTS:
+            api = getattr(k8s, api_name)(api_client)
+            options = {"_preload_content": False, "_request_timeout": timeout}
+            responses = (
+                [getattr(api, f"list_{noun}_for_all_namespaces")(**options)]
+                if not namespaces
+                else [
+                    getattr(api, f"list_namespaced_{noun}")(name, **options)
+                    for name in namespaces
+                ]
+            )
+            for response in responses:
+                for item in json.loads(response.data).get("items") or ():
+                    items.append({**item, "kind": kind})
+        return items
     finally:
-        client.close()
+        api_client.close()
 
 
 # ------------------------------------------------------------------ inventory
@@ -595,6 +664,7 @@ class RetentionPlan:
     reclaimable_bytes: int
     live: LiveWorkloads
     repositories: tuple[str, ...]
+    live_by: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     shared_bytes: int = 0  # collectable manifests' blobs still used by kept ones
 
     @property
@@ -624,6 +694,7 @@ class RetentionPlan:
                         "bytes": info.size + sum(info.blobs.values()),
                         "kept": reasons is not None,
                         "reasons": list(reasons) if reasons else ["unreferenced"],
+                        "live_by": list(self.live_by.get(digest, ())),
                     }
                 )
         return {
@@ -635,6 +706,10 @@ class RetentionPlan:
                 "read": self.live.known,
                 "source": self.live.source,
                 "digests": len(self.live.digests),
+                "by": {
+                    kind: sum(1 for kinds in self.live.by.values() if kind in kinds)
+                    for kind in sorted({k for v in self.live.by.values() for k in v})
+                },
             },
             "repositories": list(self.repositories),
             "releases": list(self.releases),
@@ -683,9 +758,14 @@ def plan_retention(
         keep(pin, "pinned")
     for digest in sorted(live.digests):
         keep(digest, "live")
+    live_by: dict[str, set[str]] = {}
+    for digest in sorted(live.digests):
+        if digest in inventory.manifests:
+            live_by.setdefault(digest, set()).update(live.by.get(digest, ()))
     for (repo, tag), digest in sorted(inventory.tag_digests.items()):
         if (repo, tag) in live.tags:
             keep(digest, "live")
+            live_by.setdefault(digest, set()).update(live.tag_by.get((repo, tag), ()))
     if not policy.collect_unledgered:
         referrers = {d for found in inventory.referrers.values() for d in found}
         for digest, info in inventory.manifests.items():
@@ -735,6 +815,7 @@ def plan_retention(
         kept_bytes=sum(kept_blobs.values()),
         reclaimable_bytes=sum(reclaim.values()),
         live=live,
+        live_by={d: tuple(sorted(k)) for d, k in live_by.items()},
         repositories=inventory.repositories,
         shared_bytes=sum(s for d, s in doomed_blobs.items() if d in kept_blobs),
     )

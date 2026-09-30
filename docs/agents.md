@@ -128,7 +128,7 @@ noted.
   build without running anything. See {doc}`publishing_images`.
 - `piceli artifacts retention --to oci://… --receipts DIR` (without
   `--delete`): reads a registry (and, with `--kubeconfig`/`--context`, the
-  cluster's pod specs) and prints which manifests the last releases, pins and
+  cluster's pods and workload pod templates) and prints which manifests the last releases, pins and
   live workloads keep and which are collectable, with the reclaimable bytes.
   It changes nothing. See {doc}`registry_retention`.
 - `piceli codegen crd FILE` (reads the file) and `piceli codegen crd

@@ -16,7 +16,10 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   never fewer than `--keep`. `--delete` prints the plan and its hash (exit 3);
   `--delete --approve HASH` deletes exactly that list by digest through the
   registry API, refuses (`retention-not-approved`) when the plan changed, never
-  deletes a digest a running workload uses, and needs a live source
+  deletes a digest a workload uses (running pods and the pod templates of
+  Deployments, StatefulSets, DaemonSets, ReplicaSets, Jobs and CronJobs, so
+  scaled-to-zero workloads and CronJobs between runs are safe; the output says
+  which kind keeps each digest), and needs a live source
   (`--kubeconfig`/`--context` or `--live-file`, else `retention-live-unknown`).
   A registry that refuses deletes is `registry-delete-disabled`. Blob space is
   freed by the registry's own garbage collection (without `--delete-untagged`).

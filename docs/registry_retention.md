@@ -22,7 +22,7 @@ A manifest (an image, or an image index with its per-platform manifests) is
 | --- | --- |
 | One of the last `--keep N` **releases** (default 3), newest first | the publish receipts (`artifacts publish --out`), registry-delivery receipts (`artifacts deliver --receipt`) and JSON Lines journals (`--journal`) you pass with `--receipts` (files or directories) |
 | **Pinned** | `--pin sha256:…` (repeatable) and `--pin-file FILE` (one digest per line, `#` comments) |
-| **Live**: a running workload uses it | the pod specs and statuses of a cluster (`--kubeconfig FILE --context NAME`, optionally `--live-namespace`) or `--live-file` |
+| **Live**: a workload uses or will pull it | the pods (specs and statuses) **and the pod templates** of Deployments, StatefulSets, DaemonSets, ReplicaSets (old ones kept for rollout history too), Jobs and CronJobs of a cluster (`--kubeconfig FILE --context NAME`, optionally `--live-namespace`), so a workload scaled to zero or a CronJob between runs still finds its image; `--live-file` adds digests |
 | A child or a referrer of a kept manifest | the platform manifests of a kept index; its SBOM, provenance and signatures (OCI referrers and `sha256-<hex>` fallback tags) |
 | **Unledgered**: tagged, but no receipt mentions it | kept by default; `--collect-unledgered` collects it |
 
@@ -108,9 +108,9 @@ frees.
   them alone.
 - Space shared with repositories outside `--to` is not counted as reclaimable
   for that registry's other users.
-- Live workloads are read from pods. A Deployment scaled to zero, a CronJob
-  between runs or a rollback target that no pod uses is **not** live: pin its
-  digest (`--pin`), or keep enough releases.
+- Live workloads are read from the cluster you name. Workloads in namespaces you
+  did not scan, on other clusters, or created after the report are not seen: pin
+  their digests (`--pin`) or scan every namespace (the default).
 
 ## How often
 
