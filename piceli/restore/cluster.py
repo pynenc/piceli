@@ -62,16 +62,19 @@ def helper_job(
     seconds: int,
     run_as_user: int,
     template: Mapping[str, Any] | None = None,
+    node_affinity: Mapping[str, Any] | None = None,
+    label: str = LABEL,
 ) -> dict[str, Any]:
     """The helper Job: one pod that mounts ``claim`` and sleeps until deleted.
 
     Placement follows the claim's volume (its node affinity) and the writer's
-    ``nodeSelector``, tolerations and pull secrets. ``activeDeadlineSeconds``
-    ends it even if Piceli is killed; a finished Job is removed after a
-    minute.
+    ``nodeSelector``, tolerations and pull secrets; ``node_affinity`` (a
+    volume's ``nodeAffinity.required``) pins it to the nodes that hold a
+    node-local volume. ``activeDeadlineSeconds`` ends it even if Piceli is
+    killed; a finished Job is removed after a minute.
     """
     pod = dict((template or {}).get("spec") or {})
-    labels = {"app.kubernetes.io/managed-by": "piceli", LABEL: point}
+    labels = {"app.kubernetes.io/managed-by": "piceli", label: point}
     spec: dict[str, Any] = {
         "restartPolicy": "Never",
         "automountServiceAccountToken": False,
@@ -104,6 +107,8 @@ def helper_job(
     for key in ("nodeSelector", "tolerations", "imagePullSecrets"):
         if pod.get(key):
             spec[key] = pod[key]
+    if node_affinity:
+        spec["affinity"] = pin(node_affinity)
     return {
         "apiVersion": "batch/v1",
         "kind": "Job",
@@ -114,6 +119,58 @@ def helper_job(
             "ttlSecondsAfterFinished": 60,
             "template": {"metadata": {"labels": labels}, "spec": spec},
         },
+    }
+
+
+#: Labels of the scratch claims and Jobs of ``piceli restore --to-new-claim``.
+VERIFY_LABEL = "piceli.io/restore-verify"
+SCRATCH_LABEL = "piceli.io/scratch"
+SOURCE_ANNOTATION = "piceli.io/source-claim"
+
+
+def pin(node_affinity: Mapping[str, Any]) -> dict[str, Any]:
+    """A pod ``affinity`` that requires the nodes a volume's affinity names."""
+    return {
+        "nodeAffinity": {
+            "requiredDuringSchedulingIgnoredDuringExecution": json.loads(
+                json.dumps(dict(node_affinity))
+            )
+        }
+    }
+
+
+def scratch_claim(
+    name: str, *, point: str, source: str, spec: Mapping[str, Any]
+) -> dict[str, Any]:
+    """A Piceli-owned scratch claim shaped like ``source``.
+
+    ``spec`` holds ``storage_class``, ``size`` and ``access_modes`` (and
+    ``volume_mode``) from the planned source claim. It is labelled
+    ``app.kubernetes.io/managed-by=piceli``, ``piceli.io/scratch=true`` and
+    ``piceli.io/restore-verify=<point>``, and names its source in an
+    annotation, so a leftover is easy to find and never mistaken for data.
+    """
+    body: dict[str, Any] = {
+        "accessModes": list(spec.get("access_modes") or ["ReadWriteOnce"]),
+        "resources": {"requests": {"storage": str(spec["size"])}},
+    }
+    if spec.get("storage_class") is not None:
+        body["storageClassName"] = spec["storage_class"]
+    if spec.get("volume_mode"):
+        body["volumeMode"] = spec["volume_mode"]
+    return {
+        "apiVersion": "v1",
+        "kind": "PersistentVolumeClaim",
+        "metadata": {
+            "name": name,
+            "labels": {
+                "app.kubernetes.io/managed-by": "piceli",
+                SCRATCH_LABEL: "true",
+                VERIFY_LABEL: point,
+            },
+            "annotations": {SOURCE_ANNOTATION: source},
+        },
+        "spec": body,
     }
 
 
@@ -309,6 +366,89 @@ class RestoreCluster:
             "matchLabels"
         ) or {}
         return ",".join(f"{key}={value}" for key, value in sorted(labels.items()))
+
+    def claim(self, name: str) -> dict[str, Any] | None:
+        """One claim, or ``None`` when it does not exist."""
+        from kubernetes.client import CoreV1Api
+        from kubernetes.client.exceptions import ApiException
+
+        try:
+            response = CoreV1Api(self.client).read_namespaced_persistent_volume_claim(
+                name,
+                self.namespace,
+                _preload_content=False,
+                _request_timeout=self.request_seconds,
+            )
+        except ApiException as error:
+            if error.status == 404:
+                return None
+            raise
+        return dict(json.loads(response.data))
+
+    def volume_affinity(self, volume: str) -> dict[str, Any] | None:
+        """``spec.nodeAffinity.required`` of a PersistentVolume (a node-local
+        volume names its node there); ``None`` when absent or unreadable."""
+        from kubernetes.client import CoreV1Api
+        from kubernetes.client.exceptions import ApiException
+
+        try:
+            response = CoreV1Api(self.client).read_persistent_volume(
+                volume, _preload_content=False, _request_timeout=self.request_seconds
+            )
+        except ApiException:
+            return None
+        body = json.loads(response.data) or {}
+        required = ((body.get("spec") or {}).get("nodeAffinity") or {}).get("required")
+        return dict(required) if isinstance(required, dict) else None
+
+    def create_claim(self, manifest: Mapping[str, Any]) -> None:
+        from kubernetes.client import CoreV1Api
+
+        CoreV1Api(self.client).create_namespaced_persistent_volume_claim(
+            self.namespace,
+            dict(manifest),
+            field_manager=FIELD_MANAGER,
+            _request_timeout=self.request_seconds,
+        )
+
+    def delete_claim(self, name: str, seconds: float) -> bool:
+        """Delete a scratch claim and wait until it is gone; ``True`` when gone.
+
+        Only a claim labelled ``piceli.io/scratch=true`` is deleted, with
+        preconditions on its uid and resource version: a live claim of the
+        same name is never touched.
+        """
+        from kubernetes.client import CoreV1Api
+        from kubernetes.client.exceptions import ApiException
+
+        current = self.claim(name)
+        if current is None:
+            return True
+        metadata = current.get("metadata") or {}
+        if (metadata.get("labels") or {}).get(SCRATCH_LABEL) != "true":
+            return False
+        try:
+            CoreV1Api(self.client).delete_namespaced_persistent_volume_claim(
+                name,
+                self.namespace,
+                body={
+                    "preconditions": {
+                        "uid": metadata.get("uid"),
+                        "resourceVersion": metadata.get("resourceVersion"),
+                    },
+                    "propagationPolicy": "Background",
+                },
+                _request_timeout=self.request_seconds,
+            )
+        except ApiException as error:
+            if error.status != 404:
+                return False
+        deadline = time.monotonic() + seconds
+        while self.claim(name) is not None:
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(self.poll_seconds)
+        return True
 
     # ------------------------------------------------------------ writers
     def scale(self, kind: str, name: str, replicas: int) -> None:

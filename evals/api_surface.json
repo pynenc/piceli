@@ -93,6 +93,8 @@
     "release_selector",
     "render",
     "resource",
+    "restore_verifies",
+    "restore_verify",
     "secret",
     "selected_environment",
     "service",
@@ -345,6 +347,11 @@
      "public",
      "scope",
      "spec"
+    ],
+    "restore_verifies": [],
+    "restore_verify": [
+     "verify",
+     "workload"
     ],
     "secret": [
      "component",
@@ -2400,6 +2407,7 @@
      "transferred_managers"
     ],
     "delete": [
+     "allow_retained",
      "deadline",
      "dry_run",
      "identity",
@@ -3747,6 +3755,21 @@
    },
    "pydantic": true
   },
+  "RestoreVerify": {
+   "attrs": [
+    "command",
+    "describe",
+    "timeout_seconds"
+   ],
+   "init": [
+    "command",
+    "timeout_seconds"
+   ],
+   "methods": {
+    "describe": []
+   },
+   "pydantic": true
+  },
   "Route": {
    "attrs": [
     "match",
@@ -4953,6 +4976,7 @@
      "--auto-approve",
      "--env",
      "--json",
+     "--otlp-endpoint",
      "--out",
      "--plan",
      "--reapply",
@@ -5324,6 +5348,7 @@
      "apply",
      "check",
      "diff",
+     "orphans",
      "plan",
      "preview",
      "resume",
@@ -5342,6 +5367,7 @@
      "--approve-if-policy",
      "--auto-approve",
      "--env",
+     "--otlp-endpoint",
      "--replace",
      "--rotate",
      "--skip-checks",
@@ -5366,6 +5392,21 @@
      "--env",
      "--exit-code",
      "--replace",
+     "--spec"
+    ],
+    "subcommands": []
+   },
+   "release orphans": {
+    "arguments": [],
+    "flags": [
+     "--approve",
+     "--env",
+     "--include-claims",
+     "--include-cluster-scoped",
+     "--include-other-owners",
+     "--include-secrets",
+     "--json",
+     "--prune",
      "--spec"
     ],
     "subcommands": []
@@ -5416,6 +5457,7 @@
      "--approve",
      "--auto-approve",
      "--env",
+     "--otlp-endpoint",
      "--replace",
      "--skip-checks",
      "--spec"
@@ -5481,12 +5523,15 @@
      "target"
     ],
     "flags": [
+     "--all",
      "--approve",
      "--claim",
      "--env",
      "--image",
      "--json",
-     "--point"
+     "--keep",
+     "--point",
+     "--to-new-claim"
     ],
     "subcommands": []
    },
@@ -5674,6 +5719,8 @@
    "deadline-exceeded",
    "deleted-resource-reappeared",
    "delivery-not-succeeded",
+   "deploy-events-config-invalid",
+   "deploy-events-export-failed",
    "deploy-flags-conflict",
    "deploy-plan-file-invalid",
    "deploy-plan-file-mismatch",
@@ -5830,6 +5877,11 @@
    "nothing-to-stop",
    "operation-identity-mismatch",
    "operator-state-unavailable",
+   "orphans-approve-without-prune",
+   "orphans-delete-failed",
+   "orphans-execution-running",
+   "orphans-no-release",
+   "orphans-plan-changed",
    "output-invalid",
    "ownership-precondition-failed",
    "pipeline-apply-crashloop",
@@ -5917,6 +5969,7 @@
    "resource-requires-adoption",
    "resource-scope-mismatch",
    "response-byte-limit",
+   "restore-options-invalid",
    "restore-plan-changed",
    "restore-point-archive-invalid",
    "restore-point-archive-missing",
@@ -5937,6 +5990,14 @@
    "restore-point-writer-unsupported",
    "restore-point-writers-remain",
    "restore-refused",
+   "restore-verify-cleanup-failed",
+   "restore-verify-failed",
+   "restore-verify-mismatch",
+   "restore-verify-plan-changed",
+   "restore-verify-scratch-exists",
+   "restore-verify-scratch-failed",
+   "restore-verify-scratch-unsupported",
+   "restore-verify-workload-missing",
    "resume-refused",
    "retained-adoption-precondition-failed",
    "retained-content-differs",
@@ -6168,6 +6229,9 @@
    },
    "RestorePoints": {
     "class": "RestorePoints"
+   },
+   "RestoreVerify": {
+    "class": "RestoreVerify"
    },
    "Route": {
     "class": "Route"
@@ -6938,6 +7002,7 @@
   "piceli.cli_contract",
   "piceli.codegen",
   "piceli.codegen.crd",
+  "piceli.deploy_events",
   "piceli.errors",
   "piceli.gcp",
   "piceli.gcp.credentials",
@@ -6999,6 +7064,7 @@
   "piceli.k8s.ops.revision",
   "piceli.k8s.ops.secret_versions",
   "piceli.k8s.ops.session",
+  "piceli.k8s.orphans",
   "piceli.k8s.port_owner",
   "piceli.k8s.release",
   "piceli.k8s.release_runner",
@@ -7065,6 +7131,7 @@
   "piceli.restore.plan",
   "piceli.restore.runner",
   "piceli.restore.store",
+  "piceli.restore.verify",
   "piceli.settings",
   "piceli.state",
   "piceli.state.archive",
@@ -7110,5 +7177,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.10.1"
+ "version": "0.11.0"
 }

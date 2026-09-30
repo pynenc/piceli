@@ -4,6 +4,51 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.11.0
+
+- **Prove a restore point without touching live data (preview):**
+  `piceli restore MODULE:ATTR --point ID --to-new-claim` (or `--all` for
+  every verified restore point) restores into scratch claims instead of the
+  live ones. The plan (exit 3, `verify_hash`) names one Piceli-owned scratch
+  claim per restored claim, shaped like its source (storage class, size,
+  access modes; pinned to the node of a node-local volume); with
+  `--approve HASH` Piceli creates them, extracts each archive and checks its
+  content digest in the cluster, then runs the command declared with
+  `app.restore_verify(workload, RestoreVerify([...]))` in a Job with the
+  workload's current image and pod settings, the scratch copies mounted
+  read-only at the workload's paths. A receipt under
+  `<restore point>/verifies/` records `PASS` or `FAIL` per claim (exit 1 on
+  any `FAIL`); the scratch claims are deleted in every case unless
+  `--keep`. Writers are never stopped and the command's output is never
+  printed. Scratch claims carry `app.kubernetes.io/managed-by=piceli`,
+  `piceli.io/scratch=true` and `piceli.io/restore-verify=<id>`, and Piceli
+  deletes only claims with that label. New error codes `restore-verify-*`
+  and `restore-options-invalid`. See {doc}`restore_points`.
+- **Deploy events to OTLP (experimental):** `piceli deploy` and
+  `piceli release apply|rollback` can send one trace per run (a root span
+  with a child span per stage) and one result log record (the dashboard
+  marker) to an OTLP/HTTP endpoint, with app, namespace, run, release, plan
+  hash, commit and ref, image digests, outcome and duration. Off unless
+  `--otlp-endpoint` or `OTEL_EXPORTER_OTLP_ENDPOINT` is set; also reads
+  `OTEL_EXPORTER_OTLP_HEADERS`, `_TIMEOUT`, `OTEL_SERVICE_NAME`,
+  `OTEL_SDK_DISABLED`. Never fails a deploy: one bounded export at the end, a
+  problem is one warning line (new codes `deploy-events-export-failed`,
+  `deploy-events-config-invalid`). No secrets are exported and no OpenTelemetry
+  package is needed. See {doc}`deploy_events`.
+- **`piceli release orphans`: report and prune leftover objects:** lists the
+  objects Piceli wrote (`piceli.io/owner`) that the selected release no longer
+  declares (a removed component) or that belong to another environment of the
+  same app (same ownership labels, another owner), with kind, name, matched
+  label, reason and age. `--prune` deletes them only after approval of a plan
+  hash over the exact set (UIDs and resourceVersions); a changed set is
+  refused. PersistentVolumeClaims, Secrets, another owner's objects and
+  cluster-scoped objects are kept unless `--include-claims`,
+  `--include-secrets`, `--include-other-owners` or `--include-cluster-scoped`.
+  A prune waits (at most `readiness_seconds`) until each deleted object is
+  gone; one still terminating (a claim a stopping pod still mounts) is
+  reported `deleting` with its `finalizers`, not `deleted`.
+  New error codes `orphans-*`. See {doc}`release_cli`.
+
 ## Version 0.10.1
 
 - **`piceli status` lists the StatefulSets of an app that pins a workload to a

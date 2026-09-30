@@ -70,6 +70,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli release apply`](#cli-release-apply) | Execute an approved plan (``--approve HASH``), or plan and confirm. | writes | yes |
 | [`piceli release check`](#cli-release-check) | Run the spec's [[checks]] now against a release; changes nothing. | reads | no |
 | [`piceli release diff`](#cli-release-diff) | Show what `plan` would change, field by field (read-only, nothing stored). | reads | no |
+| [`piceli release orphans`](#cli-release-orphans) | List the objects that carry the app's ownership labels but no current release owns. | writes | yes |
 | [`piceli release plan`](#cli-release-plan) | Capture live discovery and persist an approvable plan (prints its hash). | reads | no |
 | [`piceli release preview`](#cli-release-preview) | Alias of `plan`. | reads | no |
 | [`piceli release resume`](#cli-release-resume) | Resume an interrupted apply of a created release (same grant and ids). | writes | no |
@@ -634,6 +635,7 @@ Deploy a pipeline: inputs → build → deliver → plan → apply → checks.
 | `--ref` | text (repeatable) |  | Build SOURCE from commit REV (branch, tag or SHA) in a temporary worktree instead of the working tree; repeatable. A bare REV pins every source when they are one repository |
 | `--out` | path |  | With --plan: also write the portable plan file here (apply it on any runner with --apply FILE --approve HASH) |
 | `--apply` | path |  | Apply the plan file written by --plan --out (needs --approve with its combined hash); re-plans and refuses any change |
+| `--otlp-endpoint` | text |  | Send this run's events (a trace with one span per stage and a result log record) to an OTLP/HTTP endpoint; the standard OTEL_EXPORTER_OTLP_* variables also enable it. Never fails a deploy |
 | `--env` | text |  | Environment to deploy: the app's overrides and the pipeline's target for it (required when the pipeline has one target per environment); the combined hash covers its name and values |
 
 **Contract**
@@ -1260,6 +1262,7 @@ Execute an approved plan (``--approve HASH``), or plan and confirm.
 | `--skip-checks` | boolean | `False` | Do not run the spec's [[checks]] after readiness (emergencies only; recorded in the release history) |
 | `--env` | text |  | Environment of a pipeline (--spec MODULE:ATTR): its app overrides, target and state (required when the pipeline has one target per environment) |
 | `--approve-if-policy` | boolean | `False` | Plan and execute only when every action is inside the spec's [release] auto_approve policy (declared by the owner); otherwise print the plan hash to approve and exit 3 |
+| `--otlp-endpoint` | text |  | Send this run's events (a trace and a result log record) to an OTLP/HTTP endpoint; the standard OTEL_EXPORTER_OTLP_* variables also enable it. Never fails the command |
 
 **Contract**
 
@@ -1318,6 +1321,34 @@ Show what `plan` would change, field by field (read-only, nothing stored).
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** Read-only: stores no plan and no local state. Sends only reads and dryRun=All requests (server dry runs of the writes). Exit 1 with --exit-code when something would change (reason release-changes-pending).
+
+(cli-release-orphans)=
+### `piceli release orphans`
+
+List the objects that carry the app's ownership labels but no current release owns.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--spec` | text | required | path/to/release.toml, or MODULE:ATTR (path/to/file.py:ATTR) naming a piceli Pipeline: the release `piceli deploy` manages |
+| `--env` | text |  | Environment of a pipeline (--spec MODULE:ATTR): its app overrides, target and state (required when the pipeline has one target per environment) |
+| `--prune` | boolean | `False` | Delete the prunable leftover objects after approval (exit 3 with the plan hash to approve; --approve HASH executes) |
+| `--approve` | text |  | Plan hash to execute (from a previous `plan`/`rollback` output) |
+| `--include-claims` | boolean | `False` | Also prune PersistentVolumeClaims (their data is deleted) and StatefulSets whose retention policy deletes their claims |
+| `--include-secrets` | boolean | `False` | Also prune Secrets |
+| `--include-cluster-scoped` | boolean | `False` | Also scan and prune this namespace's ClusterRole/ClusterRoleBinding |
+| `--include-other-owners` | boolean | `False` | Also prune objects of another owner that carry the app's labels (another environment of the app) |
+| `--json` | boolean | `False` | Print only the JSON object (no human summary on stderr) |
+
+**Contract**
+
+- **Reads:** release.toml or pipeline module (--spec MODULE:ATTR), composition, state_dir, kubeconfig
+- **Writes:** nothing (read-only)
+- **Cluster:** writes
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** Read-only without --prune. --prune prints the plan hash over the exact set (UIDs and resourceVersions) and exits 3; --prune --approve HASH deletes that set, or refuses when it changed (orphans-plan-changed); each deleted object is waited for until it is gone (outcome deleting when still terminating). Never prunes claims, Secrets, objects of another owner or cluster-scoped objects unless --include-claims, --include-secrets, --include-other-owners or --include-cluster-scoped; never an object without Piceli's owner annotation. With a pipeline, --env NAME selects one environment (its target, overrides and state).
 
 (cli-release-plan)=
 ### `piceli release plan`
@@ -1409,6 +1440,7 @@ Re-plan and re-apply an earlier release against current cluster state.
 | `--adopt-all-desired` | boolean | `False` | Authorize adopting every existing unmanaged object the composition declares (each is listed in the plan and bound to its hash) |
 | `--skip-checks` | boolean | `False` | Do not run the spec's [[checks]] after readiness (emergencies only; recorded in the release history) |
 | `--env` | text |  | Environment of a pipeline (--spec MODULE:ATTR): its app overrides, target and state (required when the pipeline has one target per environment) |
+| `--otlp-endpoint` | text |  | Send this run's events (a trace and a result log record) to an OTLP/HTTP endpoint; the standard OTEL_EXPORTER_OTLP_* variables also enable it. Never fails the command |
 
 **Contract**
 
@@ -1526,23 +1558,26 @@ Put a restore point back into its claims (plan, then --approve HASH).
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `TARGET` | text | required |  |
-| `--point` | text | required | The restore point id (rp-…) |
+| `--point` | text |  | The restore point id (rp-…) |
 | `--claim` | text (repeatable) |  | Only this claim (repeatable; default: all) |
 | `--env` | text |  | The pipeline's environment |
 | `--approve` | text |  | Restore; HASH is the plan's restore_hash |
 | `--image` | text |  | Helper image pinned by digest (default: RestorePoints(image=) or each writer's image) |
+| `--to-new-claim` | boolean | `False` | Restore into scratch claims and run the app's restore_verify checks; live claims and writers are not touched |
+| `--all` | boolean | `False` | With --to-new-claim: every verified restore point |
+| `--keep` | boolean | `False` | With --to-new-claim: keep the scratch claims afterwards |
 | `--json` | boolean | `False` | Print one JSON object on stdout |
 
 **Contract**
 
 - **Reads:** pipeline module, restore point directory, kubeconfig
-- **Writes:** restore point directory (restores/ receipts)
+- **Writes:** restore point directory (restores/ and verifies/ receipts)
 - **Cluster:** writes
 - **Approval required:** yes
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** Without --approve it only reads: verifies the archives, checks the claims exist and lists the writers it would stop. With --approve HASH it plans again (restore-plan-changed on any difference), holds the pipeline's state lock, scales the writers to zero and waits until their pods are gone, empties each claim and extracts its archive in a helper Job, checks the content digest in the cluster and scales the writers back. Every file in the claims is replaced; run it again after a failure.
+- **Notes:** Without --approve it only reads: verifies the archives, checks the claims exist and lists the writers it would stop. With --approve HASH it plans again (restore-plan-changed on any difference), holds the pipeline's state lock, scales the writers to zero and waits until their pods are gone, empties each claim and extracts its archive in a helper Job, checks the content digest in the cluster and scales the writers back. Every file in the claims is replaced; run it again after a failure. With --to-new-claim (and --all for every verified point) it touches no live claim and stops no writer: the plan (exit 3, verify_hash) names one scratch claim per restored claim; --approve HASH creates them, restores and checks each content digest, runs the app's restore_verify command read-only with the workload's image, writes a receipt with PASS or FAIL per claim (exit 1 on any FAIL), and deletes the scratch claims unless --keep.
 
 (cli-restore-points)=
 ### `piceli restore-points`

@@ -139,6 +139,17 @@ EXIT_REFUSED = 2
 EXIT_APPROVAL = 3
 
 
+OtlpOption = Annotated[
+    str | None,
+    typer.Option(
+        "--otlp-endpoint",
+        help="Send this run's events (a trace and a result log record) to an "
+        "OTLP/HTTP endpoint; the standard OTEL_EXPORTER_OTLP_* variables also "
+        "enable it. Never fails the command",
+    ),
+]
+
+
 def _emit(value: dict[str, Any]) -> None:
     typer.echo(json.dumps(value, sort_keys=True, indent=2))
 
@@ -486,6 +497,61 @@ def _finish(outcome: dict[str, Any]) -> None:
         raise typer.Exit(EXIT_NOT_READY)
 
 
+def _timed_apply(
+    events: Any,
+    runner: Any,
+    plan_hash: str,
+    skip_checks: bool,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """``runner.apply`` recording the apply stage's bounds for the events."""
+    import time
+
+    start = time.time_ns()
+    try:
+        outcome: dict[str, Any] = runner.apply(
+            plan_hash, skip_checks=skip_checks, **kwargs
+        )
+    except BaseException:
+        if events is not None:
+            events.add_stage("apply", "failed", start, time.time_ns())
+        raise
+    if events is not None:
+        ok = (outcome.get("execution") or {}).get("state") == "ready"
+        events.add_stage("apply", "done" if ok else "failed", start, time.time_ns())
+    return outcome
+
+
+def _export_release(
+    events: Any, outcome: dict[str, Any], plan_hash: str | None
+) -> None:
+    """Send a release apply/rollback's events (never raises)."""
+    import time
+
+    execution = outcome.get("execution") or {}
+    state = outcome.get("release_state", execution.get("state"))
+    failed = state != "ready" and outcome.get("intent") != "stop"
+    checks = outcome.get("checks")
+    if isinstance(checks, dict):
+        now = time.time_ns()
+        passed = bool(checks.get("passed"))
+        events.add_stage("checks", "done" if passed else "failed", now, now)
+    category = execution.get("failure_category")
+    reason = "check-failed" if state == "checks-failed" else category
+    events.attributes["piceli.plan.hash"] = plan_hash
+    events.attributes["piceli.release.intent"] = outcome.get("intent")
+    rollback = outcome.get("rollback")
+    rolled_back = isinstance(rollback, dict) and rollback.get("state") == "rolled-back"
+    events.finish(
+        {
+            "state": "rolled-back" if rolled_back else "failed" if failed else "ready",
+            "release": outcome.get("release"),
+            "reason": reason if failed and isinstance(reason, str) else None,
+        },
+        rollback=rollback if isinstance(rollback, dict) else None,
+    )
+
+
 def _plan_then_execute(
     spec: str,
     *,
@@ -500,6 +566,7 @@ def _plan_then_execute(
     skip_checks: bool = False,
     env: str | None = None,
     approve_if_policy: bool = False,
+    otlp_endpoint: str | None = None,
 ) -> None:
     if approve_if_policy and (
         approve is not None
@@ -527,18 +594,39 @@ def _plan_then_execute(
             "--approve cannot be combined with planning flags",
             code="approve-with-planning-flags",
         )
+    events: Any = None
+    plan_hash = approve
     try:
         # A rollback re-applies a catalogued release (its recorded images).
         with _locked_runner(spec, current=rollback_to is None, env=env) as runner:
+            from piceli.deploy_events import recorder as events_recorder
+
+            model = getattr(getattr(runner, "spec", None), "model", None)
+            events = events_recorder(
+                otlp_endpoint,
+                kind="release",
+                say=_say,
+                attributes={
+                    "piceli.app": getattr(
+                        getattr(model, "release", None), "name", None
+                    ),
+                    "k8s.namespace.name": getattr(
+                        getattr(model, "target", None), "namespace", None
+                    ),
+                    "piceli.environment": env,
+                },
+            )
             if approve is not None:
                 expected = None
                 if rollback_to is not None:
                     expected = runner.resolve_rollback_target(rollback_to)
-                outcome = runner.apply(
+                outcome = _timed_apply(
+                    events,
+                    runner,
                     approve,
+                    skip_checks,
                     expected_intent="rollback" if rollback_to is not None else None,
                     expected_release=expected,
-                    skip_checks=skip_checks,
                 )
             else:
                 if approve_if_policy:
@@ -575,12 +663,18 @@ def _plan_then_execute(
                 elif not auto_approve and not _confirm(result):
                     _emit({"state": "approval-required", **result.to_dict()})
                     raise typer.Exit(EXIT_APPROVAL)
-                outcome = runner.apply(result.plan_hash, skip_checks=skip_checks)
+                plan_hash = result.plan_hash
+                outcome = _timed_apply(events, runner, result.plan_hash, skip_checks)
                 if approve_if_policy:
                     outcome = {**outcome, "approved_by": "policy"}
     except _refusals() as error:
+        if events is not None:
+            events.attributes["piceli.plan.hash"] = plan_hash
+            events.finish({"state": "rejected", "reason": getattr(error, "code", None)})
         _refuse(error)
         return
+    if events is not None:
+        _export_release(events, outcome, plan_hash)
     _finish(outcome)
 
 
@@ -699,6 +793,7 @@ def apply(
     skip_checks: SkipChecksOption = False,
     env: EnvOption = None,
     approve_if_policy: ApproveIfPolicyOption = False,
+    otlp_endpoint: OtlpOption = None,
 ) -> None:
     """Execute an approved plan (``--approve HASH``), or plan and confirm.
 
@@ -725,6 +820,7 @@ def apply(
         adopt_all_desired=adopt_all_desired,
         skip_checks=skip_checks,
         approve_if_policy=approve_if_policy,
+        otlp_endpoint=otlp_endpoint,
     )
 
 
@@ -741,6 +837,7 @@ def rollback(
     adopt_all_desired: AdoptAllOption = False,
     skip_checks: SkipChecksOption = False,
     env: EnvOption = None,
+    otlp_endpoint: OtlpOption = None,
 ) -> None:
     """Re-plan and re-apply an earlier release against current cluster state.
 
@@ -757,6 +854,7 @@ def rollback(
         replace=replace,
         adopt_all_desired=adopt_all_desired,
         skip_checks=skip_checks,
+        otlp_endpoint=otlp_endpoint,
     )
 
 
@@ -916,6 +1014,130 @@ def status(
             )
             _say(f"  {item['name']}: checks {outcome}")
     _emit(value)
+
+
+def _age_text(seconds: int | None) -> str:
+    if seconds is None:
+        return "?"
+    for size, unit in ((86400, "d"), (3600, "h"), (60, "m")):
+        if seconds >= size:
+            return f"{seconds // size}{unit}"
+    return f"{seconds}s"
+
+
+def _describe_orphans(report: dict[str, Any]) -> None:
+    items = report["orphans"]
+    _say(
+        f"release {report['release']} ({report['namespace']}): "
+        f"{report['summary']['total']} leftover object(s), "
+        f"{report['summary']['prunable']} prunable, {report['summary']['kept']} kept"
+    )
+    for item in items:
+        state = "prune" if item["prunable"] else "keep "
+        _say(
+            f"  {state} {item['kind']}/{item['name']}  age {_age_text(item['age_seconds'])}"
+            f"  {item['reason']} (matched {', '.join(item['matched'])})"
+            + (f"  [{'; '.join(item['blocked_by'])}]" if item["blocked_by"] else "")
+        )
+
+
+@app.command("orphans")
+def orphans(
+    spec: SpecOption,
+    env: EnvOption = None,
+    prune: Annotated[
+        bool,
+        typer.Option(
+            "--prune",
+            help="Delete the prunable leftover objects after approval (exit 3 with "
+            "the plan hash to approve; --approve HASH executes)",
+        ),
+    ] = False,
+    approve: ApproveOption = None,
+    include_claims: Annotated[
+        bool,
+        typer.Option(
+            "--include-claims",
+            help="Also prune PersistentVolumeClaims (their data is deleted) and "
+            "StatefulSets whose retention policy deletes their claims",
+        ),
+    ] = False,
+    include_secrets: Annotated[
+        bool, typer.Option("--include-secrets", help="Also prune Secrets")
+    ] = False,
+    include_cluster_scoped: Annotated[
+        bool,
+        typer.Option(
+            "--include-cluster-scoped",
+            help="Also scan and prune this namespace's ClusterRole/ClusterRoleBinding",
+        ),
+    ] = False,
+    include_other_owners: Annotated[
+        bool,
+        typer.Option(
+            "--include-other-owners",
+            help="Also prune objects of another owner that carry the app's labels "
+            "(another environment of the app)",
+        ),
+    ] = False,
+    json_only: Annotated[
+        bool,
+        typer.Option(
+            "--json", help="Print only the JSON object (no human summary on stderr)"
+        ),
+    ] = False,
+) -> None:
+    """List the objects that carry the app's ownership labels but no current release owns.
+
+    Read-only unless ``--prune``. Never listed as prunable: claims and Secrets
+    (unless included), objects without Piceli's owner annotation, objects of
+    another owner (unless included), cluster-scoped objects (unless included).
+    ``--prune`` prints the plan hash over the exact set (UIDs and
+    resourceVersions) and exits 3; ``--prune --approve HASH`` deletes exactly
+    that set, or refuses when it changed (``orphans-plan-changed``).
+    """
+    from piceli.cli_contract import reject
+    from piceli.k8s.orphans import OrphanOptions
+
+    if approve is not None and not prune:
+        reject(
+            "orphans-approve-without-prune",
+            "--approve executes a prune: pass --prune with it",
+        )
+    options = OrphanOptions(
+        include_claims, include_secrets, include_cluster_scoped, include_other_owners
+    )
+    try:
+        with _runner(spec, write=prune, env=env) as runner:
+            report = runner.orphans(options, approve=approve if prune else None)
+    except _refusals() as error:
+        _refuse(error)
+        return
+    if not json_only:
+        _describe_orphans(report)
+    if "deleted" in report:
+        failed = [item for item in report["deleted"] if item["outcome"] == "failed"]
+        if not json_only:
+            for item in report["deleted"]:
+                held = ", ".join(item.get("finalizers") or ())
+                _say(
+                    f"  {item['outcome']} {item['kind']}/{item['name']}"
+                    + (f" (held by {held})" if held else "")
+                )
+        if failed:
+            _emit({**report, "state": "failed", "reason": "orphans-delete-failed"})
+            raise typer.Exit(EXIT_NOT_READY)
+        _emit({**report, "state": "succeeded"})
+        return
+    if prune and report["summary"]["prunable"]:
+        if not json_only:
+            _say(
+                "to delete the prunable objects: piceli release orphans --spec "
+                f"{spec} --prune --approve {report['plan_hash']}"
+            )
+        _emit({**report, "state": "approval-required"})
+        raise typer.Exit(EXIT_APPROVAL)
+    _emit({**report, "state": "succeeded" if prune else "listed"})
 
 
 secret_app = typer.Typer(

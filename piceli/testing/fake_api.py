@@ -428,10 +428,11 @@ class FakeAPI:
     - ``wait_for_first_consumer``: claim names that stay ``Pending`` until a
       workload mounts them;
     - ``types``: the served resources (default :data:`TYPES`);
-    - ``terminating_reads``: when above ``0``, an ``Orphan`` delete keeps the
-      object (with a ``deletionTimestamp`` and the ``orphan`` finalizer) for
-      that many more reads of it, as a real API server does until its
-      garbage collector removes the finalizer.
+    - ``terminating_reads``: when above ``0``, an ``Orphan`` delete, or the
+      delete of an object with finalizers (a claim's ``pvc-protection``),
+      keeps the object (with a ``deletionTimestamp``, and the ``orphan``
+      finalizer for an ``Orphan`` delete) for that many more reads of it, as
+      a real API server does until its controllers remove the finalizers.
     - ``nodes``: ``{name: Node manifest}`` served at ``/api/v1/nodes/NAME``
       (read-only, not part of discovery); add one with :meth:`add_node`.
     - ``pod_failures``: workloads whose pods cannot start (see
@@ -1259,12 +1260,14 @@ class FakeAPI:
             # body only (a dryRun query parameter alone would delete).
             if body.get("dryRun") == ["All"]:
                 return 200, {"kind": "Status", "status": "Success"}
-            if self.terminating_reads > 0 and body["propagationPolicy"] == "Orphan":
+            held = list(current["metadata"].get("finalizers") or ())
+            orphan = body["propagationPolicy"] == "Orphan"
+            if self.terminating_reads > 0 and (orphan or held):
                 self.version += 1
                 current["metadata"].update(
                     {
                         "deletionTimestamp": "2026-01-01T00:00:00Z",
-                        "finalizers": ["orphan"],
+                        "finalizers": ["orphan"] if orphan else held,
                         "resourceVersion": str(self.version),
                     }
                 )

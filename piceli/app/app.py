@@ -180,6 +180,7 @@ class App(BaseModel):
     _environment: Environment | None = PrivateAttr(default=None)
     _pre_rollouts: list[PreRollout] = PrivateAttr(default_factory=list)
     _quiesce: dict[str, tuple[Any, ...]] = PrivateAttr(default_factory=dict)
+    _restore_verify: dict[str, Any] = PrivateAttr(default_factory=dict)
 
     def __init__(self, name: str, /, **data: Any) -> None:
         super().__init__(name=name, **data)
@@ -1406,6 +1407,7 @@ class App(BaseModel):
         derived._environments = dict(self._environments)
         derived._environment = env
         derived._quiesce = dict(self._quiesce)
+        derived._restore_verify = dict(self._restore_verify)
         for item in objects:
             derived._declare(item)
         return derived
@@ -1611,6 +1613,56 @@ class App(BaseModel):
         return {
             key: [hook.describe() for hook in hooks]
             for key, hooks in sorted(self._quiesce.items())
+        }
+
+    def restore_verify(self, workload: Workload, verify: Any) -> None:
+        """Declare how a restored copy of ``workload``'s claims is checked.
+
+        ``piceli restore --to-new-claim`` restores a restore point into
+        scratch claims (never the live ones), then runs ``verify``
+        (:class:`~piceli.restore.RestoreVerify`) in a Job with the workload's
+        current image and pod settings, the scratch copies mounted read-only
+        at the workload's mount paths. It renders no object and never changes
+        a release's plan hash.
+
+        :raises ValueError: for a workload of another app or kind, a second
+            declaration, or a workload that mounts no retained claim.
+
+        Example::
+
+            from piceli.restore import RestoreVerify
+            app.restore_verify(db, RestoreVerify(["db", "verify", "/var/lib/db"]))
+        """
+        from piceli.restore.model import RestoreVerify
+
+        if not any(existing is workload for existing in self._objects):
+            raise ValueError(
+                "restore_verify() takes a workload declared on this app, got "
+                f"{type(workload).__name__} {getattr(workload, 'name', '?')!r}"
+            )
+        kind = kind_of(workload)
+        if kind not in {"Deployment", "StatefulSet"}:
+            raise ValueError(
+                f"restore_verify() takes a Deployment or StatefulSet, got {kind} "
+                f"{workload.name!r}"
+            )
+        if not isinstance(verify, RestoreVerify):
+            raise ValueError("restore_verify() takes a RestoreVerify")
+        if not retained_mounts(workload):
+            raise ValueError(
+                f"{kind} {workload.name!r} mounts no retained claim "
+                "(ClaimTemplate or ExistingClaim), so there is nothing to verify"
+            )
+        key = f"{kind}/{workload.name}"
+        if key in self._restore_verify:
+            raise ValueError(f"{key} already has a restore verify command")
+        self._restore_verify[key] = verify
+
+    def restore_verifies(self) -> dict[str, dict[str, Any]]:
+        """Declared restore verify commands per ``Kind/name``, described."""
+        return {
+            key: verify.describe()
+            for key, verify in sorted(self._restore_verify.items())
         }
 
     # --------------------------------------------------------------- render

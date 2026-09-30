@@ -448,6 +448,15 @@ def deploy(
             "with its combined hash); re-plans and refuses any change",
         ),
     ] = None,
+    otlp_endpoint: Annotated[
+        str | None,
+        typer.Option(
+            "--otlp-endpoint",
+            help="Send this run's events (a trace with one span per stage and a "
+            "result log record) to an OTLP/HTTP endpoint; the standard "
+            "OTEL_EXPORTER_OTLP_* variables also enable it. Never fails a deploy",
+        ),
+    ] = None,
     env: Annotated[
         str | None,
         typer.Option(
@@ -534,9 +543,27 @@ def deploy(
             "one (in the pipeline). Plan with --plan and ask for the hash"
         )
         reject("approval-policy-missing")
-    runner = PipelineRunner(
-        pipeline, on_event=emit_json if as_json else _human, say=say, refs=refs
+    from piceli.deploy_events import recorder as events_recorder
+
+    events = events_recorder(
+        otlp_endpoint,
+        kind="deploy",
+        say=say,
+        attributes={
+            "piceli.app": pipeline.app.name,
+            "k8s.namespace.name": pipeline.target.namespace,
+            "piceli.environment": env,
+            "piceli.stage.until": until,
+        },
     )
+    sink = emit_json if as_json else _human
+    if events is not None:
+
+        def sink(event: dict[str, Any], _next: Any = sink) -> None:  # type: ignore[misc]
+            events.stage_event(event)
+            _next(event)
+
+    runner = PipelineRunner(pipeline, on_event=sink, say=say, refs=refs)
     finished: tuple[int, dict[str, Any]] | None = None
     try:
         with _terminate_as_interrupt(), runner.locked(), runner.sources():
@@ -626,11 +653,11 @@ def deploy(
                         policy=decision if approve_if_policy else None,
                     )
     except PipelineError as error:
-        _fail(runner, error, target, env)
+        _fail(runner, error, target, env, events)
     except (ValueError, OSError) as error:
         from piceli.pipeline.runner import classify
 
-        _fail(runner, classify(error), target, env)
+        _fail(runner, classify(error), target, env, events)
     except KeyboardInterrupt:
         say(
             "interrupted; continue with: piceli deploy "
@@ -639,15 +666,19 @@ def deploy(
             + " --resume"
         )
         if runner.run is not None:
-            emit_json(runner.result("interrupted"))
+            interrupted = runner.result("interrupted")
+            _export(events, runner, interrupted)
+            emit_json(interrupted)
         raise typer.Exit(EXIT_FAILED) from None
     if finished is not None:
+        _export(events, runner, finished[1])
         # Printed after the state session closed: with shared state the
         # plan's state is in the cluster before its hash is published.
         emit_json(finished[1])
         raise typer.Exit(finished[0])
     state = result["state"]
     say(f"deploy {state}: release {result.get('release')}")
+    _export(events, runner, result)
     emit_json(result)
     raise typer.Exit(EXIT_OK)
 
@@ -711,8 +742,25 @@ def _write_plan_file(
     say(f"plan file: {out}")
 
 
+def _export(events: Any, runner: Any, body: dict[str, Any]) -> None:
+    """Send the run's events (a no-op unless configured; never raises)."""
+    if events is None:
+        return
+    rollback = None
+    try:
+        if runner.run is not None:
+            rollback = runner.run.output("checks").get("rollback")
+    except Exception:
+        rollback = None
+    events.finish(body, rollback=rollback if isinstance(rollback, dict) else None)
+
+
 def _fail(
-    runner: Any, error: Any, target: str | None = None, env: str | None = None
+    runner: Any,
+    error: Any,
+    target: str | None = None,
+    env: str | None = None,
+    events: Any = None,
 ) -> None:
     say(f"{'failed' if error.failed else 'rejected'}: {error} ({error.code})")
     for item in error.details.get("blocking", ()):
@@ -783,5 +831,6 @@ def _fail(
         body["diagnosis"] = diagnosis
     if isinstance(error.details.get("policy"), dict):
         body["policy"] = error.details["policy"]
+    _export(events, runner, body)
     emit_json(body)
     raise typer.Exit(EXIT_FAILED if error.failed else EXIT_REJECTED)

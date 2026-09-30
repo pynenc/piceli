@@ -104,6 +104,15 @@ from piceli.k8s.ops.secret_versions import (
     private_directory,
 )
 from piceli.k8s.ops.session import composition_from_archive
+from piceli.k8s.orphans import (
+    OrphanOptions,
+    app_labels,
+    declared_keys,
+    delete_orphans,
+    find_orphans,
+    prune_hash,
+    scan_types,
+)
 from piceli.k8s.release import (
     ReleaseCatalog,
     ReleaseRecord,
@@ -2876,3 +2885,98 @@ class ReleaseRunner:
             }
         finally:
             store.close()
+
+    # ------------------------------------------------------------- orphans
+    def orphans(
+        self, options: OrphanOptions | None = None, *, approve: str | None = None
+    ) -> dict[str, Any]:
+        """Leftover objects no current release owns (see :mod:`piceli.k8s.orphans`).
+
+        Reads the cluster only, unless ``approve`` (the ``plan_hash`` of an
+        earlier call) is given: the set is then read again and, when it is
+        exactly the approved one, deleted (``deleted`` in the result; each
+        object is waited for until it is gone, at most ``readiness_seconds``,
+        and reported ``deleting`` if it is still terminating);
+        otherwise nothing is deleted (``orphans-plan-changed``). The current
+        release is the catalog's selected one. Refused before a release is
+        deployed (``orphans-no-release``) and while an execution is running
+        (``orphans-execution-running``): the objects of a release being
+        applied are not leftovers.
+        """
+        options = options or OrphanOptions()
+        if approve is not None and not _HASH.fullmatch(approve):
+            raise ReleaseError(
+                "plan hash must be 64 lowercase hex characters",
+                code="invalid-plan-hash",
+            )
+        if not self.state.exists() or not self.spec.catalog_path.exists():
+            raise ReleaseError(
+                "no release is deployed from this state yet", code="orphans-no-release"
+            )
+        catalog = ReleaseCatalog(self.spec.catalog_path)
+        selected = self._selected(catalog)
+        if selected is None:
+            raise ReleaseError(
+                "no release is selected in this state", code="orphans-no-release"
+            )
+        entries = self.history.entries()
+        if entries and entries[-1].get("state") == "running":
+            raise ReleaseError(
+                "an execution is running; resume or stop it first",
+                code="orphans-execution-running",
+            )
+        records = {record.name: record for record in catalog.records()}
+        current = composition_from_archive(records[selected].archive)
+        release = self.spec.model.release
+        binding = self.provider_factory(self.spec)
+        try:
+            self._check_target(catalog, binding.target)
+            kinds = scan_types(
+                (composition_from_archive(r.archive) for r in records.values()),
+                options,
+            )
+            artifact = self._discover(binding, kinds)
+            labels = app_labels(current)
+            found = find_orphans(
+                artifact.resources,
+                declared=declared_keys(current),
+                owner_ids=(release.owner, *release.inherited_owners),
+                labels=labels,
+                namespace=binding.target.namespace,
+                options=options,
+                now=_now(),
+            )
+            digest = prune_hash(binding.target, selected, options, found)
+            report: dict[str, Any] = {
+                "release": selected,
+                "namespace": binding.target.namespace,
+                "owner": release.owner,
+                "app_labels": labels,
+                "options": options.to_dict(),
+                "orphans": [item.to_dict() for item in found],
+                "summary": {
+                    "total": len(found),
+                    "prunable": sum(1 for item in found if item.prunable),
+                    "kept": sum(1 for item in found if not item.prunable),
+                },
+                "plan_hash": digest,
+            }
+            if approve is None:
+                return report
+            if approve != digest:
+                raise ReleaseError(
+                    "the leftover objects changed since the plan was approved; "
+                    "nothing was deleted",
+                    code="orphans-plan-changed",
+                    details={"plan_hash": digest},
+                )
+            limits = self._limits()
+            deleted = delete_orphans(
+                binding.provider,
+                found,
+                wait_seconds=limits.readiness_seconds,
+                poll_seconds=limits.poll_seconds,
+            )
+            return {**report, "deleted": deleted}
+        finally:
+            binding.close()

@@ -879,6 +879,8 @@ Even then, an apply that times out reports what the pods show in `diagnosis`.
 - **Approval.** Required: `--approve <combined hash>` from `--plan`,
   `--auto-approve`, or typing the hash's first 12 characters on a terminal.
   `--resume` continues an approved run and needs no new approval.
+- **Events to OpenTelemetry.** `--otlp-endpoint` (or `OTEL_EXPORTER_OTLP_ENDPOINT`)
+  exports the run as a trace and a result log record; see {doc}`deploy_events`.
 - **Idempotency.** Every stage is idempotent and skipped when unchanged, so
   re-running the same command is safe; after a failure, `--resume` continues
   the same run.

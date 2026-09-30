@@ -228,3 +228,40 @@ class RestorePoints(BaseModel):
             # Only when not the default, so other plans keep their hashes.
             **({"include": self.include} if self.include != "touched" else {}),
         }
+
+
+class RestoreVerify(BaseModel):
+    """A read-only check of a restored copy, run by ``piceli restore --to-new-claim``.
+
+    Declared with ``app.restore_verify(workload, RestoreVerify([...]))``. When
+    a restore point is restored into scratch claims (never the live ones),
+    Piceli runs ``command`` in a Job with the workload's current image and
+    pod settings (environment, Secret and ConfigMap mounts, security
+    context), with the scratch copy of each of the workload's claims mounted
+    **read-only** at the path the workload mounts the original. Exit 0 is
+    ``PASS``; anything else is ``FAIL``. The command's output is never
+    printed or stored.
+
+    :param command: argv run as the container's entrypoint.
+    :param timeout_seconds: Longest the Job may take, from creation.
+
+    Example::
+
+        app.restore_verify(db, RestoreVerify(["db", "verify", "--read-only", "/var/lib/db"]))
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    command: tuple[str, ...] = Field(min_length=1)
+    timeout_seconds: int = Field(default=300, ge=10, le=3600)
+
+    def __init__(self, command: list[str] | tuple[str, ...], /, **data: Any) -> None:
+        if isinstance(command, str):
+            raise ValueError(
+                "command is an argv list such as ['db', 'verify'], not a string"
+            )
+        super().__init__(command=tuple(command), **data)
+
+    def describe(self) -> dict[str, Any]:
+        """A JSON-safe description (part of the verify plan's hash)."""
+        return {"command": list(self.command), "timeout_seconds": self.timeout_seconds}

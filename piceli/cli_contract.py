@@ -566,6 +566,24 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "run id) with the causes recorded when it failed (pod reasons, exit "
             "codes, redacted log tails, events).",
         ),
+        "release orphans": _C(
+            "List the objects with the app's ownership labels that no current "
+            "release owns; --prune deletes them after approval.",
+            contract="conforms",
+            reads=_RELEASE_READS,
+            cluster="writes",
+            approval_required=True,
+            exit_codes=_RELEASE_EXIT,
+            notes="Read-only without --prune. --prune prints the plan hash over "
+            "the exact set (UIDs and resourceVersions) and exits 3; --prune "
+            "--approve HASH deletes that set, or refuses when it changed "
+            "(orphans-plan-changed); each deleted object is waited for until it "
+            "is gone (outcome deleting when still terminating). Never prunes claims, Secrets, objects of "
+            "another owner or cluster-scoped objects unless --include-claims, "
+            "--include-secrets, --include-other-owners or "
+            "--include-cluster-scoped; never an object without Piceli's owner "
+            "annotation." + _ENV_NOTE,
+        ),
         # -------------------------------------------------------- state
         "state show": _C(
             "Show where a release's state lives, its generation and the lock holder.",
@@ -997,7 +1015,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "Put a restore point back into its claims: plan (exit 3 with the "
             "restore_hash), then --approve HASH.",
             reads=("pipeline module", "restore point directory", "kubeconfig"),
-            writes=("restore point directory (restores/ receipts)",),
+            writes=("restore point directory (restores/ and verifies/ receipts)",),
             cluster="writes",
             approval_required=True,
             safe_to_retry=True,
@@ -1011,7 +1029,14 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "to zero and waits until their pods are gone, empties each claim and "
             "extracts its archive in a helper Job, checks the content digest in "
             "the cluster and scales the writers back. Every file in the claims "
-            "is replaced; run it again after a failure.",
+            "is replaced; run it again after a failure. With --to-new-claim "
+            "(and --all for every verified point) it touches no live claim and "
+            "stops no writer: the plan (exit 3, verify_hash) names one scratch "
+            "claim per restored claim; --approve HASH creates them, restores "
+            "and checks each content digest, runs the app's restore_verify "
+            "command read-only with the workload's image, writes a receipt "
+            "with PASS or FAIL per claim (exit 1 on any FAIL), and deletes the "
+            "scratch claims unless --keep.",
         ),
     }
 )

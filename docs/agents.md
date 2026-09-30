@@ -134,6 +134,12 @@ noted.
 - `piceli release diff`: reads the cluster and sends only server-side dry runs
   (`dryRun=All`); prints what `plan` would change, field by field. Writes no
   local state.
+- Leftover objects, `piceli release orphans --spec …`: reads the cluster and lists objects carrying the
+  app's ownership labels that no current release owns (kind, name, why,
+  age). Without `--prune` it changes nothing. `--prune` deletes only after
+  the owner approved the printed `plan_hash` (`--prune --approve HASH`); claims,
+  Secrets, another owner's objects and cluster-scoped objects need their own
+  `--include-*` flag, which you never add on your own.
 - `piceli release status`: reads local state only. Like every `release`
   command it takes `--spec release.toml` or `--spec MODULE:ATTR` (a
   pipeline; see {ref}`agents-pipeline-release`). `--run ID` (an execution
@@ -216,14 +222,18 @@ noted.
 
 Ask before running these, and show the owner what will happen first.
 
+Exporting deploy events (`--otlp-endpoint`, or `OTEL_EXPORTER_OTLP_*` in the environment) adds no approval: it only sends names, hashes, commits, digests and fixed error codes to the endpoint the owner configured, and a failure is one warning line that never changes the deploy result. Never invent an endpoint or put headers or tokens on the command line; see {doc}`deploy_events`.
+
 | Command | Changes | Approve with |
 | --- | --- | --- |
 | `piceli deploy` | Builds images, pushes them to a registry or node, applies a release | `--approve <combined hash>` from `piceli deploy MODULE:ATTR --plan`, after the owner reviewed that plan (or `--apply <plan file> --approve <its hash>` on another runner); `--resume` continues an approved run; `--approve-if-policy` only when the owner declared an `auto_approve` policy (see below) |
 | `piceli restore` | Replaces every file of the restore point's claims (stops their writers, then starts them again) | `--approve <restore_hash>` printed by `piceli restore MODULE:ATTR --point ID` without `--approve`, after the owner chose that restore point and agreed to lose what the claims hold now |
+| `piceli restore --to-new-claim` | Creates one scratch claim per restored claim (same storage class and size, labelled `piceli.io/scratch=true`), restores into it, runs the app's read-only `restore_verify` Job and deletes the scratch claims (kept only with `--keep`); live claims and writers are not touched | `--approve <verify_hash>` printed by `piceli restore MODULE:ATTR --point ID --to-new-claim` (or `--all`) without `--approve`, after the owner agreed to the storage it uses for the duration. Exit `1` with `restore-verify-failed` when a claim is `FAIL`; report each claim's `result`, never try to fix the data |
 | `piceli state import` | Replaces the release's state (local directory or the shared state in the namespace) | `--approve <import digest>` printed by `piceli state import` without `--approve`, after the owner agreed to replace the state |
 | `piceli release apply` | The cluster | `--approve <plan hash>` from `release plan`, after the owner reviewed that plan; `--approve-if-policy` only with the owner's `[release] auto_approve` |
 | `piceli release rollback` | The cluster | `--approve <plan hash>` from `release rollback <target>` without `--approve` |
 | `piceli release resume` | The cluster (continues an approved execution) | The owner's go-ahead to continue |
+| `piceli release orphans` | With `--prune`, the cluster (deletes leftover objects no release owns) | `--approve <plan hash>` printed by `--prune` without `--approve`, after the owner reviewed that exact list; `--include-claims` (data), `--include-secrets`, `--include-other-owners` and `--include-cluster-scoped` only when the owner asked for them |
 | `piceli release stop` | Local journal (cancels an execution) | The owner's go-ahead |
 | `piceli release check` | Nothing by itself, but runs the spec's checks (declared pod execs and Python functions) | The owner's go-ahead for a spec you did not write |
 | `piceli artifacts deliver` | A registry or node | `--approve-digest <config digest>` |
