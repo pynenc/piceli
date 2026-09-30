@@ -26,17 +26,25 @@ from piceli import App, ClaimTemplate, ExistingClaim, Pipeline, Quiesce, Restore
 
 app = App("shop")
 db = app.stateful_set(
-    "db", image=images["db"], replicas=2,
+    "db",
+    image=images["db"],
+    replicas=2,
     volumes={"/var/lib/db": ClaimTemplate("data", size="10Gi")},
 )
 cache = app.deployment(
-    "cache", image="docker.io/library/redis:7.4@sha256:…",
+    "cache",
+    image="docker.io/library/redis:7.4@sha256:…",
     volumes={"/data": ExistingClaim("cache-state")},
 )
 app.quiesce(cache, Quiesce.exec(["redis-cli", "SAVE"]))
 
-pipeline = Pipeline(app, target, build=images, deliver=NodeLoopbackRegistry(),
-                    restore_points=RestorePoints())
+pipeline = Pipeline(
+    app,
+    target,
+    build=images,
+    deliver=NodeLoopbackRegistry(),
+    restore_points=RestorePoints(),
+)
 ```
 
 The run gains a `backup` stage between `deliver` and `plan`. A pipeline
