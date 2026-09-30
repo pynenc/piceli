@@ -134,6 +134,12 @@ noted.
 - `piceli release diff`: reads the cluster and sends only server-side dry runs
   (`dryRun=All`); prints what `plan` would change, field by field. Writes no
   local state.
+- Leftover objects, `piceli release orphans --spec …`: reads the cluster and lists objects carrying the
+  app's ownership labels that no current release owns (kind, name, why,
+  age). Without `--prune` it changes nothing. `--prune` deletes only after
+  the owner approved the printed `plan_hash` (`--prune --approve HASH`); claims,
+  Secrets, another owner's objects and cluster-scoped objects need their own
+  `--include-*` flag, which you never add on your own.
 - `piceli release status`: reads local state only. Like every `release`
   command it takes `--spec release.toml` or `--spec MODULE:ATTR` (a
   pipeline; see {ref}`agents-pipeline-release`). `--run ID` (an execution
@@ -224,6 +230,7 @@ Ask before running these, and show the owner what will happen first.
 | `piceli release apply` | The cluster | `--approve <plan hash>` from `release plan`, after the owner reviewed that plan; `--approve-if-policy` only with the owner's `[release] auto_approve` |
 | `piceli release rollback` | The cluster | `--approve <plan hash>` from `release rollback <target>` without `--approve` |
 | `piceli release resume` | The cluster (continues an approved execution) | The owner's go-ahead to continue |
+| `piceli release orphans` | With `--prune`, the cluster (deletes leftover objects no release owns) | `--approve <plan hash>` printed by `--prune` without `--approve`, after the owner reviewed that exact list; `--include-claims` (data), `--include-secrets`, `--include-other-owners` and `--include-cluster-scoped` only when the owner asked for them |
 | `piceli release stop` | Local journal (cancels an execution) | The owner's go-ahead |
 | `piceli release check` | Nothing by itself, but runs the spec's checks (declared pod execs and Python functions) | The owner's go-ahead for a spec you did not write |
 | `piceli artifacts deliver` | A registry or node | `--approve-digest <config digest>` |

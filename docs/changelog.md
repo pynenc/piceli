@@ -4,6 +4,19 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.11.0 (unreleased)
+
+- **`piceli release orphans`: report and prune leftover objects:** lists the
+  objects Piceli wrote (`piceli.io/owner`) that the selected release no longer
+  declares (a removed component) or that belong to another environment of the
+  same app (same ownership labels, another owner), with kind, name, matched
+  label, reason and age. `--prune` deletes them only after approval of a plan
+  hash over the exact set (UIDs and resourceVersions); a changed set is
+  refused. PersistentVolumeClaims, Secrets, another owner's objects and
+  cluster-scoped objects are kept unless `--include-claims`,
+  `--include-secrets`, `--include-other-owners` or `--include-cluster-scoped`.
+  New error codes `orphans-*`. See {doc}`release_cli`.
+
 ## Version 0.10.0
 
 - **Helm chart and manifests for other people's clusters (preview):**

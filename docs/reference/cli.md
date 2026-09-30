@@ -70,6 +70,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli release apply`](#cli-release-apply) | Execute an approved plan (``--approve HASH``), or plan and confirm. | writes | yes |
 | [`piceli release check`](#cli-release-check) | Run the spec's [[checks]] now against a release; changes nothing. | reads | no |
 | [`piceli release diff`](#cli-release-diff) | Show what `plan` would change, field by field (read-only, nothing stored). | reads | no |
+| [`piceli release orphans`](#cli-release-orphans) | List the objects that carry the app's ownership labels but no current release owns. | writes | yes |
 | [`piceli release plan`](#cli-release-plan) | Capture live discovery and persist an approvable plan (prints its hash). | reads | no |
 | [`piceli release preview`](#cli-release-preview) | Alias of `plan`. | reads | no |
 | [`piceli release resume`](#cli-release-resume) | Resume an interrupted apply of a created release (same grant and ids). | writes | no |
@@ -1318,6 +1319,34 @@ Show what `plan` would change, field by field (read-only, nothing stored).
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** Read-only: stores no plan and no local state. Sends only reads and dryRun=All requests (server dry runs of the writes). Exit 1 with --exit-code when something would change (reason release-changes-pending).
+
+(cli-release-orphans)=
+### `piceli release orphans`
+
+List the objects that carry the app's ownership labels but no current release owns.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--spec` | text | required | path/to/release.toml, or MODULE:ATTR (path/to/file.py:ATTR) naming a piceli Pipeline: the release `piceli deploy` manages |
+| `--env` | text |  | Environment of a pipeline (--spec MODULE:ATTR): its app overrides, target and state (required when the pipeline has one target per environment) |
+| `--prune` | boolean | `False` | Delete the prunable leftover objects after approval (exit 3 with the plan hash to approve; --approve HASH executes) |
+| `--approve` | text |  | Plan hash to execute (from a previous `plan`/`rollback` output) |
+| `--include-claims` | boolean | `False` | Also prune PersistentVolumeClaims (their data is deleted) and StatefulSets whose retention policy deletes their claims |
+| `--include-secrets` | boolean | `False` | Also prune Secrets |
+| `--include-cluster-scoped` | boolean | `False` | Also scan and prune this namespace's ClusterRole/ClusterRoleBinding |
+| `--include-other-owners` | boolean | `False` | Also prune objects of another owner that carry the app's labels (another environment of the app) |
+| `--json` | boolean | `False` | Print only the JSON object (no human summary on stderr) |
+
+**Contract**
+
+- **Reads:** release.toml or pipeline module (--spec MODULE:ATTR), composition, state_dir, kubeconfig
+- **Writes:** nothing (read-only)
+- **Cluster:** writes
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** Read-only without --prune. --prune prints the plan hash over the exact set (UIDs and resourceVersions) and exits 3; --prune --approve HASH deletes that set, or refuses when it changed (orphans-plan-changed). Never prunes claims, Secrets, objects of another owner or cluster-scoped objects unless --include-claims, --include-secrets, --include-other-owners or --include-cluster-scoped; never an object without Piceli's owner annotation. With a pipeline, --env NAME selects one environment (its target, overrides and state).
 
 (cli-release-plan)=
 ### `piceli release plan`

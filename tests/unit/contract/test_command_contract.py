@@ -75,6 +75,7 @@ CASES: dict[str, tuple[Argv, str]] = {
             "secret show",
             "diff",
             "check",
+            "orphans",
         )
     },
     "render": (
