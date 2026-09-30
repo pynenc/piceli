@@ -208,6 +208,9 @@ is denied, those reads are skipped and the Job itself is the check.
 - Checks run one after another and stop at the first failure.
 - A check runs when the release plan changes the workload; a change that only
   affects an object the workload mounts (a Secret) does not trigger it.
+- Only `piceli deploy` runs the checks. `piceli release plan` refuses a
+  release spec whose composition returns an App with checks
+  (`release-prerollout-unsupported`) instead of skipping them.
 
 ## Testing
 

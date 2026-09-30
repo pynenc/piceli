@@ -45,6 +45,7 @@ FIRST_ARGUMENT = {
     "NodeFactsError",
     "LayerError",
     "RestorePointError",
+    "PublishError",
 }
 # ``_Failure(result, reason)`` in the delivery modules; ``reject_error(error, default)``;
 # ``DryRunUnavailable(resource, reason)`` in ``k8s/ops/dry_run.py``.
@@ -59,6 +60,7 @@ DYNAMIC = {
     "docker-tool-required",
     "ssh-tool-required",
     "kubectl-tool-required",
+    "cosign-tool-required",
     # delivery.NodeDelivery: "import-" + RunResult.state
     "import-failed",
     "import-timed-out",

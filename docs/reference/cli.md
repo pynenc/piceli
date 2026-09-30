@@ -34,6 +34,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli artifacts pin`](#cli-artifacts-pin) | Pin one public source file by digest. | none | no |
 | [`piceli artifacts preview`](#cli-artifacts-preview) | Preview a deterministic OCI build plan (no tools run). | none | no |
 | [`piceli artifacts preview-command`](#cli-artifacts-preview-command) | Preview a pinned external build command. | none | no |
+| [`piceli artifacts publish`](#cli-artifacts-publish) | Publish a build's images (every platform in one index) to a registry. | none | yes |
 | [`piceli cache prune`](#cli-cache-prune) | Remove what no release, rollback or resume needs: stale temporary directories and partial files, runs beyond --keep-last, unused delivery receipts, and (over --budget) build outputs and logs. | none | no |
 | [`piceli cache status`](#cli-cache-status) | Show the disk used per state directory and category, and Piceli's temporary directories. Read-only. | none | no |
 | [`piceli chart manifests`](#cli-chart-manifests) | Print (or write) plain manifests with a values file applied; no Helm needed. | none | no |
@@ -165,6 +166,8 @@ Preview a containerized build and its plan hash.
 | --- | --- | --- | --- |
 | `--spec` | path | required |  |
 | `--inputs` | path |  |  |
+| `--platform` | text |  | host-build.toml only: build for this platform (repeat for a multi-platform image); default the spec's build.platforms |
+| `--cache-dir` | path |  | host-build.toml only: the shared stage/target/blob directory |
 
 **Contract**
 
@@ -185,8 +188,10 @@ Run an approved containerized build and write a receipt.
 | --- | --- | --- | --- |
 | `--spec` | path | required |  |
 | `--inputs` | path |  |  |
+| `--platform` | text |  | host-build.toml only: build for this platform (repeat for a multi-platform image); default the spec's build.platforms |
+| `--cache-dir` | path |  | host-build.toml only: the shared stage/target/blob directory |
 | `--lock` | path |  |  |
-| `--approve-builder` | text | required |  |
+| `--approve-builder` | text |  | build.toml: the builder digest to run (required) |
 | `--approve-plan` | text |  |  |
 | `--allow-network` | boolean | `False` |  |
 | `--out` | path | required |  |
@@ -375,6 +380,47 @@ Preview a pinned external build command.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
+
+(cli-artifacts-publish)=
+### `piceli artifacts publish`
+
+Publish a build's images (every platform in one index) to a registry.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--receipt` | path | required |  |
+| `--output-dir` | path |  | the build's output directory (default: the receipt's directory) |
+| `--to` | text | required | oci://host[:port]/prefix |
+| `--tag` | text | required | the version tag, e.g. 1.4.0 |
+| `--image` | text |  | publish only this image |
+| `--no-attestations` | boolean | `False` | do not attach the SBOM and provenance |
+| `--move-tag` | boolean | `False` |  |
+| `--approve` | text |  | the plan digest printed without --approve |
+| `--credentials` | path |  |  |
+| `--docker-config` | path |  |  |
+| `--ca-file` | path |  |  |
+| `--docker` | path |  |  |
+| `--docker-sha256` | text |  |  |
+| `--docker-socket` | path |  |  |
+| `--out` | path |  | write the publish receipt here |
+| `--values-out` | path |  | write the Helm values fragment (images.<key>.repository/tag/digest) |
+| `--sign-key` | path |  | sign with cosign and this private key file (cosign generate-key-pair) |
+| `--cosign` | path |  |  |
+| `--cosign-sha256` | text |  |  |
+| `--timeout` | float | `1800` |  |
+
+Mutually exclusive: `credentials` / `docker_config`.
+
+**Contract**
+
+- **Reads:** build receipt and its outputs, credentials file or Docker config, docker (Docker builds only)
+- **Writes:** OCI registry (blobs, manifests, index, attestations, tag), --out receipt, --values-out
+- **Cluster:** none
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** Without --approve it prints the plan and its digest (exit 3) and contacts nothing. Pushes are content-addressed; a version tag that names another image is refused unless --move-tag.
 
 (cli-cache-prune)=
 ### `piceli cache prune`

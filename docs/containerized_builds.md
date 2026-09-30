@@ -95,6 +95,10 @@ smoke = { command = ["--self-test"], expect_exit = 0, timeout_seconds = 60 }  # 
 
 Unknown fields are errors. Every image reference must carry a digest.
 
+With several `platforms`, each image is built once per platform; `piceli
+artifacts publish` joins them in one multi-platform image (see
+{doc}`publishing_images`).
+
 ### What Piceli generates
 
 With `command`/`commands`, Piceli writes the whole Dockerfile:

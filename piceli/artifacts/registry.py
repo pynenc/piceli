@@ -33,7 +33,7 @@ import re
 import stat
 import threading
 import urllib.parse
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -177,6 +177,102 @@ class RegistryCredentials:
         }:
             raise DeliveryInputError("invalid-credentials-file")
         return cls(value.get("username"), value.get("password"), value.get("token"))
+
+
+#: ``docker-credential-<name> get``: ``(helper name, registry) -> {"Username", "Secret"}``.
+CredentialHelper = Callable[[str, str], Mapping[str, object]]
+_HELPER_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+
+
+def run_credential_helper(name: str, registry: str) -> Mapping[str, object]:
+    """Ask ``docker-credential-<name>`` for ``registry`` (stdin in, JSON out).
+
+    The helper's output is parsed, never logged; a failure is one fixed code.
+    """
+    import shutil
+    import subprocess
+
+    tool = shutil.which(f"docker-credential-{name}")
+    if tool is None:
+        raise DeliveryInputError("credential-helper-failed")
+    try:
+        result = subprocess.run(
+            [tool, "get"],
+            input=registry.encode(),
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+        value = json.loads(result.stdout) if result.returncode == 0 else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        value = None
+    if not isinstance(value, dict):
+        raise DeliveryInputError("credential-helper-failed")
+    return value
+
+
+def docker_config_credentials(
+    path: Path, registry: str, *, helper: CredentialHelper = run_credential_helper
+) -> RegistryCredentials | None:
+    """Push credentials for ``registry`` from a Docker ``config.json``.
+
+    Reads ``credHelpers[registry]`` (else ``credsStore``) and asks that
+    helper, or decodes ``auths[registry].auth``; ``None`` when the file has
+    nothing for the registry (anonymous). Nothing is printed or recorded.
+    """
+    if not isinstance(path, Path) or not path.is_absolute():
+        raise DeliveryInputError("invalid-docker-config")
+    try:
+        body = path.read_bytes()
+        if len(body) > 1_048_576:
+            raise ValueError
+        config = json.loads(body)
+        if not isinstance(config, dict):
+            raise ValueError
+    except (OSError, ValueError):
+        raise DeliveryInputError("invalid-docker-config") from None
+    keys = (registry, f"https://{registry}", f"http://{registry}")
+    helpers = config.get("credHelpers") or {}
+    name = next(
+        (helpers[key] for key in keys if isinstance(helpers, dict) and key in helpers),
+        None,
+    )
+    auths = config.get("auths") or {}
+    entry = next(
+        (auths[key] for key in keys if isinstance(auths, dict) and key in auths),
+        None,
+    )
+    if name is None and not (isinstance(entry, dict) and entry.get("auth")):
+        name = config.get("credsStore")
+    if name is not None:
+        if not isinstance(name, str) or not _HELPER_NAME.fullmatch(name):
+            raise DeliveryInputError("invalid-docker-config")
+        answer = helper(name, registry)
+        username, secret = answer.get("Username"), answer.get("Secret")
+        if not isinstance(secret, str) or not secret:
+            return None  # the helper has nothing for this registry
+        if username == "<token>" or not username:
+            return RegistryCredentials(token=secret)
+        if not isinstance(username, str):
+            raise DeliveryInputError("credential-helper-failed")
+        return _credentials(username, secret, "credential-helper-failed")
+    if not isinstance(entry, dict) or not entry.get("auth"):
+        return None
+    try:
+        raw = base64.b64decode(str(entry["auth"]), validate=True).decode()
+    except (ValueError, UnicodeDecodeError):
+        raise DeliveryInputError("invalid-docker-config") from None
+    username, sep, password = raw.partition(":")
+    if not sep:
+        raise DeliveryInputError("invalid-docker-config")
+    return _credentials(username, password, "invalid-docker-config")
+
+
+def _credentials(username: str, password: str, code: str) -> RegistryCredentials:
+    try:
+        return RegistryCredentials(username, password)
+    except ValueError:
+        raise DeliveryInputError(code) from None
 
 
 @dataclass(frozen=True)
@@ -767,6 +863,17 @@ class StreamedOciRegistryClient:
         self, repository: str, reference: str, manifest_bytes: bytes, media_type: str
     ) -> str:
         """``PUT`` a manifest under a tag or its digest; returns its digest."""
+        return self.put_manifest(repository, reference, manifest_bytes, media_type)[0]
+
+    def put_manifest(
+        self, repository: str, reference: str, manifest_bytes: bytes, media_type: str
+    ) -> tuple[str, bool]:
+        """``PUT`` a manifest; ``(digest, subject acknowledged)``.
+
+        The second value is whether the registry answered ``OCI-Subject``: it
+        indexed the manifest's ``subject`` for the referrers API (OCI
+        Distribution 1.1), so no fallback tag is needed.
+        """
         digest = "sha256:" + hashlib.sha256(manifest_bytes).hexdigest()
         response = self._call(
             "PUT",
@@ -780,7 +887,29 @@ class StreamedOciRegistryClient:
         reported = response.headers.get("docker-content-digest")
         if reported and reported != digest:
             raise RegistryError("registry-digest-mismatch")
-        return digest
+        return digest, bool(response.headers.get("oci-subject"))
+
+    def referrers(self, repository: str, digest: str) -> list[dict[str, object]] | None:
+        """The referrers of ``digest`` (OCI 1.1 API); ``None`` when unsupported."""
+        validate_digest(digest)
+        response = self._call(
+            "GET",
+            f"/v2/{repository}/referrers/{digest}",
+            repository,
+            headers={"Accept": "application/vnd.oci.image.index.v1+json"},
+            max_body=_MAX_MANIFEST,
+        )
+        content = response.headers.get("content-type", "")
+        if response.status != 200 or "application/vnd.oci.image.index" not in content:
+            return None
+        try:
+            value = json.loads(response.body)
+        except ValueError:
+            raise RegistryError("registry-error") from None
+        manifests = value.get("manifests") if isinstance(value, dict) else None
+        if not isinstance(manifests, list):
+            raise RegistryError("registry-error")
+        return [item for item in manifests if isinstance(item, dict)]
 
 
 def _default_port(scheme: str) -> int:

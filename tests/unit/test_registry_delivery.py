@@ -185,6 +185,8 @@ class FakeRegistry:
         self.auth: str | None = None  # None, "basic" or "bearer"
         self.chunks = True
         self.foreign_location: str | None = None
+        # OCI 1.1: answer OCI-Subject and serve /referrers/ (else 404 there).
+        self.referrers_api = False
         self.lock = threading.Lock()
         registry = self
 
@@ -281,12 +283,44 @@ class FakeRegistry:
             )
         if kind == "manifests":
             return self._manifest(handler, method, repo, rest, body)
+        if kind == "referrers" and self.referrers_api:
+            return self._referrers(handler, repo, rest)
         return self._reply(handler, 404)
+
+    def _referrers(self, handler, repo, subject):  # type: ignore[no-untyped-def]
+        found = []
+        for (name, digest), (body, media) in sorted(self.manifests.items()):
+            document = json.loads(body)
+            if (
+                name == repo
+                and (document.get("subject") or {}).get("digest") == subject
+            ):
+                found.append(
+                    {
+                        "mediaType": media,
+                        "digest": digest,
+                        "size": len(body),
+                        "artifactType": document.get("artifactType"),
+                    }
+                )
+        index = json.dumps(
+            {
+                "schemaVersion": 2,
+                "mediaType": "application/vnd.oci.image.index.v1+json",
+                "manifests": found,
+            }
+        ).encode()
+        return self._reply(
+            handler,
+            200,
+            index,
+            {"Content-Type": "application/vnd.oci.image.index.v1+json"},
+        )
 
     @staticmethod
     def _split(path: str) -> tuple[str, str, str]:
         tail = path[len("/v2/") :]
-        for kind in ("/blobs/", "/manifests/"):
+        for kind in ("/blobs/", "/manifests/", "/referrers/"):
             if kind in tail:
                 repo, rest = tail.split(kind, 1)
                 return repo, kind.strip("/"), rest
@@ -334,17 +368,27 @@ class FakeRegistry:
     def _manifest(self, handler, method, repo, reference, body):  # type: ignore[no-untyped-def]
         if method == "PUT":
             document = json.loads(body)
-            for desc in [document["config"], *document["layers"]]:
-                if (repo, desc["digest"]) not in self.blobs:
-                    return self._reply(
-                        handler, 400, b'{"errors":[{"code":"BLOB_UNKNOWN"}]}'
-                    )
+            if "manifests" in document:  # an index: its children must be here
+                for desc in document["manifests"]:
+                    if (repo, desc["digest"]) not in self.manifests:
+                        return self._reply(
+                            handler, 400, b'{"errors":[{"code":"MANIFEST_UNKNOWN"}]}'
+                        )
+            else:
+                for desc in [document["config"], *document["layers"]]:
+                    if (repo, desc["digest"]) not in self.blobs:
+                        return self._reply(
+                            handler, 400, b'{"errors":[{"code":"BLOB_UNKNOWN"}]}'
+                        )
             digest = sha(body)
             media = handler.headers["Content-Type"]
             self.manifests[(repo, digest)] = (body, media)
             if not reference.startswith("sha256:"):
                 self.tags[(repo, reference)] = digest
-            return self._reply(handler, 201, b"", {"Docker-Content-Digest": digest})
+            headers = {"Docker-Content-Digest": digest}
+            if self.referrers_api and "subject" in document:
+                headers["OCI-Subject"] = document["subject"]["digest"]
+            return self._reply(handler, 201, b"", headers)
         digest = (
             reference
             if reference.startswith("sha256:")

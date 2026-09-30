@@ -700,6 +700,27 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             long_running=True,
             exit_codes=(0, 1, 2),
         ),
+        "artifacts publish": _C(
+            "Publish a build's images (every platform in one index) to a registry.",
+            contract="conforms",
+            reads=(
+                "build receipt and its outputs",
+                "credentials file or Docker config",
+                "docker (Docker builds only)",
+            ),
+            writes=(
+                "OCI registry (blobs, manifests, index, attestations, tag)",
+                "--out receipt",
+                "--values-out",
+            ),
+            approval_required=True,
+            safe_to_retry=True,
+            long_running=True,
+            exit_codes=(0, 1, 2, 3),
+            notes="Without --approve it prints the plan and its digest (exit 3) "
+            "and contacts nothing. Pushes are content-addressed; a version tag "
+            "that names another image is refused unless --move-tag.",
+        ),
         # ------------------------------------------------------ observe
         "observe status": _C(
             "Compare a session archive with live cluster state.",
