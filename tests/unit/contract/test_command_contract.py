@@ -426,6 +426,28 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["ui", "serve", "--host", "0.0.0.0"],
         "ui-request-rejected",
     ),
+    "ui backup": (
+        lambda p: [
+            "ui",
+            "backup",
+            "--control-dir",
+            str(p / "state"),
+            "--output",
+            str(p / "backup.tar.gz"),
+        ],
+        "ui-state-invalid",
+    ),
+    "ui restore": (
+        lambda p: [
+            "ui",
+            "restore",
+            "--archive",
+            str(p / "junk"),
+            "--destination",
+            str(p / "recovered"),
+        ],
+        "ui-state-invalid",
+    ),
     "ui connect": (
         lambda p: [
             "ui",

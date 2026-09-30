@@ -96,7 +96,7 @@ class EnvironmentControl:
                 identity = "env-" + hashlib.sha256(branch.encode()).hexdigest()[:24]
                 registration = Registration(
                     id=identity,
-                    name=f"{pipeline.name} / {branch}",
+                    name=f"{pipeline.name[:80]} / {branch[:120]}",
                     target=KubeconfigTarget(
                         kubeconfig=target.kubeconfig.absolute(),
                         context=target.context,
@@ -120,6 +120,14 @@ class EnvironmentControl:
 
     def _authorize(self, action: str) -> None:
         self.query.registration(self.application_id, action=action)
+
+    def _visible_entry(self, entry: Mapping[str, Any]) -> bool:
+        if self.query.scope_policy is None:
+            return True
+        return (
+            entry.get("namespace")
+            == self.query.registration(self.application_id).target.namespace
+        )
 
     @contextmanager
     def _channel(self) -> Iterator[Channel]:
@@ -257,13 +265,15 @@ class EnvironmentControl:
             "configured": True,
             "controller": {
                 key: controller.get(key)
-                for key in ("state", "last_poll", "poll_seconds", "branches")
+                for key in ("state", "last_poll", "poll_seconds")
                 if isinstance(controller.get(key), (str, int, float, bool, list))
             },
             "envs": [
                 {"branch": branch, **_public_entry(value)}
                 for branch, value in sorted((document.get("envs") or {}).items())
-                if isinstance(branch, str) and isinstance(value, Mapping)
+                if isinstance(branch, str)
+                and isinstance(value, Mapping)
+                and self._visible_entry(value)
             ],
         }
 
@@ -275,6 +285,7 @@ class EnvironmentControl:
                 entry = (document.get("envs") or {}).get(branch)
                 if (
                     not isinstance(entry, Mapping)
+                    or not self._visible_entry(entry)
                     or entry.get("state") != "approval-required"
                     or entry.get("plan_hash") != plan_hash
                 ):
@@ -291,10 +302,15 @@ class EnvironmentControl:
             try:
                 document = channel.read_status() or {}
                 entry = (document.get("envs") or {}).get(branch)
-                if not isinstance(entry, Mapping) or commit not in {
-                    entry.get("commit"),
-                    entry.get("deployed_commit"),
-                }:
+                if (
+                    not isinstance(entry, Mapping)
+                    or not self._visible_entry(entry)
+                    or commit
+                    not in {
+                        entry.get("commit"),
+                        entry.get("deployed_commit"),
+                    }
+                ):
                     raise QueryError("ui-plan-stale", 409)
                 key, body = promote_request(f"{branch}@{commit}")
                 channel.add_request(key, body)

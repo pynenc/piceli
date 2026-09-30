@@ -104,9 +104,11 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli state pull`](#cli-state-pull) | Refresh the local working copy from the shared state (reads the cluster). | reads | no |
 | [`piceli state show`](#cli-state-show) | Show where the state lives, its generation and who holds the release lock. | reads | no |
 | [`piceli status`](#cli-status) | Say whether the app is up and how to reach it. Read-only. | reads | no |
+| [`piceli ui backup`](#cli-ui-backup) | Back up an offline UI control store and its release journal. | none | no |
 | [`piceli ui cluster-observe`](#cli-ui-cluster-observe) | Serve read-only scoped cluster observation (experimental). | writes | yes |
 | [`piceli ui cluster-serve`](#cli-ui-cluster-serve) | Serve read-only scoped cluster observation (experimental). | writes | yes |
 | [`piceli ui connect`](#cli-ui-connect) | Bind a laptop port for a cluster UI ticket (experimental, disabled by default). | reads | no |
+| [`piceli ui restore`](#cli-ui-restore) | Restore UI control state before starting a single new server. | none | no |
 | [`piceli ui serve`](#cli-ui-serve) | Register an existing definition or inventory scope and serve the bundled UI. | writes | yes |
 | [`piceli watch`](#cli-watch) | Follow a deploy run until it settles: every stage change and progress line, then the outcome. Read-only; reads the local run journal (with shared state run `piceli state pull` first), never the cluster. | none | no |
 
@@ -2238,6 +2240,27 @@ Say whether the app is up and how to reach it. Read-only.
 - **Output contract:** conforms
 - **Notes:** Read-only. Exit 0 when every workload is ready, 1 otherwise (including an unreadable cluster). Probes forwards on 127.0.0.1 only. JSON schema: docs/schemas/piceli-status-v1.schema.json.
 
+(cli-ui-backup)=
+### `piceli ui backup`
+
+Back up an offline UI control store and its release journal.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--control-dir` | path | required | Stopped UI control directory |
+| `--output` | path | required | New private backup archive |
+
+**Contract**
+
+- **Reads:** explicit offline UI control directory
+- **Writes:** new private verified backup archive
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Refuses an active dispatcher; archive includes private evidence and must be protected.
+
 (cli-ui-cluster-observe)=
 ### `piceli ui cluster-observe`
 
@@ -2262,6 +2285,7 @@ Serve read-only scoped cluster observation (experimental).
 | `--source-file` | text (repeatable) |  | Allowed source file; repeat |
 | `--renderer-image` | text |  | Immutable repository@sha256 renderer image |
 | `--renderer-platform` | text |  | Renderer platform |
+| `--gitops-namespace` | text |  | Controller namespace for scoped GitOps status and requests |
 | `--name` | text | `cluster` | Application display name |
 | `--host` | text | `127.0.0.1` | Loopback bind for a TLS gateway sidecar |
 | `--port` | integer | `8000` |  |
@@ -2303,6 +2327,7 @@ Serve read-only scoped cluster observation (experimental).
 | `--source-file` | text (repeatable) |  | Allowed source file; repeat |
 | `--renderer-image` | text |  | Immutable repository@sha256 renderer image |
 | `--renderer-platform` | text |  | Renderer platform |
+| `--gitops-namespace` | text |  | Controller namespace for scoped GitOps status and requests |
 | `--name` | text | `cluster` | Application display name |
 | `--host` | text | `127.0.0.1` | Loopback bind for a TLS gateway sidecar |
 | `--port` | integer | `8000` |  |
@@ -2347,6 +2372,27 @@ Bind a laptop port for a cluster UI ticket (experimental, disabled by default).
 - **Output contract:** conforms
 - **Notes:** Experimental and unsupported: refused with ui-experimental-disabled unless --experimental or PICELI_UI_EXPERIMENTAL=1. Requires piceli[ui], a trusted HTTPS cluster UI and local kubectl. The pairing secret is prompted without echo; no ambient kubeconfig or context. The port exists on the client host only while the supervised command runs.
 
+(cli-ui-restore)=
+### `piceli ui restore`
+
+Restore UI control state before starting a single new server.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--archive` | path | required | Verified UI backup archive |
+| `--destination` | path | required | Empty new control directory |
+
+**Contract**
+
+- **Reads:** explicit UI backup archive
+- **Writes:** new private UI control directory
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Stop the server first and restore before starting a new single replica.
+
 (cli-ui-serve)=
 ### `piceli ui serve`
 
@@ -2358,6 +2404,8 @@ Register an existing definition or inventory scope and serve the bundled UI.
 | `--context` | text |  | Explicit kubeconfig context |
 | `--namespace` | text |  | Inventory namespace |
 | `--definition` | path |  | Existing release TOML definition |
+| `--pipeline` | text |  | Trusted Pipeline MODULE:ATTR configured by the UI owner |
+| `--gitops-namespace` | text |  | Show the GitOps controller in this explicit namespace |
 | `--name` | text | `my-app` | Application display name |
 | `--host` | text | `127.0.0.1` | Loopback bind address |
 | `--port` | integer | `8000` |  |
@@ -2375,14 +2423,14 @@ Register an existing definition or inventory scope and serve the bundled UI.
 
 **Contract**
 
-- **Reads:** kubeconfig, release definition, release state, approved source files, pinned Docker renderer
+- **Reads:** kubeconfig, release or Pipeline definition, release state, approved source files, pinned Docker renderer
 - **Writes:** configured UI control directory, approved release state
 - **Cluster:** writes
 - **Approval required:** yes
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** Experimental. Requires piceli[ui]. Supply --definition or explicit --kubeconfig, --context and --namespace. Loopback only; no ambient target. Inventory mode reads only. Configured deployment requires separate exact evaluation-preview and deployment-plan approvals in the browser; starting the service approves neither.
+- **Notes:** Requires piceli[ui]. Supply --pipeline for a trusted Pipeline, --definition for a release definition, or explicit --kubeconfig, --context and --namespace for inventory. Loopback only; no ambient target. Pipeline builds require a second exact approval after delivery. Starting the service approves no deployment.
 
 (cli-watch)=
 ### `piceli watch`

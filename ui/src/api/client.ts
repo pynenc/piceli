@@ -65,6 +65,12 @@ export const api = {
   gitops: (signal?: AbortSignal) => service().GET('/api/v1/gitops', { signal }).then(data),
   approveGitops: (body: GitOpsApprovalRequest) => service().POST('/api/v1/gitops/approvals', { body }).then(data),
   promoteGitops: (body: GitOpsPromotionRequest) => service().POST('/api/v1/gitops/promotions', { body }).then(data),
+  pipelinePlan: () => service().POST('/api/v1/pipeline/plans', {}).then(data),
+  pipelineGetPlan: (plan_id: string, signal?: AbortSignal) => service().GET('/api/v1/pipeline/plans/{plan_id}', { params: { path: { plan_id } }, signal }).then(data),
+  pipelineAdmit: (body: OperationRequest) => service().POST('/api/v1/pipeline/operations', { body }).then(data),
+  pipelineOperations: (signal?: AbortSignal) => service().GET('/api/v1/pipeline/operations', { signal }).then(data),
+  pipelineOperation: (operation_id: string, signal?: AbortSignal) => service().GET('/api/v1/pipeline/operations/{operation_id}', { params: { path: { operation_id } }, signal }).then(data),
+  pipelineApproveSecond: (operation_id: string, body: OperationRequest) => service().POST('/api/v1/pipeline/operations/{operation_id}/approve', { params: { path: { operation_id } }, body }).then(data),
 
 };
 export const applicationPath = (id: string) => `/applications/${encodeURIComponent(id)}`;

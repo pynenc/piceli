@@ -6089,11 +6089,21 @@
     "arguments": [],
     "flags": [],
     "subcommands": [
+     "backup",
      "cluster-observe",
      "cluster-serve",
      "connect",
+     "restore",
      "serve"
     ]
+   },
+   "ui backup": {
+    "arguments": [],
+    "flags": [
+     "--control-dir",
+     "--output"
+    ],
+    "subcommands": []
    },
    "ui cluster-observe": {
     "arguments": [],
@@ -6106,6 +6116,7 @@
      "--control-dir",
      "--definition",
      "--experimental",
+     "--gitops-namespace",
      "--host",
      "--name",
      "--namespace",
@@ -6135,6 +6146,7 @@
      "--control-dir",
      "--definition",
      "--experimental",
+     "--gitops-namespace",
      "--host",
      "--name",
      "--namespace",
@@ -6168,6 +6180,14 @@
     ],
     "subcommands": []
    },
+   "ui restore": {
+    "arguments": [],
+    "flags": [
+     "--archive",
+     "--destination"
+    ],
+    "subcommands": []
+   },
    "ui serve": {
     "arguments": [],
     "flags": [
@@ -6178,11 +6198,13 @@
      "--docker",
      "--docker-socket",
      "--exec-sha256",
+     "--gitops-namespace",
      "--host",
      "--kubeconfig",
      "--name",
      "--namespace",
      "--no-allow-exec",
+     "--pipeline",
      "--port",
      "--renderer-image",
      "--renderer-platform",
@@ -7855,16 +7877,19 @@
   "piceli.server.cluster_security",
   "piceli.server.incluster",
   "piceli.server.security",
+  "piceli.server.state_archive",
   "piceli.services",
   "piceli.services.access",
   "piceli.services.authority",
   "piceli.services.cluster_evaluation",
   "piceli.services.contracts",
   "piceli.services.engine",
+  "piceli.services.environment_control",
   "piceli.services.evaluation",
   "piceli.services.logs",
   "piceli.services.observation",
   "piceli.services.operations",
+  "piceli.services.pipeline_control",
   "piceli.services.query",
   "piceli.services.registration",
   "piceli.services.remote_access",

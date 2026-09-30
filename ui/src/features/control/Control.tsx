@@ -36,10 +36,11 @@ export function Environments({ canChange }: { canChange: boolean }) {
   const query = useQuery({ queryKey: ['environments'], queryFn: ({ signal }) => api.environments(signal).then(asEnvironments) });
   const [branch, setBranch] = useState('');
   const [verb, setVerb] = useState<'up' | 'down' | 'seed'>('up');
+  const [source, setSource] = useState('');
   const [review, setReview] = useState<ActionResult | null>(null);
   const [confirmed, setConfirmed] = useState(false);
   const action = useMutation({
-    mutationFn: (approved_hash?: string) => api.environmentAction({ verb, branch, approved_hash: approved_hash ?? null, source: null }).then(asAction),
+    mutationFn: (approved_hash?: string) => api.environmentAction({ verb, branch, approved_hash: approved_hash ?? null, source: verb === 'seed' ? source : null }).then(asAction),
     onSuccess: result => {
       if (result.state === 'approval-required') { setReview(result); setConfirmed(false); }
       else { setReview(null); void queryClient.invalidateQueries({ queryKey: ['environments'] }); }
@@ -64,7 +65,8 @@ export function Environments({ canChange }: { canChange: boolean }) {
       <p className="small muted">Piceli plans the requested change first. Approval applies only to the exact current plan hash.</p>
       <div className="intent-form"><label>Branch<input value={branch} onChange={event => select(event.target.value)} list="environment-branches" placeholder="wp-feature" /></label><datalist id="environment-branches">{query.data.items.map(env => <option key={env.branch} value={env.branch} />)}</datalist>
         <label>Action<select value={verb} onChange={event => selectVerb(event.target.value as 'up' | 'down' | 'seed')}><option value="up">Up</option><option value="down">Down</option><option value="seed">Seed from configured source</option></select></label>
-        <button disabled={!branch || action.isPending} onClick={() => action.mutate(undefined)}>Prepare plan</button></div>
+        {verb === 'seed' && <label>Seed from environment<input value={source} onChange={event => { setSource(event.target.value); setReview(null); setConfirmed(false); }} list="environment-branches" placeholder="main" /></label>}
+        <button disabled={!branch || (verb === 'seed' && !source) || action.isPending} onClick={() => action.mutate(undefined)}>Prepare plan</button></div>
       {action.isError && <Failure error={action.error} retry={() => action.mutate(undefined)} />}
       {action.data && action.data.state !== 'approval-required' && <Notice title="Environment request complete">{action.data.state} · {action.data.namespace}</Notice>}
       {review && <div className="control-review" role="region" aria-label="Environment plan review"><h3>Review {verb} of {review.branch}</h3><dl className="facts"><dt>Namespace</dt><dd>{review.namespace}</dd><dt>Plan hash</dt><dd><code>{review.env_hash}</code></dd>{review.delete && <><dt>Deletes</dt><dd>{review.delete.claims.length} claims, {review.delete.volumes.length} volumes</dd></>}{review.source && <><dt>Seed source</dt><dd>{review.source.source} / {review.source.point}</dd></>}</dl>

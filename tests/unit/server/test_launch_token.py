@@ -199,7 +199,7 @@ def test_ui_serve_prints_the_launch_address_and_removes_its_token_file(
 
     def run(server, **kwargs):  # type: ignore[no-untyped-def]
         token = server.state.security.launch_token
-        (path,) = (tmp_path / "state").glob("launch-token-8123-*")
+        (path,) = (tmp_path / "state").glob("launch-token-8123")
         seen["path"] = path
         seen["file"] = path.read_text().strip() == token
         seen["mode"] = path.stat().st_mode & 0o777
@@ -234,13 +234,15 @@ def test_ui_serve_prints_the_launch_address_and_removes_its_token_file(
 
 
 def test_a_second_server_cannot_replace_the_first_servers_token(tmp_path: Path) -> None:
-    from piceli.k8s.ui_state import write_launch_token
+    from piceli.k8s.ui_state import remove_launch_token, write_launch_token
 
     first = write_launch_token(tmp_path, 8123, "first-token")
-    second = write_launch_token(tmp_path, 8123, "second-token")
-    assert first != second
+    with pytest.raises(FileExistsError):
+        write_launch_token(tmp_path, 8123, "second-token")
     assert first.read_text() == "first-token\n"
-    assert second.read_text() == "second-token\n"
-    second.unlink()
-    assert first.read_text() == "first-token\n"
-    first.unlink()
+    remove_launch_token(first)
+    assert not first.exists()
+    recovered = write_launch_token(tmp_path, 8123, "next-token")
+    assert recovered == first
+    assert recovered.read_text() == "next-token\n"
+    remove_launch_token(recovered)

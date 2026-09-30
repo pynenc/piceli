@@ -119,3 +119,50 @@ test('partial empty observation retains stale resources while a complete empty o
   await expect(inspect).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'No resources observed', exact: true })).toBeVisible();
 });
+
+test('Pipeline, Environments and GitOps controls fit this viewport and require keyboard review', async ({ page }) => {
+  const first = { id: 'plan-1', digest: 'a'.repeat(64), phase: 'preliminary', materialized: false, target: { name: 'shop', namespace: 'piceli-test' }, expires_at: '2099-01-01T00:00:00Z', stages: [{ name: 'build', state: 'planned' }, { name: 'deliver', state: 'planned' }] };
+  const second = { ...first, id: 'plan-2', digest: 'b'.repeat(64), phase: 'final', materialized: true, stages: [{ name: 'prerollout', state: 'planned', checks: [{ workload: 'web' }] }, { name: 'backup', state: 'planned', claims: [{ claim: 'data-web' }] }, { name: 'apply', state: 'planned' }] };
+  const posted = [];
+  const answer = (route, value, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(value) });
+  await page.route('**/api/v1/capabilities', async route => {
+    const response = await route.fetch();
+    const body = await response.json();
+    for (const name of ['pipeline', 'environments', 'gitops', 'environment_change', 'gitops_change']) body.actions[name] = { allowed: true };
+    await answer(route, body);
+  });
+  await page.route('**/api/v1/pipeline/**', route => {
+    const path = new URL(route.request().url()).pathname;
+    if (route.request().method() === 'POST') posted.push(path);
+    if (path.endsWith('/plans') && route.request().method() === 'POST') return answer(route, first);
+    if (path.endsWith('/plans/plan-1')) return answer(route, first);
+    if (path.endsWith('/plans/plan-2')) return answer(route, second);
+    if (path.endsWith('/operations') && route.request().method() === 'POST') return answer(route, { id: 'run-1', state: 'queued' }, 202);
+    if (path.endsWith('/operations/run-1/approve')) return answer(route, { id: 'run-1', state: 'queued' }, 202);
+    if (path.endsWith('/operations/run-1')) return answer(route, { id: 'run-1', state: 'awaiting-review', next_plan_id: 'plan-2', plan_id: 'plan-1', stages: { build: 'done', deliver: 'done' }, created_at: '2026-09-30T00:00:00Z' });
+    return answer(route, { items: [] });
+  });
+  await page.route('**/api/v1/environments', route => answer(route, { configured: true, items: [{ branch: 'wp-ui', namespace: 'piceli-test', main: false, state: 'running', health: 'healthy', commit: 'abcd', age_seconds: 120, workloads: [{ workload: 'web', ready: 1, replicas: 1 }], application_id: 'shop' }] }));
+  await page.route('**/api/v1/gitops', route => answer(route, { configured: true, controller: { state: 'running' }, envs: [{ branch: 'wp-ui', namespace: 'piceli-test', state: 'approval-required', commit: 'abcd', plan_hash: 'c'.repeat(64) }] }));
+  await page.goto('/applications');
+  const nav = page.getByRole('navigation', { name: 'Main navigation' });
+  await nav.getByRole('link', { name: 'Pipeline' }).focus();
+  await page.keyboard.press('Enter');
+  await page.getByRole('button', { name: 'Prepare new plan' }).click();
+  const preliminary = page.getByRole('button', { name: 'Approve build and delivery' });
+  await expect(preliminary).toBeDisabled();
+  await page.getByRole('checkbox').check();
+  await preliminary.click();
+  await expect(page.getByText('Second approval · materialized plan')).toBeVisible();
+  await expect(page.getByText('Pre-rollout checks')).toBeVisible();
+  const rollout = page.getByRole('button', { name: 'Approve rollout' });
+  await expect(rollout).toBeDisabled();
+  await page.getByRole('checkbox').check();
+  await rollout.click();
+  expect(posted.some(path => path.endsWith('/operations/run-1/approve'))).toBe(true);
+  await nav.getByRole('link', { name: 'Environments' }).click();
+  await expect(page.getByText('1/1 ready')).toBeVisible();
+  await nav.getByRole('link', { name: 'GitOps' }).click();
+  await expect(page.getByText('Pending plan', { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});

@@ -110,8 +110,9 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   `PICELI_HEAVY_LOCK=1`, host builds and Docker `Build.spec` runs take the same
   lock. New error codes `heavy-lock-timeout`, `heavy-command-empty`,
   `heavy-command-missing` ({doc}`heavy_work`).
-- **Web UI (experimental):** the optional `piceli[ui]` extra adds a web
-  application. See {doc}`ui` for what works and what is disabled.
+- **Web UI:** the optional `piceli[ui]` extra adds a bundled web application.
+  See {doc}`ui` for setup, supported local flows and the remaining in-cluster
+  experimental gate.
   - `piceli ui serve` runs a loopback UI for explicit inventory scopes and
     existing release definitions: isolated source evaluation, exact source
     and plan approvals before a durable release run, Activity replay,
@@ -120,8 +121,13 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
     token grants the session; cookies are named per origin; forwards left by
     a crashed UI are stopped at the next start (`--state-dir`).
   - Apps that declare `app.pre_rollout(...)` are refused with
-    `ui-prerollout-unsupported`: deploy them with `piceli deploy`, so the UI
-    never skips pre-rollout checks.
+    `ui-prerollout-unsupported` in the release-definition flow; a configured
+    Pipeline can run those checks and restore points from the browser, using
+    a second exact approval after image delivery when needed.
+  - Branch Environments and GitOps pages reuse Piceli's environment and
+    controller APIs for status, exact-hash changes, pending approvals and
+    promotion requests. Local branch scopes open Resources, logs and access.
+    `piceli ui backup` and `restore` handle stopped private UI control state.
   - `piceli ui cluster-observe` offers authenticated, read-only namespace
     inspection and logs behind an HTTPS gateway with OIDC subject grants and a
     rotating projected service-account token file.

@@ -73,6 +73,7 @@ if TYPE_CHECKING:
     from piceli.services.environment_control import EnvironmentControl
     from piceli.services.logs import LogService
     from piceli.services.operations import OperationService
+    from piceli.services.pipeline_control import PipelineControl
     from piceli.services.remote_access import RemoteAccessService
 
 
@@ -143,6 +144,7 @@ def create_app(
     access: AccessService | None = None,
     remote_access: RemoteAccessService | None = None,
     environment_control: EnvironmentControl | None = None,
+    pipeline_control: PipelineControl | None = None,
     logs: LogService | None = None,
     cluster_security: ClusterSecurity | None = None,
     launch_token: str | None = None,
@@ -168,6 +170,7 @@ def create_app(
                 environment_control is not None
                 and environment_control.query is not service
             )
+            or pipeline_control is not None
             or (
                 operations is not None
                 and (
@@ -196,6 +199,8 @@ def create_app(
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         if operations is not None:
             operations.start()
+        if pipeline_control is not None:
+            pipeline_control.start()
         try:
             yield
         finally:
@@ -205,6 +210,8 @@ def create_app(
                 remote_access.close()
             if operations is not None:
                 operations.close()
+            if pipeline_control is not None:
+                pipeline_control.close()
             service.close()
 
     app = FastAPI(
@@ -390,9 +397,19 @@ def create_app(
     @app.get(f"{api}/capabilities", response_model=Capabilities)
     def capabilities() -> Capabilities:
         result = service.capabilities()
-        if environment_control is None:
+        if environment_control is None and pipeline_control is None:
             return result
         actions = dict(result.actions)
+        if pipeline_control is not None:
+            pipeline_allowed = service._allowed(
+                pipeline_control.application_id, "plan"
+            ) and service._allowed(pipeline_control.application_id, "deploy")
+            actions["pipeline"] = Capability(
+                allowed=pipeline_allowed,
+                reason=None if pipeline_allowed else "not-authorized",
+            )
+        if environment_control is None:
+            return result.model_copy(update={"actions": actions})
         configured = environment_control.application_id in service.registrations
         visible = configured and service._allowed(
             environment_control.application_id, "inspect"
@@ -430,6 +447,41 @@ def create_app(
             reason=None if editable else "not-authorized",
         )
         return result.model_copy(update={"actions": actions})
+
+    def pipelines() -> PipelineControl:
+        if pipeline_control is None:
+            raise QueryError("ui-operation-unavailable", 409)
+        return pipeline_control
+
+    @app.post(f"{api}/pipeline/plans")
+    def pipeline_plan() -> dict[str, Any]:
+        return pipelines().plan()
+
+    @app.get(f"{api}/pipeline/plans/{{plan_id}}")
+    def pipeline_get_plan(plan_id: str) -> dict[str, Any]:
+        return pipelines().get_plan(plan_id)
+
+    @app.post(f"{api}/pipeline/operations", status_code=202)
+    def pipeline_admit(body: OperationRequest) -> dict[str, Any]:
+        return pipelines().admit(
+            body.plan_id, body.approved_digest, body.idempotency_key
+        )
+
+    @app.get(f"{api}/pipeline/operations")
+    def pipeline_operations() -> dict[str, Any]:
+        return pipelines().operations()
+
+    @app.get(f"{api}/pipeline/operations/{{operation_id}}")
+    def pipeline_operation(operation_id: str) -> dict[str, Any]:
+        return pipelines().operation(operation_id)
+
+    @app.post(f"{api}/pipeline/operations/{{operation_id}}/approve", status_code=202)
+    def pipeline_approve_second(
+        operation_id: str, body: OperationRequest
+    ) -> dict[str, Any]:
+        return pipelines().approve_second(
+            operation_id, body.plan_id, body.approved_digest
+        )
 
     def controls() -> EnvironmentControl:
         if environment_control is None:

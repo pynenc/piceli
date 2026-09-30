@@ -928,7 +928,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             contract="conforms",
             reads=(
                 "kubeconfig",
-                "release definition",
+                "release or Pipeline definition",
                 "release state",
                 "approved source files",
                 "pinned Docker renderer",
@@ -936,8 +936,22 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             writes=("configured UI control directory", "approved release state"),
             cluster="writes",
             approval_required=True,
-            notes="Experimental. Requires piceli[ui]. Supply --definition or explicit --kubeconfig, --context and --namespace. Loopback only; no ambient target. Inventory mode reads only. Configured deployment requires separate exact evaluation-preview and deployment-plan approvals in the browser; starting the service approves neither.",
+            notes="Requires piceli[ui]. Supply --pipeline for a trusted Pipeline, --definition for a release definition, or explicit --kubeconfig, --context and --namespace for inventory. Loopback only; no ambient target. Pipeline builds require a second exact approval after delivery. Starting the service approves no deployment.",
             long_running=True,
+        ),
+        "ui backup": _C(
+            "Back up stopped UI control state and release evidence.",
+            contract="conforms",
+            reads=("explicit offline UI control directory",),
+            writes=("new private verified backup archive",),
+            notes="Refuses an active dispatcher; archive includes private evidence and must be protected.",
+        ),
+        "ui restore": _C(
+            "Restore a verified UI state archive into an empty directory.",
+            contract="conforms",
+            reads=("explicit UI backup archive",),
+            writes=("new private UI control directory",),
+            notes="Stop the server first and restore before starting a new single replica.",
         ),
         "operator serve": _C(
             "Serve the operator dashboard and REST API on loopback.",

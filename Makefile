@@ -88,7 +88,7 @@ ui-fake-serve: ## Open a read-only local UI with a disposable fake Kubernetes AP
 	uv run --frozen --extra ui python tests/browser/serve_ui.py --port $(PICELI_UI_FAKE_PORT)
 
 test-ui: ## Run service and legacy UI acceptance checks against the fake API
-	uv run --frozen --extra ui pytest -n auto tests/unit/test_ui_contracts.py tests/acceptance/test_ui_truthfulness.py tests/acceptance/test_ui_service.py
+	uv run --frozen --extra ui pytest -n auto tests/unit/test_ui_contracts.py tests/unit/services/test_environment_control.py tests/unit/server/test_launch_token.py tests/unit/server/test_ui_state_archive.py tests/acceptance/test_ui_truthfulness.py tests/acceptance/test_ui_service.py tests/acceptance/test_ui_pipeline.py
 
 test-ui-fake: ## Run fake-API UI service and browser journeys (requires Chromium)
 	$(MAKE) test-ui

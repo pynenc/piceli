@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import shutil
+import tarfile
 from dataclasses import replace
 from pathlib import Path
 from typing import Annotated, Literal, cast
 
 import typer
 
-from piceli.cli_contract import reject, say
+from piceli.cli_contract import emit_json, reject, say
 from piceli.k8s.cli.ui_remote import connect as connect_remote
 from piceli.k8s.ui_experimental import experimental_enabled
 
@@ -19,6 +20,38 @@ app = typer.Typer(
 )
 
 app.command("connect")(connect_remote)
+
+
+@app.command("backup")
+def backup_ui(
+    control_dir: Annotated[Path, typer.Option(help="Stopped UI control directory")],
+    output: Annotated[Path, typer.Option(help="New private backup archive")],
+) -> None:
+    """Back up an offline UI control store and its release journal."""
+    from piceli.server.state_archive import backup
+
+    try:
+        created = backup(control_dir, output)
+    except (ValueError, OSError):
+        reject("ui-state-invalid")
+    say(f"UI state backup: {created}")
+    emit_json({"state": "backed-up", "archive": str(created)})
+
+
+@app.command("restore")
+def restore_ui(
+    archive: Annotated[Path, typer.Option(help="Verified UI backup archive")],
+    destination: Annotated[Path, typer.Option(help="Empty new control directory")],
+) -> None:
+    """Restore UI control state before starting a single new server."""
+    from piceli.server.state_archive import restore
+
+    try:
+        restored = restore(archive, destination)
+    except (ValueError, OSError, tarfile.TarError):
+        reject("ui-state-invalid")
+    say(f"UI state restored: {restored}")
+    emit_json({"state": "restored", "destination": str(restored)})
 
 
 @app.command()
@@ -108,6 +141,16 @@ def serve(
                 or any(value is not None for value in (kubeconfig, context, namespace))
                 or allow_exec
                 or exec_sha256
+                or any(
+                    value is not None
+                    for value in (
+                        source_root,
+                        source_file,
+                        renderer_image,
+                        renderer_platform,
+                        docker,
+                    )
+                )
             ):
                 reject("ui-invalid-request")
             from piceli.app.render import load_target
@@ -195,7 +238,7 @@ def serve(
                 docker,
             )
         )
-        if delivery_requested:
+        if delivery_requested and declared_pipeline is None:
             spec = registration.release_spec
             if (
                 spec is None
@@ -266,16 +309,28 @@ def serve(
                 controller_target=registration.target,
                 controller_namespace=gitops_namespace or "piceli-system",
             )
+        pipeline_delivery = None
+        if declared_pipeline is not None:
+            from piceli.services.pipeline_control import PipelineControl
+
+            pipeline_delivery = PipelineControl(
+                query,
+                registration.id,
+                declared_pipeline,
+                pipeline or "",
+                (control_dir or declared_pipeline.state_dir / "ui-control").resolve(),
+            )
         server = create_app(
             query,
             origin=origin,
             url_prefix=url_prefix,
             operations=operations,
             environment_control=control,
+            pipeline_control=pipeline_delivery,
             access=access,
             logs=logs,
         )
-        from piceli.k8s.ui_state import write_launch_token
+        from piceli.k8s.ui_state import remove_launch_token, write_launch_token
         from piceli.server.security import uvicorn_log_config
 
         token_file = write_launch_token(
@@ -296,7 +351,7 @@ def serve(
             log_config=uvicorn_log_config(),
         )
     finally:
-        token_file.unlink(missing_ok=True)
+        remove_launch_token(token_file)
 
 
 @app.command("cluster-serve")

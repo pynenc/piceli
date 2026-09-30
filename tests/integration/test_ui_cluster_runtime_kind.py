@@ -87,13 +87,18 @@ def _load_pinned(tag: str, repository: str) -> str:
     )
     assert loaded.returncode == 0, loaded.stderr[-1500:]
     listing = _docker("exec", node, "ctr", "-n", "k8s.io", "images", "ls")
+    normalized_tag = repository + ":" + tag.rsplit(":", 1)[-1]
     row = next(
-        (line.split() for line in listing.splitlines() if line.startswith(tag + " ")),
+        (
+            line.split()
+            for line in listing.splitlines()
+            if line.startswith((tag + " ", normalized_tag + " "))
+        ),
         None,
     )
     assert row is not None and row[2].startswith("sha256:")
     pinned = repository + "@" + row[2]
-    _docker("exec", node, "ctr", "-n", "k8s.io", "images", "tag", tag, pinned)
+    _docker("exec", node, "ctr", "-n", "k8s.io", "images", "tag", row[0], pinned)
     return pinned
 
 
@@ -137,9 +142,7 @@ def _images(tmp_path: Path) -> Iterator[tuple[str, str]]:
         assert _docker("inspect", "--format", "{{.State.ExitCode}}", container) == "0"
         _docker("commit", container, tagged, timeout=120)
         ui = _load_pinned(tagged, repository)
-        gateway = _load_pinned(
-            "docker.io/library/caddy:2.10.2", "docker.io/library/caddy"
-        )
+        gateway = _load_pinned(_GATEWAY_TAG, "docker.io/library/caddy")
         yield ui, gateway
     finally:
         _docker("rm", "--force", container, check=False)

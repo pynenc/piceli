@@ -33,7 +33,13 @@ class Channel:
                     "commit": "a" * 40,
                     "plan_hash": HASH,
                     "private": "never-expose",
-                }
+                },
+                "other": {
+                    "state": "approval-required",
+                    "namespace": "other-namespace",
+                    "commit": "b" * 40,
+                    "plan_hash": OTHER,
+                },
             },
         }
         self.requests: list[tuple[str, dict[str, Any]]] = []
@@ -58,7 +64,7 @@ def test_controller_requests_recheck_grant_and_pending_hash(tmp_path: Path) -> N
             Registration(
                 "shop",
                 "Shop",
-                KubeconfigTarget(tmp_path / "unused", "kind-shop", "shop"),
+                KubeconfigTarget(tmp_path / "unused", "kind-shop", "shop-wp-feature"),
             )
         ],
         scope_policy=policy,
@@ -68,6 +74,7 @@ def test_controller_requests_recheck_grant_and_pending_hash(tmp_path: Path) -> N
         status = service.gitops_status()
         assert "secret-in-url" not in str(status)
         assert "never-expose" not in str(status)
+        assert [entry["branch"] for entry in status["envs"]] == ["wp-feature"]
         with pytest.raises(QueryError) as forbidden:
             service.approve_gitops("wp-feature", HASH)
         assert forbidden.value.status == 404
@@ -78,6 +85,10 @@ def test_controller_requests_recheck_grant_and_pending_hash(tmp_path: Path) -> N
         assert not channel.requests
         assert service.approve_gitops("wp-feature", HASH)["state"] == "requested"
         assert channel.requests[-1][1]["plan_hash"] == HASH
+        with pytest.raises(QueryError):
+            service.approve_gitops("other", OTHER)
+        with pytest.raises(QueryError):
+            service.promote("other", "b" * 40)
         with pytest.raises(QueryError):
             service.promote("wp-feature", "b" * 40)
         assert service.promote("wp-feature", "a" * 40)["state"] == "requested"
@@ -93,7 +104,13 @@ def test_local_branch_gets_existing_resource_log_and_access_scope(
     import piceli.services.environment_control as module
 
     query = QueryService(
-        [Registration("shop", "Shop", KubeconfigTarget(tmp_path / "unused", "kind-shop", "shop"))]
+        [
+            Registration(
+                "shop",
+                "Shop",
+                KubeconfigTarget(tmp_path / "unused", "kind-shop", "shop"),
+            )
+        ]
     )
     pipeline = SimpleNamespace(
         name="shop",
@@ -110,8 +127,14 @@ def test_local_branch_gets_existing_resource_log_and_access_scope(
     rows = control.environments()["items"]
     branch_id = rows[1]["application_id"]
     assert rows[0]["application_id"] == "shop"
-    assert query.registration(branch_id, action="logs").target.namespace == "shop-wp-feature"
-    assert query.registration(branch_id, action="access").target.namespace == "shop-wp-feature"
+    assert (
+        query.registration(branch_id, action="logs").target.namespace
+        == "shop-wp-feature"
+    )
+    assert (
+        query.registration(branch_id, action="access").target.namespace
+        == "shop-wp-feature"
+    )
     statuses.pop()
     control.environments()
     with pytest.raises(QueryError):
