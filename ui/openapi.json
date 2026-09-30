@@ -369,6 +369,56 @@
         "title": "Capability",
         "type": "object"
       },
+      "EnvironmentActionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "approved_hash": {
+            "anyOf": [
+              {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approved Hash"
+          },
+          "branch": {
+            "maxLength": 250,
+            "minLength": 1,
+            "title": "Branch",
+            "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "maxLength": 250,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "verb": {
+            "enum": [
+              "up",
+              "down",
+              "seed"
+            ],
+            "title": "Verb",
+            "type": "string"
+          }
+        },
+        "required": [
+          "verb",
+          "branch"
+        ],
+        "title": "EnvironmentActionRequest",
+        "type": "object"
+      },
       "Evaluation": {
         "additionalProperties": false,
         "properties": {
@@ -639,6 +689,50 @@
           "state"
         ],
         "title": "Freshness",
+        "type": "object"
+      },
+      "GitOpsApprovalRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "branch": {
+            "maxLength": 250,
+            "minLength": 1,
+            "title": "Branch",
+            "type": "string"
+          },
+          "plan_hash": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Plan Hash",
+            "type": "string"
+          }
+        },
+        "required": [
+          "branch",
+          "plan_hash"
+        ],
+        "title": "GitOpsApprovalRequest",
+        "type": "object"
+      },
+      "GitOpsPromotionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "branch": {
+            "maxLength": 250,
+            "minLength": 1,
+            "title": "Branch",
+            "type": "string"
+          },
+          "commit": {
+            "pattern": "^[0-9a-f]{7,40}$",
+            "title": "Commit",
+            "type": "string"
+          }
+        },
+        "required": [
+          "branch",
+          "commit"
+        ],
+        "title": "GitOpsPromotionRequest",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -2870,6 +2964,66 @@
         "summary": "Capabilities"
       }
     },
+    "/api/v1/environments": {
+      "get": {
+        "operationId": "environments_api_v1_environments_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Environments Api V1 Environments Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Environments"
+      }
+    },
+    "/api/v1/environments/actions": {
+      "post": {
+        "operationId": "environment_action_api_v1_environments_actions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnvironmentActionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Environment Action Api V1 Environments Actions Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Environment Action"
+      }
+    },
     "/api/v1/evaluations/{evaluation_id}": {
       "get": {
         "operationId": "evaluation_api_v1_evaluations__evaluation_id__get",
@@ -2961,6 +3115,110 @@
           }
         },
         "summary": "Events"
+      }
+    },
+    "/api/v1/gitops": {
+      "get": {
+        "operationId": "gitops_api_v1_gitops_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Gitops Api V1 Gitops Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Gitops"
+      }
+    },
+    "/api/v1/gitops/approvals": {
+      "post": {
+        "operationId": "gitops_approval_api_v1_gitops_approvals_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitOpsApprovalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Gitops Approval Api V1 Gitops Approvals Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Gitops Approval"
+      }
+    },
+    "/api/v1/gitops/promotions": {
+      "post": {
+        "operationId": "gitops_promotion_api_v1_gitops_promotions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitOpsPromotionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Gitops Promotion Api V1 Gitops Promotions Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Gitops Promotion"
       }
     },
     "/api/v1/observation-events": {

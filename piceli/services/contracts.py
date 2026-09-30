@@ -222,6 +222,23 @@ class CancelRequest(Record):
     idempotency_key: str = Field(min_length=1, max_length=128)
 
 
+class EnvironmentActionRequest(Record):
+    verb: Literal["up", "down", "seed"]
+    branch: str = Field(min_length=1, max_length=250)
+    approved_hash: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
+    source: str | None = Field(default=None, max_length=250)
+
+
+class GitOpsApprovalRequest(Record):
+    branch: str = Field(min_length=1, max_length=250)
+    plan_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+
+
+class GitOpsPromotionRequest(Record):
+    branch: str = Field(min_length=1, max_length=250)
+    commit: str = Field(pattern=r"^[0-9a-f]{7,40}$")
+
+
 class Stage(Record):
     name: str
     state: Literal[

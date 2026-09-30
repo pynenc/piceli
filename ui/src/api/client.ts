@@ -1,6 +1,6 @@
 import createClient from 'openapi-fetch';
 import type { paths } from './openapi';
-import type { ServiceError, PlanRequest, EvaluationRequest, OperationRequest, RecoveryRequest, CancelRequest, AccessStartRequest, RemoteAccessStartRequest } from './generated';
+import type { ServiceError, PlanRequest, EvaluationRequest, OperationRequest, RecoveryRequest, CancelRequest, AccessStartRequest, RemoteAccessStartRequest, EnvironmentActionRequest, GitOpsApprovalRequest, GitOpsPromotionRequest } from './generated';
 
 export class ApiError extends Error {
   constructor(public status: number, public detail: ServiceError) { super(detail.message); }
@@ -60,6 +60,11 @@ export const api = {
   remoteAccessSessions: (application_id: string, signal?: AbortSignal) => service().GET('/api/v1/applications/{application_id}/remote-access', { params: { path: { application_id } }, signal }).then(data),
   issueRemoteAccess: (application_id: string, body: RemoteAccessStartRequest) => service().POST('/api/v1/applications/{application_id}/remote-access', { params: { path: { application_id } }, body: { ...body, duration_seconds: body.duration_seconds ?? 900 } }).then(data),
   stopRemoteAccess: (application_id: string, ticket_id: string) => service().DELETE('/api/v1/applications/{application_id}/remote-access/{ticket_id}', { params: { path: { application_id, ticket_id } } }).then(data),
+  environments: (signal?: AbortSignal) => service().GET('/api/v1/environments', { signal }).then(data),
+  environmentAction: (body: EnvironmentActionRequest) => service().POST('/api/v1/environments/actions', { body }).then(data),
+  gitops: (signal?: AbortSignal) => service().GET('/api/v1/gitops', { signal }).then(data),
+  approveGitops: (body: GitOpsApprovalRequest) => service().POST('/api/v1/gitops/approvals', { body }).then(data),
+  promoteGitops: (body: GitOpsPromotionRequest) => service().POST('/api/v1/gitops/promotions', { body }).then(data),
 
 };
 export const applicationPath = (id: string) => `/applications/${encodeURIComponent(id)}`;

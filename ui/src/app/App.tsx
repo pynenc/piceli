@@ -10,6 +10,8 @@ const Resources = lazy(async () => ({ default: (await import('./Resources')).Res
 const Delivery = lazy(async () => ({ default: (await import('../features/delivery/Delivery')).Delivery }));
 const Activity = lazy(async () => ({ default: (await import('../features/delivery/Delivery')).Activity }));
 const Run = lazy(async () => ({ default: (await import('../features/delivery/Delivery')).Run }));
+const Environments = lazy(async () => ({ default: (await import('../features/control/Control')).Environments }));
+const GitOps = lazy(async () => ({ default: (await import('../features/control/Control')).GitOps }));
 
 export function App() {
   const capabilities = useQuery({ queryKey: ['capabilities'], queryFn: ({ signal }) => api.capabilities(signal) });
@@ -23,15 +25,17 @@ export function App() {
   return <div className="shell">
     <a className="skip" href="#main">Skip to content</a>
     <aside className="sidebar"><Link to="/applications" className="brand"><span aria-hidden="true" className="mark">◒</span> piceli</Link>
-      <p className="eyebrow nav-label">Workspace</p><nav aria-label="Main navigation"><NavLink to="/applications">▦ <span>Applications</span></NavLink></nav>
+      <p className="eyebrow nav-label">Workspace</p><nav aria-label="Main navigation"><NavLink to="/applications">▦ <span>Applications</span></NavLink>{capabilities.data?.actions.environments?.allowed && <NavLink to="/environments">▤ <span>Environments</span></NavLink>}{capabilities.data?.actions.gitops?.allowed && <NavLink to="/gitops">◇ <span>GitOps</span></NavLink>}</nav>
       <div className="session"><span className="avatar" aria-hidden="true">{capabilities.data?.principal.name.slice(0, 2).toUpperCase() ?? '…'}</span><div>{capabilities.data?.principal.name ?? 'Connecting'}<small>{capabilities.data?.mode === 'cluster' ? 'Scoped session' : 'Local session'}</small></div></div>
     </aside>
-    <div className="workspace"><header className="topbar"><div>Workspace <span aria-hidden="true">/</span> <strong>Applications</strong></div><span className="hosting">{capabilities.data?.mode === 'cluster' ? 'Authenticated UI' : 'Local UI'}</span></header>
+    <div className="workspace"><header className="topbar"><div>Workspace <span aria-hidden="true">/</span> <strong>{location.pathname.startsWith('/environments') ? 'Environments' : location.pathname.startsWith('/gitops') ? 'GitOps' : 'Applications'}</strong></div><span className="hosting">{capabilities.data?.mode === 'cluster' ? 'Authenticated UI' : 'Local UI'}</span></header>
       <main id="main" ref={main} tabIndex={-1}>
         {capabilities.isError && <Failure error={capabilities.error} retry={() => void capabilities.refetch()} />}
         {capabilities.data?.api_version && capabilities.data.api_version !== 'piceli.ui.v1' ? <Notice title="Service version mismatch" danger>Update the UI and service together before continuing.</Notice> : <Suspense fallback={<Loading text="Loading view…" />}><Routes>
           <Route path="/" element={<Navigate to="/applications" replace />} />
           <Route path="/applications" element={<Applications capabilities={capabilities.data} />} />
+          <Route path="/environments" element={capabilities.data?.actions.environments?.allowed ? <Environments canChange={capabilities.data.actions.environment_change?.allowed === true} /> : <Notice title="Environments unavailable">This service has no configured environment pipeline for this session.</Notice>} />
+          <Route path="/gitops" element={capabilities.data?.actions.gitops?.allowed ? <GitOps canChange={capabilities.data.actions.gitops_change?.allowed === true} /> : <Notice title="GitOps unavailable">This service has no controller access for this session.</Notice>} />
           <Route path="/applications/:applicationId" element={<Navigate to="overview" replace />} />
           <Route path="/runs/:operationId" element={<Run key={location.pathname} />} />
           <Route path="/applications/:applicationId/:tab" element={<ApplicationDetail />} />

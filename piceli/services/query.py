@@ -390,6 +390,28 @@ class QueryService:
         except KeyError:
             raise QueryError("ui-not-found") from None
 
+    def register_local(self, registration: Registration) -> None:
+        """Expose an operator-derived scope; never accept one in scoped OIDC mode."""
+        if self.scope_policy is not None:
+            raise ValueError("scoped registrations are fixed at installation")
+        with self._lock:
+            previous = self.registrations.get(registration.id)
+            if previous is not None:
+                if (
+                    previous.target.kubeconfig != registration.target.kubeconfig
+                    or previous.target.context != registration.target.context
+                    or previous.target.namespace != registration.target.namespace
+                ):
+                    raise ValueError("local registration identity changed")
+                return  # retain observed target UID pins
+            self.registrations[registration.id] = registration
+
+    def remove_local(self, id: str) -> None:
+        if self.scope_policy is not None:
+            raise ValueError("scoped registrations are fixed at installation")
+        with self._lock:
+            self.registrations.pop(id, None)
+
     def close(self) -> None:
         self.observation.close()
 

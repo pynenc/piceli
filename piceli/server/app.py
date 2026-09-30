@@ -38,10 +38,14 @@ from piceli.services.contracts import (
     ApplicationPage,
     CancelRequest,
     Capabilities,
+    Capability,
+    EnvironmentActionRequest,
     Evaluation,
     EvaluationPreview,
     EvaluationRequest,
     Event,
+    GitOpsApprovalRequest,
+    GitOpsPromotionRequest,
     LogBatch,
     LogSourcePage,
     Operation,
@@ -66,6 +70,7 @@ from piceli.services.query import QueryError, QueryService
 if TYPE_CHECKING:
     from piceli.server.cluster_security import ClusterSecurity
     from piceli.services.access import AccessService
+    from piceli.services.environment_control import EnvironmentControl
     from piceli.services.logs import LogService
     from piceli.services.operations import OperationService
     from piceli.services.remote_access import RemoteAccessService
@@ -137,6 +142,7 @@ def create_app(
     operations: OperationService | None = None,
     access: AccessService | None = None,
     remote_access: RemoteAccessService | None = None,
+    environment_control: EnvironmentControl | None = None,
     logs: LogService | None = None,
     cluster_security: ClusterSecurity | None = None,
     launch_token: str | None = None,
@@ -158,6 +164,10 @@ def create_app(
             or cluster_security.config.prefix != url_prefix
             or access is not None
             or (remote_access is not None and remote_access.query is not service)
+            or (
+                environment_control is not None
+                and environment_control.query is not service
+            )
             or (
                 operations is not None
                 and (
@@ -379,7 +389,77 @@ def create_app(
 
     @app.get(f"{api}/capabilities", response_model=Capabilities)
     def capabilities() -> Capabilities:
-        return service.capabilities()
+        result = service.capabilities()
+        if environment_control is None:
+            return result
+        actions = dict(result.actions)
+        configured = environment_control.application_id in service.registrations
+        visible = configured and service._allowed(
+            environment_control.application_id, "inspect"
+        )
+        editable = configured and service._allowed(
+            environment_control.application_id, "deploy"
+        )
+        actions["environments"] = Capability(
+            allowed=visible
+            and (
+                environment_control.pipeline is not None
+                or environment_control.controller_target is not None
+                or environment_control.channel_factory is not None
+            ),
+            reason=None if visible else "environments-not-configured",
+        )
+        actions["gitops"] = Capability(
+            allowed=visible
+            and (
+                environment_control.controller_target is not None
+                or environment_control.channel_factory is not None
+            ),
+            reason=None if visible else "not-authorized",
+        )
+        actions["environment_change"] = Capability(
+            allowed=editable and environment_control.pipeline is not None,
+            reason=None if editable else "not-authorized",
+        )
+        actions["gitops_change"] = Capability(
+            allowed=editable
+            and (
+                environment_control.controller_target is not None
+                or environment_control.channel_factory is not None
+            ),
+            reason=None if editable else "not-authorized",
+        )
+        return result.model_copy(update={"actions": actions})
+
+    def controls() -> EnvironmentControl:
+        if environment_control is None:
+            raise QueryError("ui-operation-unavailable", 409)
+        return environment_control
+
+    @app.get(f"{api}/environments")
+    def environments() -> dict[str, Any]:
+        return controls().environments()
+
+    @app.post(f"{api}/environments/actions")
+    def environment_action(body: EnvironmentActionRequest) -> dict[str, Any]:
+        return controls().environment_action(
+            body.verb,
+            body.branch,
+            approved_hash=body.approved_hash,
+            source=body.source,
+        )
+
+    @app.get(f"{api}/gitops")
+    def gitops() -> dict[str, Any]:
+        return controls().gitops_status()
+
+    @app.post(f"{api}/gitops/approvals")
+    def gitops_approval(body: GitOpsApprovalRequest) -> dict[str, str]:
+        return controls().approve_gitops(body.branch, body.plan_hash)
+
+    @app.post(f"{api}/gitops/promotions")
+    def gitops_promotion(body: GitOpsPromotionRequest) -> dict[str, str]:
+        return controls().promote(body.branch, body.commit)
 
     @app.get(f"{api}/applications", response_model=ApplicationPage)
     def applications(cursor: str | None = None) -> ApplicationPage:

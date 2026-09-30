@@ -6,7 +6,7 @@ import hashlib
 import shutil
 from dataclasses import replace
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal, cast
 
 import typer
 
@@ -32,6 +32,14 @@ def serve(
     namespace: Annotated[str | None, typer.Option(help="Inventory namespace")] = None,
     definition: Annotated[
         Path | None, typer.Option(help="Existing release TOML definition")
+    ] = None,
+    pipeline: Annotated[
+        str | None,
+        typer.Option(help="Trusted Pipeline MODULE:ATTR configured by the UI owner"),
+    ] = None,
+    gitops_namespace: Annotated[
+        str | None,
+        typer.Option(help="Show the GitOps controller in this explicit namespace"),
     ] = None,
     name: Annotated[str, typer.Option(help="Application display name")] = "my-app",
     host: Annotated[str, typer.Option(help="Loopback bind address")] = "127.0.0.1",
@@ -93,7 +101,47 @@ def serve(
     from piceli.k8s.release_spec import ReleaseSpec
 
     try:
-        if definition is not None:
+        declared_pipeline = None
+        if pipeline is not None:
+            if (
+                definition is not None
+                or any(value is not None for value in (kubeconfig, context, namespace))
+                or allow_exec
+                or exec_sha256
+            ):
+                reject("ui-invalid-request")
+            from piceli.app.render import load_target
+            from piceli.pipeline import Pipeline
+
+            declared_pipeline = load_target(pipeline, Path.cwd())
+            if (
+                not isinstance(declared_pipeline, Pipeline)
+                or declared_pipeline.needs_environment
+            ):
+                reject("ui-invalid-request")
+            target_config = declared_pipeline.target
+            target = KubeconfigTarget(
+                kubeconfig=target_config.kubeconfig.absolute(),
+                context=target_config.context,
+                namespace=target_config.namespace,
+                cluster_uid=target_config.cluster_uid,
+                namespace_uid=target_config.namespace_uid,
+                transport=cast(
+                    Literal["https", "loopback-http"], target_config.transport
+                ),
+                allow_exec=target_config.allow_exec,
+                exec_sha256=target_config.exec_sha256,
+                exec_pass_env=tuple(target_config.exec_pass_env),
+                exec_timeout_seconds=target_config.exec_timeout_seconds or 60,
+            )
+            registration = Registration(
+                id="my-app",
+                name=name,
+                target=target,
+                definition_kind="pipeline",
+                ownership="native",
+            )
+        elif definition is not None:
             # The explicit target lives in the existing definition. Do not
             # silently reinterpret its namespace or credentials from UI flags.
             if (
@@ -205,11 +253,25 @@ def serve(
                 principal=Principal(id="local", name="Local user"),
             )
         origin = f"http://{'[' + host + ']' if ':' in host else host}:{port}"
+        control = None
+        if declared_pipeline is not None or gitops_namespace is not None:
+            from piceli.services.environment_control import EnvironmentControl
+
+            control = EnvironmentControl(
+                query,
+                registration.id,
+                pipeline=declared_pipeline
+                if declared_pipeline is not None and declared_pipeline.envs is not None
+                else None,
+                controller_target=registration.target,
+                controller_namespace=gitops_namespace or "piceli-system",
+            )
         server = create_app(
             query,
             origin=origin,
             url_prefix=url_prefix,
             operations=operations,
+            environment_control=control,
             access=access,
             logs=logs,
         )
@@ -282,6 +344,10 @@ def cluster_observe(
     ] = None,
     renderer_platform: Annotated[
         str | None, typer.Option(help="Renderer platform")
+    ] = None,
+    gitops_namespace: Annotated[
+        str | None,
+        typer.Option(help="Controller namespace for scoped GitOps status and requests"),
     ] = None,
     name: Annotated[str, typer.Option(help="Application display name")] = "cluster",
     host: Annotated[
@@ -510,6 +576,16 @@ def cluster_observe(
                 prefix=url_prefix,
             )
         )
+        control = None
+        if gitops_namespace is not None:
+            from piceli.services.environment_control import EnvironmentControl
+
+            control = EnvironmentControl(
+                query,
+                registration.id,
+                controller_target=target,
+                controller_namespace=gitops_namespace,
+            )
         server = create_app(
             query,
             origin=origin,
@@ -517,6 +593,7 @@ def cluster_observe(
             logs=logs,
             operations=operations,
             remote_access=remote_access,
+            environment_control=control,
             cluster_security=security,
         )
     except (ValueError, OSError):
