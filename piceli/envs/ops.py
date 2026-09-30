@@ -92,8 +92,19 @@ def main_namespace(pipeline: Pipeline) -> str:
 
 
 def namespace_for(pipeline: Pipeline, branch: str) -> str:
-    """The namespace of ``branch`` (see :meth:`EnvConfig.namespace_for`)."""
-    return env_config(pipeline).namespace_for(branch, main_namespace(pipeline))
+    """The namespace of ``branch`` (see :meth:`EnvConfig.namespace_for`).
+
+    :raises EnvError: ``env-not-configured``, ``env-branch-not-allowed``
+        (the branch matches no ``branches`` pattern), ``env-branch-invalid``.
+    """
+    config = env_config(pipeline)
+    if not config.allows(branch):
+        raise EnvError(
+            "env-branch-not-allowed",
+            f"branch {branch!r} matches none of the environment patterns "
+            f"{list(config.branches)}",
+        )
+    return config.namespace_for(branch, main_namespace(pipeline))
 
 
 _DIGEST_ONLY = re.compile(r"sha256:[0-9a-f]{64}")
@@ -262,16 +273,22 @@ def env_pipeline(
 
 def default_cluster(pipeline: Pipeline) -> EnvCluster:
     """An :class:`EnvCluster` through the target's explicit kubeconfig and context."""
+    from piceli.cli_contract import error_code
     from piceli.envs.cluster import EnvCluster
     from piceli.k8s.ops.provider_factory import api_client_from_kubeconfig
 
     target = pipeline.target
-    client = api_client_from_kubeconfig(
-        target.kubeconfig.absolute(),
-        target.context,
-        transport=target.transport,  # type: ignore[arg-type]
-        exec_policy=target.exec_policy(),
-    )
+    try:
+        client = api_client_from_kubeconfig(
+            target.kubeconfig.absolute(),
+            target.context,
+            transport=target.transport,  # type: ignore[arg-type]
+            exec_policy=target.exec_policy(),
+        )
+    except (OSError, ValueError) as error:
+        raise EnvError(
+            error_code(error, "env-cluster-unavailable"), str(error)
+        ) from None
     return EnvCluster(client, request_seconds=float(target.request_seconds))
 
 

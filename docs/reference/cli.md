@@ -47,7 +47,11 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli codegen crd`](#cli-codegen-crd) | Generate pydantic models for one CRD version, from a file or a cluster. | reads | no |
 | [`piceli deploy`](#cli-deploy) | Deploy a pipeline: inputs → build → deliver → plan → apply → checks. | writes | yes |
 | [`piceli doctor`](#cli-doctor) | Check this runner: free disk and memory against what the next build needs (estimated from the last build receipts), and the tools the pipeline uses (docker, docker buildx, kubectl). Exit 1 on a warning. | none | no |
+| [`piceli env down`](#cli-env-down) | Delete BRANCH's environment: its claims, namespace and volumes (never main's). | writes | yes |
 | [`piceli env push`](#cli-env-push) | Record a laptop-built digest for a branch environment (plan, then --approve HASH). | writes | yes |
+| [`piceli env seed`](#cli-env-seed) | Restore main's latest restore point into BRANCH's claims (replaces their content). | writes | yes |
+| [`piceli env up`](#cli-env-up) | Deploy BRANCH into its namespace (created when absent), isolated. | writes | yes |
+| [`piceli envs`](#cli-envs) | List every environment: branch, namespace, commit, deploy state, health, age. | reads | no |
 | [`piceli explain`](#cli-explain) | Explain an error code: cause, fix and whether a retry can succeed. | none | no |
 | [`piceli heavy run`](#cli-heavy-run) | Run COMMAND once the lock is free; exit with its exit code. | none | no |
 | [`piceli heavy status`](#cli-heavy-status) | Show who holds the lock and the most recent receipts. | none | no |
@@ -56,6 +60,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli import yaml`](#cli-import-yaml) | Generate a typed module from a directory of manifests (no cluster). | none | no |
 | [`piceli inputs record`](#cli-inputs-record) | Capture each declared source (or the ``--only`` ones) and write a lock. | none | no |
 | [`piceli inputs verify`](#cli-inputs-verify) | Recapture the sources and compare them with the lock (exit 1 on drift). | none | no |
+| [`piceli logs`](#cli-logs) | Print one workload's logs in an environment (kubectl, explicit context). | reads | no |
 | [`piceli observe forward-command`](#cli-observe-forward-command) | Print a JSON argv array for one explicit loopback-only port forward. | none | no |
 | [`piceli observe forward-list`](#cli-observe-forward-list) | List a user's saved port-forward preferences without starting a process. | none | no |
 | [`piceli observe forward-run`](#cli-observe-forward-run) | Run one saved loopback-only port forward until the caller interrupts it. | reads | no |
@@ -109,6 +114,7 @@ Forward the app's declared ports to 127.0.0.1 and keep them healthy.
 | `--poll` | float | `1.0` | Status report cadence (seconds) |
 | `--dashboard` | integer |  | Also serve the local dashboard on this loopback port, with these forwards as its shortcuts |
 | `--ui-config` | path | env `PICELI__UI_CONFIG` | Optional dashboard TOML (badges, tiers, extra shortcuts) |
+| `--pipeline` | text | env `PICELI_PIPELINE` | With a branch name as TARGET: the pipeline declaring envs=EnvConfig(...) (MODULE:ATTR; default $PICELI_PIPELINE). A branch's forwards get free local ports |
 
 **Contract**
 
@@ -119,7 +125,7 @@ Forward the app's declared ports to 127.0.0.1 and keep them healthy.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** Refuses (access-port-conflict) when a declared local port is held by another process and names its pid (another process's command line is never printed); when the holder is Piceli's own stale process for this app it says so and suggests `piceli access stop --stale TARGET`. Never takes a port over. Stops every forward it started on Ctrl-C/SIGTERM/SIGHUP. Exit 1 only when every forward gave up.
+- **Notes:** Refuses (access-port-conflict) when a declared local port is held by another process and names its pid (another process's command line is never printed); when the holder is Piceli's own stale process for this app it says so and suggests `piceli access stop --stale TARGET`. Never takes a port over. Stops every forward it started on Ctrl-C/SIGTERM/SIGHUP. Exit 1 only when every forward gave up. `piceli access BRANCH --pipeline MODULE:ATTR` forwards that branch environment's declared ports on free local ports.
 
 (cli-access-stop)=
 ### `piceli access stop`
@@ -787,6 +793,29 @@ Check this runner: free disk and memory against what the next build needs (estim
 - **Output contract:** conforms
 - **Notes:** Read-only; never contacts a cluster. Exit 1 with a warning (runner-disk-low, runner-memory-low, runner-tool-missing); the need is estimated from the last build receipts.
 
+(cli-env-down)=
+### `piceli env down`
+
+Delete BRANCH's environment: its claims, namespace and volumes (never main's).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `BRANCH` | text | required |  |
+| `--pipeline` | text | env `PICELI_PIPELINE` | The pipeline: MODULE:ATTR or path/to/file.py:ATTR naming a Pipeline that declares envs=EnvConfig(...) (default: $PICELI_PIPELINE) |
+| `--approve` | text |  | The env_hash to execute (from the plan) |
+| `--approve-if-policy` | boolean | `False` | Execute without --approve when the owner allows it: EnvConfig(auto_approve=True) for branch environments, or the pipeline's auto_approve policy for the deploy (never for main's teardown or seed) |
+
+**Contract**
+
+- **Reads:** pipeline module (--pipeline or $PICELI_PIPELINE), kubeconfig
+- **Writes:** <state_dir>/branches/<namespace> (removed)
+- **Cluster:** writes
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** Refuses the main branch and the main namespace always (env-main-protected) and a namespace without this app's piceli.io/env-of label or of another branch (env-namespace-not-managed). The plan lists the claims and the volumes bound to them; with --approve HASH (or --approve-if-policy and EnvConfig(auto_approve=True)) it deletes the claims, the namespace and those volumes. An absent environment prints state absent (exit 0).
+
 (cli-env-push)=
 ### `piceli env push`
 
@@ -813,6 +842,80 @@ Record a laptop-built digest for a branch environment (plan, then --approve HASH
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
 - **Notes:** Writes the ConfigMap piceli-env-<branch> (keys images, commit, pushed_at) in the branch environment's namespace, creating the namespace when absent. It pushes no image and deploys nothing.
+
+(cli-env-seed)=
+### `piceli env seed`
+
+Restore main's latest restore point into BRANCH's claims (replaces their content).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `BRANCH` | text | required |  |
+| `--pipeline` | text | env `PICELI_PIPELINE` | The pipeline: MODULE:ATTR or path/to/file.py:ATTR naming a Pipeline that declares envs=EnvConfig(...) (default: $PICELI_PIPELINE) |
+| `--from` | text |  | The branch whose latest restore point is restored (main) |
+| `--approve` | text |  | The env_hash to execute (from the plan) |
+| `--approve-if-policy` | boolean | `False` | Execute without --approve when the owner allows it: EnvConfig(auto_approve=True) for branch environments, or the pipeline's auto_approve policy for the deploy (never for main's teardown or seed) |
+
+**Contract**
+
+- **Reads:** pipeline module (--pipeline or $PICELI_PIPELINE), restore point directory, kubeconfig
+- **Writes:** restore point directory (restores/ receipts)
+- **Cluster:** writes
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** Uses the restore machinery of `piceli restore`: verifies the archives, stops the branch's writers, empties and restores each claim, checks the content digest in the cluster and starts the writers again. Never reads or writes main's claims (the archives are local). Refuses the main branch (env-main-protected).
+
+(cli-env-up)=
+### `piceli env up`
+
+Deploy BRANCH into its namespace (created when absent), isolated.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `BRANCH` | text | required |  |
+| `--pipeline` | text | env `PICELI_PIPELINE` | The pipeline: MODULE:ATTR or path/to/file.py:ATTR naming a Pipeline that declares envs=EnvConfig(...) (default: $PICELI_PIPELINE) |
+| `--commit` | text |  | The commit deployed (recorded, shown) |
+| `--digest` | text (repeatable) |  | The image of build NAME as repository@sha256:… (repeatable); branch environments never build |
+| `--receipt` | path |  | A build receipt: JSON {"images": {NAME: REF}} |
+| `--seed-from` | text |  | Restore this branch's latest restore point (main) into the environment's claims after the deploy |
+| `--plan` | boolean | `False` | Plan only; print the env_hash |
+| `--approve` | text |  | The env_hash to execute (from the plan) |
+| `--approve-if-policy` | boolean | `False` | Execute without --approve when the owner allows it: EnvConfig(auto_approve=True) for branch environments, or the pipeline's auto_approve policy for the deploy (never for main's teardown or seed) |
+| `--wait` | boolean | `False` | When the budget is full, refuse (env-budget-full) instead of stopping the least recently pushed environment |
+
+**Contract**
+
+- **Reads:** pipeline module (--pipeline or $PICELI_PIPELINE), kubeconfig, state_dir, build receipt (--receipt)
+- **Writes:** <state_dir>/branches/<namespace> (journal, release state, secrets)
+- **Cluster:** writes
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** The branch's namespace is <prefix><slug> (at most 63 characters, hash suffix when cut); main maps to the main namespace, which is never created. Branch environments never build: images come from --digest NAME=REF or --receipt. The app is isolated at render time (relative Service names, no NodePort, hostPort or hostPath, namespace-qualified cluster objects, its own generated Secrets) and gets a default-deny NetworkPolicy across namespaces and a ResourceQuota. The plan (--plan, or without an approval) lists the namespace to create, the environments the budget stops (max_envs, least recently pushed first; scaled to zero, kept), the deploy's combined plan and the seed (--seed-from main). --approve-if-policy runs a branch when EnvConfig(auto_approve=True), or when the pipeline's auto_approve policy allows the deploy and nothing is stopped; main only by the policy. --wait refuses with env-budget-full instead of stopping.
+
+(cli-envs)=
+### `piceli envs`
+
+List every environment: branch, namespace, commit, deploy state, health, age.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--pipeline` | text | env `PICELI_PIPELINE` | The pipeline: MODULE:ATTR or path/to/file.py:ATTR naming a Pipeline that declares envs=EnvConfig(...) (default: $PICELI_PIPELINE) |
+| `--json` | boolean | `False` | Print one piceli.envs.v1 JSON object |
+
+**Contract**
+
+- **Reads:** pipeline module (--pipeline or $PICELI_PIPELINE), kubeconfig
+- **Writes:** nothing (read-only)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Read-only. Human table on stderr; --json prints one piceli.envs.v1 object (envs[]: branch, namespace, main, state running|stopped|absent, health healthy|degraded|stopped|unknown, commit, build, deploy, created_at, pushed_at, age_seconds, workloads).
 
 (cli-explain)=
 ### `piceli explain`
@@ -995,6 +1098,33 @@ Recapture the sources and compare them with the lock (exit 1 on drift).
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
+
+(cli-logs)=
+### `piceli logs`
+
+Print one workload's logs in an environment (kubectl, explicit context).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `ENV` | text | required |  |
+| `WORKLOAD` | text | required |  |
+| `--pipeline` | text | env `PICELI_PIPELINE` | The pipeline: MODULE:ATTR or path/to/file.py:ATTR naming a Pipeline that declares envs=EnvConfig(...) (default: $PICELI_PIPELINE) |
+| `--previous` | boolean | `False` | The previous container's logs |
+| `--follow`, `-f` | boolean | `False` | Stream new lines until Ctrl-C |
+| `--tail` | integer | `200` |  |
+| `--container` | text |  |  |
+| `--kubectl` | text | `kubectl` | kubectl executable |
+
+**Contract**
+
+- **Reads:** pipeline module (--pipeline or $PICELI_PIPELINE), kubeconfig, kubectl
+- **Writes:** nothing (read-only)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** partial
+- **Notes:** `piceli logs BRANCH WORKLOAD [--previous] [-f] [--tail N]`: stdout carries the log lines (kubectl's), not JSON; a refusal is the JSON rejection object. WORKLOAD is a Deployment, StatefulSet, DaemonSet or Job of the app (env-workload-unknown otherwise).
 
 (cli-observe-forward-command)=
 ### `piceli observe forward-command`

@@ -77,6 +77,51 @@ class EnvCluster:
                 failed=True,
             ) from None
 
+    def _delete(self, read: Any, delete: Any, *names: str) -> bool:
+        """Delete one object, guarded by its uid and resourceVersion; ``False`` if absent."""
+        current = self._call(read, *names)
+        if current is None:
+            return False
+        metadata = current.get("metadata") or {}
+        body = {
+            "apiVersion": "v1",
+            "kind": "DeleteOptions",
+            "preconditions": {
+                "uid": metadata.get("uid"),
+                "resourceVersion": metadata.get("resourceVersion"),
+            },
+            "propagationPolicy": "Background",
+        }
+        return self._call(delete, *names, body=body) is not None
+
+    def _merge(
+        self, read: Any, patch: Any, *names: str, change: dict[str, Any]
+    ) -> None:
+        """Merge-patch ``change`` into one object (guarded by its resourceVersion)."""
+        current = self._call(read, *names)
+        if current is None:
+            raise EnvError(
+                "env-cluster-unavailable",
+                "an object changed while it was being updated; run the command again",
+                failed=True,
+            )
+        metadata = current.get("metadata") or {}
+        body = {
+            **change,
+            "metadata": {
+                **change.get("metadata", {}),
+                "uid": metadata.get("uid"),
+                "resourceVersion": metadata.get("resourceVersion"),
+            },
+        }
+        self._call(
+            patch,
+            *names,
+            body,
+            field_manager=FIELD_MANAGER,
+            _content_type="application/merge-patch+json",
+        )
+
     # --------------------------------------------------------- namespaces
     def namespaces(self, app: str) -> list[dict[str, Any]]:
         """Branch namespaces of ``app`` (label ``piceli.io/env-of``)."""
@@ -108,8 +153,15 @@ class EnvCluster:
         self, name: str, labels: Mapping[str, str], annotations: Mapping[str, str]
     ) -> None:
         """Add labels and annotations (adopts a namespace ``env push`` created)."""
-        body = {"metadata": {"labels": dict(labels), "annotations": dict(annotations)}}
-        self._call(self._core().patch_namespace, name, body)
+        core = self._core()
+        self._merge(
+            core.read_namespace,
+            core.patch_namespace,
+            name,
+            change={
+                "metadata": {"labels": dict(labels), "annotations": dict(annotations)}
+            },
+        )
 
     def pushed(self, namespace: str, branch: str) -> dict[str, Any] | None:
         """The images ``piceli env push`` recorded for ``branch``, if any.
@@ -134,7 +186,8 @@ class EnvCluster:
         return {**data, "images": images}
 
     def delete_namespace(self, name: str) -> bool:
-        return self._call(self._core().delete_namespace, name) is not None
+        core = self._core()
+        return self._delete(core.read_namespace, core.delete_namespace, name)
 
     # ------------------------------------------------------------- record
     def record(self, namespace: str) -> dict[str, Any] | None:
@@ -170,12 +223,12 @@ class EnvCluster:
                 field_manager=FIELD_MANAGER,
             )
         else:
-            self._call(
-                core.replace_namespaced_config_map,
+            self._merge(
+                core.read_namespaced_config_map,
+                core.patch_namespaced_config_map,
                 RECORD_NAME,
                 namespace,
-                body,
-                field_manager=FIELD_MANAGER,
+                change={"data": body["data"]},
             )
 
     # ---------------------------------------------------------- workloads
@@ -208,8 +261,12 @@ class EnvCluster:
         ]
 
     def delete_claim(self, namespace: str, name: str) -> None:
-        self._call(
-            self._core().delete_namespaced_persistent_volume_claim, name, namespace
+        core = self._core()
+        self._delete(
+            core.read_namespaced_persistent_volume_claim,
+            core.delete_namespaced_persistent_volume_claim,
+            name,
+            namespace,
         )
 
     def volumes(self) -> list[dict[str, Any]]:
@@ -219,4 +276,5 @@ class EnvCluster:
         ]
 
     def delete_volume(self, name: str) -> None:
-        self._call(self._core().delete_persistent_volume, name)
+        core = self._core()
+        self._delete(core.read_persistent_volume, core.delete_persistent_volume, name)

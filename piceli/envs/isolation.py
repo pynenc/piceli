@@ -273,6 +273,8 @@ def _renames(
                 "env-isolation-cluster-scoped",
                 f"{_where(ref)} is shared by every namespace and cannot be renamed",
             )
+        if env.namespace in ref.name:
+            continue  # already namespace-qualified (``<namespace>:<app>:<name>``)
         renames[(ref.kind, ref.name)] = qualified_name(ref.name, env.namespace)
     return renames
 

@@ -1233,11 +1233,11 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             ),
             cluster="reads",
             long_running=True,
-            contract="partial",
+            contract="conforms",
             exit_codes=(0, 1, 2),
             notes="`piceli logs BRANCH WORKLOAD [--previous] [-f] [--tail N]`: "
-            "stdout carries the log lines (kubectl's), not JSON; a refusal is "
-            "the JSON rejection object. WORKLOAD is a Deployment, StatefulSet, "
+            "after the checks, output and exit status are kubectl's own (log "
+            "lines on stdout); a refusal is the JSON rejection object. WORKLOAD is a Deployment, StatefulSet, "
             "DaemonSet or Job of the app (env-workload-unknown otherwise).",
         ),
     }
