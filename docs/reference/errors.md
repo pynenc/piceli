@@ -259,6 +259,11 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`nothing-to-stop`](#error-nothing-to-stop) | release | no |
 | [`operation-identity-mismatch`](#error-operation-identity-mismatch) | execution | no |
 | [`operator-state-unavailable`](#error-operator-state-unavailable) | observe | no |
+| [`orphans-approve-without-prune`](#error-orphans-approve-without-prune) | release | no |
+| [`orphans-delete-failed`](#error-orphans-delete-failed) | release | yes |
+| [`orphans-execution-running`](#error-orphans-execution-running) | release | yes |
+| [`orphans-no-release`](#error-orphans-no-release) | release | no |
+| [`orphans-plan-changed`](#error-orphans-plan-changed) | release | yes |
 | [`output-invalid`](#error-output-invalid) | build-spec | no |
 | [`ownership-precondition-failed`](#error-ownership-precondition-failed) | execution | no |
 | [`pipeline-apply-crashloop`](#error-pipeline-apply-crashloop) | pipeline | no |
@@ -2247,6 +2252,46 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** No action needed; `piceli release status` shows the result.
 - **Retry-safe:** no
+
+(error-orphans-approve-without-prune)=
+### `orphans-approve-without-prune`
+
+**--approve without --prune.** `--approve` executes a prune; `release orphans` alone only lists.
+
+- **Fix:** Add `--prune`, or drop `--approve`.
+- **Retry-safe:** no
+
+(error-orphans-delete-failed)=
+### `orphans-delete-failed`
+
+**Leftover delete failed.** At least one approved object could not be deleted (changed meanwhile, or the API server refused); the others were deleted.
+
+- **Fix:** List again: the remaining objects show with a new `plan_hash`. Check RBAC for delete on the failing kinds.
+- **Retry-safe:** yes
+
+(error-orphans-execution-running)=
+### `orphans-execution-running`
+
+**Execution running.** The latest execution is still running: the objects of a release being applied are not leftovers.
+
+- **Fix:** Finish it with `release resume`, or cancel it with `release stop`, then list again.
+- **Retry-safe:** yes
+
+(error-orphans-no-release)=
+### `orphans-no-release`
+
+**No release to compare against.** `release orphans` compares the cluster with the selected release, and this state has none yet.
+
+- **Fix:** Deploy a release from this state first (`release apply`).
+- **Retry-safe:** no
+
+(error-orphans-plan-changed)=
+### `orphans-plan-changed`
+
+**Leftover objects changed.** The set of leftover objects (or an object's resourceVersion) differs from the one whose hash was approved; nothing was deleted.
+
+- **Fix:** Run `release orphans --prune` again with the same `--include-*` flags, review the set and approve the new `plan_hash`.
+- **Retry-safe:** yes
 
 (error-plan-blocked)=
 ### `plan-blocked`

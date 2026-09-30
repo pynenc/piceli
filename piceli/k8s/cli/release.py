@@ -918,6 +918,126 @@ def status(
     _emit(value)
 
 
+def _age_text(seconds: int | None) -> str:
+    if seconds is None:
+        return "?"
+    for size, unit in ((86400, "d"), (3600, "h"), (60, "m")):
+        if seconds >= size:
+            return f"{seconds // size}{unit}"
+    return f"{seconds}s"
+
+
+def _describe_orphans(report: dict[str, Any]) -> None:
+    items = report["orphans"]
+    _say(
+        f"release {report['release']} ({report['namespace']}): "
+        f"{report['summary']['total']} leftover object(s), "
+        f"{report['summary']['prunable']} prunable, {report['summary']['kept']} kept"
+    )
+    for item in items:
+        state = "prune" if item["prunable"] else "keep "
+        _say(
+            f"  {state} {item['kind']}/{item['name']}  age {_age_text(item['age_seconds'])}"
+            f"  {item['reason']} (matched {', '.join(item['matched'])})"
+            + (f"  [{'; '.join(item['blocked_by'])}]" if item["blocked_by"] else "")
+        )
+
+
+@app.command("orphans")
+def orphans(
+    spec: SpecOption,
+    env: EnvOption = None,
+    prune: Annotated[
+        bool,
+        typer.Option(
+            "--prune",
+            help="Delete the prunable leftover objects after approval (exit 3 with "
+            "the plan hash to approve; --approve HASH executes)",
+        ),
+    ] = False,
+    approve: ApproveOption = None,
+    include_claims: Annotated[
+        bool,
+        typer.Option(
+            "--include-claims",
+            help="Also prune PersistentVolumeClaims (their data is deleted) and "
+            "StatefulSets whose retention policy deletes their claims",
+        ),
+    ] = False,
+    include_secrets: Annotated[
+        bool, typer.Option("--include-secrets", help="Also prune Secrets")
+    ] = False,
+    include_cluster_scoped: Annotated[
+        bool,
+        typer.Option(
+            "--include-cluster-scoped",
+            help="Also scan and prune this namespace's ClusterRole/ClusterRoleBinding",
+        ),
+    ] = False,
+    include_other_owners: Annotated[
+        bool,
+        typer.Option(
+            "--include-other-owners",
+            help="Also prune objects of another owner that carry the app's labels "
+            "(another environment of the app)",
+        ),
+    ] = False,
+    json_only: Annotated[
+        bool,
+        typer.Option(
+            "--json", help="Print only the JSON object (no human summary on stderr)"
+        ),
+    ] = False,
+) -> None:
+    """List the objects that carry the app's ownership labels but no current release owns.
+
+    Read-only unless ``--prune``. Never listed as prunable: claims and Secrets
+    (unless included), objects without Piceli's owner annotation, objects of
+    another owner (unless included), cluster-scoped objects (unless included).
+    ``--prune`` prints the plan hash over the exact set (UIDs and
+    resourceVersions) and exits 3; ``--prune --approve HASH`` deletes exactly
+    that set, or refuses when it changed (``orphans-plan-changed``).
+    """
+    from piceli.cli_contract import reject
+    from piceli.k8s.orphans import OrphanOptions
+
+    if approve is not None and not prune:
+        reject(
+            "orphans-approve-without-prune",
+            "--approve executes a prune: pass --prune with it",
+        )
+    options = OrphanOptions(
+        include_claims, include_secrets, include_cluster_scoped, include_other_owners
+    )
+    try:
+        with _runner(spec, write=prune, env=env) as runner:
+            report = runner.orphans(options, approve=approve if prune else None)
+    except _refusals() as error:
+        _refuse(error)
+        return
+    if not json_only:
+        _describe_orphans(report)
+    if "deleted" in report:
+        failed = [item for item in report["deleted"] if item["outcome"] == "failed"]
+        if not json_only:
+            for item in report["deleted"]:
+                _say(f"  {item['outcome']} {item['kind']}/{item['name']}")
+        if failed:
+            _emit({**report, "state": "failed", "reason": "orphans-delete-failed"})
+            raise typer.Exit(EXIT_NOT_READY)
+        _emit({**report, "state": "succeeded"})
+        return
+    if prune and report["summary"]["prunable"]:
+        if not json_only:
+            _say(
+                "to delete the prunable objects: piceli release orphans --spec "
+                f"{spec} --prune --approve {report['plan_hash']}"
+            )
+        _emit({**report, "state": "approval-required"})
+        raise typer.Exit(EXIT_APPROVAL)
+    _emit({**report, "state": "succeeded" if prune else "listed"})
+
+
 secret_app = typer.Typer(
     rich_markup_mode=None,
     help="Inspect the secret values of a release (owner only; values need --reveal).",

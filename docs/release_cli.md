@@ -22,6 +22,7 @@ piceli release resume   --spec release.toml [--release NAME] [--skip-checks]
 piceli release stop     --spec release.toml [--release NAME]
 piceli release check    --spec release.toml [--release NAME]
 piceli release status   --spec release.toml [--run EXECUTION_ID]
+piceli release orphans  --spec release.toml [--prune [--approve <hash>]] [--include-claims] [--include-secrets] [--include-other-owners] [--include-cluster-scoped] [--json]
 piceli release secret show NAME --spec release.toml [--key KEY] [--release NAME] [--reveal] [--json]
 ```
 
@@ -826,6 +827,65 @@ after failed checks is described in {doc}`checks`.
   outcome (`checks`), the deployed and previous release, pending plans and
   recent history. With `state = "cluster"` it first refreshes the working
   copy from the namespace (reads only).
+
+## Leftover objects (`orphans`)
+
+A release changes only the objects it declares (and, with `[release] prune`,
+those an earlier release of the same owner declared). Objects that outlive
+their release stay in the namespace: the objects of a component you removed,
+the names of an earlier environment of the same app. `release orphans` finds
+them; it compares the namespace with the **selected** release only (the one
+`status` shows as deployed), so the objects of a rollback target are leftovers
+too once another release is selected.
+
+```sh
+piceli release orphans --spec release.toml              # list (read-only)
+piceli release orphans --spec release.toml --prune      # exit 3 + plan_hash
+piceli release orphans --spec release.toml --prune --approve <plan_hash>
+```
+
+An object is listed only when Piceli wrote it (a `piceli.io/owner`
+annotation) and the selected release does not declare it, and
+
+* its owner is the spec's `owner` (or an `inherited_owners` entry): reason
+  `not-in-current-release`, matched on `piceli.io/owner`; or
+* it carries every label all of the selected release's objects share (the
+  app's ownership labels; `app.kubernetes.io/part-of: <app>` for a typed
+  `App`) and has another owner: reason `other-owner`, another environment of
+  the app.
+
+Each entry has `kind`, `name`, `namespace`, `matched` (the annotation or
+labels that matched), `reason`, `owner`, `created_at`, `age_seconds`, `uid`,
+`resource_version`, `prunable` and, when it is not, `blocked_by`. The JSON
+output only adds fields; a summary (`total`, `prunable`, `kept`) and the
+`plan_hash` come with it.
+
+**What is never pruned by default** (listed with `prunable: false`):
+
+| Object | Prunable only with |
+| --- | --- |
+| PersistentVolumeClaim (its data is deleted), and a StatefulSet whose `persistentVolumeClaimRetentionPolicy.whenDeleted` is `Delete` | `--include-claims` |
+| Secret | `--include-secrets` |
+| An object of another owner (another environment) | `--include-other-owners` |
+| A cluster-scoped ClusterRole or ClusterRoleBinding (scanned only then; it must name this namespace in `piceli.io/namespace`) | `--include-cluster-scoped` |
+| An object annotated `piceli.io/retained: "true"` | never |
+
+Never listed: an object without Piceli's `piceli.io/owner` annotation, an
+object with `ownerReferences` (its owner's garbage collection decides), an
+object already terminating, anything outside the target namespace, and
+Namespaces and PersistentVolumes (never scanned).
+
+`--prune` without `--approve` deletes nothing: it prints the `plan_hash` (a
+digest over the target, the release, the `--include-*` flags and the exact
+objects with their UIDs and resourceVersions) and exits 3. With
+`--approve HASH` (and the same `--include-*` flags) the set is read again; if
+it differs in any way, nothing is deleted and the refusal is
+`orphans-plan-changed`. Deletes carry UID and resourceVersion preconditions;
+an object that changed meanwhile is reported `failed`
+(`orphans-delete-failed`, exit 1) and the rest are still deleted.
+`release orphans` is refused before a release exists
+(`orphans-no-release`) and while an execution is running
+(`orphans-execution-running`).
 
 ## Shared state
 
