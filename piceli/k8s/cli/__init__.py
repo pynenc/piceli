@@ -7,6 +7,7 @@ from piceli.k8s.cli.chart import app as chart_app
 from piceli.k8s.cli.codegen import app as codegen_app
 from piceli.k8s.cli.contract import register as register_contract_commands
 from piceli.k8s.cli.deploy_pipeline import deploy
+from piceli.k8s.cli.gitops import register as register_gitops_commands
 from piceli.k8s.cli.heavy import register as register_heavy_commands
 from piceli.k8s.cli.importing import app as import_app
 from piceli.k8s.cli.inputs import app as inputs_app
@@ -38,6 +39,7 @@ register_maintenance_commands(app)
 register_heavy_commands(app)
 register_watch_command(app)
 register_restore_commands(app)
+register_gitops_commands(app)
 
 
 def _version(value: bool) -> None:
