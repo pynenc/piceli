@@ -21,7 +21,10 @@ from piceli import App, ClaimTemplate, SecretVolume, UpgradeCheck
 
 app = App("shop")
 db = app.stateful_set(
-    "db", image=images["db"], ports=[5432], replicas=2,
+    "db",
+    image=images["db"],
+    ports=[5432],
+    replicas=2,
     env={"TOKEN": credentials.key("token")},
     volumes={
         "/etc/db": SecretVolume("db-keys"),
@@ -30,8 +33,8 @@ db = app.stateful_set(
 )
 app.pre_rollout(
     db,
-    ["db", "check-config"],                                   # new image, real Secrets
-    upgrade=UpgradeCheck(["db", "verify", "/var/lib/db"]),    # retained claim, read-only
+    ["db", "check-config"],  # new image, real Secrets
+    upgrade=UpgradeCheck(["db", "verify", "/var/lib/db"]),  # retained claim, read-only
 )
 ```
 
@@ -196,6 +199,9 @@ is denied, those reads are skipped and the Job itself is the check.
 - One main container per check; init containers and sidecars are not run.
 - Network policies that select the workload's labels do not apply to the check
   pod, so a check that needs a policy-gated peer may not reach it.
+- The upgrade check runs while the old pod is still writing (it runs before
+  any quiesce): the command must open the store in a mode that tolerates a
+  concurrent writer (read-only, snapshot or secondary instance).
 - Checks run one after another and stop at the first failure.
 - A check runs when the release plan changes the workload; a change that only
   affects an object the workload mounts (a Secret) does not trigger it.
