@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from piceli.app.environment import Environment
     from piceli.artifacts.build_spec import BuildSpec
     from piceli.artifacts.host_build import HostBuildSpec
+    from piceli.envs.model import BranchEnv, EnvConfig
     from piceli.k8s.ops.exec_credentials import ExecPolicy
     from piceli.pipeline.secrets import Secrets
     from piceli.restore.model import RestorePoints
@@ -1128,6 +1129,10 @@ class Pipeline:
         claim (one per StatefulSet replica) and records the restore point;
         ``piceli restore`` puts one back. Part of the combined hash. See
         ``docs/restore_points.md``.
+    :param envs: :class:`~piceli.envs.EnvConfig`: one namespace per Git
+        branch (``piceli env up BRANCH``), isolated at render time, with a
+        budget of running branch environments. Not part of the combined hash
+        of ``piceli deploy``. See ``docs/environments.md``.
 
     Invariants: every image the app uses is a build handle or pinned by
     digest; the release never manages the node-loopback registry.
@@ -1164,6 +1169,7 @@ class Pipeline:
         cache_budget: str | int | None = None,
         auto_approve: ApprovalPolicy | Mapping[str, Any] | None = None,
         restore_points: RestorePoints | bool | None = None,
+        envs: EnvConfig | None = None,
     ) -> None:
         from piceli.app import App
 
@@ -1262,6 +1268,15 @@ class Pipeline:
             )
         except ApprovalPolicyError as error:
             raise PipelineError(error.code, str(error)) from None
+        from piceli.envs.model import EnvConfig
+
+        if envs is not None and not isinstance(envs, EnvConfig):
+            raise PipelineError("pipeline-invalid", "envs must be an EnvConfig")
+        #: One namespace per Git branch (:mod:`piceli.envs`), or ``None``.
+        self.envs: EnvConfig | None = envs
+        #: Set on the pipeline of one environment (:func:`piceli.envs.env_pipeline`):
+        #: how its app renders into the branch namespace.
+        self.branch_env: BranchEnv | None = None
 
     @property
     def name(self) -> str:

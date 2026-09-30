@@ -37,6 +37,8 @@ FIRST_ARGUMENT = {
     "_result_error",
     "ImportFailure",
     "PipelineError",
+    "EnvError",
+    "_refuse",
     "MirrorError",
     "StateError",
     "SecretSourceError",

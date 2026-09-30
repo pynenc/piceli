@@ -1599,6 +1599,49 @@
    },
    "pydantic": true
   },
+  "EnvConfig": {
+   "attrs": [
+    "allow_egress",
+    "allows",
+    "auto_approve",
+    "branches",
+    "claim_sizes",
+    "describe",
+    "is_main",
+    "main_branch",
+    "main_namespace",
+    "max_envs",
+    "namespace_for",
+    "prefix",
+    "quota",
+    "seed_from"
+   ],
+   "init": [
+    "allow_egress",
+    "auto_approve",
+    "branches",
+    "claim_sizes",
+    "main_branch",
+    "main_namespace",
+    "max_envs",
+    "prefix",
+    "quota",
+    "seed_from"
+   ],
+   "methods": {
+    "allows": [
+     "branch"
+    ],
+    "describe": [],
+    "is_main": [
+     "branch"
+    ],
+    "namespace_for": [
+     "branch",
+     "main_namespace"
+    ]
+   }
+  },
   "Environment": {
    "attr_types": {
     "autoscalers": "Scaling",
@@ -2940,6 +2983,7 @@
     "cache_budget",
     "checks",
     "deliver",
+    "envs",
     "execution",
     "field_manager",
     "inherited_owners",
@@ -4741,12 +4785,14 @@
      "deploy",
      "doctor",
      "env",
+     "envs",
      "explain",
      "gitops",
      "heavy",
      "help-json",
      "import",
      "inputs",
+     "logs",
      "observe",
      "operator",
      "promote",
@@ -4770,6 +4816,7 @@
      "--json",
      "--kubectl",
      "--only",
+     "--pipeline",
      "--poll",
      "--ui-config"
     ],
@@ -5196,8 +5243,22 @@
     "arguments": [],
     "flags": [],
     "subcommands": [
-     "push"
+     "down",
+     "push",
+     "seed",
+     "up"
     ]
+   },
+   "env down": {
+    "arguments": [
+     "branch"
+    ],
+    "flags": [
+     "--approve",
+     "--approve-if-policy",
+     "--pipeline"
+    ],
+    "subcommands": []
    },
    "env push": {
     "arguments": [
@@ -5211,6 +5272,43 @@
      "--env",
      "--namespace",
      "--receipt"
+    ],
+    "subcommands": []
+   },
+   "env seed": {
+    "arguments": [
+     "branch"
+    ],
+    "flags": [
+     "--approve",
+     "--approve-if-policy",
+     "--from",
+     "--pipeline"
+    ],
+    "subcommands": []
+   },
+   "env up": {
+    "arguments": [
+     "branch"
+    ],
+    "flags": [
+     "--approve",
+     "--approve-if-policy",
+     "--commit",
+     "--digest",
+     "--pipeline",
+     "--plan",
+     "--receipt",
+     "--seed-from",
+     "--wait"
+    ],
+    "subcommands": []
+   },
+   "envs": {
+    "arguments": [],
+    "flags": [
+     "--json",
+     "--pipeline"
     ],
     "subcommands": []
    },
@@ -5419,6 +5517,22 @@
      "--only",
      "--spec",
      "--timeout"
+    ],
+    "subcommands": []
+   },
+   "logs": {
+    "arguments": [
+     "env",
+     "workload"
+    ],
+    "flags": [
+     "--container",
+     "--follow",
+     "--kubectl",
+     "--pipeline",
+     "--previous",
+     "--tail",
+     "-f"
     ],
     "subcommands": []
    },
@@ -6107,7 +6221,31 @@
    "dockerfile-unpinned",
    "dry-run-limit-exceeded",
    "dry-run-placeholder-image",
+   "env-branch-invalid",
+   "env-branch-not-allowed",
+   "env-budget-full",
+   "env-cluster-unavailable",
+   "env-config-invalid",
+   "env-image-invalid",
+   "env-image-missing",
+   "env-isolation-absolute-service",
+   "env-isolation-cluster-scoped",
+   "env-isolation-cross-namespace",
+   "env-isolation-host-path",
+   "env-isolation-host-port",
+   "env-isolation-node-port",
+   "env-isolation-shared-volume",
+   "env-main-namespace-missing",
+   "env-main-protected",
+   "env-namespace-collision",
+   "env-namespace-not-managed",
+   "env-not-configured",
+   "env-not-found",
+   "env-pipeline-missing",
+   "env-plan-changed",
    "env-push-invalid",
+   "env-seed-no-restore-point",
+   "env-workload-unknown",
    "environment-invalid",
    "environment-required",
    "environment-unknown",
@@ -6545,6 +6683,9 @@
    "DisruptionBudget": {
     "class": "DisruptionBudget"
    },
+   "EnvConfig": {
+    "class": "EnvConfig"
+   },
    "Environment": {
     "class": "Environment"
    },
@@ -6741,6 +6882,7 @@
    "checks": {},
    "cli_contract": {},
    "codegen": {},
+   "envs": {},
    "errors": {},
    "gcp": {},
    "gitops": {},
@@ -7416,6 +7558,11 @@
   "piceli.codegen",
   "piceli.codegen.crd",
   "piceli.deploy_events",
+  "piceli.envs",
+  "piceli.envs.cluster",
+  "piceli.envs.isolation",
+  "piceli.envs.model",
+  "piceli.envs.ops",
   "piceli.errors",
   "piceli.gcp",
   "piceli.gcp.credentials",
@@ -7443,6 +7590,7 @@
   "piceli.k8s.cli.codegen",
   "piceli.k8s.cli.contract",
   "piceli.k8s.cli.deploy_pipeline",
+  "piceli.k8s.cli.env",
   "piceli.k8s.cli.env_push",
   "piceli.k8s.cli.gitops",
   "piceli.k8s.cli.heavy",

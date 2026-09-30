@@ -113,6 +113,13 @@ noted.
   `allow_dns=True`, and check the rendered policy with `piceli render` (a bad
   CIDR, port or unknown workload is `render-target-invalid`; see
   {doc}`typed_apps`).
+- `piceli envs --pipeline MODULE:ATTR [--json]` (or `PICELI_PIPELINE`):
+  lists every per-branch environment (branch, namespace, commit, build and
+  deploy state, health, age, last push); read-only. `piceli env up BRANCH
+  --plan`, and `piceli env up|down|seed BRANCH` **without** `--approve`,
+  only plan and print the `env_hash` (exit `3` without `--plan`); nothing
+  changes. `piceli logs BRANCH WORKLOAD [--previous] [-f]` reads one
+  workload's logs. See {doc}`environments`.
 - `piceli publish TARGET --to oci://…` **without** `--approve`: renders,
   packages the Flux OCI artifact and prints its digest (exit `3`); nothing
   is pushed.
@@ -247,6 +254,9 @@ Exporting deploy events (`--otlp-endpoint`, or `OTEL_EXPORTER_OTLP_*` in the env
 | Command | Changes | Approve with |
 | --- | --- | --- |
 | `piceli build job` | Creates a cache claim (if missing) and one Job on a builder node that fetches a commit, builds and pushes images by digest to the node registry; it is removed afterwards and the cache kept | `--approve <plan_hash>` printed by `piceli build job MODULE:ATTR --commit SHA …` without `--approve`, after the owner chose the commit, builder image and registry. Never put Git credentials in `--repo`; they come from a Secret. `cluster-build-failed` carries a scrubbed log tail: report it, do not retry blindly |
+| `piceli env up` | Deploys a branch into its namespace (creates it, labelled), stops the least recently pushed branch environment when `max_envs` run (scaled to zero, kept) and, with `--seed-from main`, replaces the new claims' content with main's latest restore point | `--approve <env_hash>` printed by `piceli env up BRANCH --pipeline MODULE:ATTR --digest NAME=REF` without `--approve`, after the owner reviewed the namespace, the environments it stops and the deploy plan; `--approve-if-policy` only when the owner declared `EnvConfig(auto_approve=True)` (branches) or an `auto_approve` policy; the main branch never by `EnvConfig`. On an `env-isolation-*` code, report it: never work around the isolation |
+| `piceli env down` | Deletes a branch environment: its claims (data), its namespace and the volumes bound to them; never main's | `--approve <env_hash>` printed by `piceli env down BRANCH --pipeline MODULE:ATTR` without `--approve`, after the owner agreed to lose that branch's data |
+| `piceli env seed` | Replaces every file of a branch environment's claims with main's latest restore point (stops its writers, then starts them again); main's claims are only read from the local archive | `--approve <env_hash>` printed by `piceli env seed BRANCH --pipeline MODULE:ATTR` without `--approve` |
 | `piceli env push` | Writes the ConfigMap `piceli-env-<branch>` (image digests) in the branch environment's namespace, creating the namespace if absent | `--approve <plan_hash>` printed by `piceli env push BRANCH MODULE:ATTR --receipt FILE` without `--approve`, after the owner confirmed the digests are the ones to deploy |
 | `piceli gitops enable` | Installs the GitOps controller: namespace `piceli-system`, a ServiceAccount with a namespaced Role, a ClusterRole limited to nodes (read), namespaces and binding the deployer role, a state claim, a ConfigMap and a one-replica Deployment that then **deploys branches on its own** (inside the pipeline's `auto_approve` policy, or after `piceli gitops approve`) | `--approve <plan_hash>` printed by `piceli gitops enable …` without `--approve`, after the owner chose the repository, the branch globs, the digest-pinned `--image` and reviewed the plan. Never put Git credentials in `--repo`; `--main-auto-approve` and `--cluster-rbac` only when the owner asked; see {doc}`gitops` |
 | `piceli gitops disable` | Deletes the controller's objects (never an environment, the namespace or, without `--delete-state`, the state claim) | `--approve <plan_hash>` printed without `--approve`, after the owner agreed |
@@ -273,7 +283,7 @@ Exporting deploy events (`--otlp-endpoint`, or `OTEL_EXPORTER_OTLP_*` in the env
 | `piceli artifacts execute-command` | Runs a pinned tool | `--approve-plan <hash>` |
 | `piceli artifacts import-local` | The local Docker image store | `--approve-digest <digest>` |
 | `piceli operator approve`, `piceli operator promote`, `piceli operator restore` | Operator state, catalog or files | The owner's go-ahead |
-| `piceli access`, `piceli observe serve`, `piceli operator serve`, `piceli observe forward-run`, `piceli observe forwards apply`, `piceli observe logs-run` | Long-running local processes and ports | The owner's go-ahead |
+| `piceli access` (also `piceli access BRANCH --pipeline MODULE:ATTR` for a branch environment, on free local ports), `piceli logs -f`, `piceli observe serve`, `piceli operator serve`, `piceli observe forward-run`, `piceli observe forwards apply`, `piceli observe logs-run` | Long-running local processes and ports | The owner's go-ahead |
 | `piceli access stop --stale` | Stops Piceli's own local processes for the app (a forward or dashboard the owner may still be using in another terminal); never another process | The owner's go-ahead |
 
 Never add `--auto-approve` unless the owner has said that this run is an

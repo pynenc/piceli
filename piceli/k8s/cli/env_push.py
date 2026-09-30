@@ -212,14 +212,14 @@ def push(
         )
     pipeline = _pipeline(target, env)
     if namespace is None:
-        try:
-            from piceli.envs import namespace_for  # type: ignore[attr-defined]
+        from piceli.envs import EnvError, namespace_for
 
+        try:
             namespace = namespace_for(pipeline, branch)
-        except (ImportError, TypeError, AttributeError):
+        except EnvError as error:
             reject(
                 "env-push-invalid",
-                "the pipeline declares no branch environments; pass --namespace",
+                f"{error}; pass --namespace or declare envs=EnvConfig(...)",
             )
     plan = plan_push(branch, namespace, images, commit)
     say(

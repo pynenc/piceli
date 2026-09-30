@@ -119,11 +119,19 @@ def preview_context(pipeline: Pipeline) -> ReleaseContext:
 
 def render_app(pipeline: Pipeline, ctx: ReleaseContext) -> DeploymentComposition:
     try:
-        return pipeline.app.composition(ctx)
+        composition = pipeline.app.composition(ctx)
     except PipelineError:
         raise
     except ValueError as error:
         raise PipelineError("render-model-invalid", str(error)) from None
+    env = getattr(pipeline, "branch_env", None)
+    if env is None:
+        return composition
+    # One environment of ``envs=EnvConfig(...)``: prebuilt images, and the
+    # branch isolation (see piceli.envs.isolation).
+    from piceli.envs.isolation import isolate
+
+    return isolate(composition, env)
 
 
 def used_handles(pipeline: Pipeline) -> list[str]:

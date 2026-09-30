@@ -135,7 +135,31 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`dockerfile-unpinned`](#error-dockerfile-unpinned) | build-spec | no |
 | [`dry-run-limit-exceeded`](#error-dry-run-limit-exceeded) | kubernetes | no |
 | [`dry-run-placeholder-image`](#error-dry-run-placeholder-image) | kubernetes | no |
+| [`env-branch-invalid`](#error-env-branch-invalid) | envs | no |
+| [`env-branch-not-allowed`](#error-env-branch-not-allowed) | envs | no |
+| [`env-budget-full`](#error-env-budget-full) | envs | yes |
+| [`env-cluster-unavailable`](#error-env-cluster-unavailable) | envs | yes |
+| [`env-config-invalid`](#error-env-config-invalid) | envs | no |
+| [`env-image-invalid`](#error-env-image-invalid) | envs | no |
+| [`env-image-missing`](#error-env-image-missing) | envs | no |
+| [`env-isolation-absolute-service`](#error-env-isolation-absolute-service) | envs | no |
+| [`env-isolation-cluster-scoped`](#error-env-isolation-cluster-scoped) | envs | no |
+| [`env-isolation-cross-namespace`](#error-env-isolation-cross-namespace) | envs | no |
+| [`env-isolation-host-path`](#error-env-isolation-host-path) | envs | no |
+| [`env-isolation-host-port`](#error-env-isolation-host-port) | envs | no |
+| [`env-isolation-node-port`](#error-env-isolation-node-port) | envs | no |
+| [`env-isolation-shared-volume`](#error-env-isolation-shared-volume) | envs | no |
+| [`env-main-namespace-missing`](#error-env-main-namespace-missing) | envs | no |
+| [`env-main-protected`](#error-env-main-protected) | envs | no |
+| [`env-namespace-collision`](#error-env-namespace-collision) | envs | no |
+| [`env-namespace-not-managed`](#error-env-namespace-not-managed) | envs | no |
+| [`env-not-configured`](#error-env-not-configured) | envs | no |
+| [`env-not-found`](#error-env-not-found) | envs | no |
+| [`env-pipeline-missing`](#error-env-pipeline-missing) | envs | no |
+| [`env-plan-changed`](#error-env-plan-changed) | envs | no |
 | [`env-push-invalid`](#error-env-push-invalid) | host-build | no |
+| [`env-seed-no-restore-point`](#error-env-seed-no-restore-point) | envs | no |
+| [`env-workload-unknown`](#error-env-workload-unknown) | envs | no |
 | [`environment-invalid`](#error-environment-invalid) | environments | no |
 | [`environment-required`](#error-environment-required) | environments | no |
 | [`environment-unknown`](#error-environment-unknown) | environments | no |
@@ -4502,3 +4526,198 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Run `piceli artifacts retention --delete` without `--approve`, review the new plan and pass its `digest` to `--approve`.
 - **Retry-safe:** yes
+
+
+## Per-branch environments (`piceli env`, `piceli envs`, `piceli logs`)
+
+(error-env-branch-invalid)=
+### `env-branch-invalid`
+
+**Invalid branch name.** The branch name is empty, longer than 250 characters, or has no letter or digit to name a namespace with.
+
+- **Fix:** Use a branch name with letters or digits.
+- **Retry-safe:** no
+
+(error-env-branch-not-allowed)=
+### `env-branch-not-allowed`
+
+**Branch without an environment.** The branch matches none of the `EnvConfig(branches=...)` patterns.
+
+- **Fix:** Use a matching branch name, or add a pattern to `branches` in the pipeline.
+- **Retry-safe:** no
+
+(error-env-budget-full)=
+### `env-budget-full`
+
+**Environment budget full.** `max_envs` branch environments already run, and `--wait` asked not to stop the least recently pushed one.
+
+- **Fix:** Retry later, run `piceli env down` on an unused branch, or drop `--wait` to stop the least recently pushed environment.
+- **Retry-safe:** yes
+
+(error-env-cluster-unavailable)=
+### `env-cluster-unavailable`
+
+**Kubernetes API refused.** The Kubernetes API refused or failed an environment request (the HTTP status is printed, never the server's message).
+
+- **Fix:** Check the target's kubeconfig, context and permissions (namespaces, ConfigMaps, claims, volumes), then run the command again.
+- **Retry-safe:** yes
+
+(error-env-config-invalid)=
+### `env-config-invalid`
+
+**Invalid environment declaration.** The pipeline's `EnvConfig` is invalid: a prefix that is not a lowercase DNS label start, `max_envs` outside 1-100, a claim size that is not a quantity or names no claim or workload of the app, or an app component named `piceli-env`.
+
+- **Fix:** Fix the `EnvConfig(...)` declaration in the pipeline module.
+- **Retry-safe:** no
+
+(error-env-image-invalid)=
+### `env-image-invalid`
+
+**Image not pinned by digest.** A digest or build receipt entry is not `repository@sha256:<64 hex>`, or the receipt has no image table.
+
+- **Fix:** Give each image as `NAME=REPOSITORY@sha256:<64 hex>`.
+- **Retry-safe:** no
+
+(error-env-image-missing)=
+### `env-image-missing`
+
+**No image for a build handle.** The app uses a build image in a branch environment and no digest was given for it; branch environments never build or deliver themselves.
+
+- **Fix:** Pass `--digest NAME=REPOSITORY@sha256:...` (or a build receipt with `--receipt FILE`) for every build image.
+- **Retry-safe:** no
+
+(error-env-isolation-absolute-service)=
+### `env-isolation-absolute-service`
+
+**Service named in another namespace.** A branch environment's object names a Service absolutely in another namespace (`api.shop.svc.cluster.local`), which would reach main or another branch.
+
+- **Fix:** Name Services by their relative name (`api`), or build the name from the release namespace.
+- **Retry-safe:** no
+
+(error-env-isolation-cluster-scoped)=
+### `env-isolation-cluster-scoped`
+
+**Cluster object shared by every branch.** A branch environment declares a `CustomResourceDefinition` or `Namespace`, which cannot get a per-namespace name.
+
+- **Fix:** Install cluster-wide objects with the main release only (or a separate release).
+- **Retry-safe:** no
+
+(error-env-isolation-cross-namespace)=
+### `env-isolation-cross-namespace`
+
+**Binding or policy across namespaces.** A branch environment's role binding names a subject of another namespace, or its NetworkPolicy allows traffic from or to every namespace, main's or another branch's.
+
+- **Fix:** Bind subjects of the release namespace only; select other namespaces by a label of their own (an ingress controller's), not all of them.
+- **Retry-safe:** no
+
+(error-env-isolation-host-path)=
+### `env-isolation-host-path`
+
+**Node directory in a branch environment.** A branch environment's pod mounts a `hostPath` volume, shared by every branch on that node.
+
+- **Fix:** Use a claim (`ClaimTemplate`) instead of a node directory.
+- **Retry-safe:** no
+
+(error-env-isolation-host-port)=
+### `env-isolation-host-port`
+
+**Host port in a branch environment.** A branch environment's pod binds a `hostPort` or uses `hostNetwork`, `hostPID` or `hostIPC`, which collide across branches on a node.
+
+- **Fix:** Remove the host port or host namespace from the app (or from its branch environment).
+- **Retry-safe:** no
+
+(error-env-isolation-node-port)=
+### `env-isolation-node-port`
+
+**Node port in a branch environment.** A branch environment declares a `NodePort` or `LoadBalancer` Service (or a `nodePort`), which opens a port on every node shared by all branches.
+
+- **Fix:** Use a `ClusterIP` Service and reach the branch with `piceli access BRANCH`.
+- **Retry-safe:** no
+
+(error-env-isolation-shared-volume)=
+### `env-isolation-shared-volume`
+
+**Claim bound to another volume.** A branch environment's claim binds a named volume the app does not declare (another environment's data).
+
+- **Fix:** Let branch claims be provisioned (a size in `EnvConfig(claim_sizes=...)`), or seed them with `piceli env seed`.
+- **Retry-safe:** no
+
+(error-env-main-namespace-missing)=
+### `env-main-namespace-missing`
+
+**Main namespace missing.** The main branch's namespace does not exist; env commands never create it.
+
+- **Fix:** Create it (or deploy main with `piceli deploy`) first.
+- **Retry-safe:** no
+
+(error-env-main-protected)=
+### `env-main-protected`
+
+**Main environment protected.** An environment command would delete, stop, seed or overwrite the main branch's environment or namespace; env commands never do.
+
+- **Fix:** Operate the main release with `piceli deploy` and `piceli restore`.
+- **Retry-safe:** no
+
+(error-env-namespace-collision)=
+### `env-namespace-collision`
+
+**Two branches, one namespace.** Another branch already owns the namespace this branch maps to (their names differ only in characters a namespace cannot hold).
+
+- **Fix:** Rename the branch.
+- **Retry-safe:** no
+
+(error-env-namespace-not-managed)=
+### `env-namespace-not-managed`
+
+**Namespace is not this app's environment.** The branch's namespace exists without this app's `piceli.io/env-of` label, or belongs to another branch. Nothing was changed or deleted.
+
+- **Fix:** Choose another `EnvConfig(prefix=...)`, or remove the foreign namespace yourself.
+- **Retry-safe:** no
+
+(error-env-not-configured)=
+### `env-not-configured`
+
+**No per-branch environments.** The pipeline declares no `envs=EnvConfig(...)`, or it has one target per environment (per-branch environments need one target).
+
+- **Fix:** Declare `Pipeline(..., envs=EnvConfig(prefix=...))` with a single `Target`.
+- **Retry-safe:** no
+
+(error-env-not-found)=
+### `env-not-found`
+
+**No such environment.** The branch has no environment yet.
+
+- **Fix:** Run `piceli env up BRANCH` first.
+- **Retry-safe:** no
+
+(error-env-pipeline-missing)=
+### `env-pipeline-missing`
+
+**No pipeline named.** An environment command needs the pipeline and neither `--pipeline MODULE:ATTR` nor `PICELI_PIPELINE` names it.
+
+- **Fix:** Pass `--pipeline deploy/app.py:pipeline` or set `PICELI_PIPELINE`.
+- **Retry-safe:** no
+
+(error-env-plan-changed)=
+### `env-plan-changed`
+
+**Environment plan changed.** The approved hash is not the environment's current plan (the deploy plan, the namespace, the budget, the seed or the claims to delete changed).
+
+- **Fix:** Plan again and approve the new `env_hash`.
+- **Retry-safe:** no
+
+(error-env-seed-no-restore-point)=
+### `env-seed-no-restore-point`
+
+**No restore point to seed from.** There is no verified restore point of the main namespace in the pipeline's restore point directory, or the source is not the main branch.
+
+- **Fix:** Deploy main with `restore_points=RestorePoints()` (a stateful change takes one), then seed again.
+- **Retry-safe:** no
+
+(error-env-workload-unknown)=
+### `env-workload-unknown`
+
+**Unknown workload.** `piceli logs` names a workload the app does not declare.
+
+- **Fix:** Use a Deployment, StatefulSet, DaemonSet, Job or CronJob name of the app (`piceli envs --json` lists them).
+- **Retry-safe:** no

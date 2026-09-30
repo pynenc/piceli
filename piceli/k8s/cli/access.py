@@ -54,7 +54,13 @@ from piceli.k8s.ui_config import UI_CONFIG_ENV, load_ui_config
 
 TARGET_HELP = (
     "path/to/release.toml, or module:attr (file.py:attr) of an object with "
-    ".app (a piceli App) and .target (kubeconfig, context, namespace)"
+    ".app (a piceli App) and .target (kubeconfig, context, namespace), or a "
+    "branch environment with --pipeline"
+)
+ENV_PIPELINE_HELP = (
+    "With a branch name as TARGET: the pipeline declaring envs=EnvConfig(...) "
+    "(MODULE:ATTR; default $PICELI_PIPELINE). A branch's forwards get free "
+    "local ports"
 )
 
 #: Builds the live workload reader; replaced in tests (never a real cluster).
@@ -73,11 +79,34 @@ def _names(target: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(names))
 
 
-def _resolve(target: str) -> AccessTarget:
+def _is_env(target: str) -> bool:
+    """Whether TARGET names a branch environment rather than a spec or module."""
+    return ":" not in target and not target.endswith((".toml", ".py"))
+
+
+def _resolve(target: str, pipeline: str | None = None) -> AccessTarget:
+    if pipeline and _is_env(target):
+        return _resolve_env(target, pipeline)
     try:
         return resolve_target(target, Path.cwd())
     except AccessTargetError as error:
         reject(error.code, str(error))
+
+
+def _resolve_env(branch: str, pipeline: str) -> AccessTarget:
+    """One environment of ``--pipeline`` (see :mod:`piceli.envs`); free local ports."""
+    from piceli.envs import EnvError
+    from piceli.envs.ops import env_access_target
+    from piceli.k8s.cli.env import load
+
+    declared = load(pipeline)
+    try:
+        resolved: AccessTarget = env_access_target(declared, branch)
+    except EnvError as error:
+        reject(error.code, str(error))
+    except AccessTargetError as error:
+        reject(error.code, str(error))
+    return resolved
 
 
 # ------------------------------------------------------------------- status
@@ -365,6 +394,15 @@ def access(
             help="Optional dashboard TOML (badges, tiers, extra shortcuts)",
         ),
     ] = None,
+    pipeline: Annotated[
+        str | None,
+        typer.Option(
+            "--pipeline",
+            envvar="PICELI_PIPELINE",
+            help=ENV_PIPELINE_HELP,
+            show_default=False,
+        ),
+    ] = None,
 ) -> None:
     """Forward the app's declared ports to 127.0.0.1 and keep them healthy.
 
@@ -377,7 +415,7 @@ def access(
     from piceli.k8s.cli.observe import interrupts_as_keyboard_interrupt
     from piceli.k8s.observe import ForwardSupervisor
 
-    resolved = _resolve(target)
+    resolved = _resolve(target, pipeline)
     selected, unknown = select_shortcuts(resolved.shortcuts, only)
     if unknown:
         say(f"piceli: unknown forward id(s): {', '.join(unknown)}")

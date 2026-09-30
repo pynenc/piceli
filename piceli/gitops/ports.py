@@ -321,6 +321,14 @@ class DefaultPorts:
         approve: str | None,
     ) -> EnvOutcome:
         kwargs: dict[str, Any] = {"commit": commit, "approve": approve}
+        # "policy": the owner's ApprovalPolicy, or EnvConfig(auto_approve=True)
+        # for a branch; also without a policy when the owner allows branches.
+        envs = getattr(pipeline, "envs", None)
+        by_config = bool(
+            envs is not None and envs.auto_approve and not envs.is_main(branch)
+        )
+        if approve == APPROVE_POLICY or (approve is None and by_config):
+            kwargs.update(approve=None, approve_if_policy=True)
         if digests is not None:
             kwargs["digests"] = dict(digests)
         else:
@@ -328,4 +336,11 @@ class DefaultPorts:
         return EnvOutcome.from_result(self._envs().env_up(pipeline, branch, **kwargs))
 
     def env_down(self, pipeline: Any, branch: str) -> None:
-        self._envs().env_down(pipeline, branch)
+        result = self._envs().env_down(pipeline, branch, approve_if_policy=True)
+        if result.get("state") == "approval-required":
+            raise GitOpsError(
+                "gitops-step-failed",
+                f"removing the environment of {branch} needs the owner: piceli "
+                f"env down {branch} --approve {result.get('env_hash')} (or "
+                "EnvConfig(auto_approve=True))",
+            )

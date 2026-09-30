@@ -8,7 +8,7 @@ from piceli.k8s.cli.chart import app as chart_app
 from piceli.k8s.cli.codegen import app as codegen_app
 from piceli.k8s.cli.contract import register as register_contract_commands
 from piceli.k8s.cli.deploy_pipeline import deploy
-from piceli.k8s.cli.env_push import app as env_push_app
+from piceli.k8s.cli.env import register as register_env_commands
 from piceli.k8s.cli.gitops import register as register_gitops_commands
 from piceli.k8s.cli.heavy import register as register_heavy_commands
 from piceli.k8s.cli.importing import app as import_app
@@ -26,7 +26,6 @@ from piceli.k8s.cli.watch import register as register_watch_command
 app = typer.Typer(rich_markup_mode=None)
 app.add_typer(build_app, name="build")
 app.add_typer(chart_app, name="chart")
-app.add_typer(env_push_app, name="env")  # WP-1: mount `push` on its env group
 app.add_typer(codegen_app, name="codegen")
 app.add_typer(import_app, name="import")
 app.command("deploy")(deploy)
@@ -43,6 +42,7 @@ register_maintenance_commands(app)
 register_heavy_commands(app)
 register_watch_command(app)
 register_restore_commands(app)
+register_env_commands(app)
 register_gitops_commands(app)
 
 

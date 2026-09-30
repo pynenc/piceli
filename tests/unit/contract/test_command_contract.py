@@ -202,6 +202,26 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["env", "push", "wp", f"{p / 'missing.py'}:pipeline"],
         "env-push-invalid",
     ),
+    "env up": (
+        lambda p: ["env", "up", "wp", "--pipeline", f"{p / 'missing.py'}:pipeline"],
+        "pipeline-not-found",
+    ),
+    "env down": (
+        lambda p: ["env", "down", "wp", "--pipeline", f"{p / 'missing.py'}:pipeline"],
+        "pipeline-not-found",
+    ),
+    "env seed": (
+        lambda p: ["env", "seed", "wp", "--pipeline", f"{p / 'missing.py'}:pipeline"],
+        "pipeline-not-found",
+    ),
+    "envs": (
+        lambda p: ["envs", "--pipeline", f"{p / 'missing.py'}:pipeline"],
+        "pipeline-not-found",
+    ),
+    "logs": (
+        lambda p: ["logs", "wp", "api", "--pipeline", f"{p / 'missing.py'}:pipeline"],
+        "pipeline-not-found",
+    ),
     "inputs record": (
         lambda p: ["inputs", "record", "--spec", str(p / "junk")],
         "invalid-inputs-spec",
