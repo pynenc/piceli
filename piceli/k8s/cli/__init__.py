@@ -3,6 +3,7 @@ from typing import Annotated
 import typer
 
 from piceli.k8s.cli.access import register as register_access_commands
+from piceli.k8s.cli.chart import app as chart_app
 from piceli.k8s.cli.codegen import app as codegen_app
 from piceli.k8s.cli.contract import register as register_contract_commands
 from piceli.k8s.cli.deploy_pipeline import deploy
@@ -19,6 +20,7 @@ from piceli.k8s.cli.state import app as state_app
 from piceli.k8s.cli.watch import register as register_watch_command
 
 app = typer.Typer(rich_markup_mode=None)
+app.add_typer(chart_app, name="chart")
 app.add_typer(codegen_app, name="codegen")
 app.add_typer(import_app, name="import")
 app.command("deploy")(deploy)

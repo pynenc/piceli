@@ -303,6 +303,65 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "--secrets external; redacted values and placeholder images are "
             "refused. Credentials only from --credentials FILE, never printed.",
         ),
+        # -------------------------------------------------------- chart
+        "chart render": _C(
+            "Write the app as a Helm chart directory (Chart.yaml, values, schema, templates).",
+            reads=("module/app file", "release.toml (optional)", "local receipts"),
+            writes=("--out chart directory",),
+            contract="conforms",
+            notes="Never contacts a cluster. Renders like `piceli render`; "
+            "images, pull secrets, replicas, resources, node selectors, storage, "
+            "hosts, ConfigMap keys and Secret names become values, documented "
+            "and validated by values.schema.json. Secrets are never rendered: "
+            "the chart reads existing Secrets by name. Objects holding redacted "
+            "or apply-time secret values are refused. Deterministic. --out must "
+            "be absent, empty or a previous chart render (.piceli-chart).",
+        ),
+        "chart package": _C(
+            "Write the chart archive <name>-<version>.tgz (byte-identical per chart).",
+            reads=("module/app file", "release.toml (optional)", "local receipts"),
+            writes=("--out directory (<name>-<version>.tgz)",),
+            contract="conforms",
+            notes="Never contacts a cluster. The same render, name and version "
+            "always give the same bytes and digest; an existing archive with "
+            "other content is refused (bump --version).",
+        ),
+        "chart manifests": _C(
+            "Print plain manifests with a values file applied (no Helm, no Kustomize).",
+            reads=(
+                "module/app file",
+                "release.toml (optional)",
+                "local receipts",
+                "values files",
+            ),
+            writes=("--out directory",),
+            contract="conforms",
+            notes="Never contacts a cluster. Values merge over the chart "
+            "defaults like Helm (null removes a key) and are validated against "
+            "the chart schema (chart-values-invalid). Prints YAML, or with --out "
+            "writes one file per object like render --out and prints one JSON "
+            "object. Secrets are left out (provided by the client).",
+        ),
+        "chart publish": _C(
+            "Push the chart to an OCI registry as helm push does (approval by digest).",
+            reads=(
+                "module/app file",
+                "release.toml (optional)",
+                "local receipts",
+                "credentials file",
+            ),
+            writes=("OCI registry (chart blobs, manifest, version tag)",),
+            approval_required=True,
+            safe_to_retry=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2, 3),
+            notes="Never contacts a cluster. --to oci://host[:port]/path pushes "
+            "path/<name>:<version> (config application/vnd.cncf.helm.config.v1+json, "
+            "layer application/vnd.cncf.helm.chart.content.v1.tar+gzip). Without "
+            "--approve it prints the deterministic digest and exits 3; --approve "
+            "DIGEST pushes by digest, then the tag, and reads both back. "
+            "Credentials only from --credentials FILE, never printed.",
+        ),
         # ------------------------------------------------------ codegen
         "codegen crd": _C(
             "Generate pydantic models from a CustomResourceDefinition's schema.",
@@ -640,6 +699,27 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             safe_to_retry=True,
             long_running=True,
             exit_codes=(0, 1, 2),
+        ),
+        "artifacts publish": _C(
+            "Publish a build's images (every platform in one index) to a registry.",
+            contract="conforms",
+            reads=(
+                "build receipt and its outputs",
+                "credentials file or Docker config",
+                "docker (Docker builds only)",
+            ),
+            writes=(
+                "OCI registry (blobs, manifests, index, attestations, tag)",
+                "--out receipt",
+                "--values-out",
+            ),
+            approval_required=True,
+            safe_to_retry=True,
+            long_running=True,
+            exit_codes=(0, 1, 2, 3),
+            notes="Without --approve it prints the plan and its digest (exit 3) "
+            "and contacts nothing. Pushes are content-addressed; a version tag "
+            "that names another image is refused unless --move-tag.",
         ),
         # ------------------------------------------------------ observe
         "observe status": _C(

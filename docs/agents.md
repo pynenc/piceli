@@ -109,6 +109,19 @@ noted.
 - `piceli publish TARGET --to oci://…` **without** `--approve`: renders,
   packages the Flux OCI artifact and prints its digest (exit `3`); nothing
   is pushed.
+- `piceli chart render TARGET --out DIR`, `piceli chart package TARGET --out
+  DIR` and `piceli chart manifests TARGET [--values FILE] [--out DIR]`:
+  render the app as a Helm chart directory, a reproducible
+  `<name>-<version>.tgz`, or plain manifests with a values file applied;
+  they write only local files and never read secret values (Secrets are left
+  out and referenced by name). `piceli chart publish TARGET --to oci://…`
+  **without** `--approve` prints the chart's digest (exit `3`); nothing is
+  pushed. See {doc}`helm_charts`.
+- `piceli artifacts publish --receipt R --to oci://… --tag V` **without**
+  `--approve`: reads the build receipt and prints the publish plan and its
+  digest (exit `3`); it contacts no registry. `piceli artifacts build-spec
+  preview --spec host-build.toml --platform …` plans a multi-platform host
+  build without running anything. See {doc}`publishing_images`.
 - `piceli codegen crd FILE` (reads the file) and `piceli codegen crd
   --from-cluster --kubeconfig F --context C --crd NAME` (one read of the CRD
   through the explicit context): generate typed models for a custom resource
@@ -215,7 +228,9 @@ Ask before running these, and show the owner what will happen first.
 | `piceli release check` | Nothing by itself, but runs the spec's checks (declared pod execs and Python functions) | The owner's go-ahead for a spec you did not write |
 | `piceli artifacts deliver` | A registry or node | `--approve-digest <config digest>` |
 | `piceli publish` | A registry (the manifests as a Flux OCI artifact, which a GitOps controller then applies without Piceli's plan) | `--approve <artifact digest>` printed by `piceli publish` without `--approve`, after the owner reviewed the files and the target; see {doc}`gitops` |
-| `piceli artifacts build-spec run` | Runs a build, writes outputs and images | `--approve-builder <digest>` and `--approve-plan <hash>` |
+| `piceli chart publish` | A registry (the Helm chart, which other people then install with Helm) | `--approve <digest>` printed by `piceli chart publish` without `--approve`, after the owner reviewed the chart, its version and the target; see {doc}`helm_charts` |
+| `piceli artifacts build-spec run` | Runs a build, writes outputs and images | `--approve-builder <digest>` and `--approve-plan <hash>` (a `host-build.toml`: `--approve-plan` only) |
+| `piceli artifacts publish` | A hosted registry: images of every platform, their index, attestations, signatures, the version tag | `--approve <digest>` (printed without it) |
 | `piceli artifacts execute-command` | Runs a pinned tool | `--approve-plan <hash>` |
 | `piceli artifacts import-local` | The local Docker image store | `--approve-digest <digest>` |
 | `piceli operator approve`, `piceli operator promote`, `piceli operator restore` | Operator state, catalog or files | The owner's go-ahead |

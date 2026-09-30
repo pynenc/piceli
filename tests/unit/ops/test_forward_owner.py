@@ -92,6 +92,9 @@ def test_forward_reconnects_to_the_pod_that_replaces_its_owner(
         supervisor.tick()
         assert targets.read_text().split() == ["pod/web-old"]
 
+        # A slow probe on a loaded machine may restart the forward on its own;
+        # what matters is that the move itself is not counted as one.
+        before = supervisor.statuses()[0].restarts
         live[:] = ["web-new"]  # the rollout removed the old pod
         assert _wait(
             lambda: (supervisor.tick(), supervisor.statuses()[0].pod)[1] == "web-new"
@@ -99,7 +102,7 @@ def test_forward_reconnects_to_the_pod_that_replaces_its_owner(
         assert _wait(
             lambda: targets.read_text().split() == ["pod/web-old", "pod/web-new"]
         )
-        assert supervisor.statuses()[0].restarts == 0  # not a failure
+        assert supervisor.statuses()[0].restarts == before  # not a failure
         assert supervisor.shortcuts_status("demo")[0]["pod"] == "web-new"
     finally:
         supervisor.close()

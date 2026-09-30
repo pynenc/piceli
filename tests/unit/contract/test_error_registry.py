@@ -24,6 +24,7 @@ FIRST_ARGUMENT = {
     "_Diagnosed",
     "RegistryError",
     "GitOpsError",
+    "ChartError",
     "_input",
     "SecretError",
     "ImageHandoffError",
@@ -44,6 +45,7 @@ FIRST_ARGUMENT = {
     "NodeFactsError",
     "LayerError",
     "RestorePointError",
+    "PublishError",
 }
 # ``_Failure(result, reason)`` in the delivery modules; ``reject_error(error, default)``;
 # ``DryRunUnavailable(resource, reason)`` in ``k8s/ops/dry_run.py``.
@@ -58,6 +60,7 @@ DYNAMIC = {
     "docker-tool-required",
     "ssh-tool-required",
     "kubectl-tool-required",
+    "cosign-tool-required",
     # delivery.NodeDelivery: "import-" + RunResult.state
     "import-failed",
     "import-timed-out",
@@ -111,6 +114,8 @@ DYNAMIC = {
     "release-locked",
     # k8s/cli/publish.py: a RegistryError reason that is not registered
     "gitops-push-failed",
+    # k8s/cli/chart.py: a RegistryError reason that is not registered
+    "chart-push-failed",
 }
 # Registered for the CLI contract itself (piceli/cli_contract.py users).
 CONTRACT = {"unknown-error-code"}

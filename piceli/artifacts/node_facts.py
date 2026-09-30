@@ -29,6 +29,8 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 PAGE_SIZE_LABEL = "piceli.io/page-size"
+#: The node name of facts derived from a platform alone (:meth:`NodeFacts.for_platform`).
+ANY_NODE = "any"
 PAGE_SIZES = (4096, 16384, 65536)
 _ARCH = {"arm64": "arm64", "aarch64": "arm64", "amd64": "amd64", "x86_64": "amd64"}
 _RUST_ARCH = {"arm64": "aarch64", "amd64": "x86_64"}
@@ -126,6 +128,24 @@ class NodeFacts:
         }:
             raise NodeFactsError("node-facts-unavailable", "invalid node facts")
         return cls(**dict(value))
+
+    @classmethod
+    def for_platform(cls, platform: str) -> NodeFacts:
+        """Facts for a build that targets a platform, not a known node.
+
+        Used when an image is built for other people's clusters (a published
+        multi-platform image): the node is ``any``, the kernel ``unknown`` and
+        the page size the architecture default (4 KiB), so ``{page_size}`` is
+        ``4096`` and ``{page_size_log2}`` is ``12``.
+        """
+        system, _, arch = str(platform).partition("/")
+        if system != "linux" or arch not in _RUST_ARCH:
+            raise NodeFactsError(
+                "node-facts-unavailable",
+                f"unsupported platform {platform!r}; use linux/amd64 or linux/arm64",
+            )
+        size, source = page_size(arch, "unknown")
+        return cls(ANY_NODE, system, arch, "unknown", size, source)
 
     @classmethod
     def from_node(cls, node: Mapping[str, Any]) -> NodeFacts:

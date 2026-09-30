@@ -87,6 +87,8 @@ from piceli.artifacts.source_identity import (
 )
 
 HOST_BUILD_REVISION = "piceli.host-build.v1"
+#: The platforms a host build can target.
+HOST_PLATFORMS = frozenset({"linux/amd64", "linux/arm64"})
 HOST_PREVIEW_REVISION = "piceli.host-build-preview.v1"
 DEFAULT_TIMEOUT = 1800.0
 _TOOL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,63}")
@@ -201,6 +203,9 @@ class HostBuildSpec:
     origin: Path | None = field(default=None, compare=False, repr=False)
     facts: NodeFacts | None = field(default=None, compare=False)
     """The target node's facts (`for_node`); required to plan."""
+    declared_platforms: tuple[str, ...] = ()
+    """``build.platforms``: the platforms a published image is built for
+    (:mod:`piceli.artifacts.multi_platform`); empty keeps one platform."""
     cache_dir: Path | None = field(default=None, compare=False, repr=False)
     """Shared stage, target and blob directory; default `default_cache_dir`."""
 
@@ -209,11 +214,19 @@ class HostBuildSpec:
 
     def __post_init__(self) -> None:
         _match(_NAME, self.name, "build name")
-        if self.platform is not None and self.platform not in {
-            "linux/amd64",
-            "linux/arm64",
-        }:
+        if self.platform is not None and self.platform not in HOST_PLATFORMS:
             raise _fail("build.platform must be linux/amd64 or linux/arm64")
+        if self.declared_platforms:
+            if self.platform is not None:
+                raise _fail("declare build.platform or build.platforms, not both")
+            if (
+                len(set(self.declared_platforms)) != len(self.declared_platforms)
+                or not set(self.declared_platforms) <= HOST_PLATFORMS
+            ):
+                raise _fail(
+                    "build.platforms must list linux/amd64 and/or linux/arm64, "
+                    "each once"
+                )
         if not self.images:
             raise _fail("declare at least one [[output.image]]")
         if len({item.name for item in self.images}) != len(self.images):
@@ -279,9 +292,19 @@ class HostBuildSpec:
         _keys(
             build,
             {"tools", "commands"},
-            {"platform", "workdir", "env", "source_date_epoch", "timeout_seconds"},
+            {
+                "platform",
+                "platforms",
+                "workdir",
+                "env",
+                "source_date_epoch",
+                "timeout_seconds",
+            },
             "build",
         )
+        platforms = build.get("platforms", [])
+        if not isinstance(platforms, list) or ("platforms" in build and not platforms):
+            raise _fail("build.platforms must be a non-empty list")
         tools = build["tools"]
         if not isinstance(tools, list) or not 0 < len(tools) <= 32:
             raise _fail("build.tools must list 1-32 host tool names")
@@ -320,6 +343,7 @@ class HostBuildSpec:
             commands=commands,
             tools=tuple(tools),
             platform=build.get("platform"),
+            declared_platforms=tuple(platforms),
             workdir=workdir,
             env=dict(env),
             source_date_epoch=build.get("source_date_epoch", 0),
@@ -342,6 +366,12 @@ class HostBuildSpec:
             "source_date_epoch": self.source_date_epoch,
             "timeout_seconds": self.timeout_seconds,
             "inputs": self.inputs,
+            # Only when declared: the digest of every other spec is unchanged.
+            **(
+                {"platforms": list(self.declared_platforms)}
+                if self.declared_platforms
+                else {}
+            ),
         }
 
     @property
@@ -360,6 +390,12 @@ class HostBuildSpec:
                 f"build {self.name!r} declares {self.platform}; the node runs "
                 f"{facts.platform}",
             )
+        if self.declared_platforms and facts.platform not in self.declared_platforms:
+            raise BuildSpecError(
+                "node-platform-mismatch",
+                f"build {self.name!r} declares {list(self.declared_platforms)}; "
+                f"the node runs {facts.platform}",
+            )
         return dataclasses.replace(self, facts=facts)
 
     def with_cache_dir(self, path: Path) -> HostBuildSpec:
@@ -367,10 +403,10 @@ class HostBuildSpec:
 
     @property
     def platforms(self) -> tuple[str, ...]:
-        """The one platform (from the node facts, else the declaration)."""
+        """The one platform of the node facts, else the declared ones."""
         if self.facts is not None:
             return (self.facts.platform,)
-        return (self.platform,) if self.platform else ()
+        return (self.platform,) if self.platform else self.declared_platforms
 
     def base_images(self) -> dict[str, PinnedImage]:
         return {f"output.{item.name}": item.base for item in self.images if item.base}

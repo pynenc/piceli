@@ -86,6 +86,29 @@ CASES: dict[str, tuple[Argv, str]] = {
         "gitops-target-invalid",
     ),
     **{
+        f"chart {command}": (
+            lambda p, command=command: [
+                "chart",
+                command,
+                str(p / "missing.py") + ":app",
+                "--out",
+                str(p / "o"),
+            ],
+            "render-target-invalid",
+        )
+        for command in ("render", "package", "manifests")
+    },
+    "chart publish": (
+        lambda p: [
+            "chart",
+            "publish",
+            str(p / "missing.py") + ":app",
+            "--to",
+            "http://x",
+        ],
+        "chart-target-invalid",
+    ),
+    **{
         f"state {command}": (
             lambda p, command=command, extra=extra: [
                 "state",
@@ -220,6 +243,13 @@ CASES: dict[str, tuple[Argv, str]] = {
     "artifacts build-spec preview": (
         lambda p: ["artifacts", "build-spec", "preview", "--spec", str(p / "no.toml")],
         "spec-unreadable",
+    ),
+    "artifacts publish": (
+        lambda p: (
+            ["artifacts", "publish", "--receipt", str(p / "no.json")]
+            + ["--to", "oci://127.0.0.1:9/x", "--tag", "1.0.0"]
+        ),
+        "publish-invalid",
     ),
     "artifacts build-spec run": (
         lambda p: (

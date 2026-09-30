@@ -29,59 +29,62 @@ def sha(body: bytes) -> str:
     return "sha256:" + hashlib.sha256(body).hexdigest()
 
 
-def publish_base(registry: Any, repository: str = "base/runtime") -> str:
-    """An arm64 base (one gzip layer) behind an index; returns the index digest."""
-    plain = io.BytesIO()
-    with tarfile.open(fileobj=plain, mode="w") as archive:
-        body = b"ID=base\n"
-        info = tarfile.TarInfo("etc/os-release")
-        info.size = len(body)
-        archive.addfile(info, io.BytesIO(body))
-    layer = gzip.compress(plain.getvalue(), mtime=0)
-    config = json.dumps(
-        {
-            "architecture": "arm64",
-            "os": "linux",
-            "config": {"Env": ["PATH=/usr/bin:/bin"], "Cmd": ["sh"]},
-            "rootfs": {"type": "layers", "diff_ids": [sha(plain.getvalue())]},
-            "history": [{"created_by": "base"}],
-        }
-    ).encode()
-    manifest = json.dumps(
-        {
-            "schemaVersion": 2,
-            "mediaType": OCI_MANIFEST,
-            "config": {
-                "mediaType": "application/vnd.oci.image.config.v1+json",
-                "digest": sha(config),
-                "size": len(config),
-            },
-            "layers": [
-                {
-                    "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
-                    "digest": sha(layer),
-                    "size": len(layer),
-                }
-            ],
-        }
-    ).encode()
+def publish_base(
+    registry: Any,
+    repository: str = "base/runtime",
+    architectures: tuple[str, ...] = ("arm64",),
+) -> str:
+    """A base (one gzip layer per platform) behind an index; its index digest."""
+    entries = []
+    for arch in architectures:
+        plain = io.BytesIO()
+        with tarfile.open(fileobj=plain, mode="w") as archive:
+            body = b"ID=base\n" if arch == "arm64" else f"ID=base-{arch}\n".encode()
+            info = tarfile.TarInfo("etc/os-release")
+            info.size = len(body)
+            archive.addfile(info, io.BytesIO(body))
+        layer = gzip.compress(plain.getvalue(), mtime=0)
+        config = json.dumps(
+            {
+                "architecture": arch,
+                "os": "linux",
+                "config": {"Env": ["PATH=/usr/bin:/bin"], "Cmd": ["sh"]},
+                "rootfs": {"type": "layers", "diff_ids": [sha(plain.getvalue())]},
+                "history": [{"created_by": "base"}],
+            }
+        ).encode()
+        manifest = json.dumps(
+            {
+                "schemaVersion": 2,
+                "mediaType": OCI_MANIFEST,
+                "config": {
+                    "mediaType": "application/vnd.oci.image.config.v1+json",
+                    "digest": sha(config),
+                    "size": len(config),
+                },
+                "layers": [
+                    {
+                        "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+                        "digest": sha(layer),
+                        "size": len(layer),
+                    }
+                ],
+            }
+        ).encode()
+        registry.blobs[(repository, sha(layer))] = layer
+        registry.blobs[(repository, sha(config))] = config
+        registry.manifests[(repository, sha(manifest))] = (manifest, OCI_MANIFEST)
+        entries.append(
+            {
+                "mediaType": OCI_MANIFEST,
+                "digest": sha(manifest),
+                "size": len(manifest),
+                "platform": {"os": "linux", "architecture": arch},
+            }
+        )
     index = json.dumps(
-        {
-            "schemaVersion": 2,
-            "mediaType": OCI_INDEX,
-            "manifests": [
-                {
-                    "mediaType": OCI_MANIFEST,
-                    "digest": sha(manifest),
-                    "size": len(manifest),
-                    "platform": {"os": "linux", "architecture": "arm64"},
-                }
-            ],
-        }
+        {"schemaVersion": 2, "mediaType": OCI_INDEX, "manifests": entries}
     ).encode()
-    registry.blobs[(repository, sha(layer))] = layer
-    registry.blobs[(repository, sha(config))] = config
-    registry.manifests[(repository, sha(manifest))] = (manifest, OCI_MANIFEST)
     registry.manifests[(repository, sha(index))] = (index, OCI_INDEX)
     return sha(index)
 

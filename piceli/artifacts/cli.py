@@ -109,13 +109,63 @@ def build_parser() -> argparse.ArgumentParser:
     cmd.add_argument("--kubectl", type=Path)
     cmd.add_argument("--kubectl-sha256")
     add_build_spec_commands(sub)
+    add_publish_command(sub)
     return parser
+
+
+def add_publish_command(sub: Any) -> None:
+    """``artifacts publish``: images of a build receipt to a hosted registry."""
+    cmd = sub.add_parser(
+        "publish",
+        help="push a build's images (every platform, one index) to a registry",
+    )
+    cmd.add_argument("--receipt", type=Path, required=True)
+    cmd.add_argument(
+        "--output-dir",
+        type=Path,
+        help="the build's output directory (default: the receipt's directory)",
+    )
+    cmd.add_argument("--to", required=True, help="oci://host[:port]/prefix")
+    cmd.add_argument("--tag", required=True, help="the version tag, e.g. 1.4.0")
+    cmd.add_argument(
+        "--image", action="append", dest="images", help="publish only this image"
+    )
+    cmd.add_argument(
+        "--no-attestations",
+        action="store_true",
+        help="do not attach the SBOM and provenance",
+    )
+    cmd.add_argument("--move-tag", action="store_true")
+    cmd.add_argument("--approve", help="the plan digest printed without --approve")
+    credentials = cmd.add_mutually_exclusive_group()
+    credentials.add_argument("--credentials", type=Path)
+    credentials.add_argument("--docker-config", type=Path)
+    cmd.add_argument("--ca-file", type=Path)
+    cmd.add_argument("--docker", type=Path)
+    cmd.add_argument("--docker-sha256")
+    cmd.add_argument("--docker-socket", type=Path)
+    cmd.add_argument("--out", type=Path, help="write the publish receipt here")
+    cmd.add_argument(
+        "--values-out",
+        type=Path,
+        help="write the Helm values fragment (images.<key>.repository/tag/digest)",
+    )
+    cmd.add_argument(
+        "--sign-key",
+        type=Path,
+        help="sign with cosign and this private key file (cosign generate-key-pair)",
+    )
+    cmd.add_argument("--cosign", type=Path)
+    cmd.add_argument("--cosign-sha256")
+    cmd.add_argument("--timeout", type=float, default=1800)
 
 
 def main(arguments: list[str] | None = None) -> int:
     args = build_parser().parse_args(arguments)
     if args.command == "build-spec":
         return run_build_spec_command(args)
+    if args.command == "publish":
+        return run_publish_command(args)
     try:
         if args.command == "pin":
             result = SourcePin.capture(
@@ -358,6 +408,116 @@ def _deliver_node(
             source, target, grant, reference=args.ref, limits=limits
         ),
     )
+
+
+def run_publish_command(args: argparse.Namespace, **seams: Any) -> int:
+    """Plan (exit 3), or publish an approved plan (exit 0, or 1 on failure)."""
+    from piceli.artifacts.build_spec import BuildReceipt, BuildSpecError
+    from piceli.artifacts.publish import (
+        Publisher,
+        PublishError,
+        PublishGrant,
+        PublishPlan,
+    )
+    from piceli.artifacts.registry import docker_config_credentials
+    from piceli.cli_contract import EXIT_APPROVAL, emit_json, say
+
+    try:
+        signer = None
+        if args.sign_key is not None:
+            from piceli.artifacts.signing import CosignSigner
+
+            signer = CosignSigner(
+                discover_tool("cosign", args.cosign, args.cosign_sha256),
+                args.sign_key.absolute(),
+                **seams.pop("signer_options", {}),
+            )
+        elif args.cosign is not None or args.cosign_sha256 is not None:
+            raise PublishError("publish-invalid", "--cosign needs --sign-key")
+        receipt = BuildReceipt.from_json(args.receipt.read_text())
+        output_dir = args.output_dir or args.receipt.absolute().parent
+        plan = PublishPlan.from_receipt(
+            receipt,
+            output_dir,
+            args.to,
+            args.tag,
+            images=args.images,
+            attach=not args.no_attestations,
+            move_tag=args.move_tag,
+            signing=signer.public() if signer is not None else None,
+        )
+        if args.approve is None or args.approve != plan.digest:
+            if args.approve is not None:
+                raise PublishError("publish-not-approved")
+            emit_json({"state": "approval-required", **plan.preview()})
+            say(
+                f"publish: {len(plan.images)} image(s) to {plan.target.registry} "
+                f"as {plan.tag}; approve with --approve {plan.digest}"
+            )
+            return EXIT_APPROVAL
+        credentials = None
+        if args.credentials is not None:
+            credentials = _input(
+                "invalid-credentials-file",
+                lambda: RegistryCredentials.load(args.credentials.absolute()),
+            )
+        elif args.docker_config is not None:
+            credentials = docker_config_credentials(
+                args.docker_config.absolute(), plan.target.registry
+            )
+        if signer is not None:  # cosign reaches the registry like the push
+            signer.credentials = credentials
+            signer.ca_file = args.ca_file.absolute() if args.ca_file else None
+        docker, socket = (None, None)
+        if any(
+            item.archive is None for image in plan.images for item in image.platforms
+        ):
+            docker, socket = _docker(args)
+        publisher = Publisher(
+            credentials=credentials,
+            ca_file=args.ca_file.absolute() if args.ca_file is not None else None,
+            docker=docker,
+            docker_socket=socket,
+            signer=signer,
+            timeout=args.timeout,
+            **seams,
+        )
+        result = publisher.publish(
+            plan, PublishGrant(plan.digest, time.time() + args.timeout)
+        )
+        if args.out is not None:
+            write_receipt(args.out, result)
+        if args.values_out is not None and result["values"] is not None:
+            _write_values(args.values_out, result["values"])
+        emit_json(result)
+        if result["state"] != "published":
+            reason = (
+                result["reason"] if result["reason"] in ERRORS else "publish-failed"
+            )
+            say(f"publish: failed [{reason}]")
+            return 1
+        for name, entry in result["images"].items():
+            say(
+                f"published {name}: {entry['repository']}:{entry['tag']}@{entry['digest']}"
+            )
+        return 0
+    except (PublishError, DeliveryInputError, BuildSpecError) as error:
+        return rejection(error.code if error.code in ERRORS else "publish-invalid")
+    except (ValueError, KeyError, TypeError, OSError):
+        return rejection("publish-invalid")
+
+
+def _write_values(path: Path, values: dict[str, Any]) -> None:
+    """The Helm values fragment as YAML (``helm install -f`` / ``piceli chart``)."""
+    import yaml
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.piceli-partial")
+    try:
+        temporary.write_text(yaml.safe_dump(values, sort_keys=True))
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
