@@ -26,6 +26,19 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   (and the hash covers them only when present), the run summary's
   `restore_point` gains `claim_changes`, and the fake API serves
   StorageClasses. New error codes `claim-*`. See {doc}`restore_points`.
+- **Typed egress and namespace selectors in network policies:**
+  `app.network_policy(…)` takes `egress=[…]` (workloads of the app or
+  `NetworkRule`s with `NetworkPeer.pods|workload|namespace|cidr` peers, CIDR
+  `except`, ports, protocols and `end_port` ranges), `ingress=[…]` with the
+  same typed rules (namespace selectors for ingress too), `allow_dns=True`
+  (`NetworkRule.dns()`: `kube-dns` in `kube-system`, port 53 UDP and TCP; a
+  default-deny egress otherwise breaks name resolution) and an explicit
+  `policy_types`, derived when omitted (egress alone renders `Egress` only).
+  Policies without the new arguments render byte-identically. Invalid CIDRs,
+  ports, empty selectors and unknown workloads are refused at build time
+  (`render-target-invalid`, whose message names the problem). Proven on kind: a client reaches an allowed
+  workload and not a denied one, and a replica pair is cut and healed.
+  See {doc}`typed_apps`.
 
 ## Version 0.11.0
 

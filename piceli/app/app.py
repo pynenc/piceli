@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, ClassVar, Protocol
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
@@ -32,7 +32,9 @@ from piceli.app.model import (
     Labels,
     Mount,
     Name,
+    NetworkPeer,
     NetworkPolicy,
+    NetworkRule,
     PodDefaults,
     Probe,
     Resources,
@@ -1211,10 +1213,14 @@ class App(BaseModel):
         | Sequence[Mapping[str, str]]
         | None = None,
         ports: Sequence[int] = (),
+        ingress: Sequence[NetworkRule] = (),
+        egress: Sequence[NetworkRule | Workload] = (),
+        allow_dns: bool = False,
+        policy_types: Sequence[Literal["Ingress", "Egress"]] = (),
         name: str | None = None,
         component: str | None = None,
     ) -> NetworkPolicy:
-        """Restrict ingress to selected pods (see :class:`~piceli.app.model.NetworkPolicy`).
+        """Restrict ingress and egress of selected pods (see :class:`~piceli.app.model.NetworkPolicy`).
 
         Select the protected pods with ``workload`` (its selector) or with
         ``selector`` (any pod labels, such as :attr:`release_selector` for
@@ -1222,8 +1228,19 @@ class App(BaseModel):
         ``allow_from_selector`` label sets (one mapping or several), in the
         same namespace.
 
-        Named ``<workload>-ingress`` for a workload; a ``selector`` policy
-        needs ``name``. Its component is the workload's, else ``component``,
+        ``ingress`` adds typed rules (:class:`~piceli.app.model.NetworkRule`:
+        namespace selectors, CIDRs, protocols). ``egress`` lists the allowed
+        destinations: a workload of this app (all ports) or a
+        :class:`~piceli.app.model.NetworkRule`. Declaring egress makes the
+        policy restrict egress: everything not listed is denied, DNS
+        included, so pass ``allow_dns=True`` (or add
+        ``NetworkRule.dns()``) unless the pods need no name resolution.
+        ``policy_types`` is explicit when given; otherwise ``Egress`` (plus
+        ``Ingress`` when any ingress argument is given) follows from the
+        rules. ``policy_types=("Egress",)`` with no rules denies all egress.
+
+        Named ``<workload>-ingress`` for a workload (``-egress`` when it
+        declares only egress); a ``selector`` policy needs ``name``. Its component is the workload's, else ``component``,
         else ``name``.
 
         Example, only this app's pods may connect to its pods::
@@ -1251,7 +1268,22 @@ class App(BaseModel):
                     "allow every pod in the namespace"
                 )
         pod_selector = workload.selector_labels if workload else dict(selector or {})
-        policy_name = name or f"{workload.name}-ingress"  # type: ignore[union-attr]
+        egress_rules: list[NetworkRule] = []
+        for item in egress:
+            if isinstance(item, Workload):
+                if not any(item is other for other in self._objects):
+                    raise ValueError(
+                        f"egress names {item.label} {item.name!r}, which is not "
+                        "declared in this app"
+                    )
+                egress_rules.append(NetworkRule(peers=(NetworkPeer.workload(item),)))
+            else:
+                egress_rules.append(item)
+        if allow_dns:
+            egress_rules.append(NetworkRule.dns())
+        has_ingress = bool(peers or allow_from or ports or ingress)
+        suffix = "egress" if egress_rules and not has_ingress else "ingress"
+        policy_name = name or f"{workload.name}-{suffix}"  # type: ignore[union-attr]
         return self._declare(
             NetworkPolicy.model_validate(
                 {
@@ -1262,6 +1294,9 @@ class App(BaseModel):
                         *(dict(peer) for peer in peers),
                     ),
                     "ports": tuple(ports),
+                    "ingress": tuple(ingress),
+                    "egress": tuple(egress_rules),
+                    "policy_types": tuple(policy_types),
                     "component": workload.component_name
                     if workload
                     else component or policy_name,

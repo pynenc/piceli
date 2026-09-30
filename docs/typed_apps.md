@@ -370,6 +370,53 @@ app's object labels, `{"app.kubernetes.io/part-of": <app name>}` by default),
 so the first policy lets only this app's pods reach its pods. An empty
 selector is refused: it would match every pod in the namespace.
 
+### Egress, namespaces and CIDRs
+
+`egress=[…]` restricts where the selected pods may connect. List workloads of
+the app (every port) or typed rules. `NetworkRule(peers=[…], ports=[…])` takes
+peers built with `NetworkPeer.pods(labels)`, `NetworkPeer.workload(w)`,
+`NetworkPeer.namespace("prod")` (by name) or
+`NetworkPeer.namespace(labels={…}, pods={…})` (by label, optionally only some
+pods of those namespaces), and `NetworkPeer.cidr("10.0.0.0/8",
+except_=["10.1.0.0/16"])`. Ports are numbers (TCP) or
+`NetworkPort(port=6000, end_port=6010, protocol="UDP")`. `ingress=[…]` takes
+the same rules, so ingress can select namespaces too.
+
+```python
+from piceli import NetworkPeer, NetworkPort, NetworkRule
+
+app.network_policy(
+    api,
+    egress=[
+        db,  # a workload of this app
+        NetworkRule(
+            peers=[NetworkPeer.cidr("10.0.0.0/8", except_=["10.1.0.0/16"])], ports=[443]
+        ),
+        NetworkRule(
+            peers=[NetworkPeer.namespace("metrics")], ports=[NetworkPort(port=4317)]
+        ),
+    ],
+    allow_dns=True,
+)
+```
+
+**Egress deny also blocks DNS.** Once a pod is selected by an Egress policy,
+everything not listed is denied, including name resolution. Pass
+`allow_dns=True` (or add `NetworkRule.dns()`, which allows `kube-dns` in
+`kube-system` on port 53 UDP and TCP) unless the pods need no DNS.
+
+`policy_types` is derived: `Ingress` for a policy without egress (rendered
+exactly as before, so existing plan hashes do not change); `Egress` when it
+declares egress and no ingress arguments; both when it declares both. Give it
+explicitly to override, for example
+`app.network_policy(api, policy_types=["Egress"])` denies all egress of `api`.
+Policies are additive: a pod selected by several policies may do whatever any
+of them allows, so an egress cut needs no other policy that allows the
+traffic. A CIDR, port, protocol, empty selector or rule with neither peers nor
+ports is refused when the app is built (`render-target-invalid`, whose message names the problem), and a
+workload in `egress=` must be declared in the same app. Enforcement needs a
+CNI that implements NetworkPolicy (kind's default does).
+
 ## Stateful workloads
 
 `app.stateful_set(...)` takes the same pod and container arguments as
@@ -612,7 +659,7 @@ documented in the API docs.
 | Environment | `str`, {py:class}`~piceli.app.model.SecretKey`, {py:class}`~piceli.app.model.ConfigKey`, {py:class}`~piceli.app.model.FieldRef` |
 | Volumes | {py:class}`~piceli.app.model.ConfigVolume`, {py:class}`~piceli.app.model.SecretVolume`, {py:class}`~piceli.app.model.MemoryVolume`, {py:class}`~piceli.app.model.ExistingClaim`, {py:class}`~piceli.app.model.ClaimTemplate`, {py:class}`~piceli.app.model.Mount` |
 | HTTP routing | {py:class}`~piceli.app.kinds.Route`, {py:class}`~piceli.app.kinds.GatewayRef` |
-| Declared objects (returned handles) | {py:class}`~piceli.app.model.Deployment`, {py:class}`~piceli.app.kinds.StatefulSet`, {py:class}`~piceli.app.kinds.DaemonSet`, {py:class}`~piceli.app.kinds.Job`, {py:class}`~piceli.app.kinds.CronJob` (all {py:class}`~piceli.app.model.Workload`), {py:class}`~piceli.app.model.Service`, {py:class}`~piceli.app.model.ServicePort`, {py:class}`~piceli.app.model.Config`, {py:class}`~piceli.app.model.Secret`, {py:class}`~piceli.app.model.ServiceAccount`, {py:class}`~piceli.app.model.NetworkPolicy`, {py:class}`~piceli.app.kinds.Autoscaler`, {py:class}`~piceli.app.kinds.DisruptionBudget`, {py:class}`~piceli.app.kinds.Ingress`, {py:class}`~piceli.app.kinds.HttpRoute` |
+| Declared objects (returned handles) | {py:class}`~piceli.app.model.Deployment`, {py:class}`~piceli.app.kinds.StatefulSet`, {py:class}`~piceli.app.kinds.DaemonSet`, {py:class}`~piceli.app.kinds.Job`, {py:class}`~piceli.app.kinds.CronJob` (all {py:class}`~piceli.app.model.Workload`), {py:class}`~piceli.app.model.Service`, {py:class}`~piceli.app.model.ServicePort`, {py:class}`~piceli.app.model.Config`, {py:class}`~piceli.app.model.Secret`, {py:class}`~piceli.app.model.ServiceAccount`, {py:class}`~piceli.app.model.NetworkPolicy`, {py:class}`~piceli.app.model.NetworkRule`, {py:class}`~piceli.app.model.NetworkPeer`, {py:class}`~piceli.app.model.NetworkPort`, {py:class}`~piceli.app.kinds.Autoscaler`, {py:class}`~piceli.app.kinds.DisruptionBudget`, {py:class}`~piceli.app.kinds.Ingress`, {py:class}`~piceli.app.kinds.HttpRoute` |
 
 Everything above is importable from `piceli` directly (`from piceli import
 App, ExistingClaim`). The exports are lazy, so `import piceli` stays cheap and

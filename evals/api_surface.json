@@ -312,10 +312,14 @@
      "working_dir"
     ],
     "network_policy": [
+     "allow_dns",
      "allow_from",
      "allow_from_selector",
      "component",
+     "egress",
+     "ingress",
      "name",
+     "policy_types",
      "ports",
      "selector",
      "workload"
@@ -2608,21 +2612,72 @@
    "methods": {},
    "pydantic": true
   },
+  "NetworkPeer": {
+   "attrs": [
+    "cidr",
+    "cidr_block",
+    "cidr_except",
+    "manifest",
+    "namespace",
+    "namespace_labels",
+    "pod_labels",
+    "pods",
+    "workload"
+   ],
+   "init": [
+    "cidr_block",
+    "cidr_except",
+    "namespace_labels",
+    "pod_labels"
+   ],
+   "methods": {
+    "cidr": [
+     "block",
+     "except_"
+    ],
+    "manifest": [],
+    "namespace": [
+     "labels",
+     "name",
+     "pods"
+    ],
+    "pods": [
+     "labels"
+    ],
+    "workload": [
+     "workload"
+    ]
+   },
+   "pydantic": true,
+   "returns": {
+    "cidr": "NetworkPeer",
+    "namespace": "NetworkPeer",
+    "pods": "NetworkPeer",
+    "workload": "NetworkPeer"
+   }
+  },
   "NetworkPolicy": {
    "attrs": [
     "allow_from",
     "component",
     "component_name",
+    "effective_policy_types",
+    "egress",
+    "ingress",
     "manifest",
     "name",
     "pod_selector",
+    "policy_types",
     "ports"
    ],
    "init": [
     "allow_from",
     "component",
+    "egress",
+    "ingress",
     "name",
     "pod_selector",
+    "policy_types",
     "ports"
    ],
    "methods": {
@@ -2632,6 +2687,45 @@
     ]
    },
    "pydantic": true
+  },
+  "NetworkPort": {
+   "attrs": [
+    "end_port",
+    "manifest",
+    "port",
+    "protocol"
+   ],
+   "init": [
+    "end_port",
+    "port",
+    "protocol"
+   ],
+   "methods": {
+    "manifest": []
+   },
+   "pydantic": true
+  },
+  "NetworkRule": {
+   "attrs": [
+    "dns",
+    "manifest",
+    "peers",
+    "ports"
+   ],
+   "init": [
+    "peers",
+    "ports"
+   ],
+   "methods": {
+    "dns": [],
+    "manifest": [
+     "direction"
+    ]
+   },
+   "pydantic": true,
+   "returns": {
+    "dns": "NetworkRule"
+   }
   },
   "NodeExpectation": {
    "attrs": [
@@ -6210,8 +6304,17 @@
    "Mount": {
     "class": "Mount"
    },
+   "NetworkPeer": {
+    "class": "NetworkPeer"
+   },
    "NetworkPolicy": {
     "class": "NetworkPolicy"
+   },
+   "NetworkPort": {
+    "class": "NetworkPort"
+   },
+   "NetworkRule": {
+    "class": "NetworkRule"
    },
    "NodeImport": {
     "class": "NodeImport"
@@ -6454,8 +6557,17 @@
    "Mount": {
     "class": "Mount"
    },
+   "NetworkPeer": {
+    "class": "NetworkPeer"
+   },
    "NetworkPolicy": {
     "class": "NetworkPolicy"
+   },
+   "NetworkPort": {
+    "class": "NetworkPort"
+   },
+   "NetworkRule": {
+    "class": "NetworkRule"
    },
    "PodDefaults": {
     "class": "PodDefaults"
