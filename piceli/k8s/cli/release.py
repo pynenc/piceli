@@ -1119,7 +1119,11 @@ def orphans(
         failed = [item for item in report["deleted"] if item["outcome"] == "failed"]
         if not json_only:
             for item in report["deleted"]:
-                _say(f"  {item['outcome']} {item['kind']}/{item['name']}")
+                held = ", ".join(item.get("finalizers") or ())
+                _say(
+                    f"  {item['outcome']} {item['kind']}/{item['name']}"
+                    + (f" (held by {held})" if held else "")
+                )
         if failed:
             _emit({**report, "state": "failed", "reason": "orphans-delete-failed"})
             raise typer.Exit(EXIT_NOT_READY)

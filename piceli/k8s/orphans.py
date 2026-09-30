@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -345,15 +346,23 @@ def deletion_order(orphans: Iterable[Orphan]) -> list[Orphan]:
 
 
 def delete_orphans(
-    provider: KubernetesProvider, orphans: Iterable[Orphan]
-) -> list[dict[str, str]]:
+    provider: KubernetesProvider,
+    orphans: Iterable[Orphan],
+    *,
+    wait_seconds: float = 0.0,
+    poll_seconds: float = 1.0,
+) -> list[dict[str, Any]]:
     """Delete the prunable ``orphans`` with UID and resourceVersion preconditions.
 
-    Returns one ``{"kind", "name", "outcome"}`` per object: ``deleted``,
-    ``gone`` (already absent) or ``failed`` (with ``category``: an allowlisted
+    Returns one ``{"kind", "name", "outcome"}`` per object: ``deleted`` (gone
+    from the cluster), ``deleting`` (the delete was accepted but the object
+    is still terminating after ``wait_seconds``, held by the ``finalizers``
+    listed with it: a claim stays while a pod still mounts it), ``gone``
+    (already absent) or ``failed`` (with ``category``: an allowlisted
     provider category, never a server message).
     """
-    results: list[dict[str, str]] = []
+    results: list[dict[str, Any]] = []
+    accepted: dict[int, Orphan] = {}
     for item in deletion_order(orphans):
         entry = {"kind": item.kind, "name": item.name}
         try:
@@ -364,6 +373,7 @@ def delete_orphans(
                 propagation="Background",
                 allow_retained=True,
             )
+            accepted[len(results)] = item
             results.append({**entry, "outcome": "deleted"})
         except ProviderError as error:
             if error.category == "not-found":
@@ -372,4 +382,45 @@ def delete_orphans(
                 results.append(
                     {**entry, "outcome": "failed", "category": error.category}
                 )
+    for index, finalizers in _wait_gone(
+        provider, accepted, wait_seconds, poll_seconds
+    ).items():
+        results[index] = {
+            **results[index],
+            "outcome": "deleting",
+            "finalizers": finalizers,
+        }
     return results
+
+
+def _wait_gone(
+    provider: KubernetesProvider,
+    pending: dict[int, Orphan],
+    wait_seconds: float,
+    poll_seconds: float,
+) -> dict[int, list[str]]:
+    """Wait until each deleted object is gone; the ones still terminating.
+
+    An object is gone when reading it finds nothing, or another object (a
+    new UID) under its name. Returns the finalizers still holding the rest.
+    """
+    pending = dict(pending)
+    held: dict[int, list[str]] = {}
+    end = time.monotonic() + max(0.0, wait_seconds)
+    while pending:
+        for index, item in list(pending.items()):
+            try:
+                current = provider.get(item.identity)
+            except ProviderError:
+                continue  # unknown for now: still pending
+            metadata = current.manifest["metadata"] if current else {}
+            if current is None or metadata.get("uid") != item.uid:
+                del pending[index]
+                held.pop(index, None)
+            else:
+                held[index] = [str(f) for f in metadata.get("finalizers") or ()]
+        remaining = end - time.monotonic()
+        if not pending or remaining <= 0:
+            break
+        time.sleep(min(max(poll_seconds, 0.01), remaining))
+    return {index: held.get(index, []) for index in pending}

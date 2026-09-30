@@ -1348,7 +1348,7 @@ List the objects that carry the app's ownership labels but no current release ow
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** Read-only without --prune. --prune prints the plan hash over the exact set (UIDs and resourceVersions) and exits 3; --prune --approve HASH deletes that set, or refuses when it changed (orphans-plan-changed). Never prunes claims, Secrets, objects of another owner or cluster-scoped objects unless --include-claims, --include-secrets, --include-other-owners or --include-cluster-scoped; never an object without Piceli's owner annotation. With a pipeline, --env NAME selects one environment (its target, overrides and state).
+- **Notes:** Read-only without --prune. --prune prints the plan hash over the exact set (UIDs and resourceVersions) and exits 3; --prune --approve HASH deletes that set, or refuses when it changed (orphans-plan-changed); each deleted object is waited for until it is gone (outcome deleting when still terminating). Never prunes claims, Secrets, objects of another owner or cluster-scoped objects unless --include-claims, --include-secrets, --include-other-owners or --include-cluster-scoped; never an object without Piceli's owner annotation. With a pipeline, --env NAME selects one environment (its target, overrides and state).
 
 (cli-release-plan)=
 ### `piceli release plan`

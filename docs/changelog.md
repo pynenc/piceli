@@ -44,6 +44,9 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   refused. PersistentVolumeClaims, Secrets, another owner's objects and
   cluster-scoped objects are kept unless `--include-claims`,
   `--include-secrets`, `--include-other-owners` or `--include-cluster-scoped`.
+  A prune waits (at most `readiness_seconds`) until each deleted object is
+  gone; one still terminating (a claim a stopping pod still mounts) is
+  reported `deleting` with its `finalizers`, not `deleted`.
   New error codes `orphans-*`. See {doc}`release_cli`.
 
 ## Version 0.10.1

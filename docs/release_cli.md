@@ -882,7 +882,14 @@ objects with their UIDs and resourceVersions) and exits 3. With
 it differs in any way, nothing is deleted and the refusal is
 `orphans-plan-changed`. Deletes carry UID and resourceVersion preconditions;
 an object that changed meanwhile is reported `failed`
-(`orphans-delete-failed`, exit 1) and the rest are still deleted.
+(`orphans-delete-failed`, exit 1) and the rest are still deleted. Each entry
+of `deleted` has an `outcome`: `deleted` once the object is gone, `gone` if it
+was already absent, `failed`, or `deleting` when the delete was accepted but
+the object is still terminating after `[execution] readiness_seconds`, with
+the `finalizers` that hold it (a claim stays, `kubernetes.io/pvc-protection`,
+while a pod still mounts it: a pod of a workload pruned just before may take
+its grace period to stop). The prune waits for each deleted object until then;
+a `deleting` object is not listed again (terminating objects never are).
 `release orphans` is refused before a release exists
 (`orphans-no-release`) and while an execution is running
 (`orphans-execution-running`).
