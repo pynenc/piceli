@@ -78,6 +78,28 @@ def is_loopback(host: str) -> bool:
         return False
 
 
+_CLUSTER_SERVICE = re.compile(
+    r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?\.[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?"
+    r"\.svc(?:\.cluster\.local)?"
+)
+
+
+def is_cluster_service(host: str) -> bool:
+    """Whether ``host`` is a Kubernetes Service name (``name.namespace.svc``).
+
+    Such a name resolves only through cluster DNS (or a node's containerd
+    mirror for it), never on the public Internet: the in-cluster registry
+    (``Registry.in_cluster``) is reached by it over plain HTTP inside the
+    cluster network.
+    """
+    return bool(_CLUSTER_SERVICE.fullmatch(host.lower()))
+
+
+def plain_http_allowed(host: str) -> bool:
+    """Plain HTTP is allowed to a loopback registry or an in-cluster Service name."""
+    return is_loopback(host) or is_cluster_service(host)
+
+
 def validate_host(host: str) -> str:
     """A DNS name or an IP address; nothing else can reach a URL."""
     if not isinstance(host, str) or not 0 < len(host) <= 253:
@@ -279,7 +301,8 @@ def _credentials(username: str, password: str, code: str) -> RegistryCredentials
 class RegistryEndpoint:
     """Connection specification for an owner-operated OCI registry.
 
-    ``use_tls=False`` (plain HTTP) is only accepted for a loopback ``host``.
+    ``use_tls=False`` (plain HTTP) is only accepted for a loopback ``host`` or
+    an in-cluster Service name (``name.namespace.svc``).
     """
 
     host: str
@@ -300,10 +323,11 @@ class RegistryEndpoint:
             raise ValueError("invalid registry port")
         if not isinstance(self.use_tls, bool):
             raise ValueError("invalid registry TLS flag")
-        if not self.use_tls and not is_loopback(self.host):
+        if not self.use_tls and not plain_http_allowed(self.host):
             raise DeliveryInputError(
                 "plain-http-not-loopback",
-                "plain HTTP is only allowed for a loopback registry",
+                "plain HTTP is only allowed for a loopback registry or an "
+                "in-cluster Service name",
             )
         if self.auth_token is not None and self.credentials is not None:
             raise ValueError("give either an auth token or credentials")
@@ -1012,8 +1036,9 @@ _FALSE = {"0", "false", "no"}
 class RegistryTarget:
     """A parsed ``oci://host[:port]/repository[:tag]`` delivery target.
 
-    ``tls`` defaults to ``False`` for a loopback host and ``True`` otherwise;
-    ``?tls=false`` is refused for any non-loopback host. Digest references are
+    ``tls`` defaults to ``False`` for a loopback host or an in-cluster
+    Service name (``name.namespace.svc``) and ``True`` otherwise; ``?tls=false``
+    is refused for any other host. Digest references are
     not targets: the pushed manifest's digest is the result of a delivery.
     """
 
@@ -1043,10 +1068,11 @@ class RegistryTarget:
             raise ValueError("invalid registry tag")
         if not isinstance(self.tls, bool):
             raise ValueError("invalid registry TLS flag")
-        if not self.tls and not is_loopback(self.host):
+        if not self.tls and not plain_http_allowed(self.host):
             raise DeliveryInputError(
                 "plain-http-not-loopback",
-                "plain HTTP is only allowed for a loopback registry",
+                "plain HTTP is only allowed for a loopback registry or an "
+                "in-cluster Service name",
             )
 
     @classmethod
@@ -1075,7 +1101,7 @@ class RegistryTarget:
         host = parts.hostname
         tls_text = query.get("tls")
         if tls_text is None:
-            tls = not is_loopback(host)
+            tls = not plain_http_allowed(host)
         elif tls_text in _TRUE | _FALSE:
             tls = tls_text in _TRUE
         else:

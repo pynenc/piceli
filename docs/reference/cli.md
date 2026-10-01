@@ -87,6 +87,10 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli profiles`](#cli-profiles) | List the stored credential profiles (references only, never secrets). | none | no |
 | [`piceli promote`](#cli-promote) | Ask the GitOps controller to deploy BRANCH@SHA to main, or to environment ENV. | writes | no |
 | [`piceli publish`](#cli-publish) | Push the rendered manifests as a Flux OCI artifact (needs --approve DIGEST). | none | yes |
+| [`piceli registry forward`](#cli-registry-forward) | Keep a loopback port-forward to the registry open for pushes from here. | reads | no |
+| [`piceli registry install`](#cli-registry-install) | Install the in-cluster registry and its node mirror (plan first; --approve HASH installs). | writes | yes |
+| [`piceli registry status`](#cli-registry-status) | Registry pod, mirror readiness on every node and storage use (read-only). | reads | no |
+| [`piceli registry uninstall`](#cli-registry-uninstall) | Remove the registry and its node mirrors (plan first; --approve HASH removes). | writes | yes |
 | [`piceli release apply`](#cli-release-apply) | Execute an approved plan (``--approve HASH``), or plan and confirm. | writes | yes |
 | [`piceli release check`](#cli-release-check) | Run the spec's [[checks]] now against a release; changes nothing. | reads | no |
 | [`piceli release diff`](#cli-release-diff) | Show what `plan` would change, field by field (read-only, nothing stored). | reads | no |
@@ -1815,6 +1819,128 @@ Push the rendered manifests as a Flux OCI artifact (needs --approve DIGEST).
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
 - **Notes:** Never contacts a cluster. Without --approve it prints the deterministic artifact digest and exits 3 (nothing is pushed); --approve DIGEST pushes by digest, then the tag, and reads both back. Layout of `flux push artifact` (config application/vnd.cncf.flux.config.v1+json, one layer application/vnd.cncf.flux.content.v1.tar+gzip). A Secret needs --secrets external; redacted values and placeholder images are refused. Credentials only from --credentials FILE, never printed.
+
+(cli-registry-forward)=
+### `piceli registry forward`
+
+Keep a loopback port-forward to the registry open for pushes from here.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `REF` | text |  |  |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--env` | text |  | The pipeline's environment, if it has several |
+| `--namespace` | text | `piceli-system` | Namespace of the registry |
+| `--name` | text | `piceli-registry` | Base name of its objects |
+| `--port` | integer | `5000` | Registry and Service port |
+| `--local-port` | integer |  | Loopback port (default: a free one) |
+
+**Contract**
+
+- **Reads:** kubeconfig, kubectl
+- **Writes:** nothing (read-only)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Prints one JSON object with the local push URL, then runs until interrupted. Pushes through it go by digest; nodes pull by the stable name. `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`).
+
+(cli-registry-install)=
+### `piceli registry install`
+
+Install the in-cluster registry and its node mirror (plan first; --approve HASH installs).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `REF` | text |  |  |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--env` | text |  | The pipeline's environment, if it has several |
+| `--on` | text |  | Node (kubernetes.io/hostname) that runs the registry |
+| `--storage` | text | `20Gi` | Size of the registry's retained claim |
+| `--port` | integer | `5000` | Registry and Service port |
+| `--namespace` | text | `piceli-system` | Namespace of the registry |
+| `--name` | text | `piceli-registry` | Base name of its objects |
+| `--node-port` | integer |  | Also expose a fixed NodePort (30000-32767) |
+| `--storage-class` | text |  | StorageClass of the claim |
+| `--mirror-dir` | text | `/etc/containerd/certs.d` | The nodes' containerd certs.d directory |
+| `--image` | text |  | Registry image pinned by digest (repo@sha256:…) |
+| `--approve` | text |  | The plan hash to execute |
+| `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
+| `--exec-sha256` | text |  | Expected sha256:<hex> of the resolved exec plugin file |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+
+**Contract**
+
+- **Reads:** kubeconfig, MODULE:ATTR (optional)
+- **Writes:** nothing (read-only)
+- **Cluster:** writes
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** Without --approve prints the plan (Namespace, ConfigMap, retained PersistentVolumeClaim, Service, registry Deployment pinned to the node, node agent DaemonSet that writes certs.d/<name>.<namespace>.svc:<port>/hosts.toml on each node) and its hash, exit 3. Idempotent: an installed registry plans unchanged. A changed plan is refused (cluster-registry-plan-changed). `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`).
+
+(cli-registry-status)=
+### `piceli registry status`
+
+Registry pod, mirror readiness on every node and storage use (read-only).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `REF` | text |  |  |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--env` | text |  | The pipeline's environment, if it has several |
+| `--namespace` | text | `piceli-system` | Namespace of the registry |
+| `--name` | text | `piceli-registry` | Base name of its objects |
+| `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
+| `--exec-sha256` | text |  | Expected sha256:<hex> of the resolved exec plugin file |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** kubeconfig, MODULE:ATTR (optional)
+- **Writes:** nothing (read-only)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Read-only. state: ready, degraded (registry or a node's mirror not ready) or not-installed. Storage use comes from the kubelet stats (needs nodes/proxy; null otherwise). `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`).
+
+(cli-registry-uninstall)=
+### `piceli registry uninstall`
+
+Remove the registry and its node mirrors (plan first; --approve HASH removes).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `REF` | text |  |  |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--env` | text |  | The pipeline's environment, if it has several |
+| `--namespace` | text | `piceli-system` | Namespace of the registry |
+| `--name` | text | `piceli-registry` | Base name of its objects |
+| `--delete-storage` | boolean | `False` | Also delete the claim with the images |
+| `--approve` | text |  | The plan hash to execute |
+| `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
+| `--exec-sha256` | text |  | Expected sha256:<hex> of the resolved exec plugin file |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+
+**Contract**
+
+- **Reads:** kubeconfig, MODULE:ATTR (optional)
+- **Writes:** nothing (read-only)
+- **Cluster:** writes
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** Keeps the namespace and (without --delete-storage) the claim with the images. The node agents remove their hosts.toml when they stop. Workloads that pull from the registry fail to start new pods afterwards. `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`).
 
 (cli-release-apply)=
 ### `piceli release apply`

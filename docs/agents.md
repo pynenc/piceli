@@ -97,6 +97,10 @@ noted.
   F --context C` and `piceli logout NAME` only write or remove the local
   reference file (`$PICELI_PROFILES_DIR`); they never contact a cluster, but
   which kubeconfig a profile names is the owner's decision.
+- `piceli registry status [MODULE:ATTR] [--json]` (with `--kubeconfig`/`--context`
+  or the pipeline's target): reads the in-cluster registry's pod, the mirror
+  on each node and the storage use; changes nothing. `piceli registry
+  forward` only opens a loopback port-forward to it.
 - `piceli gitops status [--json]` (with `--kubeconfig`/`--context`, or
   `--state-dir` for a local controller): reads the controller's health and
   each branch's commit, state and pending plan hash; changes nothing.
@@ -266,6 +270,8 @@ Exporting deploy events (`--otlp-endpoint`, or `OTEL_EXPORTER_OTLP_*` in the env
 | `piceli env seed` | Replaces every file of a branch environment's claims with main's latest restore point (stops its writers, then starts them again); main's claims are only read from the local archive | `--approve <env_hash>` printed by `piceli env seed BRANCH --pipeline MODULE:ATTR` without `--approve` |
 | `piceli env push` | Writes the ConfigMap `piceli-env-<branch>` (image digests) in the branch environment's namespace, creating the namespace if absent | `--approve <plan_hash>` printed by `piceli env push BRANCH MODULE:ATTR --receipt FILE` without `--approve`, after the owner confirmed the digests are the ones to deploy |
 | `piceli gitops enable` | Installs the GitOps controller: namespace `piceli-system`, a ServiceAccount with a namespaced Role, a ClusterRole limited to nodes (read), namespaces and binding the deployer role, a state claim, a ConfigMap and a one-replica Deployment that then **deploys branches on its own** (inside the pipeline's `auto_approve` policy, or after `piceli gitops approve`) | `--approve <plan_hash>` printed by `piceli gitops enable …` without `--approve`, after the owner chose the repository, the branch globs, the digest-pinned `--image` and reviewed the plan. Never put Git credentials in `--repo`; `--main-auto-approve` and `--cluster-rbac` only when the owner asked; see {doc}`gitops` |
+| `piceli registry install` | Installs the in-cluster registry in `piceli-system`: a registry Deployment pinned to one node with a retained claim, a Service and a DaemonSet that writes `/etc/containerd/certs.d/<name>.<namespace>.svc:<port>/hosts.toml` on **every node** | `--approve <plan_hash>` printed without `--approve`, after the owner chose the node, the storage and reviewed the plan; see {doc}`cluster_registry` |
+| `piceli registry uninstall` | Deletes the registry, its Service and node agents (the nodes' mirror files go with them); workloads pulling from it cannot start new pods. Never the namespace; the images only with `--delete-storage` | `--approve <plan_hash>` printed without `--approve`, after the owner agreed |
 | `piceli gitops disable` | Deletes the controller's objects (never an environment, the namespace or, without `--delete-state`, the state claim) | `--approve <plan_hash>` printed without `--approve`, after the owner agreed |
 | `piceli gitops approve` | Releases a branch deploy (or a main release) waiting for approval; the controller applies that plan on its next poll | This **is** the owner's approval: run it only with the exact hash the owner approved after seeing the plan (`piceli gitops status` shows the pending hash) |
 | `piceli promote` | Asks the controller to deploy `BRANCH@SHA` to the main environment, or `piceli promote ENV BRANCH@SHA` to a named environment that follows `Promote()` (which then waits for `gitops approve` unless it declares `auto_approve=True`) | The owner's go-ahead for that commit and environment |

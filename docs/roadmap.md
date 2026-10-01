@@ -74,6 +74,7 @@ Every feature page starts with its maturity, and this table lists them all:
 | Deterministic OCI builds (artifact API) | {doc}`artifact_delivery` | preview |
 | Image delivery (`piceli artifacts deliver`) | {doc}`node_delivery` | preview |
 | Node-local registry template | {doc}`node_local_registry` | preview |
+| In-cluster registry (`Registry.in_cluster`, `piceli registry`) | {doc}`cluster_registry` | preview |
 | Mirror third-party images by digest (`mirror=`) and take over a live node registry (`adopt=`/`replace=`) | {doc}`deploy` | preview |
 | Access and status from the model (`app.access.forward`, `piceli access`, `piceli status`) | {doc}`access` | preview |
 | Operations lens (`piceli observe`) | {doc}`operations_lens` | preview |

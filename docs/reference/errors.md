@@ -91,6 +91,12 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`cluster-build-invalid`](#error-cluster-build-invalid) | host-build | no |
 | [`cluster-identity-changed`](#error-cluster-identity-changed) | release | no |
 | [`cluster-identity-unreadable`](#error-cluster-identity-unreadable) | kubernetes | yes |
+| [`cluster-registry-cluster-failed`](#error-cluster-registry-cluster-failed) | cluster-registry | yes |
+| [`cluster-registry-invalid`](#error-cluster-registry-invalid) | cluster-registry | no |
+| [`cluster-registry-not-installed`](#error-cluster-registry-not-installed) | cluster-registry | no |
+| [`cluster-registry-not-ready`](#error-cluster-registry-not-ready) | cluster-registry | yes |
+| [`cluster-registry-plan-changed`](#error-cluster-registry-plan-changed) | cluster-registry | yes |
+| [`cluster-registry-target-required`](#error-cluster-registry-target-required) | cluster-registry | no |
 | [`codegen-cluster-read-failed`](#error-codegen-cluster-read-failed) | codegen | yes |
 | [`codegen-flags-conflict`](#error-codegen-flags-conflict) | codegen | no |
 | [`codegen-output-refused`](#error-codegen-output-refused) | codegen | no |
@@ -779,7 +785,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-plain-http-not-loopback)=
 ### `plain-http-not-loopback`
 
-**Plain HTTP to a non-loopback registry.** The registry target asks for plain HTTP but its host is not a loopback address.
+**Plain HTTP to a non-loopback registry.** The registry target asks for plain HTTP but its host is neither a loopback address nor an in-cluster Service name (`name.namespace.svc`).
 
 - **Fix:** Use TLS for remote registries, or reach the registry through `--via-forward`.
 - **Retry-safe:** no
@@ -5026,4 +5032,55 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Unknown workload.** `piceli logs` names a workload the app does not declare.
 
 - **Fix:** Use a Deployment, StatefulSet, DaemonSet, Job or CronJob name of the app (`piceli envs --json` lists them).
+- **Retry-safe:** no
+
+
+## The in-cluster registry every node pulls from (`Registry.in_cluster`, `piceli registry …`)
+
+(error-cluster-registry-cluster-failed)=
+### `cluster-registry-cluster-failed`
+
+**Cluster refused a registry request.** The Kubernetes API refused a read or a change of the registry objects (permissions, admission, an invalid object), or was unreachable.
+
+- **Fix:** Check access with a read-only tool and the message's resource, then plan again.
+- **Retry-safe:** yes
+
+(error-cluster-registry-invalid)=
+### `cluster-registry-invalid`
+
+**In-cluster registry input invalid.** `Registry.in_cluster(...)` or `piceli registry` got a value it refuses: no node (`on=`/`--on`), a size that is not like `20Gi`, a port, name or namespace that is not valid, an image not pinned by digest, a NodePort outside 30000-32767, a relative `mirror_dir`, options given together with a `MODULE:ATTR` that already declares the registry, or a `MODULE:ATTR` that is neither the registry nor a pipeline delivering to it.
+
+- **Fix:** Fix the value named in the message; with `MODULE:ATTR`, change the declaration instead of passing options.
+- **Retry-safe:** no
+
+(error-cluster-registry-not-installed)=
+### `cluster-registry-not-installed`
+
+**In-cluster registry not installed.** The pipeline delivers to `Registry.in_cluster(...)` but its Deployment is not in the namespace: it is installed once per cluster, never by `piceli deploy`.
+
+- **Fix:** Install it with `piceli registry install MODULE:ATTR` (plan, then `--approve HASH`) and plan the deploy again.
+- **Retry-safe:** no
+
+(error-cluster-registry-not-ready)=
+### `cluster-registry-not-ready`
+
+**In-cluster registry not ready.** The in-cluster registry is installed but no pod is ready (still starting, the image cannot be pulled, its claim is not bound, or its node is down).
+
+- **Fix:** Look at `piceli registry status`, fix what it shows, and plan the deploy again when it is ready.
+- **Retry-safe:** yes
+
+(error-cluster-registry-plan-changed)=
+### `cluster-registry-plan-changed`
+
+**Registry plan changed.** The hash given to `--approve` is not the hash of the current install or uninstall plan: the options or the live objects changed since the plan was reviewed.
+
+- **Fix:** Run the command without `--approve`, review the new plan and approve its hash.
+- **Retry-safe:** yes
+
+(error-cluster-registry-target-required)=
+### `cluster-registry-target-required`
+
+**No cluster named.** `piceli registry` needs the cluster: `--kubeconfig FILE --context NAME` (or `--profile NAME`), or a pipeline `MODULE:ATTR` whose target names it. It never uses the current context.
+
+- **Fix:** Pass `--kubeconfig` and `--context` (or `--profile`), or the pipeline.
 - **Retry-safe:** no

@@ -560,6 +560,22 @@ CASES: dict[str, tuple[Argv, str]] = {
     ),
     "gitops disable": (lambda p: ["gitops", "disable"], "gitops-target-required"),
     "gitops status": (lambda p: ["gitops", "status"], "gitops-target-required"),
+    "registry install": (
+        lambda p: ["registry", "install", "--on", "node-a"],
+        "cluster-registry-target-required",
+    ),
+    "registry uninstall": (
+        lambda p: ["registry", "uninstall"],
+        "cluster-registry-target-required",
+    ),
+    "registry status": (
+        lambda p: ["registry", "status"],
+        "cluster-registry-target-required",
+    ),
+    "registry forward": (
+        lambda p: ["registry", "forward"],
+        "cluster-registry-target-required",
+    ),
     "gitops approve": (
         lambda p: ["gitops", "approve", "wp-1", "not-a-hash", "--state-dir", str(p)],
         "gitops-request-invalid",
