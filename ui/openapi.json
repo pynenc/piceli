@@ -418,6 +418,34 @@
         "title": "ClusterBuildPlanRequest",
         "type": "object"
       },
+      "CompositionSyncRequest": {
+        "additionalProperties": false,
+        "description": "Sync one environment of the composition, or one of its components.",
+        "properties": {
+          "component": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Za-z0-9](?:[-A-Za-z0-9_.]{0,126}[A-Za-z0-9])?$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Component"
+          },
+          "env": {
+            "pattern": "^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$",
+            "title": "Env",
+            "type": "string"
+          }
+        },
+        "required": [
+          "env"
+        ],
+        "title": "CompositionSyncRequest",
+        "type": "object"
+      },
       "EnvironmentActionRequest": {
         "additionalProperties": false,
         "properties": {
@@ -3191,6 +3219,107 @@
           }
         },
         "summary": "Cluster Build Get Plan"
+      }
+    },
+    "/api/v1/composition": {
+      "get": {
+        "operationId": "composition_overview_api_v1_composition_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Composition Overview Api V1 Composition Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Composition Overview"
+      }
+    },
+    "/api/v1/composition/environments/{env}": {
+      "get": {
+        "operationId": "composition_environment_api_v1_composition_environments__env__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "env",
+            "required": true,
+            "schema": {
+              "title": "Env",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Composition Environment Api V1 Composition Environments  Env  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Composition Environment"
+      }
+    },
+    "/api/v1/composition/sync": {
+      "post": {
+        "operationId": "composition_sync_api_v1_composition_sync_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompositionSyncRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Composition Sync Api V1 Composition Sync Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Composition Sync"
       }
     },
     "/api/v1/environments": {
