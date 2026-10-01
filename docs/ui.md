@@ -2,8 +2,10 @@
 
 The optional `piceli[ui]` package serves a bundled React application. It does
 not need Node at runtime and does not read an ambient kubeconfig or context.
-The UI runs in one of two modes: a local, single-user process with an explicit
-target, or an OIDC-authenticated service installed inside a Kubernetes cluster.
+The UI runs in one of three modes: a local, single-user process with an
+explicit target; the composition UI that `piceli cluster init` installs in the
+cluster and you open through a port-forward; or an OIDC-authenticated service
+installed inside a Kubernetes cluster.
 Each mode offers only the actions configured by its operator.
 
 ## What it shows
@@ -50,7 +52,8 @@ token. Press Ctrl+C to stop. `PICELI_UI_FAKE_PORT=4180 make ui-fake-serve`
 selects another port. The demo observes a disposable fake Kubernetes API and
 cannot deploy.
 
-For service and browser acceptance with that fake API, run `make test-ui-fake`.
+For service and browser acceptance with that fake API, run `make test-ui-fake`
+(`make test-ui-composition` runs only the composition journeys).
 It uses port 4184 by default (`PICELI_UI_FAKE_TEST_PORT` changes it) and checks
 desktop, tablet and phone. The test runner removes its servers, browser state
 and temporary files on exit.
@@ -63,6 +66,7 @@ and temporary files on exit.
 | Local or remote host with a release definition | `piceli ui serve --definition release.toml` plus the configured isolated renderer | Source review, release plan, deploy and activity |
 | Local or remote host with a CI-style Pipeline | `piceli ui serve --pipeline module:attribute` | Pipeline plan, two approvals when images must be delivered, pre-rollout checks, restore points and deploy |
 | GitHub Actions or another CI runner to Kubernetes | `piceli deploy --plan` / `piceli deploy --apply` | The CLI remains independent of the web server; the UI does not launch CI jobs |
+| Composition UI installed by `piceli cluster init` | `piceli access ui --cluster MODULE:ATTR` (a port-forward and the launch token) | Environments, components, sources, workloads and logs, Sync |
 | UI installed inside the cluster | `piceli ui cluster-serve` behind the configured TLS gateway | OIDC-scoped observation, reviewed manual delivery, cluster build Jobs and local-client access tickets |
 | Direct application deployment to a machine without Kubernetes | No target provider exists yet | No deployment action is advertised |
 
@@ -74,6 +78,85 @@ do not become laptop ports. A local Pipeline can target a remote Kubernetes
 API through the explicit kubeconfig in its trusted definition. Never put a
 kubeconfig, arbitrary Python module, build command or source path into a
 browser request.
+
+## The composition UI in the cluster
+
+A composition's `Cluster` declares the UI with `ui=Ui(access="forward")`:
+
+```python
+from piceli.infra import Cluster, Controller, Node, Ui
+
+my_cluster = Cluster(
+    "my-cluster",
+    api="https://192.0.2.10:6443",
+    credentials="my-cluster",  # a `piceli login` profile
+    nodes=[Node("node-a", arch="amd64", roles=["controller"])],
+    controller=Controller(on="node-a", image="registry.example/piceli@sha256:…"),
+    ui=Ui(access="forward"),  # optional: on="node-a", image="…@sha256:…"
+)
+```
+
+`piceli cluster init infra.py:my_cluster` installs it in `piceli-system`, next
+to the GitOps controller:
+
+- one Deployment running `piceli ui forward-serve` from the Piceli image pinned
+  by digest (`Ui.image`, else the controller's image), on `Ui.on` (else the
+  controller's node). It listens on its pod's loopback only;
+- a ClusterIP Service, the port-forward target. Nothing is exposed outside
+  the cluster: no NodePort, no Ingress, and no OIDC in this mode;
+- a service account that reads the controller's status ConfigMap and the
+  environments' workloads, pods and logs (never their Secrets or ConfigMaps),
+  and writes exactly two objects: the controller's request inbox
+  `piceli-gitops-requests` (the **Sync** button) and the Secret
+  `piceli-ui-launch`, where the UI puts a fresh launch token when it starts.
+
+Open it from your laptop with the cluster's credentials profile:
+
+```sh
+piceli access ui --cluster infra.py:my_cluster   # or: --profile my-cluster
+```
+
+The command reads the launch token with the profile's explicit kubeconfig and
+context (never the current context), forwards `127.0.0.1:8790` to the UI
+Service, and prints one line, `Piceli UI: http://127.0.0.1:8790/?token=…`.
+Open it once: the token becomes a session cookie and leaves the address bar.
+The token appears nowhere else, not in the UI's logs. Ctrl-C stops the
+forward. When port 8790 is taken, `access-port-conflict` names its owner.
+When the UI pod restarts it writes a new token: run `piceli access ui` again.
+`--json` prints `started` (with the URL), `status` and `stopped` lines.
+
+```{image} _static/ui/composition-environments.png
+:alt: The composition Environments page: each environment's revision per source, health, state, last sync and a Sync button
+:width: 720px
+```
+
+The views, like Argo CD's applications, read the controller's published status
+(`piceli.gitops-status.v1`) every ten seconds:
+
+- **Environments**: each environment with its revision per source
+  (`source commit`, shortened), health, state, last sync and component
+  states, and a **Sync** button.
+- **An environment**: its components with source, commit, image digest,
+  state (`synced`, `building`, `rolling`, `failed`, `unchanged`) and health,
+  a **Sync** button per component, and a link to the namespace's workloads,
+  pods and current or previous logs.
+- **Sources**: each repository's URL (without any credential), the commit of
+  every ref the controller follows, and its last poll.
+
+**Sync** writes the same request as `piceli gitops sync ENV [--component
+NAME]`; the controller handles it on its next poll, under the environment's
+own rules (an approval it requires is still required: run `piceli gitops
+approve`). Every refusal has a message and a code (`piceli explain CODE`):
+`ui-controller-absent` before the controller publishes its first status,
+`ui-sync-target-unknown` for an environment or component the status no longer
+lists, `ui-sync-unavailable` when the request inbox cannot be written; and for
+`piceli access ui`, `access-ui-not-installed`, `access-ui-not-ready` (the pod is
+still starting), `access-ui-forbidden` and `access-ui-unreachable`.
+
+```{image} _static/ui/composition-environment.png
+:alt: One environment: components with source, commit, digest, state and health, each with a Sync button
+:width: 720px
+```
 
 ## Pipeline deployment from the browser
 

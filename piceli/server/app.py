@@ -41,6 +41,7 @@ from piceli.services.contracts import (
     Capability,
     ClusterBuildOperationRequest,
     ClusterBuildPlanRequest,
+    CompositionSyncRequest,
     EnvironmentActionRequest,
     Evaluation,
     EvaluationPreview,
@@ -73,6 +74,7 @@ if TYPE_CHECKING:
     from piceli.server.cluster_security import ClusterSecurity
     from piceli.services.access import AccessService
     from piceli.services.cluster_build_control import ClusterBuildControl
+    from piceli.services.composition_control import CompositionControl
     from piceli.services.environment_control import EnvironmentControl
     from piceli.services.logs import LogService
     from piceli.services.operations import OperationService
@@ -101,6 +103,9 @@ def _error(code: str, status: int) -> JSONResponse:
         "ui-logs-unavailable": "The selected container logs could not be read.",
         "cluster-build-invalid": "The installed build configuration or reviewed plan is invalid. Review a new build plan.",
         "cluster-build-failed": "The cluster build Job did not complete. Inspect its recorded outcome.",
+        "ui-controller-absent": "No GitOps controller status is published yet. Enable GitOps for the composition, then refresh.",
+        "ui-sync-target-unknown": "The controller's status does not list that environment or component. Refresh and try again.",
+        "ui-sync-unavailable": "The controller's request inbox is unavailable. Run cluster init again, then retry.",
     }
     safe_code = code if code in messages else "ui-observation-unavailable"
     return JSONResponse(
@@ -151,6 +156,7 @@ def create_app(
     environment_control: EnvironmentControl | None = None,
     pipeline_control: PipelineControl | None = None,
     cluster_build_control: ClusterBuildControl | None = None,
+    composition_control: CompositionControl | None = None,
     logs: LogService | None = None,
     cluster_security: ClusterSecurity | None = None,
     launch_token: str | None = None,
@@ -166,6 +172,10 @@ def create_app(
     if cluster_security is not None:
         from piceli.services.cluster_evaluation import KubernetesJobEvaluator
 
+        if composition_control is not None:
+            # The OIDC service keeps its fixed scopes; the forward-mode UI
+            # registers environment scopes as the status lists them.
+            raise ValueError("composition views require the local launch session")
         if (
             service.scope_policy is None
             or cluster_security.config.origin != origin
@@ -419,9 +429,20 @@ def create_app(
             environment_control is None
             and pipeline_control is None
             and cluster_build_control is None
+            and composition_control is None
         ):
             return result
         actions = dict(result.actions)
+        if composition_control is not None:
+            visible = service._allowed(composition_control.application_id, "inspect")
+            can_sync = service._allowed(composition_control.application_id, "deploy")
+            actions["composition"] = Capability(
+                allowed=visible, reason=None if visible else "not-authorized"
+            )
+            actions["composition_sync"] = Capability(
+                allowed=visible and can_sync,
+                reason=None if visible and can_sync else "not-authorized",
+            )
         if cluster_build_control is not None:
             allowed = service._allowed(cluster_build_control.application_id, "deploy")
             actions["cluster_build"] = Capability(
@@ -564,6 +585,23 @@ def create_app(
     @app.post(f"{api}/gitops/promotions")
     def gitops_promotion(body: GitOpsPromotionRequest) -> dict[str, str]:
         return controls().promote(body.branch, body.commit)
+
+    def composition() -> CompositionControl:
+        if composition_control is None:
+            raise QueryError("ui-operation-unavailable", 409)
+        return composition_control
+
+    @app.get(f"{api}/composition")
+    def composition_overview() -> dict[str, Any]:
+        return composition().overview()
+
+    @app.get(f"{api}/composition/environments/{{env}}")
+    def composition_environment(env: str) -> dict[str, Any]:
+        return composition().environment(env)
+
+    @app.post(f"{api}/composition/sync", status_code=202)
+    def composition_sync(body: CompositionSyncRequest) -> dict[str, Any]:
+        return composition().sync(body.env, body.component)
 
     @app.get(f"{api}/applications", response_model=ApplicationPage)
     def applications(cursor: str | None = None) -> ApplicationPage:

@@ -457,6 +457,25 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "`piceli access BRANCH --pipeline MODULE:ATTR` forwards that branch "
             "environment's declared ports on free local ports.",
         ),
+        "access ui": _C(
+            "Forward the UI that `piceli cluster init` installed and print its launch URL.",
+            reads=(
+                "--cluster MODULE:ATTR or --profile NAME",
+                "kubeconfig",
+                "the UI's Service and launch Secret",
+                "kubectl",
+            ),
+            writes=("loopback port 8790 (a kubectl port-forward it owns)",),
+            cluster="reads",
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            notes="Read-only on the cluster. Prints the one URL with the launch "
+            "token (stdout, or the `started` JSON line with --json); the token is "
+            "never logged elsewhere. Refuses (access-port-conflict) when "
+            "127.0.0.1:8790 is held. Stops the forward on Ctrl-C/SIGTERM/SIGHUP; "
+            "exit 1 only when the forward gave up.",
+        ),
         "access stop": _C(
             "Stop Piceli's own stale forwards and servers for the app (--stale).",
             reads=("release.toml or module:attr", "local process table"),
@@ -932,6 +951,22 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             approval_required=True,
             notes="Requires piceli[ui] and a separate HTTPS TLS gateway sidecar. Observation is the default. Configured deploy grants permit exact-plan manual delivery and cluster build Jobs; access grants permit local-client tickets. No ambient Kubernetes context or server-side laptop port.",
             long_running=True,
+        ),
+        "ui forward-serve": _C(
+            "Serve the composition UI in its pod, reached only through `piceli access ui`.",
+            contract="conforms",
+            reads=(
+                "the pod's projected service-account CA and token",
+                "the controller's status ConfigMap",
+                "environments' workloads, pods and logs",
+            ),
+            writes=(
+                "the UI's launch Secret (its launch token)",
+                "sync requests in the controller's request ConfigMap",
+            ),
+            cluster="writes",
+            long_running=True,
+            notes='Runs in the pod `piceli cluster init` installs (Ui(access="forward")). Listens on the pod\'s loopback only, without OIDC; a fresh launch token goes into the Secret piceli-ui-launch and is never printed. The Sync button writes the same request as `piceli gitops sync`; nothing else is written.',
         ),
         "ui connect": _C(
             "Bind and supervise one local loopback forward for a scoped cluster UI ticket.",
