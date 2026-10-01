@@ -119,6 +119,8 @@ class InstallSettings:
     :param storage_class: Its StorageClass (default: the cluster's).
     :param cluster_rbac: Allow ClusterRoles/ClusterRoleBindings (apps that
         declare cluster-scoped RBAC).
+    :param node: Pin the controller to this node (``kubernetes.io/hostname``,
+        a composition's ``Controller(on=)``); default: any node.
     """
 
     image: str
@@ -126,6 +128,7 @@ class InstallSettings:
     storage: str = "10Gi"
     storage_class: str | None = None
     cluster_rbac: bool = False
+    node: str | None = None
 
     def __post_init__(self) -> None:
         if not _IMAGE.fullmatch(self.image):
@@ -143,15 +146,20 @@ class InstallSettings:
             raise GitOpsError("gitops-config-invalid", "--storage must be like 10Gi")
         if self.storage_class is not None and not _NAME.fullmatch(self.storage_class):
             raise GitOpsError("gitops-config-invalid", "invalid --storage-class")
+        if self.node is not None and not _NAME.fullmatch(self.node):
+            raise GitOpsError("gitops-config-invalid", "invalid controller node")
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        body: dict[str, Any] = {
             "image": self.image,
             "credentials_secret": self.credentials_secret,
             "storage": self.storage,
             "storage_class": self.storage_class,
             "cluster_rbac": self.cluster_rbac,
         }
+        if self.node is not None:
+            body["node"] = self.node
+        return body
 
 
 def _meta(name: str, namespace: str | None = None) -> dict[str, Any]:
@@ -165,7 +173,27 @@ def render_controller(
     config: ControllerConfig, settings: InstallSettings
 ) -> list[dict[str, Any]]:
     """The controller's objects, in apply order."""
-    ns = config.namespace
+    return render_foundation(
+        config.namespace,
+        storage=settings.storage,
+        storage_class=settings.storage_class,
+        cluster_rbac=settings.cluster_rbac,
+    ) + _render_workload(config, settings)
+
+
+def render_foundation(
+    namespace: str,
+    *,
+    storage: str = "10Gi",
+    storage_class: str | None = None,
+    cluster_rbac: bool = False,
+) -> list[dict[str, Any]]:
+    """What the controller needs before it runs: namespace, identity, RBAC, state.
+
+    ``piceli cluster init`` installs these; ``piceli gitops enable`` adds the
+    configuration and the Deployment (:func:`render_controller` = both).
+    """
+    ns = namespace
     cluster_rules: list[dict[str, Any]] = [
         {"apiGroups": [""], "resources": ["nodes"], "verbs": ["get", "list", "watch"]},
         {
@@ -185,7 +213,7 @@ def render_controller(
             "verbs": ["bind"],
         },
     ]
-    if settings.cluster_rbac:
+    if cluster_rbac:
         cluster_rules.append(
             {
                 "apiGroups": [_RBAC],
@@ -212,10 +240,60 @@ def render_controller(
     ]  # fmt: skip
     claim: dict[str, Any] = {
         "accessModes": ["ReadWriteOnce"],
-        "resources": {"requests": {"storage": settings.storage}},
+        "resources": {"requests": {"storage": storage}},
     }
-    if settings.storage_class:
-        claim["storageClassName"] = settings.storage_class
+    if storage_class:
+        claim["storageClassName"] = storage_class
+    subject = [{"kind": "ServiceAccount", "name": NAME, "namespace": ns}]
+    return [
+        {"apiVersion": "v1", "kind": "Namespace", "metadata": _meta(ns)},
+        {"apiVersion": "v1", "kind": "ServiceAccount", "metadata": _meta(NAME, ns)},
+        {
+            "apiVersion": f"{_RBAC}/v1",
+            "kind": "Role",
+            "metadata": _meta(NAME, ns),
+            "rules": own_rules,
+        },
+        {
+            "apiVersion": f"{_RBAC}/v1",
+            "kind": "RoleBinding",
+            "metadata": _meta(NAME, ns),
+            "roleRef": {"apiGroup": _RBAC, "kind": "Role", "name": NAME},
+            "subjects": subject,
+        },
+        {
+            "apiVersion": f"{_RBAC}/v1",
+            "kind": "ClusterRole",
+            "metadata": _meta(NAME),
+            "rules": cluster_rules,
+        },
+        {
+            "apiVersion": f"{_RBAC}/v1",
+            "kind": "ClusterRoleBinding",
+            "metadata": _meta(NAME),
+            "roleRef": {"apiGroup": _RBAC, "kind": "ClusterRole", "name": NAME},
+            "subjects": subject,
+        },
+        {
+            "apiVersion": f"{_RBAC}/v1",
+            "kind": "ClusterRole",
+            "metadata": _meta(DEPLOYER),
+            "rules": [dict(rule) for rule in DEPLOYER_RULES],
+        },
+        {
+            "apiVersion": "v1",
+            "kind": "PersistentVolumeClaim",
+            "metadata": _meta(STATE_CLAIM, ns),
+            "spec": claim,
+        },
+    ]
+
+
+def _render_workload(
+    config: ControllerConfig, settings: InstallSettings
+) -> list[dict[str, Any]]:
+    """The controller's configuration and Deployment."""
+    ns = config.namespace
     volumes: list[dict[str, Any]] = [
         {"name": "config", "configMap": {"name": CONFIG_MAP}},
         {"name": "state", "persistentVolumeClaim": {"claimName": STATE_CLAIM}},
@@ -248,7 +326,7 @@ def render_controller(
         )
         args += ["--credentials-dir", CREDENTIALS_DIR]
     selector = {"app.kubernetes.io/name": NAME}
-    deployment = {
+    deployment: dict[str, Any] = {
         "apiVersion": "apps/v1",
         "kind": "Deployment",
         "metadata": _meta(NAME, ns),
@@ -295,48 +373,18 @@ def render_controller(
             },
         },
     }
-    subject = [{"kind": "ServiceAccount", "name": NAME, "namespace": ns}]
+    if settings.node is not None:
+        pod = deployment["spec"]["template"]["spec"]
+        pod["nodeSelector"] = {"kubernetes.io/hostname": settings.node}
+        # Pinned by name: a control-plane node is a deliberate choice.
+        pod["tolerations"] = [
+            {
+                "key": "node-role.kubernetes.io/control-plane",
+                "operator": "Exists",
+                "effect": "NoSchedule",
+            }
+        ]
     return [
-        {"apiVersion": "v1", "kind": "Namespace", "metadata": _meta(ns)},
-        {"apiVersion": "v1", "kind": "ServiceAccount", "metadata": _meta(NAME, ns)},
-        {
-            "apiVersion": f"{_RBAC}/v1",
-            "kind": "Role",
-            "metadata": _meta(NAME, ns),
-            "rules": own_rules,
-        },
-        {
-            "apiVersion": f"{_RBAC}/v1",
-            "kind": "RoleBinding",
-            "metadata": _meta(NAME, ns),
-            "roleRef": {"apiGroup": _RBAC, "kind": "Role", "name": NAME},
-            "subjects": subject,
-        },
-        {
-            "apiVersion": f"{_RBAC}/v1",
-            "kind": "ClusterRole",
-            "metadata": _meta(NAME),
-            "rules": cluster_rules,
-        },
-        {
-            "apiVersion": f"{_RBAC}/v1",
-            "kind": "ClusterRoleBinding",
-            "metadata": _meta(NAME),
-            "roleRef": {"apiGroup": _RBAC, "kind": "ClusterRole", "name": NAME},
-            "subjects": subject,
-        },
-        {
-            "apiVersion": f"{_RBAC}/v1",
-            "kind": "ClusterRole",
-            "metadata": _meta(DEPLOYER),
-            "rules": [dict(rule) for rule in DEPLOYER_RULES],
-        },
-        {
-            "apiVersion": "v1",
-            "kind": "PersistentVolumeClaim",
-            "metadata": _meta(STATE_CLAIM, ns),
-            "spec": claim,
-        },
         {
             "apiVersion": "v1",
             "kind": "ConfigMap",
@@ -355,10 +403,13 @@ _PLURALS = {
     "Namespace": "namespaces",
     "ServiceAccount": "serviceaccounts",
     "ConfigMap": "configmaps",
+    "Secret": "secrets",
     "PersistentVolumeClaim": "persistentvolumeclaims",
     "Deployment": "deployments",
     "DaemonSet": "daemonsets",
     "Service": "services",
+    "Job": "jobs",
+    "NetworkPolicy": "networkpolicies",
     "Role": "roles",
     "RoleBinding": "rolebindings",
     "ClusterRole": "clusterroles",
@@ -434,6 +485,27 @@ class Api:
             ) from None
         raw = response[0] if isinstance(response, tuple) else response
         return json.loads(raw.data or b"null")
+
+    def text(self, path: str, query: Sequence[tuple[str, str]] = ()) -> str | None:
+        """A plain-text read (a pod log); ``None`` when it is missing or refused."""
+        import urllib3
+        from kubernetes.client.exceptions import ApiException
+
+        try:
+            response = self.client.call_api(
+                path,
+                "GET",
+                query_params=list(query),
+                header_params={"Accept": "*/*"},
+                auth_settings=["BearerToken"],
+                _preload_content=False,
+                _request_timeout=self.request_seconds,
+            )
+        except (ApiException, OSError, urllib3.exceptions.HTTPError):
+            return None
+        raw = response[0] if isinstance(response, tuple) else response
+        data = raw.data or b""
+        return data.decode("utf-8", "replace") if isinstance(data, bytes) else str(data)
 
     def get(self, manifest: Mapping[str, Any]) -> dict[str, Any] | None:
         value = self.call(object_path(manifest), "GET")

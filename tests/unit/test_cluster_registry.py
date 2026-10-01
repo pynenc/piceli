@@ -171,8 +171,9 @@ def test_render_installs_registry_service_and_node_agent() -> None:
         "PersistentVolumeClaim",
         "Service",
         "Deployment",
-        "DaemonSet",
-    ]  # the Service exists before the agent starts (its address variable)
+        "DaemonSet",  # the k3s agent (node_mirror="auto": on k3s nodes)
+        "DaemonSet",  # the containerd agent (on the other nodes)
+    ]  # the Service exists before the agents start (its address variable)
     kinds = _by_kind(objects)
     assert all(
         o["metadata"].get("namespace") == "piceli-system"

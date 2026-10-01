@@ -5,6 +5,7 @@ import typer
 from piceli.k8s.cli.access import register as register_access_commands
 from piceli.k8s.cli.build import app as build_app
 from piceli.k8s.cli.chart import app as chart_app
+from piceli.k8s.cli.cluster import register as register_cluster_commands
 from piceli.k8s.cli.codegen import app as codegen_app
 from piceli.k8s.cli.contract import register as register_contract_commands
 from piceli.k8s.cli.deploy_pipeline import deploy
@@ -49,6 +50,7 @@ register_restore_commands(app)
 register_env_commands(app)
 register_gitops_commands(app)
 register_registry_commands(app)
+register_cluster_commands(app)
 register_profile_commands(app)
 
 

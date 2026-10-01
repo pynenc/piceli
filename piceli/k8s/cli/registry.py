@@ -85,6 +85,13 @@ MirrorDirOption = Annotated[
     str,
     typer.Option("--mirror-dir", help="The nodes' containerd certs.d directory"),
 ]
+NodeMirrorOption = Annotated[
+    str,
+    typer.Option(
+        "--node-mirror",
+        help="auto (per node), k3s (registries.yaml) or containerd (certs.d)",
+    ),
+]
 ImageOption = Annotated[
     str | None,
     typer.Option("--image", help="Registry image pinned by digest (repo@sha256:…)"),
@@ -110,6 +117,7 @@ _DEFAULTS: dict[str, Any] = {
     "storage_class": None,
     "mirror_dir": "/etc/containerd/certs.d",
     "image": None,
+    "node_mirror": "auto",
 }
 
 
@@ -342,6 +350,7 @@ def install(
     storage_class: StorageClassOption = None,
     mirror_dir: MirrorDirOption = "/etc/containerd/certs.d",
     image: ImageOption = None,
+    node_mirror: NodeMirrorOption = "auto",
     approve: ApproveOption = None,
     allow_exec: AllowExecOption = False,
     exec_sha256: ExecSha256Option = None,
@@ -354,7 +363,7 @@ def install(
     options = _options(
         on=on, storage=storage, port=port, namespace=namespace, name=name,
         node_port=node_port, storage_class=storage_class, mirror_dir=mirror_dir,
-        image=image,
+        image=image, node_mirror=node_mirror,
     )  # fmt: skip
     registry, target = _resolve(ref, env, options, need_node=True)
     cluster = _cluster(kubeconfig, context, transport, allow_exec, exec_sha256, target)
@@ -424,6 +433,40 @@ def _items(api: Any, path: str) -> list[dict[str, Any]]:
     found = api.call(path, "GET")
     items = (found or {}).get("items") if isinstance(found, dict) else None
     return [item for item in items or () if isinstance(item, dict)]
+
+
+def read_reports(
+    api: Any, namespace: str, pods: list[dict[str, Any]]
+) -> dict[str, dict[str, str]]:
+    """Each node agent's last report line, by node (from its log)."""
+    from piceli.artifacts import cluster_registry as cr
+
+    found: dict[str, dict[str, str]] = {}
+    for pod in pods:
+        meta = pod.get("metadata") or {}
+        node = (pod.get("spec") or {}).get("nodeName")
+        component = (meta.get("labels") or {}).get("app.kubernetes.io/component")
+        if not node or component not in cr.MIRROR_COMPONENTS:
+            continue
+        log = api.text(
+            f"/api/v1/namespaces/{namespace}/pods/{meta.get('name')}/log",
+            [("container", "mirror"), ("tailLines", "20")],
+        )
+        report = cr.parse_report(log or "")
+        if report is not None:
+            found[str(node)] = report
+    return found
+
+
+def mirror_note(item: dict[str, Any]) -> str:
+    """`` (k3s, restart k3s to load it)`` and the like, from an agent report."""
+    if "runtime" not in item:
+        return ""
+    if item.get("file") == "unmergeable":
+        return f" ({item['runtime']}: registries.yaml is not block-style YAML; left unchanged)"
+    if item.get("restart") == "needed":
+        return f" ({item['runtime']}: restart k3s on this node to load it)"
+    return f" ({item['runtime']})"
 
 
 @app.command("status")
@@ -501,6 +544,7 @@ def status(
                 raise
             except Exception:
                 used = None
+        reports = read_reports(api, ns, pods)
     body = cr.summarize(
         registry,
         deployment=deployment if isinstance(deployment, dict) else None,
@@ -509,6 +553,7 @@ def status(
         nodes=nodes,
         pods=pods,
         used_bytes=used,
+        reports=reports,
     )
     say(f"registry {body['host']}: {body['state']}")
     if body["state"] != "not-installed":
@@ -518,7 +563,7 @@ def status(
                 + (" (ready)" if pod["ready"] else "")
             )
         for item in body["mirrors"]:
-            say(f"  mirror on {item['node']}: {item['mirror']}")
+            say(f"  mirror on {item['node']}: {item['mirror']}{mirror_note(item)}")
         storage = body["storage"] or {}
         if storage:
             used_text = (

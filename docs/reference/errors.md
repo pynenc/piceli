@@ -87,10 +87,19 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`claim-migration-target-exists`](#error-claim-migration-target-exists) | restore | no |
 | [`claim-migration-verify-failed`](#error-claim-migration-verify-failed) | restore | yes |
 | [`claim-shrink-refused`](#error-claim-shrink-refused) | restore | no |
+| [`cluster-api-failed`](#error-cluster-api-failed) | cluster | yes |
+| [`cluster-api-mismatch`](#error-cluster-api-mismatch) | cluster | no |
 | [`cluster-build-failed`](#error-cluster-build-failed) | host-build | yes |
 | [`cluster-build-invalid`](#error-cluster-build-invalid) | host-build | no |
 | [`cluster-identity-changed`](#error-cluster-identity-changed) | release | no |
 | [`cluster-identity-unreadable`](#error-cluster-identity-unreadable) | kubernetes | yes |
+| [`cluster-invalid`](#error-cluster-invalid) | cluster | no |
+| [`cluster-load-failed`](#error-cluster-load-failed) | cluster | no |
+| [`cluster-node-arch-mismatch`](#error-cluster-node-arch-mismatch) | cluster | no |
+| [`cluster-node-missing`](#error-cluster-node-missing) | cluster | no |
+| [`cluster-not-found`](#error-cluster-not-found) | cluster | no |
+| [`cluster-not-initialized`](#error-cluster-not-initialized) | cluster | no |
+| [`cluster-plan-changed`](#error-cluster-plan-changed) | cluster | yes |
 | [`cluster-registry-cluster-failed`](#error-cluster-registry-cluster-failed) | cluster-registry | yes |
 | [`cluster-registry-invalid`](#error-cluster-registry-invalid) | cluster-registry | no |
 | [`cluster-registry-not-installed`](#error-cluster-registry-not-installed) | cluster-registry | no |
@@ -489,6 +498,10 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`secret-source-tool-missing`](#error-secret-source-tool-missing) | secrets | no |
 | [`secret-template-invalid`](#error-secret-template-invalid) | secrets | no |
 | [`secret-unknown-reference`](#error-secret-unknown-reference) | secrets | no |
+| [`secrets-invalid`](#error-secrets-invalid) | cluster | no |
+| [`secrets-prompt-required`](#error-secrets-prompt-required) | cluster | no |
+| [`secrets-token-empty`](#error-secrets-token-empty) | cluster | no |
+| [`secrets-token-refused`](#error-secrets-token-refused) | cluster | no |
 | [`server-target-identity-mismatch`](#error-server-target-identity-mismatch) | kubernetes | no |
 | [`sign-failed`](#error-sign-failed) | publish | yes |
 | [`sign-key-invalid`](#error-sign-key-invalid) | publish | no |
@@ -5083,4 +5096,111 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **No cluster named.** `piceli registry` needs the cluster: `--kubeconfig FILE --context NAME` (or `--profile NAME`), or a pipeline `MODULE:ATTR` whose target names it. It never uses the current context.
 
 - **Fix:** Pass `--kubeconfig` and `--context` (or `--profile`), or the pipeline.
+- **Retry-safe:** no
+
+
+## Declared clusters (`piceli.infra.Cluster`, `piceli cluster …`, `piceli secrets git`)
+
+(error-cluster-api-failed)=
+### `cluster-api-failed`
+
+**Cluster API failed.** The API server could not be reached, refused a request (the message names the method and the HTTP status), or the profile's kubeconfig could not be used.
+
+- **Fix:** Check the profile (`piceli profiles`), the network and the account's permissions, then retry.
+- **Retry-safe:** yes
+
+(error-cluster-api-mismatch)=
+### `cluster-api-mismatch`
+
+**Profile points at another cluster.** The credential profile (`Cluster(credentials=)` or `--profile`) names a kubeconfig context whose API server is not `Cluster(api=)` (scheme, host and port compared). Nothing was read from or written to the cluster.
+
+- **Fix:** Point the profile at the right context (`piceli login NAME --kubeconfig FILE --context CTX`), or correct `api=` in the declaration.
+- **Retry-safe:** no
+
+(error-cluster-invalid)=
+### `cluster-invalid`
+
+**Cluster declaration invalid.** A `Cluster`, `Node`, `Controller` or `Ui` got a value it refuses: a name that is not a DNS label or node name, an `api` that is not an http(s) URL, `credentials` that is not a profile name, an arch other than amd64/arm64, a role that is not a label-safe word, a node declared twice, a registry that is not `Registry.in_cluster(...)`, an `on=` that names an undeclared node, a poll under 10 seconds, or an image not pinned by digest.
+
+- **Fix:** Fix the value named in the message in the composition module.
+- **Retry-safe:** no
+
+(error-cluster-load-failed)=
+### `cluster-load-failed`
+
+**Composition failed to import.** Importing the module that declares the cluster raised an exception.
+
+- **Fix:** Run the module with Python to see the error, fix it, and retry.
+- **Retry-safe:** no
+
+(error-cluster-node-arch-mismatch)=
+### `cluster-node-arch-mismatch`
+
+**Node architecture differs.** A node's `status.nodeInfo.architecture` is not the `arch` the declaration gives it.
+
+- **Fix:** Correct `arch=` in the declaration (builds and placement rely on it) and plan again.
+- **Retry-safe:** no
+
+(error-cluster-node-missing)=
+### `cluster-node-missing`
+
+**Declared node not in the cluster.** A `Node(...)` of the declaration has no Node object of that name (`kubernetes.io/hostname`) in the cluster.
+
+- **Fix:** Join the node, or correct or remove it in the declaration, and plan again.
+- **Retry-safe:** no
+
+(error-cluster-not-found)=
+### `cluster-not-found`
+
+**Cluster not found.** `MODULE:ATTR` does not name an importable `piceli.infra.Cluster` (no such file, module or attribute, or the attribute is something else).
+
+- **Fix:** Pass the composition module and the attribute that holds the `Cluster(...)`, e.g. `infra.py:my_cluster`.
+- **Retry-safe:** no
+
+(error-cluster-not-initialized)=
+### `cluster-not-initialized`
+
+**Cluster not initialized.** The command needs what `piceli cluster init` installs (the namespace `piceli-system` and its ConfigMap `piceli-cluster`), and it is not there.
+
+- **Fix:** Run `piceli cluster init MODULE:ATTR` (plan, then `--approve HASH`) first.
+- **Retry-safe:** no
+
+(error-cluster-plan-changed)=
+### `cluster-plan-changed`
+
+**Cluster init plan changed.** The `--approve` hash is not the current plan's: the declaration or the cluster changed since the plan (or the hash is wrong), or a node or object changed while the plan ran.
+
+- **Fix:** Run `piceli cluster init MODULE:ATTR` again, review the new plan and approve its hash.
+- **Retry-safe:** yes
+
+(error-secrets-invalid)=
+### `secrets-invalid`
+
+**Secret input invalid.** `--username` is empty, longer than 256 characters, or holds spaces or control characters.
+
+- **Fix:** Pass a plain user name (e.g. `git`).
+- **Retry-safe:** no
+
+(error-secrets-prompt-required)=
+### `secrets-prompt-required`
+
+**Token prompt not requested.** `piceli secrets git` reads the token only with `--prompt`, so it never waits on stdin unexpectedly.
+
+- **Fix:** Add `--prompt` and type the token (or pipe it on stdin).
+- **Retry-safe:** no
+
+(error-secrets-token-empty)=
+### `secrets-token-empty`
+
+**No token read.** `--prompt` read an empty line (or end of input) from stdin, or the value held a control character.
+
+- **Fix:** Run it again and type or pipe the token.
+- **Retry-safe:** no
+
+(error-secrets-token-refused)=
+### `secrets-token-refused`
+
+**Token passed where it could leak.** `piceli secrets git` got an extra argument or option, or `PICELI_GIT_TOKEN` is set: a token is never taken from the command line or the environment, where process listings, shell history and logs keep it. The value is not printed.
+
+- **Fix:** Unset the variable, drop the argument, and pass `--prompt`: type the token (no echo) or pipe it on stdin.
 - **Retry-safe:** no

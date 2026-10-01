@@ -26,6 +26,19 @@ class Node:
     arch: Literal["amd64", "arm64"]
     roles: tuple[str, ...] = ()
 
+    def __post_init__(self) -> None:
+        from piceli.infra.cluster import as_tuple, check_node
+
+        object.__setattr__(self, "roles", as_tuple(self.roles, "Node(roles=)"))
+        check_node(self)
+
+    @property
+    def labels(self) -> dict[str, str]:
+        """``piceli.io/role-<role>=true`` per role (and ``piceli.io/builder=true``)."""
+        from piceli.infra.cluster import node_labels
+
+        return node_labels(self)
+
 
 @dataclass(frozen=True)
 class Controller:
@@ -36,6 +49,11 @@ class Controller:
     sync: Literal["on change"] = "on change"
     image: str | None = None
 
+    def __post_init__(self) -> None:
+        from piceli.infra.cluster import check_controller
+
+        check_controller(self)
+
 
 @dataclass(frozen=True)
 class Ui:
@@ -44,6 +62,11 @@ class Ui:
     access: Literal["forward"] = "forward"
     on: str | None = None
     image: str | None = None
+
+    def __post_init__(self) -> None:
+        from piceli.infra.cluster import check_ui
+
+        check_ui(self)
 
 
 @dataclass(frozen=True)
@@ -58,6 +81,22 @@ class Cluster:
     registry: Registry | None = None
     controller: Controller | None = None
     ui: Ui | None = None
+
+    def __post_init__(self) -> None:
+        from piceli.infra.cluster import as_tuple, check_cluster
+
+        object.__setattr__(self, "nodes", as_tuple(self.nodes, "Cluster(nodes=)"))
+        check_cluster(self)
+
+    def node(self, name: str) -> Node | None:
+        """The declared node ``name``, if any."""
+        return next((node for node in self.nodes if node.name == name), None)
+
+    def describe(self) -> dict[str, object]:
+        """The declaration as data (``piceli.cluster.v1``); no credentials."""
+        from piceli.infra.cluster import describe
+
+        return describe(self)
 
 
 @dataclass(frozen=True)

@@ -939,6 +939,7 @@
     "mirror_dir",
     "name",
     "namespace",
+    "node_mirror",
     "node_port",
     "node_registry",
     "on",
@@ -957,6 +958,7 @@
     "mirror_dir",
     "name",
     "namespace",
+    "node_mirror",
     "node_port",
     "node_registry",
     "on",
@@ -975,6 +977,7 @@
      "mirror_dir",
      "name",
      "namespace",
+     "node_mirror",
      "node_port",
      "on",
      "port",
@@ -3537,6 +3540,7 @@
      "mirror_dir",
      "name",
      "namespace",
+     "node_mirror",
      "node_port",
      "on",
      "port",
@@ -4956,6 +4960,7 @@
      "build",
      "cache",
      "chart",
+     "cluster",
      "codegen",
      "deploy",
      "doctor",
@@ -4981,6 +4986,7 @@
      "restore",
      "restore-points",
      "runs",
+     "secrets",
      "state",
      "status",
      "ui",
@@ -5358,6 +5364,39 @@
      "--out",
      "--spec",
      "--version"
+    ],
+    "subcommands": []
+   },
+   "cluster": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "init",
+     "status"
+    ]
+   },
+   "cluster init": {
+    "arguments": [
+     "ref"
+    ],
+    "flags": [
+     "--allow-exec",
+     "--approve",
+     "--exec-sha256",
+     "--transport",
+     "--wait"
+    ],
+    "subcommands": []
+   },
+   "cluster status": {
+    "arguments": [
+     "ref"
+    ],
+    "flags": [
+     "--allow-exec",
+     "--exec-sha256",
+     "--json",
+     "--transport"
     ],
     "subcommands": []
    },
@@ -6057,6 +6096,7 @@
      "--mirror-dir",
      "--name",
      "--namespace",
+     "--node-mirror",
      "--node-port",
      "--on",
      "--port",
@@ -6315,6 +6355,25 @@
      "--json",
      "--limit",
      "--state-dir"
+    ],
+    "subcommands": []
+   },
+   "secrets": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "git"
+    ]
+   },
+   "secrets git": {
+    "arguments": [],
+    "flags": [
+     "--allow-exec",
+     "--cluster",
+     "--exec-sha256",
+     "--prompt",
+     "--transport",
+     "--username"
     ],
     "subcommands": []
    },
@@ -6611,10 +6670,19 @@
    "claim-migration-target-exists",
    "claim-migration-verify-failed",
    "claim-shrink-refused",
+   "cluster-api-failed",
+   "cluster-api-mismatch",
    "cluster-build-failed",
    "cluster-build-invalid",
    "cluster-identity-changed",
    "cluster-identity-unreadable",
+   "cluster-invalid",
+   "cluster-load-failed",
+   "cluster-node-arch-mismatch",
+   "cluster-node-missing",
+   "cluster-not-found",
+   "cluster-not-initialized",
+   "cluster-plan-changed",
    "cluster-registry-cluster-failed",
    "cluster-registry-invalid",
    "cluster-registry-not-installed",
@@ -7013,6 +7081,10 @@
    "secret-source-tool-missing",
    "secret-template-invalid",
    "secret-unknown-reference",
+   "secrets-invalid",
+   "secrets-prompt-required",
+   "secrets-token-empty",
+   "secrets-token-refused",
    "server-target-identity-mismatch",
    "sign-failed",
    "sign-key-invalid",
@@ -7377,6 +7449,7 @@
    "gcp": {},
    "gitops": {},
    "importing": {},
+   "infra": {},
    "k8s": {},
    "maintenance": {},
    "pipeline": {},
@@ -8076,6 +8149,9 @@
   "piceli.importing.codegen",
   "piceli.importing.generate",
   "piceli.importing.sources",
+  "piceli.infra",
+  "piceli.infra.cluster",
+  "piceli.infra.cluster_init",
   "piceli.k8s",
   "piceli.k8s.access",
   "piceli.k8s.automation",
@@ -8083,6 +8159,7 @@
   "piceli.k8s.cli.access",
   "piceli.k8s.cli.build",
   "piceli.k8s.cli.chart",
+  "piceli.k8s.cli.cluster",
   "piceli.k8s.cli.cluster_access",
   "piceli.k8s.cli.codegen",
   "piceli.k8s.cli.contract",
