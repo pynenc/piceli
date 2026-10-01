@@ -253,3 +253,31 @@ def test_without_auto_approve_the_env_waits_for_the_owner(
     channel.add_request(*approve_request("main", plan))
     status = controller.poll_once()
     assert status["envs"]["main"]["state"] == "deployed"
+
+
+def test_status_publishes_promote_policy_and_branch_heads(
+    world: dict[str, Any],
+) -> None:
+    """The UI's Promote picker needs the policy and the heads it may pick."""
+    controller = world["controller"]
+    from piceli.envs import Environment, Promote
+
+    composition = controller.composition
+    rc = composition.environment("rc")
+    sources = {source.key: source for source, _ in rc.sources}
+    promoted = Environment(
+        "rc",
+        namespace=rc.namespace,
+        stack=rc.stack,
+        follow={sources["shop"]: Promote(), sources["catalog"]: "main"},
+    )
+    object.__setattr__(
+        composition,
+        "environments",
+        tuple(promoted if e.name == "rc" else e for e in composition.environments),
+    )
+    head = world["shop"].commit({"README.md": "feature\n"}, branch="feature")
+    status = controller.poll_once()
+    policies = {e["name"]: e["promote"] for e in status["controller"]["environments"]}
+    assert policies["rc"] is True and policies["main"] is False
+    assert status["sources"]["shop"]["refs"]["refs/heads/feature"] == head

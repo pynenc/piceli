@@ -47,6 +47,8 @@ LAUNCH_SECRET = "piceli-ui-launch"
 LAUNCH_KEY = "token"
 STATUS_CONFIGMAP = "piceli-gitops-status"
 REQUESTS_CONFIGMAP = "piceli-gitops-requests"
+#: The declaration ``piceli cluster init`` stores (``cluster_init.CLUSTER_CONFIG``).
+CLUSTER_CONFIG = "piceli-cluster"
 READER = "piceli-ui-read"
 MANAGED = {"app.kubernetes.io/managed-by": "piceli", "piceli.io/component": "ui"}
 _RBAC = "rbac.authorization.k8s.io"
@@ -171,7 +173,9 @@ def render_ui(cluster: Cluster) -> list[dict[str, Any]]:
         {
             "apiGroups": [""],
             "resources": ["configmaps"],
-            "resourceNames": [STATUS_CONFIGMAP, REQUESTS_CONFIGMAP],
+            # The controller's status, the requests it reads, and the
+            # cluster declaration `piceli cluster init` stores (Cluster page).
+            "resourceNames": [STATUS_CONFIGMAP, REQUESTS_CONFIGMAP, CLUSTER_CONFIG],
             "verbs": ["get"],
         },
         {
@@ -193,6 +197,9 @@ def render_ui(cluster: Cluster) -> list[dict[str, Any]]:
             "resources": ["namespaces", "pods", "services", "persistentvolumeclaims"],
             "verbs": _READ,
         },
+        # Node names, arch, roles and readiness for the Cluster page; never
+        # nodes/proxy (the kubelet API), so volume use stays unknown.
+        {"apiGroups": [""], "resources": ["nodes"], "verbs": _READ},
         {"apiGroups": [""], "resources": ["pods/log"], "verbs": ["get"]},
         {
             "apiGroups": ["apps"],

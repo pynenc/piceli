@@ -110,7 +110,10 @@ def test_rbac_reads_only_and_writes_exactly_two_objects() -> None:
         assert not set(rule["verbs"]) & WRITE, rule
         assert "secrets" not in rule["resources"]
         assert "configmaps" not in rule["resources"]
+        # The kubelet API is never granted (volume use stays unknown).
+        assert "nodes/proxy" not in rule["resources"]
     assert any("pods/log" in rule["resources"] for rule in cluster_role["rules"])
+    assert any("nodes" in rule["resources"] for rule in cluster_role["rules"])
     (role,) = objects["Role"]
     writes = [rule for rule in role["rules"] if set(rule["verbs"]) & WRITE]
     assert {

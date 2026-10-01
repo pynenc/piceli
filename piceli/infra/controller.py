@@ -1408,6 +1408,9 @@ class CompositionController:
                         }
                     elif isinstance(rule, Branch):
                         wanted.add(f"refs/heads/{rule.name}")
+                    elif isinstance(rule, Promote):
+                        # `piceli promote ENV BRANCH@SHA` picks any branch head.
+                        wanted |= {f"refs/heads/{b}" for b in refs.branches}
                     elif isinstance(rule, Tag):
                         wanted |= {
                             f"refs/tags/{t}"
@@ -1447,7 +1450,17 @@ class CompositionController:
                 "poll_failures": int(self.state.get("poll_failures") or 0),
                 "environments": []
                 if loaded is None
-                else [item.name for item in loaded.environments],
+                else [
+                    {
+                        "name": item.name,
+                        "promote": any(
+                            isinstance(rule, Promote)
+                            for _, rules in item.sources
+                            for rule in rules
+                        ),
+                    }
+                    for item in loaded.environments
+                ],
                 **repo,
             },
             "sources": {

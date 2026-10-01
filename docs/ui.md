@@ -175,17 +175,13 @@ decides whether to accept it. An environment stopped by the idle policy shows
 “Idle-stopped since” and **Wake**; Wake confirms a sync request, which the
 controller processes at its next poll. The next push can wake it as well.
 
-The composition controller currently publishes environment names but not its
-per-environment `Promote()` policy, and it publishes only followed Git refs.
-The UI therefore keeps Promote disabled when it cannot establish the policy
-and a published branch head from status. The controller must publish those
-facts before a promotion from a Promote-only source can be offered. Also, the
-forward UI install currently grants reads of controller status and workloads,
-but not `piceli-cluster` or Nodes. Cluster shows the facts it can read and
-marks unavailable node readiness and storage use as unknown. The install
-needs scoped reads of `piceli-cluster`, Nodes and kubelet volume statistics to
-show all Cluster fields. These permissions are owned by the cluster UI install
-work package.
+The controller publishes each environment's `Promote()` policy and, for a
+source followed with `Promote()`, its branch heads, so Promote offers exactly
+those; it stays disabled with a reason when the status does not allow it. The
+UI installed in the cluster reads `piceli-cluster` and Nodes for the Cluster
+page. It is never granted the kubelet API (`nodes/proxy`), so the registry's
+storage use shows as unknown there; `piceli registry status` run with an
+owner's credentials shows it.
 
 ```{image} _static/ui/named-environment-approve.png
 :alt: Approval review of an exact pending plan hash in a named environment
