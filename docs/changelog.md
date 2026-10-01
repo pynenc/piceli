@@ -65,6 +65,31 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   `component-contract-invalid`, `component-contract-missing`,
   `component-need-unmet`, `component-build-unsupported`,
   `component-build-failed`, `composition-ref-unresolved`.
+- **Python compositions:** `Environment(pipeline=PIPELINE)` and
+  `Environment.per_branch(..., pipeline=PIPELINE)` deploy a `Pipeline`'s app
+  (its workload `Stack`, checks, rollback and approval policy) instead of
+  contract components; mixing it with `Component`s, `settings=` or
+  `secrets=` is refused (`env-config-invalid`). The composition repository
+  is a source too: `piceli gitops enable infra.py` records it (`--repo`,
+  default the `origin` remote of `--root`; branch `--main-branch`, default
+  `main`) when an environment deploys a pipeline, and the controller imports
+  the module at the followed commit; a change there re-renders every
+  environment. See docs/compositions.md; `piceli.toml` stays the optional
+  path for simple components.
+- **Host build contexts from sources, change-aware per image:** in a
+  pipeline environment, `[context.X] source = "X"` reads the composition's
+  `Source` `X` at the environment's revision, fetched by one build Job with
+  the one Git Secret (`piceli build job-run --sources --spec SOURCE/PATH
+  --image JSON`). `[[output.image]] contexts = [...]` (new, optional,
+  default every context; absent from the spec digest when not declared)
+  lists what an image reads; its change key is its output table, the
+  `[build]` table and the Git blob ids of the files its contexts include. No
+  changed key, no build; otherwise only the changed images take the new
+  image, the others keep their digest and apply as no-op. Third-party
+  images of `Registry.in_cluster(mirror=[...])` (and the pipeline's own
+  `mirror=`) are copied into the in-cluster registry at sync. Status:
+  `envs.<env>.components.<image>` (with an additive `sources`) and
+  `controller.composition_repo`.
 - **Many sources, change-aware builds:** `piceli gitops enable infra.py`
   installs the controller for a composition (its plain-data form is in the
   config, so the plan hash covers every rule). It polls every source with one

@@ -219,6 +219,7 @@ restore_points
 typed_apps
 crds
 environments
+compositions
 components
 reference_app
 release_cli

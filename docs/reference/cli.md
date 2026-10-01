@@ -582,6 +582,8 @@ Inside the build Job: build and push; print the receipt line.
 | `--sources` | path |  | A composition build: the directory holding each fetched source |
 | `--component` | text (repeatable) |  | A composition build: {"component","source","digest","repository"} as JSON (repeat) |
 | `--platform` | text (repeatable) |  | A composition build: linux/amd64 (repeat) |
+| `--image` | text (repeatable) |  | A pipeline image build (with --sources and --spec SOURCE/PATH): {"image","repository","key"} as JSON (repeat) |
+| `--facts` | text |  | A pipeline image build: declared node facts (JSON) |
 | `--node-registry` | text |  |  |
 | `--timeout` | integer | `3600` |  |
 
@@ -1104,7 +1106,7 @@ Install the GitOps controller (plan first; --approve HASH installs).
 | --- | --- | --- | --- |
 | `PIPELINE` | text | required |  |
 | `--image` | text | required | The Piceli image the controller runs, pinned by digest (registry/repo@sha256:…); see docs/gitops.md to build one |
-| `--repo` | text |  | Git URL the controller polls (https://, ssh://, git@host:path); no credentials in it. Required for a pipeline; a composition names its sources |
+| `--repo` | text |  | Git URL the controller polls (https://, ssh://, git@host:path); no credentials in it. Required for a pipeline; for a composition, its own repository (default: the origin remote of --root), followed when an environment deploys a pipeline |
 | `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
 | `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
 | `--branches` | text | `main` | Comma-separated branch globs, e.g. 'main,wp-*' |
@@ -1112,7 +1114,7 @@ Install the GitOps controller (plan first; --approve HASH installs).
 | `--credentials-secret` | text |  | Secret in the controller's namespace with the Git credentials (username/password or ssh-privatekey/known_hosts); mounted, never read |
 | `--namespace` | text | `piceli-system` | The controller's namespace |
 | `--env` | text |  | The pipeline's environment, if it has several |
-| `--main-branch` | text | `main` | The branch that deploys on tags |
+| `--main-branch` | text | `main` | The branch that deploys on tags; for a composition, the branch of its own repository the controller follows |
 | `--tags` | text | `v*` | Tag glob that deploys the main branch |
 | `--main-auto-approve` | boolean | `False` | Owner's opt-in: main deploys without a hash approval when the plan is inside the pipeline's auto_approve policy |
 | `--storage` | text | `10Gi` | Size of the state volume |
