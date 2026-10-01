@@ -71,6 +71,7 @@ from piceli.infra.builders import BuildItem, BuiltImage, MirrorItem
 from piceli.infra.composition import Composition, EnvItem
 from piceli.infra.contract import ComponentContract, image_contract
 from piceli.infra.sources import SourceSet, describe_refs
+from piceli.pipeline.errors import PipelineError
 
 CONFIG_SCHEMA = "piceli.gitops-composition-config.v1"
 #: States of a component in the status.
@@ -1028,6 +1029,8 @@ class CompositionController:
         try:
             work(record)
         except Exception as error:  # one bad environment never stops the loop
+            if isinstance(error, PipelineError | GitOpsError):
+                self.log(f"{record['branch']}: {error}")  # registered, no secret
             self._fail(record, error_code(error))
         finally:
             self.busy = False

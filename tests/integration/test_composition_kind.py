@@ -140,7 +140,13 @@ def _poll(config: Path, state: Path) -> dict[str, Any]:
         "--kubeconfig", KUBECONFIG, "--context", CONTEXT, "--once", "--local-build",
     )  # fmt: skip
     assert result.exit_code == 0, result.output[-4000:]
-    return dict(json.loads(result.stdout))
+    status = dict(json.loads(result.stdout))
+    for name, env in status["envs"].items():
+        if env.get("state") not in {"deployed", None}:
+            print(
+                f"{name}: {env.get('state')} {env.get('reason')}\n{result.stderr[-3000:]}"
+            )
+    return status
 
 
 def _workload(namespace: str, kind: str, name: str) -> dict[str, Any]:
@@ -186,7 +192,7 @@ def test_a_change_rolls_only_its_component_and_branches_pull_from_the_registry(
         # 1. main: every component built (or mirrored) once and synced.
         status = _poll(config, state)
         main = status["envs"]["main"]
-        assert main["state"] == "deployed", main
+        assert main["state"] == "deployed", main.get("reason")
         assert set(_states(status, "main").values()) == {"synced"}
         assert set(main["revision"]) == {"shop", "catalog"}
         assert "rc" not in status["envs"]  # existing tags are the baseline
@@ -237,14 +243,14 @@ def test_a_change_rolls_only_its_component_and_branches_pull_from_the_registry(
         )["items"]
         running = [p for p in pods if p["status"].get("phase") == "Running"]
         assert {p["spec"]["nodeName"] for p in running} == {placement["branch"]}
+        assert running, pods
         for pod in running:
-            for container in pod["status"]["containerStatuses"]:
-                assert (
-                    container["image"].startswith(HOST)
-                    or HOST in container["imageID"]
-                    or container["ready"]
-                ), container
+            # Pulled by digest through the node's mirror of the in-cluster
+            # registry (the registry pod runs on another node).
             assert pod["spec"]["containers"][0]["image"].startswith(f"{HOST}/shop/")
+            for container in pod["status"]["containerStatuses"]:
+                assert container["ready"], container
+                assert container["imageID"].startswith(f"{HOST}/shop/"), container
         assert placement["branch"] != placement["registry"]
 
         # 4. A new tag deploys rc (three environments now).

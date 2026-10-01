@@ -290,7 +290,7 @@ class LocalBuilder:
                 self.route,
                 item.reference,
                 item.repository,
-                platform=self.platform,
+                platform=None,  # the whole index: pulled by its digest
                 credentials=None,
             )
             done[item.component] = _pinned(receipt, item.component)
@@ -619,7 +619,7 @@ class JobBuilder:
                 self.mirror_route,
                 item.reference,
                 item.repository,
-                platform=self.settings.platforms[0],
+                platform=None,  # the whole index: pulled by its digest
                 credentials=None,
             )
             done[item.component] = _pinned(receipt, item.component)

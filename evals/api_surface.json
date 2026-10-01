@@ -4407,6 +4407,8 @@
   },
   "Stack": {
    "attrs": [
+    "components",
+    "declared",
     "describe",
     "name",
     "workloads"
@@ -5243,10 +5245,13 @@
     "flags": [
      "--cache",
      "--commit",
+     "--component",
      "--node-registry",
      "--out",
+     "--platform",
      "--registry-url",
      "--source",
+     "--sources",
      "--spec",
      "--timeout"
     ],
@@ -5512,7 +5517,8 @@
      "disable",
      "enable",
      "run",
-     "status"
+     "status",
+     "sync"
     ]
    },
    "gitops approve": {
@@ -5585,6 +5591,7 @@
      "--context",
      "--credentials-dir",
      "--kubeconfig",
+     "--local-build",
      "--namespace",
      "--once",
      "--service-account",
@@ -5598,6 +5605,20 @@
     "flags": [
      "--context",
      "--json",
+     "--kubeconfig",
+     "--namespace",
+     "--state-dir",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "gitops sync": {
+    "arguments": [
+     "env"
+    ],
+    "flags": [
+     "--component",
+     "--context",
      "--kubeconfig",
      "--namespace",
      "--state-dir",
@@ -6646,6 +6667,13 @@
    "command-output-limit",
    "command-timed-out",
    "compensation-already-started",
+   "component-build-failed",
+   "component-build-unsupported",
+   "component-contract-invalid",
+   "component-contract-missing",
+   "component-need-unmet",
+   "composition-invalid",
+   "composition-ref-unresolved",
    "conflict",
    "context-budget-exceeded",
    "context-changed",
@@ -8101,6 +8129,12 @@
   "piceli.importing.generate",
   "piceli.importing.sources",
   "piceli.infra",
+  "piceli.infra.builders",
+  "piceli.infra.composition",
+  "piceli.infra.contract",
+  "piceli.infra.controller",
+  "piceli.infra.render",
+  "piceli.infra.sources",
   "piceli.infra.ui_install",
   "piceli.k8s",
   "piceli.k8s.access",

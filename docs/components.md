@@ -29,17 +29,21 @@ from piceli.infra import Cluster, Component, Source
 from piceli.pipeline.model import Registry
 
 cluster = Cluster(
-    "my-cluster", api="https://10.0.0.10:6443", credentials="my-cluster",
+    "my-cluster",
+    api="https://10.0.0.10:6443",
+    credentials="my-cluster",
     registry=Registry.in_cluster(on="node-a", repository="shop"),
 )
-shop = Source("https://git.example.com/team/shop.git")        # name "shop"
+shop = Source("https://git.example.com/team/shop.git")  # name "shop"
 catalog = Source("git@git.example.com:team/catalog.git")
 
 web = Component("web", source=shop, settings={"greeting": "hi"})
 api = Component("api", source=shop)
 items = Component("catalog", source=catalog)
 cache = Component.image(
-    "docker.io/library/redis:7.2", pin="sha256:<64 hex>", name="cache",
+    "docker.io/library/redis:7.2",
+    pin="sha256:<64 hex>",
+    name="cache",
     contract={"ports": {"redis": 6379}, "health": {"ready": "TCP redis"}},
 )
 
@@ -47,14 +51,31 @@ full = Stack("full", [web, api, items, cache])
 small = Stack("small", [web, items])
 
 environments = [
-    Environment("main", namespace="shop-main", stack=full, cluster=cluster,
-                follow={shop: "main", catalog: "main"}, auto_approve=True),
-    Environment("rc", namespace="shop-rc", stack=full, cluster=cluster,
-                follow={shop: Tag("v*-rc*"), catalog: Tag("v*")}),
+    Environment(
+        "main",
+        namespace="shop-main",
+        stack=full,
+        cluster=cluster,
+        follow={shop: "main", catalog: "main"},
+        auto_approve=True,
+    ),
+    Environment(
+        "rc",
+        namespace="shop-rc",
+        stack=full,
+        cluster=cluster,
+        follow={shop: Tag("v*-rc*"), catalog: Tag("v*")},
+    ),
     Environment.per_branch(
-        Branches("wp-*"), namespace="shop-{branch}", stack=small, cluster=cluster,
+        Branches("wp-*"),
+        namespace="shop-{branch}",
+        stack=small,
+        cluster=cluster,
         follow={shop: "{branch}", catalog: "main"},
-        on_nodes=["node-b"], limit=2, idle_stop="24h", auto_approve=True,
+        on_nodes=["node-b"],
+        limit=2,
+        idle_stop="24h",
+        auto_approve=True,
     ),
 ]
 ```
