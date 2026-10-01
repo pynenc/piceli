@@ -227,14 +227,19 @@ def _registry_status(api: Api, cluster: Cluster) -> dict[str, Any] | None:
 def _wait_for_mirrors(
     api: Api, cluster: Cluster, seconds: float
 ) -> list[dict[str, Any]]:
-    """Each node's mirror after an install: wait until every agent reported."""
+    """Each node's mirror after an install: wait until every agent reported and is Ready."""
     deadline = time.monotonic() + seconds
     while True:
         status = _registry_status(api, cluster)
         mirrors = list((status or {}).get("mirrors") or ())
         if (
             status is None
-            or (mirrors and all("runtime" in m for m in mirrors))
+            # Every agent reported and is Ready (a written file is not
+            # enough: ``pending`` means the agent pod is still starting).
+            or (
+                mirrors
+                and all("runtime" in m and m["mirror"] != "pending" for m in mirrors)
+            )
             or time.monotonic() >= deadline
         ):
             return mirrors

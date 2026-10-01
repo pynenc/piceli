@@ -163,7 +163,13 @@ def restore(archive_path: Path, destination: Path) -> Path:
                 ):
                     raise ValueError("UI backup digest mismatch")
                 path = staging.joinpath(*relative.parts)
-                path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                # Every directory is private, not only the deepest one
+                # (``mkdir(parents=True)`` gives the others the umask's 0755).
+                for directory in reversed(path.relative_to(staging).parents[:-1]):
+                    folder = staging / directory
+                    if not folder.is_dir():
+                        folder.mkdir(mode=0o700)
+                        folder.chmod(0o700)
                 path.write_bytes(raw)
                 path.chmod(0o600)
         if not any(
