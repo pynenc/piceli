@@ -39,6 +39,8 @@ from piceli.services.contracts import (
     CancelRequest,
     Capabilities,
     Capability,
+    ClusterBuildOperationRequest,
+    ClusterBuildPlanRequest,
     EnvironmentActionRequest,
     Evaluation,
     EvaluationPreview,
@@ -70,6 +72,7 @@ from piceli.services.query import QueryError, QueryService
 if TYPE_CHECKING:
     from piceli.server.cluster_security import ClusterSecurity
     from piceli.services.access import AccessService
+    from piceli.services.cluster_build_control import ClusterBuildControl
     from piceli.services.environment_control import EnvironmentControl
     from piceli.services.logs import LogService
     from piceli.services.operations import OperationService
@@ -96,6 +99,8 @@ def _error(code: str, status: int) -> JSONResponse:
         "ui-access-port-conflict": "The requested local port is already in use.",
         "ui-access-failed": "A local connection could not be established.",
         "ui-logs-unavailable": "The selected container logs could not be read.",
+        "cluster-build-invalid": "The installed build configuration or reviewed plan is invalid. Review a new build plan.",
+        "cluster-build-failed": "The cluster build Job did not complete. Inspect its recorded outcome.",
     }
     safe_code = code if code in messages else "ui-observation-unavailable"
     return JSONResponse(
@@ -145,6 +150,7 @@ def create_app(
     remote_access: RemoteAccessService | None = None,
     environment_control: EnvironmentControl | None = None,
     pipeline_control: PipelineControl | None = None,
+    cluster_build_control: ClusterBuildControl | None = None,
     logs: LogService | None = None,
     cluster_security: ClusterSecurity | None = None,
     launch_token: str | None = None,
@@ -171,6 +177,14 @@ def create_app(
                 and environment_control.query is not service
             )
             or pipeline_control is not None
+            or (
+                cluster_build_control is not None
+                and (
+                    operations is None
+                    or cluster_build_control.query is not service
+                    or cluster_build_control.store is not operations.store
+                )
+            )
             or (
                 operations is not None
                 and (
@@ -201,6 +215,8 @@ def create_app(
             operations.start()
         if pipeline_control is not None:
             pipeline_control.start()
+        if cluster_build_control is not None:
+            cluster_build_control.start()
         try:
             yield
         finally:
@@ -208,6 +224,8 @@ def create_app(
                 access.close()
             if remote_access is not None:
                 remote_access.close()
+            if cluster_build_control is not None:
+                cluster_build_control.close()
             if operations is not None:
                 operations.close()
             if pipeline_control is not None:
@@ -397,9 +415,18 @@ def create_app(
     @app.get(f"{api}/capabilities", response_model=Capabilities)
     def capabilities() -> Capabilities:
         result = service.capabilities()
-        if environment_control is None and pipeline_control is None:
+        if (
+            environment_control is None
+            and pipeline_control is None
+            and cluster_build_control is None
+        ):
             return result
         actions = dict(result.actions)
+        if cluster_build_control is not None:
+            allowed = service._allowed(cluster_build_control.application_id, "deploy")
+            actions["cluster_build"] = Capability(
+                allowed=allowed, reason=None if allowed else "not-authorized"
+            )
         if pipeline_control is not None:
             pipeline_allowed = service._allowed(
                 pipeline_control.application_id, "plan"
@@ -452,6 +479,31 @@ def create_app(
         if pipeline_control is None:
             raise QueryError("ui-operation-unavailable", 409)
         return pipeline_control
+
+    def builds() -> ClusterBuildControl:
+        if cluster_build_control is None:
+            raise QueryError("ui-operation-unavailable", 409)
+        return cluster_build_control
+
+    @app.post(f"{api}/cluster-build/plans")
+    def cluster_build_plan(body: ClusterBuildPlanRequest) -> dict[str, Any]:
+        return builds().plan(body.commit, body.cache_key)
+
+    @app.get(f"{api}/cluster-build/plans/{{plan_id}}")
+    def cluster_build_get_plan(plan_id: str) -> dict[str, Any]:
+        return builds().get_plan(plan_id)
+
+    @app.post(f"{api}/cluster-build/operations", status_code=202)
+    def cluster_build_admit(body: ClusterBuildOperationRequest) -> dict[str, Any]:
+        return builds().admit(body.plan_id, body.approved_digest, body.idempotency_key)
+
+    @app.get(f"{api}/cluster-build/operations")
+    def cluster_build_operations() -> dict[str, Any]:
+        return builds().operations()
+
+    @app.get(f"{api}/cluster-build/operations/{{operation_id}}")
+    def cluster_build_operation(operation_id: str) -> dict[str, Any]:
+        return builds().operation(operation_id)
 
     @app.post(f"{api}/pipeline/plans")
     def pipeline_plan() -> dict[str, Any]:

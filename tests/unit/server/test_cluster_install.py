@@ -179,7 +179,8 @@ def test_renderer_identity_cannot_access_api_or_network() -> None:
         "app.kubernetes.io/component": "renderer"
     }
     assert policy["policyTypes"] == ["Ingress", "Egress"]
-    assert policy["ingress"] == policy["egress"] == []
+    assert policy["ingress"] == []
+    assert policy["egress"] == []
     role = _find(objects, "Role", "piceli-ui")
     permissions = {
         (group, resource, verb)
@@ -403,7 +404,7 @@ def test_remote_local_client_grant_is_opt_in_and_adds_no_write_role() -> None:
     ][0]["command"]
     assert command[command.index("--authorized-access-sub") + 1] == "operator-subject"
     assert "--authorized-deploy-sub" not in command
-    assert "--experimental" in command
+    assert "--experimental" not in command
     role = _find(objects, "Role", "piceli-ui")
     assert all(
         verb not in {"create", "patch", "update", "delete"}
@@ -466,11 +467,11 @@ def test_restored_claim_and_url_prefix_change_the_targeted_installation() -> Non
     assert ingress["spec"]["rules"][0]["http"]["paths"][0]["path"] == "/piceli"
 
 
-def test_unfinished_paths_need_the_experimental_opt_in() -> None:
-    with pytest.raises(ValueError, match="ui-experimental-disabled"):
-        replace(_config(), manual=_manual())
-    with pytest.raises(ValueError, match="ui-experimental-disabled"):
-        replace(_config(), authorized_access_subjects=("operator-subject",))
+def test_manual_and_local_client_profiles_need_no_experimental_opt_in() -> None:
+    manual = replace(_config(), manual=_manual())
+    access = replace(_config(), authorized_access_subjects=("operator-subject",))
+    assert _find(render_cluster_install(manual), "Deployment", "piceli-ui")
+    assert _find(render_cluster_install(access), "Deployment", "piceli-ui")
     command = _find(render_cluster_install(_config()), "Deployment", "piceli-ui")[
         "spec"
     ]["template"]["spec"]["containers"][0]["command"]

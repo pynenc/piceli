@@ -8,19 +8,16 @@ login, scoped observation and logs, with no write verbs in its Role. An
 optional manual-delivery profile mounts an explicit release definition and
 source allowlist, starts `piceli ui cluster-serve`, and adds only the namespace
 resource rules the operator supplies. It grants no universal deployment
-rights. The whole template is **experimental**. The manual-delivery profile
-and local-client access are also **unsupported and disabled by default**:
-the renderer refuses them with `ui-experimental-disabled` unless the config
-sets `experimental=True`, which adds `--experimental` to the rendered UI
-command. A clean authenticated deployment and restart recovery have not
-passed their release gate; rendering a manifest is not that gate.
+rights. The optional cluster-build profile calls Piceli's existing build Job
+path through the same scoped dispatcher. Local-client access issues tickets
+for a separate `piceli ui connect` process on the operator's machine.
 
 Contributors can run `make test-ui-kind-renderer` to build and load a throwaway
 renderer image into a disposable kind cluster. That test checks actual Job
-execution, token-free Pod mounts, result parsing and cleanup. Kind's default
-CNI does not enforce NetworkPolicy, so it does not establish the egress-denial
-gate; that requires a separate cluster with an enforcing CNI and a negative
-network probe.
+execution, token-free Pod mounts, result parsing and cleanup. The combined
+`make test-ui-kind-e2e` acceptance uses one disposable cluster with an
+OIDC issuer and proves build, exact-plan deployment, recovery, local-client
+forwarding, grant revocation and renderer egress denial on kindnet.
 `make test-ui-kind-runtime` builds a throwaway UI image, boots the rendered
 single-replica installation, verifies its TLS sidecar with a trusted scratch
 certificate and an unauthenticated API refusal, then replaces the Pod and
@@ -53,6 +50,9 @@ Kubernetes NetworkPolicy selects IP ranges, not DNS names. The installed CNI
 must enforce NetworkPolicy, and the selected Ingress controller must really
 support HTTPS upstreams. If the controller runs with `hostNetwork`, its source
 may not match the Pod selector; check that before applying this policy.
+Choose `api_server` and `api_egress_cidrs` for the address the UI Pod actually
+reaches after any Service translation; a Service VIP may be translated to a
+node endpoint before the CNI evaluates the egress CIDR.
 
 ```python
 from pathlib import Path
@@ -98,7 +98,8 @@ supported when the identity provider has the matching callback URL.
 and enables a local-client access ticket; it does not grant deployment writes
 or claim that a port opens on the browser's machine. A local client must
 establish the forward separately. Leaving it empty grants no access tickets.
-Setting it requires `experimental=True`.
+The ticket remains pending until the local client proves that the forward is
+ready; stopping that client releases the ticket and listener.
 
 Review the rendered Role, ClusterRole, NetworkPolicies, projected credentials,
 image digests and Ingress route. With an explicit disposable target, the
@@ -126,14 +127,15 @@ additional policy that would grant renderer egress.
 Each renderer Job mounts an immutable, per-evaluation ConfigMap. The Job
 receives only approved source and request hashes, checks them inside the
 container, and copies verified source bytes to private scratch space before
-importing them. A deleted and recreated ConfigMap cannot silently change the
+importing them. Its trusted entrypoint waits for the deny-egress policy to
+become effective before loading source, since a CNI may program policy after
+the Pod first starts. A deleted and recreated ConfigMap cannot silently change the
 approved source. Other actors with permission to change Jobs, Roles or the
 installation itself remain inside the namespace's administrative trust boundary.
 
 ## Optional manual delivery profile
 
-The profile is experimental, unsupported and requires `experimental=True`
-on `ClusterInstallConfig`. It puts `release.toml` and precisely the listed source
+The profile puts `release.toml` and precisely the listed source
 files in a read-only ConfigMap volume. A credential-free init container checks
 their reviewed SHA-256 digests and copies them as regular, read-only files to
 `/opt/piceli/source`, backed by a private `emptyDir`. This is necessary because
@@ -186,7 +188,7 @@ manual = ManualDeliveryConfig(
         ),
     ),
 )
-# Pass manual=manual and experimental=True to ClusterInstallConfig.
+# Pass manual=manual to ClusterInstallConfig.
 ```
 
 The deploy subjects must also appear in `authorized_subjects`. The renderer
@@ -203,6 +205,38 @@ actually needs, then review the generated Role with the deployment plan.
 Some release features may need more permissions or integrations than this
 profile supplies; the service must show those failures rather than broadening
 its Role silently.
+
+## Optional cluster build profile
+
+Pass an `InstalledBuildConfig` together with the manual profile to offer
+**Cluster build** in the installed UI:
+
+```python
+from piceli.server.cluster_install import InstalledBuildConfig
+
+build = InstalledBuildConfig(
+    spec_path="host-build.toml",
+    image="registry.example.test/piceli-builder@sha256:" + "d" * 64,
+    repo="https://git.example.test/shop.git",
+    registry_url="oci://registry.internal.example.test/shop",
+    git_secret="piceli-build-git",
+    platforms=("linux/amd64",),
+    node_arch="amd64",
+)
+# Pass build=build and manual=manual to ClusterInstallConfig.
+```
+
+The operator pins the builder image, Git remote, trusted build spec path,
+registry target, platform, node selector and Secret name. A granted user
+submits a commit and cache key, reviews the build plan digest, and approves
+that exact digest. The dispatcher calls `run_build_job` from Piceli 0.13.0.
+The Job runs under `piceli-builder` with no automatic ServiceAccount token,
+reads its Git credential from the named Secret, uses a cache PVC, pushes the
+digest to the node registry and returns a receipt from its Pod log. The UI
+Role adds only PVC creation beyond the manual profile's Job permissions;
+it receives neither Secret read nor registry credentials. The builder node,
+registry, and Git endpoint must be reachable from that Job, and the registry
+must have its own retention and authentication policy.
 
 The UI Pod uses a projected, rotating service-account token and the
 namespace's `kube-root-ca.crt`; token bytes do not enter the rendered manifest.
@@ -229,6 +263,11 @@ using an explicit kubeconfig/context, wait for its Pod to exit, and take a
 storage-consistent CSI VolumeSnapshot or an offline copy supported by the
 storage provider. Do not copy SQLite or journal files from a running Pod as a
 recovery point. Bring the Deployment back to one replica after the snapshot.
+An offline maintenance Pod using `piceli ui backup`/`restore` should run as
+UID/GID 10001 and preserve owner-only modes on the control directory. If it
+needs `fsGroup` to mount the claim, set `fsGroupChangePolicy: OnRootMismatch`
+as in the UI Deployment to avoid a recursive permissions change on every
+maintenance mount.
 
 For recovery, keep the old claim intact. Restore the snapshot to a new PVC,
 set `state_claim` to that new claim in `ClusterInstallConfig`, render and review

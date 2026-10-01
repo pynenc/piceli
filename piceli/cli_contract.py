@@ -885,7 +885,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             ),
             cluster="writes",
             approval_required=True,
-            notes="Experimental. Requires piceli[ui] and a separate HTTPS TLS gateway sidecar. Default subjects inspect one namespace and logs (read-only). Unsupported and refused with ui-experimental-disabled unless --experimental or PICELI_UI_EXPERIMENTAL=1: --authorized-deploy-sub additionally enables exact-plan reviewed manual delivery with a pinned isolated renderer. --authorized-access-sub additionally enables one-time tickets for a separate local client; the server never binds a laptop port. No ambient Kubernetes context.",
+            notes="Requires piceli[ui] and a separate HTTPS TLS gateway sidecar. Default subjects inspect one namespace and logs. Configured deploy grants enable exact-plan reviewed manual delivery and credential-free cluster builds through scoped Jobs. Access grants enable local-client tickets. The server never binds a laptop port or reads an ambient Kubernetes context.",
             long_running=True,
         ),
         "ui cluster-serve": _C(
@@ -904,7 +904,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             ),
             cluster="writes",
             approval_required=True,
-            notes="Experimental. Requires piceli[ui] and a separate HTTPS TLS gateway sidecar. Observation (read-only) is default. Unsupported and refused with ui-experimental-disabled unless --experimental or PICELI_UI_EXPERIMENTAL=1: --authorized-deploy-sub enables reviewed manual delivery; --authorized-access-sub enables local-client tickets. No ambient Kubernetes context or server-side laptop port.",
+            notes="Requires piceli[ui] and a separate HTTPS TLS gateway sidecar. Observation is the default. Configured deploy grants permit exact-plan manual delivery and cluster build Jobs; access grants permit local-client tickets. No ambient Kubernetes context or server-side laptop port.",
             long_running=True,
         ),
         "ui connect": _C(
@@ -920,7 +920,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
                 "private local forward ownership record",
             ),
             cluster="reads",
-            notes="Experimental and unsupported: refused with ui-experimental-disabled unless --experimental or PICELI_UI_EXPERIMENTAL=1. Requires piceli[ui], a trusted HTTPS cluster UI and local kubectl. The pairing secret is prompted without echo; no ambient kubeconfig or context. The port exists on the client host only while the supervised command runs.",
+            notes="Requires piceli[ui], a trusted HTTPS cluster UI and local kubectl. The pairing secret is prompted without echo; kubeconfig and context must be explicit. The port exists on the client host only while the supervised command runs.",
             long_running=True,
         ),
         "ui serve": _C(

@@ -211,6 +211,17 @@ class OperationRequest(Record):
     idempotency_key: str = Field(min_length=1, max_length=128)
 
 
+class ClusterBuildPlanRequest(Record):
+    commit: str = Field(pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+    cache_key: str = Field(min_length=1, max_length=200)
+
+
+class ClusterBuildOperationRequest(Record):
+    plan_id: str
+    approved_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    idempotency_key: str = Field(min_length=1, max_length=128)
+
+
 class RecoveryRequest(Record):
     """A new attempt of the same approved plan, never implicit replanning."""
 

@@ -38,7 +38,7 @@ and temporary files on exit.
 | Local or remote host with a release definition | `piceli ui serve --definition release.toml` plus the configured isolated renderer | Source review, release plan, deploy and activity |
 | Local or remote host with a CI-style Pipeline | `piceli ui serve --pipeline module:attribute` | Pipeline plan, two approvals when images must be delivered, pre-rollout checks, restore points and deploy |
 | GitHub Actions or another CI runner to Kubernetes | `piceli deploy --plan` / `piceli deploy --apply` | The CLI remains independent of the web server; the UI does not launch CI jobs |
-| UI installed inside the cluster | `piceli ui cluster-serve` behind the configured TLS gateway | OIDC-scoped observation; manual delivery and remote local-client access remain experimental |
+| UI installed inside the cluster | `piceli ui cluster-serve` behind the configured TLS gateway | OIDC-scoped observation, reviewed manual delivery, cluster build Jobs and local-client access tickets |
 | Direct application deployment to a machine without Kubernetes | No target provider exists yet | No deployment action is advertised |
 
 A local UI process may itself run on a remote machine. Keep its listener on
@@ -70,14 +70,16 @@ review. Restarting the service marks a queued or running browser operation
 interrupted; inspect the Piceli deploy journal and prepare a new plan. A plan
 waiting for its second approval remains waiting after restart.
 
-Pre-rollout checks and restore points are Pipeline features. The separate
-release-definition UI evaluator still refuses a definition with pre-rollout
-checks (`ui-prerollout-unsupported`), so it cannot silently skip them. Use a
-configured Pipeline for that application.
+Pre-rollout checks declared by a release definition are included in its
+reviewed plan and run before the apply stage. Pipeline restore points and
+two-stage image delivery remain available to local Pipeline sessions.
 
-The Pipeline adapter runs on the local UI host. It uses that host's configured
-builder and delivery route. It is not an in-cluster credential-free builder;
-that server path is still experimental.
+The Pipeline adapter runs on the local UI host and uses its configured builder
+and delivery route. An installed UI offers a separate cluster-build action:
+after approval of the exact build plan hash, its dispatcher calls Piceli's
+existing Kubernetes build Job path. The builder Job uses its own scoped
+ServiceAccount, Git Secret, cache PVC and node registry. The UI Pod receives no
+registry or cluster-admin credential.
 
 ## Branch environments and GitOps
 
@@ -114,26 +116,30 @@ With only `--kubeconfig`, `--context` and `--namespace`, the UI is inventory
 only. An access endpoint labelled **server** is on the UI host, including when
 that host is remote. Do not infer a laptop endpoint from it.
 
-## In-cluster service and current gate
+## In-cluster service
 
 The [installation guide](ui_cluster_install.md) describes the single-replica
 Deployment, TLS gateway, OIDC configuration, namespace grants and private PVC.
-Read-only scoped observation is the supported installed profile. Manual
-source evaluation/deployment and local-client access still require
-`--experimental` or `PICELI_UI_EXPERIMENTAL=1`. The installed manual path has
-not passed the full clean-cluster OIDC deploy, CNI egress-enforcement and
-credential-free image-build gate. Use this opt-in only in disposable clusters.
-The UI does not advertise Pipeline execution from the installed service.
+The default installed profile is scoped observation. An operator may configure
+a trusted release definition, immutable renderer image, named deployment
+resources and deploy subjects. A granted OIDC user first approves the source
+evaluation digest, reviews the resulting release plan, then approves that
+plan's exact digest. The dispatcher applies that plan and writes operation and
+release state on the private PVC; an interrupted operation is visible after a
+Pod restart. Back up the PVC's control directory with the stopped-server
+commands below. The installed service does not run arbitrary browser-provided
+Pipelines.
 
 Cluster login requires a signed ID token with the configured issuer, exact
 client audience, nonce and expiry. Only a principal with a configured grant
 gets a bounded session. Each API request and live stream rechecks its scope;
 logout is a CSRF-protected POST. The browser never receives the projected
 Kubernetes service-account token. A renderer Job has no deployment token or
-host mount and is selected by a deny-egress policy, whose enforcement must be
-verified on the installed CNI.
+host mount and is selected by a deny-egress policy. Its trusted entrypoint
+waits for policy enforcement before importing approved source; verify the
+installed CNI's enforcement before enabling source evaluation.
 
-For remote local-client access in experimental cluster mode, the server
+For remote local-client access in cluster mode, the server
 issues a pending one-time ticket. `piceli ui connect` uses an explicit local
 kubeconfig and context, starts a supervised loopback forward, probes it, and
 only then reports **ready**. Stopping, expiry or lost ownership removes that

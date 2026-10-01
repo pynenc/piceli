@@ -52,6 +52,9 @@ def main() -> int:
     network_existed = exists(["network", "inspect", "kind"])
     with tempfile.TemporaryDirectory(prefix="piceli-ui-kind-") as temporary:
         directory = Path(temporary)
+        scratch_home = directory / "home"
+        scratch_home.mkdir(mode=0o700)
+        environment["HOME"] = str(scratch_home)
         kind = directory / "kind"
         url = (
             "https://github.com/kubernetes-sigs/kind/releases/download/"

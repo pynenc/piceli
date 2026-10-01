@@ -530,7 +530,6 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`ui-assets-unavailable`](#error-ui-assets-unavailable) | observe | no |
 | [`ui-evaluation-failed`](#error-ui-evaluation-failed) | observe | no |
 | [`ui-execution-failed`](#error-ui-execution-failed) | observe | no |
-| [`ui-experimental-disabled`](#error-ui-experimental-disabled) | observe | no |
 | [`ui-idempotency-conflict`](#error-ui-idempotency-conflict) | observe | no |
 | [`ui-invalid-request`](#error-ui-invalid-request) | observe | no |
 | [`ui-logs-unavailable`](#error-ui-logs-unavailable) | observe | yes |
@@ -2803,14 +2802,6 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Inspect the run stages and diagnosis before recovery or a newly reviewed rollback.
 - **Retry-safe:** no
 
-(error-ui-experimental-disabled)=
-### `ui-experimental-disabled`
-
-**Experimental UI path disabled.** This web UI path (in-cluster manual delivery, remote local-client access, or an install manifest that enables either) has not passed its release gate and is disabled by default. Nothing was started or rendered.
-
-- **Fix:** Use `piceli ui serve`, `piceli ui cluster-observe` or `piceli deploy`. To try the unsupported path anyway, set `PICELI_UI_EXPERIMENTAL=1`.
-- **Retry-safe:** no
-
 (error-ui-idempotency-conflict)=
 ### `ui-idempotency-conflict`
 
@@ -2886,9 +2877,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-ui-prerollout-unsupported)=
 ### `ui-prerollout-unsupported`
 
-**Pre-rollout checks not supported from the UI.** The evaluated app declares pre-rollout checks (`app.pre_rollout`). The web UI deploy path cannot run them yet, so it refuses to plan the release instead of skipping them. Nothing was planned or applied.
+**Legacy pre-rollout count cannot be planned.** The renderer returned a count-only pre-rollout marker without executable check details. The UI refuses to plan a release that would skip a check. Nothing was planned or applied.
 
-- **Fix:** Deploy this app with `piceli deploy`, which runs the `prerollout` stage.
+- **Fix:** Use a renderer that emits the full `app.pre_rollout` check definitions, or deploy with `piceli deploy`.
 - **Retry-safe:** no
 
 (error-ui-request-rejected)=

@@ -331,9 +331,12 @@ class PreRolloutCluster:
             self.sleep(self.poll_seconds)
 
     def _pod(self, job: str) -> dict[str, Any] | None:
-        found = self._get(self._ns("pods"), labelSelector=f"job-name={job}") or {}
-        items = found.get("items") or []
-        return items[-1] if items else None
+        for label in ("batch.kubernetes.io/job-name", "job-name"):
+            found = self._get(self._ns("pods"), labelSelector=f"{label}={job}") or {}
+            items = found.get("items") or []
+            if items:
+                return items[-1]
+        return None
 
     def _logs(self, job: str, redact: Iterable[str]) -> str:
         pod = self._pod(job)
@@ -350,7 +353,7 @@ class PreRolloutCluster:
                     ("tailLines", 60),
                     ("limitBytes", 16384),
                 ],
-                header_params={"Accept": "text/plain"},
+                header_params={"Accept": "*/*"},
                 auth_settings=["BearerToken"],
                 _preload_content=False,
                 _request_timeout=self.request_seconds,

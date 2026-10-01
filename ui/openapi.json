@@ -369,6 +369,55 @@
         "title": "Capability",
         "type": "object"
       },
+      "ClusterBuildOperationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "approved_digest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Approved Digest",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "plan_id": {
+            "title": "Plan Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "plan_id",
+          "approved_digest",
+          "idempotency_key"
+        ],
+        "title": "ClusterBuildOperationRequest",
+        "type": "object"
+      },
+      "ClusterBuildPlanRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "cache_key": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Cache Key",
+            "type": "string"
+          },
+          "commit": {
+            "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+            "title": "Commit",
+            "type": "string"
+          }
+        },
+        "required": [
+          "commit",
+          "cache_key"
+        ],
+        "title": "ClusterBuildPlanRequest",
+        "type": "object"
+      },
       "EnvironmentActionRequest": {
         "additionalProperties": false,
         "properties": {
@@ -2962,6 +3011,186 @@
           }
         },
         "summary": "Capabilities"
+      }
+    },
+    "/api/v1/cluster-build/operations": {
+      "get": {
+        "operationId": "cluster_build_operations_api_v1_cluster_build_operations_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Cluster Build Operations Api V1 Cluster Build Operations Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Cluster Build Operations"
+      },
+      "post": {
+        "operationId": "cluster_build_admit_api_v1_cluster_build_operations_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClusterBuildOperationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Cluster Build Admit Api V1 Cluster Build Operations Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cluster Build Admit"
+      }
+    },
+    "/api/v1/cluster-build/operations/{operation_id}": {
+      "get": {
+        "operationId": "cluster_build_operation_api_v1_cluster_build_operations__operation_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+              "title": "Operation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Cluster Build Operation Api V1 Cluster Build Operations  Operation Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cluster Build Operation"
+      }
+    },
+    "/api/v1/cluster-build/plans": {
+      "post": {
+        "operationId": "cluster_build_plan_api_v1_cluster_build_plans_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClusterBuildPlanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Cluster Build Plan Api V1 Cluster Build Plans Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cluster Build Plan"
+      }
+    },
+    "/api/v1/cluster-build/plans/{plan_id}": {
+      "get": {
+        "operationId": "cluster_build_get_plan_api_v1_cluster_build_plans__plan_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Cluster Build Get Plan Api V1 Cluster Build Plans  Plan Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cluster Build Get Plan"
       }
     },
     "/api/v1/environments": {

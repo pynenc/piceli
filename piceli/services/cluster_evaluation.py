@@ -58,6 +58,7 @@ class KubernetesRendererConfig:
     max_files: int = 128
     service_account: str = "piceli-renderer"
     network_policy: str = "piceli-renderer-deny-egress"
+    egress_probe: tuple[str, int] | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -71,6 +72,14 @@ class KubernetesRendererConfig:
             or not 1 <= self.max_files <= 128
             or self.service_account != "piceli-renderer"
             or self.network_policy != "piceli-renderer-deny-egress"
+            or (
+                self.egress_probe is not None
+                and (
+                    len(self.egress_probe) != 2
+                    or not self.egress_probe[0]
+                    or not 1 <= self.egress_probe[1] <= 65535
+                )
+            )
         ):
             raise EvaluationError("evaluation-config")
 
@@ -136,7 +145,7 @@ class KubernetesJobEvaluator(DockerEvaluator):
             or selector != {"app.kubernetes.io/component": "renderer"}
             or getattr(policy.spec.pod_selector, "match_expressions", None)
             or "Egress" not in (policy.spec.policy_types or [])
-            or policy.spec.egress
+            or bool(policy.spec.egress)
         ):
             raise EvaluationError("evaluation-config")
         # NetworkPolicies are additive: one permissive policy selecting these
@@ -234,7 +243,7 @@ class KubernetesJobEvaluator(DockerEvaluator):
             {"key": f"file{index:03d}", "path": filename, "mode": 0o444}
             for index, filename in enumerate(preview.files)
         ]
-        return {
+        result: dict[str, Any] = {
             "apiVersion": "batch/v1",
             "kind": "Job",
             "metadata": {
@@ -361,6 +370,14 @@ class KubernetesJobEvaluator(DockerEvaluator):
                 },
             },
         }
+        if config.egress_probe is not None:
+            result["spec"]["template"]["spec"]["containers"][0]["env"].append(
+                {
+                    "name": "PICELI_RENDER_EGRESS_PROBE",
+                    "value": json.dumps(config.egress_probe),
+                }
+            )
+        return result
 
     def _cleanup(self, api: Any, preview_id: str) -> None:
         name = self._name(preview_id)
@@ -448,8 +465,12 @@ class KubernetesJobEvaluator(DockerEvaluator):
         else:
             raise EvaluationError("evaluation-renderer")
         pods = core.list_namespaced_pod(
-            namespace, label_selector=f"job-name={name}", limit=2
+            namespace, label_selector=f"batch.kubernetes.io/job-name={name}", limit=2
         ).items
+        if not pods:
+            pods = core.list_namespaced_pod(
+                namespace, label_selector=f"job-name={name}", limit=2
+            ).items
         if (
             len(pods) != 1
             or pods[0].status.phase != "Succeeded"
@@ -555,7 +576,13 @@ class KubernetesJobEvaluator(DockerEvaluator):
             self._save(stage, record)
             result = self._run_job(api, stage, preview, cancel)
             checks = result.pop("pre_rollout_checks", 0)
-            if set(result) != {"components"} or type(checks) is not int or checks < 0:
+            pre_rollouts = result.pop("pre_rollouts", [])
+            if (
+                set(result) != {"components"}
+                or type(checks) is not int
+                or checks < 0
+                or not isinstance(pre_rollouts, list)
+            ):
                 raise EvaluationError("evaluation-output")
             if checks:
                 raise EvaluationError("ui-prerollout-unsupported")
@@ -566,6 +593,7 @@ class KubernetesJobEvaluator(DockerEvaluator):
                     "source": preview.source.model_dump(),
                     "inputs": request["inputs"],
                     "components": result["components"],
+                    **({"pre_rollouts": pre_rollouts} if pre_rollouts else {}),
                 }
             )
             record["state"] = "succeeded"

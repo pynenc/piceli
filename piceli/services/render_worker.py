@@ -6,8 +6,10 @@ import contextlib
 import hashlib
 import json
 import os
+import socket
 import sys
 import tempfile
+import time
 from dataclasses import asdict
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -76,6 +78,41 @@ def serialize(
     return {"components": components}
 
 
+def _wait_for_egress_denial(raw: str) -> None:
+    """Keep consumer code unimported until the renderer's CNI policy settles.
+
+    Some CNIs attach a new Job Pod before programming its NetworkPolicy. A
+    short-lived renderer must never use that initial open interval. The
+    installed API endpoint is an explicit, normally reachable canary; the
+    second probe checks the outside path. Neither sends a credential.
+    """
+    endpoint = json.loads(raw)
+    if (
+        not isinstance(endpoint, list)
+        or len(endpoint) != 2
+        or not isinstance(endpoint[0], str)
+        or not endpoint[0]
+        or not isinstance(endpoint[1], int)
+        or not 1 <= endpoint[1] <= 65535
+    ):
+        raise ValueError("invalid egress probe")
+    started = time.monotonic()
+    denied_in_row = 0
+    while time.monotonic() - started < 45:
+        denied = True
+        for address, port in (tuple(endpoint), ("1.1.1.1", 443)):
+            try:
+                with socket.create_connection((address, port), timeout=0.5):
+                    denied = False
+            except OSError:
+                pass
+        denied_in_row = denied_in_row + 1 if denied else 0
+        if denied_in_row >= 3 and time.monotonic() - started >= 12:
+            return
+        time.sleep(0.5)
+    raise RuntimeError("renderer egress policy did not become effective")
+
+
 def main() -> int:
     phase = "request"
     try:
@@ -103,6 +140,10 @@ def main() -> int:
             phase = "inputs"
             inputs = RenderInputs.from_dict(request["inputs"])
             context = inputs.context(placeholder_inputs(list(inputs.secret_names)))
+            egress_probe = os.environ.get("PICELI_RENDER_EGRESS_PROBE")
+            if egress_probe is not None:
+                phase = "egress"
+                _wait_for_egress_denial(egress_probe)
             phase = "source"
             with contextlib.redirect_stdout(sys.stderr):
                 composition, app = render_app_target(
@@ -110,9 +151,10 @@ def main() -> int:
                 )
                 phase = "serialize"
                 result = serialize(composition, inputs)
-                # Only the count leaves the container: the service refuses to plan
-                # an app whose pre-rollout checks the UI deploy path cannot run.
-                result["pre_rollout_checks"] = len(app.pre_rollouts) if app else 0
+                if app and app.pre_rollouts:
+                    result["pre_rollouts"] = [
+                        item.model_dump(mode="json") for item in app.pre_rollouts
+                    ]
         output = json.dumps(result, separators=(",", ":"), allow_nan=False)
         if os.environ.get("PICELI_RENDER_RESULT_LINE") == "1":
             sys.stdout.write("PICELI_RENDER_RESULT_V1:" + output + "\n")

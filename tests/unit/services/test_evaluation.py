@@ -566,7 +566,7 @@ def test_an_app_without_pre_rollout_checks_still_renders(
 
 
 @pytest.mark.parametrize("declared", [0, 1])
-def test_render_worker_reports_the_pre_rollout_check_count(
+def test_render_worker_returns_validated_pre_rollout_declarations(
     spec: ReleaseSpec,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -593,5 +593,15 @@ def test_render_worker_reports_the_pre_rollout_check_count(
     monkeypatch.setattr("sys.argv", ["render_worker", str(request)])
     assert render_worker.main() == 0
     result = json.loads(capsys.readouterr().out)
-    assert result["pre_rollout_checks"] == declared
+    if declared:
+        assert result["pre_rollouts"] == [
+            {
+                "workload": "api",
+                "command": ["api", "check"],
+                "timeout_seconds": 300,
+                "upgrade": None,
+            }
+        ]
+    else:
+        assert "pre_rollouts" not in result
     assert result["components"]

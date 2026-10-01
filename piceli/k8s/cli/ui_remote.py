@@ -21,7 +21,6 @@ from piceli.k8s.observe import ForwardSupervisor
 from piceli.k8s.ops.provider_factory import KubeconfigTarget
 from piceli.k8s.owned_processes import OwnedProcessRegistry
 from piceli.k8s.ui_config import UiShortcut
-from piceli.k8s.ui_experimental import experimental_enabled
 from piceli.k8s.ui_state import private_ui_state_dir
 from piceli.services.contracts import (
     AccessSession,
@@ -302,20 +301,10 @@ def connect(
     ] = None,
     experimental: Annotated[
         bool,
-        typer.Option(
-            help="Allow this unsupported experimental path "
-            "(also PICELI_UI_EXPERIMENTAL=1)"
-        ),
+        typer.Option(help="Deprecated compatibility option; no longer required"),
     ] = False,
 ) -> None:
-    """Bind a laptop port for a cluster UI ticket (experimental, disabled by default).
-
-    Remote local-client access has not passed its release gate: it is refused
-    with ui-experimental-disabled unless --experimental or
-    PICELI_UI_EXPERIMENTAL=1 is given, and is unsupported.
-    """
-    if not experimental_enabled(experimental):
-        reject("ui-experimental-disabled")
+    """Bind a laptop port for an authenticated cluster UI ticket."""
     executable = kubectl or (
         Path(found) if (found := shutil.which("kubectl")) else None
     )

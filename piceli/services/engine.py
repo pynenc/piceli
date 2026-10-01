@@ -101,6 +101,46 @@ class EngineAdapter:
         finally:
             binding.close()
 
+    @staticmethod
+    def _prerollout_stage(
+        spec: ReleaseSpec, rendered: RenderedComposition
+    ) -> tuple[Any, Any]:
+        """Reuse the pipeline check Job runner for validated renderer declarations."""
+        from piceli import App, Pipeline, Target
+        from piceli.app.prerollout import PreRollout
+        from piceli.app.render import placeholder_inputs
+        from piceli.pipeline.backend import Backend
+        from piceli.pipeline.prerollout import _collect
+        from piceli.pipeline.prerollout_stage import PreRolloutStage
+
+        app = App(spec.model.release.name)
+        app._pre_rollouts = [
+            PreRollout.model_validate(item) for item in rendered.pre_rollouts
+        ]
+        target = spec.kubeconfig_target()
+        pipeline = Pipeline(
+            app,
+            Target.kubeconfig(
+                target.kubeconfig,
+                context=target.context,
+                namespace=target.namespace,
+                cluster_uid=target.cluster_uid,
+                namespace_uid=target.namespace_uid,
+                transport=target.transport,
+            ),
+            state_dir=spec.state_dir,
+        )
+        backend = Backend()
+        stage = PreRolloutStage(
+            pipeline,
+            lambda: backend.prerollout_cluster(pipeline.target),
+            lambda _message: None,
+        )
+        context = rendered.inputs.context(
+            placeholder_inputs(list(rendered.inputs.secret_names))
+        )
+        return stage, _collect(rendered.composition(context))
+
     def plan(
         self,
         registration: Registration,
@@ -119,6 +159,10 @@ class EngineAdapter:
                 rollback_to=preview.release if preview.intent == "rollback" else None
             )
             pending = runner.pending_plan(result.plan_hash)
+        precheck: dict[str, Any] | None = None
+        if rendered.pre_rollouts:
+            stage, desired = self._prerollout_stage(spec, rendered)
+            precheck, _ = stage.plan(desired)
         target = replace(registration, target=spec.kubeconfig_target()).public_target()
         frozen = {
             "spec": freeze_spec(spec),
@@ -127,6 +171,8 @@ class EngineAdapter:
             "pending": pending,
             "mode": result.mode,
         }
+        if precheck is not None:
+            frozen["pre_rollout"] = precheck
         envelope = {
             "application_id": registration.id,
             "engine_digest": result.plan_hash,
@@ -159,7 +205,7 @@ class EngineAdapter:
             summary=result.counts,
             diffs=diffs,
             actions=result.to_dict()["actions"],
-            checks=result.checks,
+            checks={**result.checks, **({"pre_rollout": precheck} if precheck else {})},
             evaluation_id=evaluation_id,
             precondition_digest=digest(result.plan),
             warnings=["dry-run-unavailable"] if result.dry_run_unavailable else [],
@@ -205,15 +251,26 @@ class EngineAdapter:
 
         spec = self.validate(plan, private, pending=False)
         frozen = private["frozen"]
-        runner = self.runner_factory(
-            materialize_spec(spec, RenderedComposition.from_dict(frozen["rendered"]))
-        )
+        rendered = RenderedComposition.from_dict(frozen["rendered"])
+        runner = self.runner_factory(materialize_spec(spec, rendered))
         with session(release_scope(spec), write=True) as held:
             runner.checkpoint = lambda: held.checkpoint(force=True)
             runner.before_execution = on_start
             runner.progress = on_progress
             # Refresh shared state under its lease, then recheck reviewed metadata.
             self.validate(plan, private, pending=not resume)
+            if rendered.pre_rollouts and not resume:
+                stage, desired = self._prerollout_stage(spec, rendered)
+                current, _ = stage.plan(desired)
+                if current != frozen.get("pre_rollout"):
+                    raise QueryError("ui-plan-stale", 409)
+                changed = {
+                    (str(action["kind"]), str(action["name"]))
+                    for action in plan.actions
+                    if action.get("kind") in {"Deployment", "StatefulSet", "DaemonSet"}
+                    and action.get("operation") != "noop"
+                }
+                stage.run(desired, changed=changed, run_id=plan.id[:12])
             if resume:
                 if frozen["mode"] != "create" or execution_id is None:
                     raise QueryError("ui-operation-unavailable", 409)

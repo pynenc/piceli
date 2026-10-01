@@ -1,6 +1,6 @@
 import createClient from 'openapi-fetch';
 import type { paths } from './openapi';
-import type { ServiceError, PlanRequest, EvaluationRequest, OperationRequest, RecoveryRequest, CancelRequest, AccessStartRequest, RemoteAccessStartRequest, EnvironmentActionRequest, GitOpsApprovalRequest, GitOpsPromotionRequest } from './generated';
+import type { ServiceError, PlanRequest, EvaluationRequest, OperationRequest, RecoveryRequest, CancelRequest, AccessStartRequest, RemoteAccessStartRequest, EnvironmentActionRequest, GitOpsApprovalRequest, GitOpsPromotionRequest, ClusterBuildPlanRequest, ClusterBuildOperationRequest } from './generated';
 
 export class ApiError extends Error {
   constructor(public status: number, public detail: ServiceError) { super(detail.message); }
@@ -71,6 +71,11 @@ export const api = {
   pipelineOperations: (signal?: AbortSignal) => service().GET('/api/v1/pipeline/operations', { signal }).then(data),
   pipelineOperation: (operation_id: string, signal?: AbortSignal) => service().GET('/api/v1/pipeline/operations/{operation_id}', { params: { path: { operation_id } }, signal }).then(data),
   pipelineApproveSecond: (operation_id: string, body: OperationRequest) => service().POST('/api/v1/pipeline/operations/{operation_id}/approve', { params: { path: { operation_id } }, body }).then(data),
+  clusterBuildPlan: (body: ClusterBuildPlanRequest) => service().POST('/api/v1/cluster-build/plans', { body }).then(data),
+  clusterBuildGetPlan: (plan_id: string, signal?: AbortSignal) => service().GET('/api/v1/cluster-build/plans/{plan_id}', { params: { path: { plan_id } }, signal }).then(data),
+  clusterBuildAdmit: (body: ClusterBuildOperationRequest) => service().POST('/api/v1/cluster-build/operations', { body }).then(data),
+  clusterBuildOperations: (signal?: AbortSignal) => service().GET('/api/v1/cluster-build/operations', { signal }).then(data),
+  clusterBuildOperation: (operation_id: string, signal?: AbortSignal) => service().GET('/api/v1/cluster-build/operations/{operation_id}', { params: { path: { operation_id } }, signal }).then(data),
 
 };
 export const applicationPath = (id: string) => `/applications/${encodeURIComponent(id)}`;

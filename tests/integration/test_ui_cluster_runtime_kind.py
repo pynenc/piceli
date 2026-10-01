@@ -118,7 +118,9 @@ def _images(tmp_path: Path) -> Iterator[tuple[str, str]]:
     container = f"piceli-ui-runtime-build-{identifier}"
     repository = f"docker.io/piceli/ui-runtime-{identifier}"
     tagged = repository + ":kind"
-    gateway_existed = bool(_docker("image", "inspect", _GATEWAY_TAG, check=False))
+    gateway_existed = bool(
+        _docker("image", "inspect", "--format", "{{.Id}}", _GATEWAY_TAG, check=False)
+    )
     try:
         if not gateway_existed:
             _docker("pull", _GATEWAY_TAG)

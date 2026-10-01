@@ -111,8 +111,8 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   lock. New error codes `heavy-lock-timeout`, `heavy-command-empty`,
   `heavy-command-missing` ({doc}`heavy_work`).
 - **Web UI:** the optional `piceli[ui]` extra adds a bundled web application.
-  See {doc}`ui` for setup, supported local flows and the remaining in-cluster
-  experimental gate.
+  See {doc}`ui` for local and installed setup, environment controls and the
+  security model.
   - `piceli ui serve` runs a loopback UI for explicit inventory scopes and
     existing release definitions: isolated source evaluation, exact source
     and plan approvals before a durable release run, Activity replay,
@@ -120,22 +120,28 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
     container logs and supervised local port forwards. A one-time launch
     token grants the session; cookies are named per origin; forwards left by
     a crashed UI are stopped at the next start (`--state-dir`).
-  - Apps that declare `app.pre_rollout(...)` are refused with
-    `ui-prerollout-unsupported` in the release-definition flow; a configured
-    Pipeline can run those checks and restore points from the browser, using
-    a second exact approval after image delivery when needed.
+  - Apps that declare `app.pre_rollout(...)` include those checks in the
+    reviewed release plan and run them before apply. A configured Pipeline
+    can also run checks and restore points from the browser, using a second
+    exact approval after image delivery when needed.
   - Branch Environments and GitOps pages reuse Piceli's environment and
     controller APIs for status, exact-hash changes, pending approvals and
     promotion requests. Local branch scopes open Resources, logs and access.
     `piceli ui backup` and `restore` handle stopped private UI control state.
-  - `piceli ui cluster-observe` offers authenticated, read-only namespace
-    inspection and logs behind an HTTPS gateway with OIDC subject grants and a
-    rotating projected service-account token file.
-  - Unfinished paths are disabled unless `PICELI_UI_EXPERIMENTAL=1` is set,
-    and are unsupported: in-cluster manual delivery (`piceli ui cluster-serve`
-    with deploy grants), remote local-client access (`--authorized-access-sub`,
-    `piceli ui connect`) and install manifests that enable either. Without the
-    opt-in they fail with the new error code `ui-experimental-disabled`.
+  - `piceli ui cluster-observe` offers authenticated namespace inspection and
+    logs behind an HTTPS gateway with OIDC subject grants and a rotating
+    projected service-account token. Configured `cluster-serve` grants permit
+    exact-plan manual delivery and credential-free build Jobs. The UI Pod
+    holds no registry or cluster-admin credential; the builder Job has its own
+    ServiceAccount, Git Secret and cache PVC.
+  - `piceli ui connect` takes an authorized one-time ticket from pending to a
+    ready local forward, passes traffic and releases it on stop. An installed
+    UI can recover operation records from its private PVC after a Pod restart,
+    and its stopped state can be backed up and restored.
+  - The installed OIDC journey, exact-plan deployment with pre-rollout check,
+    build Job, restart recovery, backup/restore, revoked grants and renderer
+    egress denial run in one disposable kind acceptance cluster. The former
+    `PICELI_UI_EXPERIMENTAL` gate is no longer required.
   - `make ui-fake-serve` starts a disposable fake-API demo; `make
     test-ui-fake` runs the service and browser journeys.
   - Pipeline recovery propagates a stale or expired plan refusal instead of
