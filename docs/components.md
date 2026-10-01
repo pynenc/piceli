@@ -206,8 +206,9 @@ schema `piceli.gitops-status.v1`) gains, for a composition controller:
 
 - `sources.<name>`: `url`, `refs` (`{"refs/heads/main": sha,
   "refs/tags/v1.0.0": sha}`, the followed ones) and `last_poll`
-  (`last_error` when the last `ls-remote` failed);
-- `envs.<env>.revision`: `{source: sha}`, and `refs`: `{source: ref}`;
+  (`error`, a code, when the last `ls-remote` failed);
+- `envs.<env>.revision`: `{source: sha}`, `refs`: `{source: ref}`, and
+  `last_sync`: when it last finished deploying;
 - `envs.<env>.components.<name>`: `source`, `commit`, `digest` (the image's
   manifest digest), `source_digest` (the build cache key), `image`, `state`
   (`building`, `rolling`, `synced`, `unchanged`, `failed`), `health` and

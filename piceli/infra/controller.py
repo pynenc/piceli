@@ -908,6 +908,7 @@ class CompositionController:
             self._set(
                 record,
                 state="deployed",
+                last_sync=now,
                 deployed_commit=record.get("commit"),
                 deployed_revision=dict(record.get("revision") or {}),
                 attempts=0,
@@ -1128,7 +1129,7 @@ class CompositionController:
                     "refs": value.get("refs") or {},
                     "last_poll": value.get("last_poll"),
                     **(
-                        {"last_error": value["last_error"]}
+                        {"error": value["last_error"]}
                         if value.get("last_error")
                         else {}
                     ),

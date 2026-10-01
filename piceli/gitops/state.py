@@ -190,11 +190,11 @@ def sync_request(
     """Deploy ``env`` (every environment when ``None``) at its revision now.
 
     ``component`` (a composition only) also rebuilds that component even
-    when its source digest has an image already. The request carries the
-    time, so two syncs are two requests.
+    when its source digest has an image already. The body is ``{schema,
+    kind: "sync", env?, component?}`` under the key ``sync.<digest>`` (the
+    same request twice is one request until the controller handles it); the
+    in-cluster UI writes the same shape through this function.
     """
-    import time
-
     for value, what in ((env, "environment"), (component, "component")):
         if value is not None and (
             not value
@@ -204,7 +204,7 @@ def sync_request(
             raise GitOpsError(
                 "gitops-request-invalid", f"the {what} is not a DNS label"
             )
-    fields: dict[str, Any] = {"at": int(time.time())}
+    fields: dict[str, Any] = {}
     if env is not None:
         fields["env"] = env
     if component is not None:
