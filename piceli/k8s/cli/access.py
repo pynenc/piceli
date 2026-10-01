@@ -50,6 +50,7 @@ from piceli.k8s.access import (
     stale_hint,
     stop_stale,
 )
+from piceli.k8s.cli.ui_forward import access_ui
 from piceli.k8s.ui_config import UI_CONFIG_ENV, load_ui_config
 
 TARGET_HELP = (
@@ -646,6 +647,7 @@ class _DefaultCommand(TyperCommand):
 access_app = typer.Typer(cls=_AccessGroup, rich_markup_mode=None)
 access_app.command("run", hidden=True, cls=_DefaultCommand)(access)
 access_app.command("stop")(stop)
+access_app.command("ui")(access_ui)
 
 
 def register(app: typer.Typer) -> None:

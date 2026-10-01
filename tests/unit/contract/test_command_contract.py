@@ -141,6 +141,7 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["access", str(p / "missing-release.toml")],
         "access-target-invalid",
     ),
+    "access ui": (lambda p: ["access", "ui"], "access-ui-target-required"),
     "access stop": (
         lambda p: ["access", "stop", "--stale", str(p / "missing-release.toml")],
         "access-target-invalid",
@@ -426,6 +427,10 @@ CASES: dict[str, tuple[Argv, str]] = {
             + ["--destination", str(p / "restored")]
         ),
         "restore-refused",
+    ),
+    "ui forward-serve": (
+        lambda p: ["ui", "forward-serve", "--launch-secret", "other"],
+        "ui-invalid-request",
     ),
     "ui serve": (
         lambda p: ["ui", "serve", "--host", "0.0.0.0"],
