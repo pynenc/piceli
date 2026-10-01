@@ -5,12 +5,15 @@ One poll (:meth:`Controller.poll_once`):
 1. ``git ls-remote`` the repository (no webhook; a failure is recorded and
    the next poll tries again).
 2. Handle requests: an approval of a pending plan hash, a promotion
-   ``branch@sha`` to main.
-3. Work out what should run: every branch matching the globs (except main)
-   at its head; main only at the commit of a **new** tag matching ``v*`` or
-   of a promotion (an untagged push to main does nothing); a branch that
+   ``branch@sha`` to main or to a named environment.
+3. Work out what should run: every branch matching the globs (except main
+   and named environments) at its head; main only at the commit of a
+   **new** tag matching ``v*`` or of a promotion (an untagged push to main
+   does nothing); each named environment by its own rule (every push to a
+   followed branch, a new matching tag, a promotion); a branch that
    disappeared is torn down. Tags present at the first poll are the baseline
-   and deploy nothing.
+   and deploy nothing. A branch environment without a push for
+   ``idle_stop_seconds`` is scaled to zero (``stopped``) until its next push.
 4. Work the queue **one item at a time**: tear-downs first, then deploys
    oldest push first. A deploy checks out the commit, loads its pipeline,
    builds (or uses pushed images), then ``env_up``: with the pipeline's
@@ -251,6 +254,18 @@ class Controller:
 
     def _promote(self, key: str, body: Mapping[str, Any], refs: RemoteRefs) -> None:
         branch, commit = str(body.get("branch")), str(body.get("commit"))
+        target = str(body.get("env") or self.config.main_branch)
+        rule = self.config.rule(target)
+        if body.get("env") and (rule is None or not rule.promote):
+            self._reject(
+                key,
+                body,
+                GitOpsError(
+                    "gitops-promote-not-allowed",
+                    "the environment is unknown or does not follow Promote()",
+                ),
+            )
+            return
         known = {refs.branches.get(branch)}
         record = self._envs().get(branch)
         if record is not None:
@@ -259,7 +274,7 @@ class Controller:
             (sha for sha in known if isinstance(sha, str) and sha.startswith(commit)),
             None,
         )
-        if not self.config.deploys_main or full is None:
+        if rule is None or not rule.promote or full is None:
             # Only a commit the controller saw on that branch can be promoted.
             self._reject(
                 key,
@@ -271,13 +286,14 @@ class Controller:
                 ),
             )
             return
-        self._want(self.config.main_branch, full, f"promote {branch}@{full[:12]}")
+        self._want(target, full, f"promote {branch}@{full[:12]}")
 
     # ------------------------------------------------------------ desired
     def _desired(self, refs: RemoteRefs) -> None:
         main = self.config.main_branch
+        fixed = self.config.fixed
         for branch, commit in sorted(refs.branches.items()):
-            if branch != main and self.config.watches(branch):
+            if not fixed(branch) and self.config.watches(branch):
                 self._want(branch, commit, "push")
         tags = {
             name: sha
@@ -289,13 +305,21 @@ class Controller:
             (name for name in tags if seen.get(name) != tags[name]),
             key=_version_key,
         )
-        if self.state.get("baseline") and new and self.config.deploys_main:
+        implicit = self.config.rule(main)
+        if (
+            self.state.get("baseline")
+            and new
+            and implicit is not None
+            and implicit not in self.config.environments
+        ):
             latest = new[-1]
             self._want(main, tags[latest], f"tag {latest}")
         self.state["tags"] = dict(sorted(tags.items()))
         self.state["baseline"] = True
+        for rule in self.config.environments:
+            self._follow(rule, refs)
         for branch, record in self._envs().items():
-            if branch == main or record.get("state") == "deleting":
+            if fixed(branch) or record.get("state") == "deleting":
                 continue
             if branch not in refs.branches or not self.config.watches(branch):
                 self._set(
@@ -306,6 +330,51 @@ class Controller:
                     reason=None,
                 )
                 self.log(f"{branch}: branch gone; tearing its environment down")
+
+    def _follow(self, rule: Any, refs: RemoteRefs) -> None:
+        """A named environment's own trigger: followed branches, then new tags."""
+        heads: dict[str, dict[str, str]] = self.state.setdefault("env_heads", {})
+        known = heads.setdefault(rule.name, {})
+        for branch in rule.branches:
+            commit = refs.branches.get(branch)
+            if commit is not None and known.get(branch) != commit:
+                # Every push to a followed branch (the first one seen too).
+                self._want(rule.name, commit, f"push {branch}")
+                known[branch] = commit
+        if not rule.tags:
+            return
+        all_tags: dict[str, dict[str, str]] = self.state.setdefault("env_tags", {})
+        tags = {
+            name: sha
+            for name, sha in refs.tags.items()
+            if any(fnmatch.fnmatchcase(name, glob) for glob in rule.tags)
+        }
+        seen = all_tags.get(rule.name)
+        if seen is not None:  # the first poll of an environment is its baseline
+            new = sorted(
+                (name for name in tags if seen.get(name) != tags[name]),
+                key=_version_key,
+            )
+            if new:
+                self._want(rule.name, tags[new[-1]], f"tag {new[-1]}")
+        all_tags[rule.name] = dict(sorted(tags.items()))
+
+    def _idle(self) -> list[dict[str, Any]]:
+        """Branch environments without a push for ``idle_stop_seconds``."""
+        limit = self.config.idle_stop_seconds
+        if limit is None:
+            return []
+        now = self.clock()
+        found = []
+        for branch, record in self._envs().items():
+            if self.config.fixed(branch) or record.get("state") != "deployed":
+                continue
+            pushed = _seconds(record.get("pushed_at"))
+            at = record.get("next_attempt_at")
+            if pushed is None or now - pushed < limit or (at is not None and at > now):
+                continue
+            found.append(record)
+        return sorted(found, key=lambda r: r["branch"])
 
     def _due(self) -> list[dict[str, Any]]:
         now = self.clock()
@@ -329,7 +398,8 @@ class Controller:
     # ------------------------------------------------------------ steps
     def _deploy(self, record: dict[str, Any]) -> None:
         branch, commit = record["branch"], record["commit"]
-        main = branch == self.config.main_branch
+        rule = self.config.rule(branch)
+        fixed = self.config.fixed(branch)
         work = self.state_dir / "work"
         with self.source.checkout(commit, work) as tree:
             pipeline = self.ports.load_pipeline(
@@ -353,7 +423,7 @@ class Controller:
                 receipt = self._receipt(pipeline, branch, commit, tree)
             approve: str | None = record.get("approved_hash")
             if approve is None and getattr(pipeline, "auto_approve", None) is not None:
-                if not main or self.config.main_auto_approve:
+                if not fixed or (rule is not None and rule.auto_approve):
                     approve = APPROVE_POLICY
             outcome = EnvOutcome.from_result(
                 self.ports.env_up(
@@ -377,6 +447,11 @@ class Controller:
         kept = read_json(path)
         if isinstance(kept, dict):
             return kept
+        # The same commit built for another environment (main and rc).
+        for other in sorted(path.parent.glob(f"*-{commit}.json")):
+            kept = read_json(other)
+            if isinstance(kept, dict):
+                return kept
         receipt = dict(
             self.ports.build(
                 pipeline,
@@ -439,6 +514,36 @@ class Controller:
         del self._envs()[branch]
         self.log(f"{branch}: environment removed")
 
+    def _stop(self, record: dict[str, Any], refs: RemoteRefs) -> None:
+        """Scale an idle branch environment to zero (the next push starts it)."""
+        branch = record["branch"]
+        commit = str(refs.branches.get(branch) or record.get("deployed_commit"))
+        try:
+            with self.source.checkout(commit, self.state_dir / "work") as tree:
+                pipeline = self.ports.load_pipeline(
+                    tree, self.config.pipeline, self.config.env
+                )
+                self.ports.env_stop(pipeline, branch)
+        except Exception as error:  # retried on a later poll
+            delay = backoff(self.config, int(record.get("attempts") or 0) + 1)
+            self._set(
+                record,
+                reason=error_code(error),
+                attempts=int(record.get("attempts") or 0) + 1,
+                next_attempt_at=self.clock() + delay,
+            )
+            self.log(f"{branch}: idle stop failed ({record['reason']})")
+            return
+        self._set(
+            record,
+            state="stopped",
+            reason="idle-stop",
+            attempts=0,
+            next_attempt_at=None,
+            stopped_at=_iso(self.clock()),
+        )
+        self.log(f"{branch}: no push for a while; scaled to zero")
+
     def _step(self, record: dict[str, Any], refs: RemoteRefs) -> None:
         if self.busy:  # pragma: no cover - guarded by the tests
             raise RuntimeError("controller steps must not overlap")
@@ -474,7 +579,8 @@ class Controller:
         self._desired(refs)
         save_state(self.state_dir, self.state)
         due = self._due()
-        if due:
+        idle = self._idle()
+        if due or idle:
             try:
                 self.source.fetch()
             except GitOpsError as error:
@@ -482,7 +588,19 @@ class Controller:
                 return self._publish()
             for record in due:
                 self._step(record, refs)
+            for record in idle:
+                self._step_stop(record, refs)
         return self._publish()
+
+    def _step_stop(self, record: dict[str, Any], refs: RemoteRefs) -> None:
+        if self.busy:  # pragma: no cover - guarded by the tests
+            raise RuntimeError("controller steps must not overlap")
+        self.busy = True
+        try:
+            self._stop(record, refs)
+        finally:
+            self.busy = False
+            save_state(self.state_dir, self.state)
 
     def status(self) -> dict[str, Any]:
         """The published status document (``piceli.gitops-status.v1``)."""
@@ -507,6 +625,20 @@ class Controller:
                 "last_poll": self.state.get("last_poll"),
                 "last_error": self.state.get("last_error"),
                 "poll_failures": failures,
+                **(
+                    {
+                        "environments": [
+                            rule.to_dict() for rule in self.config.environments
+                        ]
+                    }
+                    if self.config.environments
+                    else {}
+                ),
+                **(
+                    {"idle_stop_seconds": self.config.idle_stop_seconds}
+                    if self.config.idle_stop_seconds is not None
+                    else {}
+                ),
             },
             "envs": envs,
             "rejected_requests": list(self.state.get("rejected") or []),
@@ -541,3 +673,17 @@ def _version_key(tag: str) -> tuple[Any, ...]:
         for part in re.split(r"(\d+)", tag)
         if part
     )
+
+
+def _seconds(value: Any) -> float | None:
+    """Seconds since the epoch of an ``_iso`` time, or ``None``."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return (
+            datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+            .replace(tzinfo=UTC)
+            .timestamp()
+        )
+    except ValueError:
+        return None

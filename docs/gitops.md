@@ -391,6 +391,31 @@ controller's rights. Keep the globs narrow and protect those branches as you
 would protect a CI runner's secrets.
 ```
 
+### Named environments and idle stop
+
+When the pipeline declares `EnvConfig(environments=[...])` (see
+{doc}`environments`), `gitops enable` reads them from the working tree
+(`--root`, default `.`) into the controller's config, so the install plan
+hash covers every environment's trigger; change them and run `gitops enable`
+again. A pipeline file that is there and does not load is refused
+(`gitops-pipeline-invalid`); without the file the controller runs as in
+0.13. Per environment:
+
+- `Branch("main")`: every push to `main` deploys it (no tag needed);
+- `Tag("v*-rc*")`: the latest new matching tag deploys it;
+- `Promote()`: `piceli promote rc main@<sha>` deploys that commit (an
+  environment without `Promote()` drops the request with
+  `gitops-promote-not-allowed`; `piceli promote BRANCH@SHA` still targets
+  main).
+
+Each waits for `piceli gitops approve NAME HASH` unless it declares
+`auto_approve=True` and the plan is inside the pipeline's `auto_approve`
+policy. A commit already built for one environment is not built again for
+another. `EnvConfig(idle_stop="24h")` scales a branch environment without a
+push for that long to zero (state `stopped`, reason `idle-stop`); the next
+push starts it again. The status lists the rules under
+`controller.environments` and `controller.idle_stop_seconds`.
+
 ### Status and requests (for tools)
 
 The controller publishes its status in the ConfigMap `piceli-gitops-status`
@@ -400,9 +425,10 @@ The controller publishes its status in the ConfigMap `piceli-gitops-status`
 `piceli envs` reads it (`piceli.gitops.state.read_status`). Per branch,
 `envs.<branch>` holds `commit` (wanted), `deployed_commit`, `state`
 (`pending`, `retrying`, `approval-required`, `deployed`, `failed`,
-`deleting`), `plan_hash`, `reason` (an error code), `attempts`,
+`deleting`, `stopped`), `plan_hash`, `reason` (an error code), `attempts`,
 `next_attempt_at`, `pushed_at`, `updated_at`, `namespace` and `trigger`
-(`push`, `tag v1.2.0`, `promote BRANCH@SHA`). Dropped requests are listed in
+(`push`, `push main`, `tag v1.2.0`, `promote BRANCH@SHA`); a named
+environment is keyed by its name. Dropped requests are listed in
 `rejected_requests` with their code.
 
 `piceli gitops approve` and `piceli promote` add one key each to the
@@ -426,7 +452,7 @@ handled it. Locally, `piceli gitops run --once --state-dir DIR` (with
 | `gitops-repo-invalid`, `gitops-image-unpinned`, `gitops-config-invalid` | `gitops enable` refused its options: credentials in the URL, an image not pinned by digest, a bad glob or size. |
 | `gitops-plan-changed` | `gitops enable --approve` or `gitops disable --approve` names a hash that is not the current plan's. |
 | `gitops-target-required`, `gitops-not-installed`, `gitops-cluster-failed` | No cluster named, no controller in the namespace, or the API refused a request. |
-| `gitops-approval-stale`, `gitops-promote-unknown`, `gitops-request-invalid` | A request the controller dropped (listed in `rejected_requests` of the status). |
+| `gitops-approval-stale`, `gitops-promote-unknown`, `gitops-promote-not-allowed`, `gitops-request-invalid` | A request the controller dropped (listed in `rejected_requests` of the status). |
 | `gitops-git-failed`, `gitops-pipeline-invalid`, `gitops-step-failed`, `gitops-port-unavailable` | A poll or a branch step failed; recorded in the status and retried. |
 | `gitops-state-invalid`, `gitops-controller-locked` | The controller's state is unreadable, or another controller holds it. |
 

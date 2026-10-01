@@ -88,7 +88,9 @@ _CHECKS_EXPORTS = frozenset({"Checks"})
 _RESTORE_EXPORTS = frozenset({"Quiesce", "RestorePoints", "RestoreVerify"})
 
 # Per-branch environments for ``Pipeline(envs=...)``.
-_ENVS_EXPORTS = frozenset({"EnvConfig"})
+# ``piceli.Environment`` is the app overlay; the named deploy environment is
+# ``piceli.envs.Environment``.
+_ENVS_EXPORTS = frozenset({"Branch", "EnvConfig", "Promote", "Stack", "Tag"})
 
 if TYPE_CHECKING:
     from piceli.app import (  # noqa: F401
@@ -140,7 +142,7 @@ if TYPE_CHECKING:
         Workload,
     )
     from piceli.checks import Checks  # noqa: F401
-    from piceli.envs import EnvConfig  # noqa: F401
+    from piceli.envs import Branch, EnvConfig, Promote, Stack, Tag  # noqa: F401
     from piceli.pipeline import (  # noqa: F401
         ApprovalPolicy,
         AwsSecret,

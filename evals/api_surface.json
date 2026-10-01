@@ -686,6 +686,18 @@
    },
    "pydantic": true
   },
+  "Branch": {
+   "attrs": [
+    "describe",
+    "name"
+   ],
+   "init": [
+    "name"
+   ],
+   "methods": {
+    "describe": []
+   }
+  },
   "Build": {
    "attrs": [
     "dockerfile",
@@ -1600,17 +1612,28 @@
    "pydantic": true
   },
   "EnvConfig": {
+   "attr_types": {
+    "branch_stack": "Stack",
+    "environments": "Environment"
+   },
    "attrs": [
     "allow_egress",
     "allows",
     "auto_approve",
+    "branch_nodes",
+    "branch_stack",
     "branches",
     "claim_sizes",
     "describe",
+    "environments",
+    "idle_stop",
+    "idle_stop_seconds",
+    "is_fixed",
     "is_main",
     "main_branch",
     "main_namespace",
     "max_envs",
+    "named",
     "namespace_for",
     "prefix",
     "quota",
@@ -1619,8 +1642,12 @@
    "init": [
     "allow_egress",
     "auto_approve",
+    "branch_nodes",
+    "branch_stack",
     "branches",
     "claim_sizes",
+    "environments",
+    "idle_stop",
     "main_branch",
     "main_namespace",
     "max_envs",
@@ -1633,13 +1660,22 @@
      "branch"
     ],
     "describe": [],
+    "is_fixed": [
+     "name"
+    ],
     "is_main": [
      "branch"
+    ],
+    "named": [
+     "name"
     ],
     "namespace_for": [
      "branch",
      "main_namespace"
     ]
+   },
+   "returns": {
+    "named": "Environment"
    }
   },
   "Environment": {
@@ -3188,6 +3224,15 @@
     "tcp": "Probe"
    }
   },
+  "Promote": {
+   "attrs": [
+    "describe"
+   ],
+   "init": [],
+   "methods": {
+    "describe": []
+   }
+  },
   "PythonCheck": {
    "attrs": [
     "call",
@@ -4280,6 +4325,20 @@
    },
    "pydantic": true
   },
+  "Stack": {
+   "attrs": [
+    "describe",
+    "name",
+    "workloads"
+   ],
+   "init": [
+    "name",
+    "workloads"
+   ],
+   "methods": {
+    "describe": []
+   }
+  },
   "StatefulSet": {
    "attr_types": {
     "security": "Security"
@@ -4387,6 +4446,18 @@
    ],
    "methods": {},
    "pydantic": true
+  },
+  "Tag": {
+   "attrs": [
+    "describe",
+    "pattern"
+   ],
+   "init": [
+    "pattern"
+   ],
+   "methods": {
+    "describe": []
+   }
   },
   "Target": {
    "attr_types": {
@@ -5418,6 +5489,7 @@
      "--platform",
      "--poll",
      "--repo",
+     "--root",
      "--storage",
      "--storage-class",
      "--tags",
@@ -5834,7 +5906,8 @@
    },
    "promote": {
     "arguments": [
-     "target"
+     "target",
+     "source"
     ],
     "flags": [
      "--context",
@@ -6439,12 +6512,15 @@
    "env-main-protected",
    "env-namespace-collision",
    "env-namespace-not-managed",
+   "env-nodes-conflict",
    "env-not-configured",
    "env-not-found",
    "env-pipeline-missing",
    "env-plan-changed",
    "env-push-invalid",
    "env-seed-no-restore-point",
+   "env-stack-incomplete",
+   "env-stack-unknown",
    "env-workload-unknown",
    "environment-invalid",
    "environment-required",
@@ -6498,6 +6574,7 @@
    "gitops-pipeline-invalid",
    "gitops-plan-changed",
    "gitops-port-unavailable",
+   "gitops-promote-not-allowed",
    "gitops-promote-unknown",
    "gitops-push-failed",
    "gitops-repo-invalid",
@@ -6877,6 +6954,9 @@
     ],
     "returns": "AwsSecretSpec"
    },
+   "Branch": {
+    "class": "Branch"
+   },
    "Build": {
     "class": "Build"
    },
@@ -6979,6 +7059,9 @@
    "Probe": {
     "class": "Probe"
    },
+   "Promote": {
+    "class": "Promote"
+   },
    "Quiesce": {
     "class": "Quiesce"
    },
@@ -7053,6 +7136,9 @@
     ],
     "returns": "SopsSecretSpec"
    },
+   "Stack": {
+    "class": "Stack"
+   },
    "StatefulSet": {
     "class": "StatefulSet"
    },
@@ -7064,6 +7150,9 @@
     "returns": "StaticSecretSpec"
    },
    "TYPE_CHECKING": {},
+   "Tag": {
+    "class": "Tag"
+   },
    "Target": {
     "class": "Target"
    },

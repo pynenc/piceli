@@ -13,11 +13,16 @@
   ``Namespace``);
 * gives every other cluster-scoped object a namespace-qualified name
   (``reader`` → ``reader-shop-wp-login``) and rewrites the references to it;
-* sets the declared claim sizes;
+* sets the declared claim sizes, and turns an ``ExistingClaim`` with a
+  declared size into a claim the environment owns (created empty or seeded,
+  deleted with the environment);
 * adds a default-deny ``NetworkPolicy`` across namespaces (same namespace
   and cluster DNS allowed) and a ``ResourceQuota``.
 
-The main branch gets only the image substitution (``isolated=False``).
+Every environment may also render only a :class:`~piceli.envs.Stack` of the
+app (:func:`select_stack`) and place every workload on chosen nodes
+(:func:`place`). The main branch and named environments get no isolation
+(``isolated=False``): only images, stack, placement and a declared quota.
 Importing this module is side-effect free.
 """
 
@@ -28,7 +33,14 @@ import re
 from collections.abc import Iterator, Mapping
 from typing import Any
 
-from piceli.envs.model import ISOLATION_NAME, MANAGED_BY, BranchEnv, EnvError
+from piceli.envs.model import (
+    ISOLATION_NAME,
+    MANAGED_BY,
+    STACK_KINDS,
+    BranchEnv,
+    EnvError,
+    Stack,
+)
 from piceli.k8s.ops.discovery import ResourceScope
 from piceli.k8s.ops.plan import (
     DeploymentComponent,
@@ -217,10 +229,19 @@ def _set_size(claim_spec: dict[str, Any], size: str) -> None:
     resources.setdefault("requests", {})["storage"] = size
 
 
-def _claim_sizes(manifests: dict[ResourceRef, dict[str, Any]], env: BranchEnv) -> None:
+def _claim_sizes(
+    manifests: dict[ResourceRef, dict[str, Any]], env: BranchEnv
+) -> dict[ResourceRef, dict[str, Any]]:
+    """Set the declared sizes; returns the claims the environment now owns.
+
+    A claim a workload mounts and the app does not manage (an
+    ``ExistingClaim``) becomes a claim of the environment when a size is
+    declared for it (its name, ``workload/claim`` or the workload): keyed by
+    the workload that mounts it.
+    """
     sizes = dict(env.config.claim_sizes)
     if not sizes:
-        return
+        return {}
     used: set[str] = set()
     workload_claims: dict[str, str] = {}  # claim name -> the workload using it
     for ref, manifest in manifests.items():
@@ -249,6 +270,27 @@ def _claim_sizes(manifests: dict[ResourceRef, dict[str, Any]], env: BranchEnv) -
         if key is not None:
             _set_size(manifest.setdefault("spec", {}), sizes[key])
             used.add(key)
+    managed = {ref.name for ref in manifests if ref.kind == "PersistentVolumeClaim"}
+    owned: dict[ResourceRef, dict[str, Any]] = {}
+    for ref, manifest in manifests.items():
+        if ref.kind not in STACK_KINDS:
+            continue
+        for pod in pod_specs(manifest):
+            for volume in pod.get("volumes") or ():
+                claim = str(
+                    ((volume or {}).get("persistentVolumeClaim") or {}).get("claimName")
+                    or ""
+                )
+                if not claim or claim in managed:
+                    continue
+                keys = [claim, f"{ref.name}/{claim}", ref.name]
+                key = next((item for item in keys if item in sizes), None)
+                if key is None:
+                    continue  # unsized: the claim must exist, as in 0.13
+                used.add(key)
+                managed.add(claim)
+                owned[ref] = owned.get(ref) or {}
+                owned[ref][claim] = _owned_claim(claim, sizes[key], manifest, env)
     unknown = sorted(set(sizes) - used)
     if unknown:
         raise EnvError(
@@ -256,6 +298,27 @@ def _claim_sizes(manifests: dict[ResourceRef, dict[str, Any]], env: BranchEnv) -
             f"claim_sizes names {unknown[0]!r}, which is no claim, workload or "
             "workload/claim template of the app",
         )
+    return owned
+
+
+def _owned_claim(
+    claim: str, size: str, workload: Mapping[str, Any], env: BranchEnv
+) -> dict[str, Any]:
+    """A claim the environment owns in place of an ``ExistingClaim``."""
+    labels = dict((workload.get("metadata") or {}).get("labels") or {})
+    return {
+        "apiVersion": "v1",
+        "kind": "PersistentVolumeClaim",
+        "metadata": {
+            "name": claim,
+            "namespace": env.namespace,
+            "labels": {**labels, **MANAGED_BY},
+        },
+        "spec": {
+            "accessModes": ["ReadWriteOnce"],
+            "resources": {"requests": {"storage": size}},
+        },
+    }
 
 
 # ---------------------------------------------------------- cluster scope
@@ -329,6 +392,173 @@ def _rewrite(
 # ------------------------------------------------------------ added objects
 
 
+def quota_object(env: BranchEnv, hard: Mapping[str, str]) -> dict[str, Any]:
+    """The ``ResourceQuota`` of an environment."""
+    return {
+        "apiVersion": "v1",
+        "kind": "ResourceQuota",
+        "metadata": {
+            "name": ISOLATION_NAME,
+            "namespace": env.namespace,
+            "labels": dict(MANAGED_BY),
+        },
+        "spec": {"hard": dict(hard)},
+    }
+
+
+# ------------------------------------------------------------------ stacks
+
+
+def _workload_names(component: DeploymentComponent) -> set[str]:
+    return {
+        resource.ref.name
+        for resource in component.resources
+        if resource.ref.kind in STACK_KINDS
+    }
+
+
+def select_stack(
+    composition: DeploymentComposition, stack: Stack
+) -> DeploymentComposition:
+    """Only ``stack``'s workloads and the objects of their components.
+
+    A component whose workloads are all left out is left out whole (its
+    Service, autoscaler, …); a component with workloads of the stack keeps
+    them and drops the others. Components without workloads (configs,
+    Secrets, accounts) are kept.
+
+    :raises EnvError: ``env-stack-unknown`` (a name that is no workload of the
+        app), ``env-stack-incomplete`` (a kept object depends on a left-out
+        component or workload).
+    """
+    wanted = set(stack.workloads)
+    known: set[str] = set()
+    for component in composition.components:
+        known |= _workload_names(component)
+    unknown = sorted(wanted - known)
+    if unknown:
+        raise EnvError(
+            "env-stack-unknown",
+            f"Stack {stack.name!r} names {unknown[0]!r}, which is no workload of "
+            f"the app; workloads: {sorted(known)}",
+        )
+    dropped_components: set[str] = set()
+    dropped: set[ResourceRef] = set()
+    for component in composition.components:
+        names = _workload_names(component)
+        if names and not names & wanted:
+            dropped_components.add(component.name)
+            dropped.update(resource.ref for resource in component.resources)
+            continue
+        dropped.update(
+            resource.ref
+            for resource in component.resources
+            if resource.ref.kind in STACK_KINDS and resource.ref.name not in wanted
+        )
+    kept: list[DeploymentComponent] = []
+    for component in composition.components:
+        if component.name in dropped_components:
+            continue
+        missing = sorted(set(component.dependencies) & dropped_components)
+        if missing:
+            raise EnvError(
+                "env-stack-incomplete",
+                f"Stack {stack.name!r}: component {component.name!r} depends on "
+                f"{missing[0]!r}, which the stack leaves out; add its workload",
+            )
+        resources = []
+        for resource in component.resources:
+            if resource.ref in dropped:
+                continue
+            gone = [ref for ref in resource.dependencies if ref in dropped]
+            if gone:
+                raise EnvError(
+                    "env-stack-incomplete",
+                    f"Stack {stack.name!r}: {_where(resource.ref)} depends on "
+                    f"{_where(gone[0])}, which the stack leaves out",
+                )
+            resources.append(resource)
+        kept.append(
+            DeploymentComponent(
+                component.name, tuple(resources), component.dependencies
+            )
+        )
+    return DeploymentComposition(tuple(kept))
+
+
+# --------------------------------------------------------------- placement
+
+
+def _required_terms(pod: dict[str, Any]) -> list[dict[str, Any]] | None:
+    affinity = pod.get("affinity") or {}
+    node = affinity.get("nodeAffinity") or {}
+    required = node.get("requiredDuringSchedulingIgnoredDuringExecution") or {}
+    terms = required.get("nodeSelectorTerms")
+    return list(terms) if terms else None
+
+
+def place(manifest: dict[str, Any], env: BranchEnv, ref: ResourceRef) -> bool:
+    """Put every pod of ``manifest`` on ``env.on_nodes``; whether it changed.
+
+    Node names become ``kubernetes.io/hostname In [...]`` (a required node
+    affinity, added to each existing term); a ``{label: value}`` mapping is
+    merged into ``nodeSelector``. A pod already pinned elsewhere (``node=``,
+    the delivery node of a node-loopback registry, a conflicting selector)
+    is refused with ``env-nodes-conflict``.
+    """
+    nodes = env.on_nodes
+    if nodes is None or ref.kind not in STACK_KINDS:
+        return False
+    changed = False
+    for pod in pod_specs(manifest):
+        selector = dict(pod.get("nodeSelector") or {})
+        if isinstance(nodes, Mapping):
+            for key, value in nodes.items():
+                if key in selector and selector[key] != value:
+                    raise EnvError(
+                        "env-nodes-conflict",
+                        f"{_where(ref)} selects {key}={selector[key]}, and the "
+                        f"environment's on_nodes asks {key}={value}",
+                    )
+            selector.update(nodes)
+            pod["nodeSelector"] = selector
+            changed = True
+            continue
+        pinned = pod.get("nodeName") or selector.get(HOSTNAME_LABEL)
+        if pinned is not None:
+            if pinned not in nodes:
+                raise EnvError(
+                    "env-nodes-conflict",
+                    f"{_where(ref)} is pinned to node {pinned} (its node= or the "
+                    f"delivery node), outside the environment's on_nodes {list(nodes)}",
+                )
+            continue
+        expression = {"key": HOSTNAME_LABEL, "operator": "In", "values": list(nodes)}
+        terms = _required_terms(pod)
+        if terms is None:
+            terms = [{"matchExpressions": [expression]}]
+        else:
+            terms = [
+                {
+                    **term,
+                    "matchExpressions": [
+                        *(term.get("matchExpressions") or ()),
+                        expression,
+                    ],
+                }
+                for term in terms
+            ]
+        affinity = dict(pod.get("affinity") or {})
+        node_affinity = dict(affinity.get("nodeAffinity") or {})
+        node_affinity["requiredDuringSchedulingIgnoredDuringExecution"] = {
+            "nodeSelectorTerms": terms
+        }
+        affinity["nodeAffinity"] = node_affinity
+        pod["affinity"] = affinity
+        changed = True
+    return changed
+
+
 def isolation_objects(env: BranchEnv) -> tuple[dict[str, Any], dict[str, Any]]:
     """The default-deny NetworkPolicy and the ResourceQuota of a branch env."""
     metadata = {
@@ -361,13 +591,7 @@ def isolation_objects(env: BranchEnv) -> tuple[dict[str, Any], dict[str, Any]]:
             "egress": egress,
         },
     }
-    quota = {
-        "apiVersion": "v1",
-        "kind": "ResourceQuota",
-        "metadata": dict(metadata),
-        "spec": {"hard": dict(env.config.quota or {})},
-    }
-    return policy, quota
+    return policy, quota_object(env, env.config.quota or {})
 
 
 # ------------------------------------------------------------------- entry
@@ -378,31 +602,38 @@ def isolate(
 ) -> DeploymentComposition:
     """The composition of one environment (see the module docstring).
 
-    :raises EnvError: an ``env-isolation-*`` code, ``env-image-missing`` or
-        ``env-config-invalid`` (a claim size naming nothing).
+    :raises EnvError: an ``env-isolation-*`` code, ``env-image-missing``,
+        ``env-stack-unknown``, ``env-stack-incomplete``, ``env-nodes-conflict``
+        or ``env-config-invalid`` (a claim size naming nothing).
     """
+    if env.stack is not None:
+        composition = select_stack(composition, env.stack)
     manifests: dict[ResourceRef, dict[str, Any]] = {}
     for component in composition.components:
         for resource in component.resources:
             manifests[resource.ref] = resource.manifest
     changed: set[ResourceRef] = set()
-    for ref, manifest in manifests.items():
-        if _images(manifest, env, ref):
-            changed.add(ref)
+    if env.prebuilt:
+        for ref, manifest in manifests.items():
+            if _images(manifest, env, ref):
+                changed.add(ref)
     renames: dict[tuple[str, str], str] = {}
+    owned: dict[ResourceRef, dict[str, Any]] = {}
+    before = {ref: repr(manifest) for ref, manifest in manifests.items()}
     if env.isolated:
         for ref, manifest in manifests.items():
             _check_names(manifest, env, ref)
             _check_node_access(manifest, ref)
             _check_cross_namespace(manifest, env, ref)
-        before = {ref: repr(manifest) for ref, manifest in manifests.items()}
-        _claim_sizes(manifests, env)
+        owned = _claim_sizes(manifests, env)
         renames = _renames(manifests, env)
         for ref, manifest in manifests.items():
             _rewrite(ref, manifest, renames, env)
-        changed.update(
-            ref for ref, manifest in manifests.items() if repr(manifest) != before[ref]
-        )
+    for ref, manifest in manifests.items():
+        place(manifest, env, ref)
+    changed.update(
+        ref for ref, manifest in manifests.items() if repr(manifest) != before[ref]
+    )
 
     def moved(ref: ResourceRef) -> ResourceRef:
         name = renames.get((ref.kind, ref.name))
@@ -414,7 +645,13 @@ def isolate(
     for component in composition.components:
         resources = []
         for resource in component.resources:
+            claims = [
+                ResourceIntent.from_manifest(item)
+                for item in (owned.get(resource.ref) or {}).values()
+            ]
+            resources.extend(claims)
             dependencies = tuple(moved(item) for item in resource.dependencies)
+            dependencies += tuple(claim.ref for claim in claims)
             if resource.ref not in changed and dependencies == resource.dependencies:
                 resources.append(resource)
                 continue
@@ -430,20 +667,22 @@ def isolate(
                 component.name, tuple(resources), component.dependencies
             )
         )
+    added: list[dict[str, Any]] = []
     if env.isolated:
+        added = list(isolation_objects(env))
+    elif env.quota:
+        added = [quota_object(env, env.quota)]
+    if added:
         if any(component.name == COMPONENT for component in components):
             raise EnvError(
                 "env-config-invalid",
-                f"the app declares a component named {COMPONENT!r}, which branch "
+                f"the app declares a component named {COMPONENT!r}, which "
                 "environments use for their isolation objects",
             )
         components.append(
             DeploymentComponent(
                 COMPONENT,
-                tuple(
-                    ResourceIntent.from_manifest(item)
-                    for item in isolation_objects(env)
-                ),
+                tuple(ResourceIntent.from_manifest(item) for item in added),
             )
         )
     return DeploymentComposition(tuple(components))
