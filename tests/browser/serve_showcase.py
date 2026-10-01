@@ -35,7 +35,11 @@ from piceli.testing import fake_cluster, manifest
 IMAGE = "registry.example/shop@sha256:" + "a" * 64
 SHA = "3f9c2d1e8a7b4c5d6e0f1a2b3c4d5e6f7a8b9c0d"
 STATUS = {
-    "controller": {"state": "running", "last_poll": "2026-10-01T09:30:00Z", "poll_seconds": 60},
+    "controller": {
+        "state": "running",
+        "last_poll": "2026-10-01T09:30:00Z",
+        "poll_seconds": 60,
+    },
     "envs": {
         "main": {
             "namespace": "shop",
@@ -99,7 +103,11 @@ def main() -> None:
                     transport="loopback-http",
                 ),
                 state_dir=root / "pipeline-state",
-                execution={"max_seconds": 30, "readiness_seconds": 1, "poll_seconds": 0.05},
+                execution={
+                    "max_seconds": 30,
+                    "readiness_seconds": 1,
+                    "poll_seconds": 0.05,
+                },
             )
             query = QueryService(
                 [
@@ -134,7 +142,9 @@ def main() -> None:
                     address = f"http://127.0.0.1:{options.port}/applications"
                 else:
                     token_file = write_launch_token(
-                        private_ui_state_dir(), options.port, app.state.security.launch_token
+                        private_ui_state_dir(),
+                        options.port,
+                        app.state.security.launch_token,
                     )
                     cleanup.callback(remove_launch_token, token_file)
                     address = app.state.security.launch_url()

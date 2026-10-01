@@ -30,15 +30,38 @@ def _convert(video: Path, target: Path) -> list[Path]:
         scale = f"fps={fps},scale={width}:-1:flags=lanczos"
         webp = target.with_suffix(".webp")
         subprocess.run(
-            ["ffmpeg", "-y", "-loglevel", "error", "-i", str(video), "-vf", scale,
-             "-c:v", "libwebp_anim", "-loop", "0", "-q:v", "55", str(webp)],
+            [
+                "ffmpeg",
+                "-y",
+                "-loglevel",
+                "error",
+                "-i",
+                str(video),
+                "-vf",
+                scale,
+                "-c:v",
+                "libwebp_anim",
+                "-loop",
+                "0",
+                "-q:v",
+                "55",
+                str(webp),
+            ],
             check=True,
         )
         gif = target.with_suffix(".gif")
         subprocess.run(
-            ["ffmpeg", "-y", "-loglevel", "error", "-i", str(video), "-vf",
-             f"{scale},split[a][b];[a]palettegen=max_colors=96[p];[b][p]paletteuse",
-             str(gif)],
+            [
+                "ffmpeg",
+                "-y",
+                "-loglevel",
+                "error",
+                "-i",
+                str(video),
+                "-vf",
+                f"{scale},split[a][b];[a]palettegen=max_colors=96[p];[b][p]paletteuse",
+                str(gif),
+            ],
             check=True,
         )
         if webp.stat().st_size <= MAX_BYTES and gif.stat().st_size <= MAX_BYTES:
@@ -46,7 +69,9 @@ def _convert(video: Path, target: Path) -> list[Path]:
         made = [webp, gif]
     for path in made:  # still too large at the smallest setting: keep nothing
         path.unlink()
-    raise SystemExit(f"{target.name}: clip exceeds {MAX_BYTES} bytes at the smallest size")
+    raise SystemExit(
+        f"{target.name}: clip exceeds {MAX_BYTES} bytes at the smallest size"
+    )
 
 
 def main() -> int:
@@ -66,9 +91,19 @@ def main() -> int:
             "PICELI_UI_LAUNCH_TOKEN": secrets.token_urlsafe(32),
         }
         process = subprocess.Popen(
-            ["npm", "exec", "--no", "--", "playwright", "test", "--config",
-             "../tests/browser/clips.config.cjs"],
-            cwd=root / "ui", env=env, start_new_session=True,
+            [
+                "npm",
+                "exec",
+                "--no",
+                "--",
+                "playwright",
+                "test",
+                "--config",
+                "../tests/browser/clips.config.cjs",
+            ],
+            cwd=root / "ui",
+            env=env,
+            start_new_session=True,
         )
         try:
             code = process.wait()
