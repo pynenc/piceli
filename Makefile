@@ -55,7 +55,12 @@ docs-reference: ## Regenerate docs/reference/{errors,cli}.md from code
 
 .PHONY: docs
 docs: ## Build the documentation (warnings are errors)
-	uv run --group docs sphinx-build -W --keep-going -b html docs docs/_build/html
+	uv run --group docs sphinx-build -j auto -W --keep-going -b html docs docs/_build/html
+
+.PHONY: docs-inventories
+docs-inventories: ## Refresh the committed intersphinx fallbacks in docs/_inventories
+	curl -sfL https://docs.python.org/3/objects.inv -o docs/_inventories/python.inv
+	curl -sfL https://docs.pynenc.org/en/latest/objects.inv -o docs/_inventories/pynenc.inv
 
 .PHONY: build
 build: ## Build sdist and wheel into dist/
