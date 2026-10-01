@@ -247,6 +247,65 @@ def test_unowned_pvc_adoption_changes_only_metadata_annotations(
     }
 
 
+def _status_moves(api, kind, name, **status):
+    """A controller writes only the status after planning (a new resourceVersion)."""
+    api.version += 1
+    live = api.objects[(kind, name)]
+    live["status"] = status
+    live["metadata"]["resourceVersion"] = str(api.version)
+
+
+def test_pvc_adoption_retries_when_only_the_status_moved(api_url, provider, tmp_path):
+    api, _ = api_url
+    before = live_pvc(api)
+    intent = ResourceIntent.from_manifest(pvc())
+    plan, snapshot, authorization = prepare(provider, [intent], adopt=(intent.ref,))
+    # The status moves between the dry run and the write (the window a slow
+    # cluster's volume controller hits): the write's precondition fails once.
+    original = api.route
+
+    def route(request):
+        answer = original(request)
+        if request["query"].get("dryRun") == ["All"] and request["method"] == "PATCH":
+            _status_moves(api, "PersistentVolumeClaim", "data", phase="Bound")
+        return answer
+
+    api.route = route  # type: ignore[method-assign]
+    run = executor(provider, tmp_path)
+    assert run.run("adopt-pvc", plan, snapshot, authorization)["state"] == "ready"
+    after = api.objects[("PersistentVolumeClaim", "data")]
+    assert after["spec"] == before["spec"]
+    assert after["metadata"]["annotations"]["piceli.io/owner"] == provider.owner_id
+    assert forced(api) == []
+
+
+def test_pvc_adoption_still_refuses_a_spec_change_after_planning(
+    api_url, provider, tmp_path
+):
+    api, _ = api_url
+    live_pvc(api)
+    intent = ResourceIntent.from_manifest(pvc())
+    plan, snapshot, authorization = prepare(provider, [intent], adopt=(intent.ref,))
+    original = api.route
+
+    def route(request):
+        answer = original(request)
+        if request["query"].get("dryRun") == ["All"] and request["method"] == "PATCH":
+            api.version += 1
+            live = api.objects[("PersistentVolumeClaim", "data")]
+            live["spec"]["resources"]["requests"]["storage"] = "2Gi"
+            live["metadata"]["resourceVersion"] = str(api.version)
+        return answer
+
+    api.route = route  # type: ignore[method-assign]
+    run = executor(provider, tmp_path)
+    assert run.run("adopt-pvc", plan, snapshot, authorization)["state"] != "ready"
+    assert "piceli.io/owner" not in (
+        api.objects[("PersistentVolumeClaim", "data")]["metadata"].get("annotations")
+        or {}
+    )
+
+
 def test_inherited_owner_pvc_adoption_restamps_only_the_owner(
     api_url, provider, tmp_path
 ):

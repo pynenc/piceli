@@ -239,7 +239,7 @@ def test_adopt_kubectl_objects_then_drift_and_rollback(namespace, tmp_path):
         "Secret/web-token",
     ]
     code, planned = _cli(spec, "plan", *adopt)
-    assert code == 0, planned
+    assert code == 0, json.dumps(planned, indent=1)
     modes = {item["name"]: item["adoption"] for item in planned["actions"]}
     assert modes["web"]["mode"] == "takeover"
     assert {"kubectl-client-side-apply", "kubectl-set", "kubectl-rollout"} <= set(
@@ -248,7 +248,7 @@ def test_adopt_kubectl_objects_then_drift_and_rollback(namespace, tmp_path):
     assert modes["web-data"]["mode"] == modes["web-token"]["mode"] == "metadata-only"
 
     code, applied = _cli(spec, "apply", "--approve", planned["plan_hash"])
-    assert code == 0, applied
+    assert code == 0, json.dumps(applied, indent=1)
     first = applied["release"]
 
     managers = _managers(namespace, "deployment", "web")
@@ -289,16 +289,16 @@ def test_adopt_kubectl_objects_then_drift_and_rollback(namespace, tmp_path):
         "set", "image", "deployment/web", "web=nginx:1.26-alpine", namespace=namespace
     )
     code, planned = _cli(spec, "plan")
-    assert code == 0, planned
+    assert code == 0, json.dumps(planned, indent=1)
     assert {
         (item["resource"]["name"], tuple(item["managers"])) for item in planned["drift"]
     } == {("web", ("kubectl-set",))}
 
     spec = _spec(tmp_path, namespace, DIGEST_2)
     code, applied = _cli(spec, "apply", "--auto-approve")
-    assert code == 0, applied
+    assert code == 0, json.dumps(applied, indent=1)
     code, rolled = _cli(spec, "rollback", "previous", "--auto-approve")
-    assert code == 0, rolled
+    assert code == 0, json.dumps(rolled, indent=1)
     assert rolled["selected"] == first
     image = kubectl(
         "get",
