@@ -33,7 +33,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Protocol
 
+from piceli.cli_contract import error_code
 from piceli.k8s.observe import local_port_in_use, probe_endpoint
+from piceli.k8s.ops.exec_credentials import ProviderFactoryError
 from piceli.k8s.port_owner import (
     OTHER,
     UNKNOWN,
@@ -179,11 +181,17 @@ def _from_spec(path: Path) -> AccessTarget:
         name = app.name
     else:
         shortcuts, workloads, name = (), _workloads_of(composition), model.release.name
+    try:
+        kubeconfig, context = spec.target_credentials()
+    except ProviderFactoryError as error:
+        raise AccessTargetError(
+            error_code(error, "target-refused"), str(error)
+        ) from None
     return AccessTarget(
         name=name,
         namespace=namespace,
-        kubeconfig=spec.resolve(model.target.kubeconfig),
-        context=model.target.context,
+        kubeconfig=kubeconfig,
+        context=context,
         transport=model.target.transport,
         source="release-spec",
         shortcuts=tuple(shortcuts),
@@ -263,8 +271,13 @@ def access_target_of(value: Any, entry: str) -> AccessTarget:
             f"{entry!r} must be an object with .app (a piceli App) and .target "
             "(.kubeconfig, .context, .namespace), or pass a release.toml path",
         )
-    kubeconfig = getattr(target, "kubeconfig", None)
-    context = getattr(target, "context", None)
+    from piceli.profiles import ProfileError
+
+    try:
+        kubeconfig = getattr(target, "kubeconfig", None)
+        context = getattr(target, "context", None)
+    except ProfileError as error:
+        raise AccessTargetError(error.code, str(error)) from None
     namespace = getattr(target, "namespace", None)
     if not kubeconfig or not context or not namespace:
         raise AccessTargetError(

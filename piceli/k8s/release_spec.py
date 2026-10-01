@@ -123,8 +123,12 @@ class NodeSpec(_Strict):
 
 
 class TargetSpec(_Strict):
-    kubeconfig: Path
-    context: str = Field(min_length=1)
+    # Either ``kubeconfig`` + ``context`` (explicit), or ``credentials``: the
+    # name of a profile made by ``piceli login``, resolved when the target is
+    # used (in a cluster: the pod's service account). Never both.
+    kubeconfig: Path | None = None
+    context: str | None = Field(default=None, min_length=1)
+    credentials: str | None = Field(default=None, min_length=1, max_length=63)
     namespace: str = Field(min_length=1, max_length=63)
     cluster_uid: str | None = None
     namespace_uid: str | None = None
@@ -137,6 +141,21 @@ class TargetSpec(_Strict):
     exec_sha256: str | None = None
     exec_pass_env: tuple[str, ...] = ()
     exec_timeout_seconds: float = Field(default=60.0, gt=0, le=300)
+
+    @model_validator(mode="after")
+    def _credentials(self) -> TargetSpec:
+        if self.credentials is not None:
+            if self.kubeconfig is not None or self.context is not None:
+                raise ValueError("[target] credentials excludes kubeconfig and context")
+            from piceli.profiles import check_name
+
+            check_name(self.credentials)
+        elif self.kubeconfig is None or self.context is None:
+            raise ValueError(
+                "[target] needs kubeconfig and context, or credentials = "
+                '"<profile>" (see `piceli login`)'
+            )
+        return self
 
     @model_validator(mode="after")
     def _exec(self) -> TargetSpec:
@@ -871,11 +890,23 @@ class ReleaseSpec:
         value = self.model.release.secret_store
         return self.resolve(value) if value else self.state_dir / "secrets.sqlite"
 
+    def target_credentials(self) -> tuple[Path, str]:
+        """The kubeconfig and context of ``[target]``; a profile is resolved now."""
+        from piceli.profiles import override, resolve
+
+        target = self.model.target
+        if (name := override() or target.credentials) is not None:
+            found = resolve(name)
+            return found.kubeconfig, found.context
+        assert target.kubeconfig is not None and target.context is not None
+        return self.resolve(target.kubeconfig), target.context
+
     def kubeconfig_target(self) -> KubeconfigTarget:
         target = self.model.target
+        kubeconfig, context = self.target_credentials()
         return KubeconfigTarget(
-            kubeconfig=self.resolve(target.kubeconfig),
-            context=target.context,
+            kubeconfig=kubeconfig,
+            context=context,
             namespace=target.namespace,
             cluster_uid=target.cluster_uid,
             namespace_uid=target.namespace_uid,

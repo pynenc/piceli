@@ -372,6 +372,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`prerollout-not-startable`](#error-prerollout-not-startable) | pipeline | no |
 | [`prerollout-timeout`](#error-prerollout-timeout) | pipeline | yes |
 | [`prerollout-unavailable`](#error-prerollout-unavailable) | pipeline | no |
+| [`profile-conflict`](#error-profile-conflict) | target | no |
+| [`profile-invalid`](#error-profile-invalid) | target | no |
+| [`profile-not-found`](#error-profile-not-found) | target | no |
 | [`promote-refused`](#error-promote-refused) | observe | no |
 | [`provider-error`](#error-provider-error) | kubernetes | yes |
 | [`publish-failed`](#error-publish-failed) | publish | yes |
@@ -3234,6 +3237,30 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Run the command again; if it persists, check the plugin's network access or raise `exec_timeout_seconds`.
 - **Retry-safe:** yes
+
+(error-profile-conflict)=
+### `profile-conflict`
+
+**Profile and kubeconfig both given.** `--profile` was passed together with `--kubeconfig` or `--context`; a command reaches a cluster by one or the other.
+
+- **Fix:** Pass either `--profile NAME` or `--kubeconfig FILE --context CTX`.
+- **Retry-safe:** no
+
+(error-profile-invalid)=
+### `profile-invalid`
+
+**Credential profile invalid.** A profile name, file or option is not acceptable: the name is not lowercase letters, digits, `.`, `_` or `-`; the kubeconfig given to `piceli login` is missing, unreadable or does not define the context (or defines several and `--context` was omitted); a stored profile is damaged; or the in-cluster service account is incomplete. The message names the cause; nothing was changed.
+
+- **Fix:** Fix the name, the kubeconfig path or the context as the message says, then run `piceli login NAME --kubeconfig FILE --context CTX` again.
+- **Retry-safe:** no
+
+(error-profile-not-found)=
+### `profile-not-found`
+
+**Credential profile not found.** A target names a credential profile (`Target.profile(...)`, `credentials = "NAME"`, `--profile NAME`) that was never stored on this machine (and the process is not running inside a cluster, where the service account stands in for every profile).
+
+- **Fix:** Store it once with `piceli login NAME --kubeconfig FILE --context CTX`; `piceli profiles` lists the stored ones.
+- **Retry-safe:** no
 
 (error-target-refused)=
 ### `target-refused`

@@ -510,9 +510,13 @@ class PipelineReleaseSpec(ReleaseSpec):
 
 def _target_table(pipeline: Pipeline) -> dict[str, Any]:
     target = pipeline.target
+    who: dict[str, Any] = (
+        {"credentials": target.profile_name}
+        if target.profile_name is not None
+        else {"kubeconfig": str(target.kubeconfig), "context": target.context}
+    )
     return {
-        "kubeconfig": str(target.kubeconfig),
-        "context": target.context,
+        **who,
         "namespace": target.namespace,
         "cluster_uid": target.cluster_uid,
         "namespace_uid": target.namespace_uid,
