@@ -2,6 +2,7 @@ import datetime
 import importlib.metadata
 import os
 import sys
+from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, os.path.abspath(".."))
@@ -40,10 +41,35 @@ templates_path = ["_templates"]
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "schemas"]
 
 # -- Options for intersphinx -------------------------------------------------
-intersphinx_mapping = {
-    "python": ("https://docs.python.org/3", None),
-    "pynenc": ("https://docs.pynenc.org/en/latest/", None),
+# A docs build must not fail because another site is down (CI builds with
+# -W). Each inventory falls back to a copy committed in _inventories/ (refresh
+# with `make docs-inventories`); without a copy, an unreachable site's mapping
+# is dropped and its references render as plain text.
+_INVENTORIES = {
+    "python": "https://docs.python.org/3",
+    "pynenc": "https://docs.pynenc.org/en/latest/",
 }
+
+
+def _reachable(base: str) -> bool:
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(base.rstrip("/") + "/objects.inv", timeout=10):
+            return True
+    except Exception:
+        return False
+
+
+intersphinx_mapping = {}
+for _name, _base in _INVENTORIES.items():
+    _local = Path(__file__).parent / "_inventories" / f"{_name}.inv"
+    if _local.is_file():
+        intersphinx_mapping[_name] = (_base, (None, str(_local)))
+    elif _reachable(_base):
+        intersphinx_mapping[_name] = (_base, None)
+    else:
+        print(f"intersphinx: {_base} unreachable and no local copy; skipped")
 
 # -- Autodoc settings ---------------------------------------------------
 autodoc2_render_plugin = "myst"
