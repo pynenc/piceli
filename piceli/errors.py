@@ -65,6 +65,7 @@ AREAS: Mapping[str, str] = MappingProxyType(
         "envs": "Per-branch environments (`piceli env`, `piceli envs`, `piceli logs`)",
         # --- 0.14.0 ---
         "cluster-registry": "The in-cluster registry every node pulls from (`Registry.in_cluster`, `piceli registry …`)",
+        "composition": "Compositions: sources, component contracts (`piceli.toml`) and change-aware builds (`piceli.infra`, `piceli gitops enable infra.py`)",
     }
 )
 
@@ -4633,6 +4634,62 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "Look at `piceli registry status`, fix what it shows, and plan the deploy again when it is ready.",
         True,
         "cluster-registry",
+    ),
+    _E(
+        "composition-invalid",
+        "Composition refused",
+        "The composition module (`infra.py`) or its controller config is malformed: no `environments = [...]`, an environment without a `follow={Source: rule}` mapping, a component whose source the environment does not follow, two sources or components with one name, or more than one cluster or branch rule.",
+        "Fix the module as the message says and run `piceli gitops enable infra.py` again.",
+        False,
+        "composition",
+    ),
+    _E(
+        "component-contract-invalid",
+        "Component contract refused",
+        "A `[component.<name>]` table of a source's `piceli.toml` has an unknown key, a bad value, an unpinned `image.base`, or the file is not valid TOML.",
+        "Fix `piceli.toml` in the component's repository (see docs/components.md) and push; the environment deploys on the next revision.",
+        False,
+        "composition",
+    ),
+    _E(
+        "component-contract-missing",
+        "Component contract missing",
+        "The source, at the commit the environment resolves to, has no `piceli.toml` or no `[component.<name>]` table for a component the environment runs.",
+        "Add the component's table to `piceli.toml` in that repository, or take the component out of the environment's stack.",
+        False,
+        "composition",
+    ),
+    _E(
+        "component-need-unmet",
+        "Component need unmet",
+        "A component's `needs` names a component the environment's stack does not run, or a Secret (`secret:NAME`) the environment does not list in `secrets=`.",
+        "Add the component to the stack or the Secret to the environment's `secrets=` (and create it in the namespace), or mark the need optional with `?` in `piceli.toml`.",
+        False,
+        "composition",
+    ),
+    _E(
+        "component-build-unsupported",
+        "Component build not supported here",
+        "The component's `build` cannot run where the controller builds: a `dockerfile` build needs a Docker engine, which the build Job and the controller do not have.",
+        "Use a `rust`, `python` or `files` build in `piceli.toml`.",
+        False,
+        "composition",
+    ),
+    _E(
+        "component-build-failed",
+        "Component build failed",
+        "Building or mirroring a component's image failed: the host build failed, the build Job ended without a receipt, or the push to the registry did not succeed.",
+        "Look at the controller's log and the build Job's pod log; the controller retries with backoff and on the next revision.",
+        True,
+        "composition",
+    ),
+    _E(
+        "composition-ref-unresolved",
+        "Environment ref not found",
+        "An environment's `follow` names a branch or tag pattern that the source does not have (yet), so the environment has no commit for that source and is not deployed.",
+        "Push the branch or the tag the environment follows, or change its `follow` rule.",
+        True,
+        "composition",
     ),
 )
 

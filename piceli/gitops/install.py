@@ -162,9 +162,14 @@ def _meta(name: str, namespace: str | None = None) -> dict[str, Any]:
 
 
 def render_controller(
-    config: ControllerConfig, settings: InstallSettings
+    config: ControllerConfig | Any, settings: InstallSettings
 ) -> list[dict[str, Any]]:
-    """The controller's objects, in apply order."""
+    """The controller's objects, in apply order.
+
+    ``config`` is a :class:`ControllerConfig` or a composition's
+    :class:`piceli.infra.controller.CompositionConfig` (its ``namespace`` and
+    ``to_dict()`` are used).
+    """
     ns = config.namespace
     cluster_rules: list[dict[str, Any]] = [
         {"apiGroups": [""], "resources": ["nodes"], "verbs": ["get", "list", "watch"]},

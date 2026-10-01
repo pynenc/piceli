@@ -2,7 +2,10 @@
 
 - ``gitops enable PIPELINE --repo URL --branches 'main,wp-*' --image REF@sha256:…``
   plans the controller's install (exit 3 with the plan hash) and installs it
-  with ``--approve HASH``.
+  with ``--approve HASH``; ``gitops enable infra.py --image …`` installs it
+  for a composition (every source, component and environment of the module).
+- ``gitops sync [ENV] [--component NAME]`` asks the controller to deploy an
+  environment now (and rebuild one component).
 - ``gitops disable`` plans (exit 3) and, with ``--approve HASH``, removes the
   controller; never an environment.
 - ``gitops status`` shows the controller's health and every branch's commit,
@@ -204,16 +207,8 @@ def enable(
         str,
         typer.Argument(
             help="The Pipeline in the repository: path/to/file.py:ATTR (relative "
-            "to the repository root)",
+            "to the repository root), or a composition module infra.py (no :ATTR)",
             show_default=False,
-        ),
-    ],
-    repo: Annotated[
-        str,
-        typer.Option(
-            "--repo",
-            help="Git URL the controller polls (https://, ssh://, git@host:path); "
-            "no credentials in it",
         ),
     ],
     image: Annotated[
@@ -224,6 +219,15 @@ def enable(
             "(registry/repo@sha256:…); see docs/gitops.md to build one",
         ),
     ],
+    repo: Annotated[
+        str | None,
+        typer.Option(
+            "--repo",
+            help="Git URL the controller polls (https://, ssh://, git@host:path); "
+            "no credentials in it. Required for a pipeline; a composition names "
+            "its sources",
+        ),
+    ] = None,
     kubeconfig: KubeconfigOption = None,
     context: ContextOption = None,
     branches: Annotated[
@@ -342,7 +346,10 @@ def enable(
 
     The pipeline's named environments (EnvConfig(environments=...)) and its
     idle_stop are read from the working tree (--root) into the controller's
-    config, so the plan hash covers every environment's trigger.
+    config, so the plan hash covers every environment's trigger. Given a
+    composition module (infra.py), every source, component and environment
+    of it goes into the config instead (and --repo, --branches, --env,
+    --main-branch, --tags are not used).
     """
     from piceli.gitops.config import (
         ControllerConfig,
@@ -351,6 +358,19 @@ def enable(
     )
     from piceli.gitops.install import InstallSettings, plan_objects, render_controller
 
+    if ":" not in pipeline and pipeline.endswith(".py"):
+        _enable_composition(
+            pipeline, root=root, image=image, kubeconfig=kubeconfig, context=context,
+            poll=poll, credentials_secret=credentials_secret, namespace=namespace,
+            storage=storage, storage_class=storage_class, cluster_rbac=cluster_rbac,
+            platform=platform, builder_image=builder_image,
+            build_git_secret=build_git_secret, builder_selector=builder_selector,
+            build_storage=build_storage, approve=approve, allow_exec=allow_exec,
+            exec_sha256=exec_sha256, transport=transport,
+        )  # fmt: skip
+        return
+    if repo is None:
+        reject("gitops-config-invalid", "--repo is required for a pipeline")
     with _guard():
         rules, idle = environment_rules(pipeline, root, env)
         config = ControllerConfig(
@@ -417,6 +437,114 @@ def enable(
                 config={"controller": config.to_dict(), "install": settings.to_dict()},
             )
         _run_plan(api, plan, approve, command, {"controller": config.to_dict()})
+
+
+def _enable_composition(
+    entry: str,
+    *,
+    root: Path,
+    image: str,
+    kubeconfig: Path | None,
+    context: str | None,
+    poll: str,
+    credentials_secret: str | None,
+    namespace: str,
+    storage: str,
+    storage_class: str | None,
+    cluster_rbac: bool,
+    platform: list[str] | None,
+    builder_image: str | None,
+    build_git_secret: str | None,
+    builder_selector: list[str] | None,
+    build_storage: str,
+    approve: str | None,
+    allow_exec: bool,
+    exec_sha256: str | None,
+    transport: str,
+) -> None:
+    """``gitops enable infra.py``: the controller of a composition."""
+    from piceli.gitops.config import parse_duration, parse_selector
+    from piceli.gitops.install import InstallSettings, plan_objects, render_controller
+    from piceli.infra import CompositionError
+    from piceli.infra.composition import load_composition
+    from piceli.infra.controller import CompositionConfig
+
+    try:
+        composition = load_composition(entry, root)
+    except CompositionError as error:
+        reject(error.code, str(error))
+    with _guard():
+        config = CompositionConfig(
+            composition=composition.to_dict(),
+            namespace=namespace,
+            poll_seconds=parse_duration(poll),
+            platforms=tuple(platform or ("linux/amd64",)),
+            builder_image=builder_image,
+            build_git_secret=build_git_secret or "piceli-build-git",
+            builder_selector=parse_selector(builder_selector or []),
+            build_storage=build_storage,
+        )
+        settings = InstallSettings(
+            image=image,
+            credentials_secret=credentials_secret,
+            storage=storage,
+            storage_class=storage_class,
+            cluster_rbac=cluster_rbac,
+        )
+    if kubeconfig is None and composition.cluster is not None:
+        # The cluster's credential profile (`piceli login`), never in Git.
+        from piceli.profiles import ProfileError, resolve
+
+        try:
+            found = resolve(composition.cluster.credentials)
+        except (ProfileError, ValueError):
+            reject(
+                "gitops-target-required",
+                "the cluster's credential profile is unknown here: run piceli login "
+                "or pass --kubeconfig FILE --context NAME",
+            )
+        kubeconfig, context = found.kubeconfig, found.context
+    say(f"composition {composition.name}: sources " + ", ".join(
+        f"{source.key} ({source.url})" for source in composition.sources
+    ))  # fmt: skip
+    for item in composition.environments:
+        rules = ", ".join(
+            f"{source.key} " + "|".join(_rule_text(rule) for rule in rules)
+            for source, rules in item.sources
+        )
+        say(f"environment {item.name} ({item.namespace}): follows {rules}")
+    objects = render_controller(config, settings)
+    command = _command_line(
+        "piceli gitops enable", entry, kubeconfig, context, namespace,
+        poll=poll, image=image, credentials_secret=credentials_secret,
+        storage=storage, storage_class=storage_class, builder_image=builder_image,
+        build_git_secret=build_git_secret, build_storage=build_storage,
+        root=None if root == Path(".") else str(root),
+        flags={"--cluster-rbac": cluster_rbac, "--allow-exec": allow_exec},
+        repeat={"--platform": platform or [], "--builder-selector": builder_selector or []},
+        transport=transport,
+    )  # fmt: skip
+    with _api(kubeconfig, context, transport, allow_exec, exec_sha256) as api:
+        with _guard():
+            plan = plan_objects(
+                api,
+                objects,
+                action="enable",
+                config={"controller": config.to_dict(), "install": settings.to_dict()},
+            )
+        _run_plan(api, plan, approve, command, {"controller": config.to_dict()})
+
+
+def _rule_text(rule: Any) -> str:
+    from piceli.envs.model import BRANCH, Branch, Tag
+
+    if rule == BRANCH:
+        return "{branch}"
+    if isinstance(rule, Branch):
+        return f"branch {rule.name}"
+    if isinstance(rule, Tag):
+        return f"tag {rule.pattern}"
+    return "promote"
 
 
 def environment_rules(
@@ -682,6 +810,48 @@ def approve_env(
     )
 
 
+@app.command("sync")
+def sync(
+    env: Annotated[
+        str | None,
+        typer.Argument(help="The environment to deploy now (default: every one)"),
+    ] = None,
+    component: Annotated[
+        str | None,
+        typer.Option(
+            "--component",
+            help="Also rebuild this component, even when its source did not change "
+            "(a composition controller)",
+        ),
+    ] = None,
+    kubeconfig: KubeconfigOption = None,
+    context: ContextOption = None,
+    namespace: NamespaceOption = "piceli-system",
+    state_dir: StateDirOption = None,
+    transport: TransportOption = "https",
+) -> None:
+    """Ask the controller to deploy ENV now at its revision (--component: rebuild one)."""
+    from piceli.gitops.state import sync_request
+
+    with _guard():
+        key, body = sync_request(env, component)
+    with _channel(state_dir, kubeconfig, context, namespace, transport) as channel:
+        with _guard():
+            channel.add_request(key, body)
+    say(
+        f"sync of {env or 'every environment'} recorded; the controller deploys it "
+        "on its next poll (an approval may still be required)"
+    )
+    emit_json(
+        {
+            "state": "requested",
+            "request": key,
+            "env": env,
+            "component": component,
+        }
+    )
+
+
 def promote(
     target: Annotated[
         str,
@@ -770,19 +940,45 @@ def run(
         Path | None,
         typer.Option("--credentials-dir", help="The mounted Git credentials Secret"),
     ] = None,
+    local_build: Annotated[
+        bool,
+        typer.Option(
+            "--local-build",
+            help="A composition controller run outside the cluster: build "
+            "components on this machine (host builds) and push them through a "
+            "port-forward to the in-cluster registry, instead of a build Job",
+        ),
+    ] = False,
     transport: TransportOption = "https",
 ) -> None:
     """Run the controller loop (the Deployment's entrypoint); --once for one poll."""
+    import json
+
     from piceli.gitops.config import ControllerConfig
     from piceli.gitops.controller import Controller
     from piceli.gitops.repo import GitRemote
     from piceli.gitops.state import controller_lock
+    from piceli.infra.controller import is_composition_config
 
     if service_account and kubeconfig is not None:
         reject(
             "gitops-target-required",
             "--service-account and --kubeconfig exclude each other",
         )
+    try:
+        document = json.loads(config_file.read_text())
+    except (OSError, ValueError):
+        document = None
+    if is_composition_config(document):
+        _run_composition(
+            config_file, state_dir, once=once, service_account=service_account,
+            kubeconfig=kubeconfig, context=context, namespace=namespace,
+            credentials_dir=credentials_dir, local_build=local_build,
+            transport=transport,
+        )  # fmt: skip
+        return
+    if local_build:
+        reject("gitops-config-invalid", "--local-build needs a composition controller")
     with _guard():
         config = ControllerConfig.load(config_file)
     with (
@@ -813,6 +1009,181 @@ def run(
             _forever(controller, refresh)
         finally:
             closer()
+
+
+def _run_composition(
+    config_file: Path,
+    state_dir: Path,
+    *,
+    once: bool,
+    service_account: bool,
+    kubeconfig: Path | None,
+    context: str | None,
+    namespace: str | None,
+    credentials_dir: Path | None,
+    local_build: bool,
+    transport: str,
+) -> None:
+    """``gitops run`` of a composition controller (every source, change-aware)."""
+    from piceli.gitops.state import controller_lock
+    from piceli.infra.controller import CompositionController, load_config
+    from piceli.infra.sources import SourceSet
+
+    with _guard():
+        config = load_config(config_file)
+    with (
+        tempfile.TemporaryDirectory(prefix="piceli-gitops-") as private,
+        _guard(),
+        controller_lock(state_dir),
+    ):
+        target = _run_target(service_account, kubeconfig, context, Path(private))
+        if target is None:
+            reject(
+                "gitops-target-required",
+                "the controller deploys to a cluster: pass --service-account (in its "
+                "pod) or --kubeconfig FILE --context NAME",
+            )
+        composition = config.model
+        sources = SourceSet(
+            composition.sources, state_dir / "sources", credentials_dir=credentials_dir
+        )
+        channel, closer = _run_channel(target, namespace, state_dir, transport)
+        try:
+            ports = _composition_ports(
+                target, state_dir, config, transport, local_build=local_build
+            )
+            controller = CompositionController(
+                config,
+                state_dir=state_dir,
+                sources=sources,
+                ports=ports,
+                channel=channel,
+                log=say,
+            )
+            if once:
+                emit_json(controller.poll_once())
+                return
+            say(
+                f"gitops controller polling {len(sources.remotes)} source(s) every "
+                f"{config.poll_seconds}s"
+            )
+            refresh = _refresher(service_account, Path(private), channel, transport)
+            _forever(controller, refresh)
+        finally:
+            closer()
+
+
+class _NoBuilder:
+    """A composition controller without --builder-image: mirrors, never builds."""
+
+    def __init__(self, mirror: Any) -> None:
+        self._mirror = mirror
+
+    def build(self, items: Any, checkout: Any) -> Any:
+        from piceli.gitops import GitOpsError
+
+        raise GitOpsError(
+            "gitops-config-invalid",
+            "no --builder-image: this controller cannot build components",
+        )
+
+    def mirror(self, items: Any) -> Any:
+        return self._mirror.mirror(items)
+
+
+def _composition_ports(
+    target: tuple[Path, str],
+    state_dir: Path,
+    config: Any,
+    transport: str,
+    *,
+    local_build: bool,
+) -> Any:
+    from piceli.gitops.ports import DefaultPorts
+    from piceli.infra import CompositionError
+    from piceli.infra.builders import JobBuilder, JobSettings, LocalBuilder
+    from piceli.infra.controller import DefaultCompositionPorts
+    from piceli.pipeline.backend import RegistryRoute
+
+    registry = config.model.registry
+    if registry is None:
+        raise CompositionError(
+            "composition-invalid",
+            "the composition's Cluster needs registry=Registry.in_cluster(...)",
+        )
+    envs = DefaultPorts(
+        target[0],
+        target[1],
+        state_dir,
+        namespace=config.namespace,
+        config=config,
+        transport=transport,
+        log=say,
+    )
+    if local_build:
+        route = RegistryRoute(
+            push=None,
+            node_registry=registry.host,
+            forward=f"service/{registry.name}",
+            namespace=registry.namespace,
+            remote_port=registry.port,
+            kubeconfig=target[0],
+            context=target[1],
+        )
+        builder: Any = LocalBuilder(
+            route,
+            platform=config.platforms[0],
+            cache_dir=state_dir / "build-cache",
+            work_dir=state_dir / "work",
+            say=say,
+        )
+    else:
+        # In the cluster: the registry by its Service name, plain HTTP.
+        route = RegistryRoute(
+            push=registry.host, node_registry=registry.host, tls=False
+        )
+        mirror = LocalBuilder(
+            route,
+            platform=config.platforms[0],
+            cache_dir=state_dir / "build-cache",
+            work_dir=state_dir / "work",
+            say=say,
+        )
+        if config.builder_image is None:
+            builder = _NoBuilder(mirror)
+        else:
+            from piceli.artifacts.cluster_build import BuildCluster
+            from piceli.k8s.ops.provider_factory import api_client_from_kubeconfig
+
+            cluster = BuildCluster(
+                api_client_from_kubeconfig(target[0], target[1], transport=transport),  # type: ignore[arg-type]
+                config.namespace,
+            )
+            settings = JobSettings(
+                image=config.builder_image,
+                namespace=config.namespace,
+                registry_url=registry.url,
+                node_registry=registry.host,
+                git_secret=config.build_git_secret,
+                selector=dict(config.builder_selector) or {"piceli.io/builder": "true"},
+                storage=config.build_storage,
+                platforms=tuple(config.platforms),
+            )
+            builder = JobBuilder(
+                settings,
+                {source.key: source.url for source in config.model.sources},
+                cluster,
+                mirror_route=route,
+                say=say,
+            )
+    return DefaultCompositionPorts(
+        envs,
+        builder,
+        kubeconfig=target[0],
+        context=target[1],
+        state_dir=state_dir,
+        transport=transport,
+    )
 
 
 def _run_target(

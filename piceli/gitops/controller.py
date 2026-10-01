@@ -201,6 +201,8 @@ class Controller:
                 self._approve(key, body)
             elif kind == "promote":
                 self._promote(key, body, refs)
+            elif kind == "sync":
+                self._sync(key, body)
             else:
                 self._reject(
                     key,
@@ -251,6 +253,43 @@ class Controller:
             next_attempt_at=None,
             reason=None,
         )
+
+    def _sync(self, key: str, body: Mapping[str, Any]) -> None:
+        """Deploy an environment again at its commit (``piceli gitops sync``)."""
+        if body.get("component") is not None:
+            self._reject(
+                key,
+                body,
+                GitOpsError(
+                    "gitops-request-invalid",
+                    "--component needs a composition controller (gitops enable infra.py)",
+                ),
+            )
+            return
+        env = body.get("env")
+        records = self._envs()
+        names = sorted(records) if env is None else [str(env)]
+        if env is not None and str(env) not in records:
+            self._reject(
+                key,
+                body,
+                GitOpsError(
+                    "gitops-request-invalid", "sync names no known environment"
+                ),
+            )
+            return
+        for name in names:
+            record = records[name]
+            if record.get("state") == "deleting" or not record.get("commit"):
+                continue
+            self._set(
+                record,
+                state="pending",
+                trigger="sync",
+                attempts=0,
+                next_attempt_at=None,
+                reason=None,
+            )
 
     def _promote(self, key: str, body: Mapping[str, Any], refs: RemoteRefs) -> None:
         branch, commit = str(body.get("branch")), str(body.get("commit"))
