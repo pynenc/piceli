@@ -3522,7 +3522,8 @@
     "path",
     "resolve",
     "secret_store_path",
-    "state_dir"
+    "state_dir",
+    "target_credentials"
    ],
    "init": [
     "base",
@@ -3547,7 +3548,8 @@
     "load_composition": [],
     "resolve": [
      "path"
-    ]
+    ],
+    "target_credentials": []
    },
    "returns": {
     "context": "ReleaseContext",
@@ -4394,6 +4396,7 @@
     "allow_exec",
     "cluster_uid",
     "context",
+    "credentials",
     "exec_pass_env",
     "exec_policy",
     "exec_sha256",
@@ -4402,10 +4405,13 @@
     "from_kubeconfig",
     "identity",
     "kubeconfig",
+    "location",
     "namespace",
     "namespace_uid",
     "node",
     "nodes",
+    "profile",
+    "profile_name",
     "request_seconds",
     "transport"
    ],
@@ -4414,6 +4420,7 @@
     "base",
     "cluster_uid",
     "context",
+    "credentials",
     "exec_pass_env",
     "exec_sha256",
     "exec_timeout_seconds",
@@ -4456,14 +4463,29 @@
      "request_seconds",
      "transport"
     ],
+    "location": [],
     "node": [
      "alias"
+    ],
+    "profile": [
+     "allow_exec",
+     "cluster_uid",
+     "exec_pass_env",
+     "exec_sha256",
+     "exec_timeout_seconds",
+     "name",
+     "namespace",
+     "namespace_uid",
+     "nodes",
+     "request_seconds",
+     "transport"
     ]
    },
    "returns": {
     "exec_policy": "ExecPolicy",
     "from_kubeconfig": "Target",
-    "kubeconfig": "Target"
+    "kubeconfig": "Target",
+    "profile": "Target"
    }
   },
   "TargetNode": {
@@ -4490,6 +4512,7 @@
     "allow_exec",
     "cluster_uid",
     "context",
+    "credentials",
     "exec_pass_env",
     "exec_sha256",
     "exec_timeout_seconds",
@@ -4504,6 +4527,7 @@
     "allow_exec",
     "cluster_uid",
     "context",
+    "credentials",
     "exec_pass_env",
     "exec_sha256",
     "exec_timeout_seconds",
@@ -4792,9 +4816,12 @@
      "help-json",
      "import",
      "inputs",
+     "login",
+     "logout",
      "logs",
      "observe",
      "operator",
+     "profiles",
      "promote",
      "publish",
      "release",
@@ -5521,6 +5548,23 @@
     ],
     "subcommands": []
    },
+   "login": {
+    "arguments": [
+     "name"
+    ],
+    "flags": [
+     "--context",
+     "--kubeconfig"
+    ],
+    "subcommands": []
+   },
+   "logout": {
+    "arguments": [
+     "name"
+    ],
+    "flags": [],
+    "subcommands": []
+   },
    "logs": {
     "arguments": [
      "env",
@@ -5778,6 +5822,13 @@
      "--kubeconfig",
      "--namespace",
      "--no-include-common-types"
+    ],
+    "subcommands": []
+   },
+   "profiles": {
+    "arguments": [],
+    "flags": [
+     "--json"
     ],
     "subcommands": []
    },
@@ -6607,6 +6658,9 @@
    "prerollout-not-startable",
    "prerollout-timeout",
    "prerollout-unavailable",
+   "profile-conflict",
+   "profile-invalid",
+   "profile-not-found",
    "promote-refused",
    "provider-error",
    "publish-failed",
@@ -7067,6 +7121,7 @@
    "maintenance": {},
    "pipeline": {},
    "process_group": {},
+   "profiles": {},
    "restore": {},
    "server": {},
    "services": {},
@@ -7777,6 +7832,7 @@
   "piceli.k8s.cli.maintenance",
   "piceli.k8s.cli.observe",
   "piceli.k8s.cli.operator",
+  "piceli.k8s.cli.profiles",
   "piceli.k8s.cli.publish",
   "piceli.k8s.cli.release",
   "piceli.k8s.cli.render",
@@ -7878,6 +7934,7 @@
   "piceli.pipeline.secrets",
   "piceli.pipeline.summary",
   "piceli.process_group",
+  "piceli.profiles",
   "piceli.reference_docs",
   "piceli.restore",
   "piceli.restore.claims",

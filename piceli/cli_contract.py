@@ -303,6 +303,32 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "--secrets external; redacted values and placeholder images are "
             "refused. Credentials only from --credentials FILE, never printed.",
         ),
+        # ----------------------------------------------------- profiles
+        "login": _C(
+            "Store a credential profile (a reference to a kubeconfig file and context).",
+            reads=("kubeconfig (only to check the context exists)",),
+            writes=("$PICELI_PROFILES_DIR/NAME.json (mode 0600)",),
+            contract="conforms",
+            notes="Never contacts a cluster. Stores the absolute kubeconfig path and "
+            "the context, never the kubeconfig contents or a token; the context is "
+            "required unless the file defines exactly one (current-context is never "
+            "used). Idempotent: logging in again replaces the profile.",
+        ),
+        "profiles": _C(
+            "List the stored credential profiles (names, contexts, kubeconfig paths).",
+            reads=("$PICELI_PROFILES_DIR",),
+            contract="conforms",
+            notes="Never contacts a cluster; prints references only, never secrets. "
+            "--json prints {state, profiles: [{name, kubeconfig, context, "
+            "kubeconfig_present}]}.",
+        ),
+        "logout": _C(
+            "Delete a stored credential profile (never the kubeconfig file).",
+            writes=("$PICELI_PROFILES_DIR/NAME.json (removed)",),
+            contract="conforms",
+            notes="Never contacts a cluster. Prints {state: removed|absent, name}; "
+            "removing an absent profile is not an error.",
+        ),
         # -------------------------------------------------------- chart
         "chart render": _C(
             "Write the app as a Helm chart directory (Chart.yaml, values, schema, templates).",

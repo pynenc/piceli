@@ -9,13 +9,17 @@ def main() -> None:
     install_signal_cleanup()
     if len(sys.argv) > 1 and sys.argv[1] == "artifacts":
         from piceli.artifacts.cli import main as artifacts_main
+        from piceli.k8s.cli.profiles import expand_profile_argv
 
-        raise SystemExit(artifacts_main(sys.argv[2:]))
+        raise SystemExit(
+            artifacts_main(expand_profile_argv(sys.argv[2:], artifacts=True))
+        )
     if len(sys.argv) > 1 and sys.argv[1] == "--help-json":
         sys.argv[1:2] = ["help-json"]
     from piceli.k8s.cli import app as k8s_app
+    from piceli.k8s.cli.profiles import main_argv
 
-    k8s_app()
+    k8s_app(args=main_argv())
 
 
 if __name__ == "__main__":

@@ -121,16 +121,19 @@ class _KubeconfigAccessor:
     ) -> Callable[..., Target] | Path:
         if instance is None:
             return owner.from_kubeconfig
-        return instance._kubeconfig
+        return instance._resolved()[0]
 
 
 class Target:
     """The cluster and namespace a pipeline deploys to, reached by an explicit kubeconfig.
 
-    Build one with :meth:`Target.kubeconfig`. Piceli never falls back to
-    ``~/.kube/config``, ``KUBECONFIG`` or the current context.
+    Build one with :meth:`Target.kubeconfig`, or with :meth:`Target.profile`
+    for a credential profile made by ``piceli login`` (resolved when used, so
+    no machine path is in Git). Piceli never falls back to ``~/.kube/config``,
+    ``KUBECONFIG`` or the current context.
 
-    Attributes: ``kubeconfig`` (path), ``context``, ``namespace``,
+    Attributes: ``kubeconfig`` (path), ``context`` (both resolved on use for a
+    profile), ``credentials`` (the profile name or ``None``), ``namespace``,
     ``cluster_uid``, ``namespace_uid``, ``nodes`` (alias →
     :class:`TargetNode`), ``transport``, ``request_seconds`` and the exec
     credential plugin opt-in ``allow_exec``, ``exec_sha256``,
@@ -155,10 +158,11 @@ class Target:
 
     def __init__(
         self,
-        kubeconfig: str | Path,
+        kubeconfig: str | Path | None = None,
         *,
-        context: str,
+        context: str | None = None,
         namespace: str,
+        credentials: str | None = None,
         cluster_uid: str | None = None,
         namespace_uid: str | None = None,
         nodes: Mapping[str, TargetNode | tuple[str, str | None] | str] | None = None,
@@ -170,7 +174,19 @@ class Target:
         exec_timeout_seconds: float | None = None,
         base: Path | None = None,
     ) -> None:
-        if not isinstance(context, str) or not context:
+        if credentials is not None:
+            if kubeconfig is not None or context is not None:
+                raise PipelineError(
+                    "pipeline-invalid",
+                    "a target names a credential profile or a kubeconfig and "
+                    "context, not both",
+                )
+            from piceli.profiles import check_name
+
+            check_name(credentials)
+        elif kubeconfig is None:
+            raise PipelineError("pipeline-invalid", "target kubeconfig is required")
+        elif not isinstance(context, str) or not context:
             raise PipelineError("pipeline-invalid", "target context is required")
         if not isinstance(namespace, str) or not _LABEL.fullmatch(namespace):
             raise PipelineError(
@@ -212,8 +228,9 @@ class Target:
         except (TypeError, ValueError) as error:
             raise PipelineError("pipeline-invalid", str(error)) from None
         values = {
-            "_kubeconfig": _resolve(kubeconfig, base),
-            "context": context,
+            "_kubeconfig": None if kubeconfig is None else _resolve(kubeconfig, base),
+            "_context": context,
+            "credentials": credentials,
             "namespace": namespace,
             "cluster_uid": cluster_uid,
             "namespace_uid": namespace_uid,
@@ -228,8 +245,9 @@ class Target:
         for key, item in values.items():
             object.__setattr__(self, key, item)
 
-    _kubeconfig: Path
-    context: str
+    _kubeconfig: Path | None
+    _context: str | None
+    credentials: str | None
     namespace: str
     cluster_uid: str | None
     namespace_uid: str | None
@@ -243,6 +261,34 @@ class Target:
 
     def __setattr__(self, name: str, value: Any) -> None:
         raise AttributeError("Target is immutable")
+
+    def _resolved(self) -> tuple[Path, str]:
+        """The kubeconfig and context, resolving a credential profile now."""
+        if (name := self.profile_name) is not None:
+            from piceli.profiles import resolve
+
+            found = resolve(name)
+            return found.kubeconfig, found.context
+        assert self._kubeconfig is not None and self._context is not None
+        return self._kubeconfig, self._context
+
+    @property
+    def profile_name(self) -> str | None:
+        """The credential profile in use: the declared one, or ``--profile``'s."""
+        from piceli.profiles import override
+
+        return override() or self.credentials
+
+    @property
+    def context(self) -> str:
+        """The kubeconfig context (of the credential profile, resolved on use)."""
+        return self._resolved()[1]
+
+    def location(self) -> tuple[str, str, str]:
+        """A stable key of where this target points; never resolves a profile."""
+        if self.credentials is not None:
+            return (f"profile:{self.credentials}", "", self.namespace)
+        return (str(self._kubeconfig), str(self._context), self.namespace)
 
     @classmethod
     def from_kubeconfig(
@@ -294,6 +340,48 @@ class Target:
             base=_caller_dir(),
         )
 
+    @classmethod
+    def profile(
+        cls,
+        name: str,
+        *,
+        namespace: str,
+        cluster_uid: str | None = None,
+        namespace_uid: str | None = None,
+        nodes: Mapping[str, TargetNode | tuple[str, str | None] | str] | None = None,
+        transport: str = "https",
+        request_seconds: float = 10.0,
+        allow_exec: bool = False,
+        exec_sha256: str | None = None,
+        exec_pass_env: Sequence[str] = (),
+        exec_timeout_seconds: float | None = None,
+    ) -> Target:
+        """A target reached with the credential profile ``name`` (``piceli login``).
+
+        The profile (a reference to a kubeconfig file and context kept outside
+        the repository) is resolved when the target is used, never at import
+        or plan-hash time; the plan hash covers its name. Inside a cluster
+        (``PICELI_IN_CLUSTER=1`` or a mounted service-account token) the name
+        resolves to the pod's service account. The other parameters are those
+        of :meth:`Target.kubeconfig`.
+
+        :param name: The profile name given to ``piceli login``.
+        :param namespace: The namespace; it must already exist.
+        """
+        return cls(
+            credentials=name,
+            namespace=namespace,
+            cluster_uid=cluster_uid,
+            namespace_uid=namespace_uid,
+            nodes=nodes,
+            transport=transport,
+            request_seconds=request_seconds,
+            allow_exec=allow_exec,
+            exec_sha256=exec_sha256,
+            exec_pass_env=exec_pass_env,
+            exec_timeout_seconds=exec_timeout_seconds,
+        )
+
     def node(self, alias: str | None) -> tuple[str, TargetNode]:
         """The node named by ``alias``, or the only declared node."""
         if alias is None:
@@ -339,8 +427,13 @@ class Target:
 
     def identity(self) -> dict[str, Any]:
         """What an approval binds to (never the kubeconfig path)."""
+        who = (
+            {"profile": self.profile_name}
+            if self.profile_name is not None
+            else {"context": self._context}
+        )
         return {
-            "context": self.context,
+            **who,
             "namespace": self.namespace,
             "cluster_uid": self.cluster_uid,
             "namespace_uid": self.namespace_uid,
@@ -348,9 +441,13 @@ class Target:
         }
 
     def __repr__(self) -> str:
+        who = (
+            f"profile={self.credentials!r}"
+            if self.credentials is not None
+            else f"context={self._context!r}"
+        )
         return (
-            f"Target(context={self.context!r}, namespace={self.namespace!r}, "
-            f"nodes={sorted(self.nodes)})"
+            f"Target({who}, namespace={self.namespace!r}, nodes={sorted(self.nodes)})"
         )
 
 
@@ -1400,7 +1497,7 @@ def _environment_targets(app: App, target: Any) -> dict[str, Target]:
                 f"declare; declared: {sorted(declared) or 'none'} "
                 "(app.environment(name, ...))",
             )
-        where = (str(value.kubeconfig), value.context, value.namespace)
+        where = value.location()
         if where in seen:
             raise PipelineError(
                 "pipeline-invalid",

@@ -65,6 +65,8 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli import yaml`](#cli-import-yaml) | Generate a typed module from a directory of manifests (no cluster). | none | no |
 | [`piceli inputs record`](#cli-inputs-record) | Capture each declared source (or the ``--only`` ones) and write a lock. | none | no |
 | [`piceli inputs verify`](#cli-inputs-verify) | Recapture the sources and compare them with the lock (exit 1 on drift). | none | no |
+| [`piceli login`](#cli-login) | Store a credential profile outside the repository (mode 0600). | none | no |
+| [`piceli logout`](#cli-logout) | Delete a stored profile (never the kubeconfig file it points at). | none | no |
 | [`piceli logs`](#cli-logs) | Print one workload's logs in an environment (kubectl, explicit context). | reads | no |
 | [`piceli observe forward-command`](#cli-observe-forward-command) | Print a JSON argv array for one explicit loopback-only port forward. | none | no |
 | [`piceli observe forward-list`](#cli-observe-forward-list) | List a user's saved port-forward preferences without starting a process. | none | no |
@@ -82,6 +84,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli operator restore`](#cli-operator-restore) | Safely verify and restore operator state into empty destination. | none | no |
 | [`piceli operator serve`](#cli-operator-serve) | Launch the Piceli Operator dashboard and unified REST API. | reads | no |
 | [`piceli operator status`](#cli-operator-status) | Print classified operator inventory: managed, unmanaged, unknown, and releases. | reads | no |
+| [`piceli profiles`](#cli-profiles) | List the stored credential profiles (references only, never secrets). | none | no |
 | [`piceli promote`](#cli-promote) | Ask the GitOps controller to deploy BRANCH@SHA to the main branch's environment. | writes | no |
 | [`piceli publish`](#cli-publish) | Push the rendered manifests as a Flux OCI artifact (needs --approve DIGEST). | none | yes |
 | [`piceli release apply`](#cli-release-apply) | Execute an approved plan (``--approve HASH``), or plan and confirm. | writes | yes |
@@ -1263,6 +1266,48 @@ Recapture the sources and compare them with the lock (exit 1 on drift).
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 
+(cli-login)=
+### `piceli login`
+
+Store a credential profile outside the repository (mode 0600).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `NAME` | text | required |  |
+| `--kubeconfig` | path | required | Kubeconfig file the profile points at (a reference is stored, never its contents) |
+| `--context` | text |  | Context in it (optional when the file defines exactly one; current-context is never used) |
+
+**Contract**
+
+- **Reads:** kubeconfig (only to check the context exists)
+- **Writes:** $PICELI_PROFILES_DIR/NAME.json (mode 0600)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Never contacts a cluster. Stores the absolute kubeconfig path and the context, never the kubeconfig contents or a token; the context is required unless the file defines exactly one (current-context is never used). Idempotent: logging in again replaces the profile.
+
+(cli-logout)=
+### `piceli logout`
+
+Delete a stored profile (never the kubeconfig file it points at).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `NAME` | text | required |  |
+
+**Contract**
+
+- **Reads:** nothing
+- **Writes:** $PICELI_PROFILES_DIR/NAME.json (removed)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Never contacts a cluster. Prints {state: removed|absent, name}; removing an absent profile is not an error.
+
 (cli-logs)=
 ### `piceli logs`
 
@@ -1693,6 +1738,26 @@ Print classified operator inventory: managed, unmanaged, unknown, and releases.
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`).
+
+(cli-profiles)=
+### `piceli profiles`
+
+List the stored credential profiles (references only, never secrets).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** $PICELI_PROFILES_DIR
+- **Writes:** nothing (read-only)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Never contacts a cluster; prints references only, never secrets. --json prints {state, profiles: [{name, kubeconfig, context, kubeconfig_present}]}.
 
 (cli-promote)=
 ### `piceli promote`

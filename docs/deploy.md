@@ -730,6 +730,49 @@ that `piceli deploy` manages; the release commands operate on the app's
 release only. After a manual rollback, the next `piceli deploy` re-applies
 the pipeline's current release (it converges on the model).
 
+## Credential profiles
+
+`Target.kubeconfig("path", ...)` puts a machine-local path in Git. A
+credential profile keeps it out: store it once per machine, name it in the
+declaration.
+
+```bash
+piceli login my-cluster --kubeconfig ~/clusters/my-cluster.yaml --context my-cluster
+piceli profiles --json     # names, contexts and kubeconfig paths; never secrets
+piceli logout my-cluster   # forgets the profile; the kubeconfig is untouched
+```
+
+```python
+target = Target.profile(
+    "my-cluster", namespace="shop", nodes={"primary": ("shop-node-1", None)}
+)
+```
+
+In a `release.toml` use `credentials = "my-cluster"` in `[target]` instead of
+`kubeconfig` and `context`. Declared with both, or neither, the target is
+refused.
+
+- The profile is a *reference*: `$PICELI_PROFILES_DIR/NAME.json` (default
+  `~/.config/piceli/profiles/`, directory `0700`, file `0600`) holds the
+  absolute kubeconfig path and the context, never the kubeconfig's contents
+  or a token. `piceli login` checks that the file exists and names the
+  context (the context may be omitted only when the file defines exactly
+  one; `current-context` is never used).
+- It is resolved when the target is used, never at import or plan time. The
+  plan hash covers the profile *name* (and any pinned `cluster_uid`), so the
+  same declaration hashes the same on every machine. A missing profile is
+  `profile-not-found`, with the `piceli login` command to run.
+- Inside a cluster (the GitOps controller, or any pod with
+  `PICELI_IN_CLUSTER=1` or a mounted service-account token) a profile name
+  resolves to the pod's service account instead of a stored profile.
+- `--profile NAME` replaces `--kubeconfig FILE --context CTX` on every command
+  that takes them (`observe`, `operator`, `gitops`, `codegen`, `import`, `ui`,
+  `artifacts retention`); naming both is `profile-conflict`. On commands that
+  read a pipeline or release spec (`deploy`, `release`, `status`, `access`,
+  `env`, `envs`, `logs`) it uses the profile in place of the declared
+  target's credentials for that run; the namespace and nodes stay as
+  declared, and the hash then names that profile.
+
 ## Managed clusters
 
 A target whose kubeconfig user runs an exec credential plugin (GKE, EKS,
