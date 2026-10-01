@@ -1,0 +1,33 @@
+const { test, expect } = require('./session.cjs');
+
+test('cluster and named environment actions', async ({ page }) => {
+  await page.goto('/cluster');
+  await expect(page.getByText('Profile:')).toContainText('demo-east');
+  await expect(page.getByRole('combobox', { name: 'Choose credential profile' })).toContainText('demo-west');
+  await expect(page.getByRole('heading', { name: 'Cluster', exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Cluster nodes' })).toContainText('worker-1');
+  await expect(page.getByText('Restart k3s on this node')).toBeVisible();
+  await expect(page.getByRole('region', { name: 'In-cluster registry' })).toContainText('0.49 GiB');
+  await page.goto('/composition/environments/preview');
+  await page.getByRole('button', { name: 'Promote', exact: true }).click();
+  const promotion = page.getByRole('region', { name: 'promote review' });
+  await promotion.getByRole('combobox', { name: 'Published branch and commit' }).selectOption({ index: 1 });
+  await expect(promotion.getByRole('button', { name: 'Confirm promote' })).toBeDisabled();
+  await promotion.getByRole('checkbox').check();
+  await promotion.getByRole('button', { name: 'Confirm promote' }).click();
+  await expect(page.getByText('Request recorded')).toBeVisible();
+  await page.getByRole('button', { name: 'Approve', exact: true }).click();
+  const approval = page.getByRole('region', { name: 'approve review' });
+  await expect(approval).toContainText('sha256:');
+  await approval.getByRole('checkbox').check();
+  await approval.getByRole('button', { name: 'Confirm approve' }).click();
+  await expect(page.getByText('Request recorded')).toBeVisible();
+  await page.goto('/composition/environments/wp-idle');
+  await expect(page.getByText('Idle-stopped since')).toBeVisible();
+  await page.getByRole('button', { name: 'Wake' }).click();
+  const wake = page.getByRole('region', { name: 'wake review' });
+  await wake.getByRole('checkbox').check();
+  await wake.getByRole('button', { name: 'Confirm wake' }).click();
+  await expect(page.getByText('Request recorded')).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBeTruthy();
+});

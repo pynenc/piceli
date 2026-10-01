@@ -6,6 +6,12 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ## Version 0.14.0
 
+- **Web UI:** a Cluster status page presents nodes, registry pods and storage,
+  mirror restart state, controller and UI health. Named environment headers
+  review the exact approval hash, published promotion ref and idle-stop Wake
+  request. Local `piceli ui serve --profile NAME` shows and switches saved
+  profiles through a fresh session; no credential material reaches the browser.
+
 - **Credential profiles:** `piceli login NAME --kubeconfig FILE [--context C]`
   stores a profile (the kubeconfig path and context, never its contents or a
   token; `$PICELI_PROFILES_DIR`, default `~/.config/piceli/profiles`, mode

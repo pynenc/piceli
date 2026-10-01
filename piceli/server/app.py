@@ -9,7 +9,7 @@ import re
 import threading
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -51,11 +51,14 @@ from piceli.services.contracts import (
     GitOpsPromotionRequest,
     LogBatch,
     LogSourcePage,
+    NamedEnvironmentApprovalRequest,
+    NamedEnvironmentPromotionRequest,
     Operation,
     OperationPage,
     OperationRequest,
     PlanRecord,
     PlanRequest,
+    ProfileSwitchRequest,
     RecoveryRequest,
     ReleasePage,
     RemoteAccessClaimRequest,
@@ -74,9 +77,11 @@ if TYPE_CHECKING:
     from piceli.server.cluster_security import ClusterSecurity
     from piceli.services.access import AccessService
     from piceli.services.cluster_build_control import ClusterBuildControl
+    from piceli.services.cluster_status import ClusterStatusControl
     from piceli.services.composition_control import CompositionControl
     from piceli.services.environment_control import EnvironmentControl
     from piceli.services.logs import LogService
+    from piceli.services.named_environment_actions import NamedEnvironmentActions
     from piceli.services.operations import OperationService
     from piceli.services.pipeline_control import PipelineControl
     from piceli.services.remote_access import RemoteAccessService
@@ -106,6 +111,10 @@ def _error(code: str, status: int) -> JSONResponse:
         "ui-controller-absent": "No GitOps controller status is published yet. Enable GitOps for the composition, then refresh.",
         "ui-sync-target-unknown": "The controller's status does not list that environment or component. Refresh and try again.",
         "ui-sync-unavailable": "The controller's request inbox is unavailable. Run cluster init again, then retry.",
+        "gitops-promote-not-allowed": "This environment does not allow promotion. Check its declared follow policy.",
+        "profile-not-found": "That credential profile is no longer available. Refresh the profile list.",
+        "profile-invalid": "This credential profile is invalid. Check it with piceli profiles --json.",
+        "profile-conflict": "A profile cannot be combined with explicit kubeconfig or context options.",
     }
     safe_code = code if code in messages else "ui-observation-unavailable"
     return JSONResponse(
@@ -156,10 +165,13 @@ def create_app(
     environment_control: EnvironmentControl | None = None,
     pipeline_control: PipelineControl | None = None,
     cluster_build_control: ClusterBuildControl | None = None,
+    cluster_status_control: ClusterStatusControl | None = None,
     composition_control: CompositionControl | None = None,
     logs: LogService | None = None,
     cluster_security: ClusterSecurity | None = None,
     launch_token: str | None = None,
+    active_profile: str | None = None,
+    profile_switch: Callable[[str], None] | None = None,
 ) -> FastAPI:
     """Create a local app. The caller owns the server's loopback listener.
 
@@ -252,6 +264,15 @@ def create_app(
     )
     app.state.service = service
     app.state.security = security
+    if cluster_status_control is None and service.registrations:
+        from piceli.services.cluster_status import ClusterStatusControl
+
+        scope = (
+            composition_control.application_id
+            if composition_control is not None
+            else next(iter(service.registrations))
+        )
+        cluster_status_control = ClusterStatusControl(service, scope)
     if cluster_security is not None:
         app.add_middleware(
             SessionMiddleware,
@@ -430,9 +451,15 @@ def create_app(
             and pipeline_control is None
             and cluster_build_control is None
             and composition_control is None
+            and cluster_status_control is None
         ):
             return result
         actions = dict(result.actions)
+        if cluster_status_control is not None:
+            visible = service._allowed(cluster_status_control.application_id, "inspect")
+            actions["cluster_status"] = Capability(
+                allowed=visible, reason=None if visible else "not-authorized"
+            )
         if composition_control is not None:
             visible = service._allowed(composition_control.application_id, "inspect")
             can_sync = service._allowed(composition_control.application_id, "deploy")
@@ -495,6 +522,33 @@ def create_app(
             reason=None if editable else "not-authorized",
         )
         return result.model_copy(update={"actions": actions})
+
+    @app.get(f"{api}/profiles")
+    def profiles() -> dict[str, Any]:
+        if cluster_security is not None:
+            return {"active": None, "profiles": []}
+        from piceli.profiles import list_profiles
+
+        return {
+            "active": active_profile,
+            "profiles": [
+                {"name": item.name, "available": item.kubeconfig.is_file()}
+                for item in list_profiles()
+            ],
+        }
+
+    @app.post(f"{api}/profiles/switch", status_code=202)
+    def switch_profile(body: ProfileSwitchRequest) -> dict[str, str]:
+        if cluster_security is not None or profile_switch is None:
+            raise QueryError("ui-operation-unavailable", 409)
+        from piceli.profiles import ProfileError, resolve
+
+        try:
+            resolve(body.name)
+        except ProfileError:
+            raise QueryError("profile-not-found", 404) from None
+        profile_switch(body.name)
+        return {"state": "restarting", "profile": body.name}
 
     def pipelines() -> PipelineControl:
         if pipeline_control is None:
@@ -595,6 +649,12 @@ def create_app(
     def composition_overview() -> dict[str, Any]:
         return composition().overview()
 
+    @app.get(f"{api}/cluster/status")
+    def cluster_status() -> dict[str, Any]:
+        if cluster_status_control is None:
+            raise QueryError("ui-operation-unavailable", 409)
+        return cluster_status_control.status()
+
     @app.get(f"{api}/composition/environments/{{env}}")
     def composition_environment(env: str) -> dict[str, Any]:
         return composition().environment(env)
@@ -602,6 +662,31 @@ def create_app(
     @app.post(f"{api}/composition/sync", status_code=202)
     def composition_sync(body: CompositionSyncRequest) -> dict[str, Any]:
         return composition().sync(body.env, body.component)
+
+    def named_actions() -> NamedEnvironmentActions:
+        from piceli.services.named_environment_actions import NamedEnvironmentActions
+
+        return NamedEnvironmentActions(composition())
+
+    @app.get(f"{api}/composition/environments/{{env}}/actions")
+    def named_environment_options(env: str) -> dict[str, Any]:
+        return named_actions().options(env)
+
+    @app.post(f"{api}/composition/environments/{{env}}/approvals", status_code=202)
+    def named_environment_approval(
+        env: str, body: NamedEnvironmentApprovalRequest
+    ) -> dict[str, str]:
+        return named_actions().approve(env, body.plan_hash)
+
+    @app.post(f"{api}/composition/environments/{{env}}/promotions", status_code=202)
+    def named_environment_promotion(
+        env: str, body: NamedEnvironmentPromotionRequest
+    ) -> dict[str, str]:
+        return named_actions().promote(env, body.branch, body.commit)
+
+    @app.post(f"{api}/composition/environments/{{env}}/wake", status_code=202)
+    def named_environment_wake(env: str) -> dict[str, str]:
+        return named_actions().wake(env)
 
     @app.get(f"{api}/applications", response_model=ApplicationPage)
     def applications(cursor: str | None = None) -> ApplicationPage:

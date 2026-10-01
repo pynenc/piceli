@@ -6,7 +6,7 @@ const { test, expect } = require('./session.cjs');
 
 const shots = process.env.PICELI_UI_CLIPS_SHOTS;
 async function shot(page, name) {
-  if (shots) await page.screenshot({ path: path.join(shots, `${name}.png`) });
+  if (shots) await page.screenshot({ path: path.join(shots, `${name}.png`), fullPage: true });
 }
 const pause = (page, ms = 1200) => page.waitForTimeout(ms);
 
@@ -56,6 +56,38 @@ test('composition-environments', async ({ page }) => {
   await expect(page.getByRole('region', { name: 'Source product' })).toBeVisible();
   await pause(page, 1200);
   await shot(page, 'composition-sources');
+});
+
+test('cluster-overview', async ({ page }) => {
+  await page.goto('/cluster');
+  await expect(page.getByRole('heading', { name: 'Cluster', exact: true })).toBeVisible();
+  await expect(page.getByText('Restart k3s on this node')).toBeVisible();
+  await pause(page, 1500);
+  await shot(page, 'cluster');
+});
+
+test('named-environment-actions', async ({ page }) => {
+  await page.goto('/composition/environments/preview');
+  await expect(page.getByRole('heading', { name: 'preview', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Approve', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'approve review' })).toContainText('sha256:');
+  await pause(page, 1300);
+  await shot(page, 'named-environment-approve');
+  await page.getByRole('button', { name: 'Cancel' }).click();
+  await page.getByRole('button', { name: 'Promote', exact: true }).click();
+  await page.getByRole('combobox', { name: 'Published branch and commit' }).selectOption({ index: 1 });
+  await expect(page.getByRole('region', { name: 'promote review' })).toContainText('The controller may still require');
+  await pause(page, 1300);
+  await shot(page, 'named-environment-promote');
+});
+
+test('idle-stopped-environment', async ({ page }) => {
+  await page.goto('/composition/environments/wp-idle');
+  await expect(page.getByText('Idle-stopped since')).toBeVisible();
+  await page.getByRole('button', { name: 'Wake' }).click();
+  await expect(page.getByRole('region', { name: 'wake review' })).toContainText('Request a sync');
+  await pause(page, 1300);
+  await shot(page, 'idle-stopped-environment');
 });
 
 test('pipeline-plan-approval', async ({ page }) => {

@@ -4,6 +4,7 @@ import { lazy } from 'react';
 import { NavLink, Route } from 'react-router-dom';
 import type { Capabilities } from '../../api/generated';
 import { Notice } from '../../components/State';
+import { NamedEnvironmentActions } from './NamedEnvironmentActions';
 
 const CompositionEnvironments = lazy(async () => ({ default: (await import('./Composition')).CompositionEnvironments }));
 const CompositionEnvironment = lazy(async () => ({ default: (await import('./Composition')).CompositionEnvironment }));
@@ -35,6 +36,6 @@ export function compositionRoutes(capabilities?: Capabilities) {
   return <>
     <Route path="/composition" element={ok ? <CompositionEnvironments canSync={canSync} /> : <Unavailable />} />
     <Route path="/composition/sources" element={ok ? <CompositionSources /> : <Unavailable />} />
-    <Route path="/composition/environments/:env" element={ok ? <CompositionEnvironment canSync={canSync} /> : <Unavailable />} />
+    <Route path="/composition/environments/:env" element={ok ? <CompositionEnvironment canSync={canSync} actions={environment => <NamedEnvironmentActions environment={environment} canChange={canSync} />} /> : <Unavailable />} />
   </>;
 }
