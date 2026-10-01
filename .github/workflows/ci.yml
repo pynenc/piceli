@@ -130,6 +130,9 @@ jobs:
   integration:
     name: integration (k8s ${{ matrix.node.minor }})
     needs: kind-nodes
+    # The same tree already passed on its pull request; main and releases do
+    # not wait for kind again. Nightly and manual runs cover every version.
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
@@ -169,7 +172,15 @@ jobs:
           echo "79b0f844237bd4b0446e4dc884dbc1765fc7dedc3968f743d5949c6f2e701739  /tmp/sops" | sha256sum -c -
           sudo install -m 0755 /tmp/sops /usr/local/bin/sops
       - name: Integration tests
-        run: uv run pytest tests/integration --cov --cov-report=term
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          # The Rust image build (up to 25 min) runs nightly and on demand only.
+          args=""
+          if [ "$EVENT" = pull_request ]; then
+            args="--deselect tests/integration/test_release_pipeline_kind.py"
+          fi
+          uv run pytest tests/integration --cov --cov-report=term $args
       - name: Store coverage data
         uses: actions/upload-artifact@v6
         with:
@@ -247,7 +258,7 @@ jobs:
           enable-cache: true
           cache-dependency-glob: uv.lock
       - run: uv sync --all-extras --group docs --python 3.12
-      - run: uv run sphinx-build -W --keep-going -b html docs docs/_build/html
+      - run: uv run sphinx-build -j auto -W --keep-going -b html docs docs/_build/html
 
   publish-testpypi:
     # Every pull request from this repository publishes a pre-release to TestPyPI
@@ -318,6 +329,7 @@ jobs:
 
   coverage:
     needs: [test, integration]
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
