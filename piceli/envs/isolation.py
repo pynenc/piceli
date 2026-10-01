@@ -133,7 +133,16 @@ def _refuse(code: str, message: str) -> EnvError:
 def _check_names(manifest: Mapping[str, Any], env: BranchEnv, ref: ResourceRef) -> None:
     if ref.kind == "Secret":
         return
+    # An image reference names a registry, not a Service the app calls: the
+    # in-cluster registry (``name.namespace.svc:port/…``) serves every env.
+    images = {
+        container.get("image")
+        for pod in pod_specs(dict(manifest))
+        for container in containers(pod)
+    }
     for text in _strings(manifest):
+        if text in images:
+            continue
         for match in _SERVICE_NAME.finditer(text):
             namespace = match.group(1)
             if namespace != env.namespace and namespace not in SHARED_NAMESPACES:

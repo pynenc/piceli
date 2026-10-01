@@ -1143,6 +1143,185 @@ class Registry:
             described["mirror_credentials"] = sorted(self.mirror_credentials)
         return described
 
+    @classmethod
+    def in_cluster(
+        cls,
+        *,
+        on: str,
+        storage: str = "20Gi",
+        port: int = 5000,
+        namespace: str = "piceli-system",
+        name: str = "piceli-registry",
+        repository: str | None = None,
+        image: str | None = None,
+        storage_class: str | None = None,
+        node_port: int | None = None,
+        mirror_dir: str = "/etc/containerd/certs.d",
+        mirror: Sequence[str] = (),
+        mirror_credentials: Mapping[str, Path] | None = None,
+    ) -> ClusterRegistry:
+        """A registry inside the cluster that every node pulls from by one name.
+
+        ``piceli registry install`` puts a registry Deployment (pinned to node
+        ``on``, data on a retained claim of ``storage``), a Service and a node
+        agent (DaemonSet) in ``namespace``. The agent writes a containerd
+        mirror ``<mirror_dir>/<host>/hosts.toml`` on every node, pointing the
+        stable name ``<name>.<namespace>.svc:<port>`` at the Service, so every
+        node pulls ``<name>.<namespace>.svc:<port>/<repository>/<image>@sha256:…``.
+        See ``docs/cluster_registry.md``.
+
+        :param on: Node (``kubernetes.io/hostname``) that runs the registry and
+            keeps its data.
+        :param storage: Size of the registry's retained volume claim.
+        :param port: Service and registry port (part of the stable name).
+        :param namespace: Namespace of the registry and its node agent.
+        :param name: Base name of the registry objects (part of the stable name).
+        :param repository: Repository prefix; default the app name.
+        :param image: Registry image pinned by digest; default the node-local
+            registry's.
+        :param storage_class: StorageClass of the claim (default: the cluster's).
+        :param node_port: Also expose the Service on this fixed NodePort
+            (30000-32767), for builders outside the cluster that push to it.
+        :param mirror_dir: The nodes' containerd ``config_path`` (k3s:
+            ``/var/lib/rancher/k3s/agent/etc/containerd/certs.d``).
+        :param mirror: Third-party images to copy by digest, as for
+            :class:`Registry`.
+        :param mirror_credentials: ``{registry: credentials file}`` for mirror
+            sources that need a login.
+        """
+        return ClusterRegistry(
+            on=on,
+            storage=storage,
+            port=port,
+            namespace=namespace,
+            name=name,
+            repository=repository,
+            image=image,
+            storage_class=storage_class,
+            node_port=node_port,
+            mirror_dir=mirror_dir,
+            mirror=mirror,
+            mirror_credentials=mirror_credentials,
+        )
+
+
+_QUANTITY = re.compile(r"[1-9][0-9]{0,8}(?:Ki|Mi|Gi|Ti)")
+_NODE_NAME = re.compile(r"[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?")
+_REPOSITORY = re.compile(
+    r"[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*"
+)
+_REGISTRY_IMAGE = re.compile(r"[a-z0-9][a-z0-9./:_-]*@sha256:[0-9a-f]{64}")
+_MIRROR_DIR = re.compile(r"/[A-Za-z0-9._/-]{1,250}")
+
+
+@dataclass(frozen=True)
+class ClusterRegistry(Registry):
+    """A registry in the cluster, pulled by every node through a containerd mirror.
+
+    Build it with :meth:`Registry.in_cluster`. It is a :class:`Registry`
+    whose ``url`` is the stable name ``oci://<name>.<namespace>.svc:<port>/<repository>``:
+    cluster build Jobs push to the Service by that name (cluster DNS), a
+    laptop pushes through a supervised ``kubectl port-forward`` to the
+    Service, and nodes pull by that name through the mirror the node agent
+    writes. ``piceli registry install`` installs it; ``piceli deploy`` only
+    reads whether it is ready.
+    """
+
+    url: str = ""
+    on: str = ""
+    storage: str = "20Gi"
+    port: int = 5000
+    namespace: str = "piceli-system"
+    name: str = "piceli-registry"
+    repository: str | None = None
+    image: str | None = None
+    storage_class: str | None = None
+    node_port: int | None = None
+    mirror_dir: str = "/etc/containerd/certs.d"
+
+    kind = "cluster-registry"
+
+    def __post_init__(self) -> None:
+        def invalid(message: str) -> PipelineError:
+            return PipelineError("pipeline-invalid", f"Registry.in_cluster: {message}")
+
+        if not isinstance(self.on, str) or not _NODE_NAME.fullmatch(self.on):
+            raise invalid("on= must name a node (kubernetes.io/hostname)")
+        if not isinstance(self.storage, str) or not _QUANTITY.fullmatch(self.storage):
+            raise invalid("storage= must be a size like 20Gi")
+        if (
+            isinstance(self.port, bool)
+            or not isinstance(self.port, int)
+            or not 0 < self.port < 65536
+        ):
+            raise invalid("port= must be a TCP port")
+        for key in ("namespace", "name"):
+            value = getattr(self, key)
+            if not isinstance(value, str) or not _LABEL.fullmatch(value):
+                raise invalid(f"{key}= must be a DNS label")
+        if len(self.name) > 63 - len("-storage"):
+            raise invalid("name= is too long (at most 55 characters)")
+        if self.repository is not None and (
+            not isinstance(self.repository, str)
+            or not _REPOSITORY.fullmatch(self.repository)
+        ):
+            raise invalid("repository= must be a repository path like team/app")
+        if self.image is not None and (
+            not isinstance(self.image, str) or not _REGISTRY_IMAGE.fullmatch(self.image)
+        ):
+            raise invalid("image= must be pinned by digest (repo@sha256:<64 hex>)")
+        if self.storage_class is not None and (
+            not isinstance(self.storage_class, str)
+            or not _NODE_NAME.fullmatch(self.storage_class)
+        ):
+            raise invalid("invalid storage_class=")
+        if self.node_port is not None and (
+            isinstance(self.node_port, bool)
+            or not isinstance(self.node_port, int)
+            or not 30000 <= self.node_port <= 32767
+        ):
+            raise invalid("node_port= must be in 30000-32767")
+        if (
+            not isinstance(self.mirror_dir, str)
+            or not _MIRROR_DIR.fullmatch(self.mirror_dir)
+            or "/../" in self.mirror_dir + "/"
+            or self.mirror_dir.rstrip("/") in ("", "/etc", "/var")
+        ):
+            raise invalid("mirror_dir= must be the absolute containerd certs.d dir")
+        if self.credentials is not None or self.ca_file is not None:
+            raise invalid("an in-cluster registry takes no credentials or CA file")
+        if self.node_registry is not None:
+            raise invalid("nodes pull by the stable name; node_registry= is not used")
+        prefix = f"/{self.repository}" if self.repository else ""
+        object.__setattr__(self, "url", f"oci://{self.host}{prefix}")
+        super().__post_init__()
+
+    @property
+    def host(self) -> str:
+        """The stable registry name every node and pod uses (``name.namespace.svc:port``)."""
+        return f"{self.name}.{self.namespace}.svc:{self.port}"
+
+    def describe(self) -> dict[str, Any]:
+        described: dict[str, Any] = {
+            "strategy": self.kind,
+            "host": self.host,
+            "repository": self.repository,
+            "namespace": self.namespace,
+            "name": self.name,
+            "node": self.on,
+            "storage": self.storage,
+        }
+        for key in ("image", "storage_class", "node_port"):
+            if getattr(self, key) is not None:
+                described[key] = getattr(self, key)
+        if self.mirror_dir != "/etc/containerd/certs.d":
+            described["mirror_dir"] = self.mirror_dir
+        if self.mirror:
+            described["mirror"] = list(self.mirror)
+        if self.mirror_credentials:
+            described["mirror_credentials"] = sorted(self.mirror_credentials)
+        return described
+
 
 Delivery = NodeLoopbackRegistry | NodeImport | Registry
 
@@ -1286,7 +1465,7 @@ class Pipeline:
             raise PipelineError(
                 "pipeline-invalid",
                 "a pipeline with a build needs deliver= (NodeLoopbackRegistry(), "
-                "NodeImport() or Registry(url))",
+                "NodeImport(), Registry(url) or Registry.in_cluster(on=NODE))",
             )
         if deliver is not None and not isinstance(
             deliver, NodeLoopbackRegistry | NodeImport | Registry
@@ -1303,6 +1482,11 @@ class Pipeline:
         #: The environment this pipeline was selected for (``for_environment``).
         self.environment: Environment | None = None
         self.builds = builds
+        if isinstance(deliver, ClusterRegistry) and deliver.repository is None:
+            # The in-cluster registry is shared: each app pushes under its name.
+            import dataclasses
+
+            deliver = dataclasses.replace(deliver, repository=app.name)
         self.deliver = deliver
         self.checks = _checks(checks)
         self.rollback_on_failed_checks = bool(rollback_on_failed_checks)

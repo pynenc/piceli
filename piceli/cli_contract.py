@@ -1202,6 +1202,58 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "environments, the namespace and (without --delete-state) the state "
             "volume. Exit 3 with the plan hash until --approve. " + _EXPLICIT_CONTEXT,
         ),
+        "registry install": _C(
+            "Plan and, with --approve HASH, install the in-cluster registry "
+            "(Registry.in_cluster) and the containerd mirror on every node.",
+            reads=("kubeconfig", "MODULE:ATTR (optional)"),
+            cluster="writes",
+            approval_required=True,
+            contract="conforms",
+            exit_codes=(0, 2, 3),
+            notes="Without --approve prints the plan (Namespace, ConfigMap, "
+            "retained PersistentVolumeClaim, Service, registry Deployment "
+            "pinned to the node, node agent DaemonSet that writes "
+            "certs.d/<name>.<namespace>.svc:<port>/hosts.toml on each node) "
+            "and its hash, exit 3. Idempotent: an installed registry plans "
+            "unchanged. A changed plan is refused "
+            "(cluster-registry-plan-changed). " + _EXPLICIT_CONTEXT,
+        ),
+        "registry uninstall": _C(
+            "Plan and, with --approve HASH, remove the in-cluster registry and "
+            "its node mirrors.",
+            reads=("kubeconfig", "MODULE:ATTR (optional)"),
+            cluster="writes",
+            approval_required=True,
+            contract="conforms",
+            exit_codes=(0, 2, 3),
+            notes="Keeps the namespace and (without --delete-storage) the claim "
+            "with the images. The node agents remove their hosts.toml when they "
+            "stop. Workloads that pull from the registry fail to start new "
+            "pods afterwards. " + _EXPLICIT_CONTEXT,
+        ),
+        "registry status": _C(
+            "Show the in-cluster registry pod, the mirror on every node and the "
+            "storage use.",
+            reads=("kubeconfig", "MODULE:ATTR (optional)"),
+            cluster="reads",
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="Read-only. state: ready, degraded (registry or a node's "
+            "mirror not ready) or not-installed. Storage use comes from the "
+            "kubelet stats (needs nodes/proxy; null otherwise). " + _EXPLICIT_CONTEXT,
+        ),
+        "registry forward": _C(
+            "Keep a loopback port-forward to the in-cluster registry Service open "
+            "for pushes from this machine.",
+            reads=("kubeconfig", "kubectl"),
+            cluster="reads",
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="Prints one JSON object with the local push URL, then runs "
+            "until interrupted. Pushes through it go by digest; nodes pull "
+            "by the stable name. " + _EXPLICIT_CONTEXT,
+        ),
         "gitops status": _C(
             "Show the GitOps controller's health, repository, last poll and "
             "each branch's commit, state and pending approval.",

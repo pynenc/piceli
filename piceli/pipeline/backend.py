@@ -357,6 +357,32 @@ class Backend:
             client.close()
         return [item for item in items if isinstance(item, dict)]
 
+    def cluster_registry_state(self, target: Target, strategy: Any) -> str:
+        """``ready``, ``starting`` or ``not-installed``: the in-cluster registry
+        Deployment of ``Registry.in_cluster`` (read-only)."""
+        import json
+
+        from kubernetes.client import AppsV1Api
+        from kubernetes.client.exceptions import ApiException
+
+        client = self._api(target)
+        try:
+            response = AppsV1Api(client).read_namespaced_deployment(
+                strategy.name,
+                strategy.namespace,
+                _preload_content=False,
+                _request_timeout=target.request_seconds,
+            )
+            body = json.loads(response.data)
+        except ApiException as error:
+            if error.status == 404:
+                return "not-installed"
+            raise
+        finally:
+            client.close()
+        status = body.get("status") or {}
+        return "ready" if status.get("readyReplicas") else "starting"
+
     def node_platform(self, target: Target, node: str) -> str:
         """``os/architecture`` the node reports (``status.nodeInfo``)."""
         import json

@@ -925,6 +925,68 @@
    },
    "pydantic": true
   },
+  "ClusterRegistry": {
+   "attrs": [
+    "ca_file",
+    "credentials",
+    "describe",
+    "host",
+    "image",
+    "in_cluster",
+    "kind",
+    "mirror",
+    "mirror_credentials",
+    "mirror_dir",
+    "name",
+    "namespace",
+    "node_port",
+    "node_registry",
+    "on",
+    "port",
+    "repository",
+    "storage",
+    "storage_class",
+    "url"
+   ],
+   "init": [
+    "ca_file",
+    "credentials",
+    "image",
+    "mirror",
+    "mirror_credentials",
+    "mirror_dir",
+    "name",
+    "namespace",
+    "node_port",
+    "node_registry",
+    "on",
+    "port",
+    "repository",
+    "storage",
+    "storage_class",
+    "url"
+   ],
+   "methods": {
+    "describe": [],
+    "in_cluster": [
+     "image",
+     "mirror",
+     "mirror_credentials",
+     "mirror_dir",
+     "name",
+     "namespace",
+     "node_port",
+     "on",
+     "port",
+     "repository",
+     "storage",
+     "storage_class"
+    ]
+   },
+   "returns": {
+    "in_cluster": "ClusterRegistry"
+   }
+  },
   "CombinedPlan": {
    "attrs": [
     "combined_hash",
@@ -3451,6 +3513,7 @@
     "ca_file",
     "credentials",
     "describe",
+    "in_cluster",
     "kind",
     "mirror",
     "mirror_credentials",
@@ -3466,7 +3529,24 @@
     "url"
    ],
    "methods": {
-    "describe": []
+    "describe": [],
+    "in_cluster": [
+     "image",
+     "mirror",
+     "mirror_credentials",
+     "mirror_dir",
+     "name",
+     "namespace",
+     "node_port",
+     "on",
+     "port",
+     "repository",
+     "storage",
+     "storage_class"
+    ]
+   },
+   "returns": {
+    "in_cluster": "ClusterRegistry"
    }
   },
   "ReleaseContext": {
@@ -4895,6 +4975,7 @@
      "profiles",
      "promote",
      "publish",
+     "registry",
      "release",
      "render",
      "restore",
@@ -5936,6 +6017,90 @@
     ],
     "subcommands": []
    },
+   "registry": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "forward",
+     "install",
+     "status",
+     "uninstall"
+    ]
+   },
+   "registry forward": {
+    "arguments": [
+     "ref"
+    ],
+    "flags": [
+     "--context",
+     "--env",
+     "--kubeconfig",
+     "--local-port",
+     "--name",
+     "--namespace",
+     "--port"
+    ],
+    "subcommands": []
+   },
+   "registry install": {
+    "arguments": [
+     "ref"
+    ],
+    "flags": [
+     "--allow-exec",
+     "--approve",
+     "--context",
+     "--env",
+     "--exec-sha256",
+     "--image",
+     "--kubeconfig",
+     "--mirror-dir",
+     "--name",
+     "--namespace",
+     "--node-port",
+     "--on",
+     "--port",
+     "--storage",
+     "--storage-class",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "registry status": {
+    "arguments": [
+     "ref"
+    ],
+    "flags": [
+     "--allow-exec",
+     "--context",
+     "--env",
+     "--exec-sha256",
+     "--json",
+     "--kubeconfig",
+     "--name",
+     "--namespace",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "registry uninstall": {
+    "arguments": [
+     "ref"
+    ],
+    "flags": [
+     "--allow-exec",
+     "--approve",
+     "--context",
+     "--delete-storage",
+     "--env",
+     "--exec-sha256",
+     "--kubeconfig",
+     "--name",
+     "--namespace",
+     "--transport"
+    ],
+    "subcommands": []
+   },
    "release": {
     "arguments": [],
     "flags": [],
@@ -6450,6 +6615,12 @@
    "cluster-build-invalid",
    "cluster-identity-changed",
    "cluster-identity-unreadable",
+   "cluster-registry-cluster-failed",
+   "cluster-registry-invalid",
+   "cluster-registry-not-installed",
+   "cluster-registry-not-ready",
+   "cluster-registry-plan-changed",
+   "cluster-registry-target-required",
    "codegen-cluster-read-failed",
    "codegen-flags-conflict",
    "codegen-output-refused",
@@ -7669,6 +7840,9 @@
    "CheckRunner": {
     "class": "CheckRunner"
    },
+   "ClusterRegistry": {
+    "class": "ClusterRegistry"
+   },
    "CombinedPlan": {
     "class": "CombinedPlan"
    },
@@ -7847,6 +8021,7 @@
   "piceli.artifacts.build_spec",
   "piceli.artifacts.cli",
   "piceli.artifacts.cluster_build",
+  "piceli.artifacts.cluster_registry",
   "piceli.artifacts.delivery",
   "piceli.artifacts.delivery_inputs",
   "piceli.artifacts.gc",
@@ -7923,6 +8098,7 @@
   "piceli.k8s.cli.operator",
   "piceli.k8s.cli.profiles",
   "piceli.k8s.cli.publish",
+  "piceli.k8s.cli.registry",
   "piceli.k8s.cli.release",
   "piceli.k8s.cli.render",
   "piceli.k8s.cli.restore",

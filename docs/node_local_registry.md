@@ -13,7 +13,7 @@ exposed on the network.
 
 Use it for single-node clusters and for workloads pinned to one node (k3s on a
 lab machine, kind, a single-board computer). For images that must reach several
-nodes, see [Multi-node pulls](#multi-node-pulls-next-step).
+nodes, see {doc}`cluster_registry`.
 
 ## How it works
 
@@ -235,21 +235,10 @@ wildcard (`"*"`) mirror, that entry also applies to `127.0.0.1:<port>`. Add an
 explicit `127.0.0.1:5000` entry with an `http://` endpoint, or remove the
 wildcard.
 
-## Multi-node pulls (next step)
+## Multi-node pulls
 
-The loopback address exists only on its own node. To let other nodes pull,
-the registry needs:
-
-1. a reachable address: a Service with a stable ClusterIP, a node IP, or a
-   hostname that every node resolves (node containerd does not use cluster DNS);
-2. TLS for that address, with the CA distributed to each node
-   (`/etc/containerd/certs.d/<host>/ca.crt`, or `configs."<host>".tls.ca_file`
-   in k3s `registries.yaml`);
-3. authentication for pushes (and, where needed, pulls), for example
-   htpasswd with a Secret-backed password;
-4. a generated node configuration: `registries.yaml` for k3s, or
-   `certs.d/<host>/hosts.toml` for containerd, delivered to every node and
-   followed by a runtime restart on k3s.
-
-That mode is not implemented yet. Until then, use one node-local registry per
-node that needs images, or direct node delivery ({doc}`node_delivery`).
+The loopback address exists only on its own node. For images that several
+nodes pull, use {doc}`cluster_registry` (`Registry.in_cluster(on=NODE)`): one
+registry behind a Service, and a containerd mirror on every node that maps a
+stable name to it. Or use one node-local registry per node that needs images,
+or direct node delivery ({doc}`node_delivery`).

@@ -357,6 +357,8 @@ _PLURALS = {
     "ConfigMap": "configmaps",
     "PersistentVolumeClaim": "persistentvolumeclaims",
     "Deployment": "deployments",
+    "DaemonSet": "daemonsets",
+    "Service": "services",
     "Role": "roles",
     "RoleBinding": "rolebindings",
     "ClusterRole": "clusterroles",
@@ -382,9 +384,16 @@ def object_path(manifest: Mapping[str, Any], *, collection: bool = False) -> str
 class Api:
     """A tiny JSON client on a Kubernetes ``ApiClient`` (explicit kubeconfig)."""
 
-    def __init__(self, client: Any, *, request_seconds: float = 10.0) -> None:
+    def __init__(
+        self,
+        client: Any,
+        *,
+        request_seconds: float = 10.0,
+        field_manager: str = "piceli-gitops",
+    ) -> None:
         self.client = client
         self.request_seconds = request_seconds
+        self.field_manager = field_manager
 
     def call(
         self,
@@ -402,7 +411,7 @@ class Api:
                 path,
                 method,
                 query_params=(
-                    [("fieldManager", "piceli-gitops")]
+                    [("fieldManager", self.field_manager)]
                     if method in {"POST", "PATCH"}
                     else []
                 ),
@@ -513,11 +522,12 @@ class InstallPlan:
     objects: tuple[ObjectPlan, ...]
     cluster_uid: str | None
     config: Mapping[str, Any]
+    schema: str = PLAN_SCHEMA
 
     @property
     def plan_hash(self) -> str:
         body = {
-            "schema": PLAN_SCHEMA,
+            "schema": self.schema,
             "action": self.action,
             "cluster_uid": self.cluster_uid,
             "config": self.config,
@@ -538,7 +548,7 @@ class InstallPlan:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "schema": PLAN_SCHEMA,
+            "schema": self.schema,
             "action": self.action,
             "plan_hash": self.plan_hash,
             "cluster_uid": self.cluster_uid,
@@ -561,6 +571,7 @@ def plan_objects(
     *,
     action: str,
     config: Mapping[str, Any],
+    schema: str = PLAN_SCHEMA,
 ) -> InstallPlan:
     """Compare ``objects`` with the live cluster (``enable``) or plan their removal."""
     planned: list[ObjectPlan] = []
@@ -576,7 +587,7 @@ def plan_objects(
         else:
             operation = "apply"
         planned.append(ObjectPlan(operation, manifest, uid))
-    return InstallPlan(action, tuple(planned), _cluster_uid(api), dict(config))
+    return InstallPlan(action, tuple(planned), _cluster_uid(api), dict(config), schema)
 
 
 def execute(

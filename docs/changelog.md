@@ -48,6 +48,27 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   `piceli.envs.env_stop` does it by hand with a planned `env_hash`.
 - Plan hashes, `EnvConfig.describe()` and the controller config of 0.13
   declarations are unchanged when the new fields are unused (tested).
+- **In-cluster registry (preview):** `Registry.in_cluster(on="NODE",
+  storage="20Gi", port=5000)` is a delivery target every node pulls from by
+  one stable name, `piceli-registry.piceli-system.svc:5000/<app>/<image>@sha256:…`.
+  `piceli registry install` plans (exit 3) and with `--approve HASH`
+  installs a registry Deployment pinned to the node (retained claim), a
+  Service and a node agent DaemonSet that writes the containerd mirror
+  `certs.d/<host>/hosts.toml` on every node (pointing at the Service's
+  ClusterIP, plain HTTP for that host only); `piceli registry status` shows
+  the pod, each node's mirror and the storage use; `piceli registry
+  uninstall` keeps the namespace and, without `--delete-storage`, the data;
+  `piceli registry forward` keeps a push port-forward open. `piceli deploy`
+  pushes through a port-forward to the Service, cluster builds and the GitOps
+  controller push by cluster DNS, `env push` records the stable pull
+  reference; the plan shows the registry and refuses with
+  `cluster-registry-not-installed`/`cluster-registry-not-ready` until it
+  serves. Plain HTTP is now also allowed to `name.namespace.svc` registry
+  hosts (never resolvable outside a cluster). 0.13 plan hashes are
+  unchanged. New codes `cluster-registry-invalid`,
+  `cluster-registry-target-required`, `cluster-registry-cluster-failed`,
+  `cluster-registry-plan-changed`, `cluster-registry-not-installed`,
+  `cluster-registry-not-ready`. See {doc}`cluster_registry`.
 
 ## Version 0.13.0
 

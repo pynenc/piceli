@@ -63,6 +63,8 @@ AREAS: Mapping[str, str] = MappingProxyType(
         # --- 0.13.0 ---
         "retention": "Registry retention (`piceli artifacts retention`)",
         "envs": "Per-branch environments (`piceli env`, `piceli envs`, `piceli logs`)",
+        # --- 0.14.0 ---
+        "cluster-registry": "The in-cluster registry every node pulls from (`Registry.in_cluster`, `piceli registry …`)",
     }
 )
 
@@ -489,7 +491,7 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
     _E(
         "plain-http-not-loopback",
         "Plain HTTP to a non-loopback registry",
-        "The registry target asks for plain HTTP but its host is not a loopback address.",
+        "The registry target asks for plain HTTP but its host is neither a loopback address nor an in-cluster Service name (`name.namespace.svc`).",
         "Use TLS for remote registries, or reach the registry through `--via-forward`.",
         False,
         "artifacts-input",
@@ -4582,6 +4584,55 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "Pass a receipt file, or one or more `--digest IMAGE=sha256:<64 hex>` options.",
         False,
         "host-build",
+    ),
+    # --- 0.14.0: the in-cluster registry ---
+    _E(
+        "cluster-registry-invalid",
+        "In-cluster registry input invalid",
+        "`Registry.in_cluster(...)` or `piceli registry` got a value it refuses: no node (`on=`/`--on`), a size that is not like `20Gi`, a port, name or namespace that is not valid, an image not pinned by digest, a NodePort outside 30000-32767, a relative `mirror_dir`, options given together with a `MODULE:ATTR` that already declares the registry, or a `MODULE:ATTR` that is neither the registry nor a pipeline delivering to it.",
+        "Fix the value named in the message; with `MODULE:ATTR`, change the declaration instead of passing options.",
+        False,
+        "cluster-registry",
+    ),
+    _E(
+        "cluster-registry-target-required",
+        "No cluster named",
+        "`piceli registry` needs the cluster: `--kubeconfig FILE --context NAME` (or `--profile NAME`), or a pipeline `MODULE:ATTR` whose target names it. It never uses the current context.",
+        "Pass `--kubeconfig` and `--context` (or `--profile`), or the pipeline.",
+        False,
+        "cluster-registry",
+    ),
+    _E(
+        "cluster-registry-cluster-failed",
+        "Cluster refused a registry request",
+        "The Kubernetes API refused a read or a change of the registry objects (permissions, admission, an invalid object), or was unreachable.",
+        "Check access with a read-only tool and the message's resource, then plan again.",
+        True,
+        "cluster-registry",
+    ),
+    _E(
+        "cluster-registry-plan-changed",
+        "Registry plan changed",
+        "The hash given to `--approve` is not the hash of the current install or uninstall plan: the options or the live objects changed since the plan was reviewed.",
+        "Run the command without `--approve`, review the new plan and approve its hash.",
+        True,
+        "cluster-registry",
+    ),
+    _E(
+        "cluster-registry-not-installed",
+        "In-cluster registry not installed",
+        "The pipeline delivers to `Registry.in_cluster(...)` but its Deployment is not in the namespace: it is installed once per cluster, never by `piceli deploy`.",
+        "Install it with `piceli registry install MODULE:ATTR` (plan, then `--approve HASH`) and plan the deploy again.",
+        False,
+        "cluster-registry",
+    ),
+    _E(
+        "cluster-registry-not-ready",
+        "In-cluster registry not ready",
+        "The in-cluster registry is installed but no pod is ready (still starting, the image cannot be pulled, its claim is not bound, or its node is down).",
+        "Look at `piceli registry status`, fix what it shows, and plan the deploy again when it is ready.",
+        True,
+        "cluster-registry",
     ),
 )
 

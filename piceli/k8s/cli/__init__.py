@@ -18,6 +18,7 @@ from piceli.k8s.cli.observe import app as observe_app
 from piceli.k8s.cli.operator import app as operator_app
 from piceli.k8s.cli.profiles import register as register_profile_commands
 from piceli.k8s.cli.publish import publish
+from piceli.k8s.cli.registry import register as register_registry_commands
 from piceli.k8s.cli.release import app as release_app
 from piceli.k8s.cli.render import render
 from piceli.k8s.cli.restore import register as register_restore_commands
@@ -47,6 +48,7 @@ register_watch_command(app)
 register_restore_commands(app)
 register_env_commands(app)
 register_gitops_commands(app)
+register_registry_commands(app)
 register_profile_commands(app)
 
 
