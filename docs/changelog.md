@@ -69,6 +69,29 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   `cluster-registry-target-required`, `cluster-registry-cluster-failed`,
   `cluster-registry-plan-changed`, `cluster-registry-not-installed`,
   `cluster-registry-not-ready`. See {doc}`cluster_registry`.
+- **UI in the cluster:** `Cluster(ui=Ui(access="forward"))` makes `piceli
+  cluster init` install the Piceli UI in `piceli-system`
+  (`piceli.infra.ui_install.render_ui(cluster)`): one Deployment running
+  `piceli ui forward-serve` from the digest-pinned `Ui.image` (else the
+  controller's image) on `Ui.on` (else the controller's node), a ClusterIP
+  Service only (no NodePort, Ingress or OIDC) and a service account that reads
+  the controller status, the environments' workloads, pods and logs (never
+  their Secrets or ConfigMaps) and writes only the GitOps request inbox and its
+  own launch Secret. `piceli access ui --cluster MODULE:ATTR` (or `--profile
+  NAME`) forwards `127.0.0.1:8790` to it and prints the one launch URL.
+  Views: **Environments** (revision per source, health, state, last sync),
+  an environment's components (source, commit, digest,
+  synced/building/rolling/failed/unchanged, health) with a link to its
+  workloads and logs, **Sources** (URL without credentials, refs, last poll)
+  and a **Sync** button per environment and per component (the
+  `piceli gitops sync` request). New API routes `GET /api/v1/composition`,
+  `GET /api/v1/composition/environments/{env}`, `POST
+  /api/v1/composition/sync` (additive). New codes `ui-controller-absent`,
+  `ui-sync-target-unknown`, `ui-sync-unavailable`, `ui-install-image-unpinned`,
+  `ui-install-node-unknown`, `ui-install-access-unsupported`,
+  `access-ui-target-required`, `access-ui-cluster-invalid`,
+  `access-ui-not-declared`, `access-ui-not-installed`, `access-ui-not-ready`,
+  `access-ui-forbidden`, `access-ui-unreachable`. See {doc}`ui`.
 
 ## Version 0.13.0
 

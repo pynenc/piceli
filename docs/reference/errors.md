@@ -24,6 +24,13 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`access-stop-incomplete`](#error-access-stop-incomplete) | access | yes |
 | [`access-stop-needs-stale`](#error-access-stop-needs-stale) | access | no |
 | [`access-target-invalid`](#error-access-target-invalid) | access | no |
+| [`access-ui-cluster-invalid`](#error-access-ui-cluster-invalid) | cluster-ui | no |
+| [`access-ui-forbidden`](#error-access-ui-forbidden) | cluster-ui | no |
+| [`access-ui-not-declared`](#error-access-ui-not-declared) | cluster-ui | no |
+| [`access-ui-not-installed`](#error-access-ui-not-installed) | cluster-ui | no |
+| [`access-ui-not-ready`](#error-access-ui-not-ready) | cluster-ui | yes |
+| [`access-ui-target-required`](#error-access-ui-target-required) | cluster-ui | no |
+| [`access-ui-unreachable`](#error-access-ui-unreachable) | cluster-ui | yes |
 | [`access-unknown-forward`](#error-access-unknown-forward) | access | no |
 | [`adopt-and-replace`](#error-adopt-and-replace) | release | no |
 | [`adopt-entry-not-declared`](#error-adopt-entry-not-declared) | release | no |
@@ -541,9 +548,13 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`ui-access-port-conflict`](#error-ui-access-port-conflict) | access | no |
 | [`ui-approval-mismatch`](#error-ui-approval-mismatch) | observe | no |
 | [`ui-assets-unavailable`](#error-ui-assets-unavailable) | observe | no |
+| [`ui-controller-absent`](#error-ui-controller-absent) | cluster-ui | yes |
 | [`ui-evaluation-failed`](#error-ui-evaluation-failed) | observe | no |
 | [`ui-execution-failed`](#error-ui-execution-failed) | observe | no |
 | [`ui-idempotency-conflict`](#error-ui-idempotency-conflict) | observe | no |
+| [`ui-install-access-unsupported`](#error-ui-install-access-unsupported) | cluster-ui | no |
+| [`ui-install-image-unpinned`](#error-ui-install-image-unpinned) | cluster-ui | no |
+| [`ui-install-node-unknown`](#error-ui-install-node-unknown) | cluster-ui | no |
 | [`ui-invalid-request`](#error-ui-invalid-request) | observe | no |
 | [`ui-logs-unavailable`](#error-ui-logs-unavailable) | observe | yes |
 | [`ui-not-found`](#error-ui-not-found) | observe | no |
@@ -555,6 +566,8 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`ui-prerollout-unsupported`](#error-ui-prerollout-unsupported) | observe | no |
 | [`ui-request-rejected`](#error-ui-request-rejected) | observe | no |
 | [`ui-state-invalid`](#error-ui-state-invalid) | observe | no |
+| [`ui-sync-target-unknown`](#error-ui-sync-target-unknown) | cluster-ui | no |
+| [`ui-sync-unavailable`](#error-ui-sync-unavailable) | cluster-ui | yes |
 | [`uid-version-precondition-failed`](#error-uid-version-precondition-failed) | execution | no |
 | [`undiscovered-api`](#error-undiscovered-api) | kubernetes | no |
 | [`unknown-error-code`](#error-unknown-error-code) | cli | no |
@@ -5084,3 +5097,110 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Pass `--kubeconfig` and `--context` (or `--profile`), or the pipeline.
 - **Retry-safe:** no
+
+
+## The UI installed in the cluster (`Ui(access="forward")`, `piceli access ui`, its Sync button)
+
+(error-access-ui-cluster-invalid)=
+### `access-ui-cluster-invalid`
+
+**Not a Cluster.** `--cluster MODULE:ATTR` did not import, or does not name a `piceli.infra.Cluster`.
+
+- **Fix:** Point `--cluster` at the module attribute that holds the `Cluster(...)`, for example `infra.py:my_cluster`.
+- **Retry-safe:** no
+
+(error-access-ui-forbidden)=
+### `access-ui-forbidden`
+
+**Profile cannot read the UI.** The profile's credentials may not read the `piceli-ui` Service or its launch Secret in `piceli-system`.
+
+- **Fix:** Use a profile allowed to read that Service and Secret (the one that ran `piceli cluster init`).
+- **Retry-safe:** no
+
+(error-access-ui-not-declared)=
+### `access-ui-not-declared`
+
+**Cluster declares no UI.** The `Cluster` has no `ui=Ui(...)`, so `piceli cluster init` installs no UI for it.
+
+- **Fix:** Add `ui=Ui(access="forward")` to the cluster, run `piceli cluster init` (plan, then approve), then `piceli access ui` again.
+- **Retry-safe:** no
+
+(error-access-ui-not-installed)=
+### `access-ui-not-installed`
+
+**UI not installed in the cluster.** The UI Service `piceli-ui` or its launch Secret is not in `piceli-system`.
+
+- **Fix:** Install it with `piceli cluster init MODULE:ATTR` (plan, then `--approve HASH`) and run `piceli access ui` again.
+- **Retry-safe:** no
+
+(error-access-ui-not-ready)=
+### `access-ui-not-ready`
+
+**UI has not started yet.** The UI is installed but has not written its launch token: its pod is still starting, cannot pull its image, or its node is down.
+
+- **Fix:** Wait for the `piceli-ui` pod in `piceli-system` to run, then run `piceli access ui` again.
+- **Retry-safe:** yes
+
+(error-access-ui-target-required)=
+### `access-ui-target-required`
+
+**Which cluster's UI.** `piceli access ui` needs exactly one of `--cluster MODULE:ATTR` (a composition's `Cluster`) or `--profile NAME` (a `piceli login` profile).
+
+- **Fix:** Run `piceli access ui --cluster infra.py:my_cluster` or `piceli access ui --profile my-cluster`.
+- **Retry-safe:** no
+
+(error-access-ui-unreachable)=
+### `access-ui-unreachable`
+
+**Cluster API unreachable.** The Kubernetes API of the profile did not answer, or answered with an error, while reading the UI's Service or launch Secret.
+
+- **Fix:** Check the network and the profile (`piceli profiles`), then run `piceli access ui` again.
+- **Retry-safe:** yes
+
+(error-ui-controller-absent)=
+### `ui-controller-absent`
+
+**No GitOps controller status.** The UI reads the controller's status ConfigMap `piceli-gitops-status`, and no controller has published one yet (GitOps is not enabled, or the controller has not finished its first poll).
+
+- **Fix:** Enable GitOps for the composition (`piceli gitops enable MODULE`), wait for its first poll, then refresh.
+- **Retry-safe:** yes
+
+(error-ui-install-access-unsupported)=
+### `ui-install-access-unsupported`
+
+**UI access mode not supported.** The in-cluster UI is reached only through a port-forward: `Ui(access="forward")`.
+
+- **Fix:** Use `Ui(access="forward")` and open it with `piceli access ui`.
+- **Retry-safe:** no
+
+(error-ui-install-image-unpinned)=
+### `ui-install-image-unpinned`
+
+**UI image not pinned.** The in-cluster UI runs a Piceli image, and neither `Ui(image=...)` nor `Controller(image=...)` names one pinned by digest.
+
+- **Fix:** Set `Ui(image="registry/piceli@sha256:<64 hex>")` (or the controller's image) and plan `piceli cluster init` again.
+- **Retry-safe:** no
+
+(error-ui-install-node-unknown)=
+### `ui-install-node-unknown`
+
+**UI node not declared.** `Ui(on=...)` (or, when it is unset, `Controller(on=...)`) names a node that is not in `Cluster(nodes=[...])`.
+
+- **Fix:** Name a declared node, or declare the node, and plan `piceli cluster init` again.
+- **Retry-safe:** no
+
+(error-ui-sync-target-unknown)=
+### `ui-sync-target-unknown`
+
+**Sync target not in the status.** A Sync named an environment or component that the controller's published status does not list (it was removed, renamed, or the page is out of date).
+
+- **Fix:** Refresh the page and sync an environment or component it shows; `piceli gitops status` lists them.
+- **Retry-safe:** no
+
+(error-ui-sync-unavailable)=
+### `ui-sync-unavailable`
+
+**Sync request not written.** The UI could not write the request into the ConfigMap `piceli-gitops-requests` (it is missing, the UI's service account lacks its narrow write permission, or the API was unreachable).
+
+- **Fix:** Run `piceli cluster init` again (it recreates the inbox and the UI's role), then retry; `piceli gitops sync ENV` writes the same request.
+- **Retry-safe:** yes
