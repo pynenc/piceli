@@ -588,7 +588,7 @@ class PipelineRunner:
 
     def _node_facts(self, build: Build) -> NodeFacts:
         """The facts of a host build's node (one read-only GET per node and run)."""
-        from piceli.artifacts.node_facts import NodeFactsError
+        from piceli.artifacts.node_facts import NodeFactsError, store_facts
 
         target = self.pipeline.target
         if not target.nodes:
@@ -598,17 +598,41 @@ class PipelineRunner:
                 "target (nodes={alias: node name})",
             )
         _, node = target.node(build.node)
+        if build.node_facts is not None:
+            return build.node_facts
         if node.name not in self._facts:
             try:
-                self._facts[node.name] = self.backend.node_facts(target, node.name)
+                facts = self.backend.node_facts(target, node.name)
             except NodeFactsError as error:
                 raise PipelineError(error.code, str(error)) from None
             except Exception as error:
-                raise PipelineError(
-                    "node-facts-unavailable",
-                    f"could not read node {node.name!r} ({type(error).__name__})",
-                ) from None
+                facts = self._cached_facts(node.name)
+                if facts is None:
+                    raise PipelineError(
+                        "node-facts-unavailable",
+                        f"could not read node {node.name!r} "
+                        f"({type(error).__name__}) and no cached facts exist; "
+                        "declare them with Build.spec(node_facts=...)",
+                    ) from None
+            else:
+                store_facts(self.pipeline.state_dir, facts)
+            self._facts[node.name] = facts
         return self._facts[node.name]
+
+    def _cached_facts(self, node: str) -> NodeFacts | None:
+        """The facts of the last successful read of ``node``, said aloud with their age."""
+        from piceli.artifacts.node_facts import cached_facts
+
+        found = cached_facts(self.pipeline.state_dir, node)
+        if found is None:
+            return None
+        facts, age = found
+        self.say(
+            f"node {node!r}: the API is unreachable; using node facts cached "
+            f"{int(age // 60)} minute(s) ago "
+            f"({facts.architecture}, {facts.page_size} byte pages)"
+        )
+        return facts
 
     def _provenance(self, sources: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
         """What the release records about its sources (commit, dirty, ``--ref``)."""
@@ -2296,8 +2320,6 @@ class PipelineRunner:
 
     # --------------------------------------------------------- stage: apply
     def _run_apply(self, reapply: bool, resuming: bool) -> tuple[str, dict[str, Any]]:
-        from piceli.k8s.release_runner import ReleaseError
-
         work = self._work
         assert work is not None and self.run is not None
         planned = self.run.output("plan")
@@ -2333,18 +2355,11 @@ class PipelineRunner:
                 self.say(f"[apply] {release}: resuming the interrupted execution")
                 outcome = runner.resume(release)
         if outcome is None:
-            try:
-                self.say(f"[apply] {release}: applying")
-                outcome = runner.apply(plan_hash)
-            except ReleaseError:
-                if not resuming:
-                    raise
-                try:
-                    result = runner.plan()
-                except ReleaseError as error:
-                    raise app_release_refusal(error) from None
-                work.release_plan = result
-                outcome = runner.apply(result.plan_hash)
+            # A refusal (including stale/expired approval) cannot authorize a
+            # replacement plan. Recovery must retain the recorded plan hash;
+            # the caller can explicitly plan and approve another run.
+            self.say(f"[apply] {release}: applying")
+            outcome = runner.apply(plan_hash)
         output = {
             "release": outcome.get("release", release),
             "execution": outcome["execution"],

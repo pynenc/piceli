@@ -33,6 +33,7 @@ from piceli.process_group import signal_group
 
 if TYPE_CHECKING:
     from piceli.k8s.ops.exec_credentials import ExecPolicy
+    from piceli.k8s.owned_processes import OwnedProcessRegistry
 
 _NAME = re.compile(r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?")
 _FORWARD_TARGET = re.compile(
@@ -818,6 +819,7 @@ class ForwardSupervisor:
         scope: ForwardScope | None = None,
         owner_resolver: PodResolver | None = None,
         owner_interval: float = 2.0,
+        registry: OwnedProcessRegistry | None = None,
     ) -> None:
         if not context:
             # kubectl would otherwise fall back to the file's current-context.
@@ -825,6 +827,7 @@ class ForwardSupervisor:
         self._scope = scope
         self._resolver = owner_resolver
         self._owner_interval = owner_interval
+        self._registry = registry
         self._preferences = preferences
         self._user = user
         self._kubeconfig = kubeconfig
@@ -1218,7 +1221,7 @@ class ForwardSupervisor:
                 previous = managed.pod
                 managed.process = None
                 if process is not None:
-                    self._stop_process(process)
+                    self._stop_owned(process)
                 managed.last_error = f"backing pod {previous} replaced by {live[0]}"
                 managed.consecutive_failures = 0
                 self._start_locked(managed)
@@ -1253,7 +1256,7 @@ class ForwardSupervisor:
         process = managed.process
         managed.process = None
         if process is not None:
-            self._stop_process(process)
+            self._stop_owned(process)
         self._schedule_restart_locked(
             managed,
             f"health probe failed {managed.consecutive_failures}x: {outcome}",
@@ -1285,6 +1288,7 @@ class ForwardSupervisor:
                 continue
             if process is not None:
                 managed.process = None
+                self._forget(process)
                 self._schedule_restart_locked(
                     managed, f"port-forward exited with {process.returncode}"
                 )
@@ -1324,6 +1328,9 @@ class ForwardSupervisor:
             managed.process = None
             self._schedule_restart_locked(managed, type(error).__name__)
             return
+        if self._registry is not None:
+            # Survives a crash of this process: the next start reaps it.
+            self._registry.record(managed.process.pid)
         now = time.monotonic()
         managed.error = None
         managed.health = "starting"
@@ -1338,7 +1345,7 @@ class ForwardSupervisor:
         process = managed.process
         managed.process = None
         if process is not None and process.poll() is None:
-            self._stop_process(process)
+            self._stop_owned(process)
         reason = _OCCUPIED
         if owner is not None:
             # Another process's command line is never shown: its pid only.
@@ -1372,7 +1379,15 @@ class ForwardSupervisor:
         managed.given_up = False
         managed.health = "stopped"
         if process is not None and process.poll() is None:
-            self._stop_process(process)
+            self._stop_owned(process)
+
+    def _stop_owned(self, process: subprocess.Popen[bytes]) -> None:
+        self._stop_process(process)
+        self._forget(process)
+
+    def _forget(self, process: subprocess.Popen[bytes]) -> None:
+        if self._registry is not None and process.poll() is not None:
+            self._registry.forget(process.pid)
 
     @staticmethod
     def _stop_process(process: subprocess.Popen[bytes]) -> None:
@@ -1504,8 +1519,12 @@ def kubectl_logs_command(
     tail: int = 200,
     container: str | None = None,
     previous: bool = False,
+    follow: bool = False,
 ) -> list[str]:
-    """Build a shell-free, bounded command for one workload's logs."""
+    """Build a shell-free, bounded command for one workload's logs.
+
+    ``follow`` streams new lines after the last ``tail`` ones (``--follow``).
+    """
     if not _NAME.fullmatch(namespace) or not _LOG_TARGET.fullmatch(target):
         raise ValueError("invalid log namespace or target")
     if not isinstance(tail, int) or isinstance(tail, bool) or not 1 <= tail <= 10_000:
@@ -1518,6 +1537,8 @@ def kubectl_logs_command(
         result.extend(["--container", container])
     if previous:
         result.append("--previous")
+    if follow:
+        result.append("--follow")
     return result
 
 

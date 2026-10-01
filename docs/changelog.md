@@ -4,6 +4,151 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.13.0
+
+- **Piceli as the GitOps controller (experimental):** `piceli gitops enable
+  deploy/app.py:pipeline --repo URL --branches 'main,wp-*' --image
+  REPO@sha256:…` plans (exit 3) and, with `--approve HASH`, installs a
+  one-replica controller in `piceli-system`: a ServiceAccount with a
+  namespaced Role, a ClusterRole limited to reading nodes, managing
+  namespaces and binding only the `piceli-gitops-deployer` role in each
+  environment's namespace, a state claim (Git mirror, last-seen commits,
+  receipts) and a Deployment running `piceli gitops run` from a
+  digest-pinned image. It polls the repository (`--poll`, no webhook) and
+  keeps one environment per matching branch at its head: builds in the
+  cluster (`--builder-image`) or uses the digest `piceli env push` recorded
+  for that commit, then deploys when the plan is inside the pipeline's
+  `auto_approve` policy, else waits with the plan hash for `piceli gitops
+  approve ENV HASH`. Main deploys only on a new `v*` tag or `piceli promote
+  BRANCH@SHA`, always with a hash approval unless the owner passed
+  `--main-auto-approve`; an untagged push to main does nothing. A deleted
+  branch tears its environment down (never main's). One step at a time,
+  bounded retries with backoff, a failing branch never stops the others.
+  Git credentials come only from a mounted Secret (`--credentials-secret`)
+  and are never printed. `piceli gitops status [--json]` (health, last
+  poll, per-branch commit, state and pending hash; also published in the
+  ConfigMap `piceli-gitops-status` for `piceli envs`) and `piceli gitops
+  disable` (never removes an environment). `piceli.gitops` becomes a
+  package (the handoff API is unchanged). New error codes `gitops-*`. See
+  {ref}`gitops-controller`.
+
+- **Per-branch environments (experimental):** `Pipeline(envs=EnvConfig(prefix=
+  "shop-", branches=["main", "wp-*"], max_envs=3, quota=…, claim_sizes=…,
+  seed_from=…, auto_approve=…))` runs one namespace per Git branch
+  (`<prefix><slug>`, at most 63 characters with a hash suffix; main maps to
+  its own namespace, never created, stopped or deleted). `piceli env up
+  BRANCH` plans (exit 3, `env_hash`) then deploys the branch with the digests
+  given (`--digest`, `--receipt`, or those `piceli env push` recorded),
+  isolated at render time: Services by relative name, no NodePort, hostPort
+  or hostPath, namespace-qualified cluster objects, its own state and
+  generated Secrets, a default-deny NetworkPolicy across namespaces and a
+  ResourceQuota (`env-isolation-*` codes otherwise). Branch claims use
+  `claim_sizes` and start empty; `piceli env seed` (or `--seed-from main`)
+  restores main's latest restore point into them. At most `max_envs`
+  branches run: one more stops the least recently pushed (scaled to zero),
+  or `--wait` refuses (`env-budget-full`). `piceli env down` deletes the
+  branch's claims, namespace and volumes (never main's). `piceli envs
+  [--json]` lists branch, namespace, commit, build and deploy state, health,
+  age and last push (with the GitOps controller's view), `piceli logs ENV
+  WORKLOAD [-f]` and `piceli access ENV --pipeline …` (free local ports).
+  Python API `piceli.envs` (`env_up`, `env_down`, `seed_env`, `list_envs`,
+  `namespace_for`); the GitOps controller deploys and tears down through it.
+  `plan_restore(..., source_namespace=)` restores a point into another
+  namespace. Plans of pipelines without `envs` keep their hashes.
+- **Builds in the cluster (experimental):** `piceli build job MODULE:ATTR
+  --commit SHA --image BUILDER@sha256:… --repo URL` (and
+  `piceli.artifacts.cluster_build.run_build_job`) runs the pipeline's host
+  builds as a Job on a labelled amd64 builder node: Git credentials from a
+  Secret (never printed), arm64 cross-built, the cache on a claim per branch and
+  page size, images pushed by digest to the node registry, the receipt of a
+  local host build plus `delivered` and `job`. Plan first (exit 3, plan hash),
+  then `--approve HASH`; new errors `cluster-build-invalid` and
+  `cluster-build-failed`. `piceli env push BRANCH MODULE:ATTR --receipt FILE`
+  (or `--digest IMAGE=sha256:…`) records a laptop-built digest in the ConfigMap
+  `piceli-env-<branch>` of the branch's namespace (`env-push-invalid`).
+- **Fixed, B25:** an env var named like a token or secret whose value is a
+  file path (an app pointing at a mounted token file) is a plain value: it is
+  no longer redacted into a refused apply (`unresolved private or redacted
+  manifest`). Inline secret values are still redacted.
+- **Fixed, B22:** a host build no longer needs the cluster API for node facts:
+  the last successful read is cached per node in the state directory and used
+  (and reported, with its age) when the API is unreachable, and
+  `Build.spec(..., node_facts={...})` declares them. The plan hash covers the
+  facts used.
+- **Fixed, B28:** the shared host-build target directory is per architecture and
+  page size (`<cache>/target/arm64-16384`), so builds for 4 KiB and 16 KiB
+  pages no longer rebuild jemalloc and everything above it; the first build
+  after upgrading compiles once more.
+- **Registry retention from the CLI (experimental):** `piceli artifacts
+  retention --to oci://host[:port]/prefix --receipts …` reports which
+  manifests a registry keeps (the last `--keep N` releases, per image, of the
+  publish and delivery receipts (`<state_dir>/deliveries/`), `--pin` digests, the digests running pods use, the
+  children and referrers of those, tagged manifests no receipt mentions) and
+  which are collectable, with the deduplicated bytes they free. `--budget
+  10GiB` keeps more releases newest first while the kept bytes stay within it,
+  never fewer than `--keep`. `--delete` prints the plan and its hash (exit 3);
+  `--delete --approve HASH` deletes exactly that list by digest through the
+  registry API, refuses (`retention-not-approved`) when the plan changed, never
+  deletes a digest a workload uses (running pods and the pod templates of
+  Deployments, StatefulSets, DaemonSets, ReplicaSets, Jobs and CronJobs, so
+  scaled-to-zero workloads and CronJobs between runs are safe; the output says
+  which kind keeps each digest), and needs a live source
+  (`--kubeconfig`/`--context` or `--live-file`, else `retention-live-unknown`).
+  A registry that refuses deletes is `registry-delete-disabled`. Blob space is
+  freed by the registry's own garbage collection (without `--delete-untagged`).
+  The registry client gains `list_repositories`, `list_tags` and
+  `delete_manifest`. New error codes `retention-*` and
+  `registry-delete-disabled`. See {doc}`registry_retention`.
+- **Machine-wide lock for heavy work (`piceli heavy`):** `piceli heavy run
+  [--name N] [--wait SECONDS] -- COMMAND...` runs a command under an OS-level
+  lock (`flock` in a per-user state directory, released by the OS when the
+  holder dies) so heavy runs of several agents serialize, prints who holds the
+  lock while it waits, forwards `SIGINT`/`SIGTERM`/`SIGHUP`, exits with the
+  command's code and writes a receipt (redacted command, cwd, git commit,
+  times, duration, exit code, peak memory; newest 100 kept). `piceli heavy
+  status [--json]` shows the holder and recent receipts. With
+  `PICELI_HEAVY_LOCK=1`, host builds and Docker `Build.spec` runs take the same
+  lock. New error codes `heavy-lock-timeout`, `heavy-command-empty`,
+  `heavy-command-missing` ({doc}`heavy_work`).
+- **Web UI:** the optional `piceli[ui]` extra adds a bundled web application.
+  See {doc}`ui` for local and installed setup, environment controls and the
+  security model.
+  - `piceli ui serve` runs a loopback UI for explicit inventory scopes and
+    existing release definitions: isolated source evaluation, exact source
+    and plan approvals before a durable release run, Activity replay,
+    Resources with observations, owner relationships, current and previous
+    container logs and supervised local port forwards. A one-time launch
+    token grants the session; cookies are named per origin; forwards left by
+    a crashed UI are stopped at the next start (`--state-dir`).
+  - Apps that declare `app.pre_rollout(...)` include those checks in the
+    reviewed release plan and run them before apply. A configured Pipeline
+    can also run checks and restore points from the browser, using a second
+    exact approval after image delivery when needed.
+  - Branch Environments and GitOps pages reuse Piceli's environment and
+    controller APIs for status, exact-hash changes, pending approvals and
+    promotion requests. Local branch scopes open Resources, logs and access.
+    `piceli ui backup` and `restore` handle stopped private UI control state.
+  - `piceli ui cluster-observe` offers authenticated namespace inspection and
+    logs behind an HTTPS gateway with OIDC subject grants and a rotating
+    projected service-account token. Configured `cluster-serve` grants permit
+    exact-plan manual delivery and credential-free build Jobs. The UI Pod
+    holds no registry or cluster-admin credential; the builder Job has its own
+    ServiceAccount, Git Secret and cache PVC.
+  - `piceli ui connect` takes an authorized one-time ticket from pending to a
+    ready local forward, passes traffic and releases it on stop. An installed
+    UI can recover operation records from its private PVC after a Pod restart,
+    and its stopped state can be backed up and restored.
+  - The installed OIDC journey, exact-plan deployment with pre-rollout check,
+    build Job, restart recovery, backup/restore, revoked grants and renderer
+    egress denial run in one disposable kind acceptance cluster. The former
+    `PICELI_UI_EXPERIMENTAL` gate is no longer required.
+  - `make ui-fake-serve` starts a disposable fake-API demo; `make
+    test-ui-fake` runs the service and browser journeys.
+  - Pipeline recovery propagates a stale or expired plan refusal instead of
+    planning and applying another digest; `piceli access` recognizes macOS
+    framework `Python` executables when stopping its own stale server; a
+    kubeconfig `tokenFile` credential is re-read before each API request.
+
 ## Version 0.12.0
 
 - **Grow or move a retained claim (preview):** with

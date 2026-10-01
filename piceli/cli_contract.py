@@ -427,7 +427,9 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "line is never printed); when the holder is Piceli's own stale process "
             "for this app it says so and suggests `piceli access stop --stale "
             "TARGET`. Never takes a port over. Stops every forward it started on "
-            "Ctrl-C/SIGTERM/SIGHUP. Exit 1 only when every forward gave up.",
+            "Ctrl-C/SIGTERM/SIGHUP. Exit 1 only when every forward gave up. "
+            "`piceli access BRANCH --pipeline MODULE:ATTR` forwards that branch "
+            "environment's declared ports on free local ports.",
         ),
         "access stop": _C(
             "Stop Piceli's own stale forwards and servers for the app (--stale).",
@@ -739,6 +741,27 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "and contacts nothing. Pushes are content-addressed; a version tag "
             "that names another image is refused unless --move-tag.",
         ),
+        "artifacts retention": _C(
+            "Report which registry manifests the last releases, pins and live workloads keep, and delete the rest.",
+            contract="conforms",
+            reads=(
+                "publish and delivery receipts",
+                "credentials file or Docker config",
+                "kubeconfig (live pods, with --context)",
+            ),
+            writes=(
+                "OCI registry (manifest deletes, only with --delete --approve)",
+                "--out",
+            ),
+            cluster="reads",
+            approval_required=True,
+            safe_to_retry=True,
+            exit_codes=(0, 1, 2, 3),
+            notes="Without --delete it only reads. --delete without --approve "
+            "prints the plan and its hash (exit 3). A digest a running workload "
+            "uses is never deleted; blobs are freed by the registry's own "
+            "garbage collection afterwards.",
+        ),
         # ------------------------------------------------------ observe
         "observe status": _C(
             "Compare a session archive with live cluster state.",
@@ -847,6 +870,89 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             writes=("destination directory",),
             safe_to_retry=False,
         ),
+        "ui cluster-observe": _C(
+            "Serve authenticated cluster observation with optional reviewed delivery and local-client access.",
+            contract="conforms",
+            reads=(
+                "explicit Kubernetes API origin",
+                "projected service-account CA and token files",
+                "OIDC issuer metadata",
+            ),
+            writes=(
+                "private generated kubeconfig",
+                "configured durable UI control state",
+                "separately approved cluster deployment",
+            ),
+            cluster="writes",
+            approval_required=True,
+            notes="Requires piceli[ui] and a separate HTTPS TLS gateway sidecar. Default subjects inspect one namespace and logs. Configured deploy grants enable exact-plan reviewed manual delivery and credential-free cluster builds through scoped Jobs. Access grants enable local-client tickets. The server never binds a laptop port or reads an ambient Kubernetes context.",
+            long_running=True,
+        ),
+        "ui cluster-serve": _C(
+            "Serve authenticated cluster observation with optional reviewed delivery and local-client access.",
+            contract="conforms",
+            reads=(
+                "explicit Kubernetes API origin",
+                "projected service-account CA and token files",
+                "OIDC issuer metadata",
+                "optional mounted release definition and pinned renderer",
+            ),
+            writes=(
+                "private generated kubeconfig",
+                "configured durable UI control state",
+                "separately approved cluster deployment",
+            ),
+            cluster="writes",
+            approval_required=True,
+            notes="Requires piceli[ui] and a separate HTTPS TLS gateway sidecar. Observation is the default. Configured deploy grants permit exact-plan manual delivery and cluster build Jobs; access grants permit local-client tickets. No ambient Kubernetes context or server-side laptop port.",
+            long_running=True,
+        ),
+        "ui connect": _C(
+            "Bind and supervise one local loopback forward for a scoped cluster UI ticket.",
+            contract="conforms",
+            reads=(
+                "explicit local kubeconfig and context",
+                "one-time UI pairing secret",
+                "scoped target and resource identity",
+            ),
+            writes=(
+                "owned local loopback port-forward process",
+                "private local forward ownership record",
+            ),
+            cluster="reads",
+            notes="Requires piceli[ui], a trusted HTTPS cluster UI and local kubectl. The pairing secret is prompted without echo; kubeconfig and context must be explicit. The port exists on the client host only while the supervised command runs.",
+            long_running=True,
+        ),
+        "ui serve": _C(
+            "Serve the packaged web application for an explicit target.",
+            contract="conforms",
+            reads=(
+                "kubeconfig",
+                "release or Pipeline definition",
+                "release state",
+                "approved source files",
+                "pinned Docker renderer",
+            ),
+            writes=("configured UI control directory", "approved release state"),
+            cluster="writes",
+            approval_required=True,
+            notes="Requires piceli[ui]. Supply --pipeline for a trusted Pipeline, --definition for a release definition, or explicit --kubeconfig, --context and --namespace for inventory. Loopback only; no ambient target. Pipeline builds require a second exact approval after delivery. Starting the service approves no deployment.",
+            long_running=True,
+        ),
+        "ui backup": _C(
+            "Back up stopped UI control state and release evidence.",
+            contract="conforms",
+            reads=("explicit offline UI control directory",),
+            writes=("new private verified backup archive",),
+            notes="Refuses an active dispatcher; archive includes private evidence and must be protected.",
+        ),
+        "ui restore": _C(
+            "Restore a verified UI state archive into an empty directory.",
+            contract="conforms",
+            reads=("explicit UI backup archive",),
+            writes=("new private UI control directory",),
+            notes="Stop the server first and restore before starting a new single replica.",
+        ),
         "operator serve": _C(
             "Serve the operator dashboard and REST API on loopback.",
             contract="conforms",
@@ -923,6 +1029,53 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "cache).",
         ),
         # ------------------------------------------- 0.8.0 maintenance
+        "build job": _C(
+            "Build the pipeline's host builds at a Git commit as a Job on a "
+            "labelled builder node and print the receipt: plan (exit 3 with the "
+            "plan hash), then --approve HASH.",
+            reads=("pipeline module", "kubeconfig", "node facts"),
+            writes=("node facts cache (state_dir)",),
+            cluster="writes",
+            approval_required=True,
+            safe_to_retry=True,
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2, 3),
+            notes="Without --approve it reads the node facts and prints the Job "
+            "plan only. With --approve HASH it creates the cache claim (per "
+            "branch and page size) if missing and one Job that fetches the "
+            "commit (Git credentials from a Secret, never printed), builds for "
+            "each --platform, pushes by digest to the node registry and prints "
+            "the receipt; the Job is removed afterwards and the cache kept. "
+            "Rejected: cluster-build-invalid; failed: cluster-build-failed.",
+        ),
+        "build job-run": _C(
+            "Inside the build Job: build the host specs of a checked-out "
+            "source and push the images by digest (not for manual use).",
+            reads=("the checked-out source", "PICELI_BUILD_FACTS"),
+            writes=("the build cache directory", "the node registry"),
+            cluster="none",
+            safe_to_retry=True,
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            notes="The command the Job runs; it prints one receipt line on "
+            "stdout. The approval was the plan hash of `build job`.",
+        ),
+        "env push": _C(
+            "Record a laptop-built image digest for a branch environment, "
+            "where `env up` and the controller read it: plan (exit 3 with the "
+            "hash), then --approve HASH.",
+            reads=("pipeline module", "kubeconfig", "the receipt file"),
+            cluster="writes",
+            approval_required=True,
+            safe_to_retry=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2, 3),
+            notes="Writes the ConfigMap piceli-env-<branch> (keys images, "
+            "commit, pushed_at) in the branch environment's namespace, creating "
+            "the namespace when absent. It pushes no image and deploys nothing.",
+        ),
         "cache status": _C(
             "Show the disk Piceli uses per state directory and category, and "
             "its temporary directories.",
@@ -962,6 +1115,119 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             '(state="cluster") only machine-local files are pruned. --dry-run '
             "removes nothing. Exit 1 (cache-over-budget) when a state directory "
             "is still over the budget. Always prints one JSON object.",
+        ),
+        "heavy run": _C(
+            "Run a command under the machine-wide heavy-work lock and write a receipt.",
+            reads=("the given command's working directory", "git (HEAD, status)"),
+            writes=(
+                "the per-user heavy state directory (lock, holder record, "
+                "receipts, bounded)",
+            ),
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            long_running=True,
+            safe_to_retry=False,
+            notes="Runs exactly the command given after --, without a shell and "
+            "with the caller's own authority (like time or flock); Piceli "
+            "executes nothing else, so there is no plan or approval. The "
+            "command's exit code is the exit code (128+N for signal N), so 2 "
+            "may also be the command's own; stdout holds the receipt JSON only "
+            "(the child's stdout goes to stderr). Crash-safe OS lock (flock): a "
+            "killed holder releases it. Receipts hold the redacted command, "
+            "cwd, git commit, times, exit code and peak memory; never the "
+            "environment. Rejected: heavy-lock-timeout after --wait.",
+        ),
+        "heavy status": _C(
+            "Show who holds the heavy-work lock and the recent receipts.",
+            reads=("the per-user heavy state directory",),
+            contract="conforms",
+            exit_codes=(0,),
+            notes="Read-only; never contacts a cluster.",
+        ),
+        "gitops enable": _C(
+            "Plan and, with --approve HASH, install the GitOps controller that "
+            "deploys branches from Git (one environment per branch).",
+            reads=("kubeconfig",),
+            cluster="writes",
+            approval_required=True,
+            contract="conforms",
+            exit_codes=(0, 2, 3),
+            notes="Without --approve prints the install plan (Namespace, "
+            "ServiceAccount, scoped Role/ClusterRole and bindings, state "
+            "PersistentVolumeClaim, config ConfigMap, one-replica Deployment) "
+            "and its hash, exit 3. --image must be pinned by digest "
+            "(gitops-image-unpinned); --repo must carry no credentials "
+            "(gitops-repo-invalid): they come from the Secret named by "
+            "--credentials-secret, which is mounted and never read or printed. "
+            "A changed plan is refused (gitops-plan-changed). " + _EXPLICIT_CONTEXT,
+        ),
+        "gitops disable": _C(
+            "Plan and, with --approve HASH, remove the GitOps controller; never "
+            "an environment.",
+            reads=("kubeconfig",),
+            cluster="writes",
+            approval_required=True,
+            contract="conforms",
+            exit_codes=(0, 2, 3),
+            notes="Deletes the controller's objects only; keeps the branch "
+            "environments, the namespace and (without --delete-state) the state "
+            "volume. Exit 3 with the plan hash until --approve. " + _EXPLICIT_CONTEXT,
+        ),
+        "gitops status": _C(
+            "Show the GitOps controller's health, repository, last poll and "
+            "each branch's commit, state and pending approval.",
+            reads=("kubeconfig or --state-dir",),
+            cluster="reads",
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="Read-only. Reads the ConfigMap piceli-gitops-status and the "
+            "controller Deployment (or a local --state-dir). Health: healthy, "
+            "degraded (last poll failed), stale (no poll for 3 intervals), "
+            "starting, down. gitops-not-installed without a controller.",
+        ),
+        "gitops approve": _C(
+            "Approve the pending plan hash of one branch environment; the "
+            "controller applies it on its next poll.",
+            reads=("kubeconfig or --state-dir",),
+            writes=("--state-dir requests (local controller)",),
+            cluster="writes",
+            approval_required=True,
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="This is the owner's approval: run it only with the hash the "
+            "owner approved. Writes a request to the ConfigMap "
+            "piceli-gitops-requests; a hash the environment is no longer "
+            "waiting for is dropped (gitops-approval-stale in gitops status).",
+        ),
+        "gitops run": _C(
+            "Run the GitOps controller loop (the controller Deployment's "
+            "entrypoint); --once polls once and prints the status.",
+            reads=("--config", "git remote", "--credentials-dir"),
+            writes=("--state-dir (Git mirror, state, build receipts)",),
+            cluster="writes",
+            long_running=True,
+            safe_to_retry=True,
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="Deploys branch environments without a per-run approval: "
+            "only inside the pipeline's auto_approve policy, or a plan hash "
+            "approved with gitops approve; main only on a new tag or a "
+            "promotion, and only with an approved hash unless the owner "
+            "enabled --main-auto-approve. One step at a time, bounded retries "
+            "with backoff; a failing branch never stops the others. Git "
+            "output and credentials are never printed.",
+        ),
+        "promote": _C(
+            "Ask the GitOps controller to deploy BRANCH@SHA to the main "
+            "branch's environment.",
+            reads=("kubeconfig or --state-dir",),
+            writes=("--state-dir requests (local controller)",),
+            cluster="writes",
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="Writes a request; the controller accepts only a commit it "
+            "saw on that branch (gitops-promote-unknown otherwise) and main "
+            "then waits for gitops approve of its plan hash.",
         ),
         "doctor": _C(
             "Check free disk and memory against the next build's needs, and "
@@ -1037,6 +1303,110 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "command read-only with the workload's image, writes a receipt "
             "with PASS or FAIL per claim (exit 1 on any FAIL), and deletes the "
             "scratch claims unless --keep.",
+        ),
+        # ----------------------------------------------- environments
+        "env up": _C(
+            "Deploy a branch into its own namespace (EnvConfig): plan (exit 3 "
+            "with the env_hash), then --approve HASH.",
+            reads=(
+                "pipeline module (--pipeline or $PICELI_PIPELINE)",
+                "kubeconfig",
+                "state_dir",
+                "build receipt (--receipt)",
+            ),
+            writes=(
+                "<state_dir>/branches/<namespace> (journal, release state, secrets)",
+            ),
+            cluster="writes",
+            approval_required=True,
+            safe_to_retry=True,
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2, 3),
+            notes="The branch's namespace is <prefix><slug> (at most 63 "
+            "characters, hash suffix when cut); main maps to the main "
+            "namespace, which is never created. Branch environments never "
+            "build: images come from --digest NAME=REF or --receipt. The app is "
+            "isolated at render time (relative Service names, no NodePort, "
+            "hostPort or hostPath, namespace-qualified cluster objects, its own "
+            "generated Secrets) and gets a default-deny NetworkPolicy across "
+            "namespaces and a ResourceQuota. The plan (--plan, or without an "
+            "approval) lists the namespace to create, the environments the "
+            "budget stops (max_envs, least recently pushed first; scaled to "
+            "zero, kept), the deploy's combined plan and the seed "
+            "(--seed-from main). --approve-if-policy runs a branch when "
+            "EnvConfig(auto_approve=True), or when the pipeline's auto_approve "
+            "policy allows the deploy and nothing is stopped; main only by the "
+            "policy. --wait refuses with env-budget-full instead of stopping.",
+        ),
+        "env down": _C(
+            "Delete a branch environment: its claims, namespace and volumes "
+            "(approval by env_hash; never main's).",
+            reads=("pipeline module (--pipeline or $PICELI_PIPELINE)", "kubeconfig"),
+            writes=("<state_dir>/branches/<namespace> (removed)",),
+            cluster="writes",
+            approval_required=True,
+            safe_to_retry=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2, 3),
+            notes="Refuses the main branch and the main namespace always "
+            "(env-main-protected) and a namespace without this app's "
+            "piceli.io/env-of label or of another branch "
+            "(env-namespace-not-managed). The plan lists the claims and the "
+            "volumes bound to them; with --approve HASH (or --approve-if-policy "
+            "and EnvConfig(auto_approve=True)) it deletes the claims, the "
+            "namespace and those volumes. An absent environment prints state "
+            "absent (exit 0).",
+        ),
+        "env seed": _C(
+            "Restore main's latest restore point into a branch environment's "
+            "claims (approval by env_hash).",
+            reads=(
+                "pipeline module (--pipeline or $PICELI_PIPELINE)",
+                "restore point directory",
+                "kubeconfig",
+            ),
+            writes=("restore point directory (restores/ receipts)",),
+            cluster="writes",
+            approval_required=True,
+            safe_to_retry=True,
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2, 3),
+            notes="Uses the restore machinery of `piceli restore`: verifies the "
+            "archives, stops the branch's writers, empties and restores each "
+            "claim, checks the content digest in the cluster and starts the "
+            "writers again. Never reads or writes main's claims (the archives "
+            "are local). Refuses the main branch (env-main-protected).",
+        ),
+        "envs": _C(
+            "List every environment: branch, namespace, commit, build and "
+            "deploy state, health, age, last push.",
+            reads=("pipeline module (--pipeline or $PICELI_PIPELINE)", "kubeconfig"),
+            cluster="reads",
+            contract="conforms",
+            notes="Read-only. Human table on stderr; --json prints one "
+            "piceli.envs.v1 object (envs[]: branch, namespace, main, state "
+            "running|stopped|absent, health healthy|degraded|stopped|unknown, "
+            "commit, build, deploy, created_at, pushed_at, age_seconds, "
+            "workloads).",
+        ),
+        "logs": _C(
+            "Print one workload's logs in an environment (kubectl logs with the "
+            "explicit context).",
+            reads=(
+                "pipeline module (--pipeline or $PICELI_PIPELINE)",
+                "kubeconfig",
+                "kubectl",
+            ),
+            cluster="reads",
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            notes="`piceli logs BRANCH WORKLOAD [--previous] [-f] [--tail N]`: "
+            "after the checks, output and exit status are kubectl's own (log "
+            "lines on stdout); a refusal is the JSON rejection object. WORKLOAD is a Deployment, StatefulSet, "
+            "DaemonSet or Job of the app (env-workload-unknown otherwise).",
         ),
     }
 )

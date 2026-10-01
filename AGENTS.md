@@ -24,10 +24,18 @@ make evals-check          # self-tests of the cross-model eval harness (evals/)
 make help                 # every target
 ```
 
+Tests run in parallel (pytest-xdist): always pass `-n auto` (`make test`
+does), about 1–2 minutes for the whole suite. Only failures print their
+captured logs (`log_cli` is off). While developing, run the tests of the
+files you touch; run the full suite once before committing. A test must not
+depend on the worker it runs on (no pids, ports or times in test ids or
+parametrize values). The kind integration tests share one cluster and run
+serially (`make test-integration`).
+
 Before you commit, all of these must pass:
 
 ```sh
-uv run --frozen pytest
+uv run --frozen pytest -n auto
 uv run --frozen mypy
 uv run --frozen ruff check . && uv run --frozen ruff format --check .
 uv run --frozen --group docs sphinx-build -W --keep-going -b html docs docs/_build/html

@@ -173,6 +173,7 @@ gitops
 helm_charts
 state
 maintenance
+heavy_work
 restore_points
 typed_apps
 crds
@@ -200,6 +201,7 @@ host_builds
 publishing_images
 node_delivery
 node_local_registry
+registry_retention
 artifact_delivery
 ```
 
@@ -211,6 +213,8 @@ artifact_delivery
 deployment_planning
 operations_lens
 operator_workflow
+ui
+ui_cluster_install
 ```
 
 ```{toctree}

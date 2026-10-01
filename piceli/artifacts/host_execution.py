@@ -172,7 +172,11 @@ class HostExecution:
         self.steps: list[dict[str, Any]] = []
         self.store = BlobStore(cache)
         self.stage = cache / "stage" / self.spec.name
-        self.target = cache / "target"
+        # One target directory per architecture and page size: a cache shared
+        # by nodes with other page sizes would rebuild jemalloc and everything
+        # above it on each switch (B28).
+        facts = plan.facts
+        self.target = cache / "target" / f"{facts.architecture}-{facts.page_size}"
         self.total = len(plan.commands)
 
     # ---------------------------------------------------------------- run

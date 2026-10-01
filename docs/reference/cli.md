@@ -35,6 +35,9 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli artifacts preview`](#cli-artifacts-preview) | Preview a deterministic OCI build plan (no tools run). | none | no |
 | [`piceli artifacts preview-command`](#cli-artifacts-preview-command) | Preview a pinned external build command. | none | no |
 | [`piceli artifacts publish`](#cli-artifacts-publish) | Publish a build's images (every platform in one index) to a registry. | none | yes |
+| [`piceli artifacts retention`](#cli-artifacts-retention) | Report which registry manifests the last releases, pins and live workloads keep, and delete the rest. | reads | yes |
+| [`piceli build job`](#cli-build-job) | Build at a commit as a Job on a builder node (plan, then --approve HASH). | writes | yes |
+| [`piceli build job-run`](#cli-build-job-run) | Inside the build Job: build and push; print the receipt line. | none | no |
 | [`piceli cache prune`](#cli-cache-prune) | Remove what no release, rollback or resume needs: stale temporary directories and partial files, runs beyond --keep-last, unused delivery receipts, and (over --budget) build outputs and logs. | none | no |
 | [`piceli cache status`](#cli-cache-status) | Show the disk used per state directory and category, and Piceli's temporary directories. Read-only. | none | no |
 | [`piceli chart manifests`](#cli-chart-manifests) | Print (or write) plain manifests with a values file applied; no Helm needed. | none | no |
@@ -44,12 +47,25 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli codegen crd`](#cli-codegen-crd) | Generate pydantic models for one CRD version, from a file or a cluster. | reads | no |
 | [`piceli deploy`](#cli-deploy) | Deploy a pipeline: inputs → build → deliver → plan → apply → checks. | writes | yes |
 | [`piceli doctor`](#cli-doctor) | Check this runner: free disk and memory against what the next build needs (estimated from the last build receipts), and the tools the pipeline uses (docker, docker buildx, kubectl). Exit 1 on a warning. | none | no |
+| [`piceli env down`](#cli-env-down) | Delete BRANCH's environment: its claims, namespace and volumes (never main's). | writes | yes |
+| [`piceli env push`](#cli-env-push) | Record a laptop-built digest for a branch environment (plan, then --approve HASH). | writes | yes |
+| [`piceli env seed`](#cli-env-seed) | Restore main's latest restore point into BRANCH's claims (replaces their content). | writes | yes |
+| [`piceli env up`](#cli-env-up) | Deploy BRANCH into its namespace (created when absent), isolated. | writes | yes |
+| [`piceli envs`](#cli-envs) | List every environment: branch, namespace, commit, deploy state, health, age. | reads | no |
 | [`piceli explain`](#cli-explain) | Explain an error code: cause, fix and whether a retry can succeed. | none | no |
+| [`piceli gitops approve`](#cli-gitops-approve) | Approve the pending plan of ENV; the controller applies it on its next poll. | writes | yes |
+| [`piceli gitops disable`](#cli-gitops-disable) | Remove the controller (plan first; --approve HASH removes). Never an environment. | writes | yes |
+| [`piceli gitops enable`](#cli-gitops-enable) | Install the GitOps controller (plan first; --approve HASH installs). | writes | yes |
+| [`piceli gitops run`](#cli-gitops-run) | Run the controller loop (the Deployment's entrypoint); --once for one poll. | writes | no |
+| [`piceli gitops status`](#cli-gitops-status) | Controller health, repository, last poll and every branch's state. | reads | no |
+| [`piceli heavy run`](#cli-heavy-run) | Run COMMAND once the lock is free; exit with its exit code. | none | no |
+| [`piceli heavy status`](#cli-heavy-status) | Show who holds the lock and the most recent receipts. | none | no |
 | [`piceli help-json`](#cli-help-json) | Print the whole CLI tree (commands, options, contracts) as JSON. | none | no |
 | [`piceli import live`](#cli-import-live) | Generate a typed module from the objects of a live namespace (read-only). | reads | no |
 | [`piceli import yaml`](#cli-import-yaml) | Generate a typed module from a directory of manifests (no cluster). | none | no |
 | [`piceli inputs record`](#cli-inputs-record) | Capture each declared source (or the ``--only`` ones) and write a lock. | none | no |
 | [`piceli inputs verify`](#cli-inputs-verify) | Recapture the sources and compare them with the lock (exit 1 on drift). | none | no |
+| [`piceli logs`](#cli-logs) | Print one workload's logs in an environment (kubectl, explicit context). | reads | no |
 | [`piceli observe forward-command`](#cli-observe-forward-command) | Print a JSON argv array for one explicit loopback-only port forward. | none | no |
 | [`piceli observe forward-list`](#cli-observe-forward-list) | List a user's saved port-forward preferences without starting a process. | none | no |
 | [`piceli observe forward-run`](#cli-observe-forward-run) | Run one saved loopback-only port forward until the caller interrupts it. | reads | no |
@@ -66,6 +82,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli operator restore`](#cli-operator-restore) | Safely verify and restore operator state into empty destination. | none | no |
 | [`piceli operator serve`](#cli-operator-serve) | Launch the Piceli Operator dashboard and unified REST API. | reads | no |
 | [`piceli operator status`](#cli-operator-status) | Print classified operator inventory: managed, unmanaged, unknown, and releases. | reads | no |
+| [`piceli promote`](#cli-promote) | Ask the GitOps controller to deploy BRANCH@SHA to the main branch's environment. | writes | no |
 | [`piceli publish`](#cli-publish) | Push the rendered manifests as a Flux OCI artifact (needs --approve DIGEST). | none | yes |
 | [`piceli release apply`](#cli-release-apply) | Execute an approved plan (``--approve HASH``), or plan and confirm. | writes | yes |
 | [`piceli release check`](#cli-release-check) | Run the spec's [[checks]] now against a release; changes nothing. | reads | no |
@@ -87,6 +104,12 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli state pull`](#cli-state-pull) | Refresh the local working copy from the shared state (reads the cluster). | reads | no |
 | [`piceli state show`](#cli-state-show) | Show where the state lives, its generation and who holds the release lock. | reads | no |
 | [`piceli status`](#cli-status) | Say whether the app is up and how to reach it. Read-only. | reads | no |
+| [`piceli ui backup`](#cli-ui-backup) | Back up an offline UI control store and its release journal. | none | no |
+| [`piceli ui cluster-observe`](#cli-ui-cluster-observe) | Serve OIDC-scoped cluster observation and configured delivery. | writes | yes |
+| [`piceli ui cluster-serve`](#cli-ui-cluster-serve) | Serve OIDC-scoped cluster observation and configured delivery. | writes | yes |
+| [`piceli ui connect`](#cli-ui-connect) | Bind a laptop port for an authenticated cluster UI ticket. | reads | no |
+| [`piceli ui restore`](#cli-ui-restore) | Restore UI control state before starting a single new server. | none | no |
+| [`piceli ui serve`](#cli-ui-serve) | Register an existing definition or inventory scope and serve the bundled UI. | writes | yes |
 | [`piceli watch`](#cli-watch) | Follow a deploy run until it settles: every stage change and progress line, then the outcome. Read-only; reads the local run journal (with shared state run `piceli state pull` first), never the cluster. | none | no |
 
 (cli-access)=
@@ -103,6 +126,7 @@ Forward the app's declared ports to 127.0.0.1 and keep them healthy.
 | `--poll` | float | `1.0` | Status report cadence (seconds) |
 | `--dashboard` | integer |  | Also serve the local dashboard on this loopback port, with these forwards as its shortcuts |
 | `--ui-config` | path | env `PICELI__UI_CONFIG` | Optional dashboard TOML (badges, tiers, extra shortcuts) |
+| `--pipeline` | text | env `PICELI_PIPELINE` | With a branch name as TARGET: the pipeline declaring envs=EnvConfig(...) (MODULE:ATTR; default $PICELI_PIPELINE). A branch's forwards get free local ports |
 
 **Contract**
 
@@ -113,7 +137,7 @@ Forward the app's declared ports to 127.0.0.1 and keep them healthy.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** Refuses (access-port-conflict) when a declared local port is held by another process and names its pid (another process's command line is never printed); when the holder is Piceli's own stale process for this app it says so and suggests `piceli access stop --stale TARGET`. Never takes a port over. Stops every forward it started on Ctrl-C/SIGTERM/SIGHUP. Exit 1 only when every forward gave up.
+- **Notes:** Refuses (access-port-conflict) when a declared local port is held by another process and names its pid (another process's command line is never printed); when the holder is Piceli's own stale process for this app it says so and suggests `piceli access stop --stale TARGET`. Never takes a port over. Stops every forward it started on Ctrl-C/SIGTERM/SIGHUP. Exit 1 only when every forward gave up. `piceli access BRANCH --pipeline MODULE:ATTR` forwards that branch environment's declared ports on free local ports.
 
 (cli-access-stop)=
 ### `piceli access stop`
@@ -423,6 +447,115 @@ Mutually exclusive: `credentials` / `docker_config`.
 - **Output contract:** conforms
 - **Notes:** Without --approve it prints the plan and its digest (exit 3) and contacts nothing. Pushes are content-addressed; a version tag that names another image is refused unless --move-tag.
 
+(cli-artifacts-retention)=
+### `piceli artifacts retention`
+
+Report which registry manifests the last releases, pins and live workloads keep, and delete the rest.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--to` | text | required | oci://host[:port]/prefix to inspect |
+| `--receipts` | path |  | publish or delivery receipts, JSON Lines journals or directories of them |
+| `--keep` | integer | `3` | releases kept (minimum) |
+| `--budget` | text |  | keep more releases, newest first, up to e.g. 10GiB |
+| `--pin` | text |  | a digest to keep |
+| `--pin-file` | path |  | digests to keep, one per line |
+| `--collect-unledgered` | boolean | `False` | also collect tagged manifests no receipt mentions |
+| `--repository` | text |  | a repository to inspect (registries without a catalog) |
+| `--kubeconfig` | path |  | reads live pods; with --context |
+| `--context` | text |  |  |
+| `--live-namespace` | text |  | default: all namespaces |
+| `--live-file` | path |  | digests in use, one per line or JSON |
+| `--via-forward` | text |  | service/NAME, deployment/NAME or pod/NAME |
+| `--namespace` | text |  | namespace of the forward target |
+| `--forward-remote-port` | integer | `5000` |  |
+| `--kubectl` | path |  |  |
+| `--kubectl-sha256` | text |  |  |
+| `--delete` | boolean | `False` |  |
+| `--approve` | text |  | the plan hash printed without --approve |
+| `--credentials` | path |  |  |
+| `--docker-config` | path |  |  |
+| `--ca-file` | path |  |  |
+| `--out` | path |  | write the report or receipt here |
+| `--timeout` | float | `120` |  |
+
+Mutually exclusive: `credentials` / `docker_config`.
+
+**Contract**
+
+- **Reads:** publish and delivery receipts, credentials file or Docker config, kubeconfig (live pods, with --context)
+- **Writes:** OCI registry (manifest deletes, only with --delete --approve), --out
+- **Cluster:** reads
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** Without --delete it only reads. --delete without --approve prints the plan and its hash (exit 3). A digest a running workload uses is never deleted; blobs are freed by the registry's own garbage collection afterwards.
+
+(cli-build-job)=
+### `piceli build job`
+
+Build at a commit as a Job on a builder node (plan, then --approve HASH).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `TARGET` | text | required |  |
+| `--commit` | text | required | Full Git commit id |
+| `--image` | text | required | Builder image, name@sha256:... |
+| `--repo` | text | required | Git remote URL (no credentials) |
+| `--cache-key` | text |  | The branch (default: the commit) |
+| `--platform` | text (repeatable) |  | linux/arm64, linux/amd64 (repeat) |
+| `--git-secret` | text | `piceli-build-git` | Secret with keys username, password |
+| `--selector` | text (repeatable) |  | Builder node label KEY=VALUE (repeat) |
+| `--namespace` | text |  |  |
+| `--storage` | text | `20Gi` | Cache claim size |
+| `--storage-class` | text |  |  |
+| `--timeout` | integer | `3600` | Job deadline in seconds |
+| `--registry-url` | text |  | oci://host[:port]/prefix |
+| `--node-registry` | text |  |  |
+| `--repo-root` | path |  |  |
+| `--receipt-out` | path |  | Where to write the receipt |
+| `--approve` | text |  | The plan hash to execute |
+| `--env` | text |  |  |
+
+**Contract**
+
+- **Reads:** pipeline module, kubeconfig, node facts
+- **Writes:** node facts cache (state_dir)
+- **Cluster:** writes
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** Without --approve it reads the node facts and prints the Job plan only. With --approve HASH it creates the cache claim (per branch and page size) if missing and one Job that fetches the commit (Git credentials from a Secret, never printed), builds for each --platform, pushes by digest to the node registry and prints the receipt; the Job is removed afterwards and the cache kept. Rejected: cluster-build-invalid; failed: cluster-build-failed.
+
+(cli-build-job-run)=
+### `piceli build job-run`
+
+Inside the build Job: build and push; print the receipt line.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--source` | path | required |  |
+| `--cache` | path | required |  |
+| `--out` | path | required |  |
+| `--commit` | text | required |  |
+| `--registry-url` | text | required |  |
+| `--spec` | text (repeatable) | required | host-build.toml (repeat) |
+| `--node-registry` | text |  |  |
+| `--timeout` | integer | `3600` |  |
+
+**Contract**
+
+- **Reads:** the checked-out source, PICELI_BUILD_FACTS
+- **Writes:** the build cache directory, the node registry
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** The command the Job runs; it prints one receipt line on stdout. The approval was the plan hash of `build job`.
+
 (cli-cache-prune)=
 ### `piceli cache prune`
 
@@ -672,6 +805,130 @@ Check this runner: free disk and memory against what the next build needs (estim
 - **Output contract:** conforms
 - **Notes:** Read-only; never contacts a cluster. Exit 1 with a warning (runner-disk-low, runner-memory-low, runner-tool-missing); the need is estimated from the last build receipts.
 
+(cli-env-down)=
+### `piceli env down`
+
+Delete BRANCH's environment: its claims, namespace and volumes (never main's).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `BRANCH` | text | required |  |
+| `--pipeline` | text | env `PICELI_PIPELINE` | The pipeline: MODULE:ATTR or path/to/file.py:ATTR naming a Pipeline that declares envs=EnvConfig(...) (default: $PICELI_PIPELINE) |
+| `--approve` | text |  | The env_hash to execute (from the plan) |
+| `--approve-if-policy` | boolean | `False` | Execute without --approve when the owner allows it: EnvConfig(auto_approve=True) for branch environments, or the pipeline's auto_approve policy for the deploy (never for main's teardown or seed) |
+
+**Contract**
+
+- **Reads:** pipeline module (--pipeline or $PICELI_PIPELINE), kubeconfig
+- **Writes:** <state_dir>/branches/<namespace> (removed)
+- **Cluster:** writes
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** Refuses the main branch and the main namespace always (env-main-protected) and a namespace without this app's piceli.io/env-of label or of another branch (env-namespace-not-managed). The plan lists the claims and the volumes bound to them; with --approve HASH (or --approve-if-policy and EnvConfig(auto_approve=True)) it deletes the claims, the namespace and those volumes. An absent environment prints state absent (exit 0).
+
+(cli-env-push)=
+### `piceli env push`
+
+Record a laptop-built digest for a branch environment (plan, then --approve HASH).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `BRANCH` | text | required |  |
+| `TARGET` | text | required |  |
+| `--receipt` | path |  | A host-build receipt (JSON) |
+| `--digest` | text (repeatable) |  | IMAGE=sha256:<digest>; repeat per image |
+| `--commit` | text |  | The source commit of the build |
+| `--namespace` | text |  | The environment's namespace (default: from the pipeline's envs) |
+| `--approve` | text |  | The plan hash to execute |
+| `--env` | text |  | The pipeline's environment |
+
+**Contract**
+
+- **Reads:** pipeline module, kubeconfig, the receipt file
+- **Writes:** nothing (read-only)
+- **Cluster:** writes
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** Writes the ConfigMap piceli-env-<branch> (keys images, commit, pushed_at) in the branch environment's namespace, creating the namespace when absent. It pushes no image and deploys nothing.
+
+(cli-env-seed)=
+### `piceli env seed`
+
+Restore main's latest restore point into BRANCH's claims (replaces their content).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `BRANCH` | text | required |  |
+| `--pipeline` | text | env `PICELI_PIPELINE` | The pipeline: MODULE:ATTR or path/to/file.py:ATTR naming a Pipeline that declares envs=EnvConfig(...) (default: $PICELI_PIPELINE) |
+| `--from` | text |  | The branch whose latest restore point is restored (main) |
+| `--approve` | text |  | The env_hash to execute (from the plan) |
+| `--approve-if-policy` | boolean | `False` | Execute without --approve when the owner allows it: EnvConfig(auto_approve=True) for branch environments, or the pipeline's auto_approve policy for the deploy (never for main's teardown or seed) |
+
+**Contract**
+
+- **Reads:** pipeline module (--pipeline or $PICELI_PIPELINE), restore point directory, kubeconfig
+- **Writes:** restore point directory (restores/ receipts)
+- **Cluster:** writes
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** Uses the restore machinery of `piceli restore`: verifies the archives, stops the branch's writers, empties and restores each claim, checks the content digest in the cluster and starts the writers again. Never reads or writes main's claims (the archives are local). Refuses the main branch (env-main-protected).
+
+(cli-env-up)=
+### `piceli env up`
+
+Deploy BRANCH into its namespace (created when absent), isolated.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `BRANCH` | text | required |  |
+| `--pipeline` | text | env `PICELI_PIPELINE` | The pipeline: MODULE:ATTR or path/to/file.py:ATTR naming a Pipeline that declares envs=EnvConfig(...) (default: $PICELI_PIPELINE) |
+| `--commit` | text |  | The commit deployed (recorded, shown) |
+| `--digest` | text (repeatable) |  | The image of build NAME as repository@sha256:… (repeatable); branch environments never build |
+| `--receipt` | path |  | A build receipt: JSON {"images": {NAME: REF}} |
+| `--seed-from` | text |  | Restore this branch's latest restore point (main) into the environment's claims after the deploy |
+| `--plan` | boolean | `False` | Plan only; print the env_hash |
+| `--approve` | text |  | The env_hash to execute (from the plan) |
+| `--approve-if-policy` | boolean | `False` | Execute without --approve when the owner allows it: EnvConfig(auto_approve=True) for branch environments, or the pipeline's auto_approve policy for the deploy (never for main's teardown or seed) |
+| `--wait` | boolean | `False` | When the budget is full, refuse (env-budget-full) instead of stopping the least recently pushed environment |
+
+**Contract**
+
+- **Reads:** pipeline module (--pipeline or $PICELI_PIPELINE), kubeconfig, state_dir, build receipt (--receipt)
+- **Writes:** <state_dir>/branches/<namespace> (journal, release state, secrets)
+- **Cluster:** writes
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** The branch's namespace is <prefix><slug> (at most 63 characters, hash suffix when cut); main maps to the main namespace, which is never created. Branch environments never build: images come from --digest NAME=REF or --receipt. The app is isolated at render time (relative Service names, no NodePort, hostPort or hostPath, namespace-qualified cluster objects, its own generated Secrets) and gets a default-deny NetworkPolicy across namespaces and a ResourceQuota. The plan (--plan, or without an approval) lists the namespace to create, the environments the budget stops (max_envs, least recently pushed first; scaled to zero, kept), the deploy's combined plan and the seed (--seed-from main). --approve-if-policy runs a branch when EnvConfig(auto_approve=True), or when the pipeline's auto_approve policy allows the deploy and nothing is stopped; main only by the policy. --wait refuses with env-budget-full instead of stopping.
+
+(cli-envs)=
+### `piceli envs`
+
+List every environment: branch, namespace, commit, deploy state, health, age.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--pipeline` | text | env `PICELI_PIPELINE` | The pipeline: MODULE:ATTR or path/to/file.py:ATTR naming a Pipeline that declares envs=EnvConfig(...) (default: $PICELI_PIPELINE) |
+| `--json` | boolean | `False` | Print one piceli.envs.v1 JSON object |
+
+**Contract**
+
+- **Reads:** pipeline module (--pipeline or $PICELI_PIPELINE), kubeconfig
+- **Writes:** nothing (read-only)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Read-only. Human table on stderr; --json prints one piceli.envs.v1 object (envs[]: branch, namespace, main, state running|stopped|absent, health healthy|degraded|stopped|unknown, commit, build, deploy, created_at, pushed_at, age_seconds, workloads).
+
 (cli-explain)=
 ### `piceli explain`
 
@@ -695,6 +952,201 @@ Explain an error code: cause, fix and whether a retry can succeed.
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** `--run ID --spec SPEC` explains a past execution instead, from the local state (same as `piceli release status --spec SPEC --run ID`).
+
+(cli-gitops-approve)=
+### `piceli gitops approve`
+
+Approve the pending plan of ENV; the controller applies it on its next poll.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `ENV` | text | required |  |
+| `PLAN_HASH` | text | required |  |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--state-dir` | path |  | A local controller's state directory instead of a cluster (the one `gitops run --once --state-dir` uses) |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+
+**Contract**
+
+- **Reads:** kubeconfig or --state-dir
+- **Writes:** --state-dir requests (local controller)
+- **Cluster:** writes
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** This is the owner's approval: run it only with the hash the owner approved. Writes a request to the ConfigMap piceli-gitops-requests; a hash the environment is no longer waiting for is dropped (gitops-approval-stale in gitops status).
+
+(cli-gitops-disable)=
+### `piceli gitops disable`
+
+Remove the controller (plan first; --approve HASH removes). Never an environment.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--delete-state` | boolean | `False` | Also delete the state volume (Git mirror, receipts, last-seen commits) |
+| `--approve` | text |  | The plan hash to execute |
+| `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
+| `--exec-sha256` | text |  | Expected sha256:<hex> of the resolved exec plugin file |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+
+**Contract**
+
+- **Reads:** kubeconfig
+- **Writes:** nothing (read-only)
+- **Cluster:** writes
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** Deletes the controller's objects only; keeps the branch environments, the namespace and (without --delete-state) the state volume. Exit 3 with the plan hash until --approve. `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`).
+
+(cli-gitops-enable)=
+### `piceli gitops enable`
+
+Install the GitOps controller (plan first; --approve HASH installs).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `PIPELINE` | text | required |  |
+| `--repo` | text | required | Git URL the controller polls (https://, ssh://, git@host:path); no credentials in it |
+| `--image` | text | required | The Piceli image the controller runs, pinned by digest (registry/repo@sha256:…); see docs/gitops.md to build one |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--branches` | text | `main` | Comma-separated branch globs, e.g. 'main,wp-*' |
+| `--poll` | text | `60s` | Poll interval: 60, 60s, 5m |
+| `--credentials-secret` | text |  | Secret in the controller's namespace with the Git credentials (username/password or ssh-privatekey/known_hosts); mounted, never read |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--env` | text |  | The pipeline's environment, if it has several |
+| `--main-branch` | text | `main` | The branch that deploys on tags |
+| `--tags` | text | `v*` | Tag glob that deploys the main branch |
+| `--main-auto-approve` | boolean | `False` | Owner's opt-in: main deploys without a hash approval when the plan is inside the pipeline's auto_approve policy |
+| `--storage` | text | `10Gi` | Size of the state volume |
+| `--storage-class` | text |  | StorageClass of the state volume |
+| `--cluster-rbac` | boolean | `False` | Also allow ClusterRoles/ClusterRoleBindings (apps that declare them) |
+| `--platform` | text (repeatable) |  | Build platform (repeatable), e.g. linux/arm64 |
+| `--builder-image` | text |  | Image of the cluster build Job, pinned by digest; without it branches deploy only images pushed with `piceli env push` |
+| `--build-git-secret` | text |  | Secret (username/password) the build Job fetches the repository with (default piceli-build-git) |
+| `--builder-selector` | text (repeatable) |  | key=value label of the builder node (repeatable; default piceli.io/builder=true on amd64) |
+| `--build-storage` | text | `20Gi` | Size of a branch's build cache |
+| `--build-registry` | text |  | oci://host[:port]/prefix the build pushes to (default: the pipeline's delivery) |
+| `--node-registry` | text |  | host[:port] nodes pull from, when different |
+| `--approve` | text |  | The plan hash to execute |
+| `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
+| `--exec-sha256` | text |  | Expected sha256:<hex> of the resolved exec plugin file |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+
+**Contract**
+
+- **Reads:** kubeconfig
+- **Writes:** nothing (read-only)
+- **Cluster:** writes
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** Without --approve prints the install plan (Namespace, ServiceAccount, scoped Role/ClusterRole and bindings, state PersistentVolumeClaim, config ConfigMap, one-replica Deployment) and its hash, exit 3. --image must be pinned by digest (gitops-image-unpinned); --repo must carry no credentials (gitops-repo-invalid): they come from the Secret named by --credentials-secret, which is mounted and never read or printed. A changed plan is refused (gitops-plan-changed). `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`).
+
+(cli-gitops-run)=
+### `piceli gitops run`
+
+Run the controller loop (the Deployment's entrypoint); --once for one poll.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--config` | path | required | The controller config (config.json of the ConfigMap) |
+| `--state-dir` | path | required | The controller's state directory (its volume) |
+| `--once` | boolean | `False` | Poll once, print the status and exit |
+| `--service-account` | boolean | `False` | Inside the controller's pod: reach the API with the pod's service account (an explicit kubeconfig is written for it) |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--namespace` | text |  | Publish status and read requests as ConfigMaps in this namespace (else files in --state-dir) |
+| `--credentials-dir` | path |  | The mounted Git credentials Secret |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+
+**Contract**
+
+- **Reads:** --config, git remote, --credentials-dir
+- **Writes:** --state-dir (Git mirror, state, build receipts)
+- **Cluster:** writes
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Deploys branch environments without a per-run approval: only inside the pipeline's auto_approve policy, or a plan hash approved with gitops approve; main only on a new tag or a promotion, and only with an approved hash unless the owner enabled --main-auto-approve. One step at a time, bounded retries with backoff; a failing branch never stops the others. Git output and credentials are never printed.
+
+(cli-gitops-status)=
+### `piceli gitops status`
+
+Controller health, repository, last poll and every branch's state.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--state-dir` | path |  | A local controller's state directory instead of a cluster (the one `gitops run --once --state-dir` uses) |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** kubeconfig or --state-dir
+- **Writes:** nothing (read-only)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Read-only. Reads the ConfigMap piceli-gitops-status and the controller Deployment (or a local --state-dir). Health: healthy, degraded (last poll failed), stale (no poll for 3 intervals), starting, down. gitops-not-installed without a controller.
+
+(cli-heavy-run)=
+### `piceli heavy run`
+
+Run COMMAND once the lock is free; exit with its exit code.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `COMMAND` | text |  |  |
+| `--name` | text |  | A label for the holder record and receipt |
+| `--wait` | float | `3600.0` | Seconds to wait for the lock (0: do not wait) |
+
+**Contract**
+
+- **Reads:** the given command's working directory, git (HEAD, status)
+- **Writes:** the per-user heavy state directory (lock, holder record, receipts, bounded)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** no
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Runs exactly the command given after --, without a shell and with the caller's own authority (like time or flock); Piceli executes nothing else, so there is no plan or approval. The command's exit code is the exit code (128+N for signal N), so 2 may also be the command's own; stdout holds the receipt JSON only (the child's stdout goes to stderr). Crash-safe OS lock (flock): a killed holder releases it. Receipts hold the redacted command, cwd, git commit, times, exit code and peak memory; never the environment. Rejected: heavy-lock-timeout after --wait.
+
+(cli-heavy-status)=
+### `piceli heavy status`
+
+Show who holds the lock and the most recent receipts.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+| `--limit` | integer | `10` | Receipts to list |
+
+**Contract**
+
+- **Reads:** the per-user heavy state directory
+- **Writes:** nothing (read-only)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success
+- **Output contract:** conforms
+- **Notes:** Read-only; never contacts a cluster.
 
 (cli-help-json)=
 ### `piceli help-json`
@@ -810,6 +1262,33 @@ Recapture the sources and compare them with the lock (exit 1 on drift).
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
+
+(cli-logs)=
+### `piceli logs`
+
+Print one workload's logs in an environment (kubectl, explicit context).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `ENV` | text | required |  |
+| `WORKLOAD` | text | required |  |
+| `--pipeline` | text | env `PICELI_PIPELINE` | The pipeline: MODULE:ATTR or path/to/file.py:ATTR naming a Pipeline that declares envs=EnvConfig(...) (default: $PICELI_PIPELINE) |
+| `--previous` | boolean | `False` | The previous container's logs |
+| `--follow`, `-f` | boolean | `False` | Stream new lines until Ctrl-C |
+| `--tail` | integer | `200` |  |
+| `--container` | text |  |  |
+| `--kubectl` | text | `kubectl` | kubectl executable |
+
+**Contract**
+
+- **Reads:** pipeline module (--pipeline or $PICELI_PIPELINE), kubeconfig, kubectl
+- **Writes:** nothing (read-only)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** `piceli logs BRANCH WORKLOAD [--previous] [-f] [--tail N]`: after the checks, output and exit status are kubectl's own (log lines on stdout); a refusal is the JSON rejection object. WORKLOAD is a Deployment, StatefulSet, DaemonSet or Job of the app (env-workload-unknown otherwise).
 
 (cli-observe-forward-command)=
 ### `piceli observe forward-command`
@@ -1214,6 +1693,31 @@ Print classified operator inventory: managed, unmanaged, unknown, and releases.
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`).
+
+(cli-promote)=
+### `piceli promote`
+
+Ask the GitOps controller to deploy BRANCH@SHA to the main branch's environment.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `TARGET` | text | required |  |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--state-dir` | path |  | A local controller's state directory instead of a cluster (the one `gitops run --once --state-dir` uses) |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+
+**Contract**
+
+- **Reads:** kubeconfig or --state-dir
+- **Writes:** --state-dir requests (local controller)
+- **Cluster:** writes
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Writes a request; the controller accepts only a commit it saw on that branch (gitops-promote-unknown otherwise) and main then waits for gitops approve of its plan hash.
 
 (cli-publish)=
 ### `piceli publish`
@@ -1735,6 +2239,216 @@ Say whether the app is up and how to reach it. Read-only.
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** Read-only. Exit 0 when every workload is ready, 1 otherwise (including an unreadable cluster). Probes forwards on 127.0.0.1 only. JSON schema: docs/schemas/piceli-status-v1.schema.json.
+
+(cli-ui-backup)=
+### `piceli ui backup`
+
+Back up an offline UI control store and its release journal.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--control-dir` | path | required | Stopped UI control directory |
+| `--output` | path | required | New private backup archive |
+
+**Contract**
+
+- **Reads:** explicit offline UI control directory
+- **Writes:** new private verified backup archive
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Refuses an active dispatcher; archive includes private evidence and must be protected.
+
+(cli-ui-cluster-observe)=
+### `piceli ui cluster-observe`
+
+Serve OIDC-scoped cluster observation and configured delivery.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--api-server` | text | required | Explicit in-cluster HTTPS Kubernetes API origin |
+| `--ca-file` | path | required | Mounted service-account CA file |
+| `--token-file` | path | required | Mounted rotating service-account token file |
+| `--namespace` | text | required | One authorized namespace |
+| `--control-dir` | path | required | Private directory for the generated kubeconfig |
+| `--origin` | text | required | Public HTTPS browser origin |
+| `--oidc-issuer` | text | required | Trusted OIDC issuer |
+| `--oidc-metadata-url` | text | required | Explicit OIDC discovery document URL |
+| `--oidc-client-id` | text | required | Registered public OIDC client |
+| `--authorized-sub` | text (repeatable) | required | OIDC subject granted inspection; repeat |
+| `--authorized-deploy-sub` | text (repeatable) |  | OIDC subject granted manual delivery; repeat |
+| `--authorized-access-sub` | text (repeatable) |  | Inspection subject allowed local-client forwarding; repeat |
+| `--definition` | path |  | Mounted release TOML definition |
+| `--source-root` | path |  | Mounted root of allowed source files |
+| `--source-file` | text (repeatable) |  | Allowed source file; repeat |
+| `--renderer-image` | text |  | Immutable repository@sha256 renderer image |
+| `--renderer-platform` | text |  | Renderer platform |
+| `--gitops-namespace` | text |  | Controller namespace for scoped GitOps status and requests |
+| `--grant-file` | path |  | Projected operator-owned grant map |
+| `--build-spec` | text |  | Trusted relative host-build.toml path in Git |
+| `--build-image` | text |  | Pinned cluster builder image |
+| `--build-repo` | text |  | Credential-free Git remote URL |
+| `--build-registry-url` | text |  | Node registry OCI URL |
+| `--build-git-secret` | text | `piceli-build-git` |  |
+| `--build-cache-size` | text | `20Gi` |  |
+| `--build-node-arch` | text | `amd64` |  |
+| `--build-platform` | text (repeatable) |  |  |
+| `--name` | text | `cluster` | Application display name |
+| `--host` | text | `127.0.0.1` | Loopback bind for a TLS gateway sidecar |
+| `--port` | integer | `8000` |  |
+| `--url-prefix` | text |  |  |
+| `--experimental`, `--no-experimental` | boolean | `False` | Deprecated compatibility option; no longer required |
+
+**Contract**
+
+- **Reads:** explicit Kubernetes API origin, projected service-account CA and token files, OIDC issuer metadata
+- **Writes:** private generated kubeconfig, configured durable UI control state, separately approved cluster deployment
+- **Cluster:** writes
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Requires piceli[ui] and a separate HTTPS TLS gateway sidecar. Default subjects inspect one namespace and logs. Configured deploy grants enable exact-plan reviewed manual delivery and credential-free cluster builds through scoped Jobs. Access grants enable local-client tickets. The server never binds a laptop port or reads an ambient Kubernetes context.
+
+(cli-ui-cluster-serve)=
+### `piceli ui cluster-serve`
+
+Serve OIDC-scoped cluster observation and configured delivery.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--api-server` | text | required | Explicit in-cluster HTTPS Kubernetes API origin |
+| `--ca-file` | path | required | Mounted service-account CA file |
+| `--token-file` | path | required | Mounted rotating service-account token file |
+| `--namespace` | text | required | One authorized namespace |
+| `--control-dir` | path | required | Private directory for the generated kubeconfig |
+| `--origin` | text | required | Public HTTPS browser origin |
+| `--oidc-issuer` | text | required | Trusted OIDC issuer |
+| `--oidc-metadata-url` | text | required | Explicit OIDC discovery document URL |
+| `--oidc-client-id` | text | required | Registered public OIDC client |
+| `--authorized-sub` | text (repeatable) | required | OIDC subject granted inspection; repeat |
+| `--authorized-deploy-sub` | text (repeatable) |  | OIDC subject granted manual delivery; repeat |
+| `--authorized-access-sub` | text (repeatable) |  | Inspection subject allowed local-client forwarding; repeat |
+| `--definition` | path |  | Mounted release TOML definition |
+| `--source-root` | path |  | Mounted root of allowed source files |
+| `--source-file` | text (repeatable) |  | Allowed source file; repeat |
+| `--renderer-image` | text |  | Immutable repository@sha256 renderer image |
+| `--renderer-platform` | text |  | Renderer platform |
+| `--gitops-namespace` | text |  | Controller namespace for scoped GitOps status and requests |
+| `--grant-file` | path |  | Projected operator-owned grant map |
+| `--build-spec` | text |  | Trusted relative host-build.toml path in Git |
+| `--build-image` | text |  | Pinned cluster builder image |
+| `--build-repo` | text |  | Credential-free Git remote URL |
+| `--build-registry-url` | text |  | Node registry OCI URL |
+| `--build-git-secret` | text | `piceli-build-git` |  |
+| `--build-cache-size` | text | `20Gi` |  |
+| `--build-node-arch` | text | `amd64` |  |
+| `--build-platform` | text (repeatable) |  |  |
+| `--name` | text | `cluster` | Application display name |
+| `--host` | text | `127.0.0.1` | Loopback bind for a TLS gateway sidecar |
+| `--port` | integer | `8000` |  |
+| `--url-prefix` | text |  |  |
+| `--experimental`, `--no-experimental` | boolean | `False` | Deprecated compatibility option; no longer required |
+
+**Contract**
+
+- **Reads:** explicit Kubernetes API origin, projected service-account CA and token files, OIDC issuer metadata, optional mounted release definition and pinned renderer
+- **Writes:** private generated kubeconfig, configured durable UI control state, separately approved cluster deployment
+- **Cluster:** writes
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Requires piceli[ui] and a separate HTTPS TLS gateway sidecar. Observation is the default. Configured deploy grants permit exact-plan manual delivery and cluster build Jobs; access grants permit local-client tickets. No ambient Kubernetes context or server-side laptop port.
+
+(cli-ui-connect)=
+### `piceli ui connect`
+
+Bind a laptop port for an authenticated cluster UI ticket.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--server` | text | required | Cluster UI HTTPS origin and prefix |
+| `--ticket` | text | required | Pending remote-access ticket ID |
+| `--kubeconfig` | path | required | Explicit local kubeconfig file |
+| `--context` | text | required | Explicit local kubeconfig context |
+| `--local-port` | integer | required |  |
+| `--ca-file` | path |  | Optional trusted UI server CA file |
+| `--kubectl` | path |  | Pinned kubectl executable |
+| `--experimental`, `--no-experimental` | boolean | `False` | Deprecated compatibility option; no longer required |
+
+**Contract**
+
+- **Reads:** explicit local kubeconfig and context, one-time UI pairing secret, scoped target and resource identity
+- **Writes:** owned local loopback port-forward process, private local forward ownership record
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Requires piceli[ui], a trusted HTTPS cluster UI and local kubectl. The pairing secret is prompted without echo; kubeconfig and context must be explicit. The port exists on the client host only while the supervised command runs.
+
+(cli-ui-restore)=
+### `piceli ui restore`
+
+Restore UI control state before starting a single new server.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--archive` | path | required | Verified UI backup archive |
+| `--destination` | path | required | Empty new control directory |
+
+**Contract**
+
+- **Reads:** explicit UI backup archive
+- **Writes:** new private UI control directory
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Stop the server first and restore before starting a new single replica.
+
+(cli-ui-serve)=
+### `piceli ui serve`
+
+Register an existing definition or inventory scope and serve the bundled UI.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--kubeconfig` | path |  | Explicit kubeconfig file |
+| `--context` | text |  | Explicit kubeconfig context |
+| `--namespace` | text |  | Inventory namespace |
+| `--definition` | path |  | Existing release TOML definition |
+| `--pipeline` | text |  | Trusted Pipeline MODULE:ATTR configured by the UI owner |
+| `--gitops-namespace` | text |  | Show the GitOps controller in this explicit namespace |
+| `--name` | text | `my-app` | Application display name |
+| `--host` | text | `127.0.0.1` | Loopback bind address |
+| `--port` | integer | `8000` |  |
+| `--url-prefix` | text |  | URL prefix, e.g. /piceli |
+| `--allow-exec`, `--no-allow-exec` | boolean | `False` | Authorize the target's credential plugin |
+| `--exec-sha256` | text |  |  |
+| `--control-dir` | path |  | Private durable UI operation state directory |
+| `--source-root` | path |  | Explicit root of allowed definition source files |
+| `--source-file` | text (repeatable) |  | Allowed relative source file; repeat for each file |
+| `--renderer-image` | text |  | Pinned local isolated renderer image ID (sha256:...) |
+| `--renderer-platform` | text |  | Renderer platform: linux/amd64 or linux/arm64 |
+| `--docker` | path |  | Docker executable to pin for isolated evaluation |
+| `--docker-socket` | path | `/var/run/docker.sock` | Explicit local Docker daemon socket |
+| `--state-dir` | path |  | Private UI state directory (default: $XDG_STATE_HOME/piceli/ui) |
+
+**Contract**
+
+- **Reads:** kubeconfig, release or Pipeline definition, release state, approved source files, pinned Docker renderer
+- **Writes:** configured UI control directory, approved release state
+- **Cluster:** writes
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Requires piceli[ui]. Supply --pipeline for a trusted Pipeline, --definition for a release definition, or explicit --kubeconfig, --context and --namespace for inventory. Loopback only; no ambient target. Pipeline builds require a second exact approval after delivery. Starting the service approves no deployment.
 
 (cli-watch)=
 ### `piceli watch`

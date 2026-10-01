@@ -32,7 +32,7 @@ CRD_TYPES = {
 }
 
 COMPOSITION = """
-from crds import certificate, service_monitor
+from release_crds import certificate, service_monitor
 
 from piceli import App, ServicePort
 
@@ -145,7 +145,9 @@ def _operations(payload: dict) -> dict[str, str]:
 
 @pytest.fixture
 def crd_env(tmp_path):
-    shutil.copytree(ROOT / "examples" / "environments" / "crds", tmp_path / "crds")
+    shutil.copytree(
+        ROOT / "examples" / "environments" / "crds", tmp_path / "release_crds"
+    )
     api = FakeAPI(types=CRD_TYPES)
     # The same owner released the app in another namespace.
     api.put(_widget("other-widget", "other-ns"))

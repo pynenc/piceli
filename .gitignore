@@ -178,3 +178,8 @@ examples/**/*.kubeconfig
 
 # Cross-model eval runs (baselines are committed under evals/baselines/)
 evals/results/
+
+# Frontend contributor dependencies and transient test reports
+node_modules/
+playwright-report/
+test-results/

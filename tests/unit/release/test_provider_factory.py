@@ -14,6 +14,7 @@ from piceli.k8s.ops.provider_factory import (
     ProviderFactoryError,
     api_client_from_kubeconfig,
     build_provider,
+    credential_file_paths,
 )
 from tests.acceptance.fake_api import TARGET, serve
 
@@ -139,3 +140,70 @@ def test_static_token_drops_the_sdk_refresh_hook(tmp_path):
         assert client.configuration.host == "https://127.0.0.1:6443"
     finally:
         client.close()
+
+
+def test_explicit_token_file_refreshes_and_fails_closed(tmp_path):
+    token = tmp_path / "projected-token"
+    token.write_text("first-token\n")
+    path = kubeconfig(
+        tmp_path / "kc",
+        "https://127.0.0.1:6443",
+        user=f"{{tokenFile: '{token}'}}",
+    )
+    client = api_client_from_kubeconfig(path, "explicit")
+    try:
+        assert (
+            client.configuration.get_api_key_with_prefix("BearerToken")
+            == "Bearer first-token"
+        )
+        replacement = tmp_path / "next-token"
+        replacement.write_text("second-token\n")
+        replacement.replace(token)
+        assert (
+            client.configuration.get_api_key_with_prefix("BearerToken")
+            == "Bearer second-token"
+        )
+        token.unlink()
+        with pytest.raises(ProviderFactoryError, match="tokenFile is unavailable"):
+            client.configuration.get_api_key_with_prefix("BearerToken")
+        assert "BearerToken" not in client.configuration.api_key
+    finally:
+        client.close()
+
+
+def test_token_file_must_be_explicit_and_exclusive(tmp_path):
+    for user in (
+        "{tokenFile: relative-token}",
+        f"{{tokenFile: '{tmp_path / 'token'}', token: second-token}}",
+    ):
+        path = kubeconfig(tmp_path / "kc", "https://127.0.0.1:6443", user=user)
+        with pytest.raises(ProviderFactoryError, match="tokenFile"):
+            api_client_from_kubeconfig(path, "explicit")
+
+
+def test_credential_file_paths_identifies_projected_token(tmp_path):
+    token = tmp_path / "projected-token"
+    path = kubeconfig(
+        tmp_path / "kc", "https://127.0.0.1:6443", user=f"{{tokenFile: '{token}'}}"
+    )
+    assert credential_file_paths(
+        KubeconfigTarget(path, "explicit", TARGET.namespace)
+    ) == (token,)
+
+
+def test_provider_requests_use_the_latest_named_token_file(tmp_path):
+    token = tmp_path / "projected-token"
+    token.write_text("first-token")
+    with serve() as (api, url):
+        path = kubeconfig(tmp_path / "kc", url, user=f"{{tokenFile: '{token}'}}")
+        binding = build_provider(target(path), field_manager="m", owner_id="o")
+        try:
+            assert any(
+                request["authorization"] == "Bearer first-token"
+                for request in api.requests
+            )
+            token.write_text("second-token")
+            binding.provider.verify_target()
+            assert api.requests[-1]["authorization"] == "Bearer second-token"
+        finally:
+            binding.close()

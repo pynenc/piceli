@@ -382,7 +382,9 @@ def _piceli_args(argv: list[str]) -> list[str] | None:
     name = Path(argv[0]).name
     if name == "piceli":
         return argv[1:]
-    if name.startswith("python"):
+    # macOS framework interpreters advertise .../MacOS/Python in ps, even
+    # when launched through a virtualenv's lowercase python executable.
+    if re.fullmatch(r"python(?:\d+(?:\.\d+)*)?", name, re.IGNORECASE):
         for index, item in enumerate(argv[1:-1], start=1):
             if item == "-m":
                 return argv[index + 2 :] if argv[index + 1] == "piceli" else None

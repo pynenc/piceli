@@ -96,6 +96,35 @@ Node object (one read-only `GET`) and records:
 on the node and label it: `kubectl label node worker-1 piceli.io/page-size=16384`.
 A new label value changes the plan hash, so the next deploy rebuilds.
 
+### Building while the API is down
+
+Every successful read is cached in `<state_dir>/node-facts/<node>.json` (the
+facts and when they were read). When the API cannot be reached, a plan or
+build uses that cache, says so on stderr with its age ("using node facts
+cached 12 minute(s) ago"), and the plan hash covers the facts used, so a build
+planned from the cache and one planned from a live read agree while the node
+is unchanged. Without a cache (a fresh checkout) it stops with
+`node-facts-unavailable`.
+
+To build with no API at all, declare the facts:
+
+```python
+Build.spec(
+    "host-build.toml",
+    builder="host",
+    node_facts={
+        "node": "worker-1",
+        "os": "linux",
+        "architecture": "arm64",
+        "kernel_version": "6.6.51+rpt-rpi-2712",
+        "page_size": 16384,
+        "page_size_source": "label",
+    },
+)
+```
+
+Declared facts are never read from or written to the cluster.
+
 Placeholders work in `build.commands`, `build.env` values and
 `target_files` paths. For example jemalloc fixes its page size at compile
 time:
@@ -170,9 +199,61 @@ node's platform must be in the list.
 the stage, the shared target directory and the base blobs live; the default
 is `<state_dir>/toolchains/host-build`, reported by `piceli cache status`
 under `toolchains` and `blobs`. Builds that share a cache share their
-compiled dependencies. A `.lock` file per build name keeps two runs from
+compiled dependencies, except across architectures and page sizes: the shared
+target directory is `<cache>/target/<architecture>-<page size>` (for example
+`arm64-16384`), so builds for 4 KiB and 16 KiB pages keep separate caches
+instead of recompiling jemalloc and everything above it on each switch. A `.lock` file per build name keeps two runs from
 syncing the same stage at once. Deleting the directory is always safe: the
 next build compiles and pulls again.
+
+## Building in the cluster
+
+`piceli build job` (and `piceli.artifacts.cluster_build.run_build_job`) runs
+the pipeline's host builds as a Kubernetes Job on a labelled builder node
+(default selector `piceli.io/builder=true`, `kubernetes.io/arch=amd64`), so a
+push can be built without a laptop:
+
+```console
+$ piceli build job deploy/app.py:pipeline --commit <sha> --cache-key wp/fix-1 \
+    --image registry.example/builder@sha256:… --repo https://git.example/shop.git
+$ piceli build job … --approve <plan hash>
+```
+
+The first command prints the plan (Job, cache claim, node facts, hash; exit
+`3`); `--approve HASH` runs it. The Job fetches exactly `--commit` (the
+credentials come from the Secret `--git-secret`, keys `username` and
+`password`, and reach Git only through `GIT_ASKPASS`: never a URL, argument
+or log line), builds every `--platform` (default `linux/arm64` and
+`linux/amd64`; the arm64 image is cross-built with the tools the spec
+declares, such as `cargo-zigbuild`), and pushes each image by digest to the
+node registry, sending only the blobs it lacks. The builder image is pinned by
+digest and holds `piceli` and the declared tools.
+
+The cache lives on a claim `piceli-build-cache-<branch>-<page sizes>`,
+created when missing and kept after the Job: one per branch (`--cache-key`)
+and per set of page sizes, with a separate target directory per architecture
+and page size inside it. Node facts come from the build's declared
+`node_facts`, else the target node (API, else the cache above), else the
+platform's 4 KiB defaults.
+
+The receipt has the shape of a local host build's (first platform's images in
+`outputs.images`) plus `delivered` (per platform and image: repository,
+manifest digest, `pull_ref`), `platform_receipts` (the other platforms), and
+`job` (name, commit, cache claim, plan hash, seconds); the command writes it to
+`--receipt-out` (default `<state_dir>/cluster-builds/<commit>.json`). A failed
+or timed-out Job raises `cluster-build-failed` with a scrubbed log tail; the
+Job is always removed. A Registry on the node's loopback is reached with
+`hostNetwork`, so the builder node must be the registry's node (or set
+`--registry-url` to an address the Job can reach).
+
+### A digest built on a laptop
+
+`piceli env push BRANCH MODULE:ATTR --receipt FILE` (or `--digest
+IMAGE=sha256:…`, repeated) records the digest for a branch environment in
+the ConfigMap `piceli-env-<branch>` of the environment's namespace (keys
+`images`, `commit`, `pushed_at`), where `env up` and the controller read it.
+It plans first (exit `3`, hash) and needs `--approve HASH`; it pushes no
+image.
 
 ## Receipts
 

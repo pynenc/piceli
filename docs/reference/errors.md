@@ -87,6 +87,8 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`claim-migration-target-exists`](#error-claim-migration-target-exists) | restore | no |
 | [`claim-migration-verify-failed`](#error-claim-migration-verify-failed) | restore | yes |
 | [`claim-shrink-refused`](#error-claim-shrink-refused) | restore | no |
+| [`cluster-build-failed`](#error-cluster-build-failed) | host-build | yes |
+| [`cluster-build-invalid`](#error-cluster-build-invalid) | host-build | no |
 | [`cluster-identity-changed`](#error-cluster-identity-changed) | release | no |
 | [`cluster-identity-unreadable`](#error-cluster-identity-unreadable) | kubernetes | yes |
 | [`codegen-cluster-read-failed`](#error-codegen-cluster-read-failed) | codegen | yes |
@@ -133,10 +135,43 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`dockerfile-unpinned`](#error-dockerfile-unpinned) | build-spec | no |
 | [`dry-run-limit-exceeded`](#error-dry-run-limit-exceeded) | kubernetes | no |
 | [`dry-run-placeholder-image`](#error-dry-run-placeholder-image) | kubernetes | no |
+| [`env-branch-invalid`](#error-env-branch-invalid) | envs | no |
+| [`env-branch-not-allowed`](#error-env-branch-not-allowed) | envs | no |
+| [`env-budget-full`](#error-env-budget-full) | envs | yes |
+| [`env-cluster-unavailable`](#error-env-cluster-unavailable) | envs | yes |
+| [`env-config-invalid`](#error-env-config-invalid) | envs | no |
+| [`env-image-invalid`](#error-env-image-invalid) | envs | no |
+| [`env-image-missing`](#error-env-image-missing) | envs | no |
+| [`env-isolation-absolute-service`](#error-env-isolation-absolute-service) | envs | no |
+| [`env-isolation-cluster-scoped`](#error-env-isolation-cluster-scoped) | envs | no |
+| [`env-isolation-cross-namespace`](#error-env-isolation-cross-namespace) | envs | no |
+| [`env-isolation-host-path`](#error-env-isolation-host-path) | envs | no |
+| [`env-isolation-host-port`](#error-env-isolation-host-port) | envs | no |
+| [`env-isolation-node-port`](#error-env-isolation-node-port) | envs | no |
+| [`env-isolation-shared-volume`](#error-env-isolation-shared-volume) | envs | no |
+| [`env-main-namespace-missing`](#error-env-main-namespace-missing) | envs | no |
+| [`env-main-protected`](#error-env-main-protected) | envs | no |
+| [`env-namespace-collision`](#error-env-namespace-collision) | envs | no |
+| [`env-namespace-not-managed`](#error-env-namespace-not-managed) | envs | no |
+| [`env-not-configured`](#error-env-not-configured) | envs | no |
+| [`env-not-found`](#error-env-not-found) | envs | no |
+| [`env-pipeline-missing`](#error-env-pipeline-missing) | envs | no |
+| [`env-plan-changed`](#error-env-plan-changed) | envs | no |
+| [`env-push-invalid`](#error-env-push-invalid) | host-build | no |
+| [`env-seed-no-restore-point`](#error-env-seed-no-restore-point) | envs | no |
+| [`env-workload-unknown`](#error-env-workload-unknown) | envs | no |
 | [`environment-invalid`](#error-environment-invalid) | environments | no |
 | [`environment-required`](#error-environment-required) | environments | no |
 | [`environment-unknown`](#error-environment-unknown) | environments | no |
 | [`environment-unsupported`](#error-environment-unsupported) | environments | no |
+| [`evaluation-approval`](#error-evaluation-approval) | render | no |
+| [`evaluation-config`](#error-evaluation-config) | render | no |
+| [`evaluation-expired`](#error-evaluation-expired) | render | no |
+| [`evaluation-interrupted`](#error-evaluation-interrupted) | render | no |
+| [`evaluation-output`](#error-evaluation-output) | render | no |
+| [`evaluation-renderer`](#error-evaluation-renderer) | render | no |
+| [`evaluation-source`](#error-evaluation-source) | render | no |
+| [`evaluation-unsupported`](#error-evaluation-unsupported) | render | no |
 | [`exec-auth-not-allowed`](#error-exec-auth-not-allowed) | target | no |
 | [`exec-command-not-found`](#error-exec-command-not-found) | target | no |
 | [`exec-command-unsafe`](#error-exec-command-unsafe) | target | no |
@@ -157,21 +192,41 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`forward-options-without-forward`](#error-forward-options-without-forward) | artifacts-input | no |
 | [`forward-port-conflict`](#error-forward-port-conflict) | observe | yes |
 | [`forward-port-in-use`](#error-forward-port-in-use) | artifacts-delivery | yes |
+| [`forward-reconnecting`](#error-forward-reconnecting) | access | yes |
 | [`forward-target-not-loopback`](#error-forward-target-not-loopback) | artifacts-input | no |
 | [`forward-unavailable`](#error-forward-unavailable) | artifacts-delivery | yes |
 | [`forward-unhealthy`](#error-forward-unhealthy) | observe | yes |
 | [`generation-precondition-failed`](#error-generation-precondition-failed) | execution | no |
 | [`git-timed-out`](#error-git-timed-out) | inputs | yes |
 | [`git-unavailable`](#error-git-unavailable) | inputs | no |
+| [`gitops-approval-stale`](#error-gitops-approval-stale) | gitops | yes |
 | [`gitops-artifact-changed`](#error-gitops-artifact-changed) | gitops | no |
+| [`gitops-cluster-failed`](#error-gitops-cluster-failed) | gitops | yes |
+| [`gitops-config-invalid`](#error-gitops-config-invalid) | gitops | no |
+| [`gitops-controller-locked`](#error-gitops-controller-locked) | gitops | yes |
 | [`gitops-empty`](#error-gitops-empty) | gitops | no |
+| [`gitops-git-failed`](#error-gitops-git-failed) | gitops | yes |
+| [`gitops-image-unpinned`](#error-gitops-image-unpinned) | gitops | no |
 | [`gitops-image-unresolved`](#error-gitops-image-unresolved) | gitops | no |
+| [`gitops-not-installed`](#error-gitops-not-installed) | gitops | no |
+| [`gitops-pipeline-invalid`](#error-gitops-pipeline-invalid) | gitops | yes |
+| [`gitops-plan-changed`](#error-gitops-plan-changed) | gitops | yes |
+| [`gitops-port-unavailable`](#error-gitops-port-unavailable) | gitops | no |
+| [`gitops-promote-unknown`](#error-gitops-promote-unknown) | gitops | no |
 | [`gitops-push-failed`](#error-gitops-push-failed) | gitops | yes |
+| [`gitops-repo-invalid`](#error-gitops-repo-invalid) | gitops | no |
+| [`gitops-request-invalid`](#error-gitops-request-invalid) | gitops | no |
 | [`gitops-secret-value`](#error-gitops-secret-value) | gitops | no |
 | [`gitops-secrets-present`](#error-gitops-secrets-present) | gitops | no |
+| [`gitops-state-invalid`](#error-gitops-state-invalid) | gitops | no |
+| [`gitops-step-failed`](#error-gitops-step-failed) | gitops | yes |
 | [`gitops-target-invalid`](#error-gitops-target-invalid) | gitops | no |
+| [`gitops-target-required`](#error-gitops-target-required) | gitops | no |
 | [`grant-expired`](#error-grant-expired) | build-spec | yes |
 | [`grant-mismatch`](#error-grant-mismatch) | artifacts-input | yes |
+| [`heavy-command-empty`](#error-heavy-command-empty) | maintenance | no |
+| [`heavy-command-missing`](#error-heavy-command-missing) | maintenance | no |
+| [`heavy-lock-timeout`](#error-heavy-lock-timeout) | maintenance | yes |
 | [`host-build-invalid`](#error-host-build-invalid) | host-build | no |
 | [`host-output-missing`](#error-host-output-missing) | host-build | no |
 | [`host-tool-missing`](#error-host-tool-missing) | host-build | no |
@@ -332,6 +387,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`receipt-unmatched`](#error-receipt-unmatched) | images | no |
 | [`recreated-object`](#error-recreated-object) | execution | no |
 | [`reference-required`](#error-reference-required) | artifacts-input | no |
+| [`registry-delete-disabled`](#error-registry-delete-disabled) | retention | no |
 | [`registry-digest-mismatch`](#error-registry-digest-mismatch) | artifacts-registry | no |
 | [`registry-error`](#error-registry-error) | artifacts-registry | yes |
 | [`registry-forbidden`](#error-registry-forbidden) | artifacts-registry | no |
@@ -396,6 +452,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`retained-content-differs`](#error-retained-content-differs) | release | no |
 | [`retained-content-precondition-failed`](#error-retained-content-precondition-failed) | execution | no |
 | [`retained-resource`](#error-retained-resource) | execution | no |
+| [`retention-invalid`](#error-retention-invalid) | retention | no |
+| [`retention-live-unknown`](#error-retention-live-unknown) | retention | yes |
+| [`retention-not-approved`](#error-retention-not-approved) | retention | yes |
 | [`rotate-not-valid-for-rollback`](#error-rotate-not-valid-for-rollback) | release | no |
 | [`runner-disk-low`](#error-runner-disk-low) | maintenance | yes |
 | [`runner-memory-low`](#error-runner-memory-low) | maintenance | yes |
@@ -465,6 +524,24 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`too-many-redirects`](#error-too-many-redirects) | artifacts-registry | yes |
 | [`tool-pin-mismatch`](#error-tool-pin-mismatch) | artifacts-input | no |
 | [`transport-error`](#error-transport-error) | kubernetes | yes |
+| [`ui-access-failed`](#error-ui-access-failed) | access | yes |
+| [`ui-access-port-conflict`](#error-ui-access-port-conflict) | access | no |
+| [`ui-approval-mismatch`](#error-ui-approval-mismatch) | observe | no |
+| [`ui-assets-unavailable`](#error-ui-assets-unavailable) | observe | no |
+| [`ui-evaluation-failed`](#error-ui-evaluation-failed) | observe | no |
+| [`ui-execution-failed`](#error-ui-execution-failed) | observe | no |
+| [`ui-idempotency-conflict`](#error-ui-idempotency-conflict) | observe | no |
+| [`ui-invalid-request`](#error-ui-invalid-request) | observe | no |
+| [`ui-logs-unavailable`](#error-ui-logs-unavailable) | observe | yes |
+| [`ui-not-found`](#error-ui-not-found) | observe | no |
+| [`ui-observation-unavailable`](#error-ui-observation-unavailable) | observe | yes |
+| [`ui-operation-conflict`](#error-ui-operation-conflict) | observe | yes |
+| [`ui-operation-interrupted`](#error-ui-operation-interrupted) | observe | no |
+| [`ui-operation-unavailable`](#error-ui-operation-unavailable) | observe | no |
+| [`ui-plan-stale`](#error-ui-plan-stale) | observe | no |
+| [`ui-prerollout-unsupported`](#error-ui-prerollout-unsupported) | observe | no |
+| [`ui-request-rejected`](#error-ui-request-rejected) | observe | no |
+| [`ui-state-invalid`](#error-ui-state-invalid) | observe | no |
 | [`uid-version-precondition-failed`](#error-uid-version-precondition-failed) | execution | no |
 | [`undiscovered-api`](#error-undiscovered-api) | kubernetes | no |
 | [`unknown-error-code`](#error-unknown-error-code) | cli | no |
@@ -2036,6 +2113,70 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 ## Typed apps and `piceli render`
 
+(error-evaluation-approval)=
+### `evaluation-approval`
+
+**Evaluation approval changed.** The approved source, renderer or input identities no longer match the frozen preview.
+
+- **Fix:** Create and approve another evaluation preview.
+- **Retry-safe:** no
+
+(error-evaluation-config)=
+### `evaluation-config`
+
+**Renderer configuration refused.** The renderer image, platform, tool, socket or limits are invalid.
+
+- **Fix:** Configure an explicit pinned local Docker renderer and bounded limits.
+- **Retry-safe:** no
+
+(error-evaluation-expired)=
+### `evaluation-expired`
+
+**Evaluation preview expired.** The frozen evaluation authorization expired before execution.
+
+- **Fix:** Create and approve another evaluation preview.
+- **Retry-safe:** no
+
+(error-evaluation-interrupted)=
+### `evaluation-interrupted`
+
+**Evaluation interrupted.** A previous render started without a trustworthy completion result or was stopped.
+
+- **Fix:** Review a new preview before running source again.
+- **Retry-safe:** no
+
+(error-evaluation-output)=
+### `evaluation-output`
+
+**Renderer output refused.** The renderer returned invalid, private or unbounded composition data.
+
+- **Fix:** Correct the definition to return supported public resources and symbolic secret bindings.
+- **Retry-safe:** no
+
+(error-evaluation-renderer)=
+### `evaluation-renderer`
+
+**Isolated renderer failed.** The configured isolated renderer was unavailable, exceeded limits or failed.
+
+- **Fix:** Check the pinned local renderer and its bounds; review another preview before retrying.
+- **Retry-safe:** no
+
+(error-evaluation-source)=
+### `evaluation-source`
+
+**Source selection refused.** The source selection contains an unsafe, private, unselected or oversized input.
+
+- **Fix:** Select only public definition files under the explicit source root, then preview again.
+- **Retry-safe:** no
+
+(error-evaluation-unsupported)=
+### `evaluation-unsupported`
+
+**Evaluation capability unavailable.** The definition requires a code execution capability not supported by this isolated renderer.
+
+- **Fix:** Use a supported definition or the existing explicitly approved CLI workflow.
+- **Retry-safe:** no
+
 (error-render-model-invalid)=
 ### `render-model-invalid`
 
@@ -2629,6 +2770,134 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Stop the other writer (for example `piceli operator serve`), then retry.
 - **Retry-safe:** yes
 
+(error-ui-approval-mismatch)=
+### `ui-approval-mismatch`
+
+**Approval does not match.** The submitted digest differs from the immutable preview or plan.
+
+- **Fix:** Review the displayed preview or plan and approve its exact digest.
+- **Retry-safe:** no
+
+(error-ui-assets-unavailable)=
+### `ui-assets-unavailable`
+
+**UI assets unavailable.** The installed package lacks bundled browser assets.
+
+- **Fix:** Install a Piceli wheel containing the UI assets.
+- **Retry-safe:** no
+
+(error-ui-evaluation-failed)=
+### `ui-evaluation-failed`
+
+**Definition evaluation failed.** The isolated renderer refused or failed to evaluate the approved source.
+
+- **Fix:** Check the source and renderer configuration, then review a new evaluation preview.
+- **Retry-safe:** no
+
+(error-ui-execution-failed)=
+### `ui-execution-failed`
+
+**Deployment did not succeed.** The real deployment engine or configured checks reported failure.
+
+- **Fix:** Inspect the run stages and diagnosis before recovery or a newly reviewed rollback.
+- **Retry-safe:** no
+
+(error-ui-idempotency-conflict)=
+### `ui-idempotency-conflict`
+
+**Request key already used.** An idempotency key was used with different request inputs.
+
+- **Fix:** Retry the original request unchanged or use a new key for the new request.
+- **Retry-safe:** no
+
+(error-ui-invalid-request)=
+### `ui-invalid-request`
+
+**Invalid UI request.** The request does not match the service contract.
+
+- **Fix:** Check request fields and use the matching UI version.
+- **Retry-safe:** no
+
+(error-ui-logs-unavailable)=
+### `ui-logs-unavailable`
+
+**Container logs unavailable.** The selected pod's container logs could not be read.
+
+- **Fix:** Check pod lifecycle and log-read permission, then refresh the source list.
+- **Retry-safe:** yes
+
+(error-ui-not-found)=
+### `ui-not-found`
+
+**UI resource not found.** The resource is absent or outside the configured scope.
+
+- **Fix:** Refresh the selected application.
+- **Retry-safe:** no
+
+(error-ui-observation-unavailable)=
+### `ui-observation-unavailable`
+
+**Observation unavailable.** The service could not observe the configured scope.
+
+- **Fix:** Check target connectivity and permissions, then refresh.
+- **Retry-safe:** yes
+
+(error-ui-operation-conflict)=
+### `ui-operation-conflict`
+
+**Release operation in progress.** Another admitted operation owns this release scope.
+
+- **Fix:** Inspect the existing operation and wait for its completion or acknowledged cancellation.
+- **Retry-safe:** yes
+
+(error-ui-operation-interrupted)=
+### `ui-operation-interrupted`
+
+**Operation interrupted.** The worker stopped before authoritative execution and check evidence established an outcome.
+
+- **Fix:** Inspect journal evidence and use an offered recovery action; do not blindly repeat the deployment.
+- **Retry-safe:** no
+
+(error-ui-operation-unavailable)=
+### `ui-operation-unavailable`
+
+**Operation unavailable.** The registered definition or renderer cannot perform this operation.
+
+- **Fix:** Configure a supported release definition and a pinned isolated renderer.
+- **Retry-safe:** no
+
+(error-ui-plan-stale)=
+### `ui-plan-stale`
+
+**Plan needs another review.** The approved source, execution inputs, target, or live preconditions changed, or the plan expired.
+
+- **Fix:** Create and review a new plan before deployment.
+- **Retry-safe:** no
+
+(error-ui-prerollout-unsupported)=
+### `ui-prerollout-unsupported`
+
+**Legacy pre-rollout count cannot be planned.** The renderer returned a count-only pre-rollout marker without executable check details. The UI refuses to plan a release that would skip a check. Nothing was planned or applied.
+
+- **Fix:** Use a renderer that emits the full `app.pre_rollout` check definitions, or deploy with `piceli deploy`.
+- **Retry-safe:** no
+
+(error-ui-request-rejected)=
+### `ui-request-rejected`
+
+**UI request rejected.** The request does not have a valid local session or origin.
+
+- **Fix:** Open the UI at its configured local address.
+- **Retry-safe:** no
+
+(error-ui-state-invalid)=
+### `ui-state-invalid`
+
+**Control state cannot be read.** Durable service control state is incompatible or its integrity checks failed.
+
+- **Fix:** Restore the documented service backup or repair the state before starting another worker.
+- **Retry-safe:** no
+
 (error-unknown-forward)=
 ### `unknown-forward`
 
@@ -2827,6 +3096,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Use an id from `piceli status TARGET --json` (`access.forwards[].id`); it defaults to the Service name.
 - **Retry-safe:** no
 
+(error-forward-reconnecting)=
+### `forward-reconnecting`
+
+**Local forward reconnecting.** An owned loopback forward temporarily lost its ready probe.
+
+- **Fix:** Wait for Piceli to revalidate the target and reconnect, or stop the session.
+- **Retry-safe:** yes
+
 (error-status-checks-unreadable)=
 ### `status-checks-unreadable`
 
@@ -2857,6 +3134,22 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Release state unreadable.** The release state directory (catalog, journal or history) could not be read.
 
 - **Fix:** Check `[release] state_dir` and run `piceli release status --spec release.toml`.
+- **Retry-safe:** no
+
+(error-ui-access-failed)=
+### `ui-access-failed`
+
+**Local access unavailable.** The supervised forward did not bind and pass its health probe.
+
+- **Fix:** Check target connectivity and permissions, then start a new session.
+- **Retry-safe:** yes
+
+(error-ui-access-port-conflict)=
+### `ui-access-port-conflict`
+
+**Local port occupied.** Another process already owns the requested loopback port.
+
+- **Fix:** Choose another local port or stop the process that owns it; Piceli will not adopt it.
 - **Retry-safe:** no
 
 
@@ -3576,6 +3869,30 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Run `piceli cache status` to see what is left, then raise the budget, lower `--keep-last`, or move the state directory to a larger disk.
 - **Retry-safe:** no
 
+(error-heavy-command-empty)=
+### `heavy-command-empty`
+
+**No command to run.** `piceli heavy run` was given no command after `--`.
+
+- **Fix:** Pass the command after `--`, for example `piceli heavy run -- cargo test`.
+- **Retry-safe:** no
+
+(error-heavy-command-missing)=
+### `heavy-command-missing`
+
+**Command could not be started.** The command given to `piceli heavy run` does not exist or is not executable in the current directory.
+
+- **Fix:** Check the program name and `PATH`; the command is run without a shell.
+- **Retry-safe:** no
+
+(error-heavy-lock-timeout)=
+### `heavy-lock-timeout`
+
+**Heavy-work lock still held.** Another process held the machine-wide heavy-work lock for the whole `--wait`.
+
+- **Fix:** Run `piceli heavy status` to see the holder, then retry with a larger `--wait` once it finishes.
+- **Retry-safe:** yes
+
 (error-runner-disk-low)=
 ### `runner-disk-low`
 
@@ -3652,7 +3969,15 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Retry-safe:** no
 
 
-## GitOps handoff (`piceli publish`, `piceli render --out`)
+## GitOps handoff (`piceli publish`, `piceli render --out`) and the GitOps controller (`piceli gitops …`, `piceli promote`)
+
+(error-gitops-approval-stale)=
+### `gitops-approval-stale`
+
+**Approval does not match.** `piceli gitops approve ENV HASH` named a plan hash the environment is not waiting for: a newer push or re-plan replaced the plan, or the environment is not waiting for approval.
+
+- **Fix:** Run `piceli gitops status`, review the pending plan and approve the hash it shows.
+- **Retry-safe:** yes
 
 (error-gitops-artifact-changed)=
 ### `gitops-artifact-changed`
@@ -3662,12 +3987,52 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Run `piceli publish` without `--approve`, review the new digest and approve it.
 - **Retry-safe:** no
 
+(error-gitops-cluster-failed)=
+### `gitops-cluster-failed`
+
+**Cluster request failed.** The kubeconfig was refused, the API server was unreachable, or it refused a request of the controller's install, status or requests (the HTTP status is in the message).
+
+- **Fix:** Check the kubeconfig, context and your RBAC in the controller's namespace, then run the command again.
+- **Retry-safe:** yes
+
+(error-gitops-config-invalid)=
+### `gitops-config-invalid`
+
+**Controller settings invalid.** A `piceli gitops enable` option or the controller's config file is invalid: the pipeline entry, a branch or tag glob, `--poll` (10s to 1h), the namespace, a platform, `--storage` or a Secret name.
+
+- **Fix:** Fix the option named in the message and run the command again.
+- **Retry-safe:** no
+
+(error-gitops-controller-locked)=
+### `gitops-controller-locked`
+
+**Controller already running.** Another controller process holds the state directory's lock (the Deployment's pod, or a local `gitops run`).
+
+- **Fix:** Stop the other process, or use another `--state-dir`.
+- **Retry-safe:** yes
+
 (error-gitops-empty)=
 ### `gitops-empty`
 
 **Nothing to hand off.** The render has no object left to publish (for example only Secrets, left out by `--secrets external`).
 
 - **Fix:** Check the target and `--env`; `piceli render` shows what it renders.
+- **Retry-safe:** no
+
+(error-gitops-git-failed)=
+### `gitops-git-failed`
+
+**Git command failed.** `git ls-remote`, `clone`, `fetch` or `checkout` failed or timed out (wrong URL, credentials, host key, network, or a commit missing from the mirror). Git's output is not recorded.
+
+- **Fix:** Check the URL, the credentials Secret (and `known_hosts` for SSH) and the network from the cluster; the controller retries on its next poll.
+- **Retry-safe:** yes
+
+(error-gitops-image-unpinned)=
+### `gitops-image-unpinned`
+
+**Controller image not pinned.** `--image` is not pinned by digest. The controller never runs a moving tag such as `latest`.
+
+- **Fix:** Pass `registry/repo@sha256:<digest>` of a Piceli image (see the GitOps page for how to build one).
 - **Retry-safe:** no
 
 (error-gitops-image-unresolved)=
@@ -3678,6 +4043,46 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Render from a `release.toml` whose `[images]` or receipts pin every image by digest, or deploy the pipeline with `piceli deploy`.
 - **Retry-safe:** no
 
+(error-gitops-not-installed)=
+### `gitops-not-installed`
+
+**No GitOps controller.** The controller's ConfigMap is not in the namespace (`--namespace`, default `piceli-system`): it was never enabled there, or it was disabled.
+
+- **Fix:** Install it with `piceli gitops enable …`, or pass the namespace it runs in.
+- **Retry-safe:** no
+
+(error-gitops-pipeline-invalid)=
+### `gitops-pipeline-invalid`
+
+**Pipeline not loadable.** The pipeline entry does not exist in the commit, raised while importing, or is not a `Pipeline`.
+
+- **Fix:** Fix the pipeline in the branch (it must load with `piceli render PATH:ATTR` at the repository root) and push again.
+- **Retry-safe:** yes
+
+(error-gitops-plan-changed)=
+### `gitops-plan-changed`
+
+**Controller plan changed.** The hash given to `--approve` is not the hash of the current plan: the options or the live objects changed since the plan was reviewed.
+
+- **Fix:** Run the command without `--approve`, review the new plan and approve its hash.
+- **Retry-safe:** yes
+
+(error-gitops-port-unavailable)=
+### `gitops-port-unavailable`
+
+**Environment support missing.** The controller's Piceli has no per-branch environments or cluster builds (an image older than this feature).
+
+- **Fix:** Run the controller with a Piceli image of this version or later (`piceli gitops enable --image …`).
+- **Retry-safe:** no
+
+(error-gitops-promote-unknown)=
+### `gitops-promote-unknown`
+
+**Promotion refused.** `piceli promote BRANCH@SHA` named a commit that is neither the head nor the deployed commit of a branch the controller watches, or the main branch matches no `--branches` glob.
+
+- **Fix:** Promote a commit the controller deployed on that branch (`piceli gitops status` shows them), or enable the controller with the main branch in `--branches`.
+- **Retry-safe:** no
+
 (error-gitops-push-failed)=
 ### `gitops-push-failed`
 
@@ -3685,6 +4090,22 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Check the registry, the repository and `--credentials`, then run the same command again; pushes are content-addressed.
 - **Retry-safe:** yes
+
+(error-gitops-repo-invalid)=
+### `gitops-repo-invalid`
+
+**Repository URL refused.** The `--repo` URL is not an `https://`, `ssh://`, `file://` or `git@host:path` URL, or it carries credentials (`user:password@`), which would end up in the ConfigMap, the status and process lists.
+
+- **Fix:** Pass the URL without credentials and put them in a Secret named by `--credentials-secret` (`username`/`password` or `ssh-privatekey`/`known_hosts`).
+- **Retry-safe:** no
+
+(error-gitops-request-invalid)=
+### `gitops-request-invalid`
+
+**Controller request invalid.** An approval, promotion or pushed image request is malformed (a plan hash that is not `sha256:<64 hex>`, not `BRANCH@SHA`, an unknown kind) or names a branch the controller does not watch. The controller drops it and lists it under `rejected_requests`.
+
+- **Fix:** Fix the arguments (`piceli gitops approve ENV sha256:…`, `piceli promote BRANCH@SHA`) and send it again.
+- **Retry-safe:** no
 
 (error-gitops-secret-value)=
 ### `gitops-secret-value`
@@ -3702,12 +4123,36 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Provide the Secret outside the files (a SOPS-encrypted file, an `ExternalSecret`, or created by hand) and pass `--secrets external` to leave Secrets out.
 - **Retry-safe:** no
 
+(error-gitops-state-invalid)=
+### `gitops-state-invalid`
+
+**Controller state unreadable.** The controller's state or request file is not valid JSON or has an unknown schema (a newer Piceli wrote it, or the volume was edited).
+
+- **Fix:** Run the controller with the Piceli version that wrote the state, or move the state file aside to start over (branch environments are kept).
+- **Retry-safe:** no
+
+(error-gitops-step-failed)=
+### `gitops-step-failed`
+
+**Controller step failed.** A build, deploy or teardown of one branch failed with an error that has no code of its own. The controller retries with backoff and then leaves the branch `failed` until its next push; other branches are not affected.
+
+- **Fix:** Look at `piceli gitops status` and the controller's log, fix the branch and push again.
+- **Retry-safe:** yes
+
 (error-gitops-target-invalid)=
 ### `gitops-target-invalid`
 
 **Invalid publish target.** `--to` is missing or not `oci://host[:port]/repository[:tag]`, or an annotation value (`--source`, `--revision`) is not short printable text.
 
 - **Fix:** Pass `--to oci://registry.example/team/app:tag` (plain HTTP only for a loopback registry).
+- **Retry-safe:** no
+
+(error-gitops-target-required)=
+### `gitops-target-required`
+
+**No cluster or state directory named.** The command needs a cluster (`--kubeconfig FILE --context NAME`; `gitops run` in its pod: `--service-account`) or a local controller (`--state-dir`), and got none or both.
+
+- **Fix:** Pass exactly one: `--kubeconfig` with `--context`, or `--state-dir`.
 - **Retry-safe:** no
 
 
@@ -3761,6 +4206,30 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Declare `build.platforms = ["linux/amd64", "linux/arm64"]` in the host-build.toml or pass `--platform` once per platform, each from the spec's list.
 - **Retry-safe:** no
 
+(error-cluster-build-failed)=
+### `cluster-build-failed`
+
+**Cluster build failed.** The build Job ended without a receipt: it failed, timed out, could not start (image, mount or scheduling) or its delivery to the node registry did not succeed. The Job is removed; the cache claim is kept.
+
+- **Fix:** Read the scrubbed log tail in the output, fix the build or the builder node (labels, image, registry reachability), and run it again; the cache makes a retry cheap.
+- **Retry-safe:** yes
+
+(error-cluster-build-invalid)=
+### `cluster-build-invalid`
+
+**Cluster build input invalid.** A cluster build (`piceli build job`, `run_build_job`) was given an input it refuses: a commit that is not a full Git commit id, an unsupported platform, a builder image that is not pinned by digest, a repository URL with credentials in it, a missing Git Secret (keys `username` and `password`), a pipeline without a host build, or an approved hash that no longer matches the plan.
+
+- **Fix:** Fix the input named in the message. The Git credentials belong in a Secret, never in the URL; plan again (`piceli build job ... --plan`) when the hash changed.
+- **Retry-safe:** no
+
+(error-env-push-invalid)=
+### `env-push-invalid`
+
+**Env push input invalid.** `piceli env push` needs exactly one of `--receipt FILE` (a host-build receipt, local or from a cluster build) or `--digest IMAGE=sha256:...`, with a valid image name and digest, for the digests of a branch environment.
+
+- **Fix:** Pass a receipt file, or one or more `--digest IMAGE=sha256:<64 hex>` options.
+- **Retry-safe:** no
+
 (error-host-build-invalid)=
 ### `host-build-invalid`
 
@@ -3788,9 +4257,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-node-facts-unavailable)=
 ### `node-facts-unavailable`
 
-**Node facts unavailable.** A host build reads its node's architecture and kernel version from the Node object (`status.nodeInfo`); the node reports none, an unsupported architecture, or the recorded facts are malformed.
+**Node facts unavailable.** A host build reads its node's architecture and kernel version from the Node object (`status.nodeInfo`); the node reports none, an unsupported architecture, the recorded facts are malformed, or the API is unreachable and no facts were cached from an earlier read or declared.
 
-- **Fix:** Check `kubectl get node NODE -o jsonpath='{.status.nodeInfo}'` with the pipeline's kubeconfig; only `amd64` and `arm64` Linux nodes are supported.
+- **Fix:** Check `kubectl get node NODE -o jsonpath='{.status.nodeInfo}'` with the pipeline's kubeconfig; only `amd64` and `arm64` Linux nodes are supported. Declare the facts with `Build.spec(..., node_facts=...)` to build without the API.
 - **Retry-safe:** no
 
 (error-node-page-size-invalid)=
@@ -4264,4 +4733,234 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Invalid signing key.** `--sign-key` is not an absolute path to a regular file of at most 64 KiB readable only by its owner (mode 0600), or the key changed since the plan was printed.
 
 - **Fix:** `chmod 600 cosign.key` (from `cosign generate-key-pair`), then plan and approve again.
+- **Retry-safe:** no
+
+
+## Registry retention (`piceli artifacts retention`)
+
+(error-registry-delete-disabled)=
+### `registry-delete-disabled`
+
+**Registry does not allow deletes.** The registry refused `DELETE` on a manifest (HTTP 405 or `UNSUPPORTED`). Distribution registries delete only with `REGISTRY_STORAGE_DELETE_ENABLED=true` (`storage.delete.enabled`); hosted registries have their own retention settings.
+
+- **Fix:** Enable deletes on the registry (Piceli's node-local registry already does), or use the hosted registry's own lifecycle policy. Manifests deleted before the refusal are listed in the receipt.
+- **Retry-safe:** no
+
+(error-retention-invalid)=
+### `retention-invalid`
+
+**Invalid retention input.** A `piceli artifacts retention` input is malformed: `--keep` below 1, an unreadable or invalid `--budget` (use `10GiB`, `500MB`), a pin that is not a `sha256:` digest, a receipt that is not JSON, or an option combination that does not go together (`--approve` without `--delete`, `--kubeconfig` without `--context`).
+
+- **Fix:** Correct the option named in the command's help and run it again; nothing was changed.
+- **Retry-safe:** no
+
+(error-retention-live-unknown)=
+### `retention-live-unknown`
+
+**Live workload digests unknown.** Deleting needs to know which digests running workloads use. Either no source was given (`--kubeconfig` with `--context`, or `--live-file`) or reading the pods failed. An unknown inventory never licenses a deletion.
+
+- **Fix:** Pass `--kubeconfig FILE --context NAME` (the cluster whose workloads pull from this registry) or `--live-file`, and check that the context can list pods.
+- **Retry-safe:** yes
+
+(error-retention-not-approved)=
+### `retention-not-approved`
+
+**Retention plan not approved.** `--approve` is not the hash of the plan computed now. The registry, the receipts, the pins, the keep policy or the live workloads changed since the plan was printed, so the set of manifests to delete is not the one that was reviewed.
+
+- **Fix:** Run `piceli artifacts retention --delete` without `--approve`, review the new plan and pass its `digest` to `--approve`.
+- **Retry-safe:** yes
+
+
+## Per-branch environments (`piceli env`, `piceli envs`, `piceli logs`)
+
+(error-env-branch-invalid)=
+### `env-branch-invalid`
+
+**Invalid branch name.** The branch name is empty, longer than 250 characters, or has no letter or digit to name a namespace with.
+
+- **Fix:** Use a branch name with letters or digits.
+- **Retry-safe:** no
+
+(error-env-branch-not-allowed)=
+### `env-branch-not-allowed`
+
+**Branch without an environment.** The branch matches none of the `EnvConfig(branches=...)` patterns.
+
+- **Fix:** Use a matching branch name, or add a pattern to `branches` in the pipeline.
+- **Retry-safe:** no
+
+(error-env-budget-full)=
+### `env-budget-full`
+
+**Environment budget full.** `max_envs` branch environments already run, and `--wait` asked not to stop the least recently pushed one.
+
+- **Fix:** Retry later, run `piceli env down` on an unused branch, or drop `--wait` to stop the least recently pushed environment.
+- **Retry-safe:** yes
+
+(error-env-cluster-unavailable)=
+### `env-cluster-unavailable`
+
+**Kubernetes API refused.** The Kubernetes API refused or failed an environment request (the HTTP status is printed, never the server's message).
+
+- **Fix:** Check the target's kubeconfig, context and permissions (namespaces, ConfigMaps, claims, volumes), then run the command again.
+- **Retry-safe:** yes
+
+(error-env-config-invalid)=
+### `env-config-invalid`
+
+**Invalid environment declaration.** The pipeline's `EnvConfig` is invalid: a prefix that is not a lowercase DNS label start, `max_envs` outside 1-100, a claim size that is not a quantity or names no claim or workload of the app, or an app component named `piceli-env`.
+
+- **Fix:** Fix the `EnvConfig(...)` declaration in the pipeline module.
+- **Retry-safe:** no
+
+(error-env-image-invalid)=
+### `env-image-invalid`
+
+**Image not pinned by digest.** A digest or build receipt entry is not `repository@sha256:<64 hex>`, or the receipt has no image table.
+
+- **Fix:** Give each image as `NAME=REPOSITORY@sha256:<64 hex>`.
+- **Retry-safe:** no
+
+(error-env-image-missing)=
+### `env-image-missing`
+
+**No image for a build handle.** The app uses a build image in a branch environment and no digest was given for it; branch environments never build or deliver themselves.
+
+- **Fix:** Pass `--digest NAME=REPOSITORY@sha256:...` (or a build receipt with `--receipt FILE`) for every build image.
+- **Retry-safe:** no
+
+(error-env-isolation-absolute-service)=
+### `env-isolation-absolute-service`
+
+**Service named in another namespace.** A branch environment's object names a Service absolutely in another namespace (`api.shop.svc.cluster.local`), which would reach main or another branch.
+
+- **Fix:** Name Services by their relative name (`api`), or build the name from the release namespace.
+- **Retry-safe:** no
+
+(error-env-isolation-cluster-scoped)=
+### `env-isolation-cluster-scoped`
+
+**Cluster object shared by every branch.** A branch environment declares a `CustomResourceDefinition` or `Namespace`, which cannot get a per-namespace name.
+
+- **Fix:** Install cluster-wide objects with the main release only (or a separate release).
+- **Retry-safe:** no
+
+(error-env-isolation-cross-namespace)=
+### `env-isolation-cross-namespace`
+
+**Binding or policy across namespaces.** A branch environment's role binding names a subject of another namespace, or its NetworkPolicy allows traffic from or to every namespace, main's or another branch's.
+
+- **Fix:** Bind subjects of the release namespace only; select other namespaces by a label of their own (an ingress controller's), not all of them.
+- **Retry-safe:** no
+
+(error-env-isolation-host-path)=
+### `env-isolation-host-path`
+
+**Node directory in a branch environment.** A branch environment's pod mounts a `hostPath` volume, shared by every branch on that node.
+
+- **Fix:** Use a claim (`ClaimTemplate`) instead of a node directory.
+- **Retry-safe:** no
+
+(error-env-isolation-host-port)=
+### `env-isolation-host-port`
+
+**Host port in a branch environment.** A branch environment's pod binds a `hostPort` or uses `hostNetwork`, `hostPID` or `hostIPC`, which collide across branches on a node.
+
+- **Fix:** Remove the host port or host namespace from the app (or from its branch environment).
+- **Retry-safe:** no
+
+(error-env-isolation-node-port)=
+### `env-isolation-node-port`
+
+**Node port in a branch environment.** A branch environment declares a `NodePort` or `LoadBalancer` Service (or a `nodePort`), which opens a port on every node shared by all branches.
+
+- **Fix:** Use a `ClusterIP` Service and reach the branch with `piceli access BRANCH`.
+- **Retry-safe:** no
+
+(error-env-isolation-shared-volume)=
+### `env-isolation-shared-volume`
+
+**Claim bound to another volume.** A branch environment's claim binds a named volume the app does not declare (another environment's data).
+
+- **Fix:** Let branch claims be provisioned (a size in `EnvConfig(claim_sizes=...)`), or seed them with `piceli env seed`.
+- **Retry-safe:** no
+
+(error-env-main-namespace-missing)=
+### `env-main-namespace-missing`
+
+**Main namespace missing.** The main branch's namespace does not exist; env commands never create it.
+
+- **Fix:** Create it (or deploy main with `piceli deploy`) first.
+- **Retry-safe:** no
+
+(error-env-main-protected)=
+### `env-main-protected`
+
+**Main environment protected.** An environment command would delete, stop, seed or overwrite the main branch's environment or namespace; env commands never do.
+
+- **Fix:** Operate the main release with `piceli deploy` and `piceli restore`.
+- **Retry-safe:** no
+
+(error-env-namespace-collision)=
+### `env-namespace-collision`
+
+**Two branches, one namespace.** Another branch already owns the namespace this branch maps to (their names differ only in characters a namespace cannot hold).
+
+- **Fix:** Rename the branch.
+- **Retry-safe:** no
+
+(error-env-namespace-not-managed)=
+### `env-namespace-not-managed`
+
+**Namespace is not this app's environment.** The branch's namespace exists without this app's `piceli.io/env-of` label, or belongs to another branch. Nothing was changed or deleted.
+
+- **Fix:** Choose another `EnvConfig(prefix=...)`, or remove the foreign namespace yourself.
+- **Retry-safe:** no
+
+(error-env-not-configured)=
+### `env-not-configured`
+
+**No per-branch environments.** The pipeline declares no `envs=EnvConfig(...)`, or it has one target per environment (per-branch environments need one target).
+
+- **Fix:** Declare `Pipeline(..., envs=EnvConfig(prefix=...))` with a single `Target`.
+- **Retry-safe:** no
+
+(error-env-not-found)=
+### `env-not-found`
+
+**No such environment.** The branch has no environment yet.
+
+- **Fix:** Run `piceli env up BRANCH` first.
+- **Retry-safe:** no
+
+(error-env-pipeline-missing)=
+### `env-pipeline-missing`
+
+**No pipeline named.** An environment command needs the pipeline and neither `--pipeline MODULE:ATTR` nor `PICELI_PIPELINE` names it.
+
+- **Fix:** Pass `--pipeline deploy/app.py:pipeline` or set `PICELI_PIPELINE`.
+- **Retry-safe:** no
+
+(error-env-plan-changed)=
+### `env-plan-changed`
+
+**Environment plan changed.** The approved hash is not the environment's current plan (the deploy plan, the namespace, the budget, the seed or the claims to delete changed).
+
+- **Fix:** Plan again and approve the new `env_hash`.
+- **Retry-safe:** no
+
+(error-env-seed-no-restore-point)=
+### `env-seed-no-restore-point`
+
+**No restore point to seed from.** There is no verified restore point of the main namespace in the pipeline's restore point directory, or the source is not the main branch.
+
+- **Fix:** Deploy main with `restore_points=RestorePoints()` (a stateful change takes one), then seed again.
+- **Retry-safe:** no
+
+(error-env-workload-unknown)=
+### `env-workload-unknown`
+
+**Unknown workload.** `piceli logs` names a workload the app does not declare.
+
+- **Fix:** Use a Deployment, StatefulSet, DaemonSet, Job or CronJob name of the app (`piceli envs --json` lists them).
 - **Retry-safe:** no

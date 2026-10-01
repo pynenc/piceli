@@ -1,0 +1,285 @@
+"""OIDC code-flow sessions for an explicitly configured HTTPS cluster origin."""
+
+from __future__ import annotations
+
+import hashlib
+import hmac
+import html
+import ipaddress
+import re
+import secrets
+import threading
+import time
+from collections.abc import Collection
+from dataclasses import dataclass, field
+from typing import Any
+from urllib.parse import urlsplit
+
+from authlib.integrations.starlette_client import OAuth
+from starlette.requests import Request
+from starlette.responses import HTMLResponse, RedirectResponse, Response
+
+from piceli.services.authority import ScopePolicy
+from piceli.services.contracts import Principal
+
+
+@dataclass(frozen=True)
+class ClusterSecurityConfig:
+    origin: str
+    issuer: str
+    metadata_url: str
+    client_id: str
+    client_secret: str | None = field(default=None, repr=False)
+    prefix: str = ""
+    allow_insecure_loopback_test: bool = False
+
+    def __post_init__(self) -> None:
+        origin = urlsplit(self.origin)
+        issuer = urlsplit(self.issuer)
+        metadata = urlsplit(self.metadata_url)
+        schemes = {"https"}
+        if self.allow_insecure_loopback_test:
+            schemes.add("http")
+        for parsed in (origin, issuer, metadata):
+            if (
+                parsed.scheme not in schemes
+                or not parsed.hostname
+                or parsed.username
+                or parsed.password
+                or parsed.fragment
+            ):
+                raise ValueError("invalid cluster OIDC URL")
+            if parsed.scheme == "http":
+                try:
+                    if not ipaddress.ip_address(parsed.hostname).is_loopback:
+                        raise ValueError("OIDC test URL must be literal loopback")
+                except ValueError:
+                    raise ValueError("OIDC test URL must be literal loopback") from None
+        if origin.path or origin.query or origin.fragment:
+            raise ValueError("cluster origin must not contain a path or query")
+        if not self.client_id or len(self.client_id) > 256:
+            raise ValueError("invalid OIDC client ID")
+        if self.prefix and not re.fullmatch(r"(?:/[A-Za-z0-9_-]+)+", self.prefix):
+            raise ValueError("invalid cluster URL prefix")
+
+
+@dataclass(frozen=True)
+class _Session:
+    principal: Principal
+    csrf: str
+    expires_at: float
+
+
+class ClusterSecurity:
+    """Server-held sessions; browser cookies never contain provider tokens."""
+
+    max_sessions_per_principal = 5
+
+    def __init__(self, config: ClusterSecurityConfig) -> None:
+        self.config = config
+        suffix = hashlib.sha256((config.origin + config.prefix).encode()).hexdigest()
+        # Named per origin and prefix, like the local UI's cookies.
+        self.cookie_name = "piceli_cluster_session_" + suffix[:12]
+        self.csrf_cookie_name = "piceli_csrf_" + suffix[:12]
+        self.oauth = OAuth()
+        self.client = self.oauth.register(
+            "piceli",
+            client_id=config.client_id,
+            client_secret=config.client_secret,
+            server_metadata_url=config.metadata_url,
+            client_kwargs={
+                "scope": "openid profile",
+                "code_challenge_method": "S256",
+            },
+        )
+        self.login_cookie_key = secrets.token_urlsafe(48)
+        self._lock = threading.RLock()
+        self._sessions: dict[str, _Session] = {}
+        self._scope_policy: ScopePolicy | None = None
+        self._applications: frozenset[str] = frozenset()
+
+    def bind_scope_policy(
+        self, policy: ScopePolicy, applications: Collection[str]
+    ) -> None:
+        """Bind login eligibility to the same revocable policy as API reads."""
+        with self._lock:
+            if self._scope_policy is not None and self._scope_policy is not policy:
+                raise ValueError("cluster security already has a different policy")
+            self._scope_policy = policy
+            self._applications = frozenset(applications)
+
+    def _has_grant(self, principal_id: str) -> bool:
+        policy = self._scope_policy
+        return policy is not None and policy.has_grant(principal_id, self._applications)
+
+    @property
+    def callback_uri(self) -> str:
+        return self.config.origin + self.config.prefix + "/auth/callback"
+
+    def _same_origin(
+        self, request: Request, *, mutation: bool, api: bool = False
+    ) -> bool:
+        if request.headers.get("host") != urlsplit(self.config.origin).netloc:
+            return False
+        if request.headers.get("origin", self.config.origin) != self.config.origin:
+            return False
+        fetch_site = request.headers.get("sec-fetch-site", "none")
+        if fetch_site not in {"none", "same-origin"}:
+            # A redirect back from the identity provider, or a link from
+            # another site, arrives as a cross-site top-level navigation.
+            # Permit only a safe document navigation; API calls,
+            # subresources and mutations still need a same-origin context.
+            navigation = (
+                not api
+                and not mutation
+                and request.method in {"GET", "HEAD"}
+                and request.headers.get("sec-fetch-mode") == "navigate"
+                and request.headers.get("sec-fetch-dest") == "document"
+                and "origin" not in request.headers
+            )
+            if fetch_site not in {"cross-site", "same-site"} or not navigation:
+                return False
+        return not mutation or request.headers.get("origin") == self.config.origin
+
+    def principal(self, request: Request) -> Principal | None:
+        token = request.cookies.get(self.cookie_name, "")
+        if not token or len(token) > 128:
+            return None
+        key = hashlib.sha256(token.encode()).hexdigest()
+        with self._lock:
+            session = self._sessions.get(key)
+            if session is None:
+                return None
+            if session.expires_at <= time.time():
+                del self._sessions[key]
+                return None
+            if request.method not in {"GET", "HEAD", "OPTIONS"}:
+                csrf = request.headers.get("x-piceli-csrf", "")
+                if not hmac.compare_digest(csrf, session.csrf):
+                    return None
+            return session.principal
+
+    def accepted(self, request: Request, *, api: bool) -> bool:
+        if not self._same_origin(
+            request, mutation=request.method not in {"GET", "HEAD", "OPTIONS"}, api=api
+        ):
+            return False
+        return not api or self.principal(request) is not None
+
+    async def login(self, request: Request) -> RedirectResponse:
+        if not self._same_origin(request, mutation=False):
+            raise ValueError("invalid login origin")
+        metadata = await self.client.load_server_metadata()
+        if metadata.get("issuer") != self.config.issuer:
+            raise ValueError("OIDC issuer mismatch")
+        for name in ("authorization_endpoint", "token_endpoint", "jwks_uri"):
+            endpoint = urlsplit(str(metadata.get(name, "")))
+            if not endpoint.hostname or endpoint.username or endpoint.password:
+                raise ValueError("OIDC endpoint is invalid")
+            if endpoint.scheme != "https":
+                try:
+                    loopback = ipaddress.ip_address(endpoint.hostname).is_loopback
+                except ValueError:
+                    loopback = False
+                if not (
+                    self.config.allow_insecure_loopback_test
+                    and endpoint.scheme == "http"
+                    and loopback
+                ):
+                    raise ValueError("OIDC endpoint requires HTTPS")
+        return await self.client.authorize_redirect(request, self.callback_uri)
+
+    async def callback(self, request: Request) -> HTMLResponse:
+        # A cross-site top-level GET is expected from the identity provider.
+        if request.headers.get("host") != urlsplit(self.config.origin).netloc:
+            raise ValueError("invalid callback host")
+        token = await self.client.authorize_access_token(request)
+        info: Any = token.get("userinfo")
+        if not isinstance(info, dict) or not isinstance(info.get("sub"), str):
+            raise ValueError("verified ID token is required")
+        if info.get("iss") != self.config.issuer:
+            raise ValueError("OIDC issuer mismatch")
+        audience = info.get("aud")
+        if audience != self.config.client_id and audience != [self.config.client_id]:
+            raise ValueError("OIDC audience mismatch")
+        if info.get("azp", self.config.client_id) != self.config.client_id:
+            raise ValueError("OIDC authorized party mismatch")
+        expiry = info.get("exp")
+        if not isinstance(expiry, int) or expiry <= time.time():
+            raise ValueError("OIDC ID token expired")
+        identity = hashlib.sha256(
+            (self.config.issuer + "\0" + info["sub"]).encode()
+        ).hexdigest()
+        display = info.get("preferred_username") or info["sub"]
+        principal = Principal(
+            id=identity,
+            name=str(display)[:128],
+            kind="oidc",
+        )
+        if not self._has_grant(principal.id):
+            raise ValueError("OIDC principal has no application grant")
+        session_token = secrets.token_urlsafe(32)
+        csrf = secrets.token_urlsafe(32)
+        max_age = min(3600, max(1, int(expiry - time.time())))
+        with self._lock:
+            if not self._has_grant(principal.id):
+                raise ValueError("OIDC principal grant was revoked")
+            for key, value in list(self._sessions.items()):
+                if value.expires_at <= time.time():
+                    del self._sessions[key]
+            same_principal = [
+                key
+                for key, value in self._sessions.items()
+                if value.principal.id == principal.id
+            ]
+            for key in same_principal[: -self.max_sessions_per_principal + 1]:
+                del self._sessions[key]
+            if len(self._sessions) >= 1000:
+                raise ValueError("cluster session capacity reached")
+            self._sessions[hashlib.sha256(session_token.encode()).hexdigest()] = (
+                _Session(principal, csrf, time.time() + max_age)
+            )
+        # The callback is the end of a cross-site redirect chain, where the
+        # browser withholds SameSite=Strict cookies. Continue with a
+        # navigation from this origin so the new session cookie is sent.
+        target = html.escape(self.config.prefix + "/applications", quote=True)
+        response = HTMLResponse(
+            '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            f'<meta http-equiv="refresh" content="0;url={target}">'
+            "<title>Piceli</title></head><body>"
+            f'<p><a href="{target}">Continue to Piceli</a></p></body></html>'
+        )
+        response.set_cookie(
+            self.cookie_name,
+            session_token,
+            max_age=max_age,
+            httponly=True,
+            secure=self.config.origin.startswith("https:"),
+            samesite="strict",
+            path=self.config.prefix or "/",
+        )
+        response.set_cookie(
+            self.csrf_cookie_name,
+            csrf,
+            max_age=max_age,
+            httponly=False,
+            secure=self.config.origin.startswith("https:"),
+            samesite="strict",
+            path=self.config.prefix or "/",
+        )
+        return response
+
+    def live(self, request: Request, principal: Principal) -> bool:
+        return self.principal(request) == principal
+
+    def logout(self, request: Request) -> Response:
+        """Revoke this session after the same-origin CSRF check."""
+        if self.principal(request) is None:
+            return Response(status_code=403)
+        token = request.cookies.get(self.cookie_name, "")
+        with self._lock:
+            self._sessions.pop(hashlib.sha256(token.encode()).hexdigest(), None)
+        response = Response(status_code=204)
+        for name in (self.cookie_name, self.csrf_cookie_name, "piceli_oidc_flow"):
+            response.delete_cookie(name, path=self.config.prefix or "/")
+        return response

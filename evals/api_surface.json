@@ -701,6 +701,7 @@
     "images",
     "lock",
     "node",
+    "node_facts",
     "path",
     "platform"
    ],
@@ -730,6 +731,7 @@
      "cache_dir",
      "lock",
      "node",
+     "node_facts",
      "path",
      "platform"
     ]
@@ -1596,6 +1598,49 @@
     ]
    },
    "pydantic": true
+  },
+  "EnvConfig": {
+   "attrs": [
+    "allow_egress",
+    "allows",
+    "auto_approve",
+    "branches",
+    "claim_sizes",
+    "describe",
+    "is_main",
+    "main_branch",
+    "main_namespace",
+    "max_envs",
+    "namespace_for",
+    "prefix",
+    "quota",
+    "seed_from"
+   ],
+   "init": [
+    "allow_egress",
+    "auto_approve",
+    "branches",
+    "claim_sizes",
+    "main_branch",
+    "main_namespace",
+    "max_envs",
+    "prefix",
+    "quota",
+    "seed_from"
+   ],
+   "methods": {
+    "allows": [
+     "branch"
+    ],
+    "describe": [],
+    "is_main": [
+     "branch"
+    ],
+    "namespace_for": [
+     "branch",
+     "main_namespace"
+    ]
+   }
   },
   "Environment": {
    "attr_types": {
@@ -2938,6 +2983,7 @@
     "cache_budget",
     "checks",
     "deliver",
+    "envs",
     "execution",
     "field_manager",
     "inherited_owners",
@@ -4732,17 +4778,24 @@
     "subcommands": [
      "access",
      "artifacts",
+     "build",
      "cache",
      "chart",
      "codegen",
      "deploy",
      "doctor",
+     "env",
+     "envs",
      "explain",
+     "gitops",
+     "heavy",
      "help-json",
      "import",
      "inputs",
+     "logs",
      "observe",
      "operator",
+     "promote",
      "publish",
      "release",
      "render",
@@ -4751,6 +4804,7 @@
      "runs",
      "state",
      "status",
+     "ui",
      "watch"
     ]
    },
@@ -4763,6 +4817,7 @@
      "--json",
      "--kubectl",
      "--only",
+     "--pipeline",
      "--poll",
      "--ui-config"
     ],
@@ -4781,7 +4836,8 @@
      "pin",
      "preview",
      "preview-command",
-     "publish"
+     "publish",
+     "retention"
     ]
    },
    "artifacts build": {
@@ -4937,6 +4993,83 @@
      "--timeout",
      "--to",
      "--values-out"
+    ],
+    "subcommands": []
+   },
+   "artifacts retention": {
+    "arguments": [],
+    "flags": [
+     "--approve",
+     "--budget",
+     "--ca-file",
+     "--collect-unledgered",
+     "--context",
+     "--credentials",
+     "--delete",
+     "--docker-config",
+     "--forward-remote-port",
+     "--keep",
+     "--kubeconfig",
+     "--kubectl",
+     "--kubectl-sha256",
+     "--live-file",
+     "--live-namespace",
+     "--namespace",
+     "--out",
+     "--pin",
+     "--pin-file",
+     "--receipts",
+     "--repository",
+     "--timeout",
+     "--to",
+     "--via-forward"
+    ],
+    "subcommands": []
+   },
+   "build": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "job",
+     "job-run"
+    ]
+   },
+   "build job": {
+    "arguments": [
+     "target"
+    ],
+    "flags": [
+     "--approve",
+     "--cache-key",
+     "--commit",
+     "--env",
+     "--git-secret",
+     "--image",
+     "--namespace",
+     "--node-registry",
+     "--platform",
+     "--receipt-out",
+     "--registry-url",
+     "--repo",
+     "--repo-root",
+     "--selector",
+     "--storage",
+     "--storage-class",
+     "--timeout"
+    ],
+    "subcommands": []
+   },
+   "build job-run": {
+    "arguments": [],
+    "flags": [
+     "--cache",
+     "--commit",
+     "--node-registry",
+     "--out",
+     "--registry-url",
+     "--source",
+     "--spec",
+     "--timeout"
     ],
     "subcommands": []
    },
@@ -5107,6 +5240,79 @@
     ],
     "subcommands": []
    },
+   "env": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "down",
+     "push",
+     "seed",
+     "up"
+    ]
+   },
+   "env down": {
+    "arguments": [
+     "branch"
+    ],
+    "flags": [
+     "--approve",
+     "--approve-if-policy",
+     "--pipeline"
+    ],
+    "subcommands": []
+   },
+   "env push": {
+    "arguments": [
+     "branch",
+     "target"
+    ],
+    "flags": [
+     "--approve",
+     "--commit",
+     "--digest",
+     "--env",
+     "--namespace",
+     "--receipt"
+    ],
+    "subcommands": []
+   },
+   "env seed": {
+    "arguments": [
+     "branch"
+    ],
+    "flags": [
+     "--approve",
+     "--approve-if-policy",
+     "--from",
+     "--pipeline"
+    ],
+    "subcommands": []
+   },
+   "env up": {
+    "arguments": [
+     "branch"
+    ],
+    "flags": [
+     "--approve",
+     "--approve-if-policy",
+     "--commit",
+     "--digest",
+     "--pipeline",
+     "--plan",
+     "--receipt",
+     "--seed-from",
+     "--wait"
+    ],
+    "subcommands": []
+   },
+   "envs": {
+    "arguments": [],
+    "flags": [
+     "--json",
+     "--pipeline"
+    ],
+    "subcommands": []
+   },
    "explain": {
     "arguments": [
      "code"
@@ -5116,6 +5322,132 @@
      "--json",
      "--run",
      "--spec"
+    ],
+    "subcommands": []
+   },
+   "gitops": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "approve",
+     "disable",
+     "enable",
+     "run",
+     "status"
+    ]
+   },
+   "gitops approve": {
+    "arguments": [
+     "env",
+     "plan_hash"
+    ],
+    "flags": [
+     "--context",
+     "--kubeconfig",
+     "--namespace",
+     "--state-dir",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "gitops disable": {
+    "arguments": [],
+    "flags": [
+     "--allow-exec",
+     "--approve",
+     "--context",
+     "--delete-state",
+     "--exec-sha256",
+     "--kubeconfig",
+     "--namespace",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "gitops enable": {
+    "arguments": [
+     "pipeline"
+    ],
+    "flags": [
+     "--allow-exec",
+     "--approve",
+     "--branches",
+     "--build-git-secret",
+     "--build-registry",
+     "--build-storage",
+     "--builder-image",
+     "--builder-selector",
+     "--cluster-rbac",
+     "--context",
+     "--credentials-secret",
+     "--env",
+     "--exec-sha256",
+     "--image",
+     "--kubeconfig",
+     "--main-auto-approve",
+     "--main-branch",
+     "--namespace",
+     "--node-registry",
+     "--platform",
+     "--poll",
+     "--repo",
+     "--storage",
+     "--storage-class",
+     "--tags",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "gitops run": {
+    "arguments": [],
+    "flags": [
+     "--config",
+     "--context",
+     "--credentials-dir",
+     "--kubeconfig",
+     "--namespace",
+     "--once",
+     "--service-account",
+     "--state-dir",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "gitops status": {
+    "arguments": [],
+    "flags": [
+     "--context",
+     "--json",
+     "--kubeconfig",
+     "--namespace",
+     "--state-dir",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "heavy": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "run",
+     "status"
+    ]
+   },
+   "heavy run": {
+    "arguments": [
+     "command"
+    ],
+    "flags": [
+     "--name",
+     "--wait"
+    ],
+    "subcommands": []
+   },
+   "heavy status": {
+    "arguments": [],
+    "flags": [
+     "--json",
+     "--limit"
     ],
     "subcommands": []
    },
@@ -5186,6 +5518,22 @@
      "--only",
      "--spec",
      "--timeout"
+    ],
+    "subcommands": []
+   },
+   "logs": {
+    "arguments": [
+     "env",
+     "workload"
+    ],
+    "flags": [
+     "--container",
+     "--follow",
+     "--kubectl",
+     "--pipeline",
+     "--previous",
+     "--tail",
+     "-f"
     ],
     "subcommands": []
    },
@@ -5430,6 +5778,19 @@
      "--kubeconfig",
      "--namespace",
      "--no-include-common-types"
+    ],
+    "subcommands": []
+   },
+   "promote": {
+    "arguments": [
+     "target"
+    ],
+    "flags": [
+     "--context",
+     "--kubeconfig",
+     "--namespace",
+     "--state-dir",
+     "--transport"
     ],
     "subcommands": []
    },
@@ -5724,6 +6085,154 @@
     ],
     "subcommands": []
    },
+   "ui": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "backup",
+     "cluster-observe",
+     "cluster-serve",
+     "connect",
+     "restore",
+     "serve"
+    ]
+   },
+   "ui backup": {
+    "arguments": [],
+    "flags": [
+     "--control-dir",
+     "--output"
+    ],
+    "subcommands": []
+   },
+   "ui cluster-observe": {
+    "arguments": [],
+    "flags": [
+     "--api-server",
+     "--authorized-access-sub",
+     "--authorized-deploy-sub",
+     "--authorized-sub",
+     "--build-cache-size",
+     "--build-git-secret",
+     "--build-image",
+     "--build-node-arch",
+     "--build-platform",
+     "--build-registry-url",
+     "--build-repo",
+     "--build-spec",
+     "--ca-file",
+     "--control-dir",
+     "--definition",
+     "--experimental",
+     "--gitops-namespace",
+     "--grant-file",
+     "--host",
+     "--name",
+     "--namespace",
+     "--no-experimental",
+     "--oidc-client-id",
+     "--oidc-issuer",
+     "--oidc-metadata-url",
+     "--origin",
+     "--port",
+     "--renderer-image",
+     "--renderer-platform",
+     "--source-file",
+     "--source-root",
+     "--token-file",
+     "--url-prefix"
+    ],
+    "subcommands": []
+   },
+   "ui cluster-serve": {
+    "arguments": [],
+    "flags": [
+     "--api-server",
+     "--authorized-access-sub",
+     "--authorized-deploy-sub",
+     "--authorized-sub",
+     "--build-cache-size",
+     "--build-git-secret",
+     "--build-image",
+     "--build-node-arch",
+     "--build-platform",
+     "--build-registry-url",
+     "--build-repo",
+     "--build-spec",
+     "--ca-file",
+     "--control-dir",
+     "--definition",
+     "--experimental",
+     "--gitops-namespace",
+     "--grant-file",
+     "--host",
+     "--name",
+     "--namespace",
+     "--no-experimental",
+     "--oidc-client-id",
+     "--oidc-issuer",
+     "--oidc-metadata-url",
+     "--origin",
+     "--port",
+     "--renderer-image",
+     "--renderer-platform",
+     "--source-file",
+     "--source-root",
+     "--token-file",
+     "--url-prefix"
+    ],
+    "subcommands": []
+   },
+   "ui connect": {
+    "arguments": [],
+    "flags": [
+     "--ca-file",
+     "--context",
+     "--experimental",
+     "--kubeconfig",
+     "--kubectl",
+     "--local-port",
+     "--no-experimental",
+     "--server",
+     "--ticket"
+    ],
+    "subcommands": []
+   },
+   "ui restore": {
+    "arguments": [],
+    "flags": [
+     "--archive",
+     "--destination"
+    ],
+    "subcommands": []
+   },
+   "ui serve": {
+    "arguments": [],
+    "flags": [
+     "--allow-exec",
+     "--context",
+     "--control-dir",
+     "--definition",
+     "--docker",
+     "--docker-socket",
+     "--exec-sha256",
+     "--gitops-namespace",
+     "--host",
+     "--kubeconfig",
+     "--name",
+     "--namespace",
+     "--no-allow-exec",
+     "--pipeline",
+     "--port",
+     "--renderer-image",
+     "--renderer-platform",
+     "--source-file",
+     "--source-root",
+     "--state-dir",
+     "--url-prefix"
+    ],
+    "subcommands": []
+   },
    "watch": {
     "arguments": [
      "target"
@@ -5813,6 +6322,8 @@
    "claim-migration-target-exists",
    "claim-migration-verify-failed",
    "claim-shrink-refused",
+   "cluster-build-failed",
+   "cluster-build-invalid",
    "cluster-identity-changed",
    "cluster-identity-unreadable",
    "codegen-cluster-read-failed",
@@ -5859,10 +6370,43 @@
    "dockerfile-unpinned",
    "dry-run-limit-exceeded",
    "dry-run-placeholder-image",
+   "env-branch-invalid",
+   "env-branch-not-allowed",
+   "env-budget-full",
+   "env-cluster-unavailable",
+   "env-config-invalid",
+   "env-image-invalid",
+   "env-image-missing",
+   "env-isolation-absolute-service",
+   "env-isolation-cluster-scoped",
+   "env-isolation-cross-namespace",
+   "env-isolation-host-path",
+   "env-isolation-host-port",
+   "env-isolation-node-port",
+   "env-isolation-shared-volume",
+   "env-main-namespace-missing",
+   "env-main-protected",
+   "env-namespace-collision",
+   "env-namespace-not-managed",
+   "env-not-configured",
+   "env-not-found",
+   "env-pipeline-missing",
+   "env-plan-changed",
+   "env-push-invalid",
+   "env-seed-no-restore-point",
+   "env-workload-unknown",
    "environment-invalid",
    "environment-required",
    "environment-unknown",
    "environment-unsupported",
+   "evaluation-approval",
+   "evaluation-config",
+   "evaluation-expired",
+   "evaluation-interrupted",
+   "evaluation-output",
+   "evaluation-renderer",
+   "evaluation-source",
+   "evaluation-unsupported",
    "exec-auth-not-allowed",
    "exec-command-not-found",
    "exec-command-unsafe",
@@ -5883,21 +6427,41 @@
    "forward-options-without-forward",
    "forward-port-conflict",
    "forward-port-in-use",
+   "forward-reconnecting",
    "forward-target-not-loopback",
    "forward-unavailable",
    "forward-unhealthy",
    "generation-precondition-failed",
    "git-timed-out",
    "git-unavailable",
+   "gitops-approval-stale",
    "gitops-artifact-changed",
+   "gitops-cluster-failed",
+   "gitops-config-invalid",
+   "gitops-controller-locked",
    "gitops-empty",
+   "gitops-git-failed",
+   "gitops-image-unpinned",
    "gitops-image-unresolved",
+   "gitops-not-installed",
+   "gitops-pipeline-invalid",
+   "gitops-plan-changed",
+   "gitops-port-unavailable",
+   "gitops-promote-unknown",
    "gitops-push-failed",
+   "gitops-repo-invalid",
+   "gitops-request-invalid",
    "gitops-secret-value",
    "gitops-secrets-present",
+   "gitops-state-invalid",
+   "gitops-step-failed",
    "gitops-target-invalid",
+   "gitops-target-required",
    "grant-expired",
    "grant-mismatch",
+   "heavy-command-empty",
+   "heavy-command-missing",
+   "heavy-lock-timeout",
    "host-build-invalid",
    "host-output-missing",
    "host-tool-missing",
@@ -6058,6 +6622,7 @@
    "receipt-unmatched",
    "recreated-object",
    "reference-required",
+   "registry-delete-disabled",
    "registry-digest-mismatch",
    "registry-error",
    "registry-forbidden",
@@ -6122,6 +6687,9 @@
    "retained-content-differs",
    "retained-content-precondition-failed",
    "retained-resource",
+   "retention-invalid",
+   "retention-live-unknown",
+   "retention-not-approved",
    "rotate-not-valid-for-rollback",
    "runner-disk-low",
    "runner-memory-low",
@@ -6191,6 +6759,24 @@
    "too-many-redirects",
    "tool-pin-mismatch",
    "transport-error",
+   "ui-access-failed",
+   "ui-access-port-conflict",
+   "ui-approval-mismatch",
+   "ui-assets-unavailable",
+   "ui-evaluation-failed",
+   "ui-execution-failed",
+   "ui-idempotency-conflict",
+   "ui-invalid-request",
+   "ui-logs-unavailable",
+   "ui-not-found",
+   "ui-observation-unavailable",
+   "ui-operation-conflict",
+   "ui-operation-interrupted",
+   "ui-operation-unavailable",
+   "ui-plan-stale",
+   "ui-prerollout-unsupported",
+   "ui-request-rejected",
+   "ui-state-invalid",
    "uid-version-precondition-failed",
    "undiscovered-api",
    "unknown-error-code",
@@ -6272,6 +6858,9 @@
    },
    "DisruptionBudget": {
     "class": "DisruptionBudget"
+   },
+   "EnvConfig": {
+    "class": "EnvConfig"
    },
    "Environment": {
     "class": "Environment"
@@ -6469,14 +7058,18 @@
    "checks": {},
    "cli_contract": {},
    "codegen": {},
+   "envs": {},
    "errors": {},
    "gcp": {},
+   "gitops": {},
    "importing": {},
    "k8s": {},
    "maintenance": {},
    "pipeline": {},
    "process_group": {},
    "restore": {},
+   "server": {},
+   "services": {},
    "state": {},
    "telemetry": {},
    "tempfiles": {},
@@ -7109,6 +7702,7 @@
   "piceli.artifacts.build_dockerfile",
   "piceli.artifacts.build_spec",
   "piceli.artifacts.cli",
+  "piceli.artifacts.cluster_build",
   "piceli.artifacts.delivery",
   "piceli.artifacts.delivery_inputs",
   "piceli.artifacts.gc",
@@ -7127,6 +7721,8 @@
   "piceli.artifacts.publish",
   "piceli.artifacts.registry",
   "piceli.artifacts.registry_delivery",
+  "piceli.artifacts.retention",
+  "piceli.artifacts.retention_cli",
   "piceli.artifacts.runnable",
   "piceli.artifacts.signing",
   "piceli.artifacts.source_identity",
@@ -7140,11 +7736,22 @@
   "piceli.codegen",
   "piceli.codegen.crd",
   "piceli.deploy_events",
+  "piceli.envs",
+  "piceli.envs.cluster",
+  "piceli.envs.isolation",
+  "piceli.envs.model",
+  "piceli.envs.ops",
   "piceli.errors",
   "piceli.gcp",
   "piceli.gcp.credentials",
   "piceli.gcp.gke",
   "piceli.gitops",
+  "piceli.gitops.config",
+  "piceli.gitops.controller",
+  "piceli.gitops.install",
+  "piceli.gitops.ports",
+  "piceli.gitops.repo",
+  "piceli.gitops.state",
   "piceli.importing",
   "piceli.importing.clean",
   "piceli.importing.codegen",
@@ -7155,11 +7762,16 @@
   "piceli.k8s.automation",
   "piceli.k8s.cli",
   "piceli.k8s.cli.access",
+  "piceli.k8s.cli.build",
   "piceli.k8s.cli.chart",
   "piceli.k8s.cli.cluster_access",
   "piceli.k8s.cli.codegen",
   "piceli.k8s.cli.contract",
   "piceli.k8s.cli.deploy_pipeline",
+  "piceli.k8s.cli.env",
+  "piceli.k8s.cli.env_push",
+  "piceli.k8s.cli.gitops",
+  "piceli.k8s.cli.heavy",
   "piceli.k8s.cli.importing",
   "piceli.k8s.cli.inputs",
   "piceli.k8s.cli.maintenance",
@@ -7170,6 +7782,8 @@
   "piceli.k8s.cli.render",
   "piceli.k8s.cli.restore",
   "piceli.k8s.cli.state",
+  "piceli.k8s.cli.ui",
+  "piceli.k8s.cli.ui_remote",
   "piceli.k8s.cli.watch",
   "piceli.k8s.config",
   "piceli.k8s.config.kubeconfig",
@@ -7202,6 +7816,7 @@
   "piceli.k8s.ops.secret_versions",
   "piceli.k8s.ops.session",
   "piceli.k8s.orphans",
+  "piceli.k8s.owned_processes",
   "piceli.k8s.port_owner",
   "piceli.k8s.release",
   "piceli.k8s.release_runner",
@@ -7238,11 +7853,13 @@
   "piceli.k8s.templates.deployable.stateful_set",
   "piceli.k8s.templates.deployable.volume",
   "piceli.k8s.ui_config",
+  "piceli.k8s.ui_state",
   "piceli.k8s.utils",
   "piceli.k8s.utils.utils_object",
   "piceli.maintenance",
   "piceli.maintenance.cache",
   "piceli.maintenance.doctor",
+  "piceli.maintenance.heavy",
   "piceli.pipeline",
   "piceli.pipeline.backend",
   "piceli.pipeline.checks",
@@ -7270,6 +7887,31 @@
   "piceli.restore.runner",
   "piceli.restore.store",
   "piceli.restore.verify",
+  "piceli.server",
+  "piceli.server.app",
+  "piceli.server.cluster_install",
+  "piceli.server.cluster_security",
+  "piceli.server.incluster",
+  "piceli.server.security",
+  "piceli.server.state_archive",
+  "piceli.services",
+  "piceli.services.access",
+  "piceli.services.authority",
+  "piceli.services.cluster_build_control",
+  "piceli.services.cluster_evaluation",
+  "piceli.services.contracts",
+  "piceli.services.engine",
+  "piceli.services.environment_control",
+  "piceli.services.evaluation",
+  "piceli.services.logs",
+  "piceli.services.observation",
+  "piceli.services.operations",
+  "piceli.services.pipeline_control",
+  "piceli.services.query",
+  "piceli.services.registration",
+  "piceli.services.remote_access",
+  "piceli.services.render_worker",
+  "piceli.services.store",
   "piceli.settings",
   "piceli.state",
   "piceli.state.archive",
@@ -7315,5 +7957,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.12.0"
+ "version": "0.13.0"
 }

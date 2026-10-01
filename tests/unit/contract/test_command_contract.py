@@ -78,6 +78,7 @@ CASES: dict[str, tuple[Argv, str]] = {
             "orphans",
         )
     },
+    "heavy run": (lambda p: ["heavy", "run"], "heavy-command-empty"),
     "render": (
         lambda p: ["render", str(p / "missing.py") + ":app"],
         "render-target-invalid",
@@ -182,6 +183,45 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["restore", f"{p / 'missing.py'}:pipeline", "--point", "rp-x"],
         "pipeline-not-found",
     ),
+    "build job": (
+        lambda p: (
+            ["build", "job", f"{p / 'missing.py'}:pipeline", "--commit", "a" * 40]
+            + ["--image", "x@sha256:" + "b" * 64, "--repo", "https://git.example/x.git"]
+        ),
+        "pipeline-not-found",
+    ),
+    "build job-run": (
+        lambda p: (
+            ["build", "job-run", "--source", str(p), "--cache", str(p / "c")]
+            + ["--out", str(p / "o"), "--commit", "a" * 40, "--spec", "x.toml"]
+            + ["--registry-url", "oci://127.0.0.1:5000/x"]
+        ),
+        "node-facts-unavailable",
+    ),
+    "env push": (
+        lambda p: ["env", "push", "wp", f"{p / 'missing.py'}:pipeline"],
+        "env-push-invalid",
+    ),
+    "env up": (
+        lambda p: ["env", "up", "wp", "--pipeline", f"{p / 'missing.py'}:pipeline"],
+        "pipeline-not-found",
+    ),
+    "env down": (
+        lambda p: ["env", "down", "wp", "--pipeline", f"{p / 'missing.py'}:pipeline"],
+        "pipeline-not-found",
+    ),
+    "env seed": (
+        lambda p: ["env", "seed", "wp", "--pipeline", f"{p / 'missing.py'}:pipeline"],
+        "pipeline-not-found",
+    ),
+    "envs": (
+        lambda p: ["envs", "--pipeline", f"{p / 'missing.py'}:pipeline"],
+        "pipeline-not-found",
+    ),
+    "logs": (
+        lambda p: ["logs", "wp", "api", "--pipeline", f"{p / 'missing.py'}:pipeline"],
+        "pipeline-not-found",
+    ),
     "inputs record": (
         lambda p: ["inputs", "record", "--spec", str(p / "junk")],
         "invalid-inputs-spec",
@@ -251,6 +291,12 @@ CASES: dict[str, tuple[Argv, str]] = {
             + ["--to", "oci://127.0.0.1:9/x", "--tag", "1.0.0"]
         ),
         "publish-invalid",
+    ),
+    "artifacts retention": (
+        lambda p: (
+            ["artifacts", "retention", "--to", "oci://127.0.0.1:9/x", "--keep", "0"]
+        ),
+        "retention-invalid",
     ),
     "artifacts build-spec run": (
         lambda p: (
@@ -376,6 +422,110 @@ CASES: dict[str, tuple[Argv, str]] = {
         ),
         "restore-refused",
     ),
+    "ui serve": (
+        lambda p: ["ui", "serve", "--host", "0.0.0.0"],
+        "ui-request-rejected",
+    ),
+    "ui backup": (
+        lambda p: [
+            "ui",
+            "backup",
+            "--control-dir",
+            str(p / "state"),
+            "--output",
+            str(p / "backup.tar.gz"),
+        ],
+        "ui-state-invalid",
+    ),
+    "ui restore": (
+        lambda p: [
+            "ui",
+            "restore",
+            "--archive",
+            str(p / "junk"),
+            "--destination",
+            str(p / "recovered"),
+        ],
+        "ui-state-invalid",
+    ),
+    "ui connect": (
+        lambda p: [
+            "ui",
+            "connect",
+            "--server",
+            "https://piceli.example.test",
+            "--ticket",
+            "0" * 32,
+            "--kubeconfig",
+            str(p / "missing-config"),
+            "--context",
+            "explicit",
+            "--local-port",
+            "49152",
+            "--kubectl",
+            str(p / "missing-kubectl"),
+            "--experimental",
+        ],
+        "ui-invalid-request",
+    ),
+    "ui cluster-observe": (
+        lambda p: [
+            "ui",
+            "cluster-observe",
+            "--api-server",
+            "https://kubernetes.example",
+            "--ca-file",
+            str(p / "junk"),
+            "--token-file",
+            str(p / "junk"),
+            "--namespace",
+            "default",
+            "--control-dir",
+            str(p / "state"),
+            "--origin",
+            "https://piceli.example",
+            "--oidc-issuer",
+            "https://identity.example",
+            "--oidc-metadata-url",
+            "https://identity.example/.well-known/openid-configuration",
+            "--oidc-client-id",
+            "piceli",
+            "--authorized-sub",
+            "tester",
+            "--host",
+            "0.0.0.0",
+        ],
+        "ui-invalid-request",
+    ),
+    "ui cluster-serve": (
+        lambda p: [
+            "ui",
+            "cluster-serve",
+            "--api-server",
+            "https://kubernetes.example",
+            "--ca-file",
+            str(p / "junk"),
+            "--token-file",
+            str(p / "junk"),
+            "--namespace",
+            "default",
+            "--control-dir",
+            str(p / "state"),
+            "--origin",
+            "https://piceli.example",
+            "--oidc-issuer",
+            "https://identity.example",
+            "--oidc-metadata-url",
+            "https://identity.example/.well-known/openid-configuration",
+            "--oidc-client-id",
+            "piceli",
+            "--authorized-sub",
+            "tester",
+            "--host",
+            "0.0.0.0",
+        ],
+        "ui-invalid-request",
+    ),
     "operator serve": (
         lambda p: (
             [
@@ -391,6 +541,39 @@ CASES: dict[str, tuple[Argv, str]] = {
         "invalid-access-profile",
     ),
     "explain": (lambda p: ["explain", "no-such-code"], "unknown-error-code"),
+    "gitops enable": (
+        lambda p: [
+            "gitops",
+            "enable",
+            "deploy/app.py:pipeline",
+            "--repo",
+            "https://user:secret@example.com/app.git",
+            "--image",
+            "example.com/piceli@sha256:" + "a" * 64,
+        ],
+        "gitops-repo-invalid",
+    ),
+    "gitops disable": (lambda p: ["gitops", "disable"], "gitops-target-required"),
+    "gitops status": (lambda p: ["gitops", "status"], "gitops-target-required"),
+    "gitops approve": (
+        lambda p: ["gitops", "approve", "wp-1", "not-a-hash", "--state-dir", str(p)],
+        "gitops-request-invalid",
+    ),
+    "gitops run": (
+        lambda p: [
+            "gitops",
+            "run",
+            "--config",
+            str(p / "junk"),
+            "--state-dir",
+            str(p / "state"),
+        ],
+        "gitops-config-invalid",
+    ),
+    "promote": (
+        lambda p: ["promote", "no-commit", "--state-dir", str(p)],
+        "gitops-request-invalid",
+    ),
     "codegen crd": (lambda p: ["codegen", "crd", str(p / "junk")], "crd-invalid"),
 }
 
@@ -409,8 +592,8 @@ def test_every_conforming_command_has_a_rejection_case() -> None:
     conforming = {
         path for path, item in COMMANDS.items() if item.contract == "conforms"
     }
-    # help-json has no rejection path: it takes no input.
-    assert conforming - {"help-json"} == set(CASES)
+    # help-json and heavy status have no rejection path: they take no input.
+    assert conforming - {"help-json", "heavy status"} == set(CASES)
 
 
 def test_no_command_is_partial() -> None:

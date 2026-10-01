@@ -224,7 +224,6 @@ def _pipeline_release_spec(value: Any) -> Any:
 
 
 def _from_pipeline(entry: str, base: Path) -> AccessTarget:
-    from piceli.app.app import App
     from piceli.app.render import RenderError, load_target
 
     try:
@@ -238,6 +237,17 @@ def _from_pipeline(entry: str, base: Path) -> AccessTarget:
             "access-target-invalid",
             f"importing {entry!r} failed: {describe_user_error(error)}",
         ) from None
+    return access_target_of(value, entry)
+
+
+def access_target_of(value: Any, entry: str) -> AccessTarget:
+    """The :class:`AccessTarget` of an object with ``.app`` and ``.target``.
+
+    ``entry`` names it in messages. Used for ``module:attr`` targets and for
+    the pipeline of one branch environment (:mod:`piceli.envs`).
+    """
+    from piceli.app.app import App
+
     if getattr(value, "needs_environment", False):
         raise AccessTargetError(
             "environment-required",

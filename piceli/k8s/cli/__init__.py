@@ -3,10 +3,14 @@ from typing import Annotated
 import typer
 
 from piceli.k8s.cli.access import register as register_access_commands
+from piceli.k8s.cli.build import app as build_app
 from piceli.k8s.cli.chart import app as chart_app
 from piceli.k8s.cli.codegen import app as codegen_app
 from piceli.k8s.cli.contract import register as register_contract_commands
 from piceli.k8s.cli.deploy_pipeline import deploy
+from piceli.k8s.cli.env import register as register_env_commands
+from piceli.k8s.cli.gitops import register as register_gitops_commands
+from piceli.k8s.cli.heavy import register as register_heavy_commands
 from piceli.k8s.cli.importing import app as import_app
 from piceli.k8s.cli.inputs import app as inputs_app
 from piceli.k8s.cli.maintenance import register as register_maintenance_commands
@@ -17,9 +21,11 @@ from piceli.k8s.cli.release import app as release_app
 from piceli.k8s.cli.render import render
 from piceli.k8s.cli.restore import register as register_restore_commands
 from piceli.k8s.cli.state import app as state_app
+from piceli.k8s.cli.ui import app as ui_app
 from piceli.k8s.cli.watch import register as register_watch_command
 
 app = typer.Typer(rich_markup_mode=None)
+app.add_typer(build_app, name="build")
 app.add_typer(chart_app, name="chart")
 app.add_typer(codegen_app, name="codegen")
 app.add_typer(import_app, name="import")
@@ -31,11 +37,15 @@ app.command("publish")(publish)
 app.add_typer(release_app, name="release")
 app.command("render")(render)
 app.add_typer(state_app, name="state")
+app.add_typer(ui_app, name="ui")
 register_contract_commands(app)
 register_access_commands(app)
 register_maintenance_commands(app)
+register_heavy_commands(app)
 register_watch_command(app)
 register_restore_commands(app)
+register_env_commands(app)
+register_gitops_commands(app)
 
 
 def _version(value: bool) -> None:

@@ -24,6 +24,7 @@ LATEST_ONLY = {
     "deploy_events",
     "environments",
     "gitops",
+    "heavy_work",
     "maintenance",
     "reference_app",
     "restore_points",

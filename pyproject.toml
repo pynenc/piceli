@@ -1,6 +1,6 @@
 [project]
 name = "piceli"
-version = "0.12.0"
+version = "0.13.0"
 description = "Kubernetes infrastructure as typed Python: model, plan, apply and observe"
 authors = [{ name = "Jose Diaz" }]
 license = "MIT"
@@ -49,6 +49,13 @@ telemetry = [
 crypto = [
     "cryptography>=42",
 ]
+ui = [
+    "authlib==1.8.0",
+    "fastapi==0.142.0",
+    "httpx2>=2.13,<3",
+    "itsdangerous>=2.2,<3",
+    "uvicorn>=0.35,<1",
+]
 
 [project.urls]
 Homepage = "https://pynenc.org"
@@ -64,9 +71,17 @@ piceli = "piceli.__main__:main"
 test = [
     "pytest>=8.3",
     "pytest-timeout>=2.3",
+    "pytest-xdist>=3.6",
     "pytest-asyncio>=0.24",
     "pytest-cov>=6.0",
     "jsonschema>=4.23",
+    "httpx>=0.28,<1",
+    "httpx2>=2.13,<3",
+    "hatchling>=1.26,<2",
+    "fastapi==0.142.0",
+    "uvicorn>=0.35,<1",
+    "authlib==1.8.0",
+    "itsdangerous>=2.2,<3",
 ]
 lint = [
     "ruff>=0.14",
@@ -99,7 +114,7 @@ build-backend = "hatchling.build"
 packages = ["piceli"]
 
 [tool.hatch.build.targets.sdist]
-exclude = ["/target", "/docs/apidocs", "/.github"]
+exclude = ["/target", "/docs/apidocs", "/.github", "/ui/node_modules", "/ui/test-results", "/ui/playwright-report"]
 
 [tool.ruff]
 target-version = "py312"
@@ -134,7 +149,7 @@ strict_equality = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests/unit", "tests/acceptance"]
-log_cli = true
+log_cli = false
 timeout = 30
 markers = [
     "integration: needs a real disposable cluster (kind) via kubeconfig",

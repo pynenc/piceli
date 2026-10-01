@@ -730,6 +730,36 @@ def _pool_manager_class() -> type:
     return _ExecPoolManager
 
 
+_ISSUED_TOKEN_FILES: weakref.WeakSet[TokenFileCredentialSource] = weakref.WeakSet()
+
+
+class TokenFileCredentialSource:
+    """Refresh one explicitly named projected token without trusting SDK loaders."""
+
+    def __init__(self, path: Path, configuration: Any, pool_manager: Any) -> None:
+        self.path = path
+        self.configuration = configuration
+        self.pool_manager = pool_manager
+
+    def attach(self) -> None:
+        self._refresh_hook(self.configuration)
+        self.configuration.refresh_api_key_hook = self._refresh_hook
+        _ISSUED_TOKEN_FILES.add(self)
+
+    def _refresh_hook(self, configuration: Any) -> None:
+        try:
+            if self.path.stat().st_size > 16_384:
+                raise ValueError("token file exceeds limit")
+            with self.path.open(encoding="utf-8") as stream:
+                token = stream.read(16_385).strip()
+            if not token or len(token) > 16_384 or any(c.isspace() for c in token):
+                raise ValueError("invalid token")
+        except (OSError, UnicodeError, ValueError):
+            configuration.api_key.pop("BearerToken", None)
+            raise ProviderFactoryError("tokenFile is unavailable or invalid") from None
+        configuration.api_key["BearerToken"] = "Bearer " + token
+
+
 def approved_refresh(api_client: Any) -> bool:
     """``True`` only for a client whose refresh hook was installed by :meth:`attach`.
 
@@ -741,10 +771,18 @@ def approved_refresh(api_client: Any) -> bool:
     hook = getattr(configuration, "refresh_api_key_hook", None)
     source = getattr(hook, "__self__", None)
     rest_client = getattr(api_client, "rest_client", None)
-    return (
+    exec_source = (
         isinstance(source, ExecCredentialSource)
         and source in _ISSUED
         and getattr(hook, "__func__", None) is ExecCredentialSource._refresh_hook
         and source.configuration is configuration
         and source.pool_manager is getattr(rest_client, "pool_manager", None)
     )
+    token_source = (
+        isinstance(source, TokenFileCredentialSource)
+        and source in _ISSUED_TOKEN_FILES
+        and getattr(hook, "__func__", None) is TokenFileCredentialSource._refresh_hook
+        and source.configuration is configuration
+        and source.pool_manager is getattr(rest_client, "pool_manager", None)
+    )
+    return exec_source or token_source

@@ -55,7 +55,7 @@ jobs:
           echo "79b0f844237bd4b0446e4dc884dbc1765fc7dedc3968f743d5949c6f2e701739  /tmp/sops" | sha256sum -c -
           sudo install -m 0755 /tmp/sops /usr/local/bin/sops
       - name: Unit and acceptance tests
-        run: uv run pytest --cov --cov-report=term --cov-report=xml
+        run: uv run pytest -n auto --cov --cov-report=term --cov-report=xml
       - name: Eval harness self-tests (mock models, no keys, no network)
         if: matrix.python == '3.12'
         run: make evals-check
@@ -190,7 +190,7 @@ jobs:
           cache-dependency-glob: uv.lock
       - run: uv sync --all-extras --python 3.12
       - run: uv pip install "kubernetes==$(grep -oP '"kubernetes>=\K[0-9.]+' pyproject.toml)"
-      - run: uv run --no-sync pytest -q
+      - run: uv run --no-sync pytest -q -n auto
 
   package:
     # The wheel must work without optional extras (gcp, telemetry).

@@ -37,6 +37,8 @@ FIRST_ARGUMENT = {
     "_result_error",
     "ImportFailure",
     "PipelineError",
+    "EnvError",
+    "_refuse",
     "MirrorError",
     "StateError",
     "SecretSourceError",
@@ -44,8 +46,11 @@ FIRST_ARGUMENT = {
     "CacheError",
     "NodeFactsError",
     "LayerError",
+    "QueryError",
+    "EvaluationError",
     "RestorePointError",
     "PublishError",
+    "HeavyError",
 }
 # ``_Failure(result, reason)`` in the delivery modules; ``reject_error(error, default)``;
 # ``DryRunUnavailable(resource, reason)`` in ``k8s/ops/dry_run.py``.
@@ -162,6 +167,17 @@ def emitted_codes() -> dict[str, set[str]]:
                     for keyword in node.keywords
                     if keyword.arg == "code"
                 ]
+                # Typed service outcomes carry error_code, sometimes selected
+                # by a conditional expression rather than an exception call.
+                for keyword in node.keywords:
+                    if keyword.arg == "error_code":
+                        values = [keyword.value]
+                        while values:
+                            value = values.pop()
+                            if isinstance(value, ast.IfExp):
+                                values.extend((value.body, value.orelse))
+                            else:
+                                codes.append(_literal(value))
             elif isinstance(node, ast.ClassDef):
                 # Error classes with a fixed class-level ``code = "..."``.
                 codes += [
