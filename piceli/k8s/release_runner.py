@@ -213,9 +213,10 @@ def default_check_context(
 ) -> CheckContext:
     """The check context of a release: the spec's ``[target]``, never ambient."""
     target = spec.model.target
+    kubeconfig, context = spec.target_credentials()
     return CheckContext(
-        spec.resolve(target.kubeconfig),
-        target.context,
+        kubeconfig,
+        context,
         target.namespace,
         release,
         images,

@@ -92,6 +92,11 @@ See also {ref}`the release contract changes <release-contract-changes>`.
 These never change a cluster, registry or node. Some write local files, as
 noted.
 
+- `piceli profiles [--json]`: lists the stored credential profiles (names,
+  contexts, kubeconfig paths; never secrets). `piceli login NAME --kubeconfig
+  F --context C` and `piceli logout NAME` only write or remove the local
+  reference file (`$PICELI_PROFILES_DIR`); they never contact a cluster, but
+  which kubeconfig a profile names is the owner's decision.
 - `piceli gitops status [--json]` (with `--kubeconfig`/`--context`, or
   `--state-dir` for a local controller): reads the controller's health and
   each branch's commit, state and pending plan hash; changes nothing.
@@ -562,6 +567,11 @@ accepted (`observe`, `operator`, `artifacts deliver --via-forward`), and a
 missing context is a usage error (exit `2`), never a fallback to the file's
 `current-context`. Do not change the kubeconfig or context an owner has set
 in a spec, and do not pick a context yourself: ask the owner which one to use.
+A credential profile (`Target.profile("NAME", …)`, `credentials = "NAME"`,
+`--profile NAME`) stands for the owner's kubeconfig and context; use the
+profiles `piceli profiles` lists, never create one for a kubeconfig you found.
+`profile-not-found` means the owner has to run `piceli login`; `--profile` with
+`--kubeconfig` is `profile-conflict`.
 
 An app with `cluster_rules` (typed RBAC, {doc}`typed_apps`) needs a
 kubeconfig user that may list and write ClusterRoles and ClusterRoleBindings.

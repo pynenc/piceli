@@ -138,6 +138,14 @@ piceli access app.py:pipeline   # forwards http://127.0.0.1:18080/ until Ctrl-C
 the declared port forwards healthy and restarts them when they stop answering.
 See {doc}`../access`.
 
+### Keep the kubeconfig path out of Git
+
+`Target.kubeconfig("hello.kubeconfig", ...)` is fine for a throwaway cluster.
+For a shared one, store the credentials once per machine and name them:
+`piceli login my-cluster --kubeconfig ~/hello.kubeconfig --context kind-hello`,
+then `Target.profile("my-cluster", namespace="hello")` (or `--profile
+my-cluster` on a command). See {doc}`../deploy`.
+
 ## 6. Change it and deploy again
 
 Run `piceli deploy app.py:pipeline --plan` again without changes: the plan

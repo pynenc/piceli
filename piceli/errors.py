@@ -2662,6 +2662,31 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         False,
         "checks",
     ),
+    # --- 0.14.0 credential profiles ---
+    _E(
+        "profile-not-found",
+        "Credential profile not found",
+        'A target names a credential profile (`Target.profile(...)`, `credentials = "NAME"`, `--profile NAME`) that was never stored on this machine (and the process is not running inside a cluster, where the service account stands in for every profile).',
+        "Store it once with `piceli login NAME --kubeconfig FILE --context CTX`; `piceli profiles` lists the stored ones.",
+        False,
+        "target",
+    ),
+    _E(
+        "profile-invalid",
+        "Credential profile invalid",
+        "A profile name, file or option is not acceptable: the name is not lowercase letters, digits, `.`, `_` or `-`; the kubeconfig given to `piceli login` is missing, unreadable or does not define the context (or defines several and `--context` was omitted); a stored profile is damaged; or the in-cluster service account is incomplete. The message names the cause; nothing was changed.",
+        "Fix the name, the kubeconfig path or the context as the message says, then run `piceli login NAME --kubeconfig FILE --context CTX` again.",
+        False,
+        "target",
+    ),
+    _E(
+        "profile-conflict",
+        "Profile and kubeconfig both given",
+        "`--profile` was passed together with `--kubeconfig` or `--context`; a command reaches a cluster by one or the other.",
+        "Pass either `--profile NAME` or `--kubeconfig FILE --context CTX`.",
+        False,
+        "target",
+    ),
     # --- WP3.1 exec auth ---
     _E(
         "target-refused",

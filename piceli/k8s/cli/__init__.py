@@ -16,6 +16,7 @@ from piceli.k8s.cli.inputs import app as inputs_app
 from piceli.k8s.cli.maintenance import register as register_maintenance_commands
 from piceli.k8s.cli.observe import app as observe_app
 from piceli.k8s.cli.operator import app as operator_app
+from piceli.k8s.cli.profiles import register as register_profile_commands
 from piceli.k8s.cli.publish import publish
 from piceli.k8s.cli.release import app as release_app
 from piceli.k8s.cli.render import render
@@ -46,6 +47,7 @@ register_watch_command(app)
 register_restore_commands(app)
 register_env_commands(app)
 register_gitops_commands(app)
+register_profile_commands(app)
 
 
 def _version(value: bool) -> None:

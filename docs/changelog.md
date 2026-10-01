@@ -4,6 +4,21 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.14.0 (unreleased)
+
+- **Credential profiles:** `piceli login NAME --kubeconfig FILE [--context C]`
+  stores a profile (the kubeconfig path and context, never its contents or a
+  token; `$PICELI_PROFILES_DIR`, default `~/.config/piceli/profiles`, mode
+  `0600`); `piceli profiles [--json]` and `piceli logout NAME` list and
+  forget it. `Target.profile("NAME", namespace=…)` and `credentials = "NAME"`
+  in `[target]` resolve it when the target is used, so no machine path is in
+  Git (the plan hash covers the name; `Target.kubeconfig` hashes are
+  unchanged); inside a cluster the name resolves to the service account.
+  `--profile NAME` replaces `--kubeconfig/--context` on every command that
+  takes them and the declared credentials on `deploy`, `release`, `status`,
+  `access`, `env` and `logs`. New codes `profile-not-found`,
+  `profile-invalid`, `profile-conflict`.
+
 ## Version 0.13.0
 
 - **Piceli as the GitOps controller (experimental):** `piceli gitops enable

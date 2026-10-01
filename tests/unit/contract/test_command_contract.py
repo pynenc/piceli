@@ -79,6 +79,11 @@ CASES: dict[str, tuple[Argv, str]] = {
         )
     },
     "heavy run": (lambda p: ["heavy", "run"], "heavy-command-empty"),
+    "login": (
+        lambda p: ["login", "my-cluster", "--kubeconfig", str(p / "missing.yaml")],
+        "profile-invalid",
+    ),
+    "logout": (lambda p: ["logout", "Bad Name"], "profile-invalid"),
     "render": (
         lambda p: ["render", str(p / "missing.py") + ":app"],
         "render-target-invalid",
@@ -592,8 +597,9 @@ def test_every_conforming_command_has_a_rejection_case() -> None:
     conforming = {
         path for path, item in COMMANDS.items() if item.contract == "conforms"
     }
-    # help-json and heavy status have no rejection path: they take no input.
-    assert conforming - {"help-json", "heavy status"} == set(CASES)
+    # help-json, heavy status and profiles have no rejection path: they take no
+    # input (profiles only lists).
+    assert conforming - {"help-json", "heavy status", "profiles"} == set(CASES)
 
 
 def test_no_command_is_partial() -> None:
