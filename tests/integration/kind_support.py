@@ -34,6 +34,14 @@ requires_kind = pytest.mark.skipif(
     reason="set PICELI_KIND_KUBECONFIG and PICELI_KIND_CONTEXT; needs kubectl",
 )
 
+# The UI's kind tests build and load their own images into a cluster that
+# scripts/ui_kind.py creates (make test-ui-kind-*); they do not run against a
+# shared cluster such as CI's integration matrix.
+requires_ui_kind = pytest.mark.skipif(
+    os.environ.get("PICELI_UI_KIND") != "1",
+    reason="run through scripts/ui_kind.py (make test-ui-kind-*)",
+)
+
 
 def kubectl(
     *args: str, namespace: str | None = None, stdin: str = "", check: bool = True
