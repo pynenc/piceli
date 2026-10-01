@@ -153,12 +153,15 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`env-main-protected`](#error-env-main-protected) | envs | no |
 | [`env-namespace-collision`](#error-env-namespace-collision) | envs | no |
 | [`env-namespace-not-managed`](#error-env-namespace-not-managed) | envs | no |
+| [`env-nodes-conflict`](#error-env-nodes-conflict) | envs | no |
 | [`env-not-configured`](#error-env-not-configured) | envs | no |
 | [`env-not-found`](#error-env-not-found) | envs | no |
 | [`env-pipeline-missing`](#error-env-pipeline-missing) | envs | no |
 | [`env-plan-changed`](#error-env-plan-changed) | envs | no |
 | [`env-push-invalid`](#error-env-push-invalid) | host-build | no |
 | [`env-seed-no-restore-point`](#error-env-seed-no-restore-point) | envs | no |
+| [`env-stack-incomplete`](#error-env-stack-incomplete) | envs | no |
+| [`env-stack-unknown`](#error-env-stack-unknown) | envs | no |
 | [`env-workload-unknown`](#error-env-workload-unknown) | envs | no |
 | [`environment-invalid`](#error-environment-invalid) | environments | no |
 | [`environment-required`](#error-environment-required) | environments | no |
@@ -212,6 +215,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`gitops-pipeline-invalid`](#error-gitops-pipeline-invalid) | gitops | yes |
 | [`gitops-plan-changed`](#error-gitops-plan-changed) | gitops | yes |
 | [`gitops-port-unavailable`](#error-gitops-port-unavailable) | gitops | no |
+| [`gitops-promote-not-allowed`](#error-gitops-promote-not-allowed) | gitops | no |
 | [`gitops-promote-unknown`](#error-gitops-promote-unknown) | gitops | no |
 | [`gitops-push-failed`](#error-gitops-push-failed) | gitops | yes |
 | [`gitops-repo-invalid`](#error-gitops-repo-invalid) | gitops | no |
@@ -4102,6 +4106,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Run the controller with a Piceli image of this version or later (`piceli gitops enable --image …`).
 - **Retry-safe:** no
 
+(error-gitops-promote-not-allowed)=
+### `gitops-promote-not-allowed`
+
+**Environment does not take promotions.** `piceli promote ENV BRANCH@SHA` named an environment the controller does not know, or one whose `follow` has no `Promote()`.
+
+- **Fix:** Promote to an environment that follows `Promote()` (`piceli gitops status` lists them), or add `Promote()` to its `follow` and run `piceli gitops enable` again.
+- **Retry-safe:** no
+
 (error-gitops-promote-unknown)=
 ### `gitops-promote-unknown`
 
@@ -4923,7 +4935,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-env-main-protected)=
 ### `env-main-protected`
 
-**Main environment protected.** An environment command would delete, stop, seed or overwrite the main branch's environment or namespace; env commands never do.
+**Main environment protected.** An environment command would delete, stop, seed or overwrite the main branch's environment or namespace, or a named environment's (`EnvConfig(environments=...)`); env commands never do.
 
 - **Fix:** Operate the main release with `piceli deploy` and `piceli restore`.
 - **Retry-safe:** no
@@ -4942,6 +4954,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Namespace is not this app's environment.** The branch's namespace exists without this app's `piceli.io/env-of` label, or belongs to another branch. Nothing was changed or deleted.
 
 - **Fix:** Choose another `EnvConfig(prefix=...)`, or remove the foreign namespace yourself.
+- **Retry-safe:** no
+
+(error-env-nodes-conflict)=
+### `env-nodes-conflict`
+
+**Workload pinned outside the environment's nodes.** A workload is pinned to a node (its `node=`, or the delivery node of a node-loopback registry) or selects a node label that the environment's `on_nodes` (or `EnvConfig(branch_nodes=...)`) excludes.
+
+- **Fix:** Include that node in `on_nodes`, unpin the workload, or deliver through a registry every node can pull from.
 - **Retry-safe:** no
 
 (error-env-not-configured)=
@@ -4982,6 +5002,22 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **No restore point to seed from.** There is no verified restore point of the main namespace in the pipeline's restore point directory, or the source is not the main branch.
 
 - **Fix:** Deploy main with `restore_points=RestorePoints()` (a stateful change takes one), then seed again.
+- **Retry-safe:** no
+
+(error-env-stack-incomplete)=
+### `env-stack-incomplete`
+
+**Stack leaves out a dependency.** A workload or object the environment's `Stack` keeps depends on a component or workload the stack leaves out (`app.depends(...)`, or a config of another workload's component).
+
+- **Fix:** Add the dependency's workload to the `Stack`, or drop the dependency.
+- **Retry-safe:** no
+
+(error-env-stack-unknown)=
+### `env-stack-unknown`
+
+**Stack names an unknown workload.** A `Stack(...)` of an environment names a workload the app does not declare (Deployment, StatefulSet, DaemonSet, Job or CronJob). Nothing was planned.
+
+- **Fix:** Name the app's workloads in the `Stack`, or remove the name.
 - **Retry-safe:** no
 
 (error-env-workload-unknown)=

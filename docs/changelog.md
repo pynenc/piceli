@@ -18,6 +18,36 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   takes them and the declared credentials on `deploy`, `release`, `status`,
   `access`, `env` and `logs`. New codes `profile-not-found`,
   `profile-invalid`, `profile-conflict`.
+- **Named environments:** `EnvConfig(environments=[Environment(name,
+  namespace, follow=Branch("main") | Tag("v*-rc*") | Promote(), stack=…,
+  on_nodes=…, quota=…, auto_approve=False)])` (`from piceli.envs import
+  Environment`; `Branch`, `Tag`, `Promote`, `Stack` are also exported by
+  `piceli`) declares long-lived environments with their own trigger: the
+  GitOps controller evaluates each one independently (every push to a
+  followed branch, the latest new matching tag, `piceli promote ENV
+  BRANCH@SHA`), so one branch can feed two environments. `gitops enable`
+  reads them from the working tree (`--root`) into the controller config
+  (covered by the install hash). `piceli env up NAME` deploys one (creating
+  its namespace when absent); env commands never delete, stop or seed it;
+  `piceli envs` lists it (`"fixed": true`). A 0.13 `main_namespace` stays the
+  implicit main environment (tags and promotions); an environment named like
+  `main_branch` replaces it. New codes `gitops-promote-not-allowed`,
+  `env-stack-unknown`, `env-stack-incomplete`, `env-nodes-conflict`.
+- **Stacks and placement:** `Stack(name, workloads=[...])` renders only a
+  subset of the app's workloads (`Environment(stack=…)`,
+  `EnvConfig(branch_stack=…)`); `on_nodes=[...]` (or a `{label: value}`
+  selector; `EnvConfig(branch_nodes=…)` for branches) places every workload
+  of the environment.
+- **Branch claims:** in a branch environment an `ExistingClaim` with a size
+  in `claim_sizes` becomes a claim the environment owns (empty or seeded with
+  `seed_from`, deleted with the environment); main and named environments
+  keep `ExistingClaim` semantics.
+- **Idle stop:** `EnvConfig(idle_stop="24h")` makes the GitOps controller
+  scale a branch environment without a push for that long to zero (status
+  `stopped`, reason `idle-stop`); the next push starts it again.
+  `piceli.envs.env_stop` does it by hand with a planned `env_hash`.
+- Plan hashes, `EnvConfig.describe()` and the controller config of 0.13
+  declarations are unchanged when the new fields are unused (tested).
 
 ## Version 0.13.0
 
