@@ -140,7 +140,7 @@ plan against the live cluster, no approval by plan hash, no journal, no
 dependency order between components (a Job the app waits on runs alongside
 the workloads; make workloads tolerate a dependency that is not ready yet),
 no generated or rotated secrets, no restore points and no release checks.
-See {doc}`gitops` for the same boundary with Flux and Argo CD.
+See {doc}`gitops` for the same boundary with an exported OCI artifact.
 
 The chart also keeps literally what it cannot know about another cluster:
 

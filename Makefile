@@ -61,7 +61,7 @@ docs: ## Build the documentation (warnings are errors)
 build: ## Build sdist and wheel into dist/
 	uv build
 
-.PHONY: ui-contract ui-contract-check ui-install ui-check ui-build ui-fake-serve test-ui test-ui-fake test-ui-package test-browser test-browser-cluster-oidc test-browser-delivery test-ui-kind-delivery test-ui-kind-renderer test-ui-kind-runtime test-ui-kind-e2e test-ui-performance test-ui-browser-performance test-ui-soak test-ui-access-retention-smoke test-ui-access-retention-bound test-ui-access-retention
+.PHONY: ui-contract ui-contract-check ui-install ui-check ui-build ui-fake-serve ui-clips test-ui test-ui-fake test-ui-package test-browser test-browser-cluster-oidc test-browser-delivery test-ui-kind-delivery test-ui-kind-renderer test-ui-kind-runtime test-ui-kind-e2e test-ui-performance test-ui-browser-performance test-ui-soak test-ui-access-retention-smoke test-ui-access-retention-bound test-ui-access-retention
 
 PICELI_UI_FAKE_PORT ?= 4177
 PICELI_UI_FAKE_TEST_PORT ?= 4184
@@ -86,6 +86,9 @@ ui-build: ## Bundle offline browser assets into the Python package
 
 ui-fake-serve: ## Open a read-only local UI with a disposable fake Kubernetes API (prints its launch URL)
 	uv run --frozen --extra ui python tests/browser/serve_ui.py --port $(PICELI_UI_FAKE_PORT)
+
+ui-clips: ## Record UI journeys as WebP/GIF clips and PNGs into .ui-clips/ (needs ffmpeg, Chromium)
+	uv run --frozen --extra ui python tests/browser/run_clips.py
 
 test-ui: ## Run service and legacy UI acceptance checks against the fake API
 	uv run --frozen --extra ui pytest -n auto tests/unit/test_ui_contracts.py tests/unit/services/test_environment_control.py tests/unit/server/test_launch_token.py tests/unit/server/test_ui_state_archive.py tests/acceptance/test_ui_truthfulness.py tests/acceptance/test_ui_service.py tests/acceptance/test_ui_pipeline.py
