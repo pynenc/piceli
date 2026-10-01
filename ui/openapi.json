@@ -929,6 +929,43 @@
         "title": "LogSourcePage",
         "type": "object"
       },
+      "NamedEnvironmentApprovalRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "plan_hash": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Plan Hash",
+            "type": "string"
+          }
+        },
+        "required": [
+          "plan_hash"
+        ],
+        "title": "NamedEnvironmentApprovalRequest",
+        "type": "object"
+      },
+      "NamedEnvironmentPromotionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "branch": {
+            "maxLength": 250,
+            "minLength": 1,
+            "title": "Branch",
+            "type": "string"
+          },
+          "commit": {
+            "pattern": "^[0-9a-f]{7,40}$",
+            "title": "Commit",
+            "type": "string"
+          }
+        },
+        "required": [
+          "branch",
+          "commit"
+        ],
+        "title": "NamedEnvironmentPromotionRequest",
+        "type": "object"
+      },
       "Operation": {
         "additionalProperties": false,
         "properties": {
@@ -1395,6 +1432,21 @@
           "name"
         ],
         "title": "Principal",
+        "type": "object"
+      },
+      "ProfileSwitchRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ProfileSwitchRequest",
         "type": "object"
       },
       "RecoveryRequest": {
@@ -3221,6 +3273,26 @@
         "summary": "Cluster Build Get Plan"
       }
     },
+    "/api/v1/cluster/status": {
+      "get": {
+        "operationId": "cluster_status_api_v1_cluster_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Cluster Status Api V1 Cluster Status Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Cluster Status"
+      }
+    },
     "/api/v1/composition": {
       "get": {
         "operationId": "composition_overview_api_v1_composition_get",
@@ -3280,6 +3352,196 @@
           }
         },
         "summary": "Composition Environment"
+      }
+    },
+    "/api/v1/composition/environments/{env}/actions": {
+      "get": {
+        "operationId": "named_environment_options_api_v1_composition_environments__env__actions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "env",
+            "required": true,
+            "schema": {
+              "title": "Env",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Named Environment Options Api V1 Composition Environments  Env  Actions Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Named Environment Options"
+      }
+    },
+    "/api/v1/composition/environments/{env}/approvals": {
+      "post": {
+        "operationId": "named_environment_approval_api_v1_composition_environments__env__approvals_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "env",
+            "required": true,
+            "schema": {
+              "title": "Env",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NamedEnvironmentApprovalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Named Environment Approval Api V1 Composition Environments  Env  Approvals Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Named Environment Approval"
+      }
+    },
+    "/api/v1/composition/environments/{env}/promotions": {
+      "post": {
+        "operationId": "named_environment_promotion_api_v1_composition_environments__env__promotions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "env",
+            "required": true,
+            "schema": {
+              "title": "Env",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NamedEnvironmentPromotionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Named Environment Promotion Api V1 Composition Environments  Env  Promotions Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Named Environment Promotion"
+      }
+    },
+    "/api/v1/composition/environments/{env}/wake": {
+      "post": {
+        "operationId": "named_environment_wake_api_v1_composition_environments__env__wake_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "env",
+            "required": true,
+            "schema": {
+              "title": "Env",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Named Environment Wake Api V1 Composition Environments  Env  Wake Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Named Environment Wake"
       }
     },
     "/api/v1/composition/sync": {
@@ -4038,6 +4300,68 @@
           }
         },
         "summary": "Plan"
+      }
+    },
+    "/api/v1/profiles": {
+      "get": {
+        "operationId": "profiles_api_v1_profiles_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Profiles Api V1 Profiles Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Profiles"
+      }
+    },
+    "/api/v1/profiles/switch": {
+      "post": {
+        "operationId": "switch_profile_api_v1_profiles_switch_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileSwitchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Switch Profile Api V1 Profiles Switch Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Switch Profile"
       }
     },
     "/api/v1/remote-access/{ticket_id}/claim": {

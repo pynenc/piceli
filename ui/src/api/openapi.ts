@@ -333,6 +333,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/cluster/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Cluster Status */
+        get: operations["cluster_status_api_v1_cluster_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/composition": {
         parameters: {
             query?: never;
@@ -361,6 +378,74 @@ export interface paths {
         get: operations["composition_environment_api_v1_composition_environments__env__get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/composition/environments/{env}/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Named Environment Options */
+        get: operations["named_environment_options_api_v1_composition_environments__env__actions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/composition/environments/{env}/approvals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Named Environment Approval */
+        post: operations["named_environment_approval_api_v1_composition_environments__env__approvals_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/composition/environments/{env}/promotions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Named Environment Promotion */
+        post: operations["named_environment_promotion_api_v1_composition_environments__env__promotions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/composition/environments/{env}/wake": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Named Environment Wake */
+        post: operations["named_environment_wake_api_v1_composition_environments__env__wake_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -691,6 +776,40 @@ export interface paths {
         get: operations["plan_api_v1_plans__plan_id__get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/profiles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Profiles */
+        get: operations["profiles_api_v1_profiles_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/profiles/switch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Switch Profile */
+        post: operations["switch_profile_api_v1_profiles_switch_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1071,6 +1190,18 @@ export interface components {
             /** Partial */
             partial?: components["schemas"]["PartialError"][];
         };
+        /** NamedEnvironmentApprovalRequest */
+        NamedEnvironmentApprovalRequest: {
+            /** Plan Hash */
+            plan_hash: string;
+        };
+        /** NamedEnvironmentPromotionRequest */
+        NamedEnvironmentPromotionRequest: {
+            /** Branch */
+            branch: string;
+            /** Commit */
+            commit: string;
+        };
         /** Operation */
         Operation: {
             /** Actor */
@@ -1237,6 +1368,11 @@ export interface components {
              * @enum {string}
              */
             kind: "local" | "oidc" | "service";
+            /** Name */
+            name: string;
+        };
+        /** ProfileSwitchRequest */
+        ProfileSwitchRequest: {
             /** Name */
             name: string;
         };
@@ -2288,6 +2424,28 @@ export interface operations {
             };
         };
     };
+    cluster_status_api_v1_cluster_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
     composition_overview_api_v1_composition_get: {
         parameters: {
             query?: never;
@@ -2329,6 +2487,146 @@ export interface operations {
                 content: {
                     "application/json": {
                         [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    named_environment_options_api_v1_composition_environments__env__actions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                env: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    named_environment_approval_api_v1_composition_environments__env__approvals_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                env: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NamedEnvironmentApprovalRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    named_environment_promotion_api_v1_composition_environments__env__promotions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                env: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NamedEnvironmentPromotionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    named_environment_wake_api_v1_composition_environments__env__wake_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                env: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
                     };
                 };
             };
@@ -2945,6 +3243,63 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PlanRecord"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    profiles_api_v1_profiles_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    switch_profile_api_v1_profiles_switch_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProfileSwitchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
                 };
             };
             /** @description Validation Error */

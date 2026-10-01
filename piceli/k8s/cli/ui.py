@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
+import sys
 import tarfile
+import threading
 from dataclasses import replace
 from pathlib import Path
 from typing import Annotated, Literal, cast
@@ -63,6 +66,10 @@ def serve(
         str | None, typer.Option(help="Explicit kubeconfig context")
     ] = None,
     namespace: Annotated[str | None, typer.Option(help="Inventory namespace")] = None,
+    profile: Annotated[
+        str | None,
+        typer.Option(help="Local credential profile (piceli profiles --json)"),
+    ] = None,
     definition: Annotated[
         Path | None, typer.Option(help="Existing release TOML definition")
     ] = None,
@@ -118,6 +125,20 @@ def serve(
 
     Release definitions and configured Pipelines can include pre-rollout checks.
     """
+    if profile is not None:
+        if kubeconfig is not None or context is not None:
+            reject("profile-conflict")
+        from piceli.profiles import ProfileError, resolve, set_override
+
+        try:
+            selected = resolve(profile)
+        except ProfileError as error:
+            reject(error.code)
+        if pipeline is None and definition is None:
+            kubeconfig, context = selected.kubeconfig, selected.context
+            namespace = namespace or "default"
+        else:
+            set_override(profile)
     if host not in {"127.0.0.1", "::1", "localhost"}:
         reject("ui-request-rejected")
     try:
@@ -319,6 +340,20 @@ def serve(
                 pipeline or "",
                 (control_dir or declared_pipeline.state_dir / "ui-control").resolve(),
             )
+        requested_profile: list[str] = []
+        runner: uvicorn.Server | None = None
+
+        def switch_session(selected_name: str) -> None:
+            # Stop the listener and close its access/session services before
+            # a fresh process opens credentials for the selected profile.
+            requested_profile[:] = [selected_name]
+            if runner is not None:
+                timer = threading.Timer(
+                    0.2, lambda: setattr(runner, "should_exit", True)
+                )
+                timer.daemon = True
+                timer.start()
+
         server = create_app(
             query,
             origin=origin,
@@ -328,6 +363,8 @@ def serve(
             pipeline_control=pipeline_delivery,
             access=access,
             logs=logs,
+            active_profile=profile,
+            profile_switch=switch_session,
         )
         from piceli.k8s.ui_state import remove_launch_token, write_launch_token
         from piceli.server.security import uvicorn_log_config
@@ -342,15 +379,47 @@ def serve(
         # the local session. The token is also in a 0600 file while running.
         say(f"Piceli UI: {server.state.security.launch_url()}")
         say(f"Launch token file: {token_file}")
-        uvicorn.run(
-            server,
-            host=host,
-            port=port,
-            log_level="warning",
-            log_config=uvicorn_log_config(),
+        runner = uvicorn.Server(
+            uvicorn.Config(
+                server,
+                host=host,
+                port=port,
+                log_level="warning",
+                log_config=uvicorn_log_config(),
+            )
         )
+        runner.run()
     finally:
         remove_launch_token(token_file)
+    if requested_profile:
+        # The old ASGI lifespan has finished: no forward or session survives.
+        # Keep the owner's other trusted flags, replacing only --profile.
+        argv = sys.argv[1:]
+        cleaned: list[str] = []
+        index = 0
+        while index < len(argv):
+            token = argv[index]
+            if token == "--profile":
+                index += 2
+                continue
+            if token.startswith("--profile="):
+                index += 1
+                continue
+            cleaned.append(token)
+            index += 1
+        if cleaned[:2] != ["ui", "serve"]:
+            reject("ui-operation-unavailable")
+        os.execv(
+            sys.executable,
+            [
+                sys.executable,
+                "-m",
+                "piceli",
+                *cleaned,
+                "--profile",
+                requested_profile[0],
+            ],
+        )
 
 
 @app.command("cluster-serve")

@@ -259,6 +259,19 @@ class CompositionSyncRequest(Record):
     )
 
 
+class NamedEnvironmentApprovalRequest(Record):
+    plan_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+
+
+class NamedEnvironmentPromotionRequest(Record):
+    branch: str = Field(min_length=1, max_length=250)
+    commit: str = Field(pattern=r"^[0-9a-f]{7,40}$")
+
+
+class ProfileSwitchRequest(Record):
+    name: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]{0,62}$")
+
+
 class Stage(Record):
     name: str
     state: Literal[
