@@ -28,6 +28,11 @@ disposable fake Kubernetes API (no real cluster or credential).
 :width: 720px
 ```
 
+```{image} _static/ui/cluster.png
+:alt: Cluster nodes, k3s mirror restart state, registry storage and service health
+:width: 720px
+```
+
 ```{image} _static/ui/pipeline-plan.png
 :alt: A Pipeline plan with its stages and the approval step for the exact combined hash
 :width: 720px
@@ -69,6 +74,15 @@ and temporary files on exit.
 | Composition UI installed by `piceli cluster init` | `piceli access ui --cluster MODULE:ATTR` (a port-forward and the launch token) | Environments, components, sources, workloads and logs, Sync |
 | UI installed inside the cluster | `piceli ui cluster-serve` behind the configured TLS gateway | OIDC-scoped observation, reviewed manual delivery, cluster build Jobs and local-client access tickets |
 | Direct application deployment to a machine without Kubernetes | No target provider exists yet | No deployment action is advertised |
+
+For a saved local credential profile, use `piceli ui serve --profile NAME`
+(list names with `piceli profiles --json`). The header shows the active
+profile and, when several profiles exist, a picker. Switching stops the old
+local listener and its session, then starts a fresh process with the selected
+profile. Reopen the new launch address printed by that process. Profile names
+and availability are shown; kubeconfig paths and contents are not sent to the
+browser. An explicit `--kubeconfig` or `--context` cannot accompany
+`--profile` on a new serve command.
 
 A local UI process may itself run on a remote machine. Keep its listener on
 loopback and use an SSH tunnel, for example
@@ -142,6 +156,56 @@ The views, like Argo CD's applications, read the controller's published status
   pods and current or previous logs.
 - **Sources**: each repository's URL (without any credential), the commit of
   every ref the controller follows, and its last poll.
+
+**Cluster** shows declared node architecture and roles, live readiness, the
+in-cluster registry's pod and claim status, mirror state on each node, and the
+controller and UI Deployment health. A k3s mirror that needs a service restart
+is shown separately from a ready mirror. Storage use is shown when kubelet
+volume statistics are readable; otherwise it says “Not reported.” The page
+returns only a small status projection: it does not expose the declaration's
+credential reference, Git Secret, kubeconfig or service-account token.
+
+On an environment detail header, **Approve** reviews the current pending plan
+hash, namespace, revisions and components before requiring a second explicit
+confirmation. **Promote** chooses a branch and exact commit already published
+by the controller, then requires confirmation. The server rereads status
+immediately before either request, so a changed hash or ref is refused. A
+promotion is a request to the controller; its declared follow policy still
+decides whether to accept it. An environment stopped by the idle policy shows
+“Idle-stopped since” and **Wake**; Wake confirms a sync request, which the
+controller processes at its next poll. The next push can wake it as well.
+
+The composition controller currently publishes environment names but not its
+per-environment `Promote()` policy, and it publishes only followed Git refs.
+The UI therefore keeps Promote disabled when it cannot establish the policy
+and a published branch head from status. The controller must publish those
+facts before a promotion from a Promote-only source can be offered. Also, the
+forward UI install currently grants reads of controller status and workloads,
+but not `piceli-cluster` or Nodes. Cluster shows the facts it can read and
+marks unavailable node readiness and storage use as unknown. The install
+needs scoped reads of `piceli-cluster`, Nodes and kubelet volume statistics to
+show all Cluster fields. These permissions are owned by the cluster UI install
+work package.
+
+```{image} _static/ui/named-environment-approve.png
+:alt: Approval review of an exact pending plan hash in a named environment
+:width: 720px
+```
+
+```{image} _static/ui/named-environment-promote.png
+:alt: Promotion review of a published branch and exact commit
+:width: 720px
+```
+
+```{image} _static/ui/idle-stopped-environment.png
+:alt: An idle-stopped environment with its stopped-since time and Wake review
+:width: 720px
+```
+
+Short recordings from the same fake-API journey show the
+[Cluster status](_static/ui/cluster-overview.webp),
+[Promote and Approve](_static/ui/named-environment-actions.webp), and
+[idle-stop Wake](_static/ui/idle-stopped-environment.webp) interactions.
 
 **Sync** writes the same request as `piceli gitops sync ENV [--component
 NAME]`; the controller handles it on its next poll, under the environment's

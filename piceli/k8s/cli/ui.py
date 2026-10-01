@@ -393,16 +393,17 @@ def serve(
         remove_launch_token(token_file)
     if requested_profile:
         # The old ASGI lifespan has finished: no forward or session survives.
-        # Keep the owner's other trusted flags, replacing only --profile.
+        # Keep the owner's other trusted flags. An explicit inventory target
+        # must give way to the selected profile in the fresh process.
         argv = sys.argv[1:]
         cleaned: list[str] = []
         index = 0
         while index < len(argv):
             token = argv[index]
-            if token == "--profile":
+            if token in {"--profile", "--kubeconfig", "--context"}:
                 index += 2
                 continue
-            if token.startswith("--profile="):
+            if token.startswith(("--profile=", "--kubeconfig=", "--context=")):
                 index += 1
                 continue
             cleaned.append(token)

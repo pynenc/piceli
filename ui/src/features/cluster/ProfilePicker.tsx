@@ -9,8 +9,9 @@ export function ProfilePicker() {
   const [selected, setSelected] = useState('');
   const switcher = useMutation({ mutationFn: (name: string) => api.switchProfile({ name }) });
   useEffect(() => { if (query.data) setSelected(query.data.active ?? ''); }, [query.data]);
-  if (!query.data || !query.data.profiles.length) return <span className="hosting">Local UI</span>;
-  const { active, profiles } = query.data;
+  const profiles = Array.isArray(query.data?.profiles) ? query.data.profiles : [];
+  if (!query.data || (!profiles.length && !query.data.active)) return <span className="hosting">Local UI</span>;
+  const { active } = query.data;
   return <div className="profile-picker" aria-label="Credential profile">
     <span className="small">Profile: <strong>{active ?? 'None'}</strong></span>
     {profiles.length > 1 && <><label className="sr-only" htmlFor="piceli-profile">Choose credential profile</label><select id="piceli-profile" aria-label="Choose credential profile" value={selected} onChange={event => setSelected(event.target.value)} disabled={switcher.isPending || switcher.isSuccess}><option value="">Choose profile</option>{profiles.map(item => <option key={item.name} value={item.name} disabled={!item.available}>{item.name}{item.available ? '' : ' (unavailable)'}</option>)}</select><button disabled={!selected || selected === active || switcher.isPending || switcher.isSuccess} onClick={() => switcher.mutate(selected)}>Switch</button></>}

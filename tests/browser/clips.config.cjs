@@ -6,6 +6,7 @@ if (!process.env.PICELI_UI_TEST_OUTPUT) {
 }
 const port = process.env.PICELI_UI_TEST_PORT || '4185';
 const origin = `http://127.0.0.1:${port}`;
+const python = process.env.PICELI_UI_PYTHON || 'uv run --frozen --extra ui python';
 module.exports = defineConfig({
   testDir: __dirname,
   testMatch: 'clips.spec.cjs',
@@ -23,7 +24,7 @@ module.exports = defineConfig({
     launchOptions: process.env.PICELI_BROWSER_EXECUTABLE ? { executablePath: process.env.PICELI_BROWSER_EXECUTABLE } : {},
   },
   webServer: {
-    command: `uv run --frozen --extra ui python tests/browser/serve_showcase.py --port ${port}`,
+    command: `${python} tests/browser/serve_showcase.py --port ${port}`,
     cwd: path.resolve(__dirname, '../..'),
     url: origin,
     reuseExistingServer: false,

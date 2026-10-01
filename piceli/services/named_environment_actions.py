@@ -56,7 +56,12 @@ class NamedEnvironmentActions:
             found = value.get("refs") or {}
             if not isinstance(found, Mapping):
                 continue
-            for branch, commit in sorted(found.items()):
+            for ref, commit in sorted(found.items()):
+                # Composition status uses full Git ref names. Promotion takes
+                # a branch name and the controller refuses a tag.
+                branch = ref.removeprefix("refs/heads/") if isinstance(ref, str) else ""
+                if branch == ref and ref.startswith("refs/"):
+                    continue
                 if (
                     isinstance(branch, str)
                     and isinstance(commit, str)
@@ -67,22 +72,24 @@ class NamedEnvironmentActions:
         return refs
 
     @staticmethod
-    def _promotable(document: Mapping[str, Any], env: str) -> bool:
+    def _promotable(document: Mapping[str, Any], env: str) -> bool | None:
         controller = document.get("controller") or {}
         if not isinstance(controller, Mapping):
-            return False
+            return None
         rules = controller.get("environments") or []
-        return any(
-            isinstance(rule, Mapping)
-            and rule.get("name") == env
-            and rule.get("promote") is True
-            for rule in rules
-        )
+        for rule in rules:
+            if isinstance(rule, Mapping) and rule.get("name") == env:
+                return rule.get("promote") is True
+            if rule == env:
+                # Composition status currently lists names without policy.
+                return None
+        return False
 
     def options(self, env: str) -> dict[str, Any]:
         document, entry = self._read(env, "inspect")
         refs = self._refs(document)
-        promotable = self._promotable(document, env) and bool(refs)
+        policy = self._promotable(document, env)
+        promotable = policy is True and bool(refs)
         pending = entry.get("state") == "approval-required"
         plan_hash = entry.get("plan_hash")
         approval = (
@@ -115,7 +122,13 @@ class NamedEnvironmentActions:
             "env": env,
             "promote": {
                 "allowed": promotable,
-                "reason": None if promotable else "gitops-promote-not-allowed",
+                "reason": (
+                    None
+                    if promotable
+                    else "gitops-promote-not-allowed"
+                    if policy is False
+                    else "ui-observation-unavailable"
+                ),
             },
             "approve": {
                 "allowed": approval,
@@ -144,8 +157,11 @@ class NamedEnvironmentActions:
                     (document.get("envs") or {}).get(env), Mapping
                 ):
                     raise QueryError("ui-plan-stale", 409)
-                if not self._promotable(document, env):
+                policy = self._promotable(document, env)
+                if policy is False:
                     raise QueryError("gitops-promote-not-allowed", 409)
+                if policy is None:
+                    raise QueryError("ui-observation-unavailable", 503)
                 if {"branch": branch, "commit": commit} not in [
                     {"branch": item["branch"], "commit": item["commit"]}
                     for item in self._refs(document)

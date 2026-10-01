@@ -81,6 +81,7 @@ if TYPE_CHECKING:
     from piceli.services.composition_control import CompositionControl
     from piceli.services.environment_control import EnvironmentControl
     from piceli.services.logs import LogService
+    from piceli.services.named_environment_actions import NamedEnvironmentActions
     from piceli.services.operations import OperationService
     from piceli.services.pipeline_control import PipelineControl
     from piceli.services.remote_access import RemoteAccessService
@@ -110,6 +111,10 @@ def _error(code: str, status: int) -> JSONResponse:
         "ui-controller-absent": "No GitOps controller status is published yet. Enable GitOps for the composition, then refresh.",
         "ui-sync-target-unknown": "The controller's status does not list that environment or component. Refresh and try again.",
         "ui-sync-unavailable": "The controller's request inbox is unavailable. Run cluster init again, then retry.",
+        "gitops-promote-not-allowed": "This environment does not allow promotion. Check its declared follow policy.",
+        "profile-not-found": "That credential profile is no longer available. Refresh the profile list.",
+        "profile-invalid": "This credential profile is invalid. Check it with piceli profiles --json.",
+        "profile-conflict": "A profile cannot be combined with explicit kubeconfig or context options.",
     }
     safe_code = code if code in messages else "ui-observation-unavailable"
     return JSONResponse(
@@ -658,7 +663,7 @@ def create_app(
     def composition_sync(body: CompositionSyncRequest) -> dict[str, Any]:
         return composition().sync(body.env, body.component)
 
-    def named_actions():
+    def named_actions() -> NamedEnvironmentActions:
         from piceli.services.named_environment_actions import NamedEnvironmentActions
 
         return NamedEnvironmentActions(composition())

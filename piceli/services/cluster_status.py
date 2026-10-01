@@ -170,6 +170,7 @@ class ClusterStatusControl:
     def _live(target: Any) -> dict[str, Any]:
         from piceli.artifacts import cluster_registry as cr
         from piceli.gitops.install import connect
+        from piceli.k8s.cli.registry import read_reports
         from piceli.pipeline.model import Registry
 
         with connect(
@@ -179,9 +180,14 @@ class ClusterStatusControl:
             exec_policy=target.exec_policy,
         ) as api:
             ns = SYSTEM_NAMESPACE
-            config = api.call(
-                f"/api/v1/namespaces/{ns}/configmaps/piceli-cluster", "GET"
-            )
+            try:
+                config = api.call(
+                    f"/api/v1/namespaces/{ns}/configmaps/piceli-cluster", "GET"
+                )
+            except GitOpsError:
+                # Forward-mode installs currently grant status and requests,
+                # but not the cluster declaration. Show the permitted facts.
+                config = None
             declaration: dict[str, Any] = {}
             if isinstance(config, Mapping):
                 text = (config.get("data") or {}).get("cluster.json")
@@ -203,8 +209,10 @@ class ClusterStatusControl:
             registry_decl = declaration.get("registry") or {}
             registry = None
             mirror_rows: dict[str, Mapping[str, Any]] = {}
-            if isinstance(registry_decl, Mapping):
-                on = registry_decl.get("on") or next(iter(names), "unknown")
+            if isinstance(registry_decl, Mapping) and (
+                config is None or declaration.get("registry") is not None
+            ):
+                on = registry_decl.get("node") or next(iter(names), "unknown")
                 declared_registry = Registry.in_cluster(
                     on=str(on),
                     namespace=str(registry_decl.get("namespace") or ns),
@@ -249,20 +257,33 @@ class ClusterStatusControl:
                             )
                     except GitOpsError:
                         pass
+                registry_nodes = nodes or [
+                    {"metadata": {"name": name}}
+                    for name in sorted(
+                        value
+                        for value in (
+                            names
+                            | {(pod.get("spec") or {}).get("nodeName") for pod in pods}
+                        )
+                        if isinstance(value, str)
+                    )
+                ]
                 registry = cr.summarize(
                     declared_registry,
                     deployment=deployment if isinstance(deployment, Mapping) else None,
                     service=service if isinstance(service, Mapping) else None,
                     claim=claim if isinstance(claim, Mapping) else None,
-                    nodes=nodes,
+                    nodes=registry_nodes,
                     pods=pods,
                     used_bytes=used_bytes,
+                    reports=read_reports(api, rns, pods),
                 )
                 mirror_rows = {
                     str(item.get("node")): item
                     for item in registry.get("mirrors") or []
                 }
-            rows = []
+                names.update(name for name in mirror_rows if name != "None")
+            rows: list[dict[str, Any]] = []
             for name in sorted(value for value in names if isinstance(value, str)):
                 found = by_name.get(name) or {}
                 declared = next(
@@ -314,23 +335,30 @@ class ClusterStatusControl:
             ui_deployment = api.call(
                 f"/apis/apps/v1/namespaces/{ns}/deployments/piceli-ui", "GET"
             )
+            controller_healthy = bool(
+                (controller_deployment or {}).get("status", {}).get("readyReplicas")
+            )
+            ui_healthy = bool(
+                (ui_deployment or {}).get("status", {}).get("readyReplicas")
+            )
             return {
-                "state": "ready" if config is not None else "not-initialized",
+                "state": (
+                    "unknown"
+                    if config is None
+                    else "degraded"
+                    if (registry or {}).get("state") not in (None, "ready")
+                    or not controller_healthy
+                    or not ui_healthy
+                    or any(row["mirror"]["state"] == "needs-restart" for row in rows)
+                    else "ready"
+                ),
                 "cluster": declaration.get("name") or "unknown",
                 "nodes": rows,
                 "registry": registry,
                 "controller": {
-                    "health": "healthy"
-                    if (controller_deployment or {})
-                    .get("status", {})
-                    .get("readyReplicas")
-                    else "unavailable",
+                    "health": "healthy" if controller_healthy else "unavailable",
                     "last_poll": controller_status.get("last_poll"),
                     "poll_failures": controller_status.get("poll_failures"),
                 },
-                "ui": {
-                    "health": "healthy"
-                    if (ui_deployment or {}).get("status", {}).get("readyReplicas")
-                    else "unavailable"
-                },
+                "ui": {"health": "healthy" if ui_healthy else "unavailable"},
             }
