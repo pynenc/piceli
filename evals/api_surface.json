@@ -6441,6 +6441,7 @@
      "cluster-observe",
      "cluster-serve",
      "connect",
+     "forward-serve",
      "restore",
      "serve"
     ]
@@ -6546,6 +6547,15 @@
     ],
     "subcommands": []
    },
+   "ui forward-serve": {
+    "arguments": [],
+    "flags": [
+     "--launch-secret",
+     "--namespace",
+     "--port"
+    ],
+    "subcommands": []
+   },
    "ui restore": {
     "arguments": [],
     "flags": [
@@ -6607,6 +6617,13 @@
    "access-stop-incomplete",
    "access-stop-needs-stale",
    "access-target-invalid",
+   "access-ui-cluster-invalid",
+   "access-ui-forbidden",
+   "access-ui-not-declared",
+   "access-ui-not-installed",
+   "access-ui-not-ready",
+   "access-ui-target-required",
+   "access-ui-unreachable",
    "access-unknown-forward",
    "adopt-and-replace",
    "adopt-entry-not-declared",
@@ -7137,9 +7154,13 @@
    "ui-access-port-conflict",
    "ui-approval-mismatch",
    "ui-assets-unavailable",
+   "ui-controller-absent",
    "ui-evaluation-failed",
    "ui-execution-failed",
    "ui-idempotency-conflict",
+   "ui-install-access-unsupported",
+   "ui-install-image-unpinned",
+   "ui-install-node-unknown",
    "ui-invalid-request",
    "ui-logs-unavailable",
    "ui-not-found",
@@ -7151,6 +7172,8 @@
    "ui-prerollout-unsupported",
    "ui-request-rejected",
    "ui-state-invalid",
+   "ui-sync-target-unknown",
+   "ui-sync-unavailable",
    "uid-version-precondition-failed",
    "undiscovered-api",
    "unknown-error-code",
@@ -8152,6 +8175,7 @@
   "piceli.infra",
   "piceli.infra.cluster",
   "piceli.infra.cluster_init",
+  "piceli.infra.ui_install",
   "piceli.k8s",
   "piceli.k8s.access",
   "piceli.k8s.automation",
@@ -8181,6 +8205,7 @@
   "piceli.k8s.cli.restore",
   "piceli.k8s.cli.state",
   "piceli.k8s.cli.ui",
+  "piceli.k8s.cli.ui_forward",
   "piceli.k8s.cli.ui_remote",
   "piceli.k8s.cli.watch",
   "piceli.k8s.config",
@@ -8298,6 +8323,7 @@
   "piceli.services.authority",
   "piceli.services.cluster_build_control",
   "piceli.services.cluster_evaluation",
+  "piceli.services.composition_control",
   "piceli.services.contracts",
   "piceli.services.engine",
   "piceli.services.environment_control",

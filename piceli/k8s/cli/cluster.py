@@ -93,6 +93,12 @@ def _guard() -> Iterator[None]:
         reject(code, str(error))
     except PipelineError as error:
         reject("cluster-invalid", str(error))
+    except ValueError as error:
+        # The UI installer's refusals (UiInstallError) carry their own code.
+        code = getattr(error, "code", None)
+        if not isinstance(code, str):
+            raise
+        reject(code, str(error))
 
 
 def load_cluster(ref: str) -> Cluster:
@@ -390,11 +396,20 @@ def status(
                 "ready": bool((deployment.get("status") or {}).get("readyReplicas")),
                 "node": (pod.get("nodeSelector") or {}).get("kubernetes.io/hostname"),
             }
+        controller_health = _controller_health(api, ns, deployment)
         renderer = ci.ui_renderer()
         ui = ci.ui_state(cluster, renderer)
         ui_present = None
+        ui_health = None
         if ui == "included" and renderer is not None:
-            ui_present = all(api.get(item) is not None for item in renderer(cluster))
+            try:
+                expected = renderer(cluster)
+            except ValueError:  # not installable as declared: init refuses it
+                expected = None
+            ui_present = expected is not None and all(
+                api.get(item) is not None for item in expected
+            )
+            ui_health = _ui_health(api, ns)
         secret = api.call(f"/api/v1/namespaces/{ns}/secrets/{ci.GIT_SECRET}", "GET")
         secret_row = {
             "namespace": ns,
@@ -415,6 +430,8 @@ def status(
         ui=ui,
         ui_present=ui_present,
         secret=secret_row,
+        controller_health=controller_health,
+        ui_health=ui_health,
     )
     say(f"cluster {cluster.name}: {body['state']}")
     for row in body["nodes"]:
@@ -464,6 +481,48 @@ def status(
     )
     if as_json:
         emit_json(body)
+
+
+def _controller_health(api: Api, ns: str, deployment: Any) -> dict[str, Any]:
+    """``health`` and ``last_poll`` as ``piceli gitops status`` computes them."""
+    import json
+
+    from piceli.gitops.state import STATUS_CONFIGMAP, STATUS_KEY
+    from piceli.k8s.cli.gitops import _health
+
+    if not isinstance(deployment, dict):
+        return {"health": "not-enabled", "last_poll": None}
+    found = api.call(f"/api/v1/namespaces/{ns}/configmaps/{STATUS_CONFIGMAP}", "GET")
+    document: dict[str, Any] | None = None
+    text = (
+        ((found or {}).get("data") or {}).get(STATUS_KEY)
+        if isinstance(found, dict)
+        else None
+    )
+    if isinstance(text, str):
+        try:
+            value = json.loads(text)
+        except ValueError:
+            value = None
+        document = value if isinstance(value, dict) else None
+    rollout = deployment.get("status") or {}
+    ready = bool(rollout.get("availableReplicas") or rollout.get("readyReplicas"))
+    controller = (document or {}).get("controller") or {}
+    return {
+        "health": _health(document, ready, time.time()),
+        "last_poll": controller.get("last_poll"),
+    }
+
+
+def _ui_health(api: Api, ns: str) -> str:
+    """``healthy``, ``starting`` or ``not-installed`` from the UI's Deployment."""
+    from piceli.infra.ui_install import NAME as UI_NAME
+
+    deployment = api.call(f"/apis/apps/v1/namespaces/{ns}/deployments/{UI_NAME}", "GET")
+    if not isinstance(deployment, dict):
+        return "not-installed"
+    rollout = deployment.get("status") or {}
+    return "healthy" if rollout.get("readyReplicas") else "starting"
 
 
 def _read_token() -> str:

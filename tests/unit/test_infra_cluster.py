@@ -57,8 +57,6 @@ def test_lists_become_tuples_and_roles_become_labels() -> None:
         lambda: Node("a", arch="amd64", roles=["x", "x"]),
         lambda: Controller(on="a", poll="5s"),
         lambda: Controller(on="a", poll="soon"),
-        lambda: Controller(on="a", image="piceli:latest"),
-        lambda: Ui(access="public"),  # type: ignore[arg-type]
         lambda: _cluster(api="10.0.0.1:6443"),
         lambda: _cluster(credentials="../x"),
         lambda: _cluster(registry=Registry("oci://example.com/team")),

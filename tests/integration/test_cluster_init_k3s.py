@@ -118,7 +118,13 @@ def _cli(*args: str) -> Any:
 def _wait_ready(kubeconfig: Path, seconds: float = 300) -> None:
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
-        nodes = json.loads(_kubectl(kubeconfig, "get", "nodes", "-o", "json"))["items"]
+        try:  # the API server is down while the server node restarts
+            nodes = json.loads(_kubectl(kubeconfig, "get", "nodes", "-o", "json"))[
+                "items"
+            ]
+        except subprocess.CalledProcessError:
+            time.sleep(3)
+            continue
         if nodes and all(
             any(
                 c["type"] == "Ready" and c["status"] == "True"
@@ -193,7 +199,7 @@ def test_cluster_init_on_k3s_mirrors_every_node(
     (tmp_path / "infra.py").write_text(
         f"""
 from piceli import Registry
-from piceli.infra import Cluster, Controller, Node, Ui
+from piceli.infra import Cluster, Controller, Node
 
 k3s = Cluster(
     "{NAME}",
@@ -206,7 +212,6 @@ k3s = Cluster(
     ],
     registry=Registry.in_cluster(on="{agent_a}", storage="1Gi"),
     controller=Controller(on="{agent_a}"),
-    ui=Ui(),
 )
 """
     )

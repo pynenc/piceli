@@ -346,8 +346,17 @@ def summarize(
     ui: str,
     ui_present: bool | None,
     secret: Mapping[str, Any] | None,
+    controller_health: Mapping[str, Any] | None = None,
+    ui_health: str | None = None,
 ) -> dict[str, Any]:
-    """The document of ``piceli cluster status`` (pure; tested offline)."""
+    """The document of ``piceli cluster status`` (pure; tested offline).
+
+    Shape (``piceli.cluster-status.v1``, read by the UI): ``state``,
+    ``cluster``, ``nodes[]`` (``name``, ``arch``, ``roles``, ``ready``,
+    ``mirror {kind, state, restart?, file?}``, labels), ``registry`` (the
+    ``registry status`` document), ``controller {health, last_poll, …}``,
+    ``ui {health, …}`` and ``git_secret`` (key names only).
+    """
     from piceli.artifacts.cluster_registry import RUNTIME_LABEL
 
     by_name = {str(_meta(node).get("name")): node for node in nodes}
@@ -355,10 +364,18 @@ def summarize(
         cluster.registry is not None
         and getattr(cluster.registry, "node_mirror", None) == "auto"
     )
+    mirror_rows = {str(m.get("node")): m for m in (registry or {}).get("mirrors") or ()}
     node_rows = []
     for declared in cluster.nodes:
         live = by_name.get(declared.name)
-        row: dict[str, Any] = {"name": declared.name, "present": live is not None}
+        row: dict[str, Any] = {
+            "name": declared.name,
+            "present": live is not None,
+            "arch": declared.arch,
+            "roles": list(declared.roles),
+            "ready": None,
+            "mirror": None,
+        }
         if live is not None:
             labels = _meta(live).get("labels") or {}
             info = (live.get("status") or {}).get("nodeInfo") or {}
@@ -386,6 +403,16 @@ def summarize(
                     ),
                 }
             )
+        if registry is not None:
+            found = mirror_rows.get(declared.name) or {}
+            mirror: dict[str, Any] = {
+                "kind": found.get("runtime") or row.get("runtime"),
+                "state": found.get("mirror", "missing"),
+            }
+            for key in ("restart", "file"):
+                if key in found:
+                    mirror[key] = found[key]
+            row["mirror"] = mirror
         node_rows.append(row)
     mirrors = list((registry or {}).get("mirrors") or ())
     problems: list[str] = []
@@ -421,11 +448,18 @@ def summarize(
         "unmergeable": unmergeable(mirrors),
         "controller": {
             "on": cluster.controller.on,
+            "health": (controller_health or {}).get("health", "not-enabled"),
+            "last_poll": (controller_health or {}).get("last_poll"),
             "foundation": dict(foundation),
             "deployment": controller,
         }
         if cluster.controller is not None
         else None,
-        "ui": {"state": ui, "installed": ui_present},
+        "ui": {
+            "state": ui,
+            "installed": ui_present,
+            "health": ui_health
+            or ("not-declared" if ui == "not-declared" else "not-installed"),
+        },
         "git_secret": secret,
     }

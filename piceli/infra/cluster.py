@@ -93,24 +93,12 @@ def check_controller(controller: Controller) -> None:
         raise _invalid("Controller(poll=) must be at least 10 seconds")
     if controller.sync != "on change":
         raise _invalid('Controller(sync=) must be "on change"')
-    _check_image(controller.image, "Controller(image=)")
 
 
 def check_ui(ui: Ui) -> None:
-    if ui.access != "forward":
-        raise _invalid(
-            'Ui(access=) must be "forward" (reached through piceli access ui)'
-        )
-    if ui.on is not None and (not isinstance(ui.on, str) or not _NODE.fullmatch(ui.on)):
-        raise _invalid("Ui(on=) must name a node")
-    _check_image(ui.image, "Ui(image=)")
-
-
-def _check_image(image: str | None, what: str) -> None:
-    if image is not None and not re.fullmatch(
-        r"[a-z0-9][a-z0-9./:_-]*@sha256:[0-9a-f]{64}", str(image)
-    ):
-        raise _invalid(f"{what} must be pinned by digest (repo@sha256:<64 hex>)")
+    """Nothing to refuse here: the UI installer checks its own values when it
+    renders (``ui-install-image-unpinned``, ``-node-unknown``,
+    ``-access-unsupported``) and ``cluster init`` reports those codes."""
 
 
 def check_cluster(cluster: Cluster) -> None:
@@ -145,7 +133,6 @@ def check_cluster(cluster: Cluster) -> None:
     placed = {
         "Registry.in_cluster(on=)": getattr(cluster.registry, "on", None),
         "Controller(on=)": getattr(cluster.controller, "on", None),
-        "Ui(on=)": getattr(cluster.ui, "on", None),
     }
     for what, node in placed.items():
         if node is not None and names and node not in names:

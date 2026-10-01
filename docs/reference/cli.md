@@ -24,6 +24,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | --- | --- | --- | --- |
 | [`piceli access`](#cli-access) | Forward the app's declared ports to 127.0.0.1 and keep them healthy. | reads | no |
 | [`piceli access stop`](#cli-access-stop) | Stop Piceli's stale forwards and servers for the app; never another process. | none | no |
+| [`piceli access ui`](#cli-access-ui) | Open the UI that `piceli cluster init` installed: forward it and print its URL. | reads | no |
 | [`piceli artifacts build`](#cli-artifacts-build) | Assemble an OCI image layout from a plan without running code. | none | no |
 | [`piceli artifacts build-spec preview`](#cli-artifacts-build-spec-preview) | Preview a containerized build and its plan hash. | none | no |
 | [`piceli artifacts build-spec run`](#cli-artifacts-build-spec-run) | Run an approved containerized build and write a receipt. | none | yes |
@@ -118,6 +119,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli ui cluster-observe`](#cli-ui-cluster-observe) | Serve OIDC-scoped cluster observation and configured delivery. | writes | yes |
 | [`piceli ui cluster-serve`](#cli-ui-cluster-serve) | Serve OIDC-scoped cluster observation and configured delivery. | writes | yes |
 | [`piceli ui connect`](#cli-ui-connect) | Bind a laptop port for an authenticated cluster UI ticket. | reads | no |
+| [`piceli ui forward-serve`](#cli-ui-forward-serve) | Serve the composition UI in its pod, reached only through `piceli access ui`. | writes | no |
 | [`piceli ui restore`](#cli-ui-restore) | Restore UI control state before starting a single new server. | none | no |
 | [`piceli ui serve`](#cli-ui-serve) | Register an existing definition or inventory scope and serve the bundled UI. | writes | yes |
 | [`piceli watch`](#cli-watch) | Follow a deploy run until it settles: every stage change and progress line, then the outcome. Read-only; reads the local run journal (with shared state run `piceli state pull` first), never the cluster. | none | no |
@@ -170,6 +172,30 @@ Stop Piceli's stale forwards and servers for the app; never another process.
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** Only with --stale. Checks the app's declared forward ports and each --port; stops a port's holder only when it is Piceli's own process for this target (its kubectl port-forward, orphaned or supervised, or piceli access / observe serve / operator serve with the same target), never another process, which is reported by pid only. Local only: never contacts the cluster.
+
+(cli-access-ui)=
+### `piceli access ui`
+
+Open the UI that `piceli cluster init` installed: forward it and print its URL.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--cluster` | text |  | The composition's Cluster (MODULE:ATTR); its credentials profile is used |
+| `--profile` | text |  | A `piceli login` credential profile of the cluster |
+| `--json` | boolean | `False` | Print JSON lines: started, status, stopped |
+| `--kubectl` | text | `kubectl` | kubectl executable |
+| `--poll` | float | `1.0` | Status report cadence (seconds) |
+
+**Contract**
+
+- **Reads:** --cluster MODULE:ATTR or --profile NAME, kubeconfig, the UI's Service and launch Secret, kubectl
+- **Writes:** loopback port 8790 (a kubectl port-forward it owns)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Read-only on the cluster. Prints the one URL with the launch token (stdout, or the `started` JSON line with --json); the token is never logged elsewhere. Refuses (access-port-conflict) when 127.0.0.1:8790 is held. Stops the forward on Ctrl-C/SIGTERM/SIGHUP; exit 1 only when the forward gave up.
 
 (cli-artifacts-build)=
 ### `piceli artifacts build`
@@ -2660,6 +2686,28 @@ Bind a laptop port for an authenticated cluster UI ticket.
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** Requires piceli[ui], a trusted HTTPS cluster UI and local kubectl. The pairing secret is prompted without echo; kubeconfig and context must be explicit. The port exists on the client host only while the supervised command runs.
+
+(cli-ui-forward-serve)=
+### `piceli ui forward-serve`
+
+Serve the composition UI in its pod, reached only through `piceli access ui`.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--namespace` | text | `piceli-system` | The controller's namespace (status and requests) |
+| `--port` | integer | `8790` | Loopback port in the pod |
+| `--launch-secret` | text | `piceli-ui-launch` | Secret that receives the launch token |
+
+**Contract**
+
+- **Reads:** the pod's projected service-account CA and token, the controller's status ConfigMap, environments' workloads, pods and logs
+- **Writes:** the UI's launch Secret (its launch token), sync requests in the controller's request ConfigMap
+- **Cluster:** writes
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Runs in the pod `piceli cluster init` installs (Ui(access="forward")). Listens on the pod's loopback only, without OIDC; a fresh launch token goes into the Secret piceli-ui-launch and is never printed. The Sync button writes the same request as `piceli gitops sync`; nothing else is written.
 
 (cli-ui-restore)=
 ### `piceli ui restore`

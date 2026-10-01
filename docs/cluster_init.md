@@ -19,8 +19,8 @@ from piceli.infra import Cluster, Controller, Node, Ui
 
 my_cluster = Cluster(
     "my-cluster",
-    api="https://10.0.0.10:6443",            # checked against the profile
-    credentials="my-cluster",                # a `piceli login` profile, never in Git
+    api="https://10.0.0.10:6443",  # checked against the profile
+    credentials="my-cluster",  # a `piceli login` profile, never in Git
     nodes=[
         Node("node-1", arch="amd64", roles=["builder", "controller", "registry"]),
         Node("node-2", arch="arm64", roles=["workloads"]),
@@ -28,8 +28,10 @@ my_cluster = Cluster(
     ],
     storage_class="local-path",
     registry=Registry.in_cluster(on="node-1", storage="50Gi"),
-    controller=Controller(on="node-1", poll="1m"),
-    ui=Ui(access="forward"),                 # piceli access ui
+    controller=Controller(
+        on="node-1", poll="1m", image="registry.example.com/piceli@sha256:…"
+    ),
+    ui=Ui(access="forward"),  # piceli access ui
 )
 ```
 
@@ -49,7 +51,7 @@ $ piceli cluster status infra.py:my_cluster
 | `Node(name, arch=, roles=[…])` | `name` is the node's `kubernetes.io/hostname`; `arch` must match the node (`cluster-node-arch-mismatch`). Each role becomes the label `piceli.io/role-<role>=true`; `builder` also sets `piceli.io/builder=true`, which cluster builds select by default. A declared node missing from the cluster is refused (`cluster-node-missing`). |
 | `registry=Registry.in_cluster(on=NODE, …)` | The {doc}`cluster_registry`, with its node mirrors (containerd or k3s, per node). |
 | `controller=Controller(on=NODE, poll="1m")` | Where the GitOps controller runs. Init installs its foundation; `piceli gitops enable` adds its configuration and the Deployment, pinned to `on`. |
-| `ui=Ui(access="forward")` | The UI, installed without OIDC or any exposed Service; reach it with `piceli access ui`. |
+| `ui=Ui(access="forward")` | The UI, installed without OIDC or any exposed Service; reach it with `piceli access ui` (see {doc}`ui`). It runs a Piceli image pinned by digest: `Ui(image=…)`, else `Controller(image=…)` (`ui-install-image-unpinned` otherwise), on `Ui(on=)`, else the controller's node. |
 | `storage_class=` | The StorageClass of the controller's state claim. |
 
 Lists may be written as lists; they are stored as tuples. Every value is
@@ -69,8 +71,9 @@ One plan with one hash covers:
 3. **The controller's foundation** in `piceli-system`: ServiceAccount,
    Role and RoleBinding, the ClusterRoles (`piceli-gitops`,
    `piceli-gitops-deployer`) and the state claim (see {doc}`gitops`).
-4. **The UI**, when this Piceli build includes its in-cluster installer
-   (otherwise the plan says `"ui": "unavailable"` and installs the rest).
+4. **The UI** (after the controller's objects): its Deployment, ClusterIP
+   Service, ServiceAccount and read-only RBAC, the empty launch Secret and
+   the controller's request inbox (see {doc}`ui`).
 5. The ConfigMap `piceli-system/piceli-cluster` with the declaration
    (`piceli.cluster.v1`, no credentials), which the controller and the UI
    read.
@@ -120,7 +123,9 @@ needs `cluster init` first (`cluster-not-initialized`).
 
 `piceli cluster status infra.py:my_cluster [--json]` (read-only) reports
 `ready`, `degraded` (with `problems`) or `not-initialized`, and for each
-part: the nodes (present, architecture, runtime, missing labels), the
-registry and the mirror on each node (runtime, `restart` needed), the
-controller (foundation, whether `gitops enable` deployed it), the UI and
-whether the Git Secret exists (key names only).
+part: the nodes (`name`, `arch`, `roles`, `ready`, runtime, missing labels
+and `mirror {kind, state}` with the k3s `restart` need), the registry, the
+controller (`health` and `last_poll` as `piceli gitops status` computes
+them, `not-enabled` before `gitops enable`; its foundation), the UI
+(`health`: `healthy`, `starting`, `not-installed`) and whether the Git
+Secret exists (key names only). The UI reads the same document.

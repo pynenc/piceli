@@ -78,12 +78,13 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   node's runtime; only labels it set are ever removed), installs the
   in-cluster registry with its node mirrors, the GitOps controller's
   namespace, identity, RBAC and state claim (`gitops enable` adds the
-  Deployment; `InstallSettings(node=)` pins it), the UI when the build has
-  its installer, and the ConfigMap `piceli-cluster` with the declaration.
+  Deployment; `InstallSettings(node=)` pins it), the UI (after the
+  controller's objects), and the ConfigMap `piceli-cluster` with the declaration.
   It reaches the cluster with the credential profile and refuses one whose
   server is not `api` (`cluster-api-mismatch`). Idempotent. `piceli cluster
-  status MODULE:ATTR [--json]` reports nodes, registry and mirrors,
-  controller, UI and the Git Secret. New codes `cluster-invalid`,
+  status MODULE:ATTR [--json]` reports nodes (`roles`, `ready`, `mirror
+  {kind, state}`), registry, controller (`health`, `last_poll`), UI
+  (`health`) and the Git Secret. New codes `cluster-invalid`,
   `cluster-not-found`, `cluster-load-failed`, `cluster-api-mismatch`,
   `cluster-api-failed`, `cluster-node-missing`, `cluster-node-arch-mismatch`,
   `cluster-plan-changed`, `cluster-not-initialized`. See {doc}`cluster_init`.
@@ -105,6 +106,29 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   (`piceli.io/runtime`, else `node.kubernetes.io/instance-type=k3s`).
   `piceli registry install --node-mirror`; `registry status` shows each
   agent's runtime and restart need. Verified on a three-node k3s (k3d).
+- **UI in the cluster:** `Cluster(ui=Ui(access="forward"))` makes `piceli
+  cluster init` install the Piceli UI in `piceli-system`
+  (`piceli.infra.ui_install.render_ui(cluster)`): one Deployment running
+  `piceli ui forward-serve` from the digest-pinned `Ui.image` (else the
+  controller's image) on `Ui.on` (else the controller's node), a ClusterIP
+  Service only (no NodePort, Ingress or OIDC) and a service account that reads
+  the controller status, the environments' workloads, pods and logs (never
+  their Secrets or ConfigMaps) and writes only the GitOps request inbox and its
+  own launch Secret. `piceli access ui --cluster MODULE:ATTR` (or `--profile
+  NAME`) forwards `127.0.0.1:8790` to it and prints the one launch URL.
+  Views: **Environments** (revision per source, health, state, last sync),
+  an environment's components (source, commit, digest,
+  synced/building/rolling/failed/unchanged, health) with a link to its
+  workloads and logs, **Sources** (URL without credentials, refs, last poll)
+  and a **Sync** button per environment and per component (the
+  `piceli gitops sync` request). New API routes `GET /api/v1/composition`,
+  `GET /api/v1/composition/environments/{env}`, `POST
+  /api/v1/composition/sync` (additive). New codes `ui-controller-absent`,
+  `ui-sync-target-unknown`, `ui-sync-unavailable`, `ui-install-image-unpinned`,
+  `ui-install-node-unknown`, `ui-install-access-unsupported`,
+  `access-ui-target-required`, `access-ui-cluster-invalid`,
+  `access-ui-not-declared`, `access-ui-not-installed`, `access-ui-not-ready`,
+  `access-ui-forbidden`, `access-ui-unreachable`. See {doc}`ui`.
 
 ## Version 0.13.0
 

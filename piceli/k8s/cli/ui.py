@@ -13,11 +13,13 @@ from urllib.parse import urlsplit
 import typer
 
 from piceli.cli_contract import emit_json, reject, say
+from piceli.k8s.cli.ui_forward import forward_serve
 from piceli.k8s.cli.ui_remote import connect as connect_remote
 
 app = typer.Typer(rich_markup_mode=None, help="Piceli delivery web application.")
 
 app.command("connect")(connect_remote)
+app.command("forward-serve")(forward_serve)
 
 
 @app.command("backup")

@@ -53,7 +53,11 @@ def cluster(
 
 
 def _composition(
-    tmp_path: Path, url: str, roles_b: str = '["workloads"]', name: str = "infra.py"
+    tmp_path: Path,
+    url: str,
+    roles_b: str = '["workloads"]',
+    name: str = "infra.py",
+    controller: str = 'Controller(on="node-a", poll="1m")',
 ) -> str:
     (tmp_path / name).write_text(
         f"""
@@ -69,7 +73,7 @@ my_cluster = Cluster(
         Node("node-b", arch="arm64", roles={roles_b}),
     ],
     registry=Registry.in_cluster(on="node-a", storage="1Gi"),
-    controller=Controller(on="node-a", poll="1m"),
+    controller={controller},
     ui=Ui(access="forward"),
 )
 """
@@ -210,7 +214,11 @@ def test_the_ui_is_installed_through_its_renderer(
     status = _run("cluster", "status", ref, "--json")
     assert status.exit_code == 0, status.output
     report = json.loads(status.stdout)
-    assert report["ui"] == {"state": "included", "installed": True}
+    assert report["ui"] == {
+        "state": "included",
+        "installed": True,
+        "health": "not-installed",  # the stub renders no piceli-ui Deployment
+    }
 
 
 def test_status_before_and_after_init(
@@ -312,3 +320,44 @@ def test_secrets_git_refuses_the_environment_a_missing_prompt_and_no_token(
     from_env = _secrets(ref, "--prompt", stdin=TOKEN + "\n")
     assert json.loads(from_env.stdout)["reason"] == "secrets-token-refused"
     assert TOKEN not in from_env.stdout and TOKEN not in from_env.stderr
+
+
+def test_the_real_ui_installer_needs_a_pinned_image(
+    cluster: tuple[FakeAPI, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from piceli.infra.ui_install import render_ui
+
+    api, url = cluster
+    monkeypatch.setattr(cluster_init, "ui_renderer", lambda: render_ui)
+    unpinned = _init(_composition(tmp_path, url))
+    assert unpinned.exit_code == 2, unpinned.output
+    assert json.loads(unpinned.stdout)["reason"] == "ui-install-image-unpinned"
+
+    image = "example.com/piceli@sha256:" + "a" * 64
+    ref = _composition(
+        tmp_path,
+        url,
+        name="pinned.py",
+        controller=f'Controller(on="node-a", image="{image}")',
+    )
+    body = json.loads(_init(ref).stdout)
+    names = [(c["kind"], c["name"]) for c in body["changes"]]
+    assert names.index(("Deployment", "piceli-ui")) > names.index(
+        ("ClusterRole", "piceli-gitops")
+    )  # the UI after the controller's objects
+    assert names.count(("ConfigMap", "piceli-gitops-requests")) == 1
+    assert _init(ref, "--approve", body["plan_hash"]).exit_code == 0
+    status = json.loads(_run("cluster", "status", ref, "--json").stdout)
+    assert status["ui"]["installed"] is True
+    assert status["ui"]["health"] in {"healthy", "starting"}
+    assert status["controller"]["health"] == "not-enabled"
+    assert status["controller"]["last_poll"] is None
+    node_a = status["nodes"][0]
+    assert {k: node_a[k] for k in ("name", "arch", "roles")} == {
+        "name": "node-a",
+        "arch": "amd64",
+        "roles": ["builder", "controller", "registry"],
+    }
+    assert node_a["mirror"]["kind"] == "containerd"
+    assert node_a["mirror"]["state"] in {"ready", "pending", "missing"}
+    assert api.objects[("Deployment", "piceli-ui")]["spec"]["template"]["spec"]
