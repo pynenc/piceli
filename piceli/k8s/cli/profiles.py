@@ -122,6 +122,11 @@ def _profile_values(argv: Sequence[str]) -> tuple[list[str], str | None]:
 
 def _accepts_kubeconfig(argv: Sequence[str]) -> bool:
     """Whether the command ``argv`` names declares ``--kubeconfig`` and ``--context``."""
+    return {"--kubeconfig", "--context"} <= _command_options(argv)
+
+
+def _command_options(argv: Sequence[str]) -> set[str]:
+    """The option names the command ``argv`` names declares."""
     from typer.main import get_command
 
     from piceli.k8s.cli import app
@@ -134,12 +139,11 @@ def _accepts_kubeconfig(argv: Sequence[str]) -> bool:
         if not children or token not in children:
             break
         command = children[token]
-    options = {
+    return {
         option
         for parameter in getattr(command, "params", ())
         for option in getattr(parameter, "opts", ())
     }
-    return {"--kubeconfig", "--context"} <= options
 
 
 def expand_profile_argv(argv: Sequence[str], *, artifacts: bool = False) -> list[str]:
@@ -151,7 +155,9 @@ def expand_profile_argv(argv: Sequence[str], *, artifacts: bool = False) -> list
     declared target's credentials, through :func:`piceli.profiles.set_override`.
     """
     rest, name = _profile_values(argv)
-    if name is None:
+    if name is None or "--profile" in _command_options(rest):
+        # A command with its own --profile option (e.g. an access profile
+        # file) keeps it; credential profiles do not apply there.
         return list(argv)
     if any(
         token in {"--kubeconfig", "--context"}

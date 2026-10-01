@@ -332,3 +332,20 @@ def test_profile_option_on_a_file_driven_command_overrides_the_target(
 def test_the_codes_are_registered() -> None:
     for code in ("profile-not-found", "profile-invalid", "profile-conflict"):
         assert code in ERRORS
+
+
+def test_a_command_with_its_own_profile_option_keeps_it() -> None:
+    from piceli.k8s.cli.profiles import expand_profile_argv
+
+    argv = [
+        "observe",
+        "forwards",
+        "apply",
+        "--profile",
+        "access.toml",
+        "--kubeconfig",
+        "k",
+        "--context",
+        "c",
+    ]
+    assert expand_profile_argv(argv) == argv
