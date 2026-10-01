@@ -1,0 +1,10 @@
+# The catalog repository's component: its data lives on a retained volume
+# (a claim that outlives the workload) and is checked before each rollout.
+
+[component.catalog]
+build = { files = { "catalog" = "/srv/catalog" } }
+image = { base = "docker.io/library/busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e", user = 65534, cmd = ["httpd", "-f", "-p", "8082", "-h", "/srv/catalog"] }
+ports = { http = 8082 }
+health = { ready = "GET /items.json", check = ["test", "-f", "/srv/catalog/items.json"] }
+volumes = { data = { path = "/var/lib/catalog", size = "64Mi", retained = true } }
+settings = { page_size = "20" }

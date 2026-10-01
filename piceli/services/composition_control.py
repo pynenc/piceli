@@ -21,7 +21,6 @@ Importing this module is side-effect free.
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 import threading
 from collections.abc import Callable, Mapping
@@ -31,7 +30,7 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from piceli.gitops import GitOpsError
-from piceli.gitops.state import REQUEST_SCHEMA, Channel
+from piceli.gitops.state import Channel
 from piceli.services.query import QueryError, QueryService
 from piceli.services.registration import Registration
 
@@ -49,20 +48,15 @@ _TEXT_LIMIT = 256
 def sync_request(env: str, component: str | None = None) -> tuple[str, dict[str, Any]]:
     """The request ``piceli gitops sync ENV [--component NAME]`` writes, and its key.
 
-    Same shape as the controller's other requests (``<kind>.<digest>``): a
-    repeated Sync of the same target replaces the pending one.
+    One implementation: :func:`piceli.gitops.state.sync_request` (key
+    ``sync.<digest>``; a repeated Sync of the same target replaces the
+    pending one).
     """
-    if not _DNS.fullmatch(env) or (
-        component is not None and not _NAME.fullmatch(component)
-    ):
-        raise GitOpsError(
-            "gitops-request-invalid", "sync takes an environment and component name"
-        )
-    body: dict[str, Any] = {"schema": REQUEST_SCHEMA, "kind": "sync", "env": env}
-    if component is not None:
-        body["component"] = component
-    digest = hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()[:20]
-    return f"sync.{digest}", body
+    from piceli.gitops.state import sync_request as shared
+
+    if not isinstance(env, str):
+        raise GitOpsError("gitops-request-invalid", "sync takes an environment name")
+    return shared(env, component)
 
 
 def _text(value: Any) -> str | None:

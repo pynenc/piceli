@@ -1159,6 +1159,7 @@ class Registry:
         mirror_dir: str = "/etc/containerd/certs.d",
         mirror: Sequence[str] = (),
         mirror_credentials: Mapping[str, Path] | None = None,
+        node_mirror: str = "auto",
     ) -> ClusterRegistry:
         """A registry inside the cluster that every node pulls from by one name.
 
@@ -1188,6 +1189,14 @@ class Registry:
             :class:`Registry`.
         :param mirror_credentials: ``{registry: credentials file}`` for mirror
             sources that need a login.
+        :param node_mirror: How nodes get the mirror: ``"containerd"`` writes
+            ``<mirror_dir>/<host>/hosts.toml``; ``"k3s"`` merges the host into
+            ``/etc/rancher/k3s/registries.yaml`` (never clobbering other
+            entries) and writes k3s's own ``certs.d``; ``"auto"`` (default)
+            picks per node: k3s for nodes labelled
+            ``node.kubernetes.io/instance-type=k3s`` or
+            ``piceli.io/runtime=k3s``, containerd for the others. (``mirror=``
+            is the list of third-party images to copy.)
         """
         return ClusterRegistry(
             on=on,
@@ -1202,6 +1211,7 @@ class Registry:
             mirror_dir=mirror_dir,
             mirror=mirror,
             mirror_credentials=mirror_credentials,
+            node_mirror=node_mirror,
         )
 
 
@@ -1212,6 +1222,10 @@ _REPOSITORY = re.compile(
 )
 _REGISTRY_IMAGE = re.compile(r"[a-z0-9][a-z0-9./:_-]*@sha256:[0-9a-f]{64}")
 _MIRROR_DIR = re.compile(r"/[A-Za-z0-9._/-]{1,250}")
+
+
+#: How nodes get the in-cluster registry's mirror (``Registry.in_cluster(node_mirror=)``).
+NODE_MIRRORS = ("auto", "k3s", "containerd")
 
 
 @dataclass(frozen=True)
@@ -1238,6 +1252,7 @@ class ClusterRegistry(Registry):
     storage_class: str | None = None
     node_port: int | None = None
     mirror_dir: str = "/etc/containerd/certs.d"
+    node_mirror: str = "auto"
 
     kind = "cluster-registry"
 
@@ -1288,6 +1303,8 @@ class ClusterRegistry(Registry):
             or self.mirror_dir.rstrip("/") in ("", "/etc", "/var")
         ):
             raise invalid("mirror_dir= must be the absolute containerd certs.d dir")
+        if self.node_mirror not in NODE_MIRRORS:
+            raise invalid('node_mirror= must be "auto", "k3s" or "containerd"')
         if self.credentials is not None or self.ca_file is not None:
             raise invalid("an in-cluster registry takes no credentials or CA file")
         if self.node_registry is not None:
@@ -1316,6 +1333,8 @@ class ClusterRegistry(Registry):
                 described[key] = getattr(self, key)
         if self.mirror_dir != "/etc/containerd/certs.d":
             described["mirror_dir"] = self.mirror_dir
+        if self.node_mirror != "auto":
+            described["node_mirror"] = self.node_mirror
         if self.mirror:
             described["mirror"] = list(self.mirror)
         if self.mirror_credentials:

@@ -163,6 +163,23 @@ push for that long to zero (state `stopped`, reason `idle-stop`); the next
 push starts it again. The status lists the rules under
 `controller.environments` and `controller.idle_stop_seconds`.
 
+### Compositions: many sources
+
+`piceli gitops enable infra.py` (a module, no `:ATTR`) installs the same
+controller for a composition (see {doc}`components`): it polls every
+`Source` of the module with one Git Secret, resolves each environment's
+`follow={source: rule}` to one commit per source, builds only the components
+whose source digest changed (one build Job that fetches every source it
+needs) and rolls only those; unchanged components apply as no-op. `--repo`,
+`--branches`, `--main-branch` and `--tags` are not used: the module names
+its sources and rules. The status adds `sources`, `envs.<env>.revision` and
+`envs.<env>.components` (see {doc}`components`).
+
+`piceli gitops sync [ENV] [--component NAME]` asks the controller to deploy
+an environment (or every one) now at its revision; with `--component` a
+composition controller also rebuilds that component. The deploy still needs
+the environment's usual approval.
+
 ### Status and requests (for tools)
 
 The controller publishes its status in the ConfigMap `piceli-gitops-status`
@@ -178,8 +195,9 @@ The controller publishes its status in the ConfigMap `piceli-gitops-status`
 (`push`, `tag v1.2.0`, `promote BRANCH@SHA`). Dropped requests are listed in
 `rejected_requests` with their code.
 
-`piceli gitops approve` and `piceli promote` add one key each to the
-ConfigMap `piceli-gitops-requests`; the controller removes a request once it
+`piceli gitops approve`, `piceli gitops sync` and `piceli promote` add one
+key each to the ConfigMap `piceli-gitops-requests` (kinds `approve`,
+`sync`, `promote`); the controller removes a request once it
 handled it. Locally, `piceli gitops run --once --state-dir DIR` (with
 `--kubeconfig`/`--context`) runs one poll, and `status`, `approve` and
 `promote` take `--state-dir DIR` instead of a cluster.

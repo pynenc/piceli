@@ -113,6 +113,122 @@ class Promote:
 
 Follow = Branch | Tag | Promote
 
+#: In ``Environment.per_branch(follow={source: BRANCH})``: the source follows
+#: the environment's own branch.
+BRANCH = "{branch}"
+
+
+@dataclass(frozen=True)
+class Branches:
+    """The branches that get an environment each (``Environment.per_branch(Branches("wp-*"))``).
+
+    :param patterns: Branch globs (``"wp-*"``), one or a list.
+    :param fallback: A source that follows ``"{branch}"`` but has no such
+        branch deploys this branch instead (default ``main``).
+    """
+
+    patterns: Any = "*"
+    fallback: str = "main"
+
+    def __post_init__(self) -> None:
+        items = (self.patterns,) if isinstance(self.patterns, str) else self.patterns
+        if (
+            not isinstance(items, Sequence)
+            or not items
+            or not all(isinstance(item, str) and item.strip() for item in items)
+        ):
+            raise EnvError("env-config-invalid", "Branches() takes branch globs")
+        object.__setattr__(self, "patterns", tuple(dict.fromkeys(items)))
+        Branch(self.fallback)  # an exact branch name
+
+    def matches(self, branch: str) -> bool:
+        return any(fnmatch.fnmatchcase(branch, glob) for glob in self.patterns)
+
+
+def _follow_items(value: Any, what: str, *, per_branch: bool) -> tuple[Any, ...]:
+    """One source's follow rule: ``"main"``, ``Branch``, ``Tag``, ``Promote``, a list."""
+    items = (
+        (value,)
+        if isinstance(value, str | Branch | Tag | Promote)
+        or not isinstance(value, Sequence)
+        else tuple(value)
+    )
+    found: list[Any] = []
+    for item in items:
+        if item == BRANCH and per_branch:
+            found.append(BRANCH)
+        elif isinstance(item, str) and "{" not in item:
+            found.append(Branch(item))
+        elif isinstance(item, Branch | Tag | Promote):
+            found.append(item)
+        else:
+            raise EnvError(
+                "env-config-invalid",
+                f"{what}: follow a source with a branch name, Branch(...), "
+                "Tag(...), Promote()" + (' or "{branch}"' if per_branch else ""),
+            )
+    if not found:
+        raise EnvError("env-config-invalid", f"{what}: follow names nothing")
+    return tuple(dict.fromkeys(found))
+
+
+def _describe_follow(item: Any) -> dict[str, str]:
+    if item == BRANCH:
+        return {"kind": "env-branch"}
+    described: dict[str, str] = item.describe()
+    return described
+
+
+def _source_follow(
+    follow: Mapping[Any, Any], what: str, *, per_branch: bool
+) -> tuple[tuple[Any, tuple[Any, ...]], ...]:
+    """``{Source: rule}`` → ``((source, items), ...)`` (sources named uniquely)."""
+    from piceli.infra import Source
+
+    pairs: list[tuple[Any, tuple[Any, ...]]] = []
+    names: set[str] = set()
+    for source, rule in follow.items():
+        if not isinstance(source, Source):
+            raise EnvError(
+                "env-config-invalid",
+                f"{what}: follow maps Source(...) objects to their rule",
+            )
+        if source.key in names:
+            raise EnvError(
+                "env-config-invalid", f"{what}: two sources named {source.key!r}"
+            )
+        names.add(source.key)
+        pairs.append(
+            (source, _follow_items(rule, f"{what} {source.key}", per_branch=per_branch))
+        )
+    if not pairs:
+        raise EnvError("env-config-invalid", f"{what}: follow names no source")
+    return tuple(pairs)
+
+
+def _settings(value: Any, what: str) -> dict[str, dict[str, str]]:
+    """``{component: {key: value}}`` overrides of component settings."""
+    if not isinstance(value, Mapping) or not all(
+        isinstance(name, str)
+        and isinstance(table, Mapping)
+        and all(isinstance(k, str) and isinstance(v, str) for k, v in table.items())
+        for name, table in value.items()
+    ):
+        raise EnvError(
+            "env-config-invalid", f"{what} maps component names to {{key: value}}"
+        )
+    return {name: dict(sorted(table.items())) for name, table in sorted(value.items())}
+
+
+def _secrets(value: Any, what: str) -> tuple[str, ...]:
+    if isinstance(value, str) or not isinstance(value, Sequence):
+        raise EnvError("env-config-invalid", f"{what} must be a list of Secret names")
+    if not all(_is_label(item) for item in value):
+        raise EnvError(
+            "env-config-invalid", f"{what} holds a name that is no DNS label"
+        )
+    return tuple(dict.fromkeys(value))
+
 
 def _names(values: Any, what: str) -> tuple[str, ...]:
     if isinstance(values, str) or not isinstance(values, Sequence | tuple | list):
@@ -144,10 +260,20 @@ class Stack:
 
     name: str
     workloads: Sequence[Any] = ()
+    #: The declared items that are not names (``Component`` s of a composition).
+    declared: tuple[Any, ...] = field(init=False, default=(), compare=False, repr=False)
 
     def __post_init__(self) -> None:
         if not _is_label(self.name):
             raise EnvError("env-config-invalid", "a Stack name is a DNS label")
+        if not isinstance(self.workloads, str) and isinstance(
+            self.workloads, Sequence | tuple | list
+        ):
+            object.__setattr__(
+                self,
+                "declared",
+                tuple(item for item in self.workloads if not isinstance(item, str)),
+            )
         object.__setattr__(
             self, "workloads", _names(self.workloads, f"Stack {self.name!r} workloads")
         )
@@ -155,6 +281,11 @@ class Stack:
             raise EnvError(
                 "env-config-invalid", f"Stack {self.name!r} names no workload"
             )
+
+    @property
+    def components(self) -> list[Any]:
+        """The ``Component`` s this stack was declared with (a composition's stack)."""
+        return list(self.declared)
 
     def describe(self) -> dict[str, Any]:
         return {"name": self.name, "workloads": list(self.workloads)}
@@ -258,6 +389,16 @@ class Environment:
     on_nodes: Any = None
     quota: Mapping[str, str] | None = None
     auto_approve: bool = False
+    #: The composition's cluster (``piceli.infra.Cluster``) it deploys to.
+    cluster: Any = None
+    #: Secrets the environment's namespace provides (``needs = ["secret:NAME"]``).
+    secrets: Sequence[str] = ()
+    #: ``{component: {key: value}}``: overrides of the components' ``settings``.
+    settings: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+    #: ``follow={Source: rule}`` normalised: ``((source, rules), ...)``.
+    sources: tuple[tuple[Any, tuple[Any, ...]], ...] = field(
+        init=False, default=(), compare=False, repr=False
+    )
 
     def __post_init__(self) -> None:
         if not _is_label(self.name):
@@ -269,6 +410,17 @@ class Environment:
             raise EnvError(
                 "env-config-invalid",
                 f"environment {self.name!r}: namespace is not a DNS label",
+            )
+        self._check_composition()
+        if isinstance(self.follow, Mapping):
+            pairs = _source_follow(
+                self.follow, f"environment {self.name!r}", per_branch=False
+            )
+            object.__setattr__(self, "sources", pairs)
+            object.__setattr__(
+                self,
+                "follow",
+                tuple(dict.fromkeys(item for _, items in pairs for item in items)),
             )
         follow = (
             (self.follow,)
@@ -300,6 +452,71 @@ class Environment:
         if not isinstance(self.auto_approve, bool):
             raise EnvError("env-config-invalid", "auto_approve is True or False")
 
+    def _check_composition(self) -> None:
+        what = f"environment {self.name!r}"
+        if self.cluster is not None:
+            from piceli.infra import Cluster
+
+            if not isinstance(self.cluster, Cluster):
+                raise EnvError("env-config-invalid", f"{what}: cluster is a Cluster")
+        object.__setattr__(self, "secrets", _secrets(self.secrets, f"{what} secrets"))
+        object.__setattr__(
+            self, "settings", _settings(self.settings, f"{what} settings")
+        )
+
+    @classmethod
+    def per_branch(
+        cls,
+        branches: Branches | str | Sequence[str],
+        *,
+        namespace: str,
+        follow: Mapping[Any, Any],
+        stack: Stack | None = None,
+        cluster: Any = None,
+        on_nodes: Any = None,
+        quota: Mapping[str, str] | None = None,
+        limit: int = 3,
+        idle_stop: str | int | None = None,
+        claim_sizes: Mapping[str, str] | None = None,
+        auto_approve: bool = False,
+        secrets: Sequence[str] = (),
+        settings: Mapping[str, Mapping[str, str]] | None = None,
+        allow_egress: Sequence[str] = (),
+        name: str = "branches",
+    ) -> BranchEnvironments:
+        """One environment per Git branch of the sources (a composition's branch rule).
+
+        :param branches: :class:`Branches` (or globs): the branches that get an
+            environment, and the fallback branch of sources that lack one.
+        :param namespace: ``"<prefix>{branch}"``: the branch's namespace.
+        :param follow: ``{Source: "{branch}" | "main" | Tag(...)}``; at least
+            one source follows ``"{branch}"`` (its branches create the
+            environments).
+        :param limit: At most this many branch environments run
+            (``EnvConfig(max_envs=...)``).
+
+        Every other parameter is the :class:`EnvConfig` one of the same name
+        (``on_nodes`` is ``branch_nodes``, ``stack`` is ``branch_stack``).
+        A branch environment is removed with its branch.
+        """
+        return BranchEnvironments(
+            name=name,
+            branches=branches if isinstance(branches, Branches) else Branches(branches),
+            namespace=namespace,
+            follow=follow,
+            stack=stack,
+            cluster=cluster,
+            on_nodes=on_nodes,
+            quota=quota,
+            limit=limit,
+            idle_stop=idle_stop,
+            claim_sizes=dict(claim_sizes or {}),
+            auto_approve=auto_approve,
+            secrets=tuple(secrets),
+            settings=dict(settings or {}),
+            allow_egress=tuple(allow_egress),
+        )
+
     @property
     def branches(self) -> tuple[str, ...]:
         return tuple(item.name for item in self.follow if isinstance(item, Branch))
@@ -321,6 +538,116 @@ class Environment:
             "on_nodes": _describe_nodes(self.on_nodes),
             "quota": None if self.quota is None else dict(self.quota),
             "auto_approve": self.auto_approve,
+            # Composition fields: only when declared, so 0.14 hashes stay equal.
+            **(
+                {
+                    "sources": {
+                        source.key: [_describe_follow(item) for item in items]
+                        for source, items in self.sources
+                    }
+                }
+                if self.sources
+                else {}
+            ),
+            **({"cluster": self.cluster.name} if self.cluster is not None else {}),
+            **({"secrets": list(self.secrets)} if self.secrets else {}),
+            **({"settings": dict(self.settings)} if self.settings else {}),
+        }
+
+
+@dataclass(frozen=True)
+class BranchEnvironments:
+    """A composition's branch rule (built by :meth:`Environment.per_branch`)."""
+
+    name: str
+    branches: Branches
+    namespace: str
+    follow: Mapping[Any, Any]
+    stack: Stack | None = None
+    cluster: Any = None
+    on_nodes: Any = None
+    quota: Mapping[str, str] | None = None
+    limit: int = 3
+    idle_stop: str | int | None = None
+    claim_sizes: Mapping[str, str] = field(default_factory=dict)
+    auto_approve: bool = False
+    secrets: Sequence[str] = ()
+    settings: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+    allow_egress: Sequence[str] = ()
+    sources: tuple[tuple[Any, tuple[Any, ...]], ...] = field(
+        init=False, default=(), compare=False, repr=False
+    )
+
+    def __post_init__(self) -> None:
+        what = f"branch environments {self.name!r}"
+        if not _is_label(self.name):
+            raise EnvError("env-config-invalid", f"{what}: the name is no DNS label")
+        prefix, sep, rest = self.namespace.partition(BRANCH)
+        if not sep or rest or not _PREFIX.fullmatch(prefix):
+            raise EnvError(
+                "env-config-invalid",
+                f'{what}: namespace must be "<prefix>{{branch}}" with a lowercase '
+                "prefix of at most 40 characters",
+            )
+        if not isinstance(self.follow, Mapping):
+            raise EnvError(
+                "env-config-invalid", f"{what}: follow maps each Source to its rule"
+            )
+        pairs = _source_follow(self.follow, what, per_branch=True)
+        if not any(BRANCH in items for _, items in pairs):
+            raise EnvError(
+                "env-config-invalid",
+                f'{what}: at least one source follows "{{branch}}"',
+            )
+        object.__setattr__(self, "sources", pairs)
+        if self.stack is not None and not isinstance(self.stack, Stack):
+            raise EnvError("env-config-invalid", f"{what}: stack must be a Stack")
+        object.__setattr__(self, "secrets", _secrets(self.secrets, f"{what} secrets"))
+        object.__setattr__(
+            self, "settings", _settings(self.settings, f"{what} settings")
+        )
+        if self.cluster is not None:
+            from piceli.infra import Cluster
+
+            if not isinstance(self.cluster, Cluster):
+                raise EnvError("env-config-invalid", f"{what}: cluster is a Cluster")
+        # The EnvConfig checks every remaining field (quota, sizes, idle stop).
+        self.env_config()
+
+    @property
+    def prefix(self) -> str:
+        return self.namespace.partition(BRANCH)[0]
+
+    def env_config(self) -> EnvConfig:
+        """The :class:`EnvConfig` of these branch environments."""
+        return EnvConfig(
+            prefix=self.prefix,
+            main_branch=self.branches.fallback,
+            branches=self.branches.patterns,
+            max_envs=self.limit,
+            quota=self.quota,
+            claim_sizes=dict(self.claim_sizes),
+            auto_approve=self.auto_approve,
+            allow_egress=tuple(self.allow_egress),
+            branch_nodes=self.on_nodes,
+            idle_stop=self.idle_stop,
+        )
+
+    def describe(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "branches": list(self.branches.patterns),
+            "fallback": self.branches.fallback,
+            "namespace": self.namespace,
+            "sources": {
+                source.key: [_describe_follow(item) for item in items]
+                for source, items in self.sources
+            },
+            "stack": None if self.stack is None else self.stack.describe(),
+            "cluster": None if self.cluster is None else self.cluster.name,
+            "env_config": self.env_config().describe(),
+            "secrets": list(self.secrets),
+            "settings": dict(self.settings),
         }
 
 

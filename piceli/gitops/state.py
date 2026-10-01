@@ -42,7 +42,7 @@ STATUS_CONFIGMAP = "piceli-gitops-status"
 REQUESTS_CONFIGMAP = "piceli-gitops-requests"
 STATUS_KEY = "status.json"
 #: Request kinds (the prefix of their key).
-REQUEST_KINDS = ("approve", "promote")
+REQUEST_KINDS = ("approve", "promote", "sync")
 #: Env states a status may carry.
 ENV_STATES = (
     "pending",
@@ -140,7 +140,8 @@ def request(kind: str, **fields: Any) -> tuple[str, dict[str, Any]]:
     """A request document and its key (``<kind>.<digest>``).
 
     ``approve``: ``env``, ``plan_hash``. ``promote``: ``branch``, ``commit``
-    and, for a named environment, ``env``.
+    and, for a named environment, ``env``. ``sync``: optional ``env`` and
+    ``component``.
     """
     if kind not in REQUEST_KINDS:
         raise GitOpsError("gitops-request-invalid", f"unknown request kind {kind!r}")
@@ -181,6 +182,34 @@ def promote_request(target: str, env: str | None = None) -> tuple[str, dict[str,
             "gitops-request-invalid", "the environment name is not a DNS label"
         )
     return request("promote", branch=branch, commit=commit, env=env)
+
+
+def sync_request(
+    env: str | None = None, component: str | None = None
+) -> tuple[str, dict[str, Any]]:
+    """Deploy ``env`` (every environment when ``None``) at its revision now.
+
+    ``component`` (a composition only) also rebuilds that component even
+    when its source digest has an image already. The body is ``{schema,
+    kind: "sync", env?, component?}`` under the key ``sync.<digest>`` (the
+    same request twice is one request until the controller handles it); the
+    in-cluster UI writes the same shape through this function.
+    """
+    for value, what in ((env, "environment"), (component, "component")):
+        if value is not None and (
+            not value
+            or len(value) > 63
+            or any(ch not in "abcdefghijklmnopqrstuvwxyz0123456789-" for ch in value)
+        ):
+            raise GitOpsError(
+                "gitops-request-invalid", f"the {what} is not a DNS label"
+            )
+    fields: dict[str, Any] = {}
+    if env is not None:
+        fields["env"] = env
+    if component is not None:
+        fields["component"] = component
+    return request("sync", **fields)
 
 
 class Channel(Protocol):

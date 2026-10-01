@@ -384,6 +384,19 @@ envs = EnvConfig(
   `piceli.envs.env_stop` does the same by hand (planned, `env_hash`).
   Deleting the branch still deletes its environment.
 
+### Environments of a composition
+
+In a composition (see {doc}`components`) an environment follows several
+repositories: `follow` maps each `piceli.infra.Source` to its rule,
+`Environment("main", namespace="shop-main", follow={shop: "main", catalog:
+Tag("v*")}, stack=Stack("full", [web, api]), cluster=cluster)`, and
+`Environment.per_branch(Branches("wp-*"), namespace="shop-{branch}",
+follow={shop: "{branch}", catalog: "main"}, on_nodes=["node-b"], limit=2)`
+declares the branch environments. The controller deploys the environment at
+one commit per source (its revision) and renders it from the components'
+contracts; `Stack` then holds `Component`s. A single-source
+`follow=Branch(...)` keeps its meaning here.
+
 ### One place to look
 
 - `piceli envs --pipeline MODULE:ATTR [--json]`: every environment with its

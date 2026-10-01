@@ -498,3 +498,28 @@ def test_cli_approve_promote_and_status_on_a_local_state_dir(
     status = controller.poll_once()
     assert status["envs"]["wp-6"]["state"] == "deployed"
     assert status["envs"]["main"]["commit"] == sha
+
+
+def test_sync_redeploys_an_environment_at_its_commit(
+    tmp_path: Path, repo: Repo
+) -> None:
+    from piceli.gitops.state import sync_request
+
+    ports = FakePorts()
+    controller, channel, _ = make(tmp_path, repo, ports)
+    sha = repo.push_branch("wp-1", "one")
+    controller.poll_once()
+    assert len(ports.kinds("up")) == 1
+    channel.add_request(*sync_request("wp-1"))
+    status = controller.poll_once()
+    assert ports.kinds("up")[-1][1:3] == ("wp-1", sha)
+    assert status["envs"]["wp-1"]["trigger"] == "sync"
+    # --component needs a composition; an unknown env is dropped.
+    channel.add_request(*sync_request("wp-1", "web"))
+    channel.add_request(*sync_request("nope"))
+    status = controller.poll_once()
+    assert [r["reason"] for r in status["rejected_requests"]] == [
+        "gitops-request-invalid",
+        "gitops-request-invalid",
+    ]
+    assert len(ports.kinds("up")) == 2

@@ -1121,7 +1121,9 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             contract="conforms",
             exit_codes=(0, 1, 2),
             notes="The command the Job runs; it prints one receipt line on "
-            "stdout. The approval was the plan hash of `build job`.",
+            "stdout. The approval was the plan hash of `build job`. With "
+            "--sources and --component it builds a composition's components "
+            "from their piceli.toml (the Job the composition controller runs).",
         ),
         "env push": _C(
             "Record a laptop-built image digest for a branch environment, "
@@ -1223,7 +1225,28 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "(gitops-image-unpinned); --repo must carry no credentials "
             "(gitops-repo-invalid): they come from the Secret named by "
             "--credentials-secret, which is mounted and never read or printed. "
-            "A changed plan is refused (gitops-plan-changed). " + _EXPLICIT_CONTEXT,
+            "A changed plan is refused (gitops-plan-changed). Given a "
+            "composition module (infra.py, no :ATTR) the controller config holds "
+            "every source, component and environment of it instead "
+            "(composition-invalid when it does not load); without --kubeconfig "
+            "the composition's Cluster credentials profile is used. "
+            + _EXPLICIT_CONTEXT,
+        ),
+        "gitops sync": _C(
+            "Ask the GitOps controller to deploy an environment (or every one) "
+            "now at its revision; --component also rebuilds that component.",
+            reads=("kubeconfig or --state-dir",),
+            writes=("--state-dir requests (local controller)",),
+            cluster="writes",
+            safe_to_retry=True,
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="Writes a request to the ConfigMap piceli-gitops-requests; the "
+            "controller deploys on its next poll with the environment's usual "
+            "approval (auto_approve or gitops approve of the plan hash). An "
+            "unknown environment or component is dropped "
+            "(gitops-request-invalid in gitops status); --component needs a "
+            "composition controller.",
         ),
         "gitops disable": _C(
             "Plan and, with --approve HASH, remove the GitOps controller; never "
@@ -1289,6 +1312,52 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "until interrupted. Pushes through it go by digest; nodes pull "
             "by the stable name. " + _EXPLICIT_CONTEXT,
         ),
+        "cluster init": _C(
+            "Plan and, with --approve HASH, set a declared cluster up: node role "
+            "labels, the in-cluster registry and its node mirrors, the GitOps "
+            "controller's foundation and the UI.",
+            reads=("MODULE:ATTR (piceli.infra.Cluster)", "credential profile"),
+            cluster="writes",
+            approval_required=True,
+            contract="conforms",
+            exit_codes=(0, 2, 3),
+            notes="Reaches the cluster with the declaration's credential profile "
+            "(or --profile) and refuses one whose API server is not Cluster(api=) "
+            "(cluster-api-mismatch). Without --approve prints the plan (Node "
+            "label changes, objects) and its hash, exit 3. Idempotent: a re-run "
+            "plans only changes (unchanged, exit 0). After applying it waits up "
+            "to --wait seconds for the node mirrors and lists k3s nodes that "
+            "need a k3s restart (restart_needed); it never restarts k3s. The "
+            "controller's configuration and Deployment come from piceli gitops "
+            "enable.",
+        ),
+        "cluster status": _C(
+            "Show a declared cluster's nodes and labels, registry and node "
+            "mirrors (k3s restarts needed), controller, UI and Git Secret.",
+            reads=("MODULE:ATTR (piceli.infra.Cluster)", "credential profile"),
+            cluster="reads",
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="Read-only. state: ready, degraded (problems lists why) or "
+            "not-initialized. The Git Secret shows its key names only.",
+        ),
+        "secrets git": _C(
+            "Store the Git token the GitOps controller and cluster build Jobs "
+            "use (Secret piceli-build-git: username, password).",
+            reads=(
+                "stdin (--prompt)",
+                "MODULE:ATTR (piceli.infra.Cluster)",
+                "credential profile",
+            ),
+            cluster="writes",
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="The token is read from stdin only (typed without echo, or "
+            "piped); a token argument or PICELI_GIT_TOKEN is refused "
+            "(secrets-token-refused) without echoing it. Creates or updates the "
+            "Secret without a plan; prints its name and key names, never a "
+            "value. Needs piceli cluster init first (cluster-not-initialized).",
+        ),
         "gitops status": _C(
             "Show the GitOps controller's health, repository, last poll and "
             "each branch's commit, state and pending approval.",
@@ -1334,7 +1403,10 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "it declares auto_approve=True. Scales a branch environment idle "
             "for EnvConfig(idle_stop=...) to zero. One step at a time, bounded retries "
             "with backoff; a failing branch never stops the others. Git "
-            "output and credentials are never printed.",
+            "output and credentials are never printed. A composition "
+            "controller polls every source, builds only the components whose "
+            "source digest changed (a build Job, or this machine with "
+            "--local-build) and rolls only those.",
         ),
         "promote": _C(
             "Ask the GitOps controller to deploy BRANCH@SHA to the main "
