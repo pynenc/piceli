@@ -48,6 +48,38 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   `piceli.envs.env_stop` does it by hand with a planned `env_hash`.
 - Plan hashes, `EnvConfig.describe()` and the controller config of 0.13
   declarations are unchanged when the new fields are unused (tested).
+- **Compositions (preview):** a module (`infra.py`) with `environments =
+  [...]`, `piceli.infra.Source(url, name=)` repositories,
+  `Component(name, source=)` whose contract is `[component.<name>]` in the
+  source's `piceli.toml` at the environment's commit (`build` rust, python,
+  files or dockerfile; `image` base pinned by digest, user, dirs; `ports`;
+  `health` ready/check; `upgrade_check`; `volumes` retained or scratch;
+  `needs` with `?`, `secret:`, `component:`; `settings`; `emits`; see
+  docs/components.md), `Component.image(ref, pin=)` for third-party images
+  (mirrored into the in-cluster registry, never pulled from a hosted
+  registry at run time) and `Stack(name, [components])`.
+  `Environment(follow={source: "main" | Tag(...) | Promote()}, cluster=,
+  secrets=, settings=)` follows several sources;
+  `Environment.per_branch(Branches("wp-*"), namespace="app-{branch}", ...)`
+  declares the branch environments. New codes `composition-invalid`,
+  `component-contract-invalid`, `component-contract-missing`,
+  `component-need-unmet`, `component-build-unsupported`,
+  `component-build-failed`, `composition-ref-unresolved`.
+- **Many sources, change-aware builds:** `piceli gitops enable infra.py`
+  installs the controller for a composition (its plain-data form is in the
+  config, so the plan hash covers every rule). It polls every source with one
+  Git Secret, resolves each environment to one commit per source (its
+  revision), builds per component in one build Job that fetches every needed
+  source (`piceli build job-run --sources --component`), cached by the
+  component's source digest (its build recipe and the Git trees of the paths
+  it reads): unchanged components keep their image and apply as no-op, only
+  changed ones rebuild and roll. `piceli gitops run --local-build` builds on
+  the machine running it instead. The status adds `sources`,
+  `envs.<env>.revision` and `envs.<env>.components.<name>` (additive).
+- **`piceli gitops sync [ENV] [--component NAME]`:** a sync request
+  (ConfigMap `piceli-gitops-requests`, kind `sync`): deploy now at the
+  current revision; `--component` rebuilds that component (a composition
+  controller). `gitops enable` takes `--repo` only for a pipeline.
 - **In-cluster registry (preview):** `Registry.in_cluster(on="NODE",
   storage="20Gi", port=5000)` is a delivery target every node pulls from by
   one stable name, `piceli-registry.piceli-system.svc:5000/<app>/<image>@sha256:…`.

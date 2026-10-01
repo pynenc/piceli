@@ -17,7 +17,9 @@ and volumes (never main's), :func:`seed_env` restores main's latest restore
 point into its claims and :func:`list_envs` answers what runs where and
 whether it is healthy. :class:`Environment` adds named, long-lived
 environments with their own trigger (:class:`Branch`, :class:`Tag`,
-:class:`Promote`), :class:`Stack` and placement. See
+:class:`Promote`), :class:`Stack` and placement; in a composition
+(:mod:`piceli.infra`) ``follow`` maps each source to its rule and
+:meth:`Environment.per_branch` declares the branch environments. See
 ``docs/environments.md``.
 
 Importing this package reads no file and contacts nothing.
@@ -28,6 +30,8 @@ from typing import TYPE_CHECKING, Any
 from piceli.envs.model import (
     Branch,
     BranchEnv,
+    BranchEnvironments,
+    Branches,
     EnvConfig,
     EnvError,
     Environment,
@@ -51,6 +55,8 @@ if TYPE_CHECKING:
 __all__ = [
     "Branch",
     "BranchEnv",
+    "BranchEnvironments",
+    "Branches",
     "EnvConfig",
     "EnvError",
     "EnvStatus",

@@ -121,6 +121,13 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`command-output-limit`](#error-command-output-limit) | artifacts-delivery | no |
 | [`command-timed-out`](#error-command-timed-out) | artifacts-delivery | yes |
 | [`compensation-already-started`](#error-compensation-already-started) | execution | no |
+| [`component-build-failed`](#error-component-build-failed) | composition | yes |
+| [`component-build-unsupported`](#error-component-build-unsupported) | composition | no |
+| [`component-contract-invalid`](#error-component-contract-invalid) | composition | no |
+| [`component-contract-missing`](#error-component-contract-missing) | composition | no |
+| [`component-need-unmet`](#error-component-need-unmet) | composition | no |
+| [`composition-invalid`](#error-composition-invalid) | composition | no |
+| [`composition-ref-unresolved`](#error-composition-ref-unresolved) | composition | yes |
 | [`conflict`](#error-conflict) | kubernetes | no |
 | [`context-budget-exceeded`](#error-context-budget-exceeded) | build-spec | no |
 | [`context-changed`](#error-context-changed) | build-spec | yes |
@@ -5217,6 +5224,65 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Unset the variable, drop the argument, and pass `--prompt`: type the token (no echo) or pipe it on stdin.
 - **Retry-safe:** no
+
+
+## Compositions: sources, component contracts (`piceli.toml`) and change-aware builds (`piceli.infra`, `piceli gitops enable infra.py`)
+
+(error-component-build-failed)=
+### `component-build-failed`
+
+**Component build failed.** Building or mirroring a component's image failed: the host build failed, the build Job ended without a receipt, or the push to the registry did not succeed.
+
+- **Fix:** Look at the controller's log and the build Job's pod log; the controller retries with backoff and on the next revision.
+- **Retry-safe:** yes
+
+(error-component-build-unsupported)=
+### `component-build-unsupported`
+
+**Component build not supported here.** The component's `build` cannot run where the controller builds: a `dockerfile` build needs a Docker engine, which the build Job and the controller do not have.
+
+- **Fix:** Use a `rust`, `python` or `files` build in `piceli.toml`.
+- **Retry-safe:** no
+
+(error-component-contract-invalid)=
+### `component-contract-invalid`
+
+**Component contract refused.** A `[component.<name>]` table of a source's `piceli.toml` has an unknown key, a bad value, an unpinned `image.base`, or the file is not valid TOML.
+
+- **Fix:** Fix `piceli.toml` in the component's repository (see docs/components.md) and push; the environment deploys on the next revision.
+- **Retry-safe:** no
+
+(error-component-contract-missing)=
+### `component-contract-missing`
+
+**Component contract missing.** The source, at the commit the environment resolves to, has no `piceli.toml` or no `[component.<name>]` table for a component the environment runs.
+
+- **Fix:** Add the component's table to `piceli.toml` in that repository, or take the component out of the environment's stack.
+- **Retry-safe:** no
+
+(error-component-need-unmet)=
+### `component-need-unmet`
+
+**Component need unmet.** A component's `needs` names a component the environment's stack does not run, or a Secret (`secret:NAME`) the environment does not list in `secrets=`.
+
+- **Fix:** Add the component to the stack or the Secret to the environment's `secrets=` (and create it in the namespace), or mark the need optional with `?` in `piceli.toml`.
+- **Retry-safe:** no
+
+(error-composition-invalid)=
+### `composition-invalid`
+
+**Composition refused.** The composition module (`infra.py`) or its controller config is malformed: no `environments = [...]`, an environment without a `follow={Source: rule}` mapping, a component whose source the environment does not follow, two sources or components with one name, or more than one cluster or branch rule.
+
+- **Fix:** Fix the module as the message says and run `piceli gitops enable infra.py` again.
+- **Retry-safe:** no
+
+(error-composition-ref-unresolved)=
+### `composition-ref-unresolved`
+
+**Environment ref not found.** An environment's `follow` names a branch or tag pattern that the source does not have (yet), so the environment has no commit for that source and is not deployed.
+
+- **Fix:** Push the branch or the tag the environment follows, or change its `follow` rule.
+- **Retry-safe:** yes
 
 
 ## The UI installed in the cluster (`Ui(access="forward")`, `piceli access ui`, its Sync button)

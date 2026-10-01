@@ -61,6 +61,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli gitops enable`](#cli-gitops-enable) | Install the GitOps controller (plan first; --approve HASH installs). | writes | yes |
 | [`piceli gitops run`](#cli-gitops-run) | Run the controller loop (the Deployment's entrypoint); --once for one poll. | writes | no |
 | [`piceli gitops status`](#cli-gitops-status) | Controller health, repository, last poll and every branch's state. | reads | no |
+| [`piceli gitops sync`](#cli-gitops-sync) | Ask the controller to deploy ENV now at its revision (--component: rebuild one). | writes | no |
 | [`piceli heavy run`](#cli-heavy-run) | Run COMMAND once the lock is free; exit with its exit code. | none | no |
 | [`piceli heavy status`](#cli-heavy-status) | Show who holds the lock and the most recent receipts. | none | no |
 | [`piceli help-json`](#cli-help-json) | Print the whole CLI tree (commands, options, contracts) as JSON. | none | no |
@@ -572,12 +573,15 @@ Inside the build Job: build and push; print the receipt line.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--source` | path | required |  |
 | `--cache` | path | required |  |
 | `--out` | path | required |  |
-| `--commit` | text | required |  |
 | `--registry-url` | text | required |  |
-| `--spec` | text (repeatable) | required | host-build.toml (repeat) |
+| `--source` | path |  |  |
+| `--commit` | text |  |  |
+| `--spec` | text (repeatable) |  | host-build.toml (repeat) |
+| `--sources` | path |  | A composition build: the directory holding each fetched source |
+| `--component` | text (repeatable) |  | A composition build: {"component","source","digest","repository"} as JSON (repeat) |
+| `--platform` | text (repeatable) |  | A composition build: linux/amd64 (repeat) |
 | `--node-registry` | text |  |  |
 | `--timeout` | integer | `3600` |  |
 
@@ -590,7 +594,7 @@ Inside the build Job: build and push; print the receipt line.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** The command the Job runs; it prints one receipt line on stdout. The approval was the plan hash of `build job`.
+- **Notes:** The command the Job runs; it prints one receipt line on stdout. The approval was the plan hash of `build job`. With --sources and --component it builds a composition's components from their piceli.toml (the Job the composition controller runs).
 
 (cli-cache-prune)=
 ### `piceli cache prune`
@@ -1099,8 +1103,8 @@ Install the GitOps controller (plan first; --approve HASH installs).
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `PIPELINE` | text | required |  |
-| `--repo` | text | required | Git URL the controller polls (https://, ssh://, git@host:path); no credentials in it |
 | `--image` | text | required | The Piceli image the controller runs, pinned by digest (registry/repo@sha256:…); see docs/gitops.md to build one |
+| `--repo` | text |  | Git URL the controller polls (https://, ssh://, git@host:path); no credentials in it. Required for a pipeline; a composition names its sources |
 | `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
 | `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
 | `--branches` | text | `main` | Comma-separated branch globs, e.g. 'main,wp-*' |
@@ -1136,7 +1140,7 @@ Install the GitOps controller (plan first; --approve HASH installs).
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** Reads the pipeline's named environments and idle_stop from the working tree (--root, default .) into the controller config (gitops-pipeline-invalid when the file is there and does not load). Without --approve prints the install plan (Namespace, ServiceAccount, scoped Role/ClusterRole and bindings, state PersistentVolumeClaim, config ConfigMap, one-replica Deployment) and its hash, exit 3. --image must be pinned by digest (gitops-image-unpinned); --repo must carry no credentials (gitops-repo-invalid): they come from the Secret named by --credentials-secret, which is mounted and never read or printed. A changed plan is refused (gitops-plan-changed). `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`).
+- **Notes:** Reads the pipeline's named environments and idle_stop from the working tree (--root, default .) into the controller config (gitops-pipeline-invalid when the file is there and does not load). Without --approve prints the install plan (Namespace, ServiceAccount, scoped Role/ClusterRole and bindings, state PersistentVolumeClaim, config ConfigMap, one-replica Deployment) and its hash, exit 3. --image must be pinned by digest (gitops-image-unpinned); --repo must carry no credentials (gitops-repo-invalid): they come from the Secret named by --credentials-secret, which is mounted and never read or printed. A changed plan is refused (gitops-plan-changed). Given a composition module (infra.py, no :ATTR) the controller config holds every source, component and environment of it instead (composition-invalid when it does not load); without --kubeconfig the composition's Cluster credentials profile is used. `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`).
 
 (cli-gitops-run)=
 ### `piceli gitops run`
@@ -1153,6 +1157,7 @@ Run the controller loop (the Deployment's entrypoint); --once for one poll.
 | `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
 | `--namespace` | text |  | Publish status and read requests as ConfigMaps in this namespace (else files in --state-dir) |
 | `--credentials-dir` | path |  | The mounted Git credentials Secret |
+| `--local-build` | boolean | `False` | A composition controller run outside the cluster: build components on this machine (host builds) and push them through a port-forward to the in-cluster registry, instead of a build Job |
 | `--transport` | text | `https` | https, or loopback-http for a local test API |
 
 **Contract**
@@ -1164,7 +1169,7 @@ Run the controller loop (the Deployment's entrypoint); --once for one poll.
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** Deploys branch environments without a per-run approval: only inside the pipeline's auto_approve policy, or a plan hash approved with gitops approve; main only on a new tag or a promotion, and only with an approved hash unless the owner enabled --main-auto-approve; a named environment by its own trigger (Branch, Tag, Promote) and with an approved hash unless it declares auto_approve=True. Scales a branch environment idle for EnvConfig(idle_stop=...) to zero. One step at a time, bounded retries with backoff; a failing branch never stops the others. Git output and credentials are never printed.
+- **Notes:** Deploys branch environments without a per-run approval: only inside the pipeline's auto_approve policy, or a plan hash approved with gitops approve; main only on a new tag or a promotion, and only with an approved hash unless the owner enabled --main-auto-approve; a named environment by its own trigger (Branch, Tag, Promote) and with an approved hash unless it declares auto_approve=True. Scales a branch environment idle for EnvConfig(idle_stop=...) to zero. One step at a time, bounded retries with backoff; a failing branch never stops the others. Git output and credentials are never printed. A composition controller polls every source, builds only the components whose source digest changed (a build Job, or this machine with --local-build) and rolls only those.
 
 (cli-gitops-status)=
 ### `piceli gitops status`
@@ -1190,6 +1195,32 @@ Controller health, repository, last poll and every branch's state.
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** Read-only. Reads the ConfigMap piceli-gitops-status and the controller Deployment (or a local --state-dir). Health: healthy, degraded (last poll failed), stale (no poll for 3 intervals), starting, down. gitops-not-installed without a controller.
+
+(cli-gitops-sync)=
+### `piceli gitops sync`
+
+Ask the controller to deploy ENV now at its revision (--component: rebuild one).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `ENV` | text |  |  |
+| `--component` | text |  | Also rebuild this component, even when its source did not change (a composition controller) |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--state-dir` | path |  | A local controller's state directory instead of a cluster (the one `gitops run --once --state-dir` uses) |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+
+**Contract**
+
+- **Reads:** kubeconfig or --state-dir
+- **Writes:** --state-dir requests (local controller)
+- **Cluster:** writes
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Writes a request to the ConfigMap piceli-gitops-requests; the controller deploys on its next poll with the environment's usual approval (auto_approve or gitops approve of the plan hash). An unknown environment or component is dropped (gitops-request-invalid in gitops status); --component needs a composition controller.
 
 (cli-heavy-run)=
 ### `piceli heavy run`

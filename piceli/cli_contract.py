@@ -1121,7 +1121,9 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             contract="conforms",
             exit_codes=(0, 1, 2),
             notes="The command the Job runs; it prints one receipt line on "
-            "stdout. The approval was the plan hash of `build job`.",
+            "stdout. The approval was the plan hash of `build job`. With "
+            "--sources and --component it builds a composition's components "
+            "from their piceli.toml (the Job the composition controller runs).",
         ),
         "env push": _C(
             "Record a laptop-built image digest for a branch environment, "
@@ -1223,7 +1225,28 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "(gitops-image-unpinned); --repo must carry no credentials "
             "(gitops-repo-invalid): they come from the Secret named by "
             "--credentials-secret, which is mounted and never read or printed. "
-            "A changed plan is refused (gitops-plan-changed). " + _EXPLICIT_CONTEXT,
+            "A changed plan is refused (gitops-plan-changed). Given a "
+            "composition module (infra.py, no :ATTR) the controller config holds "
+            "every source, component and environment of it instead "
+            "(composition-invalid when it does not load); without --kubeconfig "
+            "the composition's Cluster credentials profile is used. "
+            + _EXPLICIT_CONTEXT,
+        ),
+        "gitops sync": _C(
+            "Ask the GitOps controller to deploy an environment (or every one) "
+            "now at its revision; --component also rebuilds that component.",
+            reads=("kubeconfig or --state-dir",),
+            writes=("--state-dir requests (local controller)",),
+            cluster="writes",
+            safe_to_retry=True,
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="Writes a request to the ConfigMap piceli-gitops-requests; the "
+            "controller deploys on its next poll with the environment's usual "
+            "approval (auto_approve or gitops approve of the plan hash). An "
+            "unknown environment or component is dropped "
+            "(gitops-request-invalid in gitops status); --component needs a "
+            "composition controller.",
         ),
         "gitops disable": _C(
             "Plan and, with --approve HASH, remove the GitOps controller; never "
@@ -1380,7 +1403,10 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "it declares auto_approve=True. Scales a branch environment idle "
             "for EnvConfig(idle_stop=...) to zero. One step at a time, bounded retries "
             "with backoff; a failing branch never stops the others. Git "
-            "output and credentials are never printed.",
+            "output and credentials are never printed. A composition "
+            "controller polls every source, builds only the components whose "
+            "source digest changed (a build Job, or this machine with "
+            "--local-build) and rolls only those.",
         ),
         "promote": _C(
             "Ask the GitOps controller to deploy BRANCH@SHA to the main "

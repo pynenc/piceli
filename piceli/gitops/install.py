@@ -170,9 +170,14 @@ def _meta(name: str, namespace: str | None = None) -> dict[str, Any]:
 
 
 def render_controller(
-    config: ControllerConfig, settings: InstallSettings
+    config: ControllerConfig | Any, settings: InstallSettings
 ) -> list[dict[str, Any]]:
-    """The controller's objects, in apply order."""
+    """The controller's objects, in apply order.
+
+    ``config`` is a :class:`ControllerConfig` or a composition's
+    :class:`piceli.infra.controller.CompositionConfig` (its ``namespace`` and
+    ``to_dict()`` are used).
+    """
     return render_foundation(
         config.namespace,
         storage=settings.storage,
@@ -290,7 +295,7 @@ def render_foundation(
 
 
 def _render_workload(
-    config: ControllerConfig, settings: InstallSettings
+    config: ControllerConfig | Any, settings: InstallSettings
 ) -> list[dict[str, Any]]:
     """The controller's configuration and Deployment."""
     ns = config.namespace
