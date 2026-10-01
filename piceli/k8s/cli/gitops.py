@@ -224,8 +224,9 @@ def enable(
         typer.Option(
             "--repo",
             help="Git URL the controller polls (https://, ssh://, git@host:path); "
-            "no credentials in it. Required for a pipeline; a composition names "
-            "its sources",
+            "no credentials in it. Required for a pipeline; for a composition, its "
+            "own repository (default: the origin remote of --root), followed when "
+            "an environment deploys a pipeline",
         ),
     ] = None,
     kubeconfig: KubeconfigOption = None,
@@ -253,7 +254,12 @@ def enable(
         typer.Option("--env", help="The pipeline's environment, if it has several"),
     ] = None,
     main_branch: Annotated[
-        str, typer.Option("--main-branch", help="The branch that deploys on tags")
+        str,
+        typer.Option(
+            "--main-branch",
+            help="The branch that deploys on tags; for a composition, the branch "
+            "of its own repository the controller follows",
+        ),
     ] = "main",
     tags: Annotated[
         str, typer.Option("--tags", help="Tag glob that deploys the main branch")
@@ -348,8 +354,11 @@ def enable(
     idle_stop are read from the working tree (--root) into the controller's
     config, so the plan hash covers every environment's trigger. Given a
     composition module (infra.py), every source, component and environment
-    of it goes into the config instead (and --repo, --branches, --env,
-    --main-branch, --tags are not used).
+    of it goes into the config instead (and --branches, --env and --tags are
+    not used). A composition with an Environment(pipeline=...) is also
+    followed in its own repository (--repo, default the origin remote of
+    --root; branch --main-branch): the controller imports the module at that
+    branch's commit, and the module path is relative to --root.
     """
     from piceli.gitops.config import (
         ControllerConfig,
@@ -366,7 +375,8 @@ def enable(
             platform=platform, builder_image=builder_image,
             build_git_secret=build_git_secret, builder_selector=builder_selector,
             build_storage=build_storage, approve=approve, allow_exec=allow_exec,
-            exec_sha256=exec_sha256, transport=transport,
+            exec_sha256=exec_sha256, transport=transport, repo=repo,
+            main_branch=main_branch,
         )  # fmt: skip
         return
     if repo is None:
@@ -461,6 +471,8 @@ def _enable_composition(
     allow_exec: bool,
     exec_sha256: str | None,
     transport: str,
+    repo: str | None = None,
+    main_branch: str = "main",
 ) -> None:
     """``gitops enable infra.py``: the controller of a composition."""
     from piceli.gitops.config import parse_duration, parse_selector
@@ -471,11 +483,17 @@ def _enable_composition(
 
     try:
         composition = load_composition(entry, root)
+        followed = (
+            composition_repo(composition, entry, root, repo, main_branch)
+            if composition.pipelines or repo is not None
+            else None
+        )
     except CompositionError as error:
         reject(error.code, str(error))
     with _guard():
         config = CompositionConfig(
             composition=composition.to_dict(),
+            repo=None if followed is None else followed.to_dict(),
             namespace=namespace,
             poll_seconds=parse_duration(poll),
             platforms=tuple(platform or ("linux/amd64",)),
@@ -511,6 +529,11 @@ def _enable_composition(
     say(f"composition {composition.name}: sources " + ", ".join(
         f"{source.key} ({source.url})" for source in composition.sources
     ))  # fmt: skip
+    if followed is not None:
+        say(
+            f"composition repository {followed.name} ({followed.url}): follows "
+            f"branch {followed.branch}, imports {followed.entry}"
+        )
     for item in composition.environments:
         rules = ", ".join(
             f"{source.key} " + "|".join(_rule_text(rule) for rule in rules)
@@ -521,6 +544,7 @@ def _enable_composition(
     command = _command_line(
         "piceli gitops enable", entry, kubeconfig, context, namespace,
         poll=poll, image=image, credentials_secret=credentials_secret,
+        repo=repo, main_branch=None if main_branch == "main" else main_branch,
         storage=storage, storage_class=storage_class, builder_image=builder_image,
         build_git_secret=build_git_secret, build_storage=build_storage,
         root=None if root == Path(".") else str(root),
@@ -537,6 +561,80 @@ def _enable_composition(
                 config={"controller": config.to_dict(), "install": settings.to_dict()},
             )
         _run_plan(api, plan, approve, command, {"controller": config.to_dict()})
+
+
+def composition_repo(
+    composition: Any, entry: str, root: Path, repo: str | None, branch: str
+) -> Any:
+    """The composition's own repository: ``--repo`` or the origin remote of ``root``.
+
+    Also checks every pipeline environment's host builds: each spec is inside
+    the repository and each context reads a source the environment follows
+    (or the repository itself).
+
+    :raises CompositionError: ``composition-invalid``,
+        ``component-build-unsupported``.
+    """
+    import os
+    import subprocess
+
+    from piceli.infra import CompositionError, Source
+    from piceli.infra.pipelines import RepoSettings, spec_paths
+
+    def invalid(message: str) -> CompositionError:
+        return CompositionError("composition-invalid", message)
+
+    base = root.resolve()
+    if repo is None:
+        try:
+            found = subprocess.run(
+                ["git", "-C", str(base), "remote", "get-url", "origin"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            found = None
+        if found is None or found.returncode != 0 or not found.stdout.strip():
+            raise invalid(
+                "an environment deploys a pipeline: the controller follows the "
+                "composition's repository; run from its clone (--root) with an "
+                "origin remote, or pass --repo URL"
+            )
+        repo = found.stdout.strip()
+    try:
+        url = Source(repo).url
+    except CompositionError:
+        raise invalid("--repo is not a Git URL without credentials") from None
+    path = (base / entry).resolve()
+    try:
+        relative = path.relative_to(base).as_posix()
+    except ValueError:
+        raise invalid("the composition module is outside --root") from None
+    same = [source for source in composition.sources if source.url == url]
+    name = same[0].key if same else Source(url).key
+    settings = RepoSettings(name=name, url=url, branch=branch, entry=relative)
+    for item in composition.environments:
+        if item.pipeline is None:
+            continue
+        followed = {source.key for source, _ in item.sources} | {name}
+        for _, build in spec_paths(item.pipeline, base):
+            try:
+                spec = build.load()
+            except Exception as error:
+                code = getattr(error, "code", type(error).__name__)
+                raise invalid(
+                    f"environment {item.name!r}: its build spec ({code})"
+                ) from None
+            for context in spec.contexts:
+                if context.source is not None and context.source not in followed:
+                    raise invalid(
+                        f"environment {item.name!r}: context {context.name!r} reads "
+                        f"source {context.source!r}, which it does not follow"
+                    )
+    return settings
 
 
 def _rule_text(rule: Any) -> str:
@@ -1047,9 +1145,8 @@ def _run_composition(
                 "the controller deploys to a cluster: pass --service-account (in its "
                 "pod) or --kubeconfig FILE --context NAME",
             )
-        composition = config.model
         sources = SourceSet(
-            composition.sources, state_dir / "sources", credentials_dir=credentials_dir
+            config.sources, state_dir / "sources", credentials_dir=credentials_dir
         )
         channel, closer = _run_channel(target, namespace, state_dir, transport)
         try:
@@ -1091,6 +1188,9 @@ class _NoBuilder:
             "no --builder-image: this controller cannot build components",
         )
 
+    def build_spec(self, request: Any, checkout: Any) -> Any:
+        return self.build((), checkout)
+
     def mirror(self, items: Any) -> Any:
         return self._mirror.mirror(items)
 
@@ -1109,7 +1209,7 @@ def _composition_ports(
     from piceli.infra.controller import DefaultCompositionPorts
     from piceli.pipeline.backend import RegistryRoute
 
-    registry = config.model.registry
+    registry = config.registry
     if registry is None:
         raise CompositionError(
             "composition-invalid",
@@ -1175,7 +1275,7 @@ def _composition_ports(
             )
             builder = JobBuilder(
                 settings,
-                {source.key: source.url for source in config.model.sources},
+                {source.key: source.url for source in config.sources},
                 cluster,
                 mirror_route=route,
                 say=say,

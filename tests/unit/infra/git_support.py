@@ -74,7 +74,7 @@ def example_files(directory: Path) -> dict[str, str]:
     return {
         str(path.relative_to(directory)): path.read_text()
         for path in sorted(directory.rglob("*"))
-        if path.is_file()
+        if path.is_file() and "__pycache__" not in path.parts
     }
 
 

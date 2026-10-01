@@ -211,6 +211,20 @@ def job_run(
         list[str] | None,
         typer.Option("--platform", help="A composition build: linux/amd64 (repeat)"),
     ] = None,
+    image: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--image",
+            help="A pipeline image build (with --sources and --spec SOURCE/PATH): "
+            '{"image","repository","key"} as JSON (repeat)',
+        ),
+    ] = None,
+    facts: Annotated[
+        str | None,
+        typer.Option(
+            "--facts", help="A pipeline image build: declared node facts (JSON)"
+        ),
+    ] = None,
     node_registry: Annotated[str | None, typer.Option("--node-registry")] = None,
     timeout: Annotated[int, typer.Option("--timeout")] = 3600,
 ) -> None:
@@ -223,6 +237,36 @@ def job_run(
     from piceli.artifacts.node_facts import NodeFacts, NodeFactsError
     from piceli.pipeline.errors import PipelineError
 
+    if sources is not None and image:
+        from piceli.infra.builders import job_run_spec
+
+        try:
+            wanted = [json.loads(item) for item in image]
+            declared = json.loads(facts) if facts else None
+        except ValueError:
+            reject("cluster-build-invalid", "--image and --facts take JSON objects")
+        if len(spec or []) != 1 or not all(isinstance(i, dict) for i in wanted):
+            reject("cluster-build-invalid", "name one --spec SOURCE/PATH and --image")
+        try:
+            receipt = job_run_spec(
+                sources=sources,
+                spec=(spec or [""])[0],
+                images=wanted,
+                platforms=tuple(platform or ("linux/amd64",)),
+                cache=cache,
+                out=out,
+                registry_url=registry_url,
+                node_registry=node_registry,
+                facts=declared,
+                say=say,
+            )
+        except BuildSpecError as error:
+            reject(error.code, str(error))
+        except PipelineError as error:
+            reject(error.code, str(error), exit_code=EXIT_FAILED)
+        sys.stdout.write("\n" + encode_receipt(receipt) + "\n")
+        sys.stdout.flush()
+        return
     if sources is not None:
         from piceli.infra.builders import job_run_components
 

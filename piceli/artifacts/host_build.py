@@ -153,6 +153,9 @@ class HostImage:
     user: str | None = None
     workdir: str | None = None
     env: tuple[tuple[str, str], ...] = ()
+    #: The contexts this image reads (``contexts = [...]``; ``None``: all).
+    #: Only a composition controller uses it: the image's change key.
+    contexts: tuple[str, ...] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -167,7 +170,15 @@ class HostImage:
             "user": self.user,
             "workdir": self.workdir,
             "env": dict(self.env),
+            # Only when declared: every other spec's digest is unchanged.
+            **({"contexts": list(self.contexts)} if self.contexts is not None else {}),
         }
+
+    def reads(self, contexts: tuple[str, ...]) -> tuple[str, ...]:
+        """The context names this image reads, of ``contexts`` (all by default)."""
+        if self.contexts is None:
+            return contexts
+        return tuple(name for name in contexts if name in self.contexts)
 
 
 @dataclass(frozen=True)
@@ -235,6 +246,12 @@ class HostBuildSpec:
         names = [item.name for item in self.contexts]
         if not names or len(set(names)) != len(names):
             raise _fail("declare uniquely named contexts")
+        for image in self.images:
+            unknown = sorted(set(image.contexts or ()) - set(names))
+            if unknown:
+                raise _fail(
+                    f"image {image.name!r} reads unknown context {unknown[0]!r}"
+                )
         into = [item.target or item.name for item in self.contexts]
         if len(set(into)) != len(into):
             raise _fail("contexts must be staged into different directories")
@@ -663,9 +680,20 @@ def _image(item: Any) -> HostImage:
             "user",
             "workdir",
             "env",
+            "contexts",
         },
         "output.image",
     )
+    contexts = item.get("contexts")
+    if contexts is not None:
+        if (
+            not isinstance(contexts, list)
+            or not 0 < len(contexts) <= 32
+            or len(set(contexts)) != len(contexts)
+        ):
+            raise _fail("output.image.contexts must list context names, each once")
+        for name in contexts:
+            _match(_NAME, name, "output.image.contexts entry")
     base = None
     if item.get("base", "scratch") != "scratch":
         base = PinnedImage.from_dict(item["base"], "output.image.base")
@@ -728,6 +756,7 @@ def _image(item: Any) -> HostImage:
         _match(_USER, item["user"], "user") if "user" in item else None,
         _abs_path(item["workdir"], "workdir") if "workdir" in item else None,
         tuple(sorted(env.items())),
+        tuple(contexts) if contexts is not None else None,
     )
 
 

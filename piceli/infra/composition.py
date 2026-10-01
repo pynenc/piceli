@@ -9,15 +9,19 @@ A composition module declares, as module attributes:
 - the :class:`~piceli.infra.Cluster` (optional; ``Registry.in_cluster`` is
   where built and mirrored images go);
 - the :class:`~piceli.infra.Component` s, directly or through the
-  :class:`piceli.envs.Stack` s of the environments;
+  :class:`piceli.envs.Stack` s of the environments, or, for an
+  ``Environment(pipeline=...)``, a :class:`piceli.Pipeline` whose app the
+  environment deploys (its host build's contexts read the sources);
 - optionally ``name = "shop"`` (default: the file's stem): the app name of
   every object the composition deploys.
 
 :func:`load_composition` imports the module and validates it;
 :meth:`Composition.to_dict` is the plain-data form ``piceli gitops enable``
 puts into the controller's config (so the install plan hash covers every
-rule) and :meth:`Composition.from_dict` reads it back. The controller never
-imports user code.
+rule) and :meth:`Composition.from_dict` reads it back. A composition of
+contract components only is plain data: the controller never imports user
+code. A composition with pipeline environments is imported by the controller
+from its own repository at the followed commit (:mod:`piceli.infra.pipelines`).
 
 Importing this module is side-effect free.
 """
@@ -54,6 +58,12 @@ EnvItem = Environment | BranchEnvironments
 
 def _invalid(message: str) -> CompositionError:
     return CompositionError("composition-invalid", message)
+
+
+def _in_cluster(cluster: Cluster | None) -> bool:
+    from piceli.pipeline.model import ClusterRegistry
+
+    return cluster is not None and isinstance(cluster.registry, ClusterRegistry)
 
 
 @dataclass(frozen=True)
@@ -103,6 +113,11 @@ class Composition:
                     f"environment {item.name!r}: follow maps each Source to its rule "
                     "(follow={source: 'main'})"
                 )
+            if item.pipeline is not None and not _in_cluster(self.cluster):
+                raise _invalid(
+                    f"environment {item.name!r} deploys a pipeline: the composition's "
+                    "Cluster needs registry=Registry.in_cluster(...) (its images go there)"
+                )
             followed = {source.key for source, _ in item.sources}
             for component in self.stack_of(item):
                 if (
@@ -142,7 +157,12 @@ class Composition:
         raise _invalid(f"no component {name!r}")
 
     def stack_of(self, env: EnvItem) -> tuple[Component, ...]:
-        """The components ``env`` runs: its stack's, else every component."""
+        """The components ``env`` runs: its stack's, else every component.
+
+        An environment that deploys a pipeline runs no component.
+        """
+        if env.pipeline is not None:
+            return ()
         if env.stack is None:
             return self.components
         return tuple(self.component(name) for name in env.stack.workloads)
@@ -159,6 +179,11 @@ class Composition:
     @property
     def registry(self) -> Any:
         return None if self.cluster is None else self.cluster.registry
+
+    @property
+    def pipelines(self) -> bool:
+        """Whether an environment deploys a pipeline (the controller imports the module)."""
+        return any(item.pipeline is not None for item in self.environments)
 
     # ------------------------------------------------------------ plain data
     def to_dict(self) -> dict[str, Any]:
@@ -182,6 +207,11 @@ class Composition:
         """
         if not isinstance(value, Mapping) or value.get("schema") != COMPOSITION_SCHEMA:
             raise _invalid("unknown composition schema")
+        if any(item.get("pipeline") for item in value.get("environments") or ()):
+            raise _invalid(
+                "a composition with pipeline environments is imported from its "
+                "repository, not read from plain data"
+            )
         try:
             sources = {
                 item["name"]: Source(item["url"], name=item["name"])
@@ -255,6 +285,9 @@ def _env_dict(item: EnvItem) -> dict[str, Any]:
         "secrets": list(item.secrets),
         "settings": {k: dict(v) for k, v in item.settings.items()},
     }
+    if item.pipeline is not None:
+        # A summary (the plan hash covers it); the controller imports the module.
+        common["pipeline"] = pipeline_summary(item.pipeline)
     if isinstance(item, Environment):
         return {"kind": "environment", **common}
     return {
@@ -266,6 +299,19 @@ def _env_dict(item: EnvItem) -> dict[str, Any]:
         "idle_stop": item.idle_stop,
         "claim_sizes": dict(item.claim_sizes),
         "allow_egress": list(item.allow_egress),
+    }
+
+
+def pipeline_summary(pipeline: Any) -> dict[str, Any]:
+    """What a pipeline environment deploys, as plain data (no paths, no secrets)."""
+    return {
+        "app": pipeline.name,
+        "builds": [
+            {"builder": build.builder, "spec": build.path.name if build.path else None}
+            for build in pipeline.builds
+        ],
+        "checks": len(pipeline.checks),
+        "rollback_on_failed_checks": pipeline.rollback_on_failed_checks,
     }
 
 
@@ -364,6 +410,8 @@ def _cluster_dict(cluster: Cluster) -> dict[str, Any]:
             "name": registry.name,
             "repository": registry.repository,
             "storage": registry.storage,
+            # Only when declared: other configs (and their hashes) are unchanged.
+            **({"mirror": list(registry.mirror)} if registry.mirror else {}),
         }
     return {"name": cluster.name, "api": cluster.api, "registry": described}
 
@@ -383,6 +431,7 @@ def _cluster_from(value: Any) -> Cluster | None:
             name=found["name"],
             repository=found.get("repository"),
             storage=found.get("storage") or "20Gi",
+            mirror=tuple(found.get("mirror") or ()),
         )
     # Credentials are a local profile and never part of the config; in the
     # controller's pod every profile name resolves to its service account.
@@ -406,6 +455,7 @@ def _import(path: Path) -> Any:
     if spec is None or spec.loader is None:
         raise _invalid("cannot import the composition module")
     module = importlib.util.module_from_spec(spec)
+    _prefer_siblings(path.parent)
     if str(path.parent) not in sys.path:
         sys.path.append(str(path.parent))
     sys.modules[name] = module
@@ -421,6 +471,63 @@ def _import(path: Path) -> Any:
             ) from None
         raise
     return module
+
+
+def _installed() -> list[Path]:
+    import sysconfig
+
+    paths = sysconfig.get_paths()
+    return [
+        Path(paths[key])
+        for key in ("stdlib", "platstdlib", "purelib", "platlib")
+        if key in paths
+    ]
+
+
+def _prefer_siblings(directory: Path) -> None:
+    """The module's sibling files win over same-named ones imported from elsewhere.
+
+    The composition imports the files next to it (``from app import
+    pipeline``). Another directory on ``sys.path`` holding a file of the same
+    name (another checkout of the composition) is dropped from it, and a
+    module of that name imported from there is forgotten; the standard
+    library and installed packages are never touched.
+    """
+    names = {
+        item.stem if item.suffix == ".py" else item.name
+        for item in directory.iterdir()
+        if item.suffix == ".py" or (item / "__init__.py").is_file()
+    }
+    installed = _installed()
+
+    def foreign(location: Path) -> bool:
+        return not location.is_relative_to(directory) and not any(
+            location.is_relative_to(root) for root in installed
+        )
+
+    import piceli
+
+    # Piceli's own entry (an editable install puts its checkout on sys.path).
+    own = Path(piceli.__file__).parent.parent
+
+    def shadows(entry: str) -> bool:
+        found = Path(entry or ".").absolute()
+        return (
+            found != own
+            and foreign(found)
+            and any(
+                (found / f"{name}.py").is_file()
+                or (found / name / "__init__.py").is_file()
+                for name in names
+            )
+        )
+
+    sys.path[:] = [item for item in sys.path if not shadows(item)]
+    for name, loaded in list(sys.modules.items()):
+        location = getattr(loaded, "__file__", None)
+        if name.split(".", 1)[0] in names and isinstance(location, str):
+            if foreign(Path(location)):
+                del sys.modules[name]
 
 
 def is_composition(path: Path) -> bool:
@@ -463,7 +570,7 @@ def composition_from(module: Any, *, default_name: str = "composition") -> Compo
         value for value in values.values() if isinstance(value, Component)
     ]
     for item in items:
-        if item.stack is not None:
+        if item.stack is not None and item.pipeline is None:
             for component in item.stack.components:
                 if not isinstance(component, Component):
                     raise _invalid(
@@ -476,8 +583,8 @@ def composition_from(module: Any, *, default_name: str = "composition") -> Compo
                     f"stack {item.stack.name!r} names {sorted(missing)[0]!r}, which is "
                     "no Component of the composition"
                 )
-    if not components:
-        raise _invalid("the composition declares no Component")
+    if not components and not any(item.pipeline is not None for item in items):
+        raise _invalid("the composition declares no Component and no pipeline")
     name = values.get("name")
     if not isinstance(name, str):
         name = (

@@ -21,9 +21,18 @@ runs :class:`CompositionController`. One poll:
    mirror third-party images once), render the environment and ``env_up``
    it: components whose image did not change apply as no-op.
 
+A composition with pipeline environments (``Environment(pipeline=...)``)
+is followed in its own repository too (``CompositionConfig(repo=...)``): each
+poll resolves the repository's branch, imports the module at that commit when
+it moved (:class:`~piceli.infra.pipelines.CompositionRepo`), and every
+environment's revision includes that commit, so a change there re-renders
+every environment. A pipeline environment builds its pipeline's host specs,
+change-aware per output image (:mod:`piceli.infra.pipelines`).
+
 Status (``piceli.gitops-status.v1``, additive): ``sources.<name>`` (url, the
 followed refs, last poll), ``envs.<env>.revision`` and
-``envs.<env>.components.<name>`` (source, commit, digest, state, health).
+``envs.<env>.components.<name>`` (source, commit, digest, state, health; an
+output image of a pipeline environment is a component).
 
 Importing this module is side-effect free.
 """
@@ -66,9 +75,9 @@ from piceli.gitops.state import (
     save_state,
     write_json,
 )
-from piceli.infra import CompositionError
+from piceli.infra import CompositionError, Source
 from piceli.infra.builders import BuildItem, BuiltImage, MirrorItem
-from piceli.infra.composition import Composition, EnvItem
+from piceli.infra.composition import COMPOSITION_SCHEMA, Composition, EnvItem
 from piceli.infra.contract import ComponentContract, image_contract
 from piceli.infra.sources import SourceSet, describe_refs
 from piceli.pipeline.errors import PipelineError
@@ -107,6 +116,10 @@ class CompositionConfig:
     :param build_git_secret: The one Secret (``username``/``password``) the
         build Job fetches every source with.
     :param platforms: Platforms the Job builds for (the first one deploys).
+    :param repo: The composition's own repository (``{"name", "url",
+        "branch", "entry"}``, :class:`~piceli.infra.pipelines.RepoSettings`):
+        the controller follows it and imports the module at its commit;
+        ``composition`` is then the summary recorded at ``gitops enable``.
     """
 
     composition: Mapping[str, Any]
@@ -119,9 +132,22 @@ class CompositionConfig:
     build_git_secret: str = "piceli-build-git"
     builder_selector: tuple[tuple[str, str], ...] = ()
     build_storage: str = "20Gi"
+    repo: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
-        Composition.from_dict(self.composition)  # validates it
+        if self.repo is None:
+            Composition.from_dict(self.composition)  # validates it
+        else:
+            from piceli.infra.pipelines import RepoSettings
+
+            RepoSettings.from_dict(self.repo)
+            if (
+                not isinstance(self.composition, Mapping)
+                or self.composition.get("schema") != COMPOSITION_SCHEMA
+            ):
+                raise CompositionError(
+                    "composition-invalid", "unknown composition schema"
+                )
         if not _LABEL.fullmatch(self.namespace):
             raise GitOpsError("gitops-config-invalid", "invalid controller namespace")
         if not MIN_POLL_SECONDS <= self.poll_seconds <= MAX_POLL_SECONDS:
@@ -153,7 +179,35 @@ class CompositionConfig:
 
     @property
     def model(self) -> Composition:
+        if self.repo is not None:
+            raise GitOpsError(
+                "gitops-config-invalid",
+                "this composition is imported from its repository at the followed "
+                "commit (CompositionController loads it)",
+            )
         return Composition.from_dict(self.composition)
+
+    @property
+    def registry(self) -> Any:
+        """The cluster's in-cluster registry (``None``: not declared)."""
+        from piceli.infra.composition import _cluster_from
+
+        cluster = _cluster_from(self.composition.get("cluster"))
+        return None if cluster is None else cluster.registry
+
+    @property
+    def sources(self) -> tuple[Source, ...]:
+        """Every source of the config: the composition's and its own repository."""
+        found = {
+            item["name"]: Source(item["url"], name=item["name"])
+            for item in self.composition.get("sources") or ()
+        }
+        if self.repo is not None:
+            found.setdefault(
+                str(self.repo["name"]),
+                Source(str(self.repo["url"]), name=str(self.repo["name"])),
+            )
+        return tuple(found[key] for key in sorted(found))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -170,6 +224,9 @@ class CompositionConfig:
                 "selector": dict(self.builder_selector),
                 "storage": self.build_storage,
             },
+            # Only for a composition followed in its repository: other
+            # configs (and their install plan hashes) are unchanged.
+            **({"repo": dict(self.repo)} if self.repo is not None else {}),
         }
 
     @classmethod
@@ -191,6 +248,7 @@ class CompositionConfig:
                 build_git_secret=build.get("git_secret") or "piceli-build-git",
                 builder_selector=tuple(sorted((build.get("selector") or {}).items())),
                 build_storage=build.get("storage") or "20Gi",
+                repo=value.get("repo"),
             )
         except (KeyError, TypeError, ValueError) as error:
             if isinstance(error, GitOpsError):
@@ -230,6 +288,10 @@ class CompositionPorts(Protocol):
         env: EnvItem,
         contracts: Mapping[str, ComponentContract],
         images: Mapping[str, str],
+    ) -> Any: ...
+
+    def pipeline_env(
+        self, composition: Composition, env: EnvItem, images: Mapping[str, str]
     ) -> Any: ...
 
     def prepare_env(self, pipeline: Any, name: str) -> str | None: ...
@@ -296,6 +358,21 @@ class DefaultCompositionPorts:
             transport=self.transport,
         )
 
+    def pipeline_env(
+        self, composition: Composition, env: EnvItem, images: Mapping[str, str]
+    ) -> Any:
+        """The declared pipeline of ``env``, deployed by this controller (images via ``env_up``)."""
+        from piceli.infra.pipelines import environment_pipeline
+
+        return environment_pipeline(
+            composition,
+            env,
+            kubeconfig=self.kubeconfig,
+            context=self.context,
+            state_dir=self.state_dir / "pipelines",
+            transport=self.transport,
+        )
+
     def prepare_env(self, pipeline: Any, name: str) -> str | None:
         return self.envs.prepare_env(pipeline, name)  # type: ignore[no-any-return]
 
@@ -347,7 +424,16 @@ class CompositionController:
         log: Callable[[str], None] = lambda _: None,
     ) -> None:
         self.config = config
-        self.composition = config.model
+        self.repo: Any = None
+        self._composition: Composition | None = None
+        if config.repo is not None:
+            from piceli.infra.pipelines import CompositionRepo, RepoSettings
+
+            settings = RepoSettings.from_dict(config.repo)
+            sources.add(settings.source)
+            self.repo = CompositionRepo(settings, sources, state_dir / "composition")
+        else:
+            self._composition = config.model
         self.state_dir = state_dir
         self.sources = sources
         self.ports = ports
@@ -355,12 +441,21 @@ class CompositionController:
         self.clock = clock
         self.log = log
         self.state = load_state(state_dir)
-        for key in ("sources", "env_seen", "promoted", "forced"):
+        for key in ("sources", "env_seen", "promoted", "forced", "composition"):
             self.state.setdefault(key, {})
         self.refs: dict[str, RemoteRefs] = {}
         self.busy = False
 
     # ------------------------------------------------------------ helpers
+    @property
+    def composition(self) -> Composition:
+        """The composition being deployed (imported at the followed commit in repo mode)."""
+        if self._composition is None:
+            raise CompositionError(
+                "composition-invalid", "the composition is not loaded yet"
+            )
+        return self._composition
+
     def _envs(self) -> dict[str, dict[str, Any]]:
         envs: dict[str, dict[str, Any]] = self.state["envs"]
         return envs
@@ -531,6 +626,11 @@ class CompositionController:
                 missing.append(source.key)
             else:
                 used[source.key], revision[source.key] = found
+        if self.repo is not None and self.repo.commit is not None:
+            key = self.repo.settings.name
+            if key not in revision and key not in missing:
+                revision[key] = self.repo.commit
+                used[key] = f"refs/heads/{self.repo.settings.branch}"
         return revision, used, missing
 
     def _seen(self, instance: _Instance) -> dict[str, Any]:
@@ -563,6 +663,13 @@ class CompositionController:
                         }
                     )
             seen[source.key] = {"heads": heads, "tags": dict(sorted(tags.items()))}
+        if self.repo is not None and self.repo.commit is not None:
+            key = self.repo.settings.name
+            if key not in seen:  # the loaded module's commit: a change re-renders
+                seen[key] = {
+                    "heads": {self.repo.settings.branch: self.repo.commit},
+                    "tags": {},
+                }
         return seen
 
     def _desired(self) -> None:
@@ -728,6 +835,11 @@ class CompositionController:
             raise GitOpsError("gitops-request-invalid", "sync names no environment")
         if component is not None:
             known = {item.name for item in self.composition.components}
+            known |= {
+                key
+                for record in self._envs().values()
+                for key in record.get("components") or {}
+            }
             if component not in known:
                 raise GitOpsError("gitops-request-invalid", "sync names no component")
         for name in targets:
@@ -786,6 +898,9 @@ class CompositionController:
         instance = self._instance(name)
         if instance is None:
             raise CompositionError("composition-invalid", f"no environment {name!r}")
+        if instance.env.pipeline is not None:
+            self._deploy_pipeline(record, instance)
+            return
         revision: dict[str, str] = dict(record["revision"])
         contracts = self._contracts(instance, revision)
         from piceli.infra.render import check_needs
@@ -894,6 +1009,146 @@ class CompositionController:
         )
         self._outcome(record, outcome)
 
+    def _deploy_pipeline(self, record: dict[str, Any], instance: _Instance) -> None:
+        """Build the changed images of a pipeline environment, mirror, deploy."""
+        from piceli.infra.pipelines import (
+            SpecBuildRequest,
+            image_keys,
+            key_of,
+            load_spec,
+            mirror_list,
+            mirror_target,
+            spec_paths,
+        )
+
+        if self.repo is None or self.repo.checkout is None:
+            raise CompositionError(
+                "composition-invalid",
+                "a pipeline environment needs the composition's repository "
+                "(gitops enable records it)",
+            )
+        name = record["branch"]
+        env = instance.env
+        pipeline = env.pipeline
+        repo = self.repo.settings.name
+        revision: dict[str, str] = dict(record["revision"])
+        rebuild = set((self.state.get("rebuild") or {}).get(name) or ())
+        previous: dict[str, Any] = dict(record.get("components") or {})
+        now = _iso(self.clock())
+        platform = self.config.platforms[0]
+        components: dict[str, dict[str, Any]] = {}
+        images: dict[str, BuiltImage] = {}
+        requests: list[SpecBuildRequest] = []
+        for path, build in spec_paths(pipeline, self.repo.checkout):
+            self.sources.fetch(repo)
+            text = self.sources.read(repo, revision[repo], path)
+            if text is None:
+                raise CompositionError(
+                    "composition-invalid",
+                    f"the build spec {path} is not in {repo} at {revision[repo][:12]}",
+                )
+            facts = None if build.node_facts is None else build.node_facts.to_dict()
+            spec = load_spec(text, path, repo=repo, facts=facts)
+            keys = image_keys(spec, revision, self.sources, platform=platform)
+            changed: dict[str, dict[str, str]] = {}
+            for image in spec.spec.images:
+                if image.name in components:
+                    raise CompositionError(
+                        "composition-invalid", f"two builds make image {image.name!r}"
+                    )
+                key = keys[image.name]
+                cached = (
+                    None if image.name in rebuild else self._cached(image.name, key.key)
+                )
+                if cached is None:
+                    changed[image.name] = {
+                        "repository": self._repository(image.name),
+                        "key": key.key,
+                    }
+                else:
+                    images[image.name] = cached
+                primary = next(iter(sorted(key.sources)), repo)
+                components[image.name] = {
+                    "source": primary,
+                    "commit": revision.get(primary),
+                    "sources": dict(sorted(key.sources.items())),
+                    "source_digest": key.key,
+                    "digest": None if cached is None else cached.manifest_digest,
+                    "image": None if cached is None else cached.pull_ref,
+                    "state": "building" if cached is None else "pending",
+                    "health": (previous.get(image.name) or {}).get("health", "unknown"),
+                    "updated_at": now,
+                }
+            if changed:
+                commits = {
+                    source: revision[source] for source, _ in spec.contexts.values()
+                }
+                commits[repo] = revision[repo]
+                urls = {key: self.sources.sources[key].url for key in commits}
+                requests.append(
+                    SpecBuildRequest(path, repo, commits, changed, facts, urls)
+                )
+        to_mirror = [
+            MirrorItem(ref, ref, mirror_target(self.composition, pipeline, ref))
+            for ref in mirror_list(self.composition, pipeline)
+            if self._cached("mirror", key_of(ref)) is None
+        ]
+        record["components"] = components
+        if requests or to_mirror:
+            self._publish()  # show "building" while it runs
+        try:
+            if to_mirror:
+                for ref, image in self.ports.builder.mirror(to_mirror).items():
+                    self._remember("mirror", key_of(ref), image)
+            for request in requests:
+                built = self.ports.builder.build_spec(request, self.sources.checkout)
+                for image_name, wanted in request.images.items():
+                    if image_name not in built:
+                        raise CompositionError(
+                            "component-build-failed",
+                            f"the build returned no image {image_name!r}",
+                        )
+                    self._remember(image_name, wanted["key"], built[image_name])
+                    images[image_name] = built[image_name]
+        except Exception:
+            for entry in components.values():
+                if entry["state"] == "building":
+                    entry["state"] = "failed"
+            raise
+        (self.state.get("rebuild") or {}).pop(name, None)
+        for key, entry in components.items():
+            image = images[key]
+            entry["digest"] = image.manifest_digest
+            entry["image"] = image.pull_ref
+            deployed = (previous.get(key) or {}).get("deployed_image")
+            entry["deployed_image"] = deployed
+            entry["state"] = "unchanged" if deployed == image.pull_ref else "rolling"
+        refs = {key: image.pull_ref for key, image in images.items()}
+        target = self.ports.pipeline_env(self.composition, env, refs)
+        namespace = self.ports.prepare_env(target, name)
+        if namespace:
+            record["namespace"] = namespace
+        approve: str | None = record.get("approved_hash")
+        if approve is None and env.auto_approve:
+            approve = APPROVE_POLICY
+        outcome = EnvOutcome.from_result(
+            self.ports.env_up(
+                target,
+                name,
+                commit=str(record.get("commit") or ""),
+                receipt=None,
+                digests=refs,
+                approve=approve,
+            )
+        )
+        self._outcome(record, outcome)
+
+    def _down_pipeline(self, env: EnvItem) -> Any:
+        """A pipeline that only knows the environment (for env_down, env_stop)."""
+        if env.pipeline is not None:
+            return self.ports.pipeline_env(self.composition, env, {})
+        return self.ports.pipeline(self.composition, env, {}, {})
+
     def _outcome(self, record: dict[str, Any], outcome: EnvOutcome) -> None:
         if outcome.namespace:
             record["namespace"] = outcome.namespace
@@ -948,7 +1203,7 @@ class CompositionController:
             del self._envs()[name]
             return
         # No contracts: a pipeline that only knows the environment's settings.
-        self.ports.env_down(self.ports.pipeline(self.composition, rule, {}, {}), name)
+        self.ports.env_down(self._down_pipeline(rule), name)
         del self._envs()[name]
         self.log(f"{name}: environment removed")
 
@@ -978,9 +1233,7 @@ class CompositionController:
         rule = self.composition.branch_rule
         assert rule is not None
         try:
-            self.ports.env_stop(
-                self.ports.pipeline(self.composition, rule, {}, {}), record["branch"]
-            )
+            self.ports.env_stop(self._down_pipeline(rule), record["branch"])
         except Exception as error:
             attempts = int(record.get("attempts") or 0) + 1
             self._set(
@@ -1045,26 +1298,17 @@ class CompositionController:
         failed: list[str] = []
         self.refs = {}
         for key in sorted(self.sources.remotes):
-            entry = self.state["sources"].setdefault(key, {})
-            try:
-                refs = self.sources.ls_remote(key)
-            except GitOpsError as error:
-                failed.append(key)
-                entry["last_error"] = error.code
-                continue
-            self.refs[key] = refs
-            entry.update(
-                url=self.sources.sources[key].url,
-                refs=describe_refs(refs, self._followed_refs(key, refs)),
-                last_poll=_iso(now),
-                last_error=None,
-            )
+            failed += self._poll_source(key, now)
+        if self.repo is not None:
+            failed += self._load_composition(now)
         if failed:
             self.state["last_error"] = "gitops-git-failed"
             self.state["poll_failures"] = int(self.state.get("poll_failures") or 0) + 1
         else:
             self.state["last_error"] = None
             self.state["poll_failures"] = 0
+        if self._composition is None:  # nothing to deploy before the first import
+            return self._publish()
         self._requests()
         self._desired()
         self.state["baseline"] = True
@@ -1078,8 +1322,79 @@ class CompositionController:
             self._step(record, self._stop)
         return self._publish()
 
+    def _poll_source(self, key: str, now: float) -> list[str]:
+        """``git ls-remote`` one source; ``[key]`` when it failed."""
+        entry = self.state["sources"].setdefault(key, {})
+        try:
+            refs = self.sources.ls_remote(key)
+        except GitOpsError as error:
+            entry["last_error"] = error.code
+            return [key]
+        self.refs[key] = refs
+        entry.update(
+            url=self.sources.sources[key].url,
+            refs=describe_refs(refs, self._followed_refs(key, refs)),
+            last_poll=_iso(now),
+            last_error=None,
+        )
+        return []
+
+    def _load_composition(self, now: float) -> list[str]:
+        """Import the composition at its branch's head when it moved; new sources' refs.
+
+        A module that fails to import (or is invalid) is recorded with its
+        code and not retried until the branch moves again; the previous
+        composition keeps deploying.
+        """
+        assert self.repo is not None
+        settings = self.repo.settings
+        entry = self.state["composition"]
+        entry.update(source=settings.name, branch=settings.branch, entry=settings.entry)
+        refs = self.refs.get(settings.name)
+        if refs is None:
+            return []
+        commit = refs.branches.get(settings.branch)
+        if commit is None:
+            entry["error"] = "composition-ref-unresolved"
+            return []
+        if commit == self.repo.commit or entry.get("failed") == commit:
+            return []
+        try:
+            composition = self.repo.load(commit)
+            clash = [
+                s.key
+                for s in composition.sources
+                if s.key == settings.name and s.url != settings.url
+            ]
+            if clash:
+                raise CompositionError(
+                    "composition-invalid",
+                    f"a source is named {settings.name!r} like the composition's "
+                    "repository but has another URL",
+                )
+        except (CompositionError, GitOpsError) as error:
+            entry.update(error=error.code)
+            if isinstance(error, CompositionError):
+                entry["failed"] = commit
+            self.log(f"composition at {commit[:12]}: {error} ({error.code})")
+            return []
+        if self._composition is not None:
+            self.log(f"composition {settings.name}@{commit[:12]}: re-rendering")
+        self._composition = composition
+        entry.update(commit=commit, failed=None, error=None, loaded_at=_iso(now))
+        failed: list[str] = []
+        for source in composition.sources:
+            if source.key not in self.sources.remotes:
+                self.sources.add(source)
+                failed += self._poll_source(source.key, now)
+        return failed
+
     def _followed_refs(self, key: str, refs: RemoteRefs) -> set[str]:
         wanted: set[str] = set()
+        if self.repo is not None and key == self.repo.settings.name:
+            wanted.add(f"refs/heads/{self.repo.settings.branch}")
+        if self._composition is None:
+            return wanted
         for item in self.composition.environments:
             for source, rules in item.sources:
                 if source.key != key:
@@ -1112,6 +1427,12 @@ class CompositionController:
                 key: {k: v for k, v in entry.items() if k != "deployed_image"}
                 for key, entry in (record.get("components") or {}).items()
             }
+        loaded = self._composition
+        repo = (
+            {"composition_repo": dict(self.state.get("composition") or {})}
+            if self.repo is not None
+            else {}
+        )
         return {
             "schema": STATUS_SCHEMA,
             "controller": {
@@ -1119,12 +1440,15 @@ class CompositionController:
                 "version": _version(),
                 "repo": None,
                 "branches": [],
-                "composition": self.composition.name,
+                "composition": None if loaded is None else loaded.name,
                 "poll_seconds": self.config.poll_seconds,
                 "last_poll": self.state.get("last_poll"),
                 "last_error": self.state.get("last_error"),
                 "poll_failures": int(self.state.get("poll_failures") or 0),
-                "environments": [item.name for item in self.composition.environments],
+                "environments": []
+                if loaded is None
+                else [item.name for item in loaded.environments],
+                **repo,
             },
             "sources": {
                 key: {
