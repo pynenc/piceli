@@ -7,10 +7,13 @@ to the current user. Importing this module is side-effect free.
 
 from __future__ import annotations
 
+import fcntl
 import os
-import secrets
 import stat
 from pathlib import Path
+from typing import IO
+
+_launch_handles: dict[Path, IO[bytes]] = {}
 
 
 def default_ui_state_dir() -> Path:
@@ -36,32 +39,51 @@ def private_ui_state_dir(explicit: Path | None = None) -> Path:
     return directory
 
 
-def launch_token_file(directory: Path, port: int, instance_id: str) -> Path:
-    """A private token path for one server instance on ``port``."""
-    return directory / f"launch-token-{port}-{instance_id}"
+def launch_token_file(directory: Path, port: int) -> Path:
+    """The single private token path for a local server port."""
+    return directory / f"launch-token-{port}"
 
 
 def write_launch_token(directory: Path, port: int, token: str) -> Path:
-    """Write a server's launch token in a new ``0600`` file; return its path.
-
-    Another process may already be serving the same port. Never remove or
-    overwrite that process's token before the new process attempts to bind.
-    """
-    for _ in range(3):
-        path = launch_token_file(directory, port, secrets.token_hex(12))
+    """Lock the port's file for this process; recover it after a crashed owner."""
+    path = launch_token_file(directory, port)
+    if path in _launch_handles:
+        raise FileExistsError("UI launch token port is already owned")
+    descriptor = os.open(
+        path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600
+    )
+    handle = os.fdopen(descriptor, "r+b")
+    try:
+        info = os.fstat(handle.fileno())
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_mode & 0o077
+            or (hasattr(os, "getuid") and info.st_uid != os.getuid())
+        ):
+            raise ValueError("UI launch token file is not private")
         try:
-            descriptor = os.open(
-                path,
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
-                0o600,
-            )
-        except FileExistsError:
-            continue
-        try:
-            with os.fdopen(descriptor, "wb") as handle:
-                handle.write(token.encode() + b"\n")
-        except BaseException:
-            path.unlink(missing_ok=True)
-            raise
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise FileExistsError("UI launch token port is already owned") from None
+        handle.seek(0)
+        handle.truncate()
+        handle.write(token.encode() + b"\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+        _launch_handles[path] = handle
         return path
-    raise FileExistsError("Could not create a unique UI launch token file")
+    except BaseException:
+        handle.close()
+        raise
+
+
+def remove_launch_token(path: Path) -> None:
+    """Remove only this process's still-owned token file and release its lock."""
+    handle = _launch_handles.pop(path, None)
+    if handle is None:
+        return
+    try:
+        if path.exists() and path.stat().st_ino == os.fstat(handle.fileno()).st_ino:
+            path.unlink()
+    finally:
+        handle.close()

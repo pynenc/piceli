@@ -250,16 +250,19 @@ class Store:
             ).fetchone()
             if row is None:
                 raise QueryError("ui-not-found")
-            connection.execute(
-                "UPDATE records SET state=?,data=?,private=? WHERE kind=? AND id=?",
-                (
-                    value.get("state", "planned"),
-                    canonical(value),
-                    canonical(private) if private is not None else row["private"],
-                    kind,
-                    value["id"],
-                ),
-            )
+            try:
+                connection.execute(
+                    "UPDATE records SET state=?,data=?,private=? WHERE kind=? AND id=?",
+                    (
+                        value.get("state", "planned"),
+                        canonical(value),
+                        canonical(private) if private is not None else row["private"],
+                        kind,
+                        value["id"],
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                raise QueryError("ui-operation-conflict", 409) from None
             self._event(connection, kind, value)
 
     def records(

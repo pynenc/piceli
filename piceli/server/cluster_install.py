@@ -205,6 +205,48 @@ class ManualDeliveryConfig:
         return str(tomllib.loads(self.release_definition_toml)["target"]["namespace"])
 
 
+@dataclass(frozen=True)
+class InstalledBuildConfig:
+    """Operator-reviewed Job inputs; repository code runs only in the Job."""
+
+    spec_path: str
+    image: str
+    repo: str
+    registry_url: str
+    git_secret: str = "piceli-build-git"
+    platforms: tuple[str, ...] = ("linux/amd64",)
+    cache_size: str = "20Gi"
+    node_arch: str = "amd64"
+
+    def __post_init__(self) -> None:
+        from piceli.artifacts.cluster_build import ClusterBuildConfig
+        from piceli.services.cluster_build_control import ClusterBuildProfile
+
+        _image(self.image)
+        if (
+            not _NAME.fullmatch(self.git_secret)
+            or not _SIZE.fullmatch(self.cache_size)
+            or self.node_arch not in {"amd64", "arm64"}
+        ):
+            raise ValueError("invalid installed build secret or cache size")
+        ClusterBuildProfile(
+            self.spec_path,
+            ClusterBuildConfig(
+                image=self.image,
+                repo=self.repo,
+                git_secret=self.git_secret,
+                registry_url=self.registry_url,
+                storage=self.cache_size,
+                selector={
+                    "piceli.io/builder": "true",
+                    "kubernetes.io/arch": self.node_arch,
+                },
+                service_account="piceli-builder",
+            ),
+            tuple(self.platforms),
+        )
+
+
 def _https_url(value: str, *, label: str) -> tuple[str, int]:
     parsed = urlsplit(value)
     if (
@@ -277,8 +319,8 @@ class ClusterInstallConfig:
     dns_namespace: str = "kube-system"
     authorized_access_subjects: tuple[str, ...] = ()
     manual: ManualDeliveryConfig | None = None
-    #: Opt in to the unsupported manual delivery and local-client access
-    #: paths; the rendered UI command then passes ``--experimental``.
+    build: InstalledBuildConfig | None = None
+    #: Deprecated compatibility setting; supported paths no longer require it.
     experimental: bool = False
 
     def __post_init__(self) -> None:
@@ -359,13 +401,6 @@ class ClusterInstallConfig:
             _image(image)
         for value in (*self.api_egress_cidrs, *self.oidc_egress_cidrs):
             _cidr(value)
-        if (
-            self.manual is not None or self.authorized_access_subjects
-        ) and not self.experimental:
-            raise ValueError(
-                "ui-experimental-disabled: manual delivery and local-client "
-                "access are experimental; set experimental=True to render them"
-            )
         if self.manual is not None and (
             self.manual.namespace != self.namespace
             or not set(self.manual.authorized_deploy_subjects)
@@ -374,6 +409,8 @@ class ClusterInstallConfig:
             raise ValueError(
                 "manual delivery target and subjects must match this installation"
             )
+        if self.build is not None and self.manual is None:
+            raise ValueError("installed cluster build needs a manual delivery scope")
 
 
 def _object(kind: str, name: str, namespace: str, spec: dict) -> dict:
@@ -447,8 +484,7 @@ def render_cluster_install(config: ClusterInstallConfig) -> tuple[dict, ...]:
         ui_command += ["--authorized-sub", subject]
     for subject in config.authorized_access_subjects:
         ui_command += ["--authorized-access-sub", subject]
-    if config.experimental:
-        ui_command.append("--experimental")
+    ui_command += ["--grant-file", "/var/run/piceli-grants/grants.json"]
     if manual is not None:
         ui_command += [
             "--definition",
@@ -464,6 +500,26 @@ def render_cluster_install(config: ClusterInstallConfig) -> tuple[dict, ...]:
             ui_command += ["--source-file", path]
         for subject in manual.authorized_deploy_subjects:
             ui_command += ["--authorized-deploy-sub", subject]
+    if config.build is not None:
+        build = config.build
+        ui_command += [
+            "--build-spec",
+            build.spec_path,
+            "--build-image",
+            build.image,
+            "--build-repo",
+            build.repo,
+            "--build-registry-url",
+            build.registry_url,
+            "--build-git-secret",
+            build.git_secret,
+            "--build-cache-size",
+            build.cache_size,
+            "--build-node-arch",
+            build.node_arch,
+        ]
+        for platform in build.platforms:
+            ui_command += ["--build-platform", platform]
 
     caddyfile = (
         "{\n    admin off\n}\n"
@@ -545,6 +601,14 @@ def render_cluster_install(config: ClusterInstallConfig) -> tuple[dict, ...]:
                 for rule in manual.deploy_resources
             ),
         ]
+    if config.build is not None:
+        role_rules.append(
+            {
+                "apiGroups": [""],
+                "resources": ["persistentvolumeclaims"],
+                "verbs": ["create"],
+            }
+        )
     deployment: dict[str, Any] = {
         "apiVersion": "apps/v1",
         "kind": "Deployment",
@@ -592,6 +656,11 @@ def render_cluster_install(config: ClusterInstallConfig) -> tuple[dict, ...]:
                                     "readOnly": True,
                                 },
                                 {"name": "ui-tmp", "mountPath": "/tmp"},
+                                {
+                                    "name": "grants",
+                                    "mountPath": "/var/run/piceli-grants",
+                                    "readOnly": True,
+                                },
                             ],
                             "readinessProbe": {
                                 "exec": {
@@ -676,6 +745,7 @@ def render_cluster_install(config: ClusterInstallConfig) -> tuple[dict, ...]:
                             },
                         },
                         {"name": "ui-tmp", "emptyDir": {}},
+                        {"name": "grants", "configMap": {"name": "piceli-ui-grants"}},
                         {
                             "name": "gateway-config",
                             "configMap": {"name": "piceli-ui-gateway"},
@@ -813,6 +883,46 @@ def render_cluster_install(config: ClusterInstallConfig) -> tuple[dict, ...]:
             {"data": {"Caddyfile": caddyfile}},
         ),
         _object(
+            "ConfigMap",
+            "piceli-ui-grants",
+            namespace,
+            {
+                "data": {
+                    "grants.json": json.dumps(
+                        {
+                            hashlib.sha256(
+                                (config.oidc_issuer + "\0" + subject).encode()
+                            ).hexdigest(): sorted(
+                                (
+                                    {
+                                        "inspect",
+                                        "logs",
+                                        "activity",
+                                        "evaluate",
+                                        "plan",
+                                        "deploy",
+                                        "rollback",
+                                        "resume",
+                                        "cancel",
+                                    }
+                                    if manual is not None
+                                    and subject in manual.authorized_deploy_subjects
+                                    else {"inspect", "logs"}
+                                )
+                                | (
+                                    {"access"}
+                                    if subject in config.authorized_access_subjects
+                                    else set()
+                                )
+                            )
+                            for subject in config.authorized_subjects
+                        },
+                        sort_keys=True,
+                    )
+                }
+            },
+        ),
+        _object(
             "PersistentVolumeClaim",
             config.state_claim,
             namespace,
@@ -934,6 +1044,15 @@ def render_cluster_install(config: ClusterInstallConfig) -> tuple[dict, ...]:
             },
         },
     ]
+    if config.build is not None:
+        objects.append(
+            _object(
+                "ServiceAccount",
+                "piceli-builder",
+                namespace,
+                {"automountServiceAccountToken": False},
+            )
+        )
     if manual is not None:
         objects.insert(
             objects.index(deployment),

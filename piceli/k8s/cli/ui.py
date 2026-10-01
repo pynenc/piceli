@@ -4,21 +4,52 @@ from __future__ import annotations
 
 import hashlib
 import shutil
+import tarfile
 from dataclasses import replace
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal, cast
+from urllib.parse import urlsplit
 
 import typer
 
-from piceli.cli_contract import reject, say
+from piceli.cli_contract import emit_json, reject, say
 from piceli.k8s.cli.ui_remote import connect as connect_remote
-from piceli.k8s.ui_experimental import experimental_enabled
 
-app = typer.Typer(
-    rich_markup_mode=None, help="Piceli delivery web application (experimental)."
-)
+app = typer.Typer(rich_markup_mode=None, help="Piceli delivery web application.")
 
 app.command("connect")(connect_remote)
+
+
+@app.command("backup")
+def backup_ui(
+    control_dir: Annotated[Path, typer.Option(help="Stopped UI control directory")],
+    output: Annotated[Path, typer.Option(help="New private backup archive")],
+) -> None:
+    """Back up an offline UI control store and its release journal."""
+    from piceli.server.state_archive import backup
+
+    try:
+        created = backup(control_dir, output)
+    except (ValueError, OSError):
+        reject("ui-state-invalid")
+    say(f"UI state backup: {created}")
+    emit_json({"state": "backed-up", "archive": str(created)})
+
+
+@app.command("restore")
+def restore_ui(
+    archive: Annotated[Path, typer.Option(help="Verified UI backup archive")],
+    destination: Annotated[Path, typer.Option(help="Empty new control directory")],
+) -> None:
+    """Restore UI control state before starting a single new server."""
+    from piceli.server.state_archive import restore
+
+    try:
+        restored = restore(archive, destination)
+    except (ValueError, OSError, tarfile.TarError):
+        reject("ui-state-invalid")
+    say(f"UI state restored: {restored}")
+    emit_json({"state": "restored", "destination": str(restored)})
 
 
 @app.command()
@@ -32,6 +63,14 @@ def serve(
     namespace: Annotated[str | None, typer.Option(help="Inventory namespace")] = None,
     definition: Annotated[
         Path | None, typer.Option(help="Existing release TOML definition")
+    ] = None,
+    pipeline: Annotated[
+        str | None,
+        typer.Option(help="Trusted Pipeline MODULE:ATTR configured by the UI owner"),
+    ] = None,
+    gitops_namespace: Annotated[
+        str | None,
+        typer.Option(help="Show the GitOps controller in this explicit namespace"),
     ] = None,
     name: Annotated[str, typer.Option(help="Application display name")] = "my-app",
     host: Annotated[str, typer.Option(help="Loopback bind address")] = "127.0.0.1",
@@ -75,8 +114,7 @@ def serve(
 ) -> None:
     """Register an existing definition or inventory scope and serve the bundled UI.
 
-    The web UI is experimental. Apps that declare pre-rollout checks are
-    refused (ui-prerollout-unsupported); deploy them with piceli deploy.
+    Release definitions and configured Pipelines can include pre-rollout checks.
     """
     if host not in {"127.0.0.1", "::1", "localhost"}:
         reject("ui-request-rejected")
@@ -93,7 +131,57 @@ def serve(
     from piceli.k8s.release_spec import ReleaseSpec
 
     try:
-        if definition is not None:
+        declared_pipeline = None
+        if pipeline is not None:
+            if (
+                definition is not None
+                or any(value is not None for value in (kubeconfig, context, namespace))
+                or allow_exec
+                or exec_sha256
+                or any(
+                    value is not None
+                    for value in (
+                        source_root,
+                        source_file,
+                        renderer_image,
+                        renderer_platform,
+                        docker,
+                    )
+                )
+            ):
+                reject("ui-invalid-request")
+            from piceli.app.render import load_target
+            from piceli.pipeline import Pipeline
+
+            declared_pipeline = load_target(pipeline, Path.cwd())
+            if (
+                not isinstance(declared_pipeline, Pipeline)
+                or declared_pipeline.needs_environment
+            ):
+                reject("ui-invalid-request")
+            target_config = declared_pipeline.target
+            target = KubeconfigTarget(
+                kubeconfig=target_config.kubeconfig.absolute(),
+                context=target_config.context,
+                namespace=target_config.namespace,
+                cluster_uid=target_config.cluster_uid,
+                namespace_uid=target_config.namespace_uid,
+                transport=cast(
+                    Literal["https", "loopback-http"], target_config.transport
+                ),
+                allow_exec=target_config.allow_exec,
+                exec_sha256=target_config.exec_sha256,
+                exec_pass_env=tuple(target_config.exec_pass_env),
+                exec_timeout_seconds=target_config.exec_timeout_seconds or 60,
+            )
+            registration = Registration(
+                id="my-app",
+                name=name,
+                target=target,
+                definition_kind="pipeline",
+                ownership="native",
+            )
+        elif definition is not None:
             # The explicit target lives in the existing definition. Do not
             # silently reinterpret its namespace or credentials from UI flags.
             if (
@@ -147,7 +235,7 @@ def serve(
                 docker,
             )
         )
-        if delivery_requested:
+        if delivery_requested and declared_pipeline is None:
             spec = registration.release_spec
             if (
                 spec is None
@@ -205,15 +293,41 @@ def serve(
                 principal=Principal(id="local", name="Local user"),
             )
         origin = f"http://{'[' + host + ']' if ':' in host else host}:{port}"
+        control = None
+        if declared_pipeline is not None or gitops_namespace is not None:
+            from piceli.services.environment_control import EnvironmentControl
+
+            control = EnvironmentControl(
+                query,
+                registration.id,
+                pipeline=declared_pipeline
+                if declared_pipeline is not None and declared_pipeline.envs is not None
+                else None,
+                controller_target=registration.target,
+                controller_namespace=gitops_namespace or "piceli-system",
+            )
+        pipeline_delivery = None
+        if declared_pipeline is not None:
+            from piceli.services.pipeline_control import PipelineControl
+
+            pipeline_delivery = PipelineControl(
+                query,
+                registration.id,
+                declared_pipeline,
+                pipeline or "",
+                (control_dir or declared_pipeline.state_dir / "ui-control").resolve(),
+            )
         server = create_app(
             query,
             origin=origin,
             url_prefix=url_prefix,
             operations=operations,
+            environment_control=control,
+            pipeline_control=pipeline_delivery,
             access=access,
             logs=logs,
         )
-        from piceli.k8s.ui_state import write_launch_token
+        from piceli.k8s.ui_state import remove_launch_token, write_launch_token
         from piceli.server.security import uvicorn_log_config
 
         token_file = write_launch_token(
@@ -234,7 +348,7 @@ def serve(
             log_config=uvicorn_log_config(),
         )
     finally:
-        token_file.unlink(missing_ok=True)
+        remove_launch_token(token_file)
 
 
 @app.command("cluster-serve")
@@ -283,6 +397,29 @@ def cluster_observe(
     renderer_platform: Annotated[
         str | None, typer.Option(help="Renderer platform")
     ] = None,
+    gitops_namespace: Annotated[
+        str | None,
+        typer.Option(help="Controller namespace for scoped GitOps status and requests"),
+    ] = None,
+    grant_file: Annotated[
+        Path | None, typer.Option(help="Projected operator-owned grant map")
+    ] = None,
+    build_spec: Annotated[
+        str | None, typer.Option(help="Trusted relative host-build.toml path in Git")
+    ] = None,
+    build_image: Annotated[
+        str | None, typer.Option(help="Pinned cluster builder image")
+    ] = None,
+    build_repo: Annotated[
+        str | None, typer.Option(help="Credential-free Git remote URL")
+    ] = None,
+    build_registry_url: Annotated[
+        str | None, typer.Option(help="Node registry OCI URL")
+    ] = None,
+    build_git_secret: Annotated[str, typer.Option()] = "piceli-build-git",
+    build_cache_size: Annotated[str, typer.Option()] = "20Gi",
+    build_node_arch: Annotated[str, typer.Option()] = "amd64",
+    build_platform: Annotated[list[str] | None, typer.Option()] = None,
     name: Annotated[str, typer.Option(help="Application display name")] = "cluster",
     host: Annotated[
         str, typer.Option(help="Loopback bind for a TLS gateway sidecar")
@@ -291,25 +428,17 @@ def cluster_observe(
     url_prefix: Annotated[str, typer.Option()] = "",
     experimental: Annotated[
         bool,
-        typer.Option(
-            help="Allow the unsupported experimental manual delivery and "
-            "local-client access paths (also PICELI_UI_EXPERIMENTAL=1)"
-        ),
+        typer.Option(help="Deprecated compatibility option; no longer required"),
     ] = False,
 ) -> None:
-    """Serve read-only scoped cluster observation (experimental).
-
-    Manual delivery (deploy grants, definition and renderer options) and
-    local-client access (--authorized-access-sub) have not passed their release
-    gate: they are refused with ui-experimental-disabled unless --experimental
-    or PICELI_UI_EXPERIMENTAL=1 is given, and are unsupported.
-    """
+    """Serve OIDC-scoped cluster observation and configured delivery."""
     if (
         host not in {"127.0.0.1", "::1"}
         or not authorized_sub
         or len(authorized_sub) > 100
         or any(not subject or len(subject) > 256 for subject in authorized_sub)
         or not all(path.is_absolute() for path in (ca_file, token_file, control_dir))
+        or (grant_file is not None and not grant_file.is_absolute())
         or any(
             not subject or len(subject) > 256
             for subject in (authorized_deploy_sub or ())
@@ -322,21 +451,12 @@ def cluster_observe(
         or not set(authorized_access_sub or ()).issubset(set(authorized_sub))
     ):
         reject("ui-invalid-request")
-    if (
-        authorized_deploy_sub
-        or authorized_access_sub
-        or any(
-            value is not None
-            for value in (
-                definition,
-                source_root,
-                source_file,
-                renderer_image,
-                renderer_platform,
-            )
-        )
-    ) and not experimental_enabled(experimental):
-        reject("ui-experimental-disabled")
+    build_values = (build_spec, build_image, build_repo, build_registry_url)
+    if any(value is not None for value in build_values) and (
+        not all(value is not None for value in build_values)
+        or not authorized_deploy_sub
+    ):
+        reject("ui-invalid-request")
     try:
         import uvicorn
 
@@ -354,9 +474,11 @@ def cluster_observe(
     except ImportError:
         say("Install piceli[ui] to serve the web application.")
         reject("ui-assets-unavailable")
+    stage = "origin"
     try:
         if not origin.startswith("https://"):
             reject("ui-invalid-request")
+        stage = "credential"
         identity = InClusterCredential(
             api_server,
             ca_file,
@@ -374,6 +496,7 @@ def cluster_observe(
                 renderer_platform,
             )
         ) or bool(authorized_deploy_sub)
+        stage = "identity"
         if delivery_requested:
             if (
                 definition is None
@@ -402,6 +525,7 @@ def cluster_observe(
                 cluster_uid=observed.cluster_uid,
                 namespace_uid=observed.namespace_uid,
             )
+            stage = "definition"
             spec = ReleaseSpec.from_toml(definition)
             declared = spec.kubeconfig_target()
             if (
@@ -452,11 +576,19 @@ def cluster_observe(
             }
             for subject in authorized_sub
         }
-        query = QueryService([registration], scope_policy=ScopePolicy(grants))
+        if grant_file is not None:
+            from piceli.services.authority import FileScopePolicy
+
+            policy = FileScopePolicy(grant_file, registration.id)
+        else:
+            policy = ScopePolicy(grants)
+        query = QueryService([registration], scope_policy=policy)
         logs = LogService(query)
         remote_access = RemoteAccessService(query) if authorized_access_sub else None
         operations = None
+        cluster_build_control = None
         if delivery_requested:
+            stage = "renderer"
             assert source_root is not None
             assert source_file is not None
             assert renderer_image is not None
@@ -496,11 +628,52 @@ def cluster_observe(
                         image_id=renderer_image,
                         platform=renderer_platform,
                         target=target,
+                        egress_probe=(
+                            urlsplit(api_server).hostname or "",
+                            urlsplit(api_server).port or 443,
+                        ),
                     ),
                 ),
                 {registration.id: selection},
                 principal=None,
             )
+            if build_spec is not None:
+                stage = "build"
+                assert build_image is not None
+                assert build_repo is not None
+                assert build_registry_url is not None
+                from piceli.artifacts.cluster_build import ClusterBuildConfig
+                from piceli.services.cluster_build_control import (
+                    ClusterBuildControl,
+                    ClusterBuildProfile,
+                )
+
+                build_config = ClusterBuildConfig(
+                    image=build_image,
+                    repo=build_repo,
+                    git_secret=build_git_secret,
+                    namespace=namespace,
+                    registry_url=build_registry_url,
+                    storage=build_cache_size,
+                    selector={
+                        "piceli.io/builder": "true",
+                        "kubernetes.io/arch": build_node_arch,
+                    },
+                    repo_root=state / "build-specs",
+                    service_account="piceli-builder",
+                )
+                cluster_build_control = ClusterBuildControl(
+                    query,
+                    registration.id,
+                    ClusterBuildProfile(
+                        build_spec,
+                        build_config,
+                        tuple(build_platform or ("linux/amd64",)),
+                    ),
+                    operations.store,
+                    state,
+                )
+        stage = "security"
         security = ClusterSecurity(
             ClusterSecurityConfig(
                 origin=origin,
@@ -510,6 +683,17 @@ def cluster_observe(
                 prefix=url_prefix,
             )
         )
+        control = None
+        if gitops_namespace is not None:
+            from piceli.services.environment_control import EnvironmentControl
+
+            control = EnvironmentControl(
+                query,
+                registration.id,
+                controller_target=target,
+                controller_namespace=gitops_namespace,
+            )
+        stage = "app"
         server = create_app(
             query,
             origin=origin,
@@ -517,9 +701,13 @@ def cluster_observe(
             logs=logs,
             operations=operations,
             remote_access=remote_access,
+            cluster_build_control=cluster_build_control,
+            environment_control=control,
             cluster_security=security,
         )
-    except (ValueError, OSError):
+    except (ValueError, OSError) as error:
+        code = getattr(error, "code", "")
+        say(f"Piceli cluster UI startup: {stage} {type(error).__name__} {code}")
         reject("ui-invalid-request")
     mode = "manual delivery" if operations is not None else "observation"
     if remote_access is not None:

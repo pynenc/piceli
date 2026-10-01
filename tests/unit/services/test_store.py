@@ -76,6 +76,32 @@ def test_active_scope_refusal_rolls_back_idempotency_and_event(tmp_path: Path) -
     assert [item["id"] for item in store.active("operation")] == ["two"]
 
 
+def test_second_approval_conflicting_with_an_active_run_is_a_public_refusal(
+    tmp_path: Path,
+) -> None:
+    store = Store(tmp_path / "operations.sqlite3")
+    waiting = store.admit(
+        "pipeline_operation",
+        record("waiting", "queued"),
+        private={},
+        scope="same-release",
+        key="first",
+        fingerprint="first",
+    )
+    store.update("pipeline_operation", {**waiting, "state": "awaiting-review"})
+    store.admit(
+        "pipeline_operation",
+        record("other", "queued"),
+        private={},
+        scope="same-release",
+        key="other",
+        fingerprint="other",
+    )
+    with pytest.raises(QueryError, match="ui-operation-conflict"):
+        store.update("pipeline_operation", {**waiting, "state": "queued"})
+    assert store.get("pipeline_operation", "waiting")[0]["state"] == "awaiting-review"
+
+
 def test_future_schema_and_second_dispatcher_are_refused(tmp_path: Path) -> None:
     path = tmp_path / "control" / "operations.sqlite3"
     first, second = Store(path), Store(path)

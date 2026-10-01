@@ -1,357 +1,163 @@
 # Piceli web application
 
-Status: **experimental**. The local application serves a bundled React
-interface from Python. Node is a contributor build dependency; the installed
-wheel needs only `piceli[ui]`. No browser assets load from a CDN. Nothing
-changes for users who do not install `piceli[ui]` or run `piceli ui`.
+The optional `piceli[ui]` package serves a bundled React application. It does
+not need Node at runtime and does not read an ambient kubeconfig or context.
+The UI runs in one of two modes: a local, single-user process with an explicit
+target, or an OIDC-authenticated service installed inside a Kubernetes cluster.
+Each mode offers only the actions configured by its operator.
 
-## Status in this release
+## Try the local fake UI
 
-What works (experimental; interfaces may change):
-
-- `piceli ui serve`: the loopback UI for explicit inventory scopes and existing
-  release definitions. Isolated source evaluation, separate exact source and
-  plan approvals, durable release runs, Activity, Resources, logs and
-  supervised local port forwards.
-- `piceli ui cluster-observe`: authenticated, read-only inspection and logs of
-  one namespace behind an HTTPS gateway with OIDC subject grants.
-- The [installation template](ui_cluster_install.md) in its default read-only
-  profile (single replica, TLS gateway, private PVC).
-
-What the UI refuses:
-
-- An app that declares pre-rollout checks (`app.pre_rollout(...)`) fails with
-  `ui-prerollout-unsupported`: the UI never plans a release that would skip
-  them. Deploy it with `piceli deploy`.
-- A `Pipeline` target (and so restore points, backups and branch
-  environments) is not evaluated by the UI; use `piceli deploy`, `piceli env`
-  or `piceli gitops`.
-
-Disabled by default (**unsupported**): these paths have not passed their
-release gate and fail with `ui-experimental-disabled` unless you pass
-`--experimental` or set `PICELI_UI_EXPERIMENTAL=1`:
-
-- in-cluster manual delivery: `piceli ui cluster-serve` or `cluster-observe`
-  with `--authorized-deploy-sub`, `--definition`, `--source-root`,
-  `--source-file`, `--renderer-image` or `--renderer-platform`;
-- remote local-client access: `--authorized-access-sub` and
-  `piceli ui connect`;
-- install manifests that enable either (`ClusterInstallConfig(manual=...)` or
-  `authorized_access_subjects=...` need `experimental=True`, which adds
-  `--experimental` to the rendered command).
-
-Building images inside the cluster from the UI is not available. Opting in
-does not make these paths supported; use them only in disposable clusters.
-
-## Try the local UI without a cluster
-
-From a source checkout, build the bundled browser assets once, then start the
-foreground demo server:
+In a source checkout:
 
 ```sh
 make ui-install ui-build
 make ui-fake-serve
 ```
 
-The terminal prints a launch address such as
-`http://127.0.0.1:4177/?token=…`; open it once in your browser. The server
-exchanges the token for a session cookie and redirects to the same page
-without it; after that `http://127.0.0.1:4177/applications` opens directly in
-that browser. The token is also written, mode `0600`, to
-`~/.local/state/piceli/ui/launch-token-4177-<instance>` (under `$XDG_STATE_HOME`
-when set) while the demo runs, and removed when it stops. The terminal prints
-the exact file path; separate server attempts never overwrite each other's
-tokens. If you enter
-`localhost:4177`, page navigation redirects to the configured address while
-API requests stay restricted to that exact origin. The terminal stays occupied
-while the server runs. Press Ctrl+C to stop it. `PICELI_UI_FAKE_PORT=4180 make ui-fake-serve` selects another
-loopback port. This demo uses a disposable fake Kubernetes API and an
-inventory-only registration. You can inspect observed resources, but it cannot
-approve or execute a deployment. It never reads your ambient kubeconfig.
-After updating the server code or browser assets, stop and restart this
-foreground process; it does not reload changes automatically. Once the browser has the session,
-opening the UI from an external link is supported; API requests still require
-that session.
+Open the exact loopback URL printed by the foreground server, including its
+one-time launch token. The URL exchanges the token for a session and redirects
+to a token-free page. The token is also held in a mode-`0600` file at
+`$XDG_STATE_HOME/piceli/ui/launch-token-4177` (or
+`~/.local/state/piceli/ui/launch-token-4177`) while the server runs. One port
+has one locked token file; another process cannot overwrite a running server's
+token. Press Ctrl+C to stop. `PICELI_UI_FAKE_PORT=4180 make ui-fake-serve`
+selects another port. The demo observes a disposable fake Kubernetes API and
+cannot deploy.
 
-To run the fake-API service and real-browser journeys together, install
-Playwright's Chromium through the locked frontend toolchain and run:
+For service and browser acceptance with that fake API, run `make test-ui-fake`.
+It uses port 4184 by default (`PICELI_UI_FAKE_TEST_PORT` changes it) and checks
+desktop, tablet and phone. The test runner removes its servers, browser state
+and temporary files on exit.
 
-```sh
-cd ui && npm exec -- playwright install chromium && cd ..
-make test-ui-fake
-```
+## Where the UI can run
 
-The browser journeys cover desktop, tablet and phone. They use the real Python
-UI service against the disposable fake API; reports, profiles, server state and
-subprocesses are removed when the runner exits. The combined target uses port
-4184 for its browser server, so it can run while the demo occupies 4177;
-`PICELI_UI_FAKE_TEST_PORT` overrides that port. `make test-ui` runs just the
-service acceptance tests and does not require Chromium. The fake journeys do
-not establish real-cluster deployment behavior; `make test-ui-kind-delivery`
-uses a separate disposable kind cluster for that.
-
-## Where Piceli runs
-
-The UI server, the deployment target, and the source of a run are separate
-choices. The Applications screen distinguishes a local process from an
-authenticated scoped service, shows how many Kubernetes scopes are configured,
-and reports whether this session can review, observe, or access no scope. Scope
-authorization does not reveal the server's physical location. An action
-appears only when the server grants its capability. A local process may run on
-a laptop or remote machine; the target Kubernetes API may be elsewhere. A
-browser action runs on the UI server host, not on the browser's laptop.
-
-| Use case | Current path | UI behavior |
+| Use case | Command and target | Browser actions |
 | --- | --- | --- |
-| Laptop UI → explicit Kubernetes cluster | `piceli ui serve` with an explicit kubeconfig/context or release definition | Inspect; review and deploy when isolated rendering is configured |
-| GitHub Actions or another CI runner → Kubernetes cluster | `piceli deploy --plan` and `piceli deploy --apply` with exact approval (see {doc}`ci`) | CLI works independently; the UI does not launch CI jobs |
-| Local or remote UI host running a CI-style pipeline definition | The existing `piceli deploy` CLI remains available | Browser plan/apply for pipeline definitions is pending; a release-definition UI run does not stand in for it |
-| Remote machine hosting the local UI → Kubernetes cluster | Run `piceli ui serve` on that machine and reach its loopback listener through an SSH tunnel | Operations and port forwards run on that machine |
-| Authenticated scoped UI → Kubernetes namespace | `piceli ui cluster-observe` (read-only) behind an HTTPS/OIDC gateway; `cluster-serve` delivery only with `PICELI_UI_EXPERIMENTAL=1` | Scoped observation; manual delivery and local-client forwarding are disabled by default and unsupported |
-| Direct application deployment to a machine without Kubernetes | No Piceli target/provider for this yet | No deployment action is offered |
+| Laptop or remote machine to a Kubernetes cluster | `piceli ui serve --kubeconfig PATH --context NAME --namespace NAME` | Inventory, resources, logs and supervised access |
+| Local or remote host with a release definition | `piceli ui serve --definition release.toml` plus the configured isolated renderer | Source review, release plan, deploy and activity |
+| Local or remote host with a CI-style Pipeline | `piceli ui serve --pipeline module:attribute` | Pipeline plan, two approvals when images must be delivered, pre-rollout checks, restore points and deploy |
+| GitHub Actions or another CI runner to Kubernetes | `piceli deploy --plan` / `piceli deploy --apply` | The CLI remains independent of the web server; the UI does not launch CI jobs |
+| UI installed inside the cluster | `piceli ui cluster-serve` behind the configured TLS gateway | OIDC-scoped observation, reviewed manual delivery, cluster build Jobs and local-client access tickets |
+| Direct application deployment to a machine without Kubernetes | No target provider exists yet | No deployment action is advertised |
 
-For the SSH-tunnel case, keep the UI bound to loopback on the remote host and
-forward the same port from your laptop, for example
-`ssh -L 8000:127.0.0.1:8000 my-host`. Open the launch address that
-`piceli ui serve` printed on the remote host (`http://127.0.0.1:8000/?token=…`)
-in your laptop's browser; the token travels only inside the tunnel.
-The release definition and explicit Kubernetes credentials live on the remote
-UI host. Port-forward sessions also bind there. This is a local UI process on a
-remote host, not a publicly hosted multi-user service.
+A local UI process may itself run on a remote machine. Keep its listener on
+loopback and use an SSH tunnel, for example
+`ssh -L 8000:127.0.0.1:8000 my-host`, to open the printed launch URL from
+your laptop. Actions and server-side forwards run on the remote machine; they
+do not become laptop ports. A local Pipeline can target a remote Kubernetes
+API through the explicit kubeconfig in its trusted definition. Never put a
+kubeconfig, arbitrary Python module, build command or source path into a
+browser request.
 
-The existing CI deployment flow remains available while the browser workflow
-develops. The browser cannot yet run a pipeline definition using the same
-`piceli deploy` plan/apply path; that requires the pipeline's materialized
-second-plan approval before an action can be exposed. Native Git reconciliation
-and a browser action that starts a CI job are also not implemented. A
-non-Kubernetes host target would need its own real planner, authorization and
-execution backend before the UI can expose it.
+## Pipeline deployment from the browser
 
-Register an existing release definition without changing its layout:
+The UI owner starts `piceli ui serve --pipeline module:attribute` with a
+trusted `Pipeline` definition. The server uses the existing `PipelineRunner`,
+state lock, journal and portable `piceli.pipeline.planfile` document. The
+browser shows the target, exact combined hash and planned stages: inputs,
+build, delivery, pre-rollout checks, restore point, release plan, apply and
+post-deploy checks, when declared. The operator must confirm the reviewed
+hash before execution. A changed or expired plan is refused.
 
-```sh
-piceli ui serve --definition release.toml --name my-app
-```
+When the release uses built images that are not yet delivered, the first
+approval covers only the build and delivery stages. The runner stops there.
+The server then creates a real, materialized release plan and waits in
+`awaiting-review`. The browser presents its new hash, pre-rollout checks and
+restore-point effects. A second explicit approval is required before rollout.
+Closing the browser does not grant that approval. Reload the run URL to resume
+review. Restarting the service marks a queued or running browser operation
+interrupted; inspect the Piceli deploy journal and prepare a new plan. A plan
+waiting for its second approval remains waiting after restart.
 
-The definition supplies the explicit kubeconfig, context and namespace. For an
-inventory-only scope, supply those directly:
+Pre-rollout checks declared by a release definition are included in its
+reviewed plan and run before the apply stage. Pipeline restore points and
+two-stage image delivery remain available to local Pipeline sessions.
 
-```sh
-piceli ui serve --kubeconfig ./my-cluster.kubeconfig \
-  --context kind-my-cluster --namespace shop --name shop
-```
+The Pipeline adapter runs on the local UI host and uses its configured builder
+and delivery route. An installed UI offers a separate cluster-build action:
+after approval of the exact build plan hash, its dispatcher calls Piceli's
+existing Kubernetes build Job path. The builder Job uses its own scoped
+ServiceAccount, Git Secret, cache PVC and node registry. The UI Pod receives no
+registry or cluster-admin credential.
 
-Open the printed launch address (`http://127.0.0.1:8000/?token=…`) once.
-`--url-prefix /piceli` hosts the application under that prefix, including deep
-links and API routes. Local sessions are same-origin and scoped to the
-configured host. This mode is a loopback server, including when started on a
-remote host behind an SSH tunnel. It is not a public multi-user server.
+## Branch environments and GitOps
 
-Who is trusted: the local user who started the server. A browser gets the
-session only by opening the launch address, whose token is new for every start,
-compared in constant time, never written to the server log, and kept in a
-`0600` file in the private state directory (`--state-dir`) while the server
-runs. Any other local process or account that can reach the loopback port,
-including other accounts on a remote host serving through an SSH tunnel, gets
-no session and no CSRF token: a page without the session shows how to open
-the UI and grants nothing. Anyone who can read your terminal, the token file
-or your browser profile can act as you; treat the launch address like a
-password.
+If the trusted Pipeline declares `EnvConfig`, **Environments** lists branch,
+namespace, commit, state, health, age and workloads using `list_envs`. Each
+running branch registers an explicit local observation scope: open its
+Resources page to inspect workloads, current or previous container logs, and
+access forwards. Environment up, down and seed requests show the core plan
+first, then require the exact `env_hash`. Seed asks for an explicit source
+environment. Piceli replans before the change; a changed hash is refused.
 
-Browsers do not isolate cookies by port: cookies for `127.0.0.1` are sent to
-every loopback port, including a forwarded workload you open in the same
-browser, and a page on another loopback port can read the script-readable
-CSRF cookie. Each server therefore names its session and CSRF cookies after
-its own origin and prefix (`piceli_session_…`, `piceli_csrf_…`, `Path=/` or the
-URL prefix, `SameSite=Strict`, the session cookie `HttpOnly`), so two local
-UIs do not overwrite each other, and the page reads only its own CSRF cookie.
-The CSRF token alone is not the guard: every request must also carry the
-exact Host, the UI's own Origin and same-origin Fetch Metadata, which a page on
-another port cannot forge.
+Configure `--gitops-namespace NAME` to expose the existing GitOps controller.
+**GitOps** displays controller and branch status, pending plan hashes, and
+requests approval of a pending hash or promotion of `branch@sha` to main. It
+submits a request to the installed controller; the browser does not reconcile
+Git itself. In OIDC-scoped mode, entries outside the granted namespace are
+hidden and cannot be approved or promoted. The cluster service account also
+needs the corresponding ConfigMap permission in the explicitly named
+controller namespace. An absent controller is displayed as unconfigured.
 
-To enable deployment for a release definition, also configure the durable
-control directory, an explicit allowlist of source files, and a trusted local
-renderer image by immutable Docker image ID. For example:
+## Local release definition and observation
 
-```sh
-piceli ui serve --definition release.toml --name my-app \
-  --control-dir ./ui-control --source-root . \
-  --source-file composition.py \
-  --renderer-image sha256:YOUR_PINNED_IMAGE_ID \
-  --renderer-platform linux/arm64
-```
+`piceli ui serve --definition PATH` registers the definition's explicit
+target. To allow source evaluation, also configure `--source-root`, one or
+more `--source-file` entries, the pinned `--renderer-image`, and
+`--renderer-platform`; see `piceli ui serve --help` for the remaining isolated
+renderer options. The browser reviews a source-execution preview before
+running the isolated renderer, then separately approves the produced exact
+release plan. Operations are journaled and continue after a browser disconnect.
+The Resources view shows observed objects, scoped logs and owned port forwards.
+The UI never treats a catalog selection as a deployment rollback.
 
-Repeat `--source-file` for every module or data file the definition needs.
-The source root must contain the configured composition entrypoint. Keep the
-control directory, state, kubeconfig, secrets and build credentials outside
-that allowlist. The renderer image must contain the same Piceli version as the
-service; the image ID and platform are checked before evaluation. An
-unavailable renderer disables deployment rather than evaluating consumer code
-inside the API process. The source evaluation container runs without network,
-deployment credentials or a writable root filesystem.
+With only `--kubeconfig`, `--context` and `--namespace`, the UI is inventory
+only. An access endpoint labelled **server** is on the UI host, including when
+that host is remote. Do not infer a laptop endpoint from it.
 
-The browser first approves the exact frozen source preview, then reviews and
-approves a separate deployment plan. The plan binds source, inputs, target,
-checks and live preconditions. A changed plan needs a new review. Runs persist
-in the control directory; closing the browser does not cancel work. The
-Activity view shows their stages, receipts and linked recovery attempts. An
-archived rollback creates a new reviewed plan and run. Direct CLI release runs
-from the same local state appear as imported history with the provenance the
-engine recorded; their original browser plan is not available. Inventory-only
-registrations remain read-only.
+## In-cluster service
 
-The browser deploy path does not run pre-rollout checks yet. When the evaluated
-app declares `app.pre_rollout(...)`, the evaluation fails with
-`ui-prerollout-unsupported` and no plan is produced; deploy that app with
-`piceli deploy`, which runs its `prerollout` stage. Restore points
-(`Pipeline(restore_points=...)`) belong to pipeline definitions, which the
-browser cannot deploy yet, so the UI never takes or skips a `backup` stage.
+The [installation guide](ui_cluster_install.md) describes the single-replica
+Deployment, TLS gateway, OIDC configuration, namespace grants and private PVC.
+The default installed profile is scoped observation. An operator may configure
+a trusted release definition, immutable renderer image, named deployment
+resources and deploy subjects. A granted OIDC user first approves the source
+evaluation digest, reviews the resulting release plan, then approves that
+plan's exact digest. The dispatcher applies that plan and writes operation and
+release state on the private PVC; an interrupted operation is visible after a
+Pod restart. Back up the PVC's control directory with the stopped-server
+commands below. The installed service does not run arbitrary browser-provided
+Pipelines.
 
-Health, desired/live relation, operation state and observation freshness are
-separate facts. A present resource does not establish health or an unchanged
-deployment. Denied resource kinds produce partial inventory; unavailable
-observation must not appear as an empty successful result. Unknown custom
-resource health remains unknown.
+Cluster login requires a signed ID token with the configured issuer, exact
+client audience, nonce and expiry. Only a principal with a configured grant
+gets a bounded session. Each API request and live stream rechecks its scope;
+logout is a CSRF-protected POST. The browser never receives the projected
+Kubernetes service-account token. A renderer Job has no deployment token or
+host mount and is selected by a deny-egress policy. Its trusted entrypoint
+waits for policy enforcement before importing approved source; verify the
+installed CNI's enforcement before enabling source evaluation.
 
-The Resources inspector offers current and previous container logs for an
-observed Pod, Deployment, StatefulSet, DaemonSet, Job or ReplicaSet. Workload
-selection follows current pods; the selected pod UID and container are checked
-again before every bounded read. A missing pod, denied read, or partial owner
-observation is shown explicitly. Log reads refresh about once a second; the
-browser retains at most 20,000 lines or 8 MiB, virtualizes visible rows and
-reports gaps when consecutive tail reads do not overlap. Resource changes use
-a shared scoped list/watch cache with a replayable observation stream; an
-expired stream cursor causes a reset and a fresh read.
-The Table and Relationships views use the same observed resource identities
-and inspector. Relationships follow observed owner UIDs; an unobserved owner
-is labelled as such rather than inferred.
+For remote local-client access in cluster mode, the server
+issues a pending one-time ticket. `piceli ui connect` uses an explicit local
+kubeconfig and context, starts a supervised loopback forward, probes it, and
+only then reports **ready**. Stopping, expiry or lost ownership removes that
+readiness. A pending server ticket never claims a laptop port exists.
 
-Where `kubectl` is installed, a forwardable Pod, Deployment or Service can be
-opened from its inspector. The UI asks for a target port and a local port;
-Piceli verifies the selected live UID and supervises the forward. “Ready”
-means its own loopback listener passed a TCP probe. An occupied port is
-refused, and closing the server stops forwards it owns. The binding is on the
-host running this local UI, which may differ from the browser's machine.
-Ended access sessions remain visible briefly for diagnosis: the local server
-retains at most 128 terminal records for ten minutes, then releases their
-supervisor references. Active sessions are not evicted by this history limit.
+## Back up or restore UI control state
 
-Each forward the UI starts is recorded in its private state directory
-(`--state-dir`, by default `$XDG_STATE_HOME/piceli/ui` or
-`~/.local/state/piceli/ui`, mode `0700`): the process id and a fingerprint of
-its start time and command line. A graceful stop (Ctrl+C) stops every forward.
-If the server is killed (`kill -9`) or crashes, its `kubectl port-forward`
-children keep running until the next `piceli ui serve` with the same state
-directory, which stops them before serving. It stops only a recorded process
-whose owner is gone and whose pid still has the recorded fingerprint; a pid
-reused by another process, or a forward of another running UI, is left alone.
-`piceli access stop --stale` does not recognise UI forwards: it looks only at
-the ports an app declares, and UI forwards use ports chosen in the browser.
-Until the next start, find a leftover by its port (`lsof -iTCP:PORT`) and
-stop it yourself.
-
-`make test-ui-access-retention-smoke` exercises a few real supervised local
-forward lifecycles through the disposable fake API.
-`make test-ui-access-retention-bound` runs 129 sessions to cross the terminal
-history limit. The 30-minute `make test-ui-access-retention` gate repeatedly
-starts and stops an owned forward and checks process, thread, socket and memory
-return. All three print compact JSON and remove their temporary fake
-credentials and executable on exit. None contacts a real cluster.
-
-The legacy `piceli operator serve` entry point remains during migration and
-prints a deprecation notice. Its inventory is labelled as observation, its
-catalog selection is not deployment rollback, and an unconfigured artifact
-inventory has unknown totals. The old `/v1/releases/rollback` compatibility
-route returns `action: "catalog-selection"`, `selected`, and `deployed: false`.
-Actual deployment rollback is available through reviewed release plans in the
-CLI and through the new web workflow when isolated rendering is configured.
-
-The implementation tracker records the release gates. Native Git delivery and
-in-cluster manual deployment are not available in this local interface.
-
-An experimental cluster observation command is available for an
-installation that supplies a projected service-account token, its CA file, an
-explicit Kubernetes API origin and a public HTTPS OIDC client. It binds only
-to loopback for a separately configured TLS gateway sidecar:
+Stop the single UI server before backing up its private control directory:
 
 ```sh
-piceli ui cluster-observe \
-  --api-server https://kubernetes.default.svc:443 \
-  --ca-file /var/run/secrets/kubernetes.io/serviceaccount/ca.crt \
-  --token-file /var/run/secrets/kubernetes.io/serviceaccount/token \
-  --namespace shop --control-dir /var/lib/piceli \
-  --origin https://piceli.example.test \
-  --oidc-issuer https://id.example.test \
-  --oidc-metadata-url https://id.example.test/.well-known/openid-configuration \
-  --oidc-client-id piceli-ui --authorized-sub OPERATOR_SUBJECT
+piceli ui backup --control-dir /var/lib/piceli --output /safe/ui-state.tar.gz
+piceli ui restore --archive /safe/ui-state.tar.gz --destination /new/empty/control
 ```
 
-The command generates a private kubeconfig containing file paths, not token
-bytes. It refreshes the projected token before each Kubernetes request. Only
-the named OIDC subjects can inspect the configured namespace and read its
-container logs. The default observation profile does not list Secrets or ConfigMaps.
-Sessions remain in the server process, expire with the signed
-ID token, and require same-origin CSRF protection for writes. After the identity
-provider redirects back, a short same-origin page continues to the
-application, so the browser sends the new SameSite=Strict session cookie.
-Opening the UI from a link on another site is accepted as a top-level page
-navigation only; API calls, subresources and writes must come from the UI's
-own origin. The default profile has no deployment or access grant. An experimental,
-unsupported in-cluster manual deployment is available, only with
-`--experimental` or `PICELI_UI_EXPERIMENTAL=1`, as the `cluster-serve`
-profile when an
-operator mounts an explicit release definition and allowlisted source files,
-pins a prebuilt renderer image by repository digest, configures deploy grants,
-and grants only the resource kinds that release may write. Source evaluation
-uses a token-free Job selected by a deny-egress NetworkPolicy; the browser
-reviews its frozen evaluation and the resulting exact release plan separately.
-The [installation template](ui_cluster_install.md) keeps read-only mode as
-its default and documents this manual profile. The clean kind installation,
-credential-boundary, backup/restore, and remote local-client acceptance gate
-remains open under Wave 4.
-
-Local-client forwarding (experimental and unsupported; it also needs
-`--experimental` or `PICELI_UI_EXPERIMENTAL=1` on both the server and
-`piceli ui connect`) is separately enabled by repeating
-`--authorized-access-sub SUBJECT` for subjects already named by
-`--authorized-sub`. The cluster service never binds the user's laptop port.
-An authorized browser creates a short-lived ticket for a selected resource UID;
-its one-time pairing secret appears only in the issuance response, never in a
-URL. On the user's machine, run:
-
-```sh
-piceli ui connect --server https://piceli.example.test \
-  --ticket TICKET_ID --kubeconfig ./my-cluster.kubeconfig \
-  --context my-cluster --local-port 8080 --experimental
-```
-
-The command prompts for the pairing secret without echo. It checks the
-cluster, namespace and resource UID using the explicit local credentials,
-starts an owned `kubectl port-forward`, probes the loopback port, and reports
-readiness through a separate expiring lease. The service labels that state
-**client-reported ready** because it cannot probe the user's laptop. Stopping
-the command, losing the lease, replacing the selected resource or revoking its
-grant ends the connection. The resource inspector's Access panel issues a
-ticket, displays its one-time pairing secret and local-client command, polls
-status, and lets the operator stop it. The secret stays in that browser view;
-navigating away requires a new ticket. If the client is
-killed before it can stop its forward, its private ownership record lets the
-next Piceli UI or client start reap that orphaned process.
-
-Contributors can run `make test-ui-performance` to measure the server's shared
-observation fixture: 50 applications, 5,000 resources in three scopes and ten
-concurrent API clients. It prints a small JSON result and leaves no artifacts.
-This fixture does not measure browser rendering or network latency.
-
-`make test-ui-browser-performance` measures ten isolated Chromium processes
-against the same 50-application/5,000-object synthetic scope at desktop and
-phone sizes. It adds 100 ms to API requests, applies fourfold CPU throttling,
-and reports first useful list timing from each browser's first navigation in
-turn while all ten processes remain alive, concurrent resource timing, selection
-response and scroll long tasks. The command fails if the published 2 s
-first-list, 100 ms selection or 50 ms scroll-task targets are missed. The
-fixture also reads a scoped Pod log through the real service at 1,000 lines/s
-for ten seconds and checks the visible line position and log-scroll tasks. A
-missed polling interval is shown as a gap. Ten simultaneous cold starts are a
-distinct stress case and may take longer. These synthetic observations do not
-replace a real Kubernetes watch or an installed-cluster log-load run.
+The backup command refuses a held dispatcher lock. It includes the operation
+store, evaluation evidence and release journal, verifies file digests and
+writes a mode-`0600` archive. Restore validates every member before moving it
+into an empty directory with private modes. Copy or restore the archive before
+starting a new single replica; keep the archive as private as deployment
+credentials and source evidence. Pipeline runs keep their own state directory,
+which must also be backed up if it lives outside this control directory.

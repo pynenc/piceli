@@ -12,7 +12,11 @@ from pathlib import Path
 import uvicorn
 
 from piceli.k8s.ops.provider_factory import KubeconfigTarget
-from piceli.k8s.ui_state import private_ui_state_dir, write_launch_token
+from piceli.k8s.ui_state import (
+    private_ui_state_dir,
+    remove_launch_token,
+    write_launch_token,
+)
 from piceli.server.app import create_app
 from piceli.server.security import uvicorn_log_config
 from piceli.services.query import QueryService
@@ -61,7 +65,7 @@ def main() -> None:
                     token_file = write_launch_token(
                         private_ui_state_dir(), options.port, security.launch_token
                     )
-                    cleanup.callback(token_file.unlink, missing_ok=True)
+                    cleanup.callback(remove_launch_token, token_file)
                     address = (
                         f"{security.launch_url()}\n"
                         f"Launch token file (removed on exit): {token_file}"

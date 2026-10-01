@@ -1,4 +1,4 @@
-"""Unfinished in-cluster UI paths are refused unless explicitly opted in."""
+"""Installed UI paths validate their real inputs without an opt-in gate."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ import pytest
 from typer.testing import CliRunner
 
 from piceli.k8s.cli.ui import app as ui_app
-from piceli.k8s.ui_experimental import EXPERIMENTAL_ENV, experimental_enabled
 
 
 def _cluster_args(tmp_path: Path) -> list[str]:
@@ -36,14 +35,20 @@ def _cluster_args(tmp_path: Path) -> list[str]:
     ]
 
 
-def test_opt_in_reads_flag_or_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv(EXPERIMENTAL_ENV, raising=False)
-    assert not experimental_enabled()
-    assert experimental_enabled(True)
-    monkeypatch.setenv(EXPERIMENTAL_ENV, "0")
-    assert not experimental_enabled()
-    monkeypatch.setenv(EXPERIMENTAL_ENV, "1")
-    assert experimental_enabled()
+def test_legacy_experimental_environment_does_not_change_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    results = []
+    for value in ("0", "1"):
+        monkeypatch.setenv("PICELI_UI_EXPERIMENTAL", value)
+        results.append(
+            CliRunner().invoke(
+                ui_app,
+                ["cluster-serve", *_cluster_args(tmp_path), "--renderer-image", "bad"],
+            )
+        )
+    assert all(result.exit_code == 2 for result in results)
+    assert all('"reason": "ui-invalid-request"' in result.stdout for result in results)
 
 
 @pytest.mark.parametrize("command", ["cluster-serve", "cluster-observe"])
@@ -55,23 +60,24 @@ def test_opt_in_reads_flag_or_environment(monkeypatch: pytest.MonkeyPatch) -> No
         ["--renderer-image", "registry.example.test/r@sha256:" + "a" * 64],
     ],
 )
-def test_cluster_delivery_and_access_are_disabled_by_default(
+def test_cluster_delivery_and_access_reach_input_validation_by_default(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     command: str,
     extra: list[str],
 ) -> None:
-    monkeypatch.delenv(EXPERIMENTAL_ENV, raising=False)
+    monkeypatch.delenv("PICELI_UI_EXPERIMENTAL", raising=False)
     result = CliRunner().invoke(ui_app, [command, *_cluster_args(tmp_path), *extra])
     assert result.exit_code == 2
-    assert '"reason": "ui-experimental-disabled"' in result.stdout
-    assert not (tmp_path / "state").exists()
+    assert '"reason": "ui-experimental-disabled"' not in result.stdout
+    assert '"reason": "ui-invalid-request"' in result.stdout
 
 
-def test_connect_is_disabled_by_default(
+def test_connect_reaches_kubeconfig_validation_by_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.delenv(EXPERIMENTAL_ENV, raising=False)
+    monkeypatch.delenv("PICELI_UI_EXPERIMENTAL", raising=False)
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     result = CliRunner().invoke(
         ui_app,
         [
@@ -89,13 +95,13 @@ def test_connect_is_disabled_by_default(
         ],
     )
     assert result.exit_code == 2
-    assert '"reason": "ui-experimental-disabled"' in result.stdout
+    assert '"reason": "ui-invalid-request"' in result.stdout
 
 
-def test_opt_in_passes_the_gate_to_the_next_check(
+def test_legacy_opt_in_is_accepted_but_not_required(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv(EXPERIMENTAL_ENV, "1")
+    monkeypatch.setenv("PICELI_UI_EXPERIMENTAL", "1")
     result = CliRunner().invoke(
         ui_app,
         [
@@ -105,4 +111,4 @@ def test_opt_in_passes_the_gate_to_the_next_check(
             "alice",
         ],
     )
-    assert '"reason": "ui-experimental-disabled"' not in result.stdout
+    assert '"reason": "ui-invalid-request"' in result.stdout

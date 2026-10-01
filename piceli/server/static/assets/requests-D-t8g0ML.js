@@ -1,0 +1,1 @@
+function e(e,n){let r=`piceli.request:${e}:${n}`;try{let e=sessionStorage.getItem(r);if(e)return e;let t=crypto.randomUUID();return sessionStorage.setItem(r,t),t}catch{let e=t.get(r);if(e)return e;let n=crypto.randomUUID();return t.set(r,n),n}}var t=new Map;export{e as t};

@@ -142,32 +142,60 @@ class RenderedComposition:
     source: SourceRevision
     inputs: RenderInputs
     components: tuple[dict[str, Any], ...]
+    pre_rollouts: tuple[dict[str, Any], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        value = {
             "preview_id": self.preview_id,
             "digest": self.digest,
             "source": self.source.model_dump(),
             "inputs": self.inputs.to_dict(),
             "components": list(self.components),
         }
+        if self.pre_rollouts:
+            value["pre_rollouts"] = list(self.pre_rollouts)
+        return value
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> RenderedComposition:
-        if set(value) != {"preview_id", "digest", "source", "inputs", "components"}:
+        if set(value) not in (
+            {"preview_id", "digest", "source", "inputs", "components"},
+            {"preview_id", "digest", "source", "inputs", "components", "pre_rollouts"},
+        ):
             raise EvaluationError("evaluation-output")
+        from piceli.app.prerollout import PreRollout
+
+        try:
+            declared = tuple(
+                PreRollout.model_validate(item).model_dump(mode="json")
+                for item in value.get("pre_rollouts", ())
+            )
+        except (TypeError, ValueError):
+            raise EvaluationError("evaluation-output") from None
         result = cls(
             value["preview_id"],
             value["digest"],
             SourceRevision.model_validate(value["source"]),
             RenderInputs.from_dict(value["inputs"]),
             tuple(value["components"]),
+            declared,
         )
         from piceli.app.render import placeholder_inputs
 
         result.composition(
             result.inputs.context(placeholder_inputs(list(result.inputs.secret_names)))
         )
+        workloads = {
+            item["manifest"]["metadata"]["name"]
+            for component in result.components
+            for item in component["resources"]
+            if item["manifest"].get("kind")
+            in {"Deployment", "StatefulSet", "DaemonSet"}
+        }
+        if len({item["workload"] for item in declared}) != len(declared) or any(
+            item["workload"] not in workloads for item in declared
+        ):
+            raise EvaluationError("evaluation-output")
         return result
 
     def composition(self, context: ReleaseContext) -> DeploymentComposition:
@@ -875,10 +903,12 @@ class DockerEvaluator:
                     raise EvaluationError("evaluation-renderer")
                 result = json.loads(output)
                 checks = result.pop("pre_rollout_checks", 0)
+                pre_rollouts = result.pop("pre_rollouts", [])
                 if (
                     set(result) != {"components"}
                     or type(checks) is not int
                     or checks < 0
+                    or not isinstance(pre_rollouts, list)
                 ):
                     raise EvaluationError("evaluation-output")
                 if checks:
@@ -892,6 +922,7 @@ class DockerEvaluator:
                         "source": preview.source.model_dump(),
                         "inputs": request["inputs"],
                         "components": result["components"],
+                        **({"pre_rollouts": pre_rollouts} if pre_rollouts else {}),
                     }
                 )
                 record["state"] = "succeeded"

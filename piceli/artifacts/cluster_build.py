@@ -134,8 +134,14 @@ class ClusterBuildConfig:
     spec_paths: Mapping[str, str] = field(default_factory=dict)
     repo_root: Path | None = None
     resources: Mapping[str, Any] | None = None
+    # Optional, so existing CLI plans and their hashes remain unchanged.
+    service_account: str | None = None
 
     def __post_init__(self) -> None:
+        if self.service_account is not None and not _DNS.fullmatch(
+            self.service_account
+        ):
+            raise _invalid("build service account must be a DNS label")
         image, sep, digest = self.image.partition("@")
         if not image or not sep or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
             raise _invalid("the builder image must be pinned (name@sha256:<digest>)")
@@ -470,6 +476,9 @@ def _job(
             {"name": "work", "emptyDir": {}},
         ],
     }
+    if config.service_account is not None:
+        pod["serviceAccountName"] = config.service_account
+        pod["automountServiceAccountToken"] = False
     if config.tolerations:
         pod["tolerations"] = [dict(item) for item in config.tolerations]
     if host_network:
@@ -501,15 +510,18 @@ class BuildCluster(PreRolloutCluster):
     """The Job runner, reading the receipt line the build prints last."""
 
     receipt_text: str | None = None
+    log_access: str = "not-attempted"
 
     def _logs(self, job: str, redact: Any) -> str:
         from kubernetes.client.exceptions import ApiException
 
         pod = self._pod(job)
         if pod is None:
+            self.log_access = "pod-not-found"
             return ""
         self.receipt_text = None
         texts: list[str] = []
+        statuses: list[int] = []
         for lines, limit in ((60, 16384), (2, 16 * 1024 * 1024)):
             try:
                 response = self.client.call_api(
@@ -520,15 +532,19 @@ class BuildCluster(PreRolloutCluster):
                         ("tailLines", lines),
                         ("limitBytes", limit),
                     ],
-                    header_params={"Accept": "text/plain"},
+                    header_params={"Accept": "*/*"},
                     auth_settings=["BearerToken"],
                     _preload_content=False,
                     _request_timeout=self.request_seconds,
                 )
-            except ApiException:
+            except ApiException as error:
+                statuses.append(error.status)
                 texts.append("")
                 continue
             texts.append(_raw(response).data.decode(errors="replace"))
+        self.log_access = (
+            "read" if any(texts) else f"http-{statuses[-1]}" if statuses else "empty"
+        )
         for line in reversed(texts[1].splitlines() or texts[0].splitlines()):
             if line.startswith(RECEIPT_MARKER):
                 self.receipt_text = line[len(RECEIPT_MARKER) :]
@@ -644,7 +660,7 @@ def run_build_job(
             f"the build Job ended {outcome.state}"
             + (f" ({outcome.reason})" if outcome.reason else ""),
             failed=True,
-            details={"outcome": outcome.public()},
+            details={"outcome": outcome.public(), "log_access": cluster.log_access},
         )
     try:
         receipt = decode_receipt(cluster.receipt_text)
@@ -653,7 +669,7 @@ def run_build_job(
             "cluster-build-failed",
             "the build Job printed no readable receipt",
             failed=True,
-            details={"outcome": outcome.public()},
+            details={"outcome": outcome.public(), "log_access": cluster.log_access},
         ) from None
     receipt["job"] = {
         "name": plan.job["metadata"]["name"],

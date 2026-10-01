@@ -61,7 +61,7 @@ docs: ## Build the documentation (warnings are errors)
 build: ## Build sdist and wheel into dist/
 	uv build
 
-.PHONY: ui-contract ui-contract-check ui-install ui-check ui-build ui-fake-serve test-ui test-ui-fake test-ui-package test-browser test-browser-cluster-oidc test-browser-delivery test-ui-kind-delivery test-ui-kind-renderer test-ui-kind-runtime test-ui-performance test-ui-browser-performance test-ui-soak test-ui-access-retention-smoke test-ui-access-retention-bound test-ui-access-retention
+.PHONY: ui-contract ui-contract-check ui-install ui-check ui-build ui-fake-serve test-ui test-ui-fake test-ui-package test-browser test-browser-cluster-oidc test-browser-delivery test-ui-kind-delivery test-ui-kind-renderer test-ui-kind-runtime test-ui-kind-e2e test-ui-performance test-ui-browser-performance test-ui-soak test-ui-access-retention-smoke test-ui-access-retention-bound test-ui-access-retention
 
 PICELI_UI_FAKE_PORT ?= 4177
 PICELI_UI_FAKE_TEST_PORT ?= 4184
@@ -88,7 +88,7 @@ ui-fake-serve: ## Open a read-only local UI with a disposable fake Kubernetes AP
 	uv run --frozen --extra ui python tests/browser/serve_ui.py --port $(PICELI_UI_FAKE_PORT)
 
 test-ui: ## Run service and legacy UI acceptance checks against the fake API
-	uv run --frozen --extra ui pytest -n auto tests/unit/test_ui_contracts.py tests/acceptance/test_ui_truthfulness.py tests/acceptance/test_ui_service.py
+	uv run --frozen --extra ui pytest -n auto tests/unit/test_ui_contracts.py tests/unit/services/test_environment_control.py tests/unit/server/test_launch_token.py tests/unit/server/test_ui_state_archive.py tests/acceptance/test_ui_truthfulness.py tests/acceptance/test_ui_service.py tests/acceptance/test_ui_pipeline.py
 
 test-ui-fake: ## Run fake-API UI service and browser journeys (requires Chromium)
 	$(MAKE) test-ui
@@ -114,6 +114,9 @@ test-ui-kind-renderer: ## Run the token-free renderer Job in a disposable kind c
 
 test-ui-kind-runtime: ## Boot the installed UI and verify PVC survives a Pod restart in disposable kind
 	uv run --frozen --extra ui python scripts/ui_kind.py uv run --frozen --extra ui python -m pytest -q tests/integration/test_ui_cluster_runtime_kind.py
+
+test-ui-kind-e2e: ## Exercise OIDC, build, deploy, recovery, access and egress in one disposable kind cluster
+	uv run --frozen --extra ui python scripts/ui_kind.py uv run --frozen --extra ui python -m pytest -q tests/integration/test_ui_installed_e2e_kind.py
 
 test-ui-performance: ## Measure the shared-observation 50-app/5,000-object/10-client fixture
 	uv run --frozen python tests/performance/ui_observation_fixture.py
