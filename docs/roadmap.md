@@ -3,7 +3,8 @@
 Piceli aims to be the reference open-source way to manage Kubernetes applications
 and platform architecture in Python. That means replacing hand-written YAML,
 Kustomize overlays and Helm templates with typed code, then growing into
-Terraform-style infrastructure lifecycle and Argo CD-style continuous delivery.
+Terraform-style infrastructure lifecycle. Continuous delivery from Git, per-branch
+environments and a web UI are already part of it.
 
 This page summarises where the project stands and the direction it is heading.
 Priorities may change. Progress is tracked in
@@ -31,7 +32,7 @@ Priorities may change. Progress is tracked in
 | Reusable, versioned packages (Helm equivalent) | ❌ Not yet |
 | Custom resources (CRDs) | 🟡 Preview: `app.resource` with models from `piceli codegen crd` |
 | Local operations UI and JSON API | 🟡 Early preview |
-| Continuous reconciliation from Git (Argo CD equivalent) | 🟡 Handoff only: `piceli publish` (Flux OCI artifact) and `render --out` for Flux or Argo CD; no in-cluster Piceli controller |
+| Continuous delivery from Git | 🟡 Experimental: `piceli gitops enable` installs a controller that keeps one environment per branch ({doc}`gitops`, {doc}`environments`); `piceli publish` and `render --out` export manifests |
 | Cloud infrastructure lifecycle (Terraform/OpenTofu equivalent) | ❌ Not yet; GKE cluster helpers only |
 
 ## Feature status
@@ -58,7 +59,8 @@ Every feature page starts with its maturity, and this table lists them all:
 | Deploy from source (`piceli deploy`, `piceli.pipeline`) | {doc}`deploy` | preview |
 | Deploy a commit (`piceli deploy --ref`) | {ref}`deploy-ref` | preview |
 | Deploy from CI with an approval step (GitHub Actions recipe) | {doc}`ci` | preview |
-| GitOps handoff to Flux or Argo CD (`piceli publish`, `piceli render --out`) | {doc}`gitops` | preview |
+| Manifest export (`piceli publish`, `piceli render --out`) | {doc}`gitops` | preview |
+| GitOps controller and per-branch environments (`piceli gitops`, `piceli env`, `piceli envs`, `piceli promote`) | {doc}`gitops`, {doc}`environments` | experimental |
 | Shared deployment state, release lock, plan files, `piceli state` | {doc}`state` | preview |
 | Runner hygiene: temporary-file cleanup, `piceli cache status/prune`, `cache_budget=`, `piceli doctor`, run summaries and `piceli runs` | {doc}`maintenance` | preview |
 | Releases from a spec (`piceli release`) | {doc}`release_cli` | preview |
@@ -92,13 +94,13 @@ Pulumi, tests that all five render the same objects, and compares their
 size, steps and safety features; {doc}`when_to_use` is the short version.
 The table below is the long-term view.
 
-| | Kustomize | Helm | OpenTofu / Terraform | Argo CD | Piceli (goal) |
-| --- | --- | --- | --- | --- | --- |
-| Language | YAML patches | Go templates over YAML | HCL | YAML (Application CRDs) | Typed Python |
-| Validation before apply | Schema only | Schema only | Provider schemas | Diff in UI | Pydantic models, pure plans and admission dry-run |
-| Reuse | Bases and overlays | Charts | Modules | Wraps the others | Python packages of components |
-| State | None (cluster only) | Release secrets | State file and backend | Git plus cluster | Journals, revisions and release catalog |
-| Drift handling | Manual | Manual | `plan` | Continuous | `plan` now, continuous later |
+| | Kustomize | Helm | OpenTofu / Terraform | Piceli (goal) |
+| --- | --- | --- | --- | --- |
+| Language | YAML patches | Go templates over YAML | HCL | Typed Python |
+| Validation before apply | Schema only | Schema only | Provider schemas | Pydantic models, pure plans and admission dry-run |
+| Reuse | Bases and overlays | Charts | Modules | Python packages of components |
+| State | None (cluster only) | Release secrets | State file and backend | Journals, revisions and release catalog |
+| Drift handling | Manual | Manual | `plan` | `plan`, plus the GitOps controller's per-branch reconcile |
 
 ## Direction
 

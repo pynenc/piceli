@@ -1,13 +1,13 @@
 # When to use Piceli, and when not to
 
-A short decision guide. Each point links the test, example or page behind
-it; {doc}`comparisons` shows the same app written with Piceli, Helm,
-Kustomize, cdk8s and Pulumi and compares them in detail.
+A short fit guide. Each point links the test, example or page behind it;
+{doc}`comparisons` shows the same app written with Piceli, Helm, Kustomize,
+cdk8s and Pulumi and compares them in detail.
 
 ```{admonition} Maturity: preview
 :class: note
 
-Piceli is pre-alpha. The guidance below describes this release and changes
+Piceli is pre-alpha. The guide below describes this release and changes
 as features land; the {doc}`roadmap` lists the maturity of every feature.
 ```
 
@@ -48,30 +48,40 @@ as features land; the {doc}`roadmap` lists the maturity of every feature.
   ({doc}`testing`); the README quick start runs against it in CI
   ({src}`tests/acceptance/test_readme_quickstart.py`).
 
-## Do not use Piceli (yet) when
+## Current limits
 
-- **You need stable APIs.** Piceli is pre-alpha and its APIs change between
-  releases ({doc}`changelog`). Helm, Kustomize, cdk8s and Pulumi are mature.
-- **You install many third-party packages.** Most vendors ship Helm charts;
-  Piceli has no package format ({doc}`roadmap`). Use Helm for those, or
-  render a chart with `helm template` and load the YAML
-  ({ref}`faq-existing-yaml`).
-- **You run GitOps.** Argo CD and Flux reconcile Helm and Kustomize from Git
-  continuously across clusters. Piceli applies on request; continuous
-  reconciliation is not available ({doc}`roadmap`). `piceli render` can
-  still produce the YAML those controllers apply.
-- **Your infrastructure is more than Kubernetes.** Pulumi (or
-  OpenTofu/Terraform) manages databases, DNS, buckets and clusters in one
-  state with the Kubernetes objects; Piceli covers Kubernetes only
-  ({doc}`roadmap`).
-- **Your team does not use Python.** Helm and Kustomize need no programming
-  language; cdk8s and Pulumi support several.
-- **You expect removed objects to disappear.** Helm and Pulumi delete what
-  you remove from the code; Piceli prunes only from a release spec with
-  `prune = true`, and never Namespaces, volumes, claims or Secrets
+What Piceli does not do today, so you can judge the fit:
+
+- **APIs still change.** Piceli is pre-alpha and its APIs change between
+  releases ({doc}`changelog`).
+- **No package format.** Piceli has no reusable, versioned package of
+  components ({doc}`roadmap`). A vendor's Helm chart can be rendered with
+  `helm template` and its YAML loaded ({ref}`faq-existing-yaml`).
+- **Kubernetes only.** Piceli does not manage databases, DNS, buckets or
+  clusters ({doc}`roadmap`); it has GKE cluster helpers only.
+- **Python only.** Apps are written in Python.
+- **Pruning is deliberate.** Removed objects disappear only from a release
+  spec with `prune = true`, and never Namespaces, volumes, claims or Secrets
   ({doc}`release_cli`).
 
-## Using Piceli next to other tools
+## GitOps, environments and the web UI
+
+Continuous delivery is part of Piceli, not something to add next to it:
+
+- **One environment per branch from Git.** `piceli gitops enable` installs a
+  controller that polls a repository and keeps one environment per branch at
+  its head, with the same plans, approvals and checks as `piceli deploy`;
+  `piceli env`, `piceli envs` and `piceli promote` operate on those
+  environments ({doc}`gitops`, {doc}`environments`).
+- **A web UI.** `piceli ui serve` locally, or installed in the cluster with
+  OIDC, shows applications, environments, the GitOps controller and Pipeline
+  plans with their approval step ({doc}`ui`).
+- **Export when you want it.** `piceli publish --to oci://` produces an OCI
+  artifact of the rendered manifests, `piceli render --out DIR` writes them as
+  files and `piceli chart` writes a Helm chart for clusters that want one
+  ({doc}`gitops`, {doc}`helm_charts`).
+
+## Bringing what you have
 
 - **From YAML or a running namespace:** `piceli import yaml` and
   `piceli import live` write a typed module
@@ -79,6 +89,6 @@ as features land; the {doc}`roadmap` lists the maturity of every feature.
   {doc}`migrate_from_kubectl`).
 - **Existing manifests alongside a typed app:** see
   {ref}`faq-existing-yaml`.
-- **Into existing pipelines:** `piceli render` prints plain manifests for
-  `kubectl`, Argo CD or Flux; the {doc}`comparisons` test checks that they
-  match what Helm, Kustomize, cdk8s and Pulumi produce for the same app.
+- **Plain manifests:** `piceli render` prints them; the {doc}`comparisons`
+  test checks that they match what Helm, Kustomize, cdk8s and Pulumi produce
+  for the same app.

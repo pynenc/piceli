@@ -6,6 +6,31 @@ The UI runs in one of two modes: a local, single-user process with an explicit
 target, or an OIDC-authenticated service installed inside a Kubernetes cluster.
 Each mode offers only the actions configured by its operator.
 
+## What it shows
+
+The screenshots come from `make ui-clips`, which records fixed journeys on a
+disposable fake Kubernetes API (no real cluster or credential).
+
+```{image} _static/ui/applications.png
+:alt: The Applications page of the Piceli web UI
+:width: 720px
+```
+
+```{image} _static/ui/environments.webp
+:alt: Per-branch environments in the Piceli web UI: branch, namespace, commit, state and health
+:width: 720px
+```
+
+```{image} _static/ui/gitops.png
+:alt: The GitOps page: controller status and per-branch state, with a branch waiting for approval
+:width: 720px
+```
+
+```{image} _static/ui/pipeline-plan.png
+:alt: A Pipeline plan with its stages and the approval step for the exact combined hash
+:width: 720px
+```
+
 ## Try the local fake UI
 
 In a source checkout:

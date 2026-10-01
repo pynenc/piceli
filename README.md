@@ -49,11 +49,14 @@ to a running, checked release; `piceli status` and `piceli access` tell you
 whether it is up and forward its ports to your laptop.
 
 It is a Python-native alternative to hand-maintained YAML, Kustomize overlays
-and Helm templates, and it still accepts plain YAML/JSON and `kubernetes`
-client objects, so you can migrate gradually.
+and Helm templates, and it also runs the delivery loop: a GitOps controller,
+one environment per branch and a web UI. It still accepts plain YAML/JSON and
+`kubernetes` client objects, so you can migrate gradually; `piceli publish`,
+`piceli render --out` and `piceli chart` export OCI artifacts, manifests and
+Helm charts when a cluster wants them.
 [When to use Piceli](https://docs.pynenc.org/projects/piceli/en/latest/when_to_use.html)
-says when it fits and when Helm, Kustomize, cdk8s or Pulumi fit better, and
-[the same app in all five](https://docs.pynenc.org/projects/piceli/en/latest/comparisons.html)
+lists what it covers and its current limits, and
+[the same app in Piceli, Helm, Kustomize, cdk8s and Pulumi](https://docs.pynenc.org/projects/piceli/en/latest/comparisons.html)
 compares them side by side (a CI test checks that all five render the same
 objects).
 
@@ -79,6 +82,43 @@ objects).
 
 See the [changelog](https://docs.pynenc.org/projects/piceli/en/stable/changelog.html)
 for the complete list, including breaking changes.
+
+## Web UI
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/pynenc/piceli/main/docs/_static/ui/environments.gif" alt="The Piceli web UI listing per-branch environments with their namespace, commit and health" width="720">
+</p>
+
+`pip install "piceli[ui]"` adds a web UI (experimental). Run it locally with
+`piceli ui serve`, or install it in the cluster behind OIDC
+(`piceli ui cluster-serve`). It shows:
+
+- **Applications**: objects, workloads, logs and supervised port forwards.
+- **Environments**: one environment per Git branch, with namespace, commit,
+  health and workloads.
+- **GitOps**: the controller's status, each branch's state and pending plan
+  hash, with approve and promote.
+- **Pipelines**: the plan field by field, then the approval of its exact hash
+  (two approvals when images must be delivered) before anything is applied.
+- **Logs and access**: scoped container logs and local forwards.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/pynenc/piceli/main/docs/_static/ui/pipeline-plan.png" alt="A Pipeline plan with its stages and the approval step" width="720">
+</p>
+
+See the [web UI page](https://docs.pynenc.org/projects/piceli/en/stable/ui.html)
+and the [in-cluster installation](https://docs.pynenc.org/projects/piceli/en/stable/ui_cluster_install.html).
+
+## GitOps and per-branch environments (0.13.0)
+
+`piceli gitops enable` installs a controller in the cluster that polls your
+Git repository and keeps **one environment per branch** at its head, with the
+same plans, approvals and checks as `piceli deploy`. `piceli env` and
+`piceli envs` create, list and tear down those environments, and
+`piceli promote` deploys a reviewed commit to main. See
+[GitOps](https://docs.pynenc.org/projects/piceli/en/latest/gitops.html) and
+[Environments](https://docs.pynenc.org/projects/piceli/en/latest/environments.html).
+The controller is experimental.
 
 ## Installation
 
@@ -188,9 +228,13 @@ Next steps:
   codes explained by `piceli explain`, the whole command tree with side
   effects and approval rules from `piceli help-json`, and a public fake
   Kubernetes API (`piceli.testing`) for your own tests.
+- **GitOps and environments (experimental)**: `piceli gitops enable` keeps
+  one environment per branch at its head; `piceli env` and `piceli envs`
+  operate on them.
 - **Web UI (experimental)**: `pip install "piceli[ui]"` and `piceli ui serve`
   open a local browser UI to inspect an app and deploy it through the same
-  reviewed plans. In-cluster delivery from the UI is disabled by default; see
+  reviewed plans; it can also be installed in the cluster with OIDC.
+  In-cluster delivery from the UI is disabled by default; see
   the [web UI page](https://docs.pynenc.org/projects/piceli/en/stable/ui.html).
 
 ## For coding agents
