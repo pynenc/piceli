@@ -3,7 +3,7 @@ name: piceli
 description: Deploy and operate Kubernetes apps described as typed Python with Piceli, safely, from an agent. Covers installing piceli, describing an App and a Pipeline, rendering without a cluster, planning and showing the plan to the owner, deploying only with the hash the owner approved (or inside the owner's declared auto_approve policy), checking status and access, diagnosing failures with `piceli explain` and the JSON output contract, resuming interrupted runs and rolling back. Use when a project imports piceli or has a Pipeline or release.toml, or when asked to deploy, plan, roll back or debug a Piceli release.
 license: MIT
 metadata:
-  piceli-version: "0.13"
+  piceli-version: "0.14"
 ---
 
 # Piceli
@@ -38,7 +38,7 @@ exist in the version below.
 
 ## Requirements
 
-- `piceli` **0.13.x**, CPython 3.12+: `pip install "piceli>=0.13,<0.14"`.
+- `piceli` **0.14.x**, CPython 3.12+: `pip install "piceli>=0.14,<0.15"`.
 - The owner gives you a kubeconfig **file** and a **context** (here through
   `SHOP_KUBECONFIG` and `SHOP_CONTEXT`). A pipeline with `Build` objects also
   needs Docker; the example below uses pinned images only.
@@ -47,7 +47,7 @@ exist in the version below.
 python scripts/check_install.py
 ```
 
-It checks that `piceli --version` is 0.13.x and that `piceli help-json` has
+It checks that `piceli --version` is 0.14.x and that `piceli help-json` has
 every command and option this skill uses. `piceli help-json` is the full
 reference: every command's side effects, whether it needs approval and
 whether it is safe to retry.

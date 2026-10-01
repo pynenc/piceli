@@ -4,7 +4,7 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
-## Version 0.14.0 (unreleased)
+## Version 0.14.0
 
 - **Credential profiles:** `piceli login NAME --kubeconfig FILE [--context C]`
   stores a profile (the kubeconfig path and context, never its contents or a
