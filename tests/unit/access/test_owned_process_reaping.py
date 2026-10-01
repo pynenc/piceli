@@ -248,7 +248,9 @@ def test_ui_serve_reaps_orphans_before_serving(
 
     served: list[object] = []
     monkeypatch.setattr(OwnedProcessRegistry, "reap_orphans", reap)
-    monkeypatch.setattr(uvicorn, "run", lambda server, **_kwargs: served.append(server))
+    monkeypatch.setattr(
+        uvicorn.Server, "run", lambda server, **_kwargs: served.append(server)
+    )
     kubeconfig = tmp_path / "kubeconfig"
     kubeconfig.write_text("apiVersion: v1\nkind: Config\n")
     result = CliRunner().invoke(

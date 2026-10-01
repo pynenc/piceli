@@ -2773,6 +2773,7 @@ Register an existing definition or inventory scope and serve the bundled UI.
 | `--kubeconfig` | path |  | Explicit kubeconfig file |
 | `--context` | text |  | Explicit kubeconfig context |
 | `--namespace` | text |  | Inventory namespace |
+| `--profile` | text |  | Local credential profile (piceli profiles --json) |
 | `--definition` | path |  | Existing release TOML definition |
 | `--pipeline` | text |  | Trusted Pipeline MODULE:ATTR configured by the UI owner |
 | `--gitops-namespace` | text |  | Show the GitOps controller in this explicit namespace |
