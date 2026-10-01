@@ -8,8 +8,9 @@
 - ``gitops status`` shows the controller's health and every branch's commit,
   state and pending approval.
 - ``gitops approve ENV HASH`` releases a deploy waiting for approval.
-- ``promote BRANCH@SHA`` asks the controller to deploy that commit to main
-  (it then waits for ``gitops approve`` unless the owner allowed otherwise).
+- ``promote [ENV] BRANCH@SHA`` asks the controller to deploy that commit to
+  main, or to the named environment ENV (it then waits for ``gitops
+  approve`` unless the owner allowed otherwise).
 - ``gitops run`` is the controller itself (the Deployment's entrypoint), or
   one poll locally with ``--once``.
 
@@ -322,6 +323,14 @@ def enable(
             "--node-registry", help="host[:port] nodes pull from, when different"
         ),
     ] = None,
+    root: Annotated[
+        Path,
+        typer.Option(
+            "--root",
+            help="The repository's working tree: the pipeline's named "
+            "environments and idle_stop are read from it (when the file is there)",
+        ),
+    ] = Path("."),
     approve: Annotated[
         str | None, typer.Option("--approve", help="The plan hash to execute")
     ] = None,
@@ -329,7 +338,12 @@ def enable(
     exec_sha256: ExecSha256Option = None,
     transport: TransportOption = "https",
 ) -> None:
-    """Install the GitOps controller (plan first; --approve HASH installs)."""
+    """Install the GitOps controller (plan first; --approve HASH installs).
+
+    The pipeline's named environments (EnvConfig(environments=...)) and its
+    idle_stop are read from the working tree (--root) into the controller's
+    config, so the plan hash covers every environment's trigger.
+    """
     from piceli.gitops.config import (
         ControllerConfig,
         parse_duration,
@@ -338,6 +352,7 @@ def enable(
     from piceli.gitops.install import InstallSettings, plan_objects, render_controller
 
     with _guard():
+        rules, idle = environment_rules(pipeline, root, env)
         config = ControllerConfig(
             pipeline=pipeline,
             repo=repo,
@@ -355,6 +370,8 @@ def enable(
             build_registry=build_registry,
             node_registry=node_registry,
             namespace=namespace,
+            environments=rules,
+            idle_stop_seconds=idle,
         )
         settings = InstallSettings(
             image=image,
@@ -363,8 +380,20 @@ def enable(
             storage_class=storage_class,
             cluster_rbac=cluster_rbac,
         )
-    if not config.deploys_main:
+    if not config.deploys_main and config.rule(main_branch) is None:
         say(f"note: {main_branch} matches no --branches glob; tags will not deploy it")
+    for rule in config.environments:
+        say(
+            f"environment {rule.name}: follows "
+            + (
+                ", ".join(
+                    [f"branch {b}" for b in rule.branches]
+                    + [f"tag {t}" for t in rule.tags]
+                    + (["promote"] if rule.promote else [])
+                )
+                or "nothing"
+            )
+        )
     objects = render_controller(config, settings)
     command = _command_line(
         "piceli gitops enable", pipeline, kubeconfig, context, namespace,
@@ -374,6 +403,7 @@ def enable(
         builder_image=builder_image, build_git_secret=build_git_secret,
         build_storage=build_storage, build_registry=build_registry,
         node_registry=node_registry,
+        root=None if root == Path(".") else str(root),
         flags={"--main-auto-approve": main_auto_approve, "--cluster-rbac": cluster_rbac, "--allow-exec": allow_exec},
         repeat={"--platform": platform or [], "--builder-selector": builder_selector or []},
         transport=transport,
@@ -387,6 +417,44 @@ def enable(
                 config={"controller": config.to_dict(), "install": settings.to_dict()},
             )
         _run_plan(api, plan, approve, command, {"controller": config.to_dict()})
+
+
+def environment_rules(
+    entry: str, root: Path, env: str | None
+) -> tuple[tuple[Any, ...], int | None]:
+    """The named environments' rules and ``idle_stop`` of the pipeline at ``root``.
+
+    Nothing when the pipeline file is not in ``root`` (0.13 behaviour: the
+    controller then deploys branches and main by tags only).
+
+    :raises GitOpsError: ``gitops-pipeline-invalid`` when it is there and
+        does not load.
+    """
+    from piceli.gitops import GitOpsError
+    from piceli.gitops.config import EnvRule
+
+    module = entry.rpartition(":")[0]
+    if not module.endswith(".py") or not (root / module).is_file():
+        return (), None
+    from piceli.app.render import load_target
+    from piceli.pipeline import Pipeline
+
+    try:
+        value = load_target(entry, root)
+        if isinstance(value, Pipeline) and env is not None:
+            value = value.for_environment(env)
+    except Exception as error:  # the module raised while importing
+        raise GitOpsError(
+            "gitops-pipeline-invalid",
+            f"cannot read the environments of {entry}: {type(error).__name__}",
+        ) from None
+    if not isinstance(value, Pipeline):
+        raise GitOpsError("gitops-pipeline-invalid", f"{entry} is not a Pipeline")
+    config = value.envs
+    if config is None:
+        return (), None
+    rules = tuple(EnvRule.from_environment(item) for item in config.environments)
+    return rules, config.idle_stop_seconds
 
 
 def _command_line(
@@ -616,24 +684,41 @@ def approve_env(
 
 def promote(
     target: Annotated[
-        str, typer.Argument(help="BRANCH@SHA: a commit the controller saw on BRANCH")
+        str,
+        typer.Argument(
+            help="BRANCH@SHA (to main), or the named environment followed by BRANCH@SHA"
+        ),
     ],
+    source: Annotated[
+        str | None,
+        typer.Argument(
+            help="BRANCH@SHA when the first argument names an environment",
+            show_default=False,
+        ),
+    ] = None,
     kubeconfig: KubeconfigOption = None,
     context: ContextOption = None,
     namespace: NamespaceOption = "piceli-system",
     state_dir: StateDirOption = None,
     transport: TransportOption = "https",
 ) -> None:
-    """Ask the GitOps controller to deploy BRANCH@SHA to the main branch's environment."""
+    """Ask the GitOps controller to deploy BRANCH@SHA to main, or to environment ENV.
+
+    ``piceli promote wp-1@abc1234`` targets main; ``piceli promote rc
+    main@abc1234`` targets the named environment ``rc`` (it must follow
+    ``Promote()``).
+    """
     from piceli.gitops.state import promote_request
 
+    env = target if source is not None else None
     with _guard():
-        key, body = promote_request(target)
+        key, body = promote_request(source or target, env)
     with _channel(state_dir, kubeconfig, context, namespace, transport) as channel:
         with _guard():
             channel.add_request(key, body)
     say(
-        "promotion recorded; main deploys it after `piceli gitops approve` (see `piceli gitops status`)"
+        f"promotion recorded; {env or 'main'} deploys it after `piceli gitops "
+        "approve` (see `piceli gitops status`)"
     )
     emit_json(
         {
@@ -641,6 +726,7 @@ def promote(
             "request": key,
             "branch": body["branch"],
             "commit": body["commit"],
+            **({"env": env} if env is not None else {}),
         }
     )
 

@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 from piceli.envs.model import (
     ENV_BRANCH_ANNOTATION,
     ENV_BRANCH_LABEL,
+    ENV_NAME_LABEL,
     ENV_OF_LABEL,
     BranchEnv,
     EnvConfig,
@@ -88,7 +89,15 @@ def env_config(pipeline: Pipeline) -> EnvConfig:
 
 def main_namespace(pipeline: Pipeline) -> str:
     config = env_config(pipeline)
+    declared = config.named(config.main_branch)
+    if declared is not None:
+        return declared.namespace
     return config.main_namespace or pipeline.target.namespace
+
+
+def _implicit_main(config: EnvConfig, name: str) -> bool:
+    """The 0.13 main environment (``main_namespace``), not a declared one."""
+    return config.is_main(name) and config.named(name) is None
 
 
 def namespace_for(pipeline: Pipeline, branch: str) -> str:
@@ -238,26 +247,56 @@ def env_pipeline(
         )
     main_ns = main_namespace(pipeline)
     namespace = config.namespace_for(branch, main_ns)
-    main = config.is_main(branch)
+    main = _implicit_main(config, branch)
+    fixed = config.named(branch)
     images = _images(pipeline, digests, build_receipt)
     if main and not images:
         return pipeline
     alias = pin_alias(pipeline) if pipeline.deliver is not None else None
     node = pipeline.target.nodes.get(alias) if alias is not None else None
+    placement: dict[str, Any] = {}
+    if fixed is not None:
+        placement = {
+            "stack": fixed.stack,
+            "on_nodes": fixed.on_nodes,
+            "quota": fixed.quota,
+            "environment": fixed.name,
+            "prebuilt": bool(images),
+        }
+    elif not main:
+        placement = {"stack": config.branch_stack, "on_nodes": config.branch_nodes}
     env = BranchEnv(
         branch=branch,
         namespace=namespace,
         config=config,
         main_namespace=main_ns,
-        isolated=not main,
+        isolated=not config.is_fixed(branch),
         images=images,
         pin_node=node.name if node is not None else None,
         mirrors=mirror_references(pipeline) if pipeline.deliver is not None else {},
+        **placement,
     )
     derived = copy.copy(pipeline)
+    derived.branch_env = env
+    if fixed is not None:
+        # A named environment deploys like main into its own namespace: it
+        # builds unless images are given, keeps restore points (in main's
+        # store, so branches can seed from it) and its own local state.
+        if images:
+            derived.builds = ()
+            derived.deliver = None
+        target = copy.copy(pipeline.target)
+        object.__setattr__(target, "namespace", namespace)
+        object.__setattr__(target, "namespace_uid", None)
+        derived._target = target
+        derived.state_dir = pipeline.state_dir / "environments" / fixed.name
+        if pipeline.restore_points is not None:
+            derived.restore_points = pipeline.restore_points.model_copy(
+                update={"directory": str(pipeline.restore_point_directory)}
+            )
+        return derived
     derived.builds = ()
     derived.deliver = None
-    derived.branch_env = env
     if not main:
         target = copy.copy(pipeline.target)
         object.__setattr__(target, "namespace", namespace)
@@ -444,18 +483,19 @@ def _latest_point(
 
 def _seed_source(pipeline: Pipeline, branch: str, source: str) -> dict[str, Any]:
     config = env_config(pipeline)
-    if config.is_main(branch):
+    if config.is_fixed(branch):
         raise EnvError(
             "env-main-protected",
-            "the main branch's claims are never seeded or overwritten by env commands",
+            "the claims of main and of named environments are never seeded or "
+            "overwritten by env commands",
         )
-    if not config.is_main(source):
+    if not config.is_fixed(source):
         raise EnvError(
             "env-seed-no-restore-point",
-            f"only the main branch ({config.main_branch}) keeps restore points to "
-            "seed from",
+            f"only the main branch ({config.main_branch}) and named environments "
+            "keep restore points to seed from",
         )
-    source_ns = main_namespace(pipeline)
+    source_ns = config.namespace_for(source, main_namespace(pipeline))
     found = _latest_point(pipeline, source_ns)
     if found is None:
         raise EnvError(
@@ -635,11 +675,13 @@ def env_up(
 
     config = env_config(pipeline)
     namespace = namespace_for(pipeline, branch)
-    main = config.is_main(branch)
+    implicit = _implicit_main(config, branch)
+    named = config.named(branch)
+    main = config.is_fixed(branch)
     envs = cluster or default_cluster(pipeline)
     try:
         live = envs.namespace(namespace)
-        if main and live is None:
+        if implicit and live is None:
             raise EnvError(
                 "env-main-namespace-missing",
                 f"the main namespace {namespace} does not exist; env commands "
@@ -675,7 +717,7 @@ def env_up(
                 f"to stop would be {stop[0]['namespace']}",
                 details={"would_stop": stop},
             )
-        source = seed_from or (config.seed_from if live is None else None)
+        source = seed_from or (config.seed_from if live is None and not main else None)
         seed = _seed_source(pipeline, branch, source) if source else None
         runner = PipelineRunner(derived, say=say, **dict(runner_options or {}))
         fresh = live is None
@@ -688,7 +730,8 @@ def env_up(
             "app": pipeline.name,
             "branch": branch,
             "namespace": namespace,
-            "main": main,
+            "main": config.is_main(branch),
+            **({"environment": named.name} if named is not None else {}),
             "create_namespace": fresh,
             "adopt_namespace": not fresh and not main and not _adopted(live),
             "stop": [item["namespace"] for item in stop],
@@ -748,7 +791,11 @@ def env_up(
             )
             stopped[item["namespace"]] = stop_env(envs, item["namespace"], now=now)
         labels = {ENV_OF_LABEL: pipeline.name, ENV_BRANCH_LABEL: branch_label(branch)}
-        if fresh:
+        if fresh and named is not None:
+            # Not labelled env-of: a named environment is never counted,
+            # stopped or listed as a branch environment.
+            envs.create_namespace(namespace, {ENV_NAME_LABEL: named.name}, {})
+        elif fresh:
             envs.create_namespace(namespace, labels, {ENV_BRANCH_ANNOTATION: branch})
         elif env_plan["adopt_namespace"]:
             envs.label_namespace(namespace, labels, {ENV_BRANCH_ANNOTATION: branch})
@@ -859,9 +906,10 @@ def env_down(
     """
     config = env_config(pipeline)
     main_ns = main_namespace(pipeline)
-    if config.is_main(branch):
+    if config.is_fixed(branch):
         raise EnvError(
-            "env-main-protected", "the main branch's environment is never deleted"
+            "env-main-protected",
+            "the environments of main and of named environments are never deleted",
         )
     namespace = config.namespace_for(branch, main_ns)
     if namespace == main_ns:
@@ -925,6 +973,93 @@ def env_down(
         if state_dir.is_dir():
             shutil.rmtree(state_dir, ignore_errors=True)
         return {**body, "state": "removed"}
+    finally:
+        if cluster is None:
+            envs.close()
+
+
+# -------------------------------------------------------------------- stop
+
+
+def env_stop(
+    pipeline: Pipeline,
+    branch: str,
+    *,
+    approve: str | None = None,
+    approve_if_policy: bool = False,
+    reason: str = "idle",
+    cluster: Any = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Scale ``branch``'s environment to zero and keep it (the next ``env up`` starts it).
+
+    The plan lists the workloads to scale; its ``env_hash`` is the approval.
+    ``approve_if_policy`` runs it when the owner declared
+    ``EnvConfig(idle_stop=...)`` or ``auto_approve=True`` (the GitOps
+    controller's idle stop). Never main's or a named environment's.
+
+    :raises EnvError: ``env-main-protected``, ``env-namespace-not-managed``,
+        ``env-plan-changed``.
+    """
+    config = env_config(pipeline)
+    if config.is_fixed(branch):
+        raise EnvError(
+            "env-main-protected",
+            "main and named environments are never stopped by env commands",
+        )
+    namespace = config.namespace_for(branch, main_namespace(pipeline))
+    envs = cluster or default_cluster(pipeline)
+    try:
+        live = envs.namespace(namespace)
+        body: dict[str, Any] = {
+            "schema": RESULT_SCHEMA,
+            "branch": branch,
+            "namespace": namespace,
+        }
+        if live is None:
+            return {**body, "state": "absent"}
+        if not _owned(live, pipeline.name, branch) or _branch_of(live) not in {
+            None,
+            branch,
+        }:
+            raise EnvError(
+                "env-namespace-not-managed",
+                f"namespace {namespace} is not {pipeline.name}'s environment of "
+                f"branch {branch!r}; nothing is stopped",
+            )
+        record = envs.record(namespace) or {}
+        if record.get("state") == "stopped":
+            return {**body, "state": "stopped", "stopped": []}
+        workloads = sorted(
+            f"{item.get('kind')}/{(item.get('metadata') or {}).get('name')}"
+            for item in envs.workloads(namespace)
+        )
+        plan = {
+            "schema": PLAN_SCHEMA,
+            "app": pipeline.name,
+            "branch": branch,
+            "namespace": namespace,
+            "uid": (live.get("metadata") or {}).get("uid"),
+            "stop": workloads,
+        }
+        body.update({"stop": workloads, "env_hash": _hash(plan)})
+        allowed = config.idle_stop is not None or config.auto_approve
+        if approve is None and not (approve_if_policy and allowed):
+            return {
+                **body,
+                "state": "approval-required",
+                **({"reason": "approval-policy-exceeded"} if approve_if_policy else {}),
+            }
+        if approve is not None and approve != body["env_hash"]:
+            raise EnvError(
+                "env-plan-changed",
+                "the approved hash is not the environment's current stop plan",
+            )
+        stopped = stop_env(envs, namespace, now=now)
+        record = dict(envs.record(namespace) or {})
+        record["stop_reason"] = reason
+        envs.write_record(namespace, record)
+        return {**body, "state": "stopped", "stopped": stopped}
     finally:
         if cluster is None:
             envs.close()
@@ -1002,7 +1137,7 @@ def _status(
 def list_envs(
     pipeline: Pipeline, *, cluster: Any = None, now: datetime | None = None
 ) -> list[EnvStatus]:
-    """Every environment of the pipeline: main first, then branches by name (read-only)."""
+    """Every environment: main, the named ones (declared order), then branches (read-only)."""
     import dataclasses
 
     from piceli.gitops.state import env_status
@@ -1018,13 +1153,33 @@ def list_envs(
             main_live = {"metadata": {"name": main_ns}}
         reader = getattr(envs, "gitops_status", None)
         document = reader() if callable(reader) else None
-        found = [
-            _status(envs, config.main_branch, main_ns, main_live, main=True, now=moment)
-        ]
+        found = []
+        if config.named(config.main_branch) is None:
+            found.append(
+                _status(
+                    envs, config.main_branch, main_ns, main_live, main=True, now=moment
+                )
+            )
+        fixed_spaces = {main_ns}
+        for declared in config.environments:
+            fixed_spaces.add(declared.namespace)
+            try:
+                live = envs.namespace(declared.namespace)
+            except EnvError:
+                live = {"metadata": {"name": declared.namespace}}
+            status = _status(
+                envs,
+                declared.name,
+                declared.namespace,
+                live,
+                main=config.is_main(declared.name),
+                now=moment,
+            )
+            found.append(dataclasses.replace(status, branch=declared.name, fixed=True))
         branches = []
         for item in envs.namespaces(pipeline.name):
             name = str((item.get("metadata") or {}).get("name"))
-            if name == main_ns:
+            if name in fixed_spaces:
                 continue
             branch = _branch_of(item) or name
             branches.append(_status(envs, branch, name, item, main=False, now=moment))
@@ -1072,7 +1227,7 @@ def env_access_target(
     config = env_config(pipeline)
     derived = env_pipeline(pipeline, branch)
     resolved = access_target_of(derived, f"{pipeline.name} environment {branch}")
-    if config.is_main(branch):
+    if config.is_fixed(branch):
         return resolved
     shortcuts = tuple(
         item.model_copy(update={"local_port": port()}) for item in resolved.shortcuts

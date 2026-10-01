@@ -1147,12 +1147,15 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
         "gitops enable": _C(
             "Plan and, with --approve HASH, install the GitOps controller that "
             "deploys branches from Git (one environment per branch).",
-            reads=("kubeconfig",),
+            reads=("kubeconfig", "the pipeline module under --root (if present)"),
             cluster="writes",
             approval_required=True,
             contract="conforms",
             exit_codes=(0, 2, 3),
-            notes="Without --approve prints the install plan (Namespace, "
+            notes="Reads the pipeline's named environments and idle_stop from "
+            "the working tree (--root, default .) into the controller config "
+            "(gitops-pipeline-invalid when the file is there and does not "
+            "load). Without --approve prints the install plan (Namespace, "
             "ServiceAccount, scoped Role/ClusterRole and bindings, state "
             "PersistentVolumeClaim, config ConfigMap, one-replica Deployment) "
             "and its hash, exit 3. --image must be pinned by digest "
@@ -1213,21 +1216,27 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "only inside the pipeline's auto_approve policy, or a plan hash "
             "approved with gitops approve; main only on a new tag or a "
             "promotion, and only with an approved hash unless the owner "
-            "enabled --main-auto-approve. One step at a time, bounded retries "
+            "enabled --main-auto-approve; a named environment by its own "
+            "trigger (Branch, Tag, Promote) and with an approved hash unless "
+            "it declares auto_approve=True. Scales a branch environment idle "
+            "for EnvConfig(idle_stop=...) to zero. One step at a time, bounded retries "
             "with backoff; a failing branch never stops the others. Git "
             "output and credentials are never printed.",
         ),
         "promote": _C(
             "Ask the GitOps controller to deploy BRANCH@SHA to the main "
-            "branch's environment.",
+            "branch's environment, or to a named environment (promote ENV "
+            "BRANCH@SHA).",
             reads=("kubeconfig or --state-dir",),
             writes=("--state-dir requests (local controller)",),
             cluster="writes",
             contract="conforms",
             exit_codes=(0, 2),
             notes="Writes a request; the controller accepts only a commit it "
-            "saw on that branch (gitops-promote-unknown otherwise) and main "
-            "then waits for gitops approve of its plan hash.",
+            "saw on that branch (gitops-promote-unknown otherwise), a named "
+            "environment only when it follows Promote() "
+            "(gitops-promote-not-allowed), and the environment then waits for "
+            "gitops approve of its plan hash.",
         ),
         "doctor": _C(
             "Check free disk and memory against the next build's needs, and "
@@ -1389,7 +1398,8 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "piceli.envs.v1 object (envs[]: branch, namespace, main, state "
             "running|stopped|absent, health healthy|degraded|stopped|unknown, "
             "commit, build, deploy, created_at, pushed_at, age_seconds, "
-            "workloads).",
+            "workloads, gitops, fixed). Named environments are listed after "
+            "main with fixed=true and their name as branch.",
         ),
         "logs": _C(
             "Print one workload's logs in an environment (kubectl logs with the "
