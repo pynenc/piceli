@@ -5,8 +5,7 @@ as a Helm chart, as Kustomize bases and overlays, with cdk8s (Python) and with
 Pulumi (Python, Kubernetes provider). A test renders every version for `dev`,
 `staging` and `prod` and checks that all five produce the same Kubernetes
 objects. The page then compares size, the steps to deploy, change and roll
-back, and the safety features, and says where the other tools are the better
-choice.
+back, and the safety features, and lists what Piceli does not do today.
 
 ```{admonition} Maturity: preview
 :class: note
@@ -14,7 +13,7 @@ choice.
 The examples and the equality test are part of the test suite. The numbers
 below are checked by a test, so they change only together with the examples.
 Piceli is pre-alpha; Helm, Kustomize, cdk8s and Pulumi are mature projects
-with far larger user bases (see [Where the others are better](#where-the-others-are-better)).
+with far larger user bases (see [What Piceli does not do today](#current-limits)).
 ```
 
 ## The app
@@ -141,12 +140,12 @@ links that tool's documentation.
 | Cluster selection | Only an explicit kubeconfig file and context; never the current context ({src}`test_named_context_is_used_never_current_context <tests/unit/cli/test_cluster_access.py>`) | The current context unless `--kube-context` | The current context unless `--context` | Depends on the applier | The ambient kubeconfig unless the provider sets one (the example sets [`kubeconfig` and `context`](https://www.pulumi.com/registry/packages/kubernetes/api-docs/provider/)) |
 | Autoscaled replicas | The autoscaler keeps `spec.replicas`; a re-apply never resets it ({src}`test_autoscaler_takes_replicas_without_diff_drift_or_reset <tests/acceptance/test_autoscaled_replicas.py>`) | The chart should omit `replicas` when an HPA is used ([Kubernetes docs](https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/)); these examples set it to match Piceli's output | Same | Same | Same |
 
-## Where the others are better
+(current-limits)=
+## What Piceli does not do today
 
-Piceli is the youngest tool here, and for many teams one of the others is
-the right choice today:
+Piceli is the youngest tool here. These are its current limits:
 
-- **Ecosystem.** Most vendors ship a Helm chart, and
+- **No package format.** Most vendors ship a Helm chart, and
   [Artifact Hub](https://artifacthub.io/) lists thousands of them. Piceli has
   no package format yet (the {doc}`roadmap` lists reusable packages as not
   started); to run a vendor's chart with Piceli you render it with
@@ -156,24 +155,19 @@ the right choice today:
   CNCF project, Kustomize is built into `kubectl`, and Pulumi and cdk8s have
   years of production use. Piceli is pre-alpha: APIs change between releases
   (see the {doc}`changelog`).
-- **GitOps controllers.** [Argo CD](https://argo-cd.readthedocs.io/en/stable/user-guide/application_sources/)
-  and Flux ([Helm](https://fluxcd.io/flux/components/helm/),
-  [Kustomize](https://fluxcd.io/flux/components/kustomize/)) reconcile Helm
-  charts and Kustomize overlays from Git continuously, across many clusters,
-  with a UI. Piceli applies on request (from a laptop or CI); continuous
-  reconciliation is on the {doc}`roadmap`, not available. You can still feed
-  `piceli render` output to those controllers.
-- **More than Kubernetes.** Pulumi manages cloud resources (databases, DNS,
+- **Kubernetes only.** Pulumi manages cloud resources (databases, DNS,
   buckets, clusters) in the same program and state as the Kubernetes
-  objects, with policy as code and many languages. Piceli covers Kubernetes
-  only.
+  objects. Piceli covers Kubernetes only.
 - **Secrets at rest.** Pulumi encrypts secrets in its configuration and
   state by default; Piceli keeps generated values in a private local store
   (or, with `state="cluster"`, in Secrets of the release namespace) and
   relies on SOPS, Vault or AWS for encrypted sources.
 - **Removing objects.** Helm and Pulumi delete what you remove from the code
   by default; Piceli prunes only from a release spec with `prune = true`.
-- **Languages and people.** Helm and Kustomize need no programming language;
-  cdk8s and Pulumi support several. Piceli is Python only.
+- **Python only.** Helm and Kustomize need no programming language; cdk8s
+  and Pulumi support several. Piceli is Python only.
 
-See {doc}`when_to_use` for a short decision guide.
+Continuous delivery is built in: {doc}`gitops` describes the controller that
+keeps one environment per branch, {doc}`environments` the per-branch
+environments and {doc}`ui` the web UI. See {doc}`when_to_use` for a short fit
+guide.

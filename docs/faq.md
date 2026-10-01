@@ -78,6 +78,10 @@ loopback registries, for example an in-cluster registry reached through a
 port-forward. Without a registry, `deliver` can also import an image straight
 into a node's containerd. See {doc}`node_delivery`.
 
+## Does Piceli do GitOps and per-branch environments?
+
+Yes. `piceli gitops enable` installs a controller that polls a Git repository and keeps one environment per branch at its head, with the same plans, approvals and checks as `piceli deploy`; `piceli env`, `piceli envs` and `piceli promote` operate on them. The controller is experimental. See {doc}`gitops` and {doc}`environments`; the {doc}`web UI <ui>` shows both.
+
 ## Is the web UI safe to expose?
 
 No. `piceli observe serve` and `piceli operator serve` bind to `127.0.0.1` only

@@ -14,7 +14,9 @@ YAML/JSON), shows you exactly what would change in the live cluster, and
 applies only the plan you approved, in dependency order, with a durable journal
 that makes every run resumable. `piceli deploy` takes an app from source to a
 running, checked release in one command. It is a Python-native alternative to
-hand-maintained YAML, Kustomize overlays and Helm templates.
+hand-maintained YAML, Kustomize overlays and Helm templates, and since 0.13.0
+it also runs the delivery loop: a GitOps controller, one environment per
+branch and a web UI.
 
 ```{admonition} Project status: pre-alpha
 :class: warning
@@ -25,6 +27,26 @@ preconditions, a durable journal and resume, always against an explicit
 kubeconfig file and context. See {doc}`overview` for the architecture and
 {doc}`roadmap` for the status of each feature.
 ```
+
+## The 0.13.0 flow: GitOps, environments and the web UI
+
+```{image} _static/ui/environments.png
+:alt: The Piceli web UI listing per-branch environments with their namespace, commit and health
+:width: 720px
+:align: center
+```
+
+```bash
+piceli gitops enable deploy/app.py:pipeline --repo <url> --branches 'main,wp-*' ...   # install the controller (plan, then --approve)
+piceli envs --pipeline deploy/app.py:pipeline    # what runs where: branch, namespace, commit, health
+piceli env up wp-login --plan                    # one environment per branch (plan, then --approve)
+piceli ui serve --pipeline deploy/app.py:pipeline  # the web UI
+```
+
+The controller keeps one environment per branch at its head ({doc}`gitops`),
+`piceli env` and `piceli envs` operate on them ({doc}`environments`), and the
+web UI shows applications, environments, the controller and Pipeline plans
+with their approval step ({doc}`ui`).
 
 ## A first taste
 
@@ -76,12 +98,29 @@ The mental model (model → plan → execute → observe), the engine and a
 glossary.
 :::
 
+:::{grid-item-card} Web UI
+:link: ui
+:link-type: doc
+
+Applications, per-branch environments, GitOps and Pipeline plans with their
+approval step: local with `piceli ui serve`, or installed in the cluster
+with OIDC.
+:::
+
+:::{grid-item-card} GitOps and per-branch environments
+:link: gitops
+:link-type: doc
+
+`piceli gitops enable` keeps one environment per branch at its head; see also
+{doc}`environments` for `piceli env` and `piceli envs`.
+:::
+
 :::{grid-item-card} When to use Piceli
 :link: when_to_use
 :link-type: doc
 
-When Piceli fits, when Helm, Kustomize, cdk8s or Pulumi fit better, and the
-same app written in all five.
+What Piceli covers and its current limits, and the same app written in
+Piceli, Helm, Kustomize, cdk8s and Pulumi.
 :::
 
 :::{grid-item-card} A realistic app
@@ -170,6 +209,8 @@ pre_rollout_checks
 deploy_events
 ci
 gitops
+ui
+ui_cluster_install
 helm_charts
 state
 maintenance
@@ -214,8 +255,6 @@ artifact_delivery
 deployment_planning
 operations_lens
 operator_workflow
-ui
-ui_cluster_install
 ```
 
 ```{toctree}

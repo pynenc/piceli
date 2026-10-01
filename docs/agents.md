@@ -21,7 +21,7 @@ See the {doc}`roadmap` for every feature's status.
 | The same, as pages | {doc}`reference/cli`, {doc}`reference/errors` |
 | An index of the documentation for language models | [`llms.txt`](https://docs.pynenc.org/projects/piceli/en/stable/llms.txt) |
 | A ready agent skill (`SKILL.md` and scripts: install, plan, ask, deploy, status, diagnose, resume, roll back) | [`skills/piceli`](https://github.com/pynenc/piceli/tree/main/skills/piceli); its walkthrough runs in CI against the built wheel |
-| Whether Piceli fits a task, or another tool fits better | {doc}`when_to_use`, {doc}`comparisons` |
+| Whether Piceli fits a task, and what it does not do today | {doc}`when_to_use`, {doc}`comparisons` |
 | How well models follow these rules (the rules below are scored; breaking one fails the task) | {doc}`contributing/evals` |
 
 `piceli help-json` is generated from the command definitions. For each
@@ -115,7 +115,7 @@ noted.
   to show the owner what differs before deploying another environment; see
   {doc}`environments`, and {doc}`reference_app` for a complete example).
   `--out DIR` writes one YAML file per object into `DIR` (a directory the
-  owner commits for Argo CD or Flux; it must be absent, empty or a previous
+  owner commits to Git; it must be absent, empty or a previous
   `--out`); a Secret is refused unless `--secrets external`. See
   {doc}`gitops`. When you write a network policy, `app.network_policy(…,
   egress=[…])` denies every other destination, DNS included: add
@@ -132,7 +132,7 @@ noted.
   listed too (`"fixed": true`, their name as `branch`); `piceli env up NAME`
   plans one like a branch. See {doc}`environments`.
 - `piceli publish TARGET --to oci://…` **without** `--approve`: renders,
-  packages the Flux OCI artifact and prints its digest (exit `3`); nothing
+  packages the OCI artifact and prints its digest (exit `3`); nothing
   is pushed.
 - `piceli chart render TARGET --out DIR`, `piceli chart package TARGET --out
   DIR` and `piceli chart manifests TARGET [--values FILE] [--out DIR]`:
@@ -288,7 +288,7 @@ Exporting deploy events (`--otlp-endpoint`, or `OTEL_EXPORTER_OTLP_*` in the env
 | `piceli release stop` | Local journal (cancels an execution) | The owner's go-ahead |
 | `piceli release check` | Nothing by itself, but runs the spec's checks (declared pod execs and Python functions) | The owner's go-ahead for a spec you did not write |
 | `piceli artifacts deliver` | A registry or node | `--approve-digest <config digest>` |
-| `piceli publish` | A registry (the manifests as a Flux OCI artifact, which a GitOps controller then applies without Piceli's plan) | `--approve <artifact digest>` printed by `piceli publish` without `--approve`, after the owner reviewed the files and the target; see {doc}`gitops` |
+| `piceli publish` | A registry (the manifests as an OCI artifact, which something other than Piceli then applies, without Piceli's plan) | `--approve <artifact digest>` printed by `piceli publish` without `--approve`, after the owner reviewed the files and the target; see {doc}`gitops` |
 | `piceli chart publish` | A registry (the Helm chart, which other people then install with Helm) | `--approve <digest>` printed by `piceli chart publish` without `--approve`, after the owner reviewed the chart, its version and the target; see {doc}`helm_charts` |
 | `piceli artifacts build-spec run` | Runs a build, writes outputs and images | `--approve-builder <digest>` and `--approve-plan <hash>` (a `host-build.toml`: `--approve-plan` only) |
 | `piceli artifacts publish` | A hosted registry: images of every platform, their index, attestations, signatures, the version tag | `--approve <digest>` (printed without it) |

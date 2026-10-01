@@ -183,3 +183,6 @@ evals/results/
 node_modules/
 playwright-report/
 test-results/
+
+# UI clips and screenshots recorded by `make ui-clips`
+.ui-clips/
