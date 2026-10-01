@@ -1,6 +1,12 @@
-# Compositions and component contracts
+# Component contracts (`piceli.toml`)
 
 Maturity: **preview** (the API may change before 1.0).
+
+The main way to compose repositories is in Python, in the composition
+repository: a `Pipeline` per environment and a host build whose contexts
+read the other repositories (see {doc}`compositions`). This page is the
+optional alternative for **simple components**: each repository describes
+its own components in a `piceli.toml`, and the composition only places them.
 
 A *composition* deploys components that live in several Git repositories.
 Each repository says how its components are built and run, in a

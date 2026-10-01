@@ -170,10 +170,14 @@ controller for a composition (see {doc}`components`): it polls every
 `Source` of the module with one Git Secret, resolves each environment's
 `follow={source: rule}` to one commit per source, builds only the components
 whose source digest changed (one build Job that fetches every source it
-needs) and rolls only those; unchanged components apply as no-op. `--repo`,
-`--branches`, `--main-branch` and `--tags` are not used: the module names
-its sources and rules. The status adds `sources`, `envs.<env>.revision` and
-`envs.<env>.components` (see {doc}`components`).
+needs) and rolls only those; unchanged components apply as no-op.
+`--branches` and `--tags` are not used: the module names its sources and
+rules. When an environment deploys a pipeline (`Environment(pipeline=…)`,
+see {doc}`compositions`), the controller also follows the composition's own
+repository (`--repo`, default the origin remote of `--root`; branch
+`--main-branch`) and imports the module at its commit; each output image is
+rebuilt only when its change key changed. The status adds `sources`,
+`envs.<env>.revision` and `envs.<env>.components` (see {doc}`components`).
 
 `piceli gitops sync [ENV] [--component NAME]` asks the controller to deploy
 an environment (or every one) now at its revision; with `--component` a

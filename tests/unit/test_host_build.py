@@ -301,3 +301,33 @@ def test_two_page_sizes_keep_separate_target_directories(
         ]
     assert len(set(targets.values())) == 2
     assert all(Path(value).is_dir() for value in targets.values())
+
+
+def test_an_image_may_name_the_contexts_it_reads(tmp_path: Path) -> None:
+    document = {
+        "revision": "piceli.host-build.v1",
+        "name": "two",
+        "build": {"tools": ["true"], "commands": [["true"]]},
+        "context": {"a": {"include": ["a/**"]}, "b": {"include": ["b/**"]}},
+        "output": {
+            "image": [
+                {"name": "one", "repository": "x/one", "files": {"a/f": "/f"}},
+                {
+                    "name": "two",
+                    "repository": "x/two",
+                    "files": {"b/f": "/f"},
+                    "contexts": ["b"],
+                },
+            ]
+        },
+    }
+    parsed = HostBuildSpec.from_dict(document, tmp_path)
+    one, two = parsed.images
+    assert one.reads(("a", "b")) == ("a", "b") and "contexts" not in one.to_dict()
+    assert two.reads(("a", "b")) == ("b",) and two.to_dict()["contexts"] == ["b"]
+    document["output"]["image"][1]["contexts"] = ["c"]
+    with pytest.raises(BuildSpecError, match="unknown context"):
+        HostBuildSpec.from_dict(document, tmp_path)
+    document["output"]["image"][1]["contexts"] = ["b", "b"]
+    with pytest.raises(BuildSpecError):
+        HostBuildSpec.from_dict(document, tmp_path)

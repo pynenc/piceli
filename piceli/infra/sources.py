@@ -7,7 +7,9 @@
 - the ``piceli.toml`` of a commit (``git show <commit>:piceli.toml``);
 - the Git object id of a path at a commit (``git rev-parse <commit>:<path>``),
   which is what a component's source digest is made of: a commit that leaves
-  the paths a build reads untouched leaves the digest unchanged.
+  the paths a build reads untouched leaves the digest unchanged;
+- the files below a directory at a commit with their blob ids
+  (``git ls-tree -r``): what a pipeline image's change key is made of.
 
 Git runs as :class:`piceli.gitops.repo.GitRemote` runs it: no prompt, the
 credentials only from the mounted Secret directory (one for every source),
@@ -58,12 +60,25 @@ class SourceSet:
         options: dict[str, Any] = {"credentials_dir": credentials_dir}
         if runner is not None:
             options["runner"] = runner
+        self._root = mirror_root
+        self._options = options
         self.sources = {source.key: source for source in sources}
         self.remotes = {
             key: GitRemote(source.url, mirror_root / key, **options)
             for key, source in self.sources.items()
         }
         self._fetched: set[str] = set()
+
+    def add(self, source: Source) -> None:
+        """Follow one more source (a composition imported later names it)."""
+        known = self.sources.get(source.key)
+        if known is not None and known.url == source.url:
+            return
+        self.sources[source.key] = source
+        self.remotes[source.key] = GitRemote(
+            source.url, self._root / source.key, **self._options
+        )
+        self._fetched.discard(source.key)
 
     def ls_remote(self, key: str) -> RemoteRefs:
         return self.remotes[key].ls_remote()
@@ -95,6 +110,37 @@ class SourceSet:
             return None
         found = out.decode().strip()
         return found if _OBJECT.fullmatch(found) else None
+
+    def tree(self, key: str, commit: str, prefix: str) -> list[tuple[str, str, str]]:
+        """``(path relative to prefix, mode, object id)`` of every file below ``prefix``.
+
+        Submodules are skipped; symbolic links are listed (mode ``120000``).
+        An absent ``prefix`` lists nothing.
+        """
+        if not _COMMIT.fullmatch(commit):
+            raise GitOpsError("gitops-git-failed", "invalid commit id")
+        prefix = prefix.strip("/")
+        if prefix in ("", "."):
+            prefix = ""
+        args = ["ls-tree", "-r", "-z", "--full-tree", commit]
+        if prefix:
+            args += ["--", prefix + "/"]
+        out = self._git(key, *args, what="ls-tree")
+        found: list[tuple[str, str, str]] = []
+        for record in out.split(b"\0"):
+            if not record:
+                continue
+            meta, _, raw = record.partition(b"\t")
+            mode, kind, oid = meta.decode().split(" ")
+            if kind != "blob":
+                continue
+            path = raw.decode("utf-8", "surrogateescape")
+            if prefix:
+                if not path.startswith(prefix + "/"):
+                    continue
+                path = path[len(prefix) + 1 :]
+            found.append((path, mode, oid))
+        return found
 
     def read(self, key: str, commit: str, path: str) -> bytes | None:
         """The bytes of ``path`` at ``commit`` (``None``: absent)."""

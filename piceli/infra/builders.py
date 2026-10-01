@@ -296,6 +296,47 @@ class LocalBuilder:
             done[item.component] = _pinned(receipt, item.component)
         return done
 
+    def build_spec(
+        self, request: Any, checkout: Callable[[str, str, Path], Any]
+    ) -> dict[str, BuiltImage]:
+        """Build a pipeline's host spec from checkouts of its sources; push the changed images.
+
+        ``request`` is a :class:`piceli.infra.pipelines.SpecBuildRequest`.
+        """
+        from contextlib import ExitStack
+
+        from piceli.infra.pipelines import run_spec_build
+
+        self.work_dir.mkdir(parents=True, exist_ok=True)
+
+        def deliver(name: str, archive: Path, image_id: str, repository: str) -> Any:
+            return self._backend().registry_deliver(
+                self.route, image_id, repository, archive=archive
+            )
+
+        with (
+            ExitStack() as stack,
+            tempfile.TemporaryDirectory(prefix="out-", dir=self.work_dir) as out,
+        ):
+            roots = {
+                name: Path(stack.enter_context(checkout(name, commit, self.work_dir)))
+                for name, commit in sorted(request.commits.items())
+            }
+            self.say(f"[build] {request.spec}: " + ", ".join(sorted(request.images)))
+            receipt = run_spec_build(
+                request,
+                roots,
+                platforms=(self.platform,),
+                cache=self.cache_dir,
+                out=Path(out),
+                deliver=deliver,
+                say=self.say,
+            )
+        return {
+            name: BuiltImage(str(entry["pull_ref"]), str(entry["manifest_digest"]))
+            for name, entry in receipt["images"].items()
+        }
+
 
 # ------------------------------------------------------------------ in a Job
 
@@ -522,6 +563,122 @@ def job_run_components(
     return {"components": results}
 
 
+def spec_job(
+    settings: JobSettings, request: Any, urls: Mapping[str, str]
+) -> dict[str, Any]:
+    """The Job that fetches every source a pipeline's host spec reads and builds it.
+
+    ``request`` is a :class:`piceli.infra.pipelines.SpecBuildRequest`: each
+    source is fetched once at its commit with the one Git Secret, the spec is
+    read from the composition repository's checkout, and only the images
+    whose change key changed are pushed.
+    """
+    urls = {**dict(urls), **dict(request.urls)}
+    missing = sorted(set(request.commits) - set(urls))
+    if missing:
+        raise CompositionError(
+            "composition-invalid", f"no URL of source {missing[0]!r}"
+        )
+    lines = "\n".join(
+        f"{name} {urls[name]} {sha}" for name, sha in sorted(request.commits.items())
+    )
+    arguments = ["--spec", f"{request.repo}/{request.spec}"]
+    for name, wanted in sorted(request.images.items()):
+        arguments += [
+            "--image",
+            json.dumps({"image": name, **dict(wanted)}, sort_keys=True),
+        ]
+    for platform in settings.platforms:
+        arguments += ["--platform", platform]
+    if request.facts:
+        arguments += ["--facts", json.dumps(dict(request.facts), sort_keys=True)]
+    job = component_job(settings, [], {})
+    key = hashlib.sha256(
+        json.dumps([lines, arguments], sort_keys=True).encode()
+    ).hexdigest()[:10]
+    job["metadata"]["name"] = f"piceli-image-build-{key}"
+    labels = {**job["metadata"]["labels"], "piceli.io/component-build": key}
+    job["metadata"]["labels"] = labels
+    job["spec"]["template"]["metadata"]["labels"] = labels
+    container = job["spec"]["template"]["spec"]["containers"][0]
+    container["command"] = ["sh", "-c", _SCRIPT, "piceli-build", *arguments]
+    for entry in container["env"]:
+        if entry["name"] == "PICELI_BUILD_SOURCES":
+            entry["value"] = lines
+        elif entry["name"] == "PICELI_BUILD_REGISTRY":
+            # Images go to <registry host>/<repository>: the request names them.
+            entry["value"] = f"oci://{settings.node_registry}"
+    return job
+
+
+def job_run_spec(
+    *,
+    sources: Path,
+    spec: str,
+    images: Sequence[Mapping[str, Any]],
+    platforms: Sequence[str],
+    cache: Path,
+    out: Path,
+    registry_url: str,
+    node_registry: str | None,
+    facts: Mapping[str, Any] | None = None,
+    say: Callable[[str], None] = lambda _: None,
+    deliver: Any = None,
+) -> dict[str, Any]:
+    """What a pipeline image build Job runs: the spec at ``sources/<repo>/<path>``.
+
+    ``spec`` is ``<repo source>/<path>``; each fetched source is
+    ``sources/<name>``. Pushes each of ``images`` (``{"image",
+    "repository", "key"}``) and returns ``{"images": {name: {"pull_ref",
+    "manifest_digest", "key", "platform"}}}``.
+    """
+    from piceli.artifacts.delivery import ArchiveSource, DeliveryGrant
+    from piceli.artifacts.registry import RegistryTarget
+    from piceli.artifacts.registry_delivery import RegistryDelivery
+    from piceli.infra.pipelines import SpecBuildRequest, run_spec_build
+
+    if deliver is None:
+        deliver = RegistryDelivery().deliver
+    repo, _, path = spec.partition("/")
+    names = sorted(item.name for item in sources.iterdir() if item.is_dir())
+    for name in [repo, *names]:
+        if not re.fullmatch(r"[a-z0-9][-a-z0-9]{0,62}", name):
+            raise CompositionError("composition-invalid", "invalid source name")
+    request = SpecBuildRequest(
+        spec=path,
+        repo=repo,
+        commits=dict.fromkeys(names, ""),
+        images={
+            str(item["image"]): {
+                "repository": str(item["repository"]),
+                "key": str(item["key"]),
+            }
+            for item in images
+        },
+        facts=facts,
+    )
+    prefix = registry_url.rstrip("/")
+
+    def push(name: str, archive: Path, image_id: str, repository: str) -> Any:
+        url = f"{prefix}/{repository}"
+        return deliver(
+            ArchiveSource(archive),
+            RegistryTarget.parse(url),
+            DeliveryGrant(image_id, url, time.time() + 3600),
+            node_registry=node_registry,
+        )
+
+    return run_spec_build(
+        request,
+        {name: sources / name for name in names},
+        platforms=platforms,
+        cache=cache,
+        out=out,
+        deliver=push,
+        say=say,
+    )
+
+
 class JobBuilder:
     """Build in the cluster: one Job per batch of changed components.
 
@@ -607,6 +764,60 @@ class JobBuilder:
                 str(entry["pull_ref"]), str(entry["manifest_digest"])
             )
         return built
+
+    def build_spec(
+        self, request: Any, checkout: Callable[[str, str, Path], Any]
+    ) -> dict[str, BuiltImage]:
+        """One Job that fetches every source of a pipeline's host spec and builds it."""
+        from piceli.artifacts.cluster_build import decode_receipt
+
+        if not request.images:
+            return {}
+        job = spec_job(self.settings, request, self.urls)
+        self.cluster.ensure_claim(self._claim())
+        self.say(
+            f"[build] Job {job['metadata']['name']}: "
+            + ", ".join(sorted(request.images))
+        )
+        outcome = self.cluster.run_job(job)
+        if outcome.state != "passed" or self.cluster.receipt_text is None:
+            raise CompositionError(
+                "component-build-failed", f"the image build Job ended {outcome.state}"
+            )
+        try:
+            receipt = decode_receipt(self.cluster.receipt_text)
+        except (ValueError, OSError):
+            raise CompositionError(
+                "component-build-failed", "the build Job printed no readable receipt"
+            ) from None
+        found = receipt.get("images") or {}
+        built: dict[str, BuiltImage] = {}
+        for name, wanted in request.images.items():
+            entry = found.get(name)
+            if not isinstance(entry, Mapping) or entry.get("key") != wanted["key"]:
+                raise CompositionError(
+                    "component-build-failed",
+                    f"the build Job returned no image {name!r}",
+                )
+            built[name] = BuiltImage(
+                str(entry["pull_ref"]), str(entry["manifest_digest"])
+            )
+        return built
+
+    def _claim(self) -> dict[str, Any]:
+        return {
+            "apiVersion": "v1",
+            "kind": "PersistentVolumeClaim",
+            "metadata": {
+                "name": self.settings.cache_claim,
+                "namespace": self.settings.namespace,
+                "labels": {"app.kubernetes.io/managed-by": "piceli"},
+            },
+            "spec": {
+                "accessModes": ["ReadWriteOnce"],
+                "resources": {"requests": {"storage": self.settings.storage}},
+            },
+        }
 
     def mirror(self, items: Sequence[MirrorItem]) -> dict[str, BuiltImage]:
         if self.backend is None:

@@ -395,6 +395,10 @@ class Environment:
     secrets: Sequence[str] = ()
     #: ``{component: {key: value}}``: overrides of the components' ``settings``.
     settings: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+    #: A composition environment that deploys this :class:`piceli.Pipeline`'s
+    #: app (its workloads, checks, rollback and approval policy) instead of
+    #: contract components; its images are built from the composition's sources.
+    pipeline: Any = field(default=None, compare=False)
     #: ``follow={Source: rule}`` normalised: ``((source, rules), ...)``.
     sources: tuple[tuple[Any, tuple[Any, ...]], ...] = field(
         init=False, default=(), compare=False, repr=False
@@ -463,6 +467,7 @@ class Environment:
         object.__setattr__(
             self, "settings", _settings(self.settings, f"{what} settings")
         )
+        _check_pipeline(self, what)
 
     @classmethod
     def per_branch(
@@ -483,6 +488,7 @@ class Environment:
         settings: Mapping[str, Mapping[str, str]] | None = None,
         allow_egress: Sequence[str] = (),
         name: str = "branches",
+        pipeline: Any = None,
     ) -> BranchEnvironments:
         """One environment per Git branch of the sources (a composition's branch rule).
 
@@ -494,6 +500,8 @@ class Environment:
             environments).
         :param limit: At most this many branch environments run
             (``EnvConfig(max_envs=...)``).
+        :param pipeline: Deploy this :class:`piceli.Pipeline`'s app instead of
+            contract components (``stack`` then names its workloads).
 
         Every other parameter is the :class:`EnvConfig` one of the same name
         (``on_nodes`` is ``branch_nodes``, ``stack`` is ``branch_stack``).
@@ -515,6 +523,7 @@ class Environment:
             secrets=tuple(secrets),
             settings=dict(settings or {}),
             allow_egress=tuple(allow_egress),
+            pipeline=pipeline,
         )
 
     @property
@@ -552,7 +561,34 @@ class Environment:
             **({"cluster": self.cluster.name} if self.cluster is not None else {}),
             **({"secrets": list(self.secrets)} if self.secrets else {}),
             **({"settings": dict(self.settings)} if self.settings else {}),
+            **({"pipeline": self.pipeline.name} if self.pipeline is not None else {}),
         }
+
+
+def _check_pipeline(env: Any, what: str) -> None:
+    """``pipeline=``: a Pipeline, never mixed with contract components."""
+    if env.pipeline is None:
+        return
+    from piceli.pipeline.model import Pipeline
+
+    if not isinstance(env.pipeline, Pipeline):
+        raise EnvError("env-config-invalid", f"{what}: pipeline is a piceli Pipeline")
+    if env.stack is not None:
+        from piceli.infra import Component
+
+        if any(isinstance(item, Component) for item in env.stack.declared):
+            raise EnvError(
+                "env-config-invalid",
+                f"{what}: deploys a pipeline; its stack names the pipeline's "
+                "workloads, not Components (declare the components in another "
+                "environment)",
+            )
+    if env.settings or env.secrets:
+        raise EnvError(
+            "env-config-invalid",
+            f"{what}: settings= and secrets= configure contract components; a "
+            "pipeline environment takes them from its Pipeline",
+        )
 
 
 @dataclass(frozen=True)
@@ -574,6 +610,7 @@ class BranchEnvironments:
     secrets: Sequence[str] = ()
     settings: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
     allow_egress: Sequence[str] = ()
+    pipeline: Any = field(default=None, compare=False)
     sources: tuple[tuple[Any, tuple[Any, ...]], ...] = field(
         init=False, default=(), compare=False, repr=False
     )
@@ -611,6 +648,7 @@ class BranchEnvironments:
 
             if not isinstance(self.cluster, Cluster):
                 raise EnvError("env-config-invalid", f"{what}: cluster is a Cluster")
+        _check_pipeline(self, what)
         # The EnvConfig checks every remaining field (quota, sizes, idle stop).
         self.env_config()
 
@@ -648,6 +686,7 @@ class BranchEnvironments:
             "env_config": self.env_config().describe(),
             "secrets": list(self.secrets),
             "settings": dict(self.settings),
+            **({"pipeline": self.pipeline.name} if self.pipeline is not None else {}),
         }
 
 
