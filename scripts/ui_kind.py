@@ -74,6 +74,7 @@ def main() -> int:
             PICELI_KIND_KUBECONFIG=str(kubeconfig),
             PICELI_KIND_CONTEXT="kind-" + name,
             PICELI_KIND_NODE=name + "-control-plane",
+            PICELI_UI_KIND="1",
         )
         try:
             subprocess.run(

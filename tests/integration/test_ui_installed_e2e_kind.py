@@ -46,6 +46,7 @@ from tests.integration.kind_support import (
     kubectl,
     node_platform,
     requires_kind,
+    requires_ui_kind,
     wait_for,
 )
 from tests.integration.test_ui_cluster_runtime_kind import (
@@ -59,7 +60,12 @@ from tests.unit.host_build_support import HOST_TOML, publish_base
 from tests.unit.server.test_cluster_install import _config
 from tests.unit.test_registry_delivery import FakeRegistry
 
-pytestmark = [pytest.mark.integration, pytest.mark.timeout(1500), requires_kind]
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.timeout(1500),
+    requires_kind,
+    requires_ui_kind,
+]
 
 _ISSUER = r"""
 import base64, hashlib, json, os, ssl, time

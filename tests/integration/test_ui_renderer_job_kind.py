@@ -38,9 +38,15 @@ from tests.integration.kind_support import (
     kubectl,
     node_platform,
     requires_kind,
+    requires_ui_kind,
 )
 
-pytestmark = [pytest.mark.integration, pytest.mark.timeout(900), requires_kind]
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.timeout(900),
+    requires_kind,
+    requires_ui_kind,
+]
 
 _DOCKER = "unix:///var/run/docker.sock"
 

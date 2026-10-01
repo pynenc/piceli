@@ -12,10 +12,10 @@ from dataclasses import replace
 import pytest
 
 from piceli.server.cluster_install import cluster_install_yaml
-from tests.integration.kind_support import kubectl, requires_kind
+from tests.integration.kind_support import kubectl, requires_kind, requires_ui_kind
 from tests.unit.server.test_cluster_install import _config, _manual
 
-pytestmark = [pytest.mark.integration, requires_kind]
+pytestmark = [pytest.mark.integration, requires_kind, requires_ui_kind]
 
 
 def test_manual_ui_manifest_is_admitted_by_kubernetes() -> None:

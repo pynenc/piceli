@@ -33,11 +33,17 @@ from tests.integration.kind_support import (
     KUBECONFIG,
     kubectl,
     requires_kind,
+    requires_ui_kind,
     wait_for,
 )
 from tests.unit.server.test_cluster_install import _config
 
-pytestmark = [pytest.mark.integration, pytest.mark.timeout(900), requires_kind]
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.timeout(900),
+    requires_kind,
+    requires_ui_kind,
+]
 _DOCKER = "unix:///var/run/docker.sock"
 _GATEWAY_TAG = "caddy:2.10.2"
 
