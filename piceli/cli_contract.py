@@ -1289,6 +1289,52 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "until interrupted. Pushes through it go by digest; nodes pull "
             "by the stable name. " + _EXPLICIT_CONTEXT,
         ),
+        "cluster init": _C(
+            "Plan and, with --approve HASH, set a declared cluster up: node role "
+            "labels, the in-cluster registry and its node mirrors, the GitOps "
+            "controller's foundation and the UI.",
+            reads=("MODULE:ATTR (piceli.infra.Cluster)", "credential profile"),
+            cluster="writes",
+            approval_required=True,
+            contract="conforms",
+            exit_codes=(0, 2, 3),
+            notes="Reaches the cluster with the declaration's credential profile "
+            "(or --profile) and refuses one whose API server is not Cluster(api=) "
+            "(cluster-api-mismatch). Without --approve prints the plan (Node "
+            "label changes, objects) and its hash, exit 3. Idempotent: a re-run "
+            "plans only changes (unchanged, exit 0). After applying it waits up "
+            "to --wait seconds for the node mirrors and lists k3s nodes that "
+            "need a k3s restart (restart_needed); it never restarts k3s. The "
+            "controller's configuration and Deployment come from piceli gitops "
+            "enable.",
+        ),
+        "cluster status": _C(
+            "Show a declared cluster's nodes and labels, registry and node "
+            "mirrors (k3s restarts needed), controller, UI and Git Secret.",
+            reads=("MODULE:ATTR (piceli.infra.Cluster)", "credential profile"),
+            cluster="reads",
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="Read-only. state: ready, degraded (problems lists why) or "
+            "not-initialized. The Git Secret shows its key names only.",
+        ),
+        "secrets git": _C(
+            "Store the Git token the GitOps controller and cluster build Jobs "
+            "use (Secret piceli-build-git: username, password).",
+            reads=(
+                "stdin (--prompt)",
+                "MODULE:ATTR (piceli.infra.Cluster)",
+                "credential profile",
+            ),
+            cluster="writes",
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="The token is read from stdin only (typed without echo, or "
+            "piped); a token argument or PICELI_GIT_TOKEN is refused "
+            "(secrets-token-refused) without echoing it. Creates or updates the "
+            "Secret without a plan; prints its name and key names, never a "
+            "value. Needs piceli cluster init first (cluster-not-initialized).",
+        ),
         "gitops status": _C(
             "Show the GitOps controller's health, repository, last poll and "
             "each branch's commit, state and pending approval.",

@@ -57,7 +57,8 @@ In the namespace `piceli-system` (`namespace=`):
 | `PersistentVolumeClaim/piceli-registry-storage` | The images (`storage=`, `storage_class=`), annotated `piceli.io/retained`. |
 | `Service/piceli-registry` | A stable ClusterIP on `port=`; with `node_port=` also a fixed NodePort. |
 | `Deployment/piceli-registry` | One replica of the digest-pinned `registry` image, pinned to `on=` (the control-plane taint is tolerated, since the node was chosen by name), on the pod network, non-root, read-only root filesystem. |
-| `DaemonSet/piceli-registry-mirror` | The node agent: one pod on every node (every taint tolerated) that writes the containerd mirror. |
+| `DaemonSet/piceli-registry-mirror` | The node agent: one pod on every containerd node (every taint tolerated) that writes the containerd mirror. |
+| `DaemonSet/piceli-registry-mirror-k3s` | The k3s node agent: one pod on every k3s node that merges the mirror into `registries.yaml` (see [k3s nodes](#k3s-nodes)). |
 
 `piceli registry uninstall` plans the removal (exit 3, then `--approve
 HASH`); it keeps the namespace and, without `--delete-storage`, the claim
@@ -102,8 +103,7 @@ TLS (`plain-http-not-loopback`).
 
 ```{important}
 containerd reads `certs.d` only when its configuration sets `config_path`.
-k3s sets it to `/var/lib/rancher/k3s/agent/etc/containerd/certs.d`: pass that
-as `mirror_dir=` (not verified on k3s in this release). On kind, add to the
+k3s nodes get their own agent (next section). On kind, add to the
 cluster configuration:
 
     containerdConfigPatches:
@@ -114,6 +114,63 @@ cluster configuration:
 `piceli registry status` shows each node's agent as ready once the file is
 written; it cannot see whether containerd reads that directory.
 ```
+
+## k3s nodes
+
+k3s generates its containerd configuration itself, from
+`/etc/rancher/k3s/registries.yaml`, when it starts. `node_mirror=` chooses
+the node agent:
+
+| `node_mirror=` | Nodes | What the agent writes |
+| --- | --- | --- |
+| `"auto"` (default) | k3s nodes get the k3s agent, the others the containerd agent | per node, as below |
+| `"k3s"` | every node | `registries.yaml` and k3s's `certs.d` |
+| `"containerd"` | every node | `<mirror_dir>/<host>/hosts.toml` (as before) |
+
+With `"auto"` a node is a k3s node when it is labelled
+`piceli.io/runtime=k3s`, or has no `piceli.io/runtime` label and k3s's own
+label `node.kubernetes.io/instance-type=k3s`. {doc}`cluster_init` sets
+`piceli.io/runtime` on every declared node from the runtime it reports;
+label a node by hand to override it.
+
+The k3s agent (`DaemonSet/piceli-registry-mirror-k3s`):
+
+- merges this entry under `mirrors:` in `/etc/rancher/k3s/registries.yaml`,
+  between two marker comments, with the indentation of the entries already
+  there, keeping the file's mode; it creates the file when there is none:
+
+  ```yaml
+  mirrors:
+    # piceli:begin piceli-registry.piceli-system.svc:5000
+    "piceli-registry.piceli-system.svc:5000":
+      endpoint:
+        - "http://10.43.12.34:5000"
+    # piceli:end piceli-registry.piceli-system.svc:5000
+  ```
+
+  Every other entry (`mirrors`, `configs`, credentials) is kept byte for
+  byte, and nothing of the file is logged. A file it cannot edit that way
+  (flow style such as `mirrors: {}`, JSON, a quoted or repeated `mirrors`
+  key) is left untouched: the agent reports `unmergeable` and stays not
+  ready;
+- writes the same `hosts.toml` into k3s's own
+  `/var/lib/rancher/k3s/agent/etc/containerd/certs.d/<host>/`, which
+  containerd reads at every pull, so the mirror works at once;
+- on stop (uninstall, drain) removes its entry, its `hosts.toml`, and the
+  file itself when it had created it (an empty `mirrors:` key it added to
+  an existing file stays).
+
+**Restarts.** k3s reads `registries.yaml` only when it starts: the entry
+there is what keeps the mirror after k3s restarts and regenerates `certs.d`.
+Every current k3s configures containerd with `config_path`, so no restart is
+needed. When a node's k3s does not (an old k3s), its agent reports `restart:
+needed`, shown by `piceli registry status`, `piceli cluster init` and
+`piceli cluster status`; restart k3s on that node (`systemctl restart k3s`,
+or `k3s-agent` on agents) when convenient. Piceli never restarts k3s.
+
+Each agent ends its start with one report line
+(`piceli-mirror: {"runtime": "k3s", "file": "written", "restart": "not-needed"}`),
+which `status` reads from its log; the mirror rows then show the runtime.
 
 ## How images get in
 

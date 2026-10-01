@@ -545,6 +545,24 @@ class FakeAPI:
             self.nodes[name] = node
         return copy.deepcopy(node)
 
+    def _patch_node(self, name: str, body: Any) -> tuple[int, Any]:
+        """A merge patch of a node's labels and annotations (``metadata.uid`` must match)."""
+        node = self.nodes.get(name)
+        if node is None:
+            return 404, {}
+        meta = (body or {}).get("metadata") or {}
+        if "uid" in meta and meta["uid"] != node["metadata"]["uid"]:
+            return 409, {"kind": "Status", "code": 409}
+        for key in ("labels", "annotations"):
+            current = node["metadata"].setdefault(key, {})
+            for item, value in (meta.get(key) or {}).items():
+                if value is None:
+                    current.pop(item, None)
+                else:
+                    current[item] = value
+        self.version += 1
+        return 200, copy.deepcopy(node)
+
     def scale(
         self,
         kind: str,
@@ -1219,9 +1237,20 @@ class FakeAPI:
         extra = self._serve_pod_extras(path, method, query)
         if extra is not None:
             return extra
+        if path == "/api/v1/nodes" and method == "GET":
+            return 200, {
+                "apiVersion": "v1",
+                "kind": "NodeList",
+                "metadata": {"resourceVersion": str(self.version)},
+                "items": [
+                    copy.deepcopy(self.nodes[name]) for name in sorted(self.nodes)
+                ],
+            }
         if path.startswith("/api/v1/nodes/") and method == "GET":
             node = self.nodes.get(path.rsplit("/", 1)[1])
             return (200, copy.deepcopy(node)) if node is not None else (404, {})
+        if path.startswith("/api/v1/nodes/") and method == "PATCH":
+            return self._patch_node(path.rsplit("/", 1)[1], request.get("body"))
         # Like the API server, decode each path segment: RBAC names may hold
         # ':' (sent as %3A).
         parts = [unquote(part) for part in path.split("/")]

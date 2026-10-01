@@ -69,6 +69,43 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   `cluster-registry-target-required`, `cluster-registry-cluster-failed`,
   `cluster-registry-plan-changed`, `cluster-registry-not-installed`,
   `cluster-registry-not-ready`. See {doc}`cluster_registry`.
+- **Cluster init:** `piceli.infra.Cluster(name, api=, credentials=, nodes=[Node(name, arch=, roles=[…])],
+  storage_class=, registry=Registry.in_cluster(on=), controller=Controller(on=, poll=), ui=Ui(access="forward"))`
+  declares a cluster (values checked at import, `cluster-invalid`).
+  `piceli cluster init MODULE:ATTR` plans (exit 3) and, with `--approve
+  HASH`, labels the nodes (`piceli.io/role-<role>=true`,
+  `piceli.io/builder=true` for `builder`, `piceli.io/runtime` from the
+  node's runtime; only labels it set are ever removed), installs the
+  in-cluster registry with its node mirrors, the GitOps controller's
+  namespace, identity, RBAC and state claim (`gitops enable` adds the
+  Deployment; `InstallSettings(node=)` pins it), the UI (after the
+  controller's objects), and the ConfigMap `piceli-cluster` with the declaration.
+  It reaches the cluster with the credential profile and refuses one whose
+  server is not `api` (`cluster-api-mismatch`). Idempotent. `piceli cluster
+  status MODULE:ATTR [--json]` reports nodes (`roles`, `ready`, `mirror
+  {kind, state}`), registry, controller (`health`, `last_poll`), UI
+  (`health`) and the Git Secret. New codes `cluster-invalid`,
+  `cluster-not-found`, `cluster-load-failed`, `cluster-api-mismatch`,
+  `cluster-api-failed`, `cluster-node-missing`, `cluster-node-arch-mismatch`,
+  `cluster-plan-changed`, `cluster-not-initialized`. See {doc}`cluster_init`.
+- **Git token:** `piceli secrets git --cluster MODULE:ATTR --prompt
+  [--username U]` reads the token from stdin (no echo), refuses one given
+  as an argument or in `PICELI_GIT_TOKEN` without echoing it, writes the
+  Secret `piceli-system/piceli-build-git` (`username`, `password`) the
+  controller and build Jobs use, and prints names only. New codes
+  `secrets-token-refused`, `secrets-prompt-required`, `secrets-token-empty`,
+  `secrets-invalid`.
+- **k3s node mirrors:** `Registry.in_cluster(node_mirror="auto"|"k3s"|"containerd")`
+  (default `"auto"`; `mirror=` stays the list of images to copy). On k3s
+  nodes a second agent (`piceli-registry-mirror-k3s`) merges the mirror into
+  `/etc/rancher/k3s/registries.yaml` between marker comments (other entries
+  and the file's mode kept; a flow-style or JSON file is left alone,
+  `unmergeable`) and writes k3s's `certs.d`, so it works without a restart
+  and survives one; it never restarts k3s and reports `restart: needed` on a
+  k3s whose containerd does not read `certs.d`. `"auto"` picks per node
+  (`piceli.io/runtime`, else `node.kubernetes.io/instance-type=k3s`).
+  `piceli registry install --node-mirror`; `registry status` shows each
+  agent's runtime and restart need. Verified on a three-node k3s (k3d).
 - **UI in the cluster:** `Cluster(ui=Ui(access="forward"))` makes `piceli
   cluster init` install the Piceli UI in `piceli-system`
   (`piceli.infra.ui_install.render_ui(cluster)`): one Deployment running

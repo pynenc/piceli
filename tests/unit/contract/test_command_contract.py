@@ -581,6 +581,18 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["registry", "forward"],
         "cluster-registry-target-required",
     ),
+    "cluster init": (
+        lambda p: ["cluster", "init", "no_such_composition:cluster"],
+        "cluster-not-found",
+    ),
+    "cluster status": (
+        lambda p: ["cluster", "status", "no_such_composition:cluster"],
+        "cluster-not-found",
+    ),
+    "secrets git": (
+        lambda p: ["secrets", "git", "--cluster", "infra.py:c", "a-token-value"],
+        "secrets-token-refused",
+    ),
     "gitops approve": (
         lambda p: ["gitops", "approve", "wp-1", "not-a-hash", "--state-dir", str(p)],
         "gitops-request-invalid",

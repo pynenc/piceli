@@ -45,6 +45,8 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli chart package`](#cli-chart-package) | Write the chart archive <name>-<version>.tgz (byte-identical per chart). | none | no |
 | [`piceli chart publish`](#cli-chart-publish) | Push the chart to an OCI registry as helm push does (needs --approve DIGEST). | none | yes |
 | [`piceli chart render`](#cli-chart-render) | Write the app as a Helm chart directory (Chart.yaml, values, schema, templates). | none | no |
+| [`piceli cluster init`](#cli-cluster-init) | Set the cluster up: node labels, registry and mirrors, controller, UI (plan first; --approve HASH applies). | writes | yes |
+| [`piceli cluster status`](#cli-cluster-status) | Nodes, registry and mirrors, controller, UI and Git Secret of a declared cluster (read-only). | reads | no |
 | [`piceli codegen crd`](#cli-codegen-crd) | Generate pydantic models for one CRD version, from a file or a cluster. | reads | no |
 | [`piceli deploy`](#cli-deploy) | Deploy a pipeline: inputs → build → deliver → plan → apply → checks. | writes | yes |
 | [`piceli doctor`](#cli-doctor) | Check this runner: free disk and memory against what the next build needs (estimated from the last build receipts), and the tools the pipeline uses (docker, docker buildx, kubectl). Exit 1 on a warning. | none | no |
@@ -107,6 +109,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli restore`](#cli-restore) | Put a restore point back into its claims (plan, then --approve HASH). | writes | yes |
 | [`piceli restore-points`](#cli-restore-points) | List a pipeline's restore points, newest first (read-only, offline). | none | no |
 | [`piceli runs`](#cli-runs) | List the deploy runs of a pipeline, newest first, with their state, release, duration and summary files. Read-only (with shared state it reads the local working copy: run `piceli state pull` first). | none | no |
+| [`piceli secrets git`](#cli-secrets-git) | Store the Git token the controller and cluster builds use (read from stdin, never printed). | writes | no |
 | [`piceli state export`](#cli-state-export) | Write the release's state to one file (secret material excluded unless asked). | reads | no |
 | [`piceli state import`](#cli-state-import) | Replace the release's state with an export (needs --approve DIGEST). | writes | yes |
 | [`piceli state pull`](#cli-state-pull) | Refresh the local working copy from the shared state (reads the cluster). | reads | no |
@@ -750,6 +753,55 @@ Write the app as a Helm chart directory (Chart.yaml, values, schema, templates).
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** Never contacts a cluster. Renders like `piceli render`; images, pull secrets, replicas, resources, node selectors, storage, hosts, ConfigMap keys and Secret names become values, documented and validated by values.schema.json. Secrets are never rendered: the chart reads existing Secrets by name. Objects holding redacted or apply-time secret values are refused. Deterministic. --out must be absent, empty or a previous chart render (.piceli-chart).
+
+(cli-cluster-init)=
+### `piceli cluster init`
+
+Set the cluster up: node labels, registry and mirrors, controller, UI (plan first; --approve HASH applies).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `REF` | text | required |  |
+| `--approve` | text |  | The plan hash to execute |
+| `--wait` | integer | `120` | Seconds to wait for the node mirrors to report after installing |
+| `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
+| `--exec-sha256` | text |  | Expected sha256:<hex> of the resolved exec plugin file |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.Cluster), credential profile
+- **Writes:** nothing (read-only)
+- **Cluster:** writes
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** Reaches the cluster with the declaration's credential profile (or --profile) and refuses one whose API server is not Cluster(api=) (cluster-api-mismatch). Without --approve prints the plan (Node label changes, objects) and its hash, exit 3. Idempotent: a re-run plans only changes (unchanged, exit 0). After applying it waits up to --wait seconds for the node mirrors and lists k3s nodes that need a k3s restart (restart_needed); it never restarts k3s. The controller's configuration and Deployment come from piceli gitops enable.
+
+(cli-cluster-status)=
+### `piceli cluster status`
+
+Nodes, registry and mirrors, controller, UI and Git Secret of a declared cluster (read-only).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `REF` | text | required |  |
+| `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
+| `--exec-sha256` | text |  | Expected sha256:<hex> of the resolved exec plugin file |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.Cluster), credential profile
+- **Writes:** nothing (read-only)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Read-only. state: ready, degraded (problems lists why) or not-initialized. The Git Secret shows its key names only.
 
 (cli-codegen-crd)=
 ### `piceli codegen crd`
@@ -1893,6 +1945,7 @@ Install the in-cluster registry and its node mirror (plan first; --approve HASH 
 | `--storage-class` | text |  | StorageClass of the claim |
 | `--mirror-dir` | text | `/etc/containerd/certs.d` | The nodes' containerd certs.d directory |
 | `--image` | text |  | Registry image pinned by digest (repo@sha256:…) |
+| `--node-mirror` | text | `auto` | auto (per node), k3s (registries.yaml) or containerd (certs.d) |
 | `--approve` | text |  | The plan hash to execute |
 | `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
 | `--exec-sha256` | text |  | Expected sha256:<hex> of the resolved exec plugin file |
@@ -2348,6 +2401,31 @@ List the deploy runs of a pipeline, newest first, with their state, release, dur
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** Read-only; newest first. With shared state it reads the local working copy (piceli state pull first). summary.json follows docs/schemas/piceli-run-summary-v1.schema.json.
+
+(cli-secrets-git)=
+### `piceli secrets git`
+
+Store the Git token the controller and cluster builds use (read from stdin, never printed).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--cluster` | text | required | MODULE:ATTR of the piceli.infra.Cluster whose controller and builds use it |
+| `--prompt` | boolean | `False` | Read the token from stdin (typed without echo, or piped); required |
+| `--username` | text | `git` | Git user name stored with the token |
+| `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
+| `--exec-sha256` | text |  | Expected sha256:<hex> of the resolved exec plugin file |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+
+**Contract**
+
+- **Reads:** stdin (--prompt), MODULE:ATTR (piceli.infra.Cluster), credential profile
+- **Writes:** nothing (read-only)
+- **Cluster:** writes
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** The token is read from stdin only (typed without echo, or piped); a token argument or PICELI_GIT_TOKEN is refused (secrets-token-refused) without echoing it. Creates or updates the Secret without a plan; prints its name and key names, never a value. Needs piceli cluster init first (cluster-not-initialized).
 
 (cli-state-export)=
 ### `piceli state export`

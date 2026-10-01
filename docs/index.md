@@ -243,6 +243,7 @@ publishing_images
 node_delivery
 node_local_registry
 cluster_registry
+cluster_init
 registry_retention
 artifact_delivery
 ```
