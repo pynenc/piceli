@@ -38,6 +38,26 @@ test('gitops', async ({ page }) => {
   await pause(page, 1000);
 });
 
+test('composition-environments', async ({ page }) => {
+  await page.goto('/composition');
+  await expect(page.getByRole('heading', { name: 'Environments', exact: true })).toBeVisible();
+  const main = page.getByRole('region', { name: 'Environment main' });
+  await expect(main.getByText('3f9c2d1')).toBeVisible();
+  await pause(page, 1500);
+  await shot(page, 'composition-environments');
+  await main.getByRole('button', { name: 'Sync main' }).click();
+  await expect(main.getByText(/Sync requested/)).toBeVisible();
+  await pause(page, 1200);
+  await main.getByRole('link', { name: 'Open environment' }).click();
+  await expect(page.getByRole('region', { name: 'Components' })).toBeVisible();
+  await pause(page, 1500);
+  await shot(page, 'composition-environment');
+  await page.goto('/composition/sources');
+  await expect(page.getByRole('region', { name: 'Source product' })).toBeVisible();
+  await pause(page, 1200);
+  await shot(page, 'composition-sources');
+});
+
 test('pipeline-plan-approval', async ({ page }) => {
   await page.goto('/pipeline');
   await expect(page.getByRole('heading', { name: 'Pipeline', exact: true })).toBeVisible();

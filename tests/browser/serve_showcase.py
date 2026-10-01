@@ -26,11 +26,13 @@ from piceli.k8s.ui_state import (
 )
 from piceli.server.app import create_app
 from piceli.server.security import uvicorn_log_config
+from piceli.services.composition_control import CompositionControl
 from piceli.services.environment_control import EnvironmentControl
 from piceli.services.pipeline_control import PipelineControl
 from piceli.services.query import QueryService
 from piceli.services.registration import Registration
 from piceli.testing import fake_cluster, manifest
+from tests.ui_composition_fixture import STATUS as COMPOSITION
 
 IMAGE = "registry.example/shop@sha256:" + "a" * 64
 SHA = "3f9c2d1e8a7b4c5d6e0f1a2b3c4d5e6f7a8b9c0d"
@@ -69,9 +71,9 @@ STATUS = {
 
 
 @contextmanager
-def _channel(directory: Path):  # type: ignore[no-untyped-def]
+def _channel(directory: Path, status: dict = STATUS):  # type: ignore[no-untyped-def]
     channel = DirectoryChannel(directory)
-    channel.publish(STATUS)
+    channel.publish(status)
     yield channel
 
 
@@ -136,6 +138,11 @@ def main() -> None:
                 launch_token=given,
                 pipeline_control=control,
                 environment_control=environments,
+                composition_control=CompositionControl(
+                    query,
+                    "shop",
+                    lambda: _channel(root / "composition", COMPOSITION),
+                ),
             )
             with ExitStack() as cleanup:
                 if given:

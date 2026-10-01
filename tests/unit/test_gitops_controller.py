@@ -500,7 +500,9 @@ def test_cli_approve_promote_and_status_on_a_local_state_dir(
     assert status["envs"]["main"]["commit"] == sha
 
 
-def test_sync_redeploys_an_environment_at_its_commit(tmp_path: Path, repo: Repo) -> None:
+def test_sync_redeploys_an_environment_at_its_commit(
+    tmp_path: Path, repo: Repo
+) -> None:
     from piceli.gitops.state import sync_request
 
     ports = FakePorts()

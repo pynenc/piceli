@@ -39,7 +39,9 @@ def _enable(kubeconfig: Path, *extra: str) -> Any:
     )  # fmt: skip
 
 
-def test_enable_installs_a_composition_controller(cluster: tuple[FakeAPI, Path]) -> None:
+def test_enable_installs_a_composition_controller(
+    cluster: tuple[FakeAPI, Path],
+) -> None:
     api, kubeconfig = cluster
     planned = _enable(kubeconfig)
     assert planned.exit_code == 3, planned.output
@@ -47,7 +49,11 @@ def test_enable_installs_a_composition_controller(cluster: tuple[FakeAPI, Path])
     assert body["controller"]["schema"] == CONFIG_SCHEMA
     composition = body["controller"]["composition"]
     assert [s["name"] for s in composition["sources"]] == ["catalog", "shop"]
-    assert [e["name"] for e in composition["environments"]] == ["main", "rc", "branches"]
+    assert [e["name"] for e in composition["environments"]] == [
+        "main",
+        "rc",
+        "branches",
+    ]
     assert "environment main (shop-main): follows" in planned.stderr
     done = _enable(kubeconfig, "--approve", body["plan_hash"])
     assert done.exit_code == 0, done.output
@@ -78,7 +84,8 @@ def test_enable_refuses_a_broken_composition(
 
 def test_sync_writes_a_request(tmp_path: Path) -> None:
     result = CliRunner().invoke(
-        app, ["gitops", "sync", "main", "--component", "web", "--state-dir", str(tmp_path)]
+        app,
+        ["gitops", "sync", "main", "--component", "web", "--state-dir", str(tmp_path)],
     )
     assert result.exit_code == 0, result.output
     body = json.loads(result.stdout)

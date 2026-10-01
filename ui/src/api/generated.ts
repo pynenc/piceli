@@ -9,6 +9,7 @@ export type Capabilities = { "api_version"?: "piceli.ui.v1"; "mode"?: "local" | 
 export type Capability = { "allowed": boolean; "reason"?: string | null };
 export type ClusterBuildOperationRequest = { "plan_id": string; "approved_digest": string; "idempotency_key": string };
 export type ClusterBuildPlanRequest = { "commit": string; "cache_key": string };
+export type CompositionSyncRequest = { "env": string; "component"?: string | null };
 export type EnvironmentActionRequest = { "verb": "up" | "down" | "seed"; "branch": string; "approved_hash"?: string | null; "source"?: string | null };
 export type Evaluation = { "id": string; "application_id": string; "state": "queued" | "running" | "succeeded" | "failed" | "interrupted"; "plan_id"?: string | null; "error_code"?: string | null; "preview_id"?: string | null; "created_at"?: string | null; "updated_at"?: string | null };
 export type EvaluationPreview = { "id": string; "application_id": string; "digest": string; "source": SourceRevision; "renderer_digest": string; "input_digest": string; "files": Array<string>; "intent": "deploy" | "rollback"; "release"?: string | null; "expires_at": string; "limits": Record<string, number>; "warnings"?: Array<string> };

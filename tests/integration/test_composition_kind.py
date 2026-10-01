@@ -120,7 +120,13 @@ def _wait_registry() -> None:
     deadline = time.monotonic() + 300
     while time.monotonic() < deadline:
         status = _cli(
-            "registry", "status", "--kubeconfig", KUBECONFIG, "--context", CONTEXT, "--json"
+            "registry",
+            "status",
+            "--kubeconfig",
+            KUBECONFIG,
+            "--context",
+            CONTEXT,
+            "--json",
         )
         if status.exit_code == 0 and json.loads(status.stdout)["state"] == "ready":
             return
@@ -138,7 +144,9 @@ def _poll(config: Path, state: Path) -> dict[str, Any]:
 
 
 def _workload(namespace: str, kind: str, name: str) -> dict[str, Any]:
-    return dict(json.loads(kubectl("get", kind, name, "-o", "json", namespace=namespace)))
+    return dict(
+        json.loads(kubectl("get", kind, name, "-o", "json", namespace=namespace))
+    )
 
 
 def _states(status: dict[str, Any], env: str) -> dict[str, str]:
@@ -187,7 +195,9 @@ def test_a_change_rolls_only_its_component_and_branches_pull_from_the_registry(
         before = {
             ("deployment", "api"): _workload("shop-main", "deployment", "api"),
             ("deployment", "cache"): _workload("shop-main", "deployment", "cache"),
-            ("statefulset", "catalog"): _workload("shop-main", "statefulset", "catalog"),
+            ("statefulset", "catalog"): _workload(
+                "shop-main", "statefulset", "catalog"
+            ),
         }
         web_before = _workload("shop-main", "deployment", "web")
         first = _digests(status, "main")
@@ -229,9 +239,11 @@ def test_a_change_rolls_only_its_component_and_branches_pull_from_the_registry(
         assert {p["spec"]["nodeName"] for p in running} == {placement["branch"]}
         for pod in running:
             for container in pod["status"]["containerStatuses"]:
-                assert container["image"].startswith(HOST) or HOST in container[
-                    "imageID"
-                ] or container["ready"], container
+                assert (
+                    container["image"].startswith(HOST)
+                    or HOST in container["imageID"]
+                    or container["ready"]
+                ), container
             assert pod["spec"]["containers"][0]["image"].startswith(f"{HOST}/shop/")
         assert placement["branch"] != placement["registry"]
 
