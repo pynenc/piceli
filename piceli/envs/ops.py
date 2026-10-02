@@ -930,7 +930,12 @@ def env_down(
             "branch": branch,
             "namespace": namespace,
         }
+        state_dir = pipeline.state_dir / "branches" / namespace
         if live is None:
+            # Gone already (deleted by hand, or an earlier teardown that did
+            # not finish): its local state goes too.
+            if state_dir.is_dir():
+                shutil.rmtree(state_dir, ignore_errors=True)
             return {**body, "state": "absent"}
         if not _owned(live, pipeline.name, branch) or _branch_of(live) not in {
             None,
@@ -1007,7 +1012,6 @@ def env_down(
                 + ", ".join(left)
             )
             body["volumes_left"] = left
-        state_dir = pipeline.state_dir / "branches" / namespace
         if state_dir.is_dir():
             shutil.rmtree(state_dir, ignore_errors=True)
         return {**body, "state": "removed"}
