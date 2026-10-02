@@ -4,6 +4,14 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.14.2
+
+- **Images:** `ghcr.io/pynenc/piceli-controller` and `piceli-builder` are
+  linked to the repository and public (anonymous pull); the release checks
+  an anonymous pull before it finishes. The builder adds `make`, `cmake`,
+  `g++`, `pkg-config`, `curl` and `xz` for crates with C builds
+  (`jemalloc-sys`, `aws-lc-sys`).
+
 ## Version 0.14.1
 
 - **Fix:** the GitOps controller's copy of third-party images and the

@@ -104,7 +104,12 @@ their digests:
   it too);
 - `ghcr.io/pynenc/piceli-builder@sha256:…` for `--builder-image` (the
   controller plus `cargo` with the linux and wasm32 targets,
-  `cargo-zigbuild`, `zig`, `uv`, `gcc`).
+  `cargo-zigbuild`, `zig`, `uv`, and `gcc`, `make`, `cmake`, `pkg-config`,
+  `curl`, `xz` for crates with C builds such as `jemalloc-sys` and
+  `aws-lc-sys`).
+
+Both packages are public: nodes pull them anonymously. A release checks that
+an anonymous pull works before it finishes.
 
 `--image` must be pinned by digest; the controller never pulls a moving tag,
 and the image's Piceli version should match your CLI's. To build them
@@ -112,11 +117,11 @@ yourself (another registry, more tools), use `images/Dockerfile` with the
 wheel of your version:
 
 ```console
-$ pip download --no-deps --dest ctx/dist "piceli==0.14.1"
+$ pip download --no-deps --dest ctx/dist "piceli==0.14.2"
 $ docker buildx build -f images/Dockerfile --target controller \
-    --platform linux/amd64,linux/arm64 -t REGISTRY/piceli-controller:0.14.1 --push ctx
+    --platform linux/amd64,linux/arm64 -t REGISTRY/piceli-controller:0.14.2 --push ctx
 $ docker buildx build -f images/Dockerfile --target builder \
-    --platform linux/amd64,linux/arm64 -t REGISTRY/piceli-builder:0.14.1 --push ctx
+    --platform linux/amd64,linux/arm64 -t REGISTRY/piceli-builder:0.14.2 --push ctx
 ```
 
 The push prints each digest. Add whatever your pipeline module imports

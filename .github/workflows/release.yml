@@ -214,6 +214,12 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check the builder's tools before publishing
+        run: |
+          docker buildx build --load --platform linux/amd64 --target builder \
+            -f source/images/Dockerfile -t builder-check ctx
+          docker run --rm builder-check sh -ec \
+            'for t in make cmake pkg-config curl xz gcc cargo cargo-zigbuild zig uv python3; do command -v "$t" >/dev/null || { echo "missing $t"; exit 1; }; done'
       - name: Build and push the images that are missing
         run: |
           version="${TAG#v}"
@@ -238,3 +244,22 @@ jobs:
         env:
           TAG: ${{ needs.build.outputs.tag }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Nodes pull these anonymously. GHCR creates a package private and has
+      # no API to change that: an owner makes each package public once
+      # (Package settings, Change visibility); later versions stay public.
+      - name: Check that anyone can pull the images
+        run: |
+          version="${TAG#v}"
+          for target in controller builder; do
+            token="$(curl -fsS "https://ghcr.io/token?scope=repository:pynenc/piceli-${target}:pull" | jq -r .token)"
+            code="$(curl -s -o /dev/null -w '%{http_code}' \
+              -H "Authorization: Bearer ${token}" \
+              -H 'Accept: application/vnd.oci.image.index.v1+json' \
+              "https://ghcr.io/v2/pynenc/piceli-${target}/manifests/${version}")"
+            if [ "$code" != 200 ]; then
+              echo "::error::ghcr.io/pynenc/piceli-${target} is not public (anonymous pull: HTTP ${code}). Make it public: https://github.com/orgs/pynenc/packages/container/piceli-${target}/settings"
+              exit 1
+            fi
+          done
+        env:
+          TAG: ${{ needs.build.outputs.tag }}
