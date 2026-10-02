@@ -56,6 +56,7 @@ from piceli.services.contracts import (
     Operation,
     OperationPage,
     OperationRequest,
+    PlanPage,
     PlanRecord,
     PlanRequest,
     ProfileSwitchRequest,
@@ -849,6 +850,12 @@ def create_app(
     @app.get(f"{api}/plans/{{plan_id}}", response_model=PlanRecord)
     def plan(plan_id: str) -> PlanRecord:
         return delivery().plan(plan_id)
+
+    @app.get(f"{api}/applications/{{application_id}}/plans", response_model=PlanPage)
+    def plan_list(
+        application_id: str, page: str | None = None, limit: int = 25
+    ) -> PlanPage:
+        return delivery().plans(application_id, page=page, limit=limit)
 
     @app.post(
         f"{api}/applications/{{application_id}}/operations",

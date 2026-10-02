@@ -19,6 +19,7 @@ from piceli.services.contracts import (
     Operation,
     OperationPage,
     OperationRequest,
+    PlanPage,
     PlanRecord,
     PlanRequest,
     Principal,
@@ -245,6 +246,21 @@ class OperationService:
         self.query.registration(raw["application_id"], action="plan")
         return PlanRecord.model_validate(raw)
 
+    def plans(
+        self,
+        application_id: str,
+        *,
+        page: str | None = None,
+        limit: int = 25,
+    ) -> PlanPage:
+        self.query.registration(application_id, action="activity")
+        return self.store.plan_page(
+            application_id,
+            self.query._snapshot_scope(f"plans:{application_id}"),
+            page=page,
+            limit=limit,
+        )
+
     def admit(self, application_id: str, request: OperationRequest) -> Operation:
         registration = self._registration(application_id, action="plan")
         raw, private = self.store.get("plan", request.plan_id)
@@ -299,6 +315,13 @@ class OperationService:
         return self._public(Operation.model_validate(result))
 
     def _public(self, operation: Operation) -> Operation:
+        # A historical capture has the same authorization boundary as live pod
+        # output, even when the journal was already persisted with the receipt.
+        journal = operation.journal
+        if journal is not None and not self.query._allowed(
+            operation.application_id, "logs"
+        ):
+            journal = journal.model_copy(update={"logs": []})
         resumable = False
         if (
             operation.state in {"failed", "interrupted"}
@@ -321,6 +344,7 @@ class OperationService:
         )
         return operation.model_copy(
             update={
+                "journal": journal,
                 "capabilities": {
                     "resume": Capability(
                         allowed=resumable and resume_authorized,
@@ -338,14 +362,39 @@ class OperationService:
                         if not cancel_authorized
                         else "operation-ended",
                     ),
-                }
+                },
             }
         )
 
     def operation(self, id: str) -> Operation:
         raw, _ = self.store.get("operation", id)
-        self.query.registration(raw["application_id"], action="activity")
-        return self._public(Operation.model_validate(raw))
+        registration = self.query.registration(raw["application_id"], action="activity")
+        operation = Operation.model_validate(raw)
+        # Only the detail read projects the journal. Listing history must not
+        # open every execution journal or change any durable operation state.
+        if operation.engine_execution_id:
+            try:
+                private = None
+                engine_digest = operation.approved_digest
+                if operation.plan_id:
+                    plan_raw, private = self.store.get("plan", operation.plan_id)
+                    plan = PlanRecord.model_validate(plan_raw)
+                    if (
+                        plan.application_id != operation.application_id
+                        or plan.digest != operation.approved_digest
+                    ):
+                        raise QueryError("ui-state-invalid", 409)
+                    engine_digest = plan.engine_digest or ""
+                journal = self.engine.journal(
+                    registration, operation.engine_execution_id, engine_digest, private
+                )
+                if journal is not None:
+                    operation = operation.model_copy(update={"journal": journal})
+            except Exception:
+                # Journal gaps do not rewrite a successful operation into a
+                # failure, discard a saved receipt, or authorize any action.
+                pass
+        return self._public(operation)
 
     def resume(self, id: str, request: RecoveryRequest) -> Operation:
         # Resolve and authorize the original scope before even consulting an

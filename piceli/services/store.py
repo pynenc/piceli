@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import base64
 import fcntl
 import hashlib
+import hmac
 import json
 import os
+import secrets
 import sqlite3
 import threading
 from collections.abc import Iterator, Mapping
@@ -14,7 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import IO, Any
 
-from piceli.services.contracts import Event
+from piceli.services.contracts import Event, PlanPage, PlanSummary
 from piceli.services.query import QueryError
 
 SCHEMA_VERSION = 1
@@ -44,6 +47,7 @@ class Store:
         self.path = path
         self._guard = threading.RLock()
         self._dispatcher: IO[str] | None = None
+        self._page_key = secrets.token_bytes(32)
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
@@ -274,6 +278,123 @@ class Store:
                 (kind, application_id, application_id),
             ).fetchall()
             return [dict(json.loads(row["data"])) for row in rows]
+
+    def _page_token(self, value: dict[str, Any]) -> str:
+        encoded = (
+            base64.urlsafe_b64encode(canonical(value).encode()).decode().rstrip("=")
+        )
+        signature = hmac.new(
+            self._page_key, encoded.encode(), hashlib.sha256
+        ).hexdigest()
+        return f"{encoded}.{signature}"
+
+    def _page_value(self, token: str) -> dict[str, Any]:
+        try:
+            if len(token) > 2048:
+                raise ValueError("invalid page")
+            encoded, signature = token.split(".")
+            expected = hmac.new(
+                self._page_key, encoded.encode(), hashlib.sha256
+            ).hexdigest()
+            if not hmac.compare_digest(signature, expected):
+                raise ValueError("invalid page")
+            value = json.loads(
+                base64.b64decode(
+                    encoded + "=" * (-len(encoded) % 4), altchars=b"-_", validate=True
+                )
+            )
+            if not isinstance(value, dict):
+                raise ValueError("invalid page")
+            return value
+        except (ValueError, TypeError, UnicodeError):
+            raise QueryError("ui-invalid-request", 409) from None
+
+    def plan_page(
+        self,
+        application_id: str,
+        scope: str,
+        *,
+        page: str | None = None,
+        limit: int = 25,
+    ) -> PlanPage:
+        """Bounded immutable-plan inventory; newly inserted plans wait for refresh.
+
+        Cursors bind the principal/grant scope, app, page size and initial row
+        boundary. Creation metadata plus ID provides a stable total ordering.
+        Only whitelisted public summary fields are read from each JSON record.
+        """
+        if not 1 <= limit <= 100:
+            raise QueryError("ui-invalid-request", 422)
+        identity = digest({"scope": scope, "application": application_id})
+        after: list[str] | None = None
+        with self.transaction() as connection:
+            if page is None:
+                upper = connection.execute(
+                    "SELECT COALESCE(MAX(rowid),0) FROM records WHERE kind='plan' AND app=?",
+                    (application_id,),
+                ).fetchone()[0]
+            else:
+                value = self._page_value(page)
+                upper, after = value.get("upper"), value.get("after")
+                if (
+                    set(value) != {"v", "scope", "upper", "limit", "after"}
+                    or value["v"] != 1
+                    or value["scope"] != identity
+                    or value["limit"] != limit
+                    or type(upper) is not int
+                    or upper < 0
+                    or not isinstance(after, list)
+                    or len(after) != 2
+                    or not all(isinstance(item, str) for item in after)
+                ):
+                    raise QueryError("ui-invalid-request", 409)
+            snapshot = {"v": 1, "scope": identity, "upper": upper, "limit": limit}
+            # JSON projection avoids loading diffs, desired manifests or private
+            # frozen inputs for every row on an archive page.
+            fields = (
+                "id",
+                "application_id",
+                "digest",
+                "target",
+                "source",
+                "intent",
+                "release",
+                "expires_at",
+                "summary",
+            )
+            projection = ",".join(
+                f"'{field}',json_extract(data,'$.{field}')" for field in fields
+            )
+            rows = connection.execute(
+                "SELECT created,id,json_object(" + projection + ","
+                "'created_at',created,"
+                "'plan_kind',COALESCE(json_extract(data,'$.plan_kind'),'release'),"
+                "'desired_resources_complete',COALESCE(json_extract(data,'$.desired_resources_complete'),0)"
+                ") AS summary FROM records WHERE kind='plan' AND app=? AND rowid<=? "
+                "AND (? IS NULL OR created<? OR (created=? AND id<?)) "
+                "ORDER BY created DESC,id DESC LIMIT ?",
+                (
+                    application_id,
+                    upper,
+                    after[0] if after else None,
+                    after[0] if after else None,
+                    after[0] if after else None,
+                    after[1] if after else None,
+                    limit + 1,
+                ),
+            ).fetchall()
+            selected = rows[:limit]
+            return PlanPage(
+                items=[
+                    PlanSummary.model_validate_json(row["summary"]) for row in selected
+                ],
+                cursor=self._page_token(snapshot),
+                next_page=self._page_token(
+                    {**snapshot, "after": [selected[-1]["created"], selected[-1]["id"]]}
+                )
+                if len(rows) > limit
+                else None,
+            )
 
     def active(self, kind: str) -> list[dict[str, Any]]:
         """All nonterminal admissions, independent of history/list retention."""

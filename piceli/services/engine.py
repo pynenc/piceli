@@ -17,11 +17,13 @@ from piceli.k8s.release_secrets import input_names
 from piceli.k8s.release_spec import NodeRef, ReleaseSpec
 from piceli.services.contracts import (
     EvaluationPreview,
+    ExecutionJournalRecord,
     PlanRecord,
     ReleaseSummary,
     ResourceDiff,
     ResourceIdentity,
 )
+from piceli.services.plan_evidence import desired_resources, plan_steps
 from piceli.services.query import QueryError
 from piceli.services.registration import Registration
 from piceli.services.store import digest
@@ -192,6 +194,7 @@ class EngineAdapter:
                     **{key: item for key, item in value.items() if key != "resource"},
                 )
             )
+        desired, desired_complete = desired_resources(result.plan, target.id)
         record = PlanRecord(
             id=authorization_digest,
             application_id=registration.id,
@@ -209,6 +212,9 @@ class EngineAdapter:
             evaluation_id=evaluation_id,
             precondition_digest=digest(result.plan),
             warnings=["dry-run-unavailable"] if result.dry_run_unavailable else [],
+            steps=plan_steps(result.plan, target.id),
+            desired_resources=desired,
+            desired_resources_complete=desired_complete,
         )
         return record, {"frozen": frozen, "envelope": envelope}
 
@@ -301,6 +307,29 @@ class EngineAdapter:
                     result["checks"] = {"passed": checked.get("passed")}
             return result
 
+    def journal(
+        self,
+        registration: Registration,
+        execution_id: str,
+        engine_digest: str,
+        private: Mapping[str, Any] | None = None,
+    ) -> ExecutionJournalRecord | None:
+        """Recorded evidence only, bound to this execution and its frozen plan."""
+        from piceli.services.execution_evidence import read_journal
+
+        spec = (
+            thaw_spec(private["frozen"]["spec"])
+            if private is not None
+            else registration.release_spec
+        )
+        if spec is None:
+            return None
+        target = replace(registration, target=spec.kubeconfig_target()).public_target()
+        with session(release_scope(spec), write=False):
+            return read_journal(
+                spec.journal_path, execution_id, engine_digest, target.id
+            )
+
     def cancel(self, private: Mapping[str, Any], execution_id: str) -> None:
         """Persist cancellation without waiting for the active runner's lease.
 
@@ -366,6 +395,9 @@ class EngineAdapter:
             )
             for value in reviewed["diffs"]
         ]
+        desired, desired_complete = desired_resources(
+            reviewed["plan"], parent.target.id
+        )
         plan = parent.model_copy(
             update={
                 "id": identity,
@@ -381,6 +413,9 @@ class EngineAdapter:
                 "authorization": "policy",
                 "policy_digest": parent.digest,
                 "precondition_digest": digest(reviewed["plan"]),
+                "steps": plan_steps(reviewed["plan"], parent.target.id),
+                "desired_resources": desired,
+                "desired_resources_complete": desired_complete,
             }
         )
         return plan, {"frozen": frozen, "envelope": envelope}
