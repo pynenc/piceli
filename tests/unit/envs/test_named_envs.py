@@ -354,3 +354,35 @@ def test_env_stop_is_planned_and_allowed_by_idle_stop(tmp_path: Path) -> None:
     with pytest.raises(EnvError) as error:
         env_stop(idle, "wp-b", approve_if_policy=True, cluster=cluster)
     assert error.value.code == "env-namespace-not-managed"
+
+
+def test_checks_are_scoped_to_the_branch_stack(tmp_path: Path) -> None:
+    from piceli import Checks
+    from piceli.pipeline.compose import release_checks, scoped_checks
+
+    app = App("shop")
+    web = app.service(app.deployment("web", image=WEB, ports=[8080]), port=80)
+    db = app.stateful_set("db", image=DB, ports=[5432])
+    checks = [
+        Checks.http(web, "/"),
+        Checks.exec(db, ["true"]),
+        Checks.http("service/db", "/"),
+        Checks.exec("pod/db-0", ["true"]),
+        Checks.python("checks.py:smoke"),
+    ]
+    pipeline = Pipeline(
+        app,
+        Target(tmp_path / "kc", context="c", namespace="shop"),
+        state_dir=tmp_path / "state",
+        checks=checks,
+        envs=EnvConfig(prefix="shop-", branch_stack=Stack("small", workloads=["web"])),
+    )
+    # Main (no stack) keeps every check.
+    assert scoped_checks(pipeline) == (tuple(checks), [])
+    kept, skipped = scoped_checks(env_pipeline(pipeline, "wp-login"))
+    assert kept == (checks[0], checks[3], checks[4])
+    assert [(item["target"], item["why"]) for item in skipped] == [
+        ("statefulset/db", "not-in-stack"),
+        ("service/db", "not-in-stack"),
+    ]
+    assert release_checks(env_pipeline(pipeline, "wp-login")) == kept

@@ -604,12 +604,65 @@ def _spec(
     )
 
 
+#: A check's ``kind/NAME`` target kind → the rendered object kind it names.
+_CHECK_KINDS = {
+    "service": "Service",
+    "deployment": "Deployment",
+    "statefulset": "StatefulSet",
+    "daemonset": "DaemonSet",
+}
+
+
+def _check_label(check: Any) -> str:
+    label = getattr(check, "label", None)
+    return str(label) if label else type(check).__name__
+
+
+def scoped_checks(pipeline: Pipeline) -> tuple[tuple[Any, ...], list[dict[str, Any]]]:
+    """``(kept, skipped)``: the pipeline's checks within its environment's stack.
+
+    An environment with a :class:`~piceli.envs.Stack` renders only some of
+    the app's workloads; a check whose ``kind/NAME`` target is a Service or
+    workload that environment does not render is skipped and listed as
+    ``{"check", "target", "why": "not-in-stack"}``. A check without such a
+    target (``python``, or a ``pod/NAME``) always runs. Without a stack every
+    check is kept.
+    """
+    checks = tuple(pipeline.checks)
+    env = getattr(pipeline, "branch_env", None)
+    if env is None or getattr(env, "stack", None) is None or not checks:
+        return checks, []
+    _, composition = offline_composition(pipeline)
+    rendered = {
+        (resource.ref.kind, resource.ref.name)
+        for component in composition.components
+        for resource in component.resources
+    }
+    kept: list[Any] = []
+    skipped: list[dict[str, Any]] = []
+    for check in checks:
+        target = getattr(check, "target", None)
+        kind, _, name = target.partition("/") if isinstance(target, str) else ("", "", "")
+        wanted = _CHECK_KINDS.get(kind.lower())
+        if wanted is None or not name or (wanted, name) in rendered:
+            kept.append(check)
+            continue
+        skipped.append(
+            {"check": _check_label(check), "target": target, "why": "not-in-stack"}
+        )
+    return tuple(kept), skipped
+
+
 def release_checks(pipeline: Pipeline) -> tuple[Any, ...]:
-    """The pipeline's checks the release engine can run (``piceli.checks`` models)."""
+    """The pipeline's checks the release engine can run (``piceli.checks`` models).
+
+    Only the checks within the environment's stack (see :func:`scoped_checks`).
+    """
     from piceli.checks.model import ExecCheck, HttpCheck, MetricCheck, PythonCheck
 
     kinds = (HttpCheck, ExecCheck, MetricCheck, PythonCheck)
-    return tuple(check for check in pipeline.checks if isinstance(check, kinds))
+    kept, _ = scoped_checks(pipeline)
+    return tuple(check for check in kept if isinstance(check, kinds))
 
 
 def release_spec(
