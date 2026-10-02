@@ -6,7 +6,6 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ## Version 0.14.4
 
-<<<<<<< HEAD
 - **Fix:** `Checks.http` and `Checks.metric` pass in an isolated branch
   environment. They reach a ready pod of the target through a port forward
   of the API (from Python, no `kubectl`): the connection starts inside the
@@ -18,7 +17,6 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   (`failure.log_tail`).
 - **Fix:** branch teardown removes the failed build Job kept for that
   branch.
-=======
 - **Retention removes images nothing uses:** `artifacts retention --keep 0`
   is allowed (with `--kubeconfig` and `--context`) and keeps only live and
   pinned digests. Liveness is what runs or is referenced now: finished pods
@@ -28,7 +26,6 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   registry, so a manifest pushed by digest without a receipt is found and
   collected. Each deletion now lists `bytes`, `why` and `seen_in`; the guide
   shows how to garbage-collect `Registry.in_cluster` afterwards.
->>>>>>> wp/0.14.4-retention
 
 ## Version 0.14.3
 
