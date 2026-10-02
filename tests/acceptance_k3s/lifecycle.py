@@ -902,10 +902,14 @@ class Lifecycle:
                     after.get(key) == value,
                     f"{key} rolled: {value} -> {after.get(key)}",
                 )
-        text = self.controller_log(self.log_since)
-        for word in ("prerollout", "backup", "restore point"):
-            found = [line for line in text.splitlines() if word in line.lower()]
-            log(f"log '{word}': " + (" | ".join(found[-2:]) or "none"))
+        # The store's new image passed its pre-rollout checks (configuration
+        # and read-only upgrade check) and its claim got a restore point.
+        run = self.checked_run("/main/", self.since_epoch)
+        for stage in ("prerollout", "backup", "apply", "checks"):
+            check(
+                run["stages"].get(stage) == "done",
+                f"main {stage}: {run['stages'].get(stage)}",
+            )
 
     def stage_5_check_only(self) -> None:
         before = self.generations("lc-main")
