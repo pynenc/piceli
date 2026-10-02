@@ -1158,19 +1158,42 @@ class KubernetesProvider:
         }
         if labels:
             patch["labels"] = labels
-        expected = json.loads(json.dumps(current.manifest))
+        path = self._path(self.api_for(identity, deadline=deadline), identity.name)
+        base = current
+        for attempt in range(PRECONDITION_ATTEMPTS):
+            try:
+                raw = self._request(
+                    "PATCH",
+                    path,
+                    body={"metadata": patch},
+                    query={"fieldManager": self.field_manager}
+                    | ({"dryRun": "All"} if dry_run else {}),
+                    deadline=deadline,
+                    merge=True,
+                )
+                break
+            except ProviderError as error:
+                # A controller moved only the status (a volume being bound)
+                # between observation and this write: send the same patch at
+                # the new resourceVersion. Any other change still fails.
+                if (
+                    error.status != 409
+                    or error.ambiguous
+                    or attempt + 1 == PRECONDITION_ATTEMPTS
+                ):
+                    raise
+                fresh = self.get(identity, deadline=deadline)
+                if fresh is None or not status_only_change(current, fresh):
+                    raise
+                base = fresh
+                patch = {
+                    **patch,
+                    "resourceVersion": fresh.manifest["metadata"]["resourceVersion"],
+                }
+        expected = json.loads(json.dumps(base.manifest))
         for section, values in (("labels", labels), ("annotations", annotations)):
             if values:
                 expected["metadata"].setdefault(section, {}).update(values)
-        raw = self._request(
-            "PATCH",
-            self._path(self.api_for(identity, deadline=deadline), identity.name),
-            body={"metadata": patch},
-            query={"fieldManager": self.field_manager}
-            | ({"dryRun": "All"} if dry_run else {}),
-            deadline=deadline,
-            merge=True,
-        )
         if dry_run:
             if raw.get("metadata", {}).get("name") != identity.name:
                 raise ProviderError("invalid-write-response")

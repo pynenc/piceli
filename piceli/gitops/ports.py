@@ -140,6 +140,10 @@ class Ports(Protocol):
         """Remove the branch environment (never main's)."""
         ...
 
+    def env_stop(self, pipeline: Any, branch: str) -> None:
+        """Scale an idle branch environment to zero (``EnvConfig(idle_stop=...)``)."""
+        ...
+
 
 def retarget(pipeline: Any, kubeconfig: Path, context: str, state_dir: Path) -> Any:
     """``pipeline`` reached through the controller's kubeconfig and state.
@@ -325,7 +329,7 @@ class DefaultPorts:
         # for a branch; also without a policy when the owner allows branches.
         envs = getattr(pipeline, "envs", None)
         by_config = bool(
-            envs is not None and envs.auto_approve and not envs.is_main(branch)
+            envs is not None and envs.auto_approve and not envs.is_fixed(branch)
         )
         if approve == APPROVE_POLICY or (approve is None and by_config):
             kwargs.update(approve=None, approve_if_policy=True)
@@ -343,4 +347,14 @@ class DefaultPorts:
                 f"removing the environment of {branch} needs the owner: piceli "
                 f"env down {branch} --approve {result.get('env_hash')} (or "
                 "EnvConfig(auto_approve=True))",
+            )
+
+    def env_stop(self, pipeline: Any, branch: str) -> None:
+        result = self._envs().env_stop(
+            pipeline, branch, approve_if_policy=True, reason="idle"
+        )
+        if result.get("state") == "approval-required":
+            raise GitOpsError(
+                "gitops-step-failed",
+                f"stopping the environment of {branch} needs EnvConfig(idle_stop=...)",
             )

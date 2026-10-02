@@ -4,6 +4,195 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.14.0
+
+- **Web UI:** a Cluster status page presents nodes, registry pods and storage,
+  mirror restart state, controller and UI health. Named environment headers
+  review the exact approval hash, published promotion ref and idle-stop Wake
+  request. Local `piceli ui serve --profile NAME` shows and switches saved
+  profiles through a fresh session; no credential material reaches the browser.
+
+- **Credential profiles:** `piceli login NAME --kubeconfig FILE [--context C]`
+  stores a profile (the kubeconfig path and context, never its contents or a
+  token; `$PICELI_PROFILES_DIR`, default `~/.config/piceli/profiles`, mode
+  `0600`); `piceli profiles [--json]` and `piceli logout NAME` list and
+  forget it. `Target.profile("NAME", namespace=…)` and `credentials = "NAME"`
+  in `[target]` resolve it when the target is used, so no machine path is in
+  Git (the plan hash covers the name; `Target.kubeconfig` hashes are
+  unchanged); inside a cluster the name resolves to the service account.
+  `--profile NAME` replaces `--kubeconfig/--context` on every command that
+  takes them and the declared credentials on `deploy`, `release`, `status`,
+  `access`, `env` and `logs`. New codes `profile-not-found`,
+  `profile-invalid`, `profile-conflict`.
+- **Named environments:** `EnvConfig(environments=[Environment(name,
+  namespace, follow=Branch("main") | Tag("v*-rc*") | Promote(), stack=…,
+  on_nodes=…, quota=…, auto_approve=False)])` (`from piceli.envs import
+  Environment`; `Branch`, `Tag`, `Promote`, `Stack` are also exported by
+  `piceli`) declares long-lived environments with their own trigger: the
+  GitOps controller evaluates each one independently (every push to a
+  followed branch, the latest new matching tag, `piceli promote ENV
+  BRANCH@SHA`), so one branch can feed two environments. `gitops enable`
+  reads them from the working tree (`--root`) into the controller config
+  (covered by the install hash). `piceli env up NAME` deploys one (creating
+  its namespace when absent); env commands never delete, stop or seed it;
+  `piceli envs` lists it (`"fixed": true`). A 0.13 `main_namespace` stays the
+  implicit main environment (tags and promotions); an environment named like
+  `main_branch` replaces it. New codes `gitops-promote-not-allowed`,
+  `env-stack-unknown`, `env-stack-incomplete`, `env-nodes-conflict`.
+- **Stacks and placement:** `Stack(name, workloads=[...])` renders only a
+  subset of the app's workloads (`Environment(stack=…)`,
+  `EnvConfig(branch_stack=…)`); `on_nodes=[...]` (or a `{label: value}`
+  selector; `EnvConfig(branch_nodes=…)` for branches) places every workload
+  of the environment.
+- **Branch claims:** in a branch environment an `ExistingClaim` with a size
+  in `claim_sizes` becomes a claim the environment owns (empty or seeded with
+  `seed_from`, deleted with the environment); main and named environments
+  keep `ExistingClaim` semantics.
+- **Idle stop:** `EnvConfig(idle_stop="24h")` makes the GitOps controller
+  scale a branch environment without a push for that long to zero (status
+  `stopped`, reason `idle-stop`); the next push starts it again.
+  `piceli.envs.env_stop` does it by hand with a planned `env_hash`.
+- Plan hashes, `EnvConfig.describe()` and the controller config of 0.13
+  declarations are unchanged when the new fields are unused (tested).
+- **Compositions (preview):** a module (`infra.py`) with `environments =
+  [...]`, `piceli.infra.Source(url, name=)` repositories,
+  `Component(name, source=)` whose contract is `[component.<name>]` in the
+  source's `piceli.toml` at the environment's commit (`build` rust, python,
+  files or dockerfile; `image` base pinned by digest, user, dirs; `ports`;
+  `health` ready/check; `upgrade_check`; `volumes` retained or scratch;
+  `needs` with `?`, `secret:`, `component:`; `settings`; `emits`; see
+  docs/components.md), `Component.image(ref, pin=)` for third-party images
+  (mirrored into the in-cluster registry, never pulled from a hosted
+  registry at run time) and `Stack(name, [components])`.
+  `Environment(follow={source: "main" | Tag(...) | Promote()}, cluster=,
+  secrets=, settings=)` follows several sources;
+  `Environment.per_branch(Branches("wp-*"), namespace="app-{branch}", ...)`
+  declares the branch environments. New codes `composition-invalid`,
+  `component-contract-invalid`, `component-contract-missing`,
+  `component-need-unmet`, `component-build-unsupported`,
+  `component-build-failed`, `composition-ref-unresolved`.
+- **Python compositions:** `Environment(pipeline=PIPELINE)` and
+  `Environment.per_branch(..., pipeline=PIPELINE)` deploy a `Pipeline`'s app
+  (its workload `Stack`, checks, rollback and approval policy) instead of
+  contract components; mixing it with `Component`s, `settings=` or
+  `secrets=` is refused (`env-config-invalid`). The composition repository
+  is a source too: `piceli gitops enable infra.py` records it (`--repo`,
+  default the `origin` remote of `--root`; branch `--main-branch`, default
+  `main`) when an environment deploys a pipeline, and the controller imports
+  the module at the followed commit; a change there re-renders every
+  environment. See docs/compositions.md; `piceli.toml` stays the optional
+  path for simple components.
+- **Host build contexts from sources, change-aware per image:** in a
+  pipeline environment, `[context.X] source = "X"` reads the composition's
+  `Source` `X` at the environment's revision, fetched by one build Job with
+  the one Git Secret (`piceli build job-run --sources --spec SOURCE/PATH
+  --image JSON`). `[[output.image]] contexts = [...]` (new, optional,
+  default every context; absent from the spec digest when not declared)
+  lists what an image reads; its change key is its output table, the
+  `[build]` table and the Git blob ids of the files its contexts include. No
+  changed key, no build; otherwise only the changed images take the new
+  image, the others keep their digest and apply as no-op. Third-party
+  images of `Registry.in_cluster(mirror=[...])` (and the pipeline's own
+  `mirror=`) are copied into the in-cluster registry at sync. Status:
+  `envs.<env>.components.<image>` (with an additive `sources`) and
+  `controller.composition_repo`.
+- **Many sources, change-aware builds:** `piceli gitops enable infra.py`
+  installs the controller for a composition (its plain-data form is in the
+  config, so the plan hash covers every rule). It polls every source with one
+  Git Secret, resolves each environment to one commit per source (its
+  revision), builds per component in one build Job that fetches every needed
+  source (`piceli build job-run --sources --component`), cached by the
+  component's source digest (its build recipe and the Git trees of the paths
+  it reads): unchanged components keep their image and apply as no-op, only
+  changed ones rebuild and roll. `piceli gitops run --local-build` builds on
+  the machine running it instead. The status adds `sources`,
+  `envs.<env>.revision` and `envs.<env>.components.<name>` (additive).
+- **`piceli gitops sync [ENV] [--component NAME]`:** a sync request
+  (ConfigMap `piceli-gitops-requests`, kind `sync`): deploy now at the
+  current revision; `--component` rebuilds that component (a composition
+  controller). `gitops enable` takes `--repo` only for a pipeline.
+- **In-cluster registry (preview):** `Registry.in_cluster(on="NODE",
+  storage="20Gi", port=5000)` is a delivery target every node pulls from by
+  one stable name, `piceli-registry.piceli-system.svc:5000/<app>/<image>@sha256:…`.
+  `piceli registry install` plans (exit 3) and with `--approve HASH`
+  installs a registry Deployment pinned to the node (retained claim), a
+  Service and a node agent DaemonSet that writes the containerd mirror
+  `certs.d/<host>/hosts.toml` on every node (pointing at the Service's
+  ClusterIP, plain HTTP for that host only); `piceli registry status` shows
+  the pod, each node's mirror and the storage use; `piceli registry
+  uninstall` keeps the namespace and, without `--delete-storage`, the data;
+  `piceli registry forward` keeps a push port-forward open. `piceli deploy`
+  pushes through a port-forward to the Service, cluster builds and the GitOps
+  controller push by cluster DNS, `env push` records the stable pull
+  reference; the plan shows the registry and refuses with
+  `cluster-registry-not-installed`/`cluster-registry-not-ready` until it
+  serves. Plain HTTP is now also allowed to `name.namespace.svc` registry
+  hosts (never resolvable outside a cluster). 0.13 plan hashes are
+  unchanged. New codes `cluster-registry-invalid`,
+  `cluster-registry-target-required`, `cluster-registry-cluster-failed`,
+  `cluster-registry-plan-changed`, `cluster-registry-not-installed`,
+  `cluster-registry-not-ready`. See {doc}`cluster_registry`.
+- **Cluster init:** `piceli.infra.Cluster(name, api=, credentials=, nodes=[Node(name, arch=, roles=[…])],
+  storage_class=, registry=Registry.in_cluster(on=), controller=Controller(on=, poll=), ui=Ui(access="forward"))`
+  declares a cluster (values checked at import, `cluster-invalid`).
+  `piceli cluster init MODULE:ATTR` plans (exit 3) and, with `--approve
+  HASH`, labels the nodes (`piceli.io/role-<role>=true`,
+  `piceli.io/builder=true` for `builder`, `piceli.io/runtime` from the
+  node's runtime; only labels it set are ever removed), installs the
+  in-cluster registry with its node mirrors, the GitOps controller's
+  namespace, identity, RBAC and state claim (`gitops enable` adds the
+  Deployment; `InstallSettings(node=)` pins it), the UI (after the
+  controller's objects), and the ConfigMap `piceli-cluster` with the declaration.
+  It reaches the cluster with the credential profile and refuses one whose
+  server is not `api` (`cluster-api-mismatch`). Idempotent. `piceli cluster
+  status MODULE:ATTR [--json]` reports nodes (`roles`, `ready`, `mirror
+  {kind, state}`), registry, controller (`health`, `last_poll`), UI
+  (`health`) and the Git Secret. New codes `cluster-invalid`,
+  `cluster-not-found`, `cluster-load-failed`, `cluster-api-mismatch`,
+  `cluster-api-failed`, `cluster-node-missing`, `cluster-node-arch-mismatch`,
+  `cluster-plan-changed`, `cluster-not-initialized`. See {doc}`cluster_init`.
+- **Git token:** `piceli secrets git --cluster MODULE:ATTR --prompt
+  [--username U]` reads the token from stdin (no echo), refuses one given
+  as an argument or in `PICELI_GIT_TOKEN` without echoing it, writes the
+  Secret `piceli-system/piceli-build-git` (`username`, `password`) the
+  controller and build Jobs use, and prints names only. New codes
+  `secrets-token-refused`, `secrets-prompt-required`, `secrets-token-empty`,
+  `secrets-invalid`.
+- **k3s node mirrors:** `Registry.in_cluster(node_mirror="auto"|"k3s"|"containerd")`
+  (default `"auto"`; `mirror=` stays the list of images to copy). On k3s
+  nodes a second agent (`piceli-registry-mirror-k3s`) merges the mirror into
+  `/etc/rancher/k3s/registries.yaml` between marker comments (other entries
+  and the file's mode kept; a flow-style or JSON file is left alone,
+  `unmergeable`) and writes k3s's `certs.d`, so it works without a restart
+  and survives one; it never restarts k3s and reports `restart: needed` on a
+  k3s whose containerd does not read `certs.d`. `"auto"` picks per node
+  (`piceli.io/runtime`, else `node.kubernetes.io/instance-type=k3s`).
+  `piceli registry install --node-mirror`; `registry status` shows each
+  agent's runtime and restart need. Verified on a three-node k3s (k3d).
+- **UI in the cluster:** `Cluster(ui=Ui(access="forward"))` makes `piceli
+  cluster init` install the Piceli UI in `piceli-system`
+  (`piceli.infra.ui_install.render_ui(cluster)`): one Deployment running
+  `piceli ui forward-serve` from the digest-pinned `Ui.image` (else the
+  controller's image) on `Ui.on` (else the controller's node), a ClusterIP
+  Service only (no NodePort, Ingress or OIDC) and a service account that reads
+  the controller status, the environments' workloads, pods and logs (never
+  their Secrets or ConfigMaps) and writes only the GitOps request inbox and its
+  own launch Secret. `piceli access ui --cluster MODULE:ATTR` (or `--profile
+  NAME`) forwards `127.0.0.1:8790` to it and prints the one launch URL.
+  Views: **Environments** (revision per source, health, state, last sync),
+  an environment's components (source, commit, digest,
+  synced/building/rolling/failed/unchanged, health) with a link to its
+  workloads and logs, **Sources** (URL without credentials, refs, last poll)
+  and a **Sync** button per environment and per component (the
+  `piceli gitops sync` request). New API routes `GET /api/v1/composition`,
+  `GET /api/v1/composition/environments/{env}`, `POST
+  /api/v1/composition/sync` (additive). New codes `ui-controller-absent`,
+  `ui-sync-target-unknown`, `ui-sync-unavailable`, `ui-install-image-unpinned`,
+  `ui-install-node-unknown`, `ui-install-access-unsupported`,
+  `access-ui-target-required`, `access-ui-cluster-invalid`,
+  `access-ui-not-declared`, `access-ui-not-installed`, `access-ui-not-ready`,
+  `access-ui-forbidden`, `access-ui-unreachable`. See {doc}`ui`.
+
 ## Version 0.13.0
 
 - **Piceli as the GitOps controller (experimental):** `piceli gitops enable

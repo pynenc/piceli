@@ -1,0 +1,41 @@
+# How the example's images are built: one host build (no container VM) that
+# reads three contexts, each from a source of the composition (infra.py):
+# `infra` is the composition repository itself, `api` and `worker` the two
+# product repositories. Each image lists the contexts it reads, so a push to
+# `worker` rebuilds only the `worker` image (see docs/compositions.md).
+revision = "piceli.host-build.v1"
+name = "example"
+
+[build]
+tools = ["true"]
+commands = [["true"]]
+
+[context.infra]
+source = "infra"
+include = ["config/**"]
+
+[context.api]
+source = "api"
+include = ["site/**"]
+
+[context.worker]
+source = "worker"
+include = ["jobs/**"]
+
+[[output.image]]
+name = "api"
+repository = "example/api"
+contexts = ["api", "infra"]
+base = { image = "docker.io/library/busybox:1.37.0", digest = "sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e" }
+files = { "api/site" = "/srv/site", "infra/config/api.json" = "/srv/site/config.json" }
+user = "65534:65534"
+entrypoint = ["httpd", "-f", "-p", "8080", "-h", "/srv/site"]
+
+[[output.image]]
+name = "worker"
+repository = "example/worker"
+contexts = ["worker"]
+base = { image = "docker.io/library/busybox:1.37.0", digest = "sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e" }
+files = { "worker/jobs" = "/opt/worker" }
+user = "65534:65534"
+entrypoint = ["sh", "/opt/worker/run.sh"]

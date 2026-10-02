@@ -1,0 +1,18 @@
+# The contract of the shop repository's components. This repository says how
+# each one is built and run; the composition (infra.py) says where it runs.
+# See docs/components.md.
+
+[component.web]
+build = { files = { "web" = "/srv/web" } }
+image = { base = "docker.io/library/busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e", user = 65534, cmd = ["httpd", "-f", "-p", "8080", "-h", "/srv/web"] }
+ports = { http = 8080 }
+health = { ready = "GET /index.html" }
+needs = ["catalog", "cache?"]
+settings = { greeting = "hello" }
+
+[component.api]
+build = { files = { "api" = "/srv/api" } }
+image = { base = "docker.io/library/busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e", user = 65534, cmd = ["httpd", "-f", "-p", "8081", "-h", "/srv/api"] }
+ports = { http = 8081 }
+health = { ready = "GET /status.json" }
+needs = ["catalog"]

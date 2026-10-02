@@ -15,19 +15,37 @@ branch ``wp-login`` into namespace ``shop-wp-login``, isolated at render time
 NetworkPolicy across namespaces. :func:`env_down` deletes it with its claims
 and volumes (never main's), :func:`seed_env` restores main's latest restore
 point into its claims and :func:`list_envs` answers what runs where and
-whether it is healthy. See ``docs/environments.md``.
+whether it is healthy. :class:`Environment` adds named, long-lived
+environments with their own trigger (:class:`Branch`, :class:`Tag`,
+:class:`Promote`), :class:`Stack` and placement; in a composition
+(:mod:`piceli.infra`) ``follow`` maps each source to its rule and
+:meth:`Environment.per_branch` declares the branch environments. See
+``docs/environments.md``.
 
 Importing this package reads no file and contacts nothing.
 """
 
 from typing import TYPE_CHECKING, Any
 
-from piceli.envs.model import BranchEnv, EnvConfig, EnvError, EnvStatus
+from piceli.envs.model import (
+    Branch,
+    BranchEnv,
+    BranchEnvironments,
+    Branches,
+    EnvConfig,
+    EnvError,
+    Environment,
+    EnvStatus,
+    Promote,
+    Stack,
+    Tag,
+)
 
 if TYPE_CHECKING:
     from piceli.envs.ops import (
         env_down,
         env_pipeline,
+        env_stop,
         env_up,
         list_envs,
         namespace_for,
@@ -35,19 +53,35 @@ if TYPE_CHECKING:
     )
 
 __all__ = [
+    "Branch",
     "BranchEnv",
+    "BranchEnvironments",
+    "Branches",
     "EnvConfig",
     "EnvError",
     "EnvStatus",
+    "Environment",
+    "Promote",
+    "Stack",
+    "Tag",
     "env_down",
     "env_pipeline",
+    "env_stop",
     "env_up",
     "list_envs",
     "namespace_for",
     "seed_env",
 ]
 
-_OPS = {"env_down", "env_pipeline", "env_up", "list_envs", "namespace_for", "seed_env"}
+_OPS = {
+    "env_down",
+    "env_pipeline",
+    "env_stop",
+    "env_up",
+    "list_envs",
+    "namespace_for",
+    "seed_env",
+}
 
 
 def __getattr__(name: str) -> Any:

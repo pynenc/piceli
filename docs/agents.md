@@ -92,6 +92,19 @@ See also {ref}`the release contract changes <release-contract-changes>`.
 These never change a cluster, registry or node. Some write local files, as
 noted.
 
+- `piceli profiles [--json]`: lists the stored credential profiles (names,
+  contexts, kubeconfig paths; never secrets). `piceli login NAME --kubeconfig
+  F --context C` and `piceli logout NAME` only write or remove the local
+  reference file (`$PICELI_PROFILES_DIR`); they never contact a cluster, but
+  which kubeconfig a profile names is the owner's decision.
+- `piceli registry status [MODULE:ATTR] [--json]` (with `--kubeconfig`/`--context`
+  or the pipeline's target): reads the in-cluster registry's pod, the mirror
+  on each node and the storage use; changes nothing. `piceli registry
+  forward` only opens a loopback port-forward to it.
+- `piceli cluster status MODULE:ATTR [--json]`: reads a declared cluster's
+  nodes and labels, the registry and the mirror on each node (and which k3s
+  nodes need a k3s restart), the controller, the UI and whether the Git
+  Secret exists (key names only); changes nothing.
 - `piceli gitops status [--json]` (with `--kubeconfig`/`--context`, or
   `--state-dir` for a local controller): reads the controller's health and
   each branch's commit, state and pending plan hash; changes nothing.
@@ -119,7 +132,9 @@ noted.
   --plan`, and `piceli env up|down|seed BRANCH` **without** `--approve`,
   only plan and print the `env_hash` (exit `3` without `--plan`); nothing
   changes. `piceli logs BRANCH WORKLOAD [--previous] [-f]` reads one
-  workload's logs. See {doc}`environments`.
+  workload's logs. Named environments (`EnvConfig(environments=...)`) are
+  listed too (`"fixed": true`, their name as `branch`); `piceli env up NAME`
+  plans one like a branch. See {doc}`environments`.
 - `piceli publish TARGET --to oci://…` **without** `--approve`: renders,
   packages the OCI artifact and prints its digest (exit `3`); nothing
   is pushed.
@@ -254,14 +269,19 @@ Exporting deploy events (`--otlp-endpoint`, or `OTEL_EXPORTER_OTLP_*` in the env
 | Command | Changes | Approve with |
 | --- | --- | --- |
 | `piceli build job` | Creates a cache claim (if missing) and one Job on a builder node that fetches a commit, builds and pushes images by digest to the node registry; it is removed afterwards and the cache kept | `--approve <plan_hash>` printed by `piceli build job MODULE:ATTR --commit SHA …` without `--approve`, after the owner chose the commit, builder image and registry. Never put Git credentials in `--repo`; they come from a Secret. `cluster-build-failed` carries a scrubbed log tail: report it, do not retry blindly |
-| `piceli env up` | Deploys a branch into its namespace (creates it, labelled), stops the least recently pushed branch environment when `max_envs` run (scaled to zero, kept) and, with `--seed-from main`, replaces the new claims' content with main's latest restore point | `--approve <env_hash>` printed by `piceli env up BRANCH --pipeline MODULE:ATTR --digest NAME=REF` without `--approve`, after the owner reviewed the namespace, the environments it stops and the deploy plan; `--approve-if-policy` only when the owner declared `EnvConfig(auto_approve=True)` (branches) or an `auto_approve` policy; the main branch never by `EnvConfig`. On an `env-isolation-*` code, report it: never work around the isolation |
+| `piceli env up` | Deploys a branch into its namespace (creates it, labelled), stops the least recently pushed branch environment when `max_envs` run (scaled to zero, kept) and, with `--seed-from main`, replaces the new claims' content with main's latest restore point | `--approve <env_hash>` printed by `piceli env up BRANCH --pipeline MODULE:ATTR --digest NAME=REF` without `--approve`, after the owner reviewed the namespace, the environments it stops and the deploy plan; `--approve-if-policy` only when the owner declared `EnvConfig(auto_approve=True)` (branches) or an `auto_approve` policy; the main branch and named environments never by `EnvConfig`. On an `env-isolation-*`, `env-stack-*` or `env-nodes-conflict` code, report it: never work around the isolation, stack or placement |
 | `piceli env down` | Deletes a branch environment: its claims (data), its namespace and the volumes bound to them; never main's | `--approve <env_hash>` printed by `piceli env down BRANCH --pipeline MODULE:ATTR` without `--approve`, after the owner agreed to lose that branch's data |
 | `piceli env seed` | Replaces every file of a branch environment's claims with main's latest restore point (stops its writers, then starts them again); main's claims are only read from the local archive | `--approve <env_hash>` printed by `piceli env seed BRANCH --pipeline MODULE:ATTR` without `--approve` |
 | `piceli env push` | Writes the ConfigMap `piceli-env-<branch>` (image digests) in the branch environment's namespace, creating the namespace if absent | `--approve <plan_hash>` printed by `piceli env push BRANCH MODULE:ATTR --receipt FILE` without `--approve`, after the owner confirmed the digests are the ones to deploy |
 | `piceli gitops enable` | Installs the GitOps controller: namespace `piceli-system`, a ServiceAccount with a namespaced Role, a ClusterRole limited to nodes (read), namespaces and binding the deployer role, a state claim, a ConfigMap and a one-replica Deployment that then **deploys branches on its own** (inside the pipeline's `auto_approve` policy, or after `piceli gitops approve`) | `--approve <plan_hash>` printed by `piceli gitops enable …` without `--approve`, after the owner chose the repository, the branch globs, the digest-pinned `--image` and reviewed the plan. Never put Git credentials in `--repo`; `--main-auto-approve` and `--cluster-rbac` only when the owner asked; see {doc}`gitops` |
+| `piceli registry install` | Installs the in-cluster registry in `piceli-system`: a registry Deployment pinned to one node with a retained claim, a Service and a DaemonSet that writes `/etc/containerd/certs.d/<name>.<namespace>.svc:<port>/hosts.toml` on **every node** | `--approve <plan_hash>` printed without `--approve`, after the owner chose the node, the storage and reviewed the plan; see {doc}`cluster_registry` |
+| `piceli cluster init` | Labels the declared nodes (`piceli.io/role-<role>`, `piceli.io/builder`, `piceli.io/runtime`), installs the in-cluster registry and its node agents (they write the containerd `certs.d` mirror, or merge an entry into `/etc/rancher/k3s/registries.yaml` on k3s nodes), the GitOps controller's namespace, identity, RBAC and state claim, and the UI | `--approve <plan_hash>` printed by `piceli cluster init MODULE:ATTR` without `--approve`, after the owner reviewed the plan. Never restart k3s yourself: report the `restart_needed` nodes to the owner. On `cluster-api-mismatch`, report it: never point the profile elsewhere on your own; see {doc}`cluster_init` |
+| `piceli secrets git` | Creates or updates the Secret `piceli-build-git` (`username`, `password`) in `piceli-system`, which the controller and cluster builds clone with | The owner runs it and types the token (`--prompt`). Never type, pipe, echo or pass a token yourself, never put one in an argument or `PICELI_GIT_TOKEN` |
+| `piceli registry uninstall` | Deletes the registry, its Service and node agents (the nodes' mirror files go with them); workloads pulling from it cannot start new pods. Never the namespace; the images only with `--delete-storage` | `--approve <plan_hash>` printed without `--approve`, after the owner agreed |
 | `piceli gitops disable` | Deletes the controller's objects (never an environment, the namespace or, without `--delete-state`, the state claim) | `--approve <plan_hash>` printed without `--approve`, after the owner agreed |
 | `piceli gitops approve` | Releases a branch deploy (or a main release) waiting for approval; the controller applies that plan on its next poll | This **is** the owner's approval: run it only with the exact hash the owner approved after seeing the plan (`piceli gitops status` shows the pending hash) |
-| `piceli promote` | Asks the controller to deploy `BRANCH@SHA` to the main environment (which then waits for `gitops approve`) | The owner's go-ahead for that commit |
+| `piceli promote` | Asks the controller to deploy `BRANCH@SHA` to the main environment, or `piceli promote ENV BRANCH@SHA` to a named environment that follows `Promote()` (which then waits for `gitops approve` unless it declares `auto_approve=True`) | The owner's go-ahead for that commit and environment |
+| `piceli gitops sync` | Asks the controller to deploy an environment (or every one) now at its revision; with `--component NAME` (a composition controller) also rebuilds that component | The owner's go-ahead; the deploy still needs the environment's usual approval (`auto_approve`, or `piceli gitops approve` of its plan hash) |
 | `piceli gitops run` | The controller loop itself (normally only inside its Deployment); deploys and tears down branch environments | Never run it yourself unless the owner asked for a local `--once` poll |
 | `piceli deploy` | Builds images, pushes them to a registry or node, applies a release | `--approve <combined hash>` from `piceli deploy MODULE:ATTR --plan`, after the owner reviewed that plan (or `--apply <plan file> --approve <its hash>` on another runner); `--resume` continues an approved run; `--approve-if-policy` only when the owner declared an `auto_approve` policy (see below) |
 | `piceli restore` | Replaces every file of the restore point's claims (stops their writers, then starts them again) | `--approve <restore_hash>` printed by `piceli restore MODULE:ATTR --point ID` without `--approve`, after the owner chose that restore point and agreed to lose what the claims hold now |
@@ -283,8 +303,8 @@ Exporting deploy events (`--otlp-endpoint`, or `OTEL_EXPORTER_OTLP_*` in the env
 | `piceli artifacts execute-command` | Runs a pinned tool | `--approve-plan <hash>` |
 | `piceli artifacts import-local` | The local Docker image store | `--approve-digest <digest>` |
 | `piceli operator approve`, `piceli operator promote`, `piceli operator restore` | Operator state, catalog or files | The owner's go-ahead |
-| `piceli access` (also `piceli access BRANCH --pipeline MODULE:ATTR` for a branch environment, on free local ports), `piceli logs -f`, `piceli ui serve`, `piceli ui connect`, `piceli observe serve`, `piceli operator serve`, `piceli observe forward-run`, `piceli observe forwards apply`, `piceli observe logs-run` | Long-running local processes and ports | The owner's go-ahead |
-| `piceli ui cluster-observe`, `piceli ui cluster-serve` | A long-running authenticated service in a named Kubernetes namespace; configured grants permit reviewed deployment and cluster build operations | The owner's approval of the installation, target and grants |
+| `piceli access` (also `piceli access BRANCH --pipeline MODULE:ATTR` for a branch environment, on free local ports; `piceli access ui --cluster MODULE:ATTR` for the UI `piceli cluster init` installed, which prints one launch URL with its token: show it only to the owner), `piceli logs -f`, `piceli ui serve`, `piceli ui connect`, `piceli observe serve`, `piceli operator serve`, `piceli observe forward-run`, `piceli observe forwards apply`, `piceli observe logs-run` | Long-running local processes and ports | The owner's go-ahead |
+| `piceli ui cluster-observe`, `piceli ui cluster-serve`, `piceli ui forward-serve` (runs only in the pod `piceli cluster init` installs; its Sync button writes GitOps sync requests) | A long-running authenticated service in a named Kubernetes namespace; configured grants permit reviewed deployment and cluster build operations | The owner's approval of the installation, target and grants |
 | `piceli access stop --stale` | Stops Piceli's own local processes for the app (a forward or dashboard the owner may still be using in another terminal); never another process | The owner's go-ahead |
 
 Never add `--auto-approve` unless the owner has said that this run is an
@@ -562,6 +582,11 @@ accepted (`observe`, `operator`, `artifacts deliver --via-forward`), and a
 missing context is a usage error (exit `2`), never a fallback to the file's
 `current-context`. Do not change the kubeconfig or context an owner has set
 in a spec, and do not pick a context yourself: ask the owner which one to use.
+A credential profile (`Target.profile("NAME", …)`, `credentials = "NAME"`,
+`--profile NAME`) stands for the owner's kubeconfig and context; use the
+profiles `piceli profiles` lists, never create one for a kubeconfig you found.
+`profile-not-found` means the owner has to run `piceli login`; `--profile` with
+`--kubeconfig` is `profile-conflict`.
 
 An app with `cluster_rules` (typed RBAC, {doc}`typed_apps`) needs a
 kubeconfig user that may list and write ClusterRoles and ClusterRoleBindings.

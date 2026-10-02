@@ -198,7 +198,13 @@ def _describe(plan: Any, entry: str) -> None:
             f"network {build['network']})"
         )
     deliver = stages["deliver"]
-    if "registry" in deliver:
+    if "registry" in deliver and "host" in deliver["registry"]:
+        registry = deliver["registry"]
+        say(
+            f"  deliver  registry {registry['host']}: {registry['state']} "
+            f"(in-cluster, on node {registry['node']})"
+        )
+    elif "registry" in deliver:
         registry = deliver["registry"]
         changes = ", ".join(
             f"{c['operation']} {c['kind']}/{c['name']}" for c in registry["changes"]

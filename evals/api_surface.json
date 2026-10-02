@@ -686,6 +686,18 @@
    },
    "pydantic": true
   },
+  "Branch": {
+   "attrs": [
+    "describe",
+    "name"
+   ],
+   "init": [
+    "name"
+   ],
+   "methods": {
+    "describe": []
+   }
+  },
   "Build": {
    "attrs": [
     "dockerfile",
@@ -912,6 +924,71 @@
     ]
    },
    "pydantic": true
+  },
+  "ClusterRegistry": {
+   "attrs": [
+    "ca_file",
+    "credentials",
+    "describe",
+    "host",
+    "image",
+    "in_cluster",
+    "kind",
+    "mirror",
+    "mirror_credentials",
+    "mirror_dir",
+    "name",
+    "namespace",
+    "node_mirror",
+    "node_port",
+    "node_registry",
+    "on",
+    "port",
+    "repository",
+    "storage",
+    "storage_class",
+    "url"
+   ],
+   "init": [
+    "ca_file",
+    "credentials",
+    "image",
+    "mirror",
+    "mirror_credentials",
+    "mirror_dir",
+    "name",
+    "namespace",
+    "node_mirror",
+    "node_port",
+    "node_registry",
+    "on",
+    "port",
+    "repository",
+    "storage",
+    "storage_class",
+    "url"
+   ],
+   "methods": {
+    "describe": [],
+    "in_cluster": [
+     "image",
+     "mirror",
+     "mirror_credentials",
+     "mirror_dir",
+     "name",
+     "namespace",
+     "node_mirror",
+     "node_port",
+     "on",
+     "port",
+     "repository",
+     "storage",
+     "storage_class"
+    ]
+   },
+   "returns": {
+    "in_cluster": "ClusterRegistry"
+   }
   },
   "CombinedPlan": {
    "attrs": [
@@ -1600,17 +1677,28 @@
    "pydantic": true
   },
   "EnvConfig": {
+   "attr_types": {
+    "branch_stack": "Stack",
+    "environments": "Environment"
+   },
    "attrs": [
     "allow_egress",
     "allows",
     "auto_approve",
+    "branch_nodes",
+    "branch_stack",
     "branches",
     "claim_sizes",
     "describe",
+    "environments",
+    "idle_stop",
+    "idle_stop_seconds",
+    "is_fixed",
     "is_main",
     "main_branch",
     "main_namespace",
     "max_envs",
+    "named",
     "namespace_for",
     "prefix",
     "quota",
@@ -1619,8 +1707,12 @@
    "init": [
     "allow_egress",
     "auto_approve",
+    "branch_nodes",
+    "branch_stack",
     "branches",
     "claim_sizes",
+    "environments",
+    "idle_stop",
     "main_branch",
     "main_namespace",
     "max_envs",
@@ -1633,13 +1725,22 @@
      "branch"
     ],
     "describe": [],
+    "is_fixed": [
+     "name"
+    ],
     "is_main": [
      "branch"
+    ],
+    "named": [
+     "name"
     ],
     "namespace_for": [
      "branch",
      "main_namespace"
     ]
+   },
+   "returns": {
+    "named": "Environment"
    }
   },
   "Environment": {
@@ -3188,6 +3289,15 @@
     "tcp": "Probe"
    }
   },
+  "Promote": {
+   "attrs": [
+    "describe"
+   ],
+   "init": [],
+   "methods": {
+    "describe": []
+   }
+  },
   "PythonCheck": {
    "attrs": [
     "call",
@@ -3406,6 +3516,7 @@
     "ca_file",
     "credentials",
     "describe",
+    "in_cluster",
     "kind",
     "mirror",
     "mirror_credentials",
@@ -3421,7 +3532,25 @@
     "url"
    ],
    "methods": {
-    "describe": []
+    "describe": [],
+    "in_cluster": [
+     "image",
+     "mirror",
+     "mirror_credentials",
+     "mirror_dir",
+     "name",
+     "namespace",
+     "node_mirror",
+     "node_port",
+     "on",
+     "port",
+     "repository",
+     "storage",
+     "storage_class"
+    ]
+   },
+   "returns": {
+    "in_cluster": "ClusterRegistry"
    }
   },
   "ReleaseContext": {
@@ -3522,7 +3651,8 @@
     "path",
     "resolve",
     "secret_store_path",
-    "state_dir"
+    "state_dir",
+    "target_credentials"
    ],
    "init": [
     "base",
@@ -3547,7 +3677,8 @@
     "load_composition": [],
     "resolve": [
      "path"
-    ]
+    ],
+    "target_credentials": []
    },
    "returns": {
     "context": "ReleaseContext",
@@ -4278,6 +4409,22 @@
    },
    "pydantic": true
   },
+  "Stack": {
+   "attrs": [
+    "components",
+    "declared",
+    "describe",
+    "name",
+    "workloads"
+   ],
+   "init": [
+    "name",
+    "workloads"
+   ],
+   "methods": {
+    "describe": []
+   }
+  },
   "StatefulSet": {
    "attr_types": {
     "security": "Security"
@@ -4386,6 +4533,18 @@
    "methods": {},
    "pydantic": true
   },
+  "Tag": {
+   "attrs": [
+    "describe",
+    "pattern"
+   ],
+   "init": [
+    "pattern"
+   ],
+   "methods": {
+    "describe": []
+   }
+  },
   "Target": {
    "attr_types": {
     "nodes": "TargetNode"
@@ -4394,6 +4553,7 @@
     "allow_exec",
     "cluster_uid",
     "context",
+    "credentials",
     "exec_pass_env",
     "exec_policy",
     "exec_sha256",
@@ -4402,10 +4562,13 @@
     "from_kubeconfig",
     "identity",
     "kubeconfig",
+    "location",
     "namespace",
     "namespace_uid",
     "node",
     "nodes",
+    "profile",
+    "profile_name",
     "request_seconds",
     "transport"
    ],
@@ -4414,6 +4577,7 @@
     "base",
     "cluster_uid",
     "context",
+    "credentials",
     "exec_pass_env",
     "exec_sha256",
     "exec_timeout_seconds",
@@ -4456,14 +4620,29 @@
      "request_seconds",
      "transport"
     ],
+    "location": [],
     "node": [
      "alias"
+    ],
+    "profile": [
+     "allow_exec",
+     "cluster_uid",
+     "exec_pass_env",
+     "exec_sha256",
+     "exec_timeout_seconds",
+     "name",
+     "namespace",
+     "namespace_uid",
+     "nodes",
+     "request_seconds",
+     "transport"
     ]
    },
    "returns": {
     "exec_policy": "ExecPolicy",
     "from_kubeconfig": "Target",
-    "kubeconfig": "Target"
+    "kubeconfig": "Target",
+    "profile": "Target"
    }
   },
   "TargetNode": {
@@ -4490,6 +4669,7 @@
     "allow_exec",
     "cluster_uid",
     "context",
+    "credentials",
     "exec_pass_env",
     "exec_sha256",
     "exec_timeout_seconds",
@@ -4504,6 +4684,7 @@
     "allow_exec",
     "cluster_uid",
     "context",
+    "credentials",
     "exec_pass_env",
     "exec_sha256",
     "exec_timeout_seconds",
@@ -4781,6 +4962,7 @@
      "build",
      "cache",
      "chart",
+     "cluster",
      "codegen",
      "deploy",
      "doctor",
@@ -4792,16 +4974,21 @@
      "help-json",
      "import",
      "inputs",
+     "login",
+     "logout",
      "logs",
      "observe",
      "operator",
+     "profiles",
      "promote",
      "publish",
+     "registry",
      "release",
      "render",
      "restore",
      "restore-points",
      "runs",
+     "secrets",
      "state",
      "status",
      "ui",
@@ -5064,10 +5251,15 @@
     "flags": [
      "--cache",
      "--commit",
+     "--component",
+     "--facts",
+     "--image",
      "--node-registry",
      "--out",
+     "--platform",
      "--registry-url",
      "--source",
+     "--sources",
      "--spec",
      "--timeout"
     ],
@@ -5179,6 +5371,39 @@
      "--out",
      "--spec",
      "--version"
+    ],
+    "subcommands": []
+   },
+   "cluster": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "init",
+     "status"
+    ]
+   },
+   "cluster init": {
+    "arguments": [
+     "ref"
+    ],
+    "flags": [
+     "--allow-exec",
+     "--approve",
+     "--exec-sha256",
+     "--transport",
+     "--wait"
+    ],
+    "subcommands": []
+   },
+   "cluster status": {
+    "arguments": [
+     "ref"
+    ],
+    "flags": [
+     "--allow-exec",
+     "--exec-sha256",
+     "--json",
+     "--transport"
     ],
     "subcommands": []
    },
@@ -5333,7 +5558,8 @@
      "disable",
      "enable",
      "run",
-     "status"
+     "status",
+     "sync"
     ]
    },
    "gitops approve": {
@@ -5391,6 +5617,7 @@
      "--platform",
      "--poll",
      "--repo",
+     "--root",
      "--storage",
      "--storage-class",
      "--tags",
@@ -5405,6 +5632,7 @@
      "--context",
      "--credentials-dir",
      "--kubeconfig",
+     "--local-build",
      "--namespace",
      "--once",
      "--service-account",
@@ -5418,6 +5646,20 @@
     "flags": [
      "--context",
      "--json",
+     "--kubeconfig",
+     "--namespace",
+     "--state-dir",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "gitops sync": {
+    "arguments": [
+     "env"
+    ],
+    "flags": [
+     "--component",
+     "--context",
      "--kubeconfig",
      "--namespace",
      "--state-dir",
@@ -5519,6 +5761,23 @@
      "--spec",
      "--timeout"
     ],
+    "subcommands": []
+   },
+   "login": {
+    "arguments": [
+     "name"
+    ],
+    "flags": [
+     "--context",
+     "--kubeconfig"
+    ],
+    "subcommands": []
+   },
+   "logout": {
+    "arguments": [
+     "name"
+    ],
+    "flags": [],
     "subcommands": []
    },
    "logs": {
@@ -5781,9 +6040,17 @@
     ],
     "subcommands": []
    },
+   "profiles": {
+    "arguments": [],
+    "flags": [
+     "--json"
+    ],
+    "subcommands": []
+   },
    "promote": {
     "arguments": [
-     "target"
+     "target",
+     "source"
     ],
     "flags": [
      "--context",
@@ -5809,6 +6076,91 @@
      "--source",
      "--spec",
      "--to"
+    ],
+    "subcommands": []
+   },
+   "registry": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "forward",
+     "install",
+     "status",
+     "uninstall"
+    ]
+   },
+   "registry forward": {
+    "arguments": [
+     "ref"
+    ],
+    "flags": [
+     "--context",
+     "--env",
+     "--kubeconfig",
+     "--local-port",
+     "--name",
+     "--namespace",
+     "--port"
+    ],
+    "subcommands": []
+   },
+   "registry install": {
+    "arguments": [
+     "ref"
+    ],
+    "flags": [
+     "--allow-exec",
+     "--approve",
+     "--context",
+     "--env",
+     "--exec-sha256",
+     "--image",
+     "--kubeconfig",
+     "--mirror-dir",
+     "--name",
+     "--namespace",
+     "--node-mirror",
+     "--node-port",
+     "--on",
+     "--port",
+     "--storage",
+     "--storage-class",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "registry status": {
+    "arguments": [
+     "ref"
+    ],
+    "flags": [
+     "--allow-exec",
+     "--context",
+     "--env",
+     "--exec-sha256",
+     "--json",
+     "--kubeconfig",
+     "--name",
+     "--namespace",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "registry uninstall": {
+    "arguments": [
+     "ref"
+    ],
+    "flags": [
+     "--allow-exec",
+     "--approve",
+     "--context",
+     "--delete-storage",
+     "--env",
+     "--exec-sha256",
+     "--kubeconfig",
+     "--name",
+     "--namespace",
+     "--transport"
     ],
     "subcommands": []
    },
@@ -6029,6 +6381,25 @@
     ],
     "subcommands": []
    },
+   "secrets": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "git"
+    ]
+   },
+   "secrets git": {
+    "arguments": [],
+    "flags": [
+     "--allow-exec",
+     "--cluster",
+     "--exec-sha256",
+     "--prompt",
+     "--transport",
+     "--username"
+    ],
+    "subcommands": []
+   },
    "state": {
     "arguments": [],
     "flags": [],
@@ -6093,6 +6464,7 @@
      "cluster-observe",
      "cluster-serve",
      "connect",
+     "forward-serve",
      "restore",
      "serve"
     ]
@@ -6198,6 +6570,15 @@
     ],
     "subcommands": []
    },
+   "ui forward-serve": {
+    "arguments": [],
+    "flags": [
+     "--launch-secret",
+     "--namespace",
+     "--port"
+    ],
+    "subcommands": []
+   },
    "ui restore": {
     "arguments": [],
     "flags": [
@@ -6224,6 +6605,7 @@
      "--no-allow-exec",
      "--pipeline",
      "--port",
+     "--profile",
      "--renderer-image",
      "--renderer-platform",
      "--source-file",
@@ -6259,6 +6641,13 @@
    "access-stop-incomplete",
    "access-stop-needs-stale",
    "access-target-invalid",
+   "access-ui-cluster-invalid",
+   "access-ui-forbidden",
+   "access-ui-not-declared",
+   "access-ui-not-installed",
+   "access-ui-not-ready",
+   "access-ui-target-required",
+   "access-ui-unreachable",
    "access-unknown-forward",
    "adopt-and-replace",
    "adopt-entry-not-declared",
@@ -6322,10 +6711,25 @@
    "claim-migration-target-exists",
    "claim-migration-verify-failed",
    "claim-shrink-refused",
+   "cluster-api-failed",
+   "cluster-api-mismatch",
    "cluster-build-failed",
    "cluster-build-invalid",
    "cluster-identity-changed",
    "cluster-identity-unreadable",
+   "cluster-invalid",
+   "cluster-load-failed",
+   "cluster-node-arch-mismatch",
+   "cluster-node-missing",
+   "cluster-not-found",
+   "cluster-not-initialized",
+   "cluster-plan-changed",
+   "cluster-registry-cluster-failed",
+   "cluster-registry-invalid",
+   "cluster-registry-not-installed",
+   "cluster-registry-not-ready",
+   "cluster-registry-plan-changed",
+   "cluster-registry-target-required",
    "codegen-cluster-read-failed",
    "codegen-flags-conflict",
    "codegen-output-refused",
@@ -6334,6 +6738,13 @@
    "command-output-limit",
    "command-timed-out",
    "compensation-already-started",
+   "component-build-failed",
+   "component-build-unsupported",
+   "component-contract-invalid",
+   "component-contract-missing",
+   "component-need-unmet",
+   "composition-invalid",
+   "composition-ref-unresolved",
    "conflict",
    "context-budget-exceeded",
    "context-changed",
@@ -6388,12 +6799,15 @@
    "env-main-protected",
    "env-namespace-collision",
    "env-namespace-not-managed",
+   "env-nodes-conflict",
    "env-not-configured",
    "env-not-found",
    "env-pipeline-missing",
    "env-plan-changed",
    "env-push-invalid",
    "env-seed-no-restore-point",
+   "env-stack-incomplete",
+   "env-stack-unknown",
    "env-workload-unknown",
    "environment-invalid",
    "environment-required",
@@ -6447,6 +6861,7 @@
    "gitops-pipeline-invalid",
    "gitops-plan-changed",
    "gitops-port-unavailable",
+   "gitops-promote-not-allowed",
    "gitops-promote-unknown",
    "gitops-push-failed",
    "gitops-repo-invalid",
@@ -6607,6 +7022,9 @@
    "prerollout-not-startable",
    "prerollout-timeout",
    "prerollout-unavailable",
+   "profile-conflict",
+   "profile-invalid",
+   "profile-not-found",
    "promote-refused",
    "provider-error",
    "publish-failed",
@@ -6711,6 +7129,10 @@
    "secret-source-tool-missing",
    "secret-template-invalid",
    "secret-unknown-reference",
+   "secrets-invalid",
+   "secrets-prompt-required",
+   "secrets-token-empty",
+   "secrets-token-refused",
    "server-target-identity-mismatch",
    "sign-failed",
    "sign-key-invalid",
@@ -6763,9 +7185,13 @@
    "ui-access-port-conflict",
    "ui-approval-mismatch",
    "ui-assets-unavailable",
+   "ui-controller-absent",
    "ui-evaluation-failed",
    "ui-execution-failed",
    "ui-idempotency-conflict",
+   "ui-install-access-unsupported",
+   "ui-install-image-unpinned",
+   "ui-install-node-unknown",
    "ui-invalid-request",
    "ui-logs-unavailable",
    "ui-not-found",
@@ -6777,6 +7203,8 @@
    "ui-prerollout-unsupported",
    "ui-request-rejected",
    "ui-state-invalid",
+   "ui-sync-target-unknown",
+   "ui-sync-unavailable",
    "uid-version-precondition-failed",
    "undiscovered-api",
    "unknown-error-code",
@@ -6822,6 +7250,9 @@
      "version_stage"
     ],
     "returns": "AwsSecretSpec"
+   },
+   "Branch": {
+    "class": "Branch"
    },
    "Build": {
     "class": "Build"
@@ -6925,6 +7356,9 @@
    "Probe": {
     "class": "Probe"
    },
+   "Promote": {
+    "class": "Promote"
+   },
    "Quiesce": {
     "class": "Quiesce"
    },
@@ -6999,6 +7433,9 @@
     ],
     "returns": "SopsSecretSpec"
    },
+   "Stack": {
+    "class": "Stack"
+   },
    "StatefulSet": {
     "class": "StatefulSet"
    },
@@ -7010,6 +7447,9 @@
     "returns": "StaticSecretSpec"
    },
    "TYPE_CHECKING": {},
+   "Tag": {
+    "class": "Tag"
+   },
    "Target": {
     "class": "Target"
    },
@@ -7063,10 +7503,12 @@
    "gcp": {},
    "gitops": {},
    "importing": {},
+   "infra": {},
    "k8s": {},
    "maintenance": {},
    "pipeline": {},
    "process_group": {},
+   "profiles": {},
    "restore": {},
    "server": {},
    "services": {},
@@ -7525,6 +7967,9 @@
    "CheckRunner": {
     "class": "CheckRunner"
    },
+   "ClusterRegistry": {
+    "class": "ClusterRegistry"
+   },
    "CombinedPlan": {
     "class": "CombinedPlan"
    },
@@ -7703,6 +8148,7 @@
   "piceli.artifacts.build_spec",
   "piceli.artifacts.cli",
   "piceli.artifacts.cluster_build",
+  "piceli.artifacts.cluster_registry",
   "piceli.artifacts.delivery",
   "piceli.artifacts.delivery_inputs",
   "piceli.artifacts.gc",
@@ -7757,6 +8203,17 @@
   "piceli.importing.codegen",
   "piceli.importing.generate",
   "piceli.importing.sources",
+  "piceli.infra",
+  "piceli.infra.builders",
+  "piceli.infra.cluster",
+  "piceli.infra.cluster_init",
+  "piceli.infra.composition",
+  "piceli.infra.contract",
+  "piceli.infra.controller",
+  "piceli.infra.pipelines",
+  "piceli.infra.render",
+  "piceli.infra.sources",
+  "piceli.infra.ui_install",
   "piceli.k8s",
   "piceli.k8s.access",
   "piceli.k8s.automation",
@@ -7764,6 +8221,7 @@
   "piceli.k8s.cli.access",
   "piceli.k8s.cli.build",
   "piceli.k8s.cli.chart",
+  "piceli.k8s.cli.cluster",
   "piceli.k8s.cli.cluster_access",
   "piceli.k8s.cli.codegen",
   "piceli.k8s.cli.contract",
@@ -7777,12 +8235,15 @@
   "piceli.k8s.cli.maintenance",
   "piceli.k8s.cli.observe",
   "piceli.k8s.cli.operator",
+  "piceli.k8s.cli.profiles",
   "piceli.k8s.cli.publish",
+  "piceli.k8s.cli.registry",
   "piceli.k8s.cli.release",
   "piceli.k8s.cli.render",
   "piceli.k8s.cli.restore",
   "piceli.k8s.cli.state",
   "piceli.k8s.cli.ui",
+  "piceli.k8s.cli.ui_forward",
   "piceli.k8s.cli.ui_remote",
   "piceli.k8s.cli.watch",
   "piceli.k8s.config",
@@ -7878,6 +8339,7 @@
   "piceli.pipeline.secrets",
   "piceli.pipeline.summary",
   "piceli.process_group",
+  "piceli.profiles",
   "piceli.reference_docs",
   "piceli.restore",
   "piceli.restore.claims",
@@ -7899,11 +8361,14 @@
   "piceli.services.authority",
   "piceli.services.cluster_build_control",
   "piceli.services.cluster_evaluation",
+  "piceli.services.cluster_status",
+  "piceli.services.composition_control",
   "piceli.services.contracts",
   "piceli.services.engine",
   "piceli.services.environment_control",
   "piceli.services.evaluation",
   "piceli.services.logs",
+  "piceli.services.named_environment_actions",
   "piceli.services.observation",
   "piceli.services.operations",
   "piceli.services.pipeline_control",
@@ -7957,5 +8422,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.13.0"
+ "version": "0.14.0"
 }

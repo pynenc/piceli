@@ -57,3 +57,23 @@ def test_pipeline_only_control_store_can_be_backed_up(tmp_path: Path) -> None:
     archive = backup(state, tmp_path / "pipeline-ui.tar.gz")
     recovered = restore(archive, tmp_path / "recovered")
     assert (recovered / "pipeline-control.sqlite3").is_file()
+
+
+def test_restore_makes_every_directory_private(tmp_path: Path) -> None:
+    """Nested members (evaluations/<id>/...) never leave a 0755 parent behind."""
+    state = tmp_path / "control"
+    store = Store(state / "operations.sqlite3")
+    store.acquire_dispatcher()
+    store.close()
+    nested = state / "evaluations" / "run-1" / "result.json"
+    nested.parent.mkdir(parents=True)
+    nested.write_text("{}")
+    archive = tmp_path / "ui-backup.tar.gz"
+    backup(state, archive)
+    restored = restore(archive, tmp_path / "recovered")
+    for path in (
+        restored,
+        restored / "evaluations",
+        restored / "evaluations" / "run-1",
+    ):
+        assert path.stat().st_mode & 0o777 == 0o700, path

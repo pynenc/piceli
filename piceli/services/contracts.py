@@ -250,6 +250,28 @@ class GitOpsPromotionRequest(Record):
     commit: str = Field(pattern=r"^[0-9a-f]{7,40}$")
 
 
+class CompositionSyncRequest(Record):
+    """Sync one environment of the composition, or one of its components."""
+
+    env: str = Field(pattern=r"^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$")
+    component: str | None = Field(
+        default=None, pattern=r"^[A-Za-z0-9](?:[-A-Za-z0-9_.]{0,126}[A-Za-z0-9])?$"
+    )
+
+
+class NamedEnvironmentApprovalRequest(Record):
+    plan_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+
+
+class NamedEnvironmentPromotionRequest(Record):
+    branch: str = Field(min_length=1, max_length=250)
+    commit: str = Field(pattern=r"^[0-9a-f]{7,40}$")
+
+
+class ProfileSwitchRequest(Record):
+    name: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]{0,62}$")
+
+
 class Stage(Record):
     name: str
     state: Literal[

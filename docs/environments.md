@@ -296,6 +296,107 @@ them, and its local state. It refuses the main branch and namespace always
 (`env-main-protected`) and any namespace without this app's
 `piceli.io/env-of` label (`env-namespace-not-managed`).
 
+### Named environments, stacks and placement
+
+```{admonition} New in 0.14.0
+:class: note
+
+`environments=`, `Stack`, `on_nodes`, `branch_stack`, `branch_nodes` and
+`idle_stop` are new; a 0.13 `EnvConfig` renders and hashes as before.
+```
+
+Besides one namespace per branch, `EnvConfig(environments=[...])` declares
+**named, long-lived environments**, each with its own trigger, namespace,
+stack and placement. (`piceli.envs.Environment` is not the app overlay
+`piceli.Environment` above: it says where the pipeline deploys and what
+deploys it.)
+
+```python
+from piceli import Branch, EnvConfig, Promote, Stack, Tag
+from piceli.envs import Environment
+
+full = Stack("full", workloads=["web", "worker", "db", "cache"])
+small = Stack("small", workloads=["web", "db"])
+
+envs = EnvConfig(
+    prefix="shop-",
+    branches=["wp-*"],
+    environments=[
+        # every push to main deploys here
+        Environment("main", namespace="shop-main", follow=Branch("main"), stack=full),
+        # a new v*-rc* tag, or `piceli promote rc main@<sha>`
+        Environment(
+            "rc",
+            namespace="shop-rc",
+            follow=[Tag("v*-rc*"), Promote()],
+            on_nodes=["node-a", "node-b"],
+            quota={"pods": "40"},
+        ),
+    ],
+    # branch environments: a small stack on chosen nodes
+    branch_stack=small,
+    branch_nodes=["node-c"],  # or {"example.com/pool": "branches"}
+    claim_sizes={"db-data": "1Gi"},  # an ExistingClaim becomes the branch's own
+    seed_from="main",
+    idle_stop="24h",
+)
+```
+
+- **Triggers.** `follow` takes `Branch("NAME")` (every push to that branch,
+  the first one seen too), `Tag("GLOB")` (a new matching tag; tags present
+  when the environment is first seen are its baseline) and `Promote()`
+  (`piceli promote ENV BRANCH@SHA`), one or a list. The GitOps controller
+  evaluates each environment on its own, so one branch can feed two
+  environments (main deploys `main` on every push and `rc` on a tag). An
+  environment named like `main_branch` replaces the implicit main
+  environment (`main_namespace`, deployed on `v*` tags and promotions);
+  without one, 0.13's main behaviour is unchanged.
+- **Commands.** `piceli env up NAME` deploys a named environment like main:
+  it builds unless `--digest`/`--receipt` give the images, keeps restore
+  points (in main's store, so `seed_from` may name it), and creates the
+  namespace when absent (label `piceli.io/env-name`). Env commands never
+  delete, stop or seed it (`env-main-protected`); it is never counted in
+  `max_envs`. `piceli envs` lists it after main with `"fixed": true` and its
+  name as `branch`. `auto_approve=True` lets the controller deploy it
+  without a hash when the plan is inside the pipeline's `auto_approve`
+  policy (like `--main-auto-approve`). Environment names take precedence
+  over branch names, and a branch whose namespace is a named environment's
+  is refused (`env-namespace-collision`).
+- **Stacks.** `Stack(name, workloads=[...])` names workloads of the app (by
+  name or the declared object). An environment with a stack renders only
+  them: a component whose workloads are all left out is left out whole (its
+  Service, autoscaler, …); configs, Secrets and accounts always render. A
+  name that is no workload is refused (`env-stack-unknown`), and so is a
+  kept object that depends on a left-out component (`env-stack-incomplete`).
+- **Placement.** `on_nodes=["node-a", ...]` adds a required node affinity
+  `kubernetes.io/hostname In [...]` to every workload; a mapping
+  `{"label": "value"}` is merged into `nodeSelector`. A workload pinned to
+  another node (`node=`, or the delivery node of a node-loopback registry)
+  is refused (`env-nodes-conflict`): use a registry every node pulls from.
+- **Branch claims.** In a branch environment, an `ExistingClaim` with a size
+  in `claim_sizes` (by claim name, `workload/claim` or workload) becomes a
+  claim the environment owns: created empty (or seeded with `seed_from`),
+  deleted with the environment. Without a size it stays an existing claim,
+  as in 0.13. Main and named environments keep `ExistingClaim` semantics.
+- **Idle stop.** With `idle_stop="24h"` the GitOps controller scales a branch
+  environment without a push for that long to zero (status `stopped`,
+  reason `idle-stop`); the next push deploys and starts it again.
+  `piceli.envs.env_stop` does the same by hand (planned, `env_hash`).
+  Deleting the branch still deletes its environment.
+
+### Environments of a composition
+
+In a composition (see {doc}`components`) an environment follows several
+repositories: `follow` maps each `piceli.infra.Source` to its rule,
+`Environment("main", namespace="shop-main", follow={shop: "main", catalog:
+Tag("v*")}, stack=Stack("full", [web, api]), cluster=cluster)`, and
+`Environment.per_branch(Branches("wp-*"), namespace="shop-{branch}",
+follow={shop: "{branch}", catalog: "main"}, on_nodes=["node-b"], limit=2)`
+declares the branch environments. The controller deploys the environment at
+one commit per source (its revision) and renders it from the components'
+contracts; `Stack` then holds `Component`s. A single-source
+`follow=Branch(...)` keeps its meaning here.
+
 ### One place to look
 
 - `piceli envs --pipeline MODULE:ATTR [--json]`: every environment with its
@@ -316,4 +417,5 @@ them, and its local state. It refuses the main branch and namespace always
 | Declare and apply | {py:class}`~piceli.app.environment.Environment`, {py:class}`~piceli.app.environment.Scaling`, {py:meth}`App.environment <piceli.app.app.App.environment>`, {py:meth}`App.for_environment <piceli.app.app.App.for_environment>`, `App.environments`, `App.selected_environment` |
 | Pipelines | {py:class}`~piceli.pipeline.model.Pipeline` (`target=` mapping, `for_environment`, `environment`, `needs_environment`) |
 | Compare | {py:func}`~piceli.app.environment.environment_diff`, {py:func}`~piceli.app.environment.field_changes` |
-| Per-branch environments | `piceli.envs`: `EnvConfig`, `namespace_for`, `env_up`, `env_down`, `seed_env`, `list_envs`, `EnvStatus` |
+| Per-branch environments | `piceli.envs`: `EnvConfig`, `namespace_for`, `env_up`, `env_down`, `env_stop`, `seed_env`, `list_envs`, `EnvStatus` |
+| Named environments | `piceli.envs`: `Environment`, `Branch`, `Tag`, `Promote`, `Stack` |

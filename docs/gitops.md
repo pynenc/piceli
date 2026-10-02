@@ -138,6 +138,52 @@ controller's rights. Keep the globs narrow and protect those branches as you
 would protect a CI runner's secrets.
 ```
 
+### Named environments and idle stop
+
+When the pipeline declares `EnvConfig(environments=[...])` (see
+{doc}`environments`), `gitops enable` reads them from the working tree
+(`--root`, default `.`) into the controller's config, so the install plan
+hash covers every environment's trigger; change them and run `gitops enable`
+again. A pipeline file that is there and does not load is refused
+(`gitops-pipeline-invalid`); without the file the controller runs as in
+0.13. Per environment:
+
+- `Branch("main")`: every push to `main` deploys it (no tag needed);
+- `Tag("v*-rc*")`: the latest new matching tag deploys it;
+- `Promote()`: `piceli promote rc main@<sha>` deploys that commit (an
+  environment without `Promote()` drops the request with
+  `gitops-promote-not-allowed`; `piceli promote BRANCH@SHA` still targets
+  main).
+
+Each waits for `piceli gitops approve NAME HASH` unless it declares
+`auto_approve=True` and the plan is inside the pipeline's `auto_approve`
+policy. A commit already built for one environment is not built again for
+another. `EnvConfig(idle_stop="24h")` scales a branch environment without a
+push for that long to zero (state `stopped`, reason `idle-stop`); the next
+push starts it again. The status lists the rules under
+`controller.environments` and `controller.idle_stop_seconds`.
+
+### Compositions: many sources
+
+`piceli gitops enable infra.py` (a module, no `:ATTR`) installs the same
+controller for a composition (see {doc}`components`): it polls every
+`Source` of the module with one Git Secret, resolves each environment's
+`follow={source: rule}` to one commit per source, builds only the components
+whose source digest changed (one build Job that fetches every source it
+needs) and rolls only those; unchanged components apply as no-op.
+`--branches` and `--tags` are not used: the module names its sources and
+rules. When an environment deploys a pipeline (`Environment(pipeline=…)`,
+see {doc}`compositions`), the controller also follows the composition's own
+repository (`--repo`, default the origin remote of `--root`; branch
+`--main-branch`) and imports the module at its commit; each output image is
+rebuilt only when its change key changed. The status adds `sources`,
+`envs.<env>.revision` and `envs.<env>.components` (see {doc}`components`).
+
+`piceli gitops sync [ENV] [--component NAME]` asks the controller to deploy
+an environment (or every one) now at its revision; with `--component` a
+composition controller also rebuilds that component. The deploy still needs
+the environment's usual approval.
+
 ### Status and requests (for tools)
 
 The controller publishes its status in the ConfigMap `piceli-gitops-status`
@@ -147,13 +193,15 @@ The controller publishes its status in the ConfigMap `piceli-gitops-status`
 `piceli envs` reads it (`piceli.gitops.state.read_status`). Per branch,
 `envs.<branch>` holds `commit` (wanted), `deployed_commit`, `state`
 (`pending`, `retrying`, `approval-required`, `deployed`, `failed`,
-`deleting`), `plan_hash`, `reason` (an error code), `attempts`,
+`deleting`,
+`stopped`), `plan_hash`, `reason` (an error code), `attempts`,
 `next_attempt_at`, `pushed_at`, `updated_at`, `namespace` and `trigger`
 (`push`, `tag v1.2.0`, `promote BRANCH@SHA`). Dropped requests are listed in
 `rejected_requests` with their code.
 
-`piceli gitops approve` and `piceli promote` add one key each to the
-ConfigMap `piceli-gitops-requests`; the controller removes a request once it
+`piceli gitops approve`, `piceli gitops sync` and `piceli promote` add one
+key each to the ConfigMap `piceli-gitops-requests` (kinds `approve`,
+`sync`, `promote`); the controller removes a request once it
 handled it. Locally, `piceli gitops run --once --state-dir DIR` (with
 `--kubeconfig`/`--context`) runs one poll, and `status`, `approve` and
 `promote` take `--state-dir DIR` instead of a cluster.

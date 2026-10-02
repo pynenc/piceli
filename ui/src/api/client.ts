@@ -1,6 +1,6 @@
 import createClient from 'openapi-fetch';
 import type { paths } from './openapi';
-import type { ServiceError, PlanRequest, EvaluationRequest, OperationRequest, RecoveryRequest, CancelRequest, AccessStartRequest, RemoteAccessStartRequest, EnvironmentActionRequest, GitOpsApprovalRequest, GitOpsPromotionRequest, ClusterBuildPlanRequest, ClusterBuildOperationRequest } from './generated';
+import type { ServiceError, PlanRequest, EvaluationRequest, OperationRequest, RecoveryRequest, CancelRequest, AccessStartRequest, RemoteAccessStartRequest, EnvironmentActionRequest, GitOpsApprovalRequest, GitOpsPromotionRequest, ClusterBuildPlanRequest, ClusterBuildOperationRequest, CompositionSyncRequest, NamedEnvironmentApprovalRequest, NamedEnvironmentPromotionRequest, ProfileSwitchRequest } from './generated';
 
 export class ApiError extends Error {
   constructor(public status: number, public detail: ServiceError) { super(detail.message); }
@@ -76,6 +76,16 @@ export const api = {
   clusterBuildAdmit: (body: ClusterBuildOperationRequest) => service().POST('/api/v1/cluster-build/operations', { body }).then(data),
   clusterBuildOperations: (signal?: AbortSignal) => service().GET('/api/v1/cluster-build/operations', { signal }).then(data),
   clusterBuildOperation: (operation_id: string, signal?: AbortSignal) => service().GET('/api/v1/cluster-build/operations/{operation_id}', { params: { path: { operation_id } }, signal }).then(data),
+  composition: (signal?: AbortSignal) => service().GET('/api/v1/composition', { signal }).then(data),
+  compositionEnvironment: (env: string, signal?: AbortSignal) => service().GET('/api/v1/composition/environments/{env}', { params: { path: { env } }, signal }).then(data),
+  compositionSync: (body: CompositionSyncRequest) => service().POST('/api/v1/composition/sync', { body }).then(data),
+  clusterStatus: (signal?: AbortSignal) => service().GET('/api/v1/cluster/status', { signal }).then(data),
+  profiles: (signal?: AbortSignal) => service().GET('/api/v1/profiles', { signal }).then(data),
+  switchProfile: (body: ProfileSwitchRequest) => service().POST('/api/v1/profiles/switch', { body }).then(data),
+  namedEnvironmentActions: (env: string, signal?: AbortSignal) => service().GET('/api/v1/composition/environments/{env}/actions', { params: { path: { env } }, signal }).then(data),
+  approveNamedEnvironment: (env: string, body: NamedEnvironmentApprovalRequest) => service().POST('/api/v1/composition/environments/{env}/approvals', { params: { path: { env } }, body }).then(data),
+  promoteNamedEnvironment: (env: string, body: NamedEnvironmentPromotionRequest) => service().POST('/api/v1/composition/environments/{env}/promotions', { params: { path: { env } }, body }).then(data),
+  wakeNamedEnvironment: (env: string) => service().POST('/api/v1/composition/environments/{env}/wake', { params: { path: { env } } }).then(data),
 
 };
 export const applicationPath = (id: string) => `/applications/${encodeURIComponent(id)}`;

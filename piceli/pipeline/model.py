@@ -121,16 +121,19 @@ class _KubeconfigAccessor:
     ) -> Callable[..., Target] | Path:
         if instance is None:
             return owner.from_kubeconfig
-        return instance._kubeconfig
+        return instance._resolved()[0]
 
 
 class Target:
     """The cluster and namespace a pipeline deploys to, reached by an explicit kubeconfig.
 
-    Build one with :meth:`Target.kubeconfig`. Piceli never falls back to
-    ``~/.kube/config``, ``KUBECONFIG`` or the current context.
+    Build one with :meth:`Target.kubeconfig`, or with :meth:`Target.profile`
+    for a credential profile made by ``piceli login`` (resolved when used, so
+    no machine path is in Git). Piceli never falls back to ``~/.kube/config``,
+    ``KUBECONFIG`` or the current context.
 
-    Attributes: ``kubeconfig`` (path), ``context``, ``namespace``,
+    Attributes: ``kubeconfig`` (path), ``context`` (both resolved on use for a
+    profile), ``credentials`` (the profile name or ``None``), ``namespace``,
     ``cluster_uid``, ``namespace_uid``, ``nodes`` (alias →
     :class:`TargetNode`), ``transport``, ``request_seconds`` and the exec
     credential plugin opt-in ``allow_exec``, ``exec_sha256``,
@@ -155,10 +158,11 @@ class Target:
 
     def __init__(
         self,
-        kubeconfig: str | Path,
+        kubeconfig: str | Path | None = None,
         *,
-        context: str,
+        context: str | None = None,
         namespace: str,
+        credentials: str | None = None,
         cluster_uid: str | None = None,
         namespace_uid: str | None = None,
         nodes: Mapping[str, TargetNode | tuple[str, str | None] | str] | None = None,
@@ -170,7 +174,19 @@ class Target:
         exec_timeout_seconds: float | None = None,
         base: Path | None = None,
     ) -> None:
-        if not isinstance(context, str) or not context:
+        if credentials is not None:
+            if kubeconfig is not None or context is not None:
+                raise PipelineError(
+                    "pipeline-invalid",
+                    "a target names a credential profile or a kubeconfig and "
+                    "context, not both",
+                )
+            from piceli.profiles import check_name
+
+            check_name(credentials)
+        elif kubeconfig is None:
+            raise PipelineError("pipeline-invalid", "target kubeconfig is required")
+        elif not isinstance(context, str) or not context:
             raise PipelineError("pipeline-invalid", "target context is required")
         if not isinstance(namespace, str) or not _LABEL.fullmatch(namespace):
             raise PipelineError(
@@ -212,8 +228,9 @@ class Target:
         except (TypeError, ValueError) as error:
             raise PipelineError("pipeline-invalid", str(error)) from None
         values = {
-            "_kubeconfig": _resolve(kubeconfig, base),
-            "context": context,
+            "_kubeconfig": None if kubeconfig is None else _resolve(kubeconfig, base),
+            "_context": context,
+            "credentials": credentials,
             "namespace": namespace,
             "cluster_uid": cluster_uid,
             "namespace_uid": namespace_uid,
@@ -228,8 +245,9 @@ class Target:
         for key, item in values.items():
             object.__setattr__(self, key, item)
 
-    _kubeconfig: Path
-    context: str
+    _kubeconfig: Path | None
+    _context: str | None
+    credentials: str | None
     namespace: str
     cluster_uid: str | None
     namespace_uid: str | None
@@ -243,6 +261,34 @@ class Target:
 
     def __setattr__(self, name: str, value: Any) -> None:
         raise AttributeError("Target is immutable")
+
+    def _resolved(self) -> tuple[Path, str]:
+        """The kubeconfig and context, resolving a credential profile now."""
+        if (name := self.profile_name) is not None:
+            from piceli.profiles import resolve
+
+            found = resolve(name)
+            return found.kubeconfig, found.context
+        assert self._kubeconfig is not None and self._context is not None
+        return self._kubeconfig, self._context
+
+    @property
+    def profile_name(self) -> str | None:
+        """The credential profile in use: the declared one, or ``--profile``'s."""
+        from piceli.profiles import override
+
+        return override() or self.credentials
+
+    @property
+    def context(self) -> str:
+        """The kubeconfig context (of the credential profile, resolved on use)."""
+        return self._resolved()[1]
+
+    def location(self) -> tuple[str, str, str]:
+        """A stable key of where this target points; never resolves a profile."""
+        if self.credentials is not None:
+            return (f"profile:{self.credentials}", "", self.namespace)
+        return (str(self._kubeconfig), str(self._context), self.namespace)
 
     @classmethod
     def from_kubeconfig(
@@ -294,6 +340,48 @@ class Target:
             base=_caller_dir(),
         )
 
+    @classmethod
+    def profile(
+        cls,
+        name: str,
+        *,
+        namespace: str,
+        cluster_uid: str | None = None,
+        namespace_uid: str | None = None,
+        nodes: Mapping[str, TargetNode | tuple[str, str | None] | str] | None = None,
+        transport: str = "https",
+        request_seconds: float = 10.0,
+        allow_exec: bool = False,
+        exec_sha256: str | None = None,
+        exec_pass_env: Sequence[str] = (),
+        exec_timeout_seconds: float | None = None,
+    ) -> Target:
+        """A target reached with the credential profile ``name`` (``piceli login``).
+
+        The profile (a reference to a kubeconfig file and context kept outside
+        the repository) is resolved when the target is used, never at import
+        or plan-hash time; the plan hash covers its name. Inside a cluster
+        (``PICELI_IN_CLUSTER=1`` or a mounted service-account token) the name
+        resolves to the pod's service account. The other parameters are those
+        of :meth:`Target.kubeconfig`.
+
+        :param name: The profile name given to ``piceli login``.
+        :param namespace: The namespace; it must already exist.
+        """
+        return cls(
+            credentials=name,
+            namespace=namespace,
+            cluster_uid=cluster_uid,
+            namespace_uid=namespace_uid,
+            nodes=nodes,
+            transport=transport,
+            request_seconds=request_seconds,
+            allow_exec=allow_exec,
+            exec_sha256=exec_sha256,
+            exec_pass_env=exec_pass_env,
+            exec_timeout_seconds=exec_timeout_seconds,
+        )
+
     def node(self, alias: str | None) -> tuple[str, TargetNode]:
         """The node named by ``alias``, or the only declared node."""
         if alias is None:
@@ -339,8 +427,13 @@ class Target:
 
     def identity(self) -> dict[str, Any]:
         """What an approval binds to (never the kubeconfig path)."""
+        who = (
+            {"profile": self.profile_name}
+            if self.profile_name is not None
+            else {"context": self._context}
+        )
         return {
-            "context": self.context,
+            **who,
             "namespace": self.namespace,
             "cluster_uid": self.cluster_uid,
             "namespace_uid": self.namespace_uid,
@@ -348,9 +441,13 @@ class Target:
         }
 
     def __repr__(self) -> str:
+        who = (
+            f"profile={self.credentials!r}"
+            if self.credentials is not None
+            else f"context={self._context!r}"
+        )
         return (
-            f"Target(context={self.context!r}, namespace={self.namespace!r}, "
-            f"nodes={sorted(self.nodes)})"
+            f"Target({who}, namespace={self.namespace!r}, nodes={sorted(self.nodes)})"
         )
 
 
@@ -1046,6 +1143,204 @@ class Registry:
             described["mirror_credentials"] = sorted(self.mirror_credentials)
         return described
 
+    @classmethod
+    def in_cluster(
+        cls,
+        *,
+        on: str,
+        storage: str = "20Gi",
+        port: int = 5000,
+        namespace: str = "piceli-system",
+        name: str = "piceli-registry",
+        repository: str | None = None,
+        image: str | None = None,
+        storage_class: str | None = None,
+        node_port: int | None = None,
+        mirror_dir: str = "/etc/containerd/certs.d",
+        mirror: Sequence[str] = (),
+        mirror_credentials: Mapping[str, Path] | None = None,
+        node_mirror: str = "auto",
+    ) -> ClusterRegistry:
+        """A registry inside the cluster that every node pulls from by one name.
+
+        ``piceli registry install`` puts a registry Deployment (pinned to node
+        ``on``, data on a retained claim of ``storage``), a Service and a node
+        agent (DaemonSet) in ``namespace``. The agent writes a containerd
+        mirror ``<mirror_dir>/<host>/hosts.toml`` on every node, pointing the
+        stable name ``<name>.<namespace>.svc:<port>`` at the Service, so every
+        node pulls ``<name>.<namespace>.svc:<port>/<repository>/<image>@sha256:…``.
+        See ``docs/cluster_registry.md``.
+
+        :param on: Node (``kubernetes.io/hostname``) that runs the registry and
+            keeps its data.
+        :param storage: Size of the registry's retained volume claim.
+        :param port: Service and registry port (part of the stable name).
+        :param namespace: Namespace of the registry and its node agent.
+        :param name: Base name of the registry objects (part of the stable name).
+        :param repository: Repository prefix; default the app name.
+        :param image: Registry image pinned by digest; default the node-local
+            registry's.
+        :param storage_class: StorageClass of the claim (default: the cluster's).
+        :param node_port: Also expose the Service on this fixed NodePort
+            (30000-32767), for builders outside the cluster that push to it.
+        :param mirror_dir: The nodes' containerd ``config_path`` (k3s:
+            ``/var/lib/rancher/k3s/agent/etc/containerd/certs.d``).
+        :param mirror: Third-party images to copy by digest, as for
+            :class:`Registry`.
+        :param mirror_credentials: ``{registry: credentials file}`` for mirror
+            sources that need a login.
+        :param node_mirror: How nodes get the mirror: ``"containerd"`` writes
+            ``<mirror_dir>/<host>/hosts.toml``; ``"k3s"`` merges the host into
+            ``/etc/rancher/k3s/registries.yaml`` (never clobbering other
+            entries) and writes k3s's own ``certs.d``; ``"auto"`` (default)
+            picks per node: k3s for nodes labelled
+            ``node.kubernetes.io/instance-type=k3s`` or
+            ``piceli.io/runtime=k3s``, containerd for the others. (``mirror=``
+            is the list of third-party images to copy.)
+        """
+        return ClusterRegistry(
+            on=on,
+            storage=storage,
+            port=port,
+            namespace=namespace,
+            name=name,
+            repository=repository,
+            image=image,
+            storage_class=storage_class,
+            node_port=node_port,
+            mirror_dir=mirror_dir,
+            mirror=mirror,
+            mirror_credentials=mirror_credentials,
+            node_mirror=node_mirror,
+        )
+
+
+_QUANTITY = re.compile(r"[1-9][0-9]{0,8}(?:Ki|Mi|Gi|Ti)")
+_NODE_NAME = re.compile(r"[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?")
+_REPOSITORY = re.compile(
+    r"[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*"
+)
+_REGISTRY_IMAGE = re.compile(r"[a-z0-9][a-z0-9./:_-]*@sha256:[0-9a-f]{64}")
+_MIRROR_DIR = re.compile(r"/[A-Za-z0-9._/-]{1,250}")
+
+
+#: How nodes get the in-cluster registry's mirror (``Registry.in_cluster(node_mirror=)``).
+NODE_MIRRORS = ("auto", "k3s", "containerd")
+
+
+@dataclass(frozen=True)
+class ClusterRegistry(Registry):
+    """A registry in the cluster, pulled by every node through a containerd mirror.
+
+    Build it with :meth:`Registry.in_cluster`. It is a :class:`Registry`
+    whose ``url`` is the stable name ``oci://<name>.<namespace>.svc:<port>/<repository>``:
+    cluster build Jobs push to the Service by that name (cluster DNS), a
+    laptop pushes through a supervised ``kubectl port-forward`` to the
+    Service, and nodes pull by that name through the mirror the node agent
+    writes. ``piceli registry install`` installs it; ``piceli deploy`` only
+    reads whether it is ready.
+    """
+
+    url: str = ""
+    on: str = ""
+    storage: str = "20Gi"
+    port: int = 5000
+    namespace: str = "piceli-system"
+    name: str = "piceli-registry"
+    repository: str | None = None
+    image: str | None = None
+    storage_class: str | None = None
+    node_port: int | None = None
+    mirror_dir: str = "/etc/containerd/certs.d"
+    node_mirror: str = "auto"
+
+    kind = "cluster-registry"
+
+    def __post_init__(self) -> None:
+        def invalid(message: str) -> PipelineError:
+            return PipelineError("pipeline-invalid", f"Registry.in_cluster: {message}")
+
+        if not isinstance(self.on, str) or not _NODE_NAME.fullmatch(self.on):
+            raise invalid("on= must name a node (kubernetes.io/hostname)")
+        if not isinstance(self.storage, str) or not _QUANTITY.fullmatch(self.storage):
+            raise invalid("storage= must be a size like 20Gi")
+        if (
+            isinstance(self.port, bool)
+            or not isinstance(self.port, int)
+            or not 0 < self.port < 65536
+        ):
+            raise invalid("port= must be a TCP port")
+        for key in ("namespace", "name"):
+            value = getattr(self, key)
+            if not isinstance(value, str) or not _LABEL.fullmatch(value):
+                raise invalid(f"{key}= must be a DNS label")
+        if len(self.name) > 63 - len("-storage"):
+            raise invalid("name= is too long (at most 55 characters)")
+        if self.repository is not None and (
+            not isinstance(self.repository, str)
+            or not _REPOSITORY.fullmatch(self.repository)
+        ):
+            raise invalid("repository= must be a repository path like team/app")
+        if self.image is not None and (
+            not isinstance(self.image, str) or not _REGISTRY_IMAGE.fullmatch(self.image)
+        ):
+            raise invalid("image= must be pinned by digest (repo@sha256:<64 hex>)")
+        if self.storage_class is not None and (
+            not isinstance(self.storage_class, str)
+            or not _NODE_NAME.fullmatch(self.storage_class)
+        ):
+            raise invalid("invalid storage_class=")
+        if self.node_port is not None and (
+            isinstance(self.node_port, bool)
+            or not isinstance(self.node_port, int)
+            or not 30000 <= self.node_port <= 32767
+        ):
+            raise invalid("node_port= must be in 30000-32767")
+        if (
+            not isinstance(self.mirror_dir, str)
+            or not _MIRROR_DIR.fullmatch(self.mirror_dir)
+            or "/../" in self.mirror_dir + "/"
+            or self.mirror_dir.rstrip("/") in ("", "/etc", "/var")
+        ):
+            raise invalid("mirror_dir= must be the absolute containerd certs.d dir")
+        if self.node_mirror not in NODE_MIRRORS:
+            raise invalid('node_mirror= must be "auto", "k3s" or "containerd"')
+        if self.credentials is not None or self.ca_file is not None:
+            raise invalid("an in-cluster registry takes no credentials or CA file")
+        if self.node_registry is not None:
+            raise invalid("nodes pull by the stable name; node_registry= is not used")
+        prefix = f"/{self.repository}" if self.repository else ""
+        object.__setattr__(self, "url", f"oci://{self.host}{prefix}")
+        super().__post_init__()
+
+    @property
+    def host(self) -> str:
+        """The stable registry name every node and pod uses (``name.namespace.svc:port``)."""
+        return f"{self.name}.{self.namespace}.svc:{self.port}"
+
+    def describe(self) -> dict[str, Any]:
+        described: dict[str, Any] = {
+            "strategy": self.kind,
+            "host": self.host,
+            "repository": self.repository,
+            "namespace": self.namespace,
+            "name": self.name,
+            "node": self.on,
+            "storage": self.storage,
+        }
+        for key in ("image", "storage_class", "node_port"):
+            if getattr(self, key) is not None:
+                described[key] = getattr(self, key)
+        if self.mirror_dir != "/etc/containerd/certs.d":
+            described["mirror_dir"] = self.mirror_dir
+        if self.node_mirror != "auto":
+            described["node_mirror"] = self.node_mirror
+        if self.mirror:
+            described["mirror"] = list(self.mirror)
+        if self.mirror_credentials:
+            described["mirror_credentials"] = sorted(self.mirror_credentials)
+        return described
+
 
 Delivery = NodeLoopbackRegistry | NodeImport | Registry
 
@@ -1189,7 +1484,7 @@ class Pipeline:
             raise PipelineError(
                 "pipeline-invalid",
                 "a pipeline with a build needs deliver= (NodeLoopbackRegistry(), "
-                "NodeImport() or Registry(url))",
+                "NodeImport(), Registry(url) or Registry.in_cluster(on=NODE))",
             )
         if deliver is not None and not isinstance(
             deliver, NodeLoopbackRegistry | NodeImport | Registry
@@ -1206,6 +1501,11 @@ class Pipeline:
         #: The environment this pipeline was selected for (``for_environment``).
         self.environment: Environment | None = None
         self.builds = builds
+        if isinstance(deliver, ClusterRegistry) and deliver.repository is None:
+            # The in-cluster registry is shared: each app pushes under its name.
+            import dataclasses
+
+            deliver = dataclasses.replace(deliver, repository=app.name)
         self.deliver = deliver
         self.checks = _checks(checks)
         self.rollback_on_failed_checks = bool(rollback_on_failed_checks)
@@ -1400,7 +1700,7 @@ def _environment_targets(app: App, target: Any) -> dict[str, Target]:
                 f"declare; declared: {sorted(declared) or 'none'} "
                 "(app.environment(name, ...))",
             )
-        where = (str(value.kubeconfig), value.context, value.namespace)
+        where = value.location()
         if where in seen:
             raise PipelineError(
                 "pipeline-invalid",

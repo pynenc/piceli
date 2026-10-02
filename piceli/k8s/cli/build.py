@@ -184,12 +184,47 @@ def job(
 
 @app.command("job-run")
 def job_run(
-    source: Annotated[Path, typer.Option("--source")],
     cache: Annotated[Path, typer.Option("--cache")],
     out: Annotated[Path, typer.Option("--out")],
-    commit: Annotated[str, typer.Option("--commit")],
     registry_url: Annotated[str, typer.Option("--registry-url")],
-    spec: Annotated[list[str], typer.Option("--spec", help="host-build.toml (repeat)")],
+    source: Annotated[Path | None, typer.Option("--source")] = None,
+    commit: Annotated[str | None, typer.Option("--commit")] = None,
+    spec: Annotated[
+        list[str] | None, typer.Option("--spec", help="host-build.toml (repeat)")
+    ] = None,
+    sources: Annotated[
+        Path | None,
+        typer.Option(
+            "--sources",
+            help="A composition build: the directory holding each fetched source",
+        ),
+    ] = None,
+    component: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--component",
+            help='A composition build: {"component","source","digest","repository"} '
+            "as JSON (repeat)",
+        ),
+    ] = None,
+    platform: Annotated[
+        list[str] | None,
+        typer.Option("--platform", help="A composition build: linux/amd64 (repeat)"),
+    ] = None,
+    image: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--image",
+            help="A pipeline image build (with --sources and --spec SOURCE/PATH): "
+            '{"image","repository","key"} as JSON (repeat)',
+        ),
+    ] = None,
+    facts: Annotated[
+        str | None,
+        typer.Option(
+            "--facts", help="A pipeline image build: declared node facts (JSON)"
+        ),
+    ] = None,
     node_registry: Annotated[str | None, typer.Option("--node-registry")] = None,
     timeout: Annotated[int, typer.Option("--timeout")] = 3600,
 ) -> None:
@@ -202,6 +237,68 @@ def job_run(
     from piceli.artifacts.node_facts import NodeFacts, NodeFactsError
     from piceli.pipeline.errors import PipelineError
 
+    if sources is not None and image:
+        from piceli.infra.builders import job_run_spec
+
+        try:
+            wanted = [json.loads(item) for item in image]
+            declared = json.loads(facts) if facts else None
+        except ValueError:
+            reject("cluster-build-invalid", "--image and --facts take JSON objects")
+        if len(spec or []) != 1 or not all(isinstance(i, dict) for i in wanted):
+            reject("cluster-build-invalid", "name one --spec SOURCE/PATH and --image")
+        try:
+            receipt = job_run_spec(
+                sources=sources,
+                spec=(spec or [""])[0],
+                images=wanted,
+                platforms=tuple(platform or ("linux/amd64",)),
+                cache=cache,
+                out=out,
+                registry_url=registry_url,
+                node_registry=node_registry,
+                facts=declared,
+                say=say,
+            )
+        except BuildSpecError as error:
+            reject(error.code, str(error))
+        except PipelineError as error:
+            reject(error.code, str(error), exit_code=EXIT_FAILED)
+        sys.stdout.write("\n" + encode_receipt(receipt) + "\n")
+        sys.stdout.flush()
+        return
+    if sources is not None:
+        from piceli.infra.builders import job_run_components
+
+        try:
+            items = [json.loads(item) for item in component or []]
+        except ValueError:
+            reject("cluster-build-invalid", "--component takes a JSON object")
+        if not items or not all(isinstance(item, dict) for item in items):
+            reject("cluster-build-invalid", "name at least one --component")
+        try:
+            receipt = job_run_components(
+                sources=sources,
+                items=items,
+                platforms=tuple(platform or ("linux/amd64",)),
+                cache=cache,
+                out=out,
+                registry_url=registry_url,
+                node_registry=node_registry,
+                say=say,
+            )
+        except BuildSpecError as error:
+            reject(error.code, str(error))
+        except PipelineError as error:
+            reject(error.code, str(error), exit_code=EXIT_FAILED)
+        sys.stdout.write("\n" + encode_receipt(receipt) + "\n")
+        sys.stdout.flush()
+        return
+    if source is None or commit is None or not spec:
+        reject(
+            "cluster-build-invalid",
+            "pass --source, --commit and --spec (or --sources and --component)",
+        )
     try:
         raw: dict[str, Any] = json.loads(os.environ.get("PICELI_BUILD_FACTS", ""))
         facts = {name: NodeFacts.from_dict(value) for name, value in raw.items()}

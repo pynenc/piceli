@@ -197,16 +197,18 @@ def test_ui_serve_prints_the_launch_address_and_removes_its_token_file(
 
     seen: dict[str, object] = {}
 
-    def run(server, **kwargs):  # type: ignore[no-untyped-def]
-        token = server.state.security.launch_token
+    def run(runner):  # type: ignore[no-untyped-def]
+        token = runner.config.app.state.security.launch_token
         (path,) = (tmp_path / "state").glob("launch-token-8123")
         seen["path"] = path
         seen["file"] = path.read_text().strip() == token
         seen["mode"] = path.stat().st_mode & 0o777
         seen["token"] = token
-        seen["filters"] = kwargs["log_config"]["loggers"]["uvicorn.access"]["filters"]
+        seen["filters"] = runner.config.log_config["loggers"]["uvicorn.access"][
+            "filters"
+        ]
 
-    monkeypatch.setattr(uvicorn, "run", run)
+    monkeypatch.setattr(uvicorn.Server, "run", run)
     kubeconfig = tmp_path / "kubeconfig"
     kubeconfig.write_text("apiVersion: v1\nkind: Config\n")
     result = CliRunner().invoke(

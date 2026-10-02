@@ -85,6 +85,7 @@ from piceli.pipeline.errors import PipelineError
 from piceli.pipeline.journal import FINISHED, Journal, Run, now, write_private
 from piceli.pipeline.model import (
     Build,
+    ClusterRegistry,
     NodeImport,
     NodeLoopbackRegistry,
     Pipeline,
@@ -660,6 +661,19 @@ class PipelineRunner:
                 kubeconfig=target.kubeconfig,
                 context=target.context,
             )
+        if isinstance(strategy, ClusterRegistry):
+            # From here (a laptop or a runner outside the cluster) the
+            # registry is reached through a supervised port-forward to its
+            # Service; nodes pull by the stable name through their mirror.
+            return RegistryRoute(
+                push=None,
+                node_registry=strategy.host,
+                forward=f"service/{strategy.name}",
+                namespace=strategy.namespace,
+                remote_port=strategy.port,
+                kubeconfig=target.kubeconfig,
+                context=target.context,
+            )
         assert isinstance(strategy, Registry)
         from piceli.artifacts.registry import RegistryTarget
 
@@ -966,6 +980,10 @@ class PipelineRunner:
             if work.platforms:
                 stage["registry"]["index_platforms"] = list(work.platforms)
                 hashed["registry"]["index_platforms"] = list(work.platforms)
+        elif isinstance(strategy, ClusterRegistry):
+            # Installed once per cluster (`piceli registry install`); the
+            # deploy only reads whether it serves (not part of the hash).
+            stage["registry"] = self._cluster_registry_stage(strategy)
         images: dict[str, Any] = {}
         for name in work.used:
             config = work.producer[name].images.get(name, {}).get("image_id")
@@ -989,6 +1007,35 @@ class PipelineRunner:
                 work, registry_ready
             )
         return stage, hashed
+
+    def _cluster_registry_stage(self, strategy: ClusterRegistry) -> dict[str, Any]:
+        try:
+            state = self.backend.cluster_registry_state(self.pipeline.target, strategy)
+        except Exception as error:
+            raise PipelineError(
+                "pipeline-registry-unreadable",
+                f"could not read the in-cluster registry ({type(error).__name__}); "
+                "check access with piceli registry status",
+            ) from None
+        if state == "not-installed":
+            raise PipelineError(
+                "cluster-registry-not-installed",
+                f"no in-cluster registry {strategy.name} in namespace "
+                f"{strategy.namespace}; install it once with piceli registry install",
+            )
+        if state != "ready":
+            raise PipelineError(
+                "cluster-registry-not-ready",
+                f"the in-cluster registry {strategy.name} is not ready ({state}); "
+                "see piceli registry status",
+            )
+        return {
+            "action": "unchanged",
+            "host": strategy.host,
+            "namespace": strategy.namespace,
+            "node": strategy.on,
+            "state": state,
+        }
 
     def _registry_inputs(self, work: _Work) -> None:
         """Read the live registry and the node platform (read-only, once per run)."""

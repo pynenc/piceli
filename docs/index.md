@@ -219,6 +219,8 @@ restore_points
 typed_apps
 crds
 environments
+compositions
+components
 reference_app
 release_cli
 checks
@@ -242,6 +244,8 @@ host_builds
 publishing_images
 node_delivery
 node_local_registry
+cluster_registry
+cluster_init
 registry_retention
 artifact_delivery
 ```

@@ -119,6 +119,67 @@ def parse_globs(value: str | Sequence[str]) -> tuple[str, ...]:
 
 
 @dataclass(frozen=True)
+class EnvRule:
+    """When the controller deploys one named environment (from ``Environment.follow``).
+
+    :param name: The environment's name (its key in the status).
+    :param branches: Exact branches whose every push deploys it.
+    :param tags: Tag globs whose new tags deploy it.
+    :param promote: ``piceli promote NAME BRANCH@SHA`` may target it.
+    :param auto_approve: The owner's opt-in to deploy it without a hash
+        approval when the plan is inside the pipeline's ``auto_approve``.
+    """
+
+    name: str
+    branches: tuple[str, ...] = ()
+    tags: tuple[str, ...] = ()
+    promote: bool = False
+    auto_approve: bool = False
+
+    def __post_init__(self) -> None:
+        if not _LABEL.fullmatch(self.name or ""):
+            raise GitOpsError("gitops-config-invalid", "invalid environment name")
+        object.__setattr__(self, "branches", tuple(self.branches))
+        object.__setattr__(self, "tags", tuple(self.tags))
+        for value in (*self.branches, *self.tags):
+            if not isinstance(value, str) or not _GLOB.fullmatch(value):
+                raise GitOpsError(
+                    "gitops-config-invalid",
+                    f"environment {self.name}: invalid branch or tag {value!r}",
+                )
+
+    @classmethod
+    def from_environment(cls, environment: Any) -> EnvRule:
+        """The rule of a :class:`piceli.envs.Environment`."""
+        return cls(
+            name=environment.name,
+            branches=tuple(environment.branches),
+            tags=tuple(environment.tags),
+            promote=bool(environment.promote),
+            auto_approve=bool(environment.auto_approve),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "branches": list(self.branches),
+            "tags": list(self.tags),
+            "promote": self.promote,
+            "auto_approve": self.auto_approve,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> EnvRule:
+        return cls(
+            name=str(value["name"]),
+            branches=tuple(value.get("branches") or ()),
+            tags=tuple(value.get("tags") or ()),
+            promote=bool(value.get("promote", False)),
+            auto_approve=bool(value.get("auto_approve", False)),
+        )
+
+
+@dataclass(frozen=True)
 class ControllerConfig:
     """What the controller watches and deploys.
 
@@ -150,6 +211,12 @@ class ControllerConfig:
         (default: the pipeline's delivery).
     :param node_registry: ``host[:port]`` nodes pull from, when different.
     :param namespace: The controller's namespace.
+    :param environments: Named environments and their triggers (read from
+        the pipeline's ``EnvConfig(environments=...)`` by ``gitops enable``).
+        One named ``main_branch`` replaces the implicit main rule (tags
+        ``tags`` and promotions).
+    :param idle_stop_seconds: Scale a branch environment to zero after no
+        push for this long (``EnvConfig(idle_stop=...)``); ``None``: never.
     """
 
     pipeline: str
@@ -170,6 +237,8 @@ class ControllerConfig:
     build_storage: str = "20Gi"
     build_registry: str | None = None
     node_registry: str | None = None
+    environments: tuple[EnvRule, ...] = ()
+    idle_stop_seconds: int | None = None
 
     def __post_init__(self) -> None:
         if not _ENTRY.fullmatch(self.pipeline) or ".." in self.pipeline.split(":")[0]:
@@ -215,6 +284,20 @@ class ControllerConfig:
                 raise GitOpsError(
                     "gitops-config-invalid", f"invalid platform {platform!r}"
                 )
+        object.__setattr__(self, "environments", tuple(self.environments))
+        names = [rule.name for rule in self.environments]
+        if len(set(names)) != len(names) or not all(
+            isinstance(rule, EnvRule) for rule in self.environments
+        ):
+            raise GitOpsError(
+                "gitops-config-invalid", "environment names must be unique"
+            )
+        if self.idle_stop_seconds is not None and (
+            not isinstance(self.idle_stop_seconds, int) or self.idle_stop_seconds < 60
+        ):
+            raise GitOpsError(
+                "gitops-config-invalid", "idle_stop must be at least a minute"
+            )
 
     def watches(self, branch: str) -> bool:
         """Whether ``branch`` matches one of the branch globs."""
@@ -223,6 +306,35 @@ class ControllerConfig:
     @property
     def deploys_main(self) -> bool:
         return self.watches(self.main_branch)
+
+    def rules(self) -> tuple[EnvRule, ...]:
+        """Every named environment's rule, the implicit main one first.
+
+        The implicit main rule (tags ``tags``, promotions, ``main_auto_approve``)
+        applies when no declared environment is named ``main_branch`` and the
+        branch globs include it, as in 0.13.
+        """
+        declared = {rule.name for rule in self.environments}
+        implicit: tuple[EnvRule, ...] = ()
+        if self.main_branch not in declared and self.deploys_main:
+            implicit = (
+                EnvRule(
+                    self.main_branch,
+                    tags=(self.tags,),
+                    promote=True,
+                    auto_approve=self.main_auto_approve,
+                ),
+            )
+        return implicit + self.environments
+
+    def rule(self, name: str) -> EnvRule | None:
+        return next((rule for rule in self.rules() if rule.name == name), None)
+
+    def fixed(self, name: str) -> bool:
+        """``name`` is main or a named environment: never a branch environment."""
+        return name == self.main_branch or any(
+            rule.name == name for rule in self.environments
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -247,6 +359,17 @@ class ControllerConfig:
                 "registry": self.build_registry,
                 "node_registry": self.node_registry,
             },
+            # 0.14 keys only when used: a 0.13 install plan hashes the same.
+            **(
+                {"environments": [rule.to_dict() for rule in self.environments]}
+                if self.environments
+                else {}
+            ),
+            **(
+                {"idle_stop_seconds": self.idle_stop_seconds}
+                if self.idle_stop_seconds is not None
+                else {}
+            ),
         }
 
     @classmethod
@@ -276,6 +399,10 @@ class ControllerConfig:
                 build_storage=build.get("storage") or "20Gi",
                 build_registry=build.get("registry"),
                 node_registry=build.get("node_registry"),
+                environments=tuple(
+                    EnvRule.from_dict(item) for item in value.get("environments") or ()
+                ),
+                idle_stop_seconds=value.get("idle_stop_seconds"),
             )
         except (KeyError, TypeError, ValueError) as error:
             if isinstance(error, GitOpsError):

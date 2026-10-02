@@ -8,6 +8,7 @@ a temporary directory removed on exit.
 from __future__ import annotations
 
 import argparse
+import copy
 import os
 import sys
 import tempfile
@@ -24,13 +25,17 @@ from piceli.k8s.ui_state import (
     remove_launch_token,
     write_launch_token,
 )
+from piceli.profiles import save_profile
 from piceli.server.app import create_app
 from piceli.server.security import uvicorn_log_config
+from piceli.services.cluster_status import ClusterStatusControl
+from piceli.services.composition_control import CompositionControl
 from piceli.services.environment_control import EnvironmentControl
 from piceli.services.pipeline_control import PipelineControl
 from piceli.services.query import QueryService
 from piceli.services.registration import Registration
 from piceli.testing import fake_cluster, manifest
+from tests.ui_composition_fixture import STATUS as COMPOSITION
 
 IMAGE = "registry.example/shop@sha256:" + "a" * 64
 SHA = "3f9c2d1e8a7b4c5d6e0f1a2b3c4d5e6f7a8b9c0d"
@@ -67,11 +72,88 @@ STATUS = {
     },
 }
 
+COMPOSITION_STATUS = copy.deepcopy(COMPOSITION)
+COMPOSITION_STATUS["controller"]["environments"] = [
+    {"name": "main", "promote": True},
+    {"name": "preview", "promote": True},
+    {"name": "wp-idle", "promote": False},
+]
+COMPOSITION_STATUS["envs"]["preview"] = {
+    "namespace": "shop-preview",
+    "state": "approval-required",
+    "health": "unknown",
+    "plan_hash": "sha256:" + "e" * 64,
+    "revision": {
+        "product": COMPOSITION_STATUS["sources"]["product"]["refs"]["wp-login"]
+    },
+    "components": {
+        "web": {"source": "product", "state": "unchanged", "health": "healthy"}
+    },
+}
+COMPOSITION_STATUS["envs"]["wp-idle"] = {
+    "namespace": "shop-idle",
+    "state": "stopped",
+    "reason": "idle-stop",
+    "stopped_at": "2026-10-01T08:00:00Z",
+    "health": "suspended",
+    "revision": {
+        "product": COMPOSITION_STATUS["sources"]["product"]["refs"]["wp-login"]
+    },
+    "components": {},
+}
+CLUSTER_STATUS = {
+    "state": "degraded",
+    "cluster": "my-cluster",
+    "nodes": [
+        {
+            "name": "control-1",
+            "arch": "amd64",
+            "roles": ["controller", "ui"],
+            "ready": True,
+            "mirror": {"kind": "containerd", "state": "ready"},
+        },
+        {
+            "name": "worker-1",
+            "arch": "arm64",
+            "roles": ["builder", "app"],
+            "ready": True,
+            "mirror": {"kind": "k3s", "state": "needs-restart"},
+        },
+    ],
+    "registry": {
+        "state": "ready",
+        "host": "piceli-registry.piceli-system.svc:5000",
+        "registry": {
+            "ready": True,
+            "pods": [
+                {
+                    "name": "registry-1",
+                    "node": "worker-1",
+                    "phase": "Running",
+                    "ready": True,
+                }
+            ],
+        },
+        "storage": {
+            "claim": "piceli-registry-storage",
+            "phase": "Bound",
+            "capacity": "20Gi",
+            "used_bytes": 524288000,
+        },
+    },
+    "controller": {
+        "health": "degraded",
+        "last_poll": "2026-10-01T09:30:00Z",
+        "poll_failures": 2,
+    },
+    "ui": {"health": "healthy"},
+}
+
 
 @contextmanager
-def _channel(directory: Path):  # type: ignore[no-untyped-def]
+def _channel(directory: Path, status: dict = STATUS):  # type: ignore[no-untyped-def]
     channel = DirectoryChannel(directory)
-    channel.publish(STATUS)
+    channel.publish(status)
     yield channel
 
 
@@ -81,10 +163,13 @@ def main() -> None:
     options = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="piceli-ui-showcase-") as directory:
         root = Path(directory)
+        os.environ["PICELI_PROFILES_DIR"] = str(root / "profiles")
         with fake_cluster() as cluster:
             cluster.api.put(manifest("Deployment", "api"), owned=True)
             cluster.api.put(manifest("ConfigMap", "settings"))
             kubeconfig = cluster.kubeconfig(root / "kubeconfig")
+            save_profile("demo-east", kubeconfig, "fake")
+            save_profile("demo-west", kubeconfig, "fake")
             target = KubeconfigTarget(
                 kubeconfig,
                 "fake",
@@ -136,6 +221,16 @@ def main() -> None:
                 launch_token=given,
                 pipeline_control=control,
                 environment_control=environments,
+                composition_control=CompositionControl(
+                    query,
+                    "shop",
+                    lambda: _channel(root / "composition", COMPOSITION_STATUS),
+                ),
+                cluster_status_control=ClusterStatusControl(
+                    query, "shop", lambda: CLUSTER_STATUS
+                ),
+                active_profile="demo-east",
+                profile_switch=lambda _name: None,
             )
             with ExitStack() as cleanup:
                 if given:

@@ -24,6 +24,13 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`access-stop-incomplete`](#error-access-stop-incomplete) | access | yes |
 | [`access-stop-needs-stale`](#error-access-stop-needs-stale) | access | no |
 | [`access-target-invalid`](#error-access-target-invalid) | access | no |
+| [`access-ui-cluster-invalid`](#error-access-ui-cluster-invalid) | cluster-ui | no |
+| [`access-ui-forbidden`](#error-access-ui-forbidden) | cluster-ui | no |
+| [`access-ui-not-declared`](#error-access-ui-not-declared) | cluster-ui | no |
+| [`access-ui-not-installed`](#error-access-ui-not-installed) | cluster-ui | no |
+| [`access-ui-not-ready`](#error-access-ui-not-ready) | cluster-ui | yes |
+| [`access-ui-target-required`](#error-access-ui-target-required) | cluster-ui | no |
+| [`access-ui-unreachable`](#error-access-ui-unreachable) | cluster-ui | yes |
 | [`access-unknown-forward`](#error-access-unknown-forward) | access | no |
 | [`adopt-and-replace`](#error-adopt-and-replace) | release | no |
 | [`adopt-entry-not-declared`](#error-adopt-entry-not-declared) | release | no |
@@ -87,10 +94,25 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`claim-migration-target-exists`](#error-claim-migration-target-exists) | restore | no |
 | [`claim-migration-verify-failed`](#error-claim-migration-verify-failed) | restore | yes |
 | [`claim-shrink-refused`](#error-claim-shrink-refused) | restore | no |
+| [`cluster-api-failed`](#error-cluster-api-failed) | cluster | yes |
+| [`cluster-api-mismatch`](#error-cluster-api-mismatch) | cluster | no |
 | [`cluster-build-failed`](#error-cluster-build-failed) | host-build | yes |
 | [`cluster-build-invalid`](#error-cluster-build-invalid) | host-build | no |
 | [`cluster-identity-changed`](#error-cluster-identity-changed) | release | no |
 | [`cluster-identity-unreadable`](#error-cluster-identity-unreadable) | kubernetes | yes |
+| [`cluster-invalid`](#error-cluster-invalid) | cluster | no |
+| [`cluster-load-failed`](#error-cluster-load-failed) | cluster | no |
+| [`cluster-node-arch-mismatch`](#error-cluster-node-arch-mismatch) | cluster | no |
+| [`cluster-node-missing`](#error-cluster-node-missing) | cluster | no |
+| [`cluster-not-found`](#error-cluster-not-found) | cluster | no |
+| [`cluster-not-initialized`](#error-cluster-not-initialized) | cluster | no |
+| [`cluster-plan-changed`](#error-cluster-plan-changed) | cluster | yes |
+| [`cluster-registry-cluster-failed`](#error-cluster-registry-cluster-failed) | cluster-registry | yes |
+| [`cluster-registry-invalid`](#error-cluster-registry-invalid) | cluster-registry | no |
+| [`cluster-registry-not-installed`](#error-cluster-registry-not-installed) | cluster-registry | no |
+| [`cluster-registry-not-ready`](#error-cluster-registry-not-ready) | cluster-registry | yes |
+| [`cluster-registry-plan-changed`](#error-cluster-registry-plan-changed) | cluster-registry | yes |
+| [`cluster-registry-target-required`](#error-cluster-registry-target-required) | cluster-registry | no |
 | [`codegen-cluster-read-failed`](#error-codegen-cluster-read-failed) | codegen | yes |
 | [`codegen-flags-conflict`](#error-codegen-flags-conflict) | codegen | no |
 | [`codegen-output-refused`](#error-codegen-output-refused) | codegen | no |
@@ -99,6 +121,13 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`command-output-limit`](#error-command-output-limit) | artifacts-delivery | no |
 | [`command-timed-out`](#error-command-timed-out) | artifacts-delivery | yes |
 | [`compensation-already-started`](#error-compensation-already-started) | execution | no |
+| [`component-build-failed`](#error-component-build-failed) | composition | yes |
+| [`component-build-unsupported`](#error-component-build-unsupported) | composition | no |
+| [`component-contract-invalid`](#error-component-contract-invalid) | composition | no |
+| [`component-contract-missing`](#error-component-contract-missing) | composition | no |
+| [`component-need-unmet`](#error-component-need-unmet) | composition | no |
+| [`composition-invalid`](#error-composition-invalid) | composition | no |
+| [`composition-ref-unresolved`](#error-composition-ref-unresolved) | composition | yes |
 | [`conflict`](#error-conflict) | kubernetes | no |
 | [`context-budget-exceeded`](#error-context-budget-exceeded) | build-spec | no |
 | [`context-changed`](#error-context-changed) | build-spec | yes |
@@ -153,12 +182,15 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`env-main-protected`](#error-env-main-protected) | envs | no |
 | [`env-namespace-collision`](#error-env-namespace-collision) | envs | no |
 | [`env-namespace-not-managed`](#error-env-namespace-not-managed) | envs | no |
+| [`env-nodes-conflict`](#error-env-nodes-conflict) | envs | no |
 | [`env-not-configured`](#error-env-not-configured) | envs | no |
 | [`env-not-found`](#error-env-not-found) | envs | no |
 | [`env-pipeline-missing`](#error-env-pipeline-missing) | envs | no |
 | [`env-plan-changed`](#error-env-plan-changed) | envs | no |
 | [`env-push-invalid`](#error-env-push-invalid) | host-build | no |
 | [`env-seed-no-restore-point`](#error-env-seed-no-restore-point) | envs | no |
+| [`env-stack-incomplete`](#error-env-stack-incomplete) | envs | no |
+| [`env-stack-unknown`](#error-env-stack-unknown) | envs | no |
 | [`env-workload-unknown`](#error-env-workload-unknown) | envs | no |
 | [`environment-invalid`](#error-environment-invalid) | environments | no |
 | [`environment-required`](#error-environment-required) | environments | no |
@@ -212,6 +244,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`gitops-pipeline-invalid`](#error-gitops-pipeline-invalid) | gitops | yes |
 | [`gitops-plan-changed`](#error-gitops-plan-changed) | gitops | yes |
 | [`gitops-port-unavailable`](#error-gitops-port-unavailable) | gitops | no |
+| [`gitops-promote-not-allowed`](#error-gitops-promote-not-allowed) | gitops | no |
 | [`gitops-promote-unknown`](#error-gitops-promote-unknown) | gitops | no |
 | [`gitops-push-failed`](#error-gitops-push-failed) | gitops | yes |
 | [`gitops-repo-invalid`](#error-gitops-repo-invalid) | gitops | no |
@@ -372,6 +405,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`prerollout-not-startable`](#error-prerollout-not-startable) | pipeline | no |
 | [`prerollout-timeout`](#error-prerollout-timeout) | pipeline | yes |
 | [`prerollout-unavailable`](#error-prerollout-unavailable) | pipeline | no |
+| [`profile-conflict`](#error-profile-conflict) | target | no |
+| [`profile-invalid`](#error-profile-invalid) | target | no |
+| [`profile-not-found`](#error-profile-not-found) | target | no |
 | [`promote-refused`](#error-promote-refused) | observe | no |
 | [`provider-error`](#error-provider-error) | kubernetes | yes |
 | [`publish-failed`](#error-publish-failed) | publish | yes |
@@ -476,6 +512,10 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`secret-source-tool-missing`](#error-secret-source-tool-missing) | secrets | no |
 | [`secret-template-invalid`](#error-secret-template-invalid) | secrets | no |
 | [`secret-unknown-reference`](#error-secret-unknown-reference) | secrets | no |
+| [`secrets-invalid`](#error-secrets-invalid) | cluster | no |
+| [`secrets-prompt-required`](#error-secrets-prompt-required) | cluster | no |
+| [`secrets-token-empty`](#error-secrets-token-empty) | cluster | no |
+| [`secrets-token-refused`](#error-secrets-token-refused) | cluster | no |
 | [`server-target-identity-mismatch`](#error-server-target-identity-mismatch) | kubernetes | no |
 | [`sign-failed`](#error-sign-failed) | publish | yes |
 | [`sign-key-invalid`](#error-sign-key-invalid) | publish | no |
@@ -528,9 +568,13 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`ui-access-port-conflict`](#error-ui-access-port-conflict) | access | no |
 | [`ui-approval-mismatch`](#error-ui-approval-mismatch) | observe | no |
 | [`ui-assets-unavailable`](#error-ui-assets-unavailable) | observe | no |
+| [`ui-controller-absent`](#error-ui-controller-absent) | cluster-ui | yes |
 | [`ui-evaluation-failed`](#error-ui-evaluation-failed) | observe | no |
 | [`ui-execution-failed`](#error-ui-execution-failed) | observe | no |
 | [`ui-idempotency-conflict`](#error-ui-idempotency-conflict) | observe | no |
+| [`ui-install-access-unsupported`](#error-ui-install-access-unsupported) | cluster-ui | no |
+| [`ui-install-image-unpinned`](#error-ui-install-image-unpinned) | cluster-ui | no |
+| [`ui-install-node-unknown`](#error-ui-install-node-unknown) | cluster-ui | no |
 | [`ui-invalid-request`](#error-ui-invalid-request) | observe | no |
 | [`ui-logs-unavailable`](#error-ui-logs-unavailable) | observe | yes |
 | [`ui-not-found`](#error-ui-not-found) | observe | no |
@@ -542,6 +586,8 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`ui-prerollout-unsupported`](#error-ui-prerollout-unsupported) | observe | no |
 | [`ui-request-rejected`](#error-ui-request-rejected) | observe | no |
 | [`ui-state-invalid`](#error-ui-state-invalid) | observe | no |
+| [`ui-sync-target-unknown`](#error-ui-sync-target-unknown) | cluster-ui | no |
+| [`ui-sync-unavailable`](#error-ui-sync-unavailable) | cluster-ui | yes |
 | [`uid-version-precondition-failed`](#error-uid-version-precondition-failed) | execution | no |
 | [`undiscovered-api`](#error-undiscovered-api) | kubernetes | no |
 | [`unknown-error-code`](#error-unknown-error-code) | cli | no |
@@ -772,7 +818,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-plain-http-not-loopback)=
 ### `plain-http-not-loopback`
 
-**Plain HTTP to a non-loopback registry.** The registry target asks for plain HTTP but its host is not a loopback address.
+**Plain HTTP to a non-loopback registry.** The registry target asks for plain HTTP but its host is neither a loopback address nor an in-cluster Service name (`name.namespace.svc`).
 
 - **Fix:** Use TLS for remote registries, or reach the registry through `--via-forward`.
 - **Retry-safe:** no
@@ -3235,6 +3281,30 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Run the command again; if it persists, check the plugin's network access or raise `exec_timeout_seconds`.
 - **Retry-safe:** yes
 
+(error-profile-conflict)=
+### `profile-conflict`
+
+**Profile and kubeconfig both given.** `--profile` was passed together with `--kubeconfig` or `--context`; a command reaches a cluster by one or the other.
+
+- **Fix:** Pass either `--profile NAME` or `--kubeconfig FILE --context CTX`.
+- **Retry-safe:** no
+
+(error-profile-invalid)=
+### `profile-invalid`
+
+**Credential profile invalid.** A profile name, file or option is not acceptable: the name is not lowercase letters, digits, `.`, `_` or `-`; the kubeconfig given to `piceli login` is missing, unreadable or does not define the context (or defines several and `--context` was omitted); a stored profile is damaged; or the in-cluster service account is incomplete. The message names the cause; nothing was changed.
+
+- **Fix:** Fix the name, the kubeconfig path or the context as the message says, then run `piceli login NAME --kubeconfig FILE --context CTX` again.
+- **Retry-safe:** no
+
+(error-profile-not-found)=
+### `profile-not-found`
+
+**Credential profile not found.** A target names a credential profile (`Target.profile(...)`, `credentials = "NAME"`, `--profile NAME`) that was never stored on this machine (and the process is not running inside a cluster, where the service account stands in for every profile).
+
+- **Fix:** Store it once with `piceli login NAME --kubeconfig FILE --context CTX`; `piceli profiles` lists the stored ones.
+- **Retry-safe:** no
+
 (error-target-refused)=
 ### `target-refused`
 
@@ -4075,6 +4145,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Run the controller with a Piceli image of this version or later (`piceli gitops enable --image …`).
 - **Retry-safe:** no
 
+(error-gitops-promote-not-allowed)=
+### `gitops-promote-not-allowed`
+
+**Environment does not take promotions.** `piceli promote ENV BRANCH@SHA` named an environment the controller does not know, or one whose `follow` has no `Promote()`.
+
+- **Fix:** Promote to an environment that follows `Promote()` (`piceli gitops status` lists them), or add `Promote()` to its `follow` and run `piceli gitops enable` again.
+- **Retry-safe:** no
+
 (error-gitops-promote-unknown)=
 ### `gitops-promote-unknown`
 
@@ -4896,7 +4974,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-env-main-protected)=
 ### `env-main-protected`
 
-**Main environment protected.** An environment command would delete, stop, seed or overwrite the main branch's environment or namespace; env commands never do.
+**Main environment protected.** An environment command would delete, stop, seed or overwrite the main branch's environment or namespace, or a named environment's (`EnvConfig(environments=...)`); env commands never do.
 
 - **Fix:** Operate the main release with `piceli deploy` and `piceli restore`.
 - **Retry-safe:** no
@@ -4915,6 +4993,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Namespace is not this app's environment.** The branch's namespace exists without this app's `piceli.io/env-of` label, or belongs to another branch. Nothing was changed or deleted.
 
 - **Fix:** Choose another `EnvConfig(prefix=...)`, or remove the foreign namespace yourself.
+- **Retry-safe:** no
+
+(error-env-nodes-conflict)=
+### `env-nodes-conflict`
+
+**Workload pinned outside the environment's nodes.** A workload is pinned to a node (its `node=`, or the delivery node of a node-loopback registry) or selects a node label that the environment's `on_nodes` (or `EnvConfig(branch_nodes=...)`) excludes.
+
+- **Fix:** Include that node in `on_nodes`, unpin the workload, or deliver through a registry every node can pull from.
 - **Retry-safe:** no
 
 (error-env-not-configured)=
@@ -4957,6 +5043,22 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Deploy main with `restore_points=RestorePoints()` (a stateful change takes one), then seed again.
 - **Retry-safe:** no
 
+(error-env-stack-incomplete)=
+### `env-stack-incomplete`
+
+**Stack leaves out a dependency.** A workload or object the environment's `Stack` keeps depends on a component or workload the stack leaves out (`app.depends(...)`, or a config of another workload's component).
+
+- **Fix:** Add the dependency's workload to the `Stack`, or drop the dependency.
+- **Retry-safe:** no
+
+(error-env-stack-unknown)=
+### `env-stack-unknown`
+
+**Stack names an unknown workload.** A `Stack(...)` of an environment names a workload the app does not declare (Deployment, StatefulSet, DaemonSet, Job or CronJob). Nothing was planned.
+
+- **Fix:** Name the app's workloads in the `Stack`, or remove the name.
+- **Retry-safe:** no
+
 (error-env-workload-unknown)=
 ### `env-workload-unknown`
 
@@ -4964,3 +5066,327 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Use a Deployment, StatefulSet, DaemonSet, Job or CronJob name of the app (`piceli envs --json` lists them).
 - **Retry-safe:** no
+
+
+## The in-cluster registry every node pulls from (`Registry.in_cluster`, `piceli registry …`)
+
+(error-cluster-registry-cluster-failed)=
+### `cluster-registry-cluster-failed`
+
+**Cluster refused a registry request.** The Kubernetes API refused a read or a change of the registry objects (permissions, admission, an invalid object), or was unreachable.
+
+- **Fix:** Check access with a read-only tool and the message's resource, then plan again.
+- **Retry-safe:** yes
+
+(error-cluster-registry-invalid)=
+### `cluster-registry-invalid`
+
+**In-cluster registry input invalid.** `Registry.in_cluster(...)` or `piceli registry` got a value it refuses: no node (`on=`/`--on`), a size that is not like `20Gi`, a port, name or namespace that is not valid, an image not pinned by digest, a NodePort outside 30000-32767, a relative `mirror_dir`, options given together with a `MODULE:ATTR` that already declares the registry, or a `MODULE:ATTR` that is neither the registry nor a pipeline delivering to it.
+
+- **Fix:** Fix the value named in the message; with `MODULE:ATTR`, change the declaration instead of passing options.
+- **Retry-safe:** no
+
+(error-cluster-registry-not-installed)=
+### `cluster-registry-not-installed`
+
+**In-cluster registry not installed.** The pipeline delivers to `Registry.in_cluster(...)` but its Deployment is not in the namespace: it is installed once per cluster, never by `piceli deploy`.
+
+- **Fix:** Install it with `piceli registry install MODULE:ATTR` (plan, then `--approve HASH`) and plan the deploy again.
+- **Retry-safe:** no
+
+(error-cluster-registry-not-ready)=
+### `cluster-registry-not-ready`
+
+**In-cluster registry not ready.** The in-cluster registry is installed but no pod is ready (still starting, the image cannot be pulled, its claim is not bound, or its node is down).
+
+- **Fix:** Look at `piceli registry status`, fix what it shows, and plan the deploy again when it is ready.
+- **Retry-safe:** yes
+
+(error-cluster-registry-plan-changed)=
+### `cluster-registry-plan-changed`
+
+**Registry plan changed.** The hash given to `--approve` is not the hash of the current install or uninstall plan: the options or the live objects changed since the plan was reviewed.
+
+- **Fix:** Run the command without `--approve`, review the new plan and approve its hash.
+- **Retry-safe:** yes
+
+(error-cluster-registry-target-required)=
+### `cluster-registry-target-required`
+
+**No cluster named.** `piceli registry` needs the cluster: `--kubeconfig FILE --context NAME` (or `--profile NAME`), or a pipeline `MODULE:ATTR` whose target names it. It never uses the current context.
+
+- **Fix:** Pass `--kubeconfig` and `--context` (or `--profile`), or the pipeline.
+- **Retry-safe:** no
+
+
+## Declared clusters (`piceli.infra.Cluster`, `piceli cluster …`, `piceli secrets git`)
+
+(error-cluster-api-failed)=
+### `cluster-api-failed`
+
+**Cluster API failed.** The API server could not be reached, refused a request (the message names the method and the HTTP status), or the profile's kubeconfig could not be used.
+
+- **Fix:** Check the profile (`piceli profiles`), the network and the account's permissions, then retry.
+- **Retry-safe:** yes
+
+(error-cluster-api-mismatch)=
+### `cluster-api-mismatch`
+
+**Profile points at another cluster.** The credential profile (`Cluster(credentials=)` or `--profile`) names a kubeconfig context whose API server is not `Cluster(api=)` (scheme, host and port compared). Nothing was read from or written to the cluster.
+
+- **Fix:** Point the profile at the right context (`piceli login NAME --kubeconfig FILE --context CTX`), or correct `api=` in the declaration.
+- **Retry-safe:** no
+
+(error-cluster-invalid)=
+### `cluster-invalid`
+
+**Cluster declaration invalid.** A `Cluster`, `Node`, `Controller` or `Ui` got a value it refuses: a name that is not a DNS label or node name, an `api` that is not an http(s) URL, `credentials` that is not a profile name, an arch other than amd64/arm64, a role that is not a label-safe word, a node declared twice, a registry that is not `Registry.in_cluster(...)`, an `on=` of the registry or controller that names an undeclared node, or a poll under 10 seconds (the UI's own values are refused by its installer, `ui-install-*`).
+
+- **Fix:** Fix the value named in the message in the composition module.
+- **Retry-safe:** no
+
+(error-cluster-load-failed)=
+### `cluster-load-failed`
+
+**Composition failed to import.** Importing the module that declares the cluster raised an exception.
+
+- **Fix:** Run the module with Python to see the error, fix it, and retry.
+- **Retry-safe:** no
+
+(error-cluster-node-arch-mismatch)=
+### `cluster-node-arch-mismatch`
+
+**Node architecture differs.** A node's `status.nodeInfo.architecture` is not the `arch` the declaration gives it.
+
+- **Fix:** Correct `arch=` in the declaration (builds and placement rely on it) and plan again.
+- **Retry-safe:** no
+
+(error-cluster-node-missing)=
+### `cluster-node-missing`
+
+**Declared node not in the cluster.** A `Node(...)` of the declaration has no Node object of that name (`kubernetes.io/hostname`) in the cluster.
+
+- **Fix:** Join the node, or correct or remove it in the declaration, and plan again.
+- **Retry-safe:** no
+
+(error-cluster-not-found)=
+### `cluster-not-found`
+
+**Cluster not found.** `MODULE:ATTR` does not name an importable `piceli.infra.Cluster` (no such file, module or attribute, or the attribute is something else).
+
+- **Fix:** Pass the composition module and the attribute that holds the `Cluster(...)`, e.g. `infra.py:my_cluster`.
+- **Retry-safe:** no
+
+(error-cluster-not-initialized)=
+### `cluster-not-initialized`
+
+**Cluster not initialized.** The command needs what `piceli cluster init` installs (the namespace `piceli-system` and its ConfigMap `piceli-cluster`), and it is not there.
+
+- **Fix:** Run `piceli cluster init MODULE:ATTR` (plan, then `--approve HASH`) first.
+- **Retry-safe:** no
+
+(error-cluster-plan-changed)=
+### `cluster-plan-changed`
+
+**Cluster init plan changed.** The `--approve` hash is not the current plan's: the declaration or the cluster changed since the plan (or the hash is wrong), or a node or object changed while the plan ran.
+
+- **Fix:** Run `piceli cluster init MODULE:ATTR` again, review the new plan and approve its hash.
+- **Retry-safe:** yes
+
+(error-secrets-invalid)=
+### `secrets-invalid`
+
+**Secret input invalid.** `--username` is empty, longer than 256 characters, or holds spaces or control characters.
+
+- **Fix:** Pass a plain user name (e.g. `git`).
+- **Retry-safe:** no
+
+(error-secrets-prompt-required)=
+### `secrets-prompt-required`
+
+**Token prompt not requested.** `piceli secrets git` reads the token only with `--prompt`, so it never waits on stdin unexpectedly.
+
+- **Fix:** Add `--prompt` and type the token (or pipe it on stdin).
+- **Retry-safe:** no
+
+(error-secrets-token-empty)=
+### `secrets-token-empty`
+
+**No token read.** `--prompt` read an empty line (or end of input) from stdin, or the value held a control character.
+
+- **Fix:** Run it again and type or pipe the token.
+- **Retry-safe:** no
+
+(error-secrets-token-refused)=
+### `secrets-token-refused`
+
+**Token passed where it could leak.** `piceli secrets git` got an extra argument or option, or `PICELI_GIT_TOKEN` is set: a token is never taken from the command line or the environment, where process listings, shell history and logs keep it. The value is not printed.
+
+- **Fix:** Unset the variable, drop the argument, and pass `--prompt`: type the token (no echo) or pipe it on stdin.
+- **Retry-safe:** no
+
+
+## Compositions: sources, component contracts (`piceli.toml`) and change-aware builds (`piceli.infra`, `piceli gitops enable infra.py`)
+
+(error-component-build-failed)=
+### `component-build-failed`
+
+**Component build failed.** Building or mirroring a component's image failed: the host build failed, the build Job ended without a receipt, or the push to the registry did not succeed.
+
+- **Fix:** Look at the controller's log and the build Job's pod log; the controller retries with backoff and on the next revision.
+- **Retry-safe:** yes
+
+(error-component-build-unsupported)=
+### `component-build-unsupported`
+
+**Component build not supported here.** The component's `build` cannot run where the controller builds: a `dockerfile` build needs a Docker engine, which the build Job and the controller do not have.
+
+- **Fix:** Use a `rust`, `python` or `files` build in `piceli.toml`.
+- **Retry-safe:** no
+
+(error-component-contract-invalid)=
+### `component-contract-invalid`
+
+**Component contract refused.** A `[component.<name>]` table of a source's `piceli.toml` has an unknown key, a bad value, an unpinned `image.base`, or the file is not valid TOML.
+
+- **Fix:** Fix `piceli.toml` in the component's repository (see docs/components.md) and push; the environment deploys on the next revision.
+- **Retry-safe:** no
+
+(error-component-contract-missing)=
+### `component-contract-missing`
+
+**Component contract missing.** The source, at the commit the environment resolves to, has no `piceli.toml` or no `[component.<name>]` table for a component the environment runs.
+
+- **Fix:** Add the component's table to `piceli.toml` in that repository, or take the component out of the environment's stack.
+- **Retry-safe:** no
+
+(error-component-need-unmet)=
+### `component-need-unmet`
+
+**Component need unmet.** A component's `needs` names a component the environment's stack does not run, or a Secret (`secret:NAME`) the environment does not list in `secrets=`.
+
+- **Fix:** Add the component to the stack or the Secret to the environment's `secrets=` (and create it in the namespace), or mark the need optional with `?` in `piceli.toml`.
+- **Retry-safe:** no
+
+(error-composition-invalid)=
+### `composition-invalid`
+
+**Composition refused.** The composition module (`infra.py`) or its controller config is malformed: no `environments = [...]`, an environment without a `follow={Source: rule}` mapping, a component whose source the environment does not follow, two sources or components with one name, or more than one cluster or branch rule.
+
+- **Fix:** Fix the module as the message says and run `piceli gitops enable infra.py` again.
+- **Retry-safe:** no
+
+(error-composition-ref-unresolved)=
+### `composition-ref-unresolved`
+
+**Environment ref not found.** An environment's `follow` names a branch or tag pattern that the source does not have (yet), so the environment has no commit for that source and is not deployed.
+
+- **Fix:** Push the branch or the tag the environment follows, or change its `follow` rule.
+- **Retry-safe:** yes
+
+
+## The UI installed in the cluster (`Ui(access="forward")`, `piceli access ui`, its Sync button)
+
+(error-access-ui-cluster-invalid)=
+### `access-ui-cluster-invalid`
+
+**Not a Cluster.** `--cluster MODULE:ATTR` did not import, or does not name a `piceli.infra.Cluster`.
+
+- **Fix:** Point `--cluster` at the module attribute that holds the `Cluster(...)`, for example `infra.py:my_cluster`.
+- **Retry-safe:** no
+
+(error-access-ui-forbidden)=
+### `access-ui-forbidden`
+
+**Profile cannot read the UI.** The profile's credentials may not read the `piceli-ui` Service or its launch Secret in `piceli-system`.
+
+- **Fix:** Use a profile allowed to read that Service and Secret (the one that ran `piceli cluster init`).
+- **Retry-safe:** no
+
+(error-access-ui-not-declared)=
+### `access-ui-not-declared`
+
+**Cluster declares no UI.** The `Cluster` has no `ui=Ui(...)`, so `piceli cluster init` installs no UI for it.
+
+- **Fix:** Add `ui=Ui(access="forward")` to the cluster, run `piceli cluster init` (plan, then approve), then `piceli access ui` again.
+- **Retry-safe:** no
+
+(error-access-ui-not-installed)=
+### `access-ui-not-installed`
+
+**UI not installed in the cluster.** The UI Service `piceli-ui` or its launch Secret is not in `piceli-system`.
+
+- **Fix:** Install it with `piceli cluster init MODULE:ATTR` (plan, then `--approve HASH`) and run `piceli access ui` again.
+- **Retry-safe:** no
+
+(error-access-ui-not-ready)=
+### `access-ui-not-ready`
+
+**UI has not started yet.** The UI is installed but has not written its launch token: its pod is still starting, cannot pull its image, or its node is down.
+
+- **Fix:** Wait for the `piceli-ui` pod in `piceli-system` to run, then run `piceli access ui` again.
+- **Retry-safe:** yes
+
+(error-access-ui-target-required)=
+### `access-ui-target-required`
+
+**Which cluster's UI.** `piceli access ui` needs exactly one of `--cluster MODULE:ATTR` (a composition's `Cluster`) or `--profile NAME` (a `piceli login` profile).
+
+- **Fix:** Run `piceli access ui --cluster infra.py:my_cluster` or `piceli access ui --profile my-cluster`.
+- **Retry-safe:** no
+
+(error-access-ui-unreachable)=
+### `access-ui-unreachable`
+
+**Cluster API unreachable.** The Kubernetes API of the profile did not answer, or answered with an error, while reading the UI's Service or launch Secret.
+
+- **Fix:** Check the network and the profile (`piceli profiles`), then run `piceli access ui` again.
+- **Retry-safe:** yes
+
+(error-ui-controller-absent)=
+### `ui-controller-absent`
+
+**No GitOps controller status.** The UI reads the controller's status ConfigMap `piceli-gitops-status`, and no controller has published one yet (GitOps is not enabled, or the controller has not finished its first poll).
+
+- **Fix:** Enable GitOps for the composition (`piceli gitops enable MODULE`), wait for its first poll, then refresh.
+- **Retry-safe:** yes
+
+(error-ui-install-access-unsupported)=
+### `ui-install-access-unsupported`
+
+**UI access mode not supported.** The in-cluster UI is reached only through a port-forward: `Ui(access="forward")`.
+
+- **Fix:** Use `Ui(access="forward")` and open it with `piceli access ui`.
+- **Retry-safe:** no
+
+(error-ui-install-image-unpinned)=
+### `ui-install-image-unpinned`
+
+**UI image not pinned.** The in-cluster UI runs a Piceli image, and neither `Ui(image=...)` nor `Controller(image=...)` names one pinned by digest.
+
+- **Fix:** Set `Ui(image="registry/piceli@sha256:<64 hex>")` (or the controller's image) and plan `piceli cluster init` again.
+- **Retry-safe:** no
+
+(error-ui-install-node-unknown)=
+### `ui-install-node-unknown`
+
+**UI node not declared.** `Ui(on=...)` (or, when it is unset, `Controller(on=...)`) names a node that is not in `Cluster(nodes=[...])`.
+
+- **Fix:** Name a declared node, or declare the node, and plan `piceli cluster init` again.
+- **Retry-safe:** no
+
+(error-ui-sync-target-unknown)=
+### `ui-sync-target-unknown`
+
+**Sync target not in the status.** A Sync named an environment or component that the controller's published status does not list (it was removed, renamed, or the page is out of date).
+
+- **Fix:** Refresh the page and sync an environment or component it shows; `piceli gitops status` lists them.
+- **Retry-safe:** no
+
+(error-ui-sync-unavailable)=
+### `ui-sync-unavailable`
+
+**Sync request not written.** The UI could not write the request into the ConfigMap `piceli-gitops-requests` (it is missing, the UI's service account lacks its narrow write permission, or the API was unreachable).
+
+- **Fix:** Run `piceli cluster init` again (it recreates the inbox and the UI's role), then retry; `piceli gitops sync ENV` writes the same request.
+- **Retry-safe:** yes

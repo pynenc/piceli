@@ -178,6 +178,10 @@ env = { RUST_LOG = "info" }
 - An `entrypoint` without `cmd` clears the base image's `Cmd`, as a
   Dockerfile `ENTRYPOINT` does.
 - `build.env` cannot set `PATH`, `CARGO_TARGET_DIR` or `SOURCE_DATE_EPOCH`.
+- `contexts = ["api", "config"]` (optional, default every context) names
+  the contexts an image reads. A composition controller rebuilds an image
+  only when the files of those contexts (or its tables) changed (see
+  {doc}`compositions`); a local build still builds every image.
 - There is no smoke check: nothing can run a `linux/arm64` binary on the
   build machine without a VM. Use {doc}`checks` after the rollout.
 
