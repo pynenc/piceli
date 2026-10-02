@@ -1682,6 +1682,7 @@
     "environments": "Environment"
    },
    "attrs": [
+    "allow_api",
     "allow_egress",
     "allows",
     "auto_approve",
@@ -1705,6 +1706,7 @@
     "seed_from"
    ],
    "init": [
+    "allow_api",
     "allow_egress",
     "auto_approve",
     "branch_nodes",
@@ -5614,6 +5616,7 @@
      "--cluster-rbac",
      "--context",
      "--credentials-secret",
+     "--delete-volumes",
      "--env",
      "--exec-sha256",
      "--image",
@@ -8430,5 +8433,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.14.2"
+ "version": "0.14.3"
 }

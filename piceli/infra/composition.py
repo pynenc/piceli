@@ -299,6 +299,7 @@ def _env_dict(item: EnvItem) -> dict[str, Any]:
         "idle_stop": item.idle_stop,
         "claim_sizes": dict(item.claim_sizes),
         "allow_egress": list(item.allow_egress),
+        **({"allow_api": True} if item.allow_api else {}),
     }
 
 
@@ -356,6 +357,7 @@ def _env_from(
             idle_stop=item.get("idle_stop"),
             claim_sizes=item.get("claim_sizes") or {},
             allow_egress=tuple(item.get("allow_egress") or ()),
+            allow_api=item.get("allow_api") is True,
             **common,
         )
     return Environment(item["name"], **common)

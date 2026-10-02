@@ -11,7 +11,8 @@ account, roles, bindings) in a uniquely named namespace, binds the deployer
 role in a branch namespace as ``gitops`` does, then acts as the controller's
 service account (``--as``):
 
-* a branch teardown may list and delete persistent volumes;
+* a branch teardown may list persistent volumes (deleting them is opt-in)
+  and read the API server's EndpointSlice;
 * a release may create a Role granting ``metrics.k8s.io`` reads (the API
   server refuses an escalation when the deployer lacks them);
 * restore points may scale Deployments and StatefulSets.
@@ -77,7 +78,11 @@ def test_the_controller_may_tear_down_and_releases_may_grant_metrics_and_scale()
         kubectl("apply", "-f", "-", stdin=json.dumps(binding))
         # Bug: a branch teardown listed persistent volumes and got HTTP 403.
         assert _can(system, "list", "persistentvolumes")
-        assert _can(system, "delete", "persistentvolumes")
+        # Deleting volumes is the --delete-volumes opt-in (0.14.3).
+        assert not _can(system, "delete", "persistentvolumes")
+        assert _can(
+            system, "get", "endpointslices.discovery.k8s.io/kubernetes", "-n", "default"
+        )
         assert _can(system, "delete", "namespaces")
         assert not _can(system, "create", "persistentvolumes")
         # Restore points scale workloads in the branch namespace.

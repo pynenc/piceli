@@ -176,7 +176,11 @@ def cluster_config(cluster: Cluster) -> dict[str, Any]:
 
 
 def render_objects(
-    cluster: Cluster, ui: UiRenderer | None, *, cluster_rbac: bool = False
+    cluster: Cluster,
+    ui: UiRenderer | None,
+    *,
+    cluster_rbac: bool = False,
+    delete_volumes: bool = False,
 ) -> list[dict[str, Any]]:
     """Every object init installs, in apply order (each one once).
 
@@ -202,7 +206,10 @@ def render_objects(
         objects += render_registry(cluster.registry)
     if cluster.controller is not None:
         objects += render_foundation(
-            NAMESPACE, storage_class=cluster.storage_class, cluster_rbac=cluster_rbac
+            NAMESPACE,
+            storage_class=cluster.storage_class,
+            cluster_rbac=cluster_rbac,
+            delete_volumes=delete_volumes or cluster.controller.delete_volumes,
         )
     if cluster.ui is not None and ui is not None:
         objects += ui(cluster)
@@ -279,6 +286,7 @@ def plan_init(api: Api, cluster: Cluster, ui: UiRenderer | None) -> InitPlan:
         _RBAC,
         NAME,
         has_cluster_rbac,
+        has_volume_delete,
         object_path,
         plan_objects,
     )
@@ -299,6 +307,7 @@ def plan_init(api: Api, cluster: Cluster, ui: UiRenderer | None) -> InitPlan:
             cluster,
             ui,
             cluster_rbac=has_cluster_rbac(live if isinstance(live, dict) else None),
+            delete_volumes=has_volume_delete(live if isinstance(live, dict) else None),
         ),
         action="enable",
         config=described,

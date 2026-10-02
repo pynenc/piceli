@@ -121,3 +121,83 @@ def test_controller_poll_deploys_a_branch_through_env_up(tmp_path: Path) -> None
         assert result.exit_code == 0, result.output
         rows = {row["branch"]: row for row in json.loads(result.stdout)["envs"]}
         assert rows[BRANCH]["commit"] == sha and rows[BRANCH]["health"] == "healthy"
+
+
+def test_a_branch_with_allow_api_may_reach_the_api_server(tmp_path: Path) -> None:
+    """The isolation allows the API server's endpoints, read from the cluster."""
+    repo = Repo(tmp_path)
+    repo.git("checkout", "--quiet", "-B", BRANCH, "main")
+    (repo.work / "deploy" / "app.py").write_text(
+        textwrap.dedent(PIPELINE).replace(
+            "auto_approve=True)", "auto_approve=True, allow_api=True)"
+        )
+    )
+    repo.git("add", "-A")
+    repo.git("commit", "--quiet", "-m", "pipeline")
+    sha = repo.git("rev-parse", "HEAD")
+    repo.git("push", "--quiet", "origin", BRANCH)
+
+    api = FakeAPI(
+        types={
+            **TYPES,
+            "resourcequotas": ("v1", "ResourceQuota", True),
+            # Served outside the fake's one namespace (it lives in default).
+            "endpointslices": ("discovery.k8s.io/v1", "EndpointSlice", False),
+        },
+        namespace=BRANCH_NS,
+    )
+    del api.objects[("Namespace", BRANCH_NS)]
+    api.add_node("node-a")
+    pushed = manifest("ConfigMap", configmap_name(BRANCH))
+    pushed["data"] = {"images": json.dumps({"api": {"digest": DIGEST}}), "commit": sha}
+    api.put(pushed)
+    slice_ = {
+        "apiVersion": "discovery.k8s.io/v1",
+        "kind": "EndpointSlice",
+        "metadata": {"name": "kubernetes", "namespace": "default"},
+    }
+    slice_.update(
+        {
+            "addressType": "IPv4",
+            "endpoints": [
+                {"addresses": ["192.0.2.10"], "conditions": {"ready": True}},
+                {"addresses": ["192.0.2.11"], "conditions": {"ready": True}},
+            ],
+            "ports": [{"name": "https", "port": 6443, "protocol": "TCP"}],
+        }
+    )
+    api.put(slice_)
+    with serve(api) as (api, url):
+        kubeconfig = write_kubeconfig(
+            url, tmp_path / "controller.kubeconfig", context="fake"
+        )
+        config = ControllerConfig(
+            pipeline="deploy/app.py:pipeline",
+            repo=str(repo.remote),
+            branches=("main", "wp-*"),
+        )
+        state = tmp_path / "state"
+        controller = Controller(
+            config,
+            state_dir=state,
+            source=GitRemote(config.repo, state / "mirror"),
+            ports=DefaultPorts(
+                Path(kubeconfig),
+                "fake",
+                state,
+                namespace="piceli-system",
+                config=config,
+                transport="loopback-http",
+            ),
+            channel=DirectoryChannel(state),
+        )
+        entry = controller.poll_once()["envs"][BRANCH]
+        assert entry["state"] == "deployed", json.dumps(entry)
+        policy = api.objects[("NetworkPolicy", "piceli-env-isolation")]
+        assert {
+            "to": [
+                {"ipBlock": {"cidr": "192.0.2.10/32"}},
+                {"ipBlock": {"cidr": "192.0.2.11/32"}},
+            ],
+            "ports": [{"protocol": "TCP", "port": 6443}],
+        } in policy["spec"]["egress"]

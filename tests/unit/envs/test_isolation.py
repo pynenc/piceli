@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -266,6 +267,10 @@ def test_cluster_scoped_objects_get_namespace_qualified_names() -> None:
     }
     objects = _objects(isolate(_composition(role, binding, storage, claim), _env()))
     assert ("ClusterRole", f"viewer-{NS}") in objects
+    # Teardown finds them by their environment's namespace.
+    for kind in ("ClusterRole", "ClusterRoleBinding"):
+        labels = objects[(kind, f"viewer-{NS}")]["metadata"]["labels"]
+        assert labels["piceli.io/env-namespace"] == NS
     assert (
         objects[("ClusterRoleBinding", f"viewer-{NS}")]["roleRef"]["name"]
         == f"viewer-{NS}"
@@ -312,3 +317,43 @@ def test_claim_sizes_apply_to_templates_and_claims() -> None:
     with pytest.raises(EnvError) as error:
         isolate(_composition(stateful), _env(claim_sizes={"nothing": "1Gi"}))
     assert error.value.code == "env-config-invalid"
+
+
+def test_allow_api_lets_branch_pods_reach_the_api_server_endpoints() -> None:
+    """The policy matches the endpoints (post-DNAT), not the Service IP."""
+    from piceli.envs.isolation import isolation_objects
+
+    env = BranchEnv(
+        "wp-x",
+        NS,
+        EnvConfig(prefix="shop-", allow_api=True),
+        "shop",
+        api_endpoints=(("10.0.0.4", 6443), ("10.0.0.5", 6443)),
+    )
+    policy, _ = isolation_objects(env)
+    api_rules = [
+        rule
+        for rule in policy["spec"]["egress"]
+        if rule.get("ports") == [{"protocol": "TCP", "port": 6443}]
+    ]
+    assert api_rules == [
+        {
+            "to": [
+                {"ipBlock": {"cidr": "10.0.0.4/32"}},
+                {"ipBlock": {"cidr": "10.0.0.5/32"}},
+            ],
+            "ports": [{"protocol": "TCP", "port": 6443}],
+        }
+    ]
+    # Without allow_api nothing reaches the API server.
+    plain, _ = isolation_objects(
+        BranchEnv("wp-x", NS, EnvConfig(prefix="shop-"), "shop")
+    )
+    assert not any("ipBlock" in json.dumps(rule) for rule in plain["spec"]["egress"])
+
+
+def test_allow_api_is_described_only_when_declared() -> None:
+    assert "allow_api" not in EnvConfig(prefix="shop-").describe()
+    assert EnvConfig(prefix="shop-", allow_api=True).describe()["allow_api"] is True
+    with pytest.raises(EnvError):
+        EnvConfig(prefix="shop-", allow_api="yes")  # type: ignore[arg-type]

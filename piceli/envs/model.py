@@ -487,6 +487,7 @@ class Environment:
         secrets: Sequence[str] = (),
         settings: Mapping[str, Mapping[str, str]] | None = None,
         allow_egress: Sequence[str] = (),
+        allow_api: bool = False,
         name: str = "branches",
         pipeline: Any = None,
     ) -> BranchEnvironments:
@@ -523,6 +524,7 @@ class Environment:
             secrets=tuple(secrets),
             settings=dict(settings or {}),
             allow_egress=tuple(allow_egress),
+            allow_api=allow_api,
             pipeline=pipeline,
         )
 
@@ -610,6 +612,7 @@ class BranchEnvironments:
     secrets: Sequence[str] = ()
     settings: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
     allow_egress: Sequence[str] = ()
+    allow_api: bool = False
     pipeline: Any = field(default=None, compare=False)
     sources: tuple[tuple[Any, tuple[Any, ...]], ...] = field(
         init=False, default=(), compare=False, repr=False
@@ -667,6 +670,7 @@ class BranchEnvironments:
             claim_sizes=dict(self.claim_sizes),
             auto_approve=self.auto_approve,
             allow_egress=tuple(self.allow_egress),
+            allow_api=self.allow_api,
             branch_nodes=self.on_nodes,
             idle_stop=self.idle_stop,
         )
@@ -723,6 +727,10 @@ class EnvConfig:
         ``--approve-if-policy``). The main branch is never approved by it.
     :param allow_egress: CIDRs branch pods may reach besides their own
         namespace and the cluster DNS (``["0.0.0.0/0"]`` for the internet).
+    :param allow_api: Branch pods may reach the Kubernetes API server (a
+        workload that uses its service-account token). ``env up`` reads the
+        API server's addresses (EndpointSlice ``default/kubernetes``) and
+        allows exactly those; no node IP in the configuration.
     :param environments: Named, long-lived :class:`Environment` s, each with
         its own trigger (``follow``), namespace, stack and placement. One
         named like ``main_branch`` replaces the implicit main environment
@@ -750,6 +758,7 @@ class EnvConfig:
     seed_from: str | None = None
     auto_approve: bool = False
     allow_egress: Sequence[str] = ()
+    allow_api: bool = False
     environments: Sequence[Environment] = ()
     branch_stack: Stack | None = None
     branch_nodes: Any = None
@@ -793,6 +802,8 @@ class EnvConfig:
         object.__setattr__(self, "claim_sizes", dict(sorted(sizes.items())))
         if isinstance(self.allow_egress, str):
             raise EnvError("env-config-invalid", "allow_egress must be a list of CIDRs")
+        if not isinstance(self.allow_api, bool):
+            raise EnvError("env-config-invalid", "allow_api must be True or False")
         object.__setattr__(self, "allow_egress", tuple(self.allow_egress))
         if self.seed_from is not None and not isinstance(self.seed_from, str):
             raise EnvError("env-config-invalid", "seed_from must be a branch name")
@@ -917,7 +928,8 @@ class EnvConfig:
             "seed_from": self.seed_from,
             "auto_approve": self.auto_approve,
             "allow_egress": list(self.allow_egress),
-            # 0.14 fields: only when declared, so 0.13 descriptions stay equal.
+            # Later fields: only when declared, so earlier descriptions stay equal.
+            **({"allow_api": True} if self.allow_api else {}),
             **(
                 {"environments": [item.describe() for item in self.environments]}
                 if self.environments
@@ -982,6 +994,9 @@ class BranchEnv:
     prebuilt: bool = True
     #: The named environment's name (``None`` for main and branches).
     environment: str | None = None
+    #: ``(address, port)`` of the API server, read by ``env up`` when
+    #: ``config.allow_api`` (the egress the isolation then allows).
+    api_endpoints: tuple[tuple[str, int], ...] = ()
 
 
 @dataclass(frozen=True)

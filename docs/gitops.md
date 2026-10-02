@@ -111,8 +111,11 @@ their digests:
   `curl`, `xz` for crates with C builds such as `jemalloc-sys` and
   `aws-lc-sys`).
 
-Both packages are public: nodes pull them anonymously. A release checks that
-an anonymous pull works before it finishes.
+Both packages are public: nodes pull them anonymously. Each release checks
+that an anonymous pull works and warns, with the settings link, when a
+package is private. When the project's Docker Hub
+credentials are configured, the release also copies them, same digests, to
+`docker.io/pynenc/piceli-controller` and `docker.io/pynenc/piceli-builder`.
 
 `--image` must be pinned by digest; the controller never pulls a moving tag,
 and the image's Piceli version should match your CLI's. To build them
@@ -120,11 +123,11 @@ yourself (another registry, more tools), use `images/Dockerfile` with the
 wheel of your version:
 
 ```console
-$ pip download --no-deps --dest ctx/dist "piceli==0.14.2"
+$ pip download --no-deps --dest ctx/dist "piceli==0.14.3"
 $ docker buildx build -f images/Dockerfile --target controller \
-    --platform linux/amd64,linux/arm64 -t REGISTRY/piceli-controller:0.14.2 --push ctx
+    --platform linux/amd64,linux/arm64 -t REGISTRY/piceli-controller:0.14.3 --push ctx
 $ docker buildx build -f images/Dockerfile --target builder \
-    --platform linux/amd64,linux/arm64 -t REGISTRY/piceli-builder:0.14.2 --push ctx
+    --platform linux/amd64,linux/arm64 -t REGISTRY/piceli-builder:0.14.3 --push ctx
 ```
 
 The push prints each digest. Add whatever your pipeline module imports
@@ -138,7 +141,7 @@ env push`.
 | --- | --- |
 | Namespace `piceli-system` (`--namespace`) | The controller's home (never deleted by `disable`). |
 | ServiceAccount, Role and RoleBinding `piceli-gitops` | In its namespace only: ConfigMaps (status, requests), Leases, build Jobs, their Pods and logs, cache claims, Events. |
-| ClusterRole and ClusterRoleBinding `piceli-gitops` | Read nodes; create, read and delete namespaces (one per branch); read and delete PersistentVolumes (a branch teardown removes the volumes bound to its claims); create RoleBindings that bind **only** `piceli-gitops-deployer` (the `bind` verb is limited to that name). No Secrets, nothing else cluster-wide. `--cluster-rbac` adds ClusterRoles/ClusterRoleBindings for apps that declare them; `piceli cluster init` keeps that rule. |
+| ClusterRole and ClusterRoleBinding `piceli-gitops` | Read nodes; create, read and delete namespaces (one per branch); read PersistentVolumes (a branch teardown lists the volumes bound to its claims; deleting them is the `--delete-volumes` opt-in below); get the EndpointSlice `default/kubernetes` (the API server's addresses, for `allow_api`); create RoleBindings that bind **only** `piceli-gitops-deployer` (the `bind` verb is limited to that name). No Secrets, nothing else cluster-wide. `--cluster-rbac` adds ClusterRoles/ClusterRoleBindings for apps that declare them; `piceli cluster init` keeps that rule. |
 | ClusterRole `piceli-gitops-deployer` | The namespaced kinds an app deploys, the `scale` subresource of Deployments and StatefulSets (restore points) and reads (`get`, `list`, `watch`) of `metrics.k8s.io` pods and nodes, so a release can grant them to its own Role without an escalation refusal, and `get` on `services/proxy` and `pods/proxy` (HTTP and metric checks go through the API server proxy); used only through a RoleBinding in each environment's namespace, so the controller can change nothing outside them. |
 | PersistentVolumeClaim `piceli-gitops-state` (`--storage`, `--storage-class`) | The Git mirror, the last-seen commits and tags, build receipts. |
 | ConfigMap `piceli-gitops-config` | The settings (pipeline, repository, globs, poll, build options); never a credential. |
@@ -513,3 +516,16 @@ Always sign the digest, never the tag.
 
 `piceli explain <code>` prints the cause and the fix; {doc}`reference/errors`
 lists every code.
+
+### Volumes of a torn-down branch
+
+Deleting a branch deletes its namespace and claims. With a storage class
+whose reclaim policy is `Delete` the volumes go with the claims. With
+`Retain` they stay: the teardown lists them in its result (`volumes_left`)
+and the log. To have the controller delete them, opt in with `piceli gitops
+enable --delete-volumes` (or `Controller(delete_volumes=True)` in a
+composition): it grants the controller `delete` on PersistentVolumes
+cluster-wide, which Kubernetes cannot narrow further; teardown still
+deletes only the volumes bound to the branch's own claims. Teardown also
+removes the ClusterRoles and ClusterRoleBindings the branch's release
+created (labelled `piceli.io/env-namespace`).

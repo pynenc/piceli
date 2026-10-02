@@ -84,6 +84,11 @@ class EnvCluster:
 
         return AppsV1Api(self.client)
 
+    def _rbac(self) -> Any:
+        from kubernetes.client import RbacAuthorizationV1Api
+
+        return RbacAuthorizationV1Api(self.client)
+
     def _data(self, response: Any) -> dict[str, Any]:
         value = json.loads(response.data)
         return value if isinstance(value, dict) else {}
@@ -331,3 +336,76 @@ class EnvCluster:
     def delete_volume(self, name: str) -> None:
         core = self._core()
         self._delete(core.read_persistent_volume, core.delete_persistent_volume, name)
+
+    def api_endpoints(self) -> tuple[tuple[str, int], ...]:
+        """``(address, port)`` of the API server (EndpointSlice ``default/kubernetes``)."""
+        from kubernetes.client import DiscoveryV1Api
+
+        body = self._call(
+            DiscoveryV1Api(self.client).read_namespaced_endpoint_slice,
+            "kubernetes",
+            "default",
+        )
+        ports = [
+            int(port["port"])
+            for port in (body or {}).get("ports") or ()
+            if isinstance(port, dict) and isinstance(port.get("port"), int)
+        ]
+        found = {
+            (str(address), port)
+            for endpoint in (body or {}).get("endpoints") or ()
+            if isinstance(endpoint, dict)
+            and (endpoint.get("conditions") or {}).get("ready") is not False
+            for address in endpoint.get("addresses") or ()
+            for port in ports
+        }
+        if not found:
+            raise EnvError(
+                "env-config-invalid",
+                "allow_api: the EndpointSlice default/kubernetes lists no API "
+                "server address",
+            )
+        return tuple(sorted(found))
+
+    def cluster_objects(self, namespace: str) -> list[tuple[str, str]]:
+        """``(kind, name)`` of the ClusterRoles/Bindings Piceli made for ``namespace``.
+
+        An environment's cluster-scoped objects carry the label
+        ``piceli.io/env-namespace=<namespace>`` (earlier releases: the name
+        ``<namespace>:<app>:<name>``) and Piceli's ``piceli.io/owner`` mark;
+        objects without that mark are never listed. A controller not allowed
+        to list them (no ``--cluster-rbac``) could not have made any: empty.
+        """
+        from piceli.envs.isolation import ENV_NAMESPACE_LABEL
+
+        rbac = self._rbac()
+        found: list[tuple[str, str]] = []
+        for kind, method in (
+            ("ClusterRole", rbac.list_cluster_role),
+            ("ClusterRoleBinding", rbac.list_cluster_role_binding),
+        ):
+            try:
+                body = self._call(method)
+            except EnvError as error:
+                if "denied" in (error.details or {}):
+                    return []
+                raise
+            for item in (body or {}).get("items") or ():
+                metadata = (item or {}).get("metadata") or {}
+                name = str(metadata.get("name") or "")
+                labelled = (metadata.get("labels") or {}).get(ENV_NAMESPACE_LABEL)
+                ours = labelled == namespace or name.startswith(f"{namespace}:")
+                if ours and (metadata.get("annotations") or {}).get("piceli.io/owner"):
+                    found.append((kind, name))
+        return sorted(found)
+
+    def delete_cluster_object(self, kind: str, name: str) -> None:
+        rbac = self._rbac()
+        if kind == "ClusterRole":
+            self._delete(rbac.read_cluster_role, rbac.delete_cluster_role, name)
+        elif kind == "ClusterRoleBinding":
+            self._delete(
+                rbac.read_cluster_role_binding, rbac.delete_cluster_role_binding, name
+            )
+        else:
+            raise ValueError(f"not a cluster object Piceli removes: {kind}")

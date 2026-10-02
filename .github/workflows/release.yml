@@ -244,21 +244,47 @@ jobs:
         env:
           TAG: ${{ needs.build.outputs.tag }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # A mirror on Docker Hub (docker.io/pynenc/piceli-*), the same digests,
+      # copied without rebuilding; only when the owner configured the
+      # DOCKERHUB_USERNAME and DOCKERHUB_TOKEN secrets.
+      - name: Mirror the images to Docker Hub
+        env:
+          TAG: ${{ needs.build.outputs.tag }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -z "$DOCKERHUB_USERNAME" ] || [ -z "$DOCKERHUB_TOKEN" ]; then
+            echo "Docker Hub secrets not set: no mirror"
+            exit 0
+          fi
+          echo "$DOCKERHUB_TOKEN" | docker login docker.io -u "$DOCKERHUB_USERNAME" --password-stdin
+          version="${TAG#v}"
+          for target in controller builder; do
+            docker buildx imagetools create \
+              -t "docker.io/pynenc/piceli-${target}:${version}" \
+              "ghcr.io/pynenc/piceli-${target}:${version}"
+            echo "- \`docker.io/pynenc/piceli-${target}:${version}\` (mirror)" >> "$GITHUB_STEP_SUMMARY"
+          done
       # Nodes pull these anonymously. GHCR creates a package private and has
       # no API to change that: an owner makes each package public once
       # (Package settings, Change visibility); later versions stay public.
+      # Everything is published by now, so a private package is a warning
+      # (with the link), not a failed release.
       - name: Check that anyone can pull the images
         run: |
           version="${TAG#v}"
           for target in controller builder; do
-            token="$(curl -fsS "https://ghcr.io/token?scope=repository:pynenc/piceli-${target}:pull" | jq -r .token)"
+            token="$(curl -sS "https://ghcr.io/token?scope=repository:pynenc/piceli-${target}:pull" | jq -r '.token // empty')"
             code="$(curl -s -o /dev/null -w '%{http_code}' \
-              -H "Authorization: Bearer ${token}" \
+              ${token:+-H "Authorization: Bearer ${token}"} \
               -H 'Accept: application/vnd.oci.image.index.v1+json' \
               "https://ghcr.io/v2/pynenc/piceli-${target}/manifests/${version}")"
-            if [ "$code" != 200 ]; then
-              echo "::error::ghcr.io/pynenc/piceli-${target} is not public (anonymous pull: HTTP ${code}). Make it public: https://github.com/orgs/pynenc/packages/container/piceli-${target}/settings"
-              exit 1
+            if [ "$code" = 200 ]; then
+              echo "ghcr.io/pynenc/piceli-${target}: public"
+            else
+              settings="https://github.com/orgs/pynenc/packages/container/piceli-${target}/settings"
+              echo "::warning::ghcr.io/pynenc/piceli-${target} is private (anonymous pull: HTTP ${code}): nodes cannot pull it. Make it public once: ${settings}"
+              echo "- :warning: \`piceli-${target}\` is private: [make it public](${settings})" >> "$GITHUB_STEP_SUMMARY"
             fi
           done
         env:

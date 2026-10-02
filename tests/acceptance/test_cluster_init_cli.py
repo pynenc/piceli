@@ -383,3 +383,26 @@ def test_init_keeps_the_cluster_rbac_rule_gitops_enable_added(
     assert again.exit_code == 0, again.output
     assert json.loads(again.stdout)["state"] == "unchanged"
     assert api.objects[("ClusterRole", NAME)]["rules"] == wider["rules"]
+
+
+def test_init_keeps_the_volume_delete_rule_gitops_enable_added(
+    cluster: tuple[FakeAPI, str], tmp_path: Path
+) -> None:
+    from piceli.gitops.install import NAME, has_volume_delete, render_foundation
+
+    api, url = cluster
+    ref = _composition(tmp_path, url)
+    planned = json.loads(_init(ref).stdout)
+    assert _init(ref, "--approve", planned["plan_hash"]).exit_code == 0
+    assert not has_volume_delete(api.objects[("ClusterRole", NAME)])
+    # `gitops enable --delete-volumes` widened the controller's ClusterRole.
+    wider = next(
+        item
+        for item in render_foundation("piceli-system", delete_volumes=True)
+        if item["kind"] == "ClusterRole" and item["metadata"]["name"] == NAME
+    )
+    api.objects[("ClusterRole", NAME)]["rules"] = wider["rules"]
+    again = _init(ref)
+    assert again.exit_code == 0, again.output
+    assert json.loads(again.stdout)["state"] == "unchanged"
+    assert has_volume_delete(api.objects[("ClusterRole", NAME)])

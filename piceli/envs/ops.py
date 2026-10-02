@@ -223,6 +223,7 @@ def env_pipeline(
     *,
     digests: Mapping[str, str] | None = None,
     build_receipt: Mapping[str, Any] | None = None,
+    api_endpoints: tuple[tuple[str, int], ...] = (),
 ) -> Pipeline:
     """The pipeline of one environment.
 
@@ -274,6 +275,7 @@ def env_pipeline(
         images=images,
         pin_node=node.name if node is not None else None,
         mirrors=mirror_references(pipeline) if pipeline.deliver is not None else {},
+        api_endpoints=tuple(api_endpoints),
         **placement,
     )
     derived = copy.copy(pipeline)
@@ -707,7 +709,13 @@ def env_up(
                 build_receipt = pushed
                 commit = commit or pushed.get("commit")
         derived = env_pipeline(
-            pipeline, branch, digests=digests, build_receipt=build_receipt
+            pipeline,
+            branch,
+            digests=digests,
+            build_receipt=build_receipt,
+            api_endpoints=envs.api_endpoints()
+            if config.allow_api and not main and not config.is_fixed(branch)
+            else (),
         )
         stop = [] if main else plan_budget(envs, pipeline, namespace)
         if stop and wait:
@@ -943,15 +951,28 @@ def env_down(
             if ((item.get("spec") or {}).get("claimRef") or {}).get("namespace")
             == namespace
         )
+        # Cluster-scoped objects the release made for this environment
+        # (labelled with its namespace, marked as Piceli's).
+        cluster_objects = [
+            f"{kind}/{name}" for kind, name in envs.cluster_objects(namespace)
+        ]
+        delete: dict[str, Any] = {"claims": claims, "volumes": volumes}
+        if cluster_objects:
+            delete["cluster_objects"] = cluster_objects
         plan = {
             "schema": PLAN_SCHEMA,
             "app": pipeline.name,
             "branch": branch,
             "namespace": namespace,
             "uid": (live.get("metadata") or {}).get("uid"),
-            "delete": {"claims": claims, "volumes": volumes},
+            "delete": delete,
         }
-        body.update({"delete": plan["delete"], "env_hash": _hash(plan)})
+        body.update(
+            {
+                "delete": {**delete, "cluster_objects": cluster_objects},
+                "env_hash": _hash(plan),
+            }
+        )
         if approve is None and not (approve_if_policy and config.auto_approve):
             return {
                 **body,
@@ -965,10 +986,27 @@ def env_down(
             )
         for claim in claims:
             envs.delete_claim(namespace, claim)
+        for item in cluster_objects:
+            kind, _, name = item.partition("/")
+            envs.delete_cluster_object(kind, name)
         say(f"deleting namespace {namespace} ({len(claims)} claim(s))")
         envs.delete_namespace(namespace)
+        left: list[str] = []
         for volume in volumes:
-            envs.delete_volume(volume)
+            try:
+                envs.delete_volume(volume)
+            except EnvError as error:
+                # Deleting volumes is the owner's opt-in (delete_volumes);
+                # without it they stay and are reported, not retried.
+                if "denied" not in (error.details or {}):
+                    raise
+                left.append(volume)
+        if left:
+            say(
+                f"kept {len(left)} volume(s) the controller may not delete: "
+                + ", ".join(left)
+            )
+            body["volumes_left"] = left
         state_dir = pipeline.state_dir / "branches" / namespace
         if state_dir.is_dir():
             shutil.rmtree(state_dir, ignore_errors=True)

@@ -1120,6 +1120,7 @@ Install the GitOps controller (plan first; --approve HASH installs).
 | `--storage` | text | `10Gi` | Size of the state volume |
 | `--storage-class` | text |  | StorageClass of the state volume |
 | `--cluster-rbac` | boolean | `False` | Also allow ClusterRoles/ClusterRoleBindings (apps that declare them) |
+| `--delete-volumes` | boolean | `False` | Let branch teardown delete the PersistentVolumes bound to the environment's claims (cluster-wide delete on PersistentVolumes) |
 | `--platform` | text (repeatable) |  | Build platform (repeatable), e.g. linux/arm64 |
 | `--builder-image` | text |  | Image of the cluster build Job, pinned by digest; without it branches deploy only images pushed with `piceli env push` |
 | `--build-git-secret` | text |  | Secret (username/password) the build Job fetches the repository with (default piceli-build-git) |

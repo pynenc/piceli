@@ -271,7 +271,10 @@ Other cluster-scoped objects get the namespace in their name
 `cluster_rules=` already is). Every branch also gets a `NetworkPolicy`
 `piceli-env-isolation` that denies traffic across namespaces (its own
 namespace and the cluster DNS stay allowed; `allow_egress=["0.0.0.0/0"]`
-opens the internet) and a `ResourceQuota` of the same name (`quota`; by
+opens the internet; `allow_api=True` lets pods that use their
+service-account token reach the API server: `env up` reads its addresses
+from the EndpointSlice `default/kubernetes` and allows exactly those, so no
+node IP is written in the configuration) and a `ResourceQuota` of the same name (`quota`; by
 default only counts, which need no pod requests). A controller in another
 namespace (an ingress controller) needs its own allowing policy in the app.
 

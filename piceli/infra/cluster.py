@@ -93,6 +93,8 @@ def check_controller(controller: Controller) -> None:
         raise _invalid("Controller(poll=) must be at least 10 seconds")
     if controller.sync != "on change":
         raise _invalid('Controller(sync=) must be "on change"')
+    if not isinstance(controller.delete_volumes, bool):
+        raise _invalid("Controller(delete_volumes=) must be True or False")
 
 
 def check_ui(ui: Ui) -> None:
@@ -199,6 +201,8 @@ def describe(cluster: Cluster) -> dict[str, Any]:
             "sync": cluster.controller.sync,
             "image": cluster.controller.image,
         }
+        if cluster.controller.delete_volumes:  # absent when off: same hashes
+            body["controller"]["delete_volumes"] = True
     if cluster.ui is not None:
         body["ui"] = {
             "access": cluster.ui.access,

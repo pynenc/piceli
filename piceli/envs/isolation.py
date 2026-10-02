@@ -78,6 +78,10 @@ def _where(ref: ResourceRef) -> str:
     return f"{ref.kind}/{ref.name}"
 
 
+#: On every cluster-scoped object of an isolated environment: its namespace.
+ENV_NAMESPACE_LABEL = "piceli.io/env-namespace"
+
+
 def qualified_name(name: str, namespace: str) -> str:
     """``<name>-<namespace>`` (at most 253 characters, hash suffix when cut)."""
     value = f"{name}-{namespace}"
@@ -589,6 +593,20 @@ def isolation_objects(env: BranchEnv) -> tuple[dict[str, Any], dict[str, Any]]:
     ]
     for cidr in env.config.allow_egress:
         egress.append({"to": [{"ipBlock": {"cidr": cidr}}]})
+    if env.config.allow_api and env.api_endpoints:
+        # The API server's endpoints: the policy sees the address after the
+        # Service's DNAT, so the `kubernetes` Service IP alone would not match.
+        for port in sorted({port for _, port in env.api_endpoints}):
+            addresses = sorted({a for a, p in env.api_endpoints if p == port})
+            egress.append(
+                {
+                    "to": [
+                        {"ipBlock": {"cidr": f"{a}/{128 if ':' in a else 32}"}}
+                        for a in addresses
+                    ],
+                    "ports": [{"protocol": "TCP", "port": port}],
+                }
+            )
     policy = {
         "apiVersion": "networking.k8s.io/v1",
         "kind": "NetworkPolicy",
@@ -638,6 +656,11 @@ def isolate(
         renames = _renames(manifests, env)
         for ref, manifest in manifests.items():
             _rewrite(ref, manifest, renames, env)
+            if not ref.namespace:
+                # Teardown finds the cluster-scoped objects of this
+                # environment by this label (they outlive its namespace).
+                labels = manifest["metadata"].setdefault("labels", {})
+                labels[ENV_NAMESPACE_LABEL] = env.namespace
     for ref, manifest in manifests.items():
         place(manifest, env, ref)
     changed.update(
