@@ -4,12 +4,14 @@ const { test, expect } = require('./session.cjs');
 
 const fits = page => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
 
-test('launch opens the environments overview with revisions and health', async ({ page }) => {
+test('launch opens the topology overview with accessible environment revisions and health', async ({ page }) => {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto('/');
-  await expect(page).toHaveURL(/\/composition$/);
-  await expect(page.getByRole('heading', { name: 'Environments', exact: true })).toBeVisible();
+  await expect(page).toHaveURL(/\/composition\/overview$/);
+  await expect(page.getByRole('heading', { name: 'Your delivery landscape', exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Infrastructure topology', exact: true })).toBeVisible();
+  await page.getByText('Environment inventory', { exact: true }).click();
   const main = page.getByRole('region', { name: 'Environment main' });
   await expect(main.getByText('3f9c2d1')).toBeVisible();
   await expect(main.getByText('1 rolling · 1 synced · 1 unchanged')).toBeVisible();
