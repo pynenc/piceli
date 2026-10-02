@@ -175,8 +175,14 @@ def cluster_config(cluster: Cluster) -> dict[str, Any]:
     }
 
 
-def render_objects(cluster: Cluster, ui: UiRenderer | None) -> list[dict[str, Any]]:
-    """Every object init installs, in apply order (each one once)."""
+def render_objects(
+    cluster: Cluster, ui: UiRenderer | None, *, cluster_rbac: bool = False
+) -> list[dict[str, Any]]:
+    """Every object init installs, in apply order (each one once).
+
+    ``cluster_rbac`` keeps the rule ``gitops enable --cluster-rbac`` added
+    to the controller's ClusterRole (:func:`plan_init` reads it live).
+    """
     from piceli.artifacts.cluster_registry import render as render_registry
     from piceli.gitops.install import render_foundation
     from piceli.pipeline.model import ClusterRegistry
@@ -195,7 +201,9 @@ def render_objects(cluster: Cluster, ui: UiRenderer | None) -> list[dict[str, An
     if isinstance(cluster.registry, ClusterRegistry):
         objects += render_registry(cluster.registry)
     if cluster.controller is not None:
-        objects += render_foundation(NAMESPACE, storage_class=cluster.storage_class)
+        objects += render_foundation(
+            NAMESPACE, storage_class=cluster.storage_class, cluster_rbac=cluster_rbac
+        )
     if cluster.ui is not None and ui is not None:
         objects += ui(cluster)
     seen: set[tuple[str, str | None, str]] = set()
@@ -267,13 +275,31 @@ def list_items(api: Api, path: str) -> list[dict[str, Any]]:
 
 def plan_init(api: Api, cluster: Cluster, ui: UiRenderer | None) -> InitPlan:
     """Compare the declaration with the live cluster (reads only)."""
-    from piceli.gitops.install import plan_objects
+    from piceli.gitops.install import (
+        _RBAC,
+        NAME,
+        has_cluster_rbac,
+        object_path,
+        plan_objects,
+    )
 
     nodes = plan_nodes(cluster, list_items(api, "/api/v1/nodes"))
     described = cluster.describe()
+    # `gitops enable --cluster-rbac` widened the controller's ClusterRole:
+    # init keeps the rule rather than taking the owner's opt-in back.
+    role = {
+        "apiVersion": f"{_RBAC}/v1",
+        "kind": "ClusterRole",
+        "metadata": {"name": NAME},
+    }
+    live = api.call(object_path(role), "GET") if cluster.controller else None
     objects = plan_objects(
         api,
-        render_objects(cluster, ui),
+        render_objects(
+            cluster,
+            ui,
+            cluster_rbac=has_cluster_rbac(live if isinstance(live, dict) else None),
+        ),
         action="enable",
         config=described,
         schema=PLAN_SCHEMA,

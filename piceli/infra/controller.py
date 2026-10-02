@@ -63,8 +63,16 @@ from piceli.gitops.config import (
     MIN_POLL_SECONDS,
     backoff,
 )
-from piceli.gitops.controller import _iso, _seconds, _version, _version_key, error_code
-from piceli.gitops.ports import APPROVE_POLICY, EnvOutcome
+from piceli.gitops.controller import (
+    _iso,
+    _seconds,
+    _version,
+    _version_key,
+    error_code,
+    failure_detail,
+    replan_stale,
+)
+from piceli.gitops.ports import EnvOutcome
 from piceli.gitops.repo import RemoteRefs
 from piceli.gitops.state import (
     STATUS_SCHEMA,
@@ -499,6 +507,7 @@ class CompositionController:
             "plan_hash": None,
             "approved_hash": None,
             "reason": None,
+            "failure": None,
             "pushed_at": _iso(now),
             "updated_at": _iso(now),
         }
@@ -507,9 +516,15 @@ class CompositionController:
             + ", ".join(f"{k}@{v[:12]}" for k, v in sorted(revision.items()))
         )
 
-    def _fail(self, record: dict[str, Any], reason: str) -> None:
+    def _fail(
+        self,
+        record: dict[str, Any],
+        reason: str,
+        error: BaseException | None = None,
+    ) -> None:
         attempts = int(record.get("attempts") or 0) + 1
         deleting = record.get("state") == "deleting"
+        record["failure"] = None if error is None else failure_detail(error)
         if not deleting and (
             reason in FINAL_CODES or attempts >= self.config.max_attempts
         ):
@@ -994,17 +1009,19 @@ class CompositionController:
         namespace = self.ports.prepare_env(pipeline, name)
         if namespace:
             record["namespace"] = namespace
-        approve: str | None = record.get("approved_hash")
-        if approve is None and instance.env.auto_approve:
-            approve = APPROVE_POLICY
         outcome = EnvOutcome.from_result(
-            self.ports.env_up(
-                pipeline,
-                name,
-                commit=str(record.get("commit") or ""),
-                receipt=None,
-                digests=None,
-                approve=approve,
+            replan_stale(
+                record,
+                lambda approve: self.ports.env_up(
+                    pipeline,
+                    name,
+                    commit=str(record.get("commit") or ""),
+                    receipt=None,
+                    digests=None,
+                    approve=approve,
+                ),
+                policy=bool(instance.env.auto_approve),
+                log=self.log,
             )
         )
         self._outcome(record, outcome)
@@ -1128,17 +1145,19 @@ class CompositionController:
         namespace = self.ports.prepare_env(target, name)
         if namespace:
             record["namespace"] = namespace
-        approve: str | None = record.get("approved_hash")
-        if approve is None and env.auto_approve:
-            approve = APPROVE_POLICY
         outcome = EnvOutcome.from_result(
-            self.ports.env_up(
-                target,
-                name,
-                commit=str(record.get("commit") or ""),
-                receipt=None,
-                digests=refs,
-                approve=approve,
+            replan_stale(
+                record,
+                lambda approve: self.ports.env_up(
+                    target,
+                    name,
+                    commit=str(record.get("commit") or ""),
+                    receipt=None,
+                    digests=refs,
+                    approve=approve,
+                ),
+                policy=bool(env.auto_approve),
+                log=self.log,
             )
         )
         self._outcome(record, outcome)
@@ -1172,6 +1191,7 @@ class CompositionController:
                 plan_hash=None,
                 approved_hash=None,
                 reason=None,
+                failure=None,
             )
             changed = sorted(k for k, v in components.items() if v["state"] == "synced")
             self.log(
@@ -1185,6 +1205,7 @@ class CompositionController:
                 approved_hash=None,
                 next_attempt_at=None,
                 reason=outcome.reason,
+                failure=None,
             )
             self.log(
                 f"{record['branch']}: approval required; piceli gitops approve "
@@ -1284,7 +1305,7 @@ class CompositionController:
         except Exception as error:  # one bad environment never stops the loop
             if isinstance(error, PipelineError | GitOpsError):
                 self.log(f"{record['branch']}: {error}")  # registered, no secret
-            self._fail(record, error_code(error))
+            self._fail(record, error_code(error), error)
         finally:
             self.busy = False
             save_state(self.state_dir, self.state)

@@ -6,11 +6,42 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ## Version 0.14.2
 
+## Version 0.14.2
+
 - **Images:** `ghcr.io/pynenc/piceli-controller` and `piceli-builder` are
   linked to the repository and public (anonymous pull); the release checks
   an anonymous pull before it finishes. The builder adds `make`, `cmake`,
   `g++`, `pkg-config`, `curl` and `xz` for crates with C builds
   (`jemalloc-sys`, `aws-lc-sys`).
+- **Fix:** a failed cluster build is diagnosable. The build Job's log ends
+  with the failing command's last 200 lines of output (at most 16 KiB,
+  redacted like pre-rollout logs: known secret values, `password=…`-style
+  pairs, token-like strings); the failed Job and its pod are kept until the
+  next build of the same branch (or, for a composition, of the same cache)
+  replaces them; the controller status shows `failure.log_tail` (scrubbed,
+  at most 4000 characters) and `failure.kept_job`.
+- **Fix:** the deployer ClusterRole `piceli-gitops-deployer` reads
+  `metrics.k8s.io` pods and nodes (`get`, `list`, `watch`), so a release can
+  create a Role that grants them without an escalation refusal, and
+  updates the `scale` subresource of Deployments and StatefulSets (`get`,
+  `update`, `patch`) for restore points.
+- **Fix:** after a partial apply the controller (single repository and
+  composition) no longer retries the stale approval until it fails
+  (`env-plan-changed`): it plans again, applies when the auto-approve policy
+  covers the new plan, and otherwise waits in `approval-required` with the new
+  hash.
+- **Fix:** `piceli gitops enable` with changed settings (a new
+  `--builder-image`) restarts the controller: its pod template carries the
+  configuration's hash (`piceli.io/config-hash`). `piceli cluster init` keeps
+  the `--cluster-rbac` rule `gitops enable` added to ClusterRole
+  `piceli-gitops` instead of removing it.
+- **Fix:** deleting a branch removes its environment again: the controller's
+  ClusterRole `piceli-gitops` may `get`, `list` and `delete`
+  PersistentVolumes (a teardown removes the volumes bound to the
+  environment's claims; listing them was refused with HTTP 403 and the
+  teardown looped on `env-cluster-unavailable`). A refused Kubernetes request
+  now names its verb, resource and namespace in the message, the log and the
+  status (`failure.denied`), never the server's answer.
 
 ## Version 0.14.1
 

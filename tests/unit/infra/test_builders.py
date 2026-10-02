@@ -206,3 +206,43 @@ def test_the_job_run_builds_a_files_component(tmp_path: Path) -> None:
     entry = receipt["components"]["site"]
     assert entry["pull_ref"].startswith("registry.example:5000/shop/site@sha256:")
     assert entry["digest"] == "sha256:" + "7" * 64 and pushed == ["shop/site"]
+
+
+def test_a_failed_component_build_keeps_its_job_and_log_tail() -> None:
+    from piceli.artifacts.cluster_build import BUILD_LABEL, CACHE_LABEL
+
+    contracts = parse_contracts(TOML)
+    item = _item("site", "shop", "1" * 40, contracts)
+
+    class Failed:
+        state = "failed"
+        extra = {"kept_job": "piceli-component-build-x"}
+
+        def public(self) -> dict[str, Any]:
+            return {"state": "failed", "log_tail": "  | error: linker failed"}
+
+    class Cluster(_Cluster):
+        def run_build(self, job: dict[str, Any], key: dict[str, str]) -> Failed:
+            self.jobs.append(job)
+            self.keys = key
+            return Failed()
+
+    cluster = Cluster({})
+    settings = JobSettings(
+        image="registry.example/builder@sha256:" + "f" * 64,
+        namespace="piceli-system",
+        registry_url="oci://piceli-registry.piceli-system.svc:5000/shop",
+        node_registry="piceli-registry.piceli-system.svc:5000",
+    )
+    builder = JobBuilder(
+        settings, {"shop": "https://git.example/shop.git"}, cluster, mirror_route=None
+    )
+    with pytest.raises(CompositionError) as raised:
+        builder.build([item], checkout=None)  # type: ignore[arg-type]
+    assert raised.value.code == "component-build-failed"
+    details = raised.value.details
+    assert details["outcome"]["log_tail"] == "  | error: linker failed"
+    assert details["kept_job"] == "piceli-component-build-x"
+    # One key per cache claim: the next component build replaces the kept Job.
+    labels = cluster.jobs[0]["metadata"]["labels"]
+    assert cluster.keys == {BUILD_LABEL: "true", CACHE_LABEL: labels[CACHE_LABEL]}

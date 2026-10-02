@@ -14,11 +14,12 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import stat
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -59,6 +60,48 @@ from piceli.artifacts.oci_layers import (
 from piceli.artifacts.process import ProcessLimits
 
 MAX_ARCHIVE_BYTES = 16 * 1024**3
+#: What a failed command keeps of its output (:attr:`BuildSpecError.output_tail`).
+OUTPUT_TAIL_LINES = 200
+OUTPUT_TAIL_BYTES = 16 * 1024
+_TAIL_LINE_CHARS = 500
+_SECRET_NAME = re.compile(
+    r"(?i)pass(?:word|wd)?|secret|token|api[_-]?key|authorization|credential"
+)
+
+
+class OutputTail:
+    """The last bytes of one command's output, redacted on the way out.
+
+    Redaction follows the pre-rollout log rules
+    (:func:`piceli.pipeline.prerollout.scrub`): known secret values first,
+    then ``key=value`` pairs naming a password, token or credential, then
+    any long run of token characters.
+    """
+
+    def __init__(self) -> None:
+        self.data = bytearray()
+
+    def feed(self, block: bytes) -> None:
+        self.data += block
+        if len(self.data) > 4 * OUTPUT_TAIL_BYTES:
+            del self.data[: len(self.data) - 4 * OUTPUT_TAIL_BYTES]
+
+    def text(self, secrets: Iterable[str] = ()) -> str:
+        from piceli.pipeline.prerollout import _SCHEME, _SENSITIVE, _TOKEN
+
+        known = sorted({v for v in secrets if len(v) >= 4}, key=len, reverse=True)
+        lines = bytes(self.data).decode("utf-8", "replace").replace("\r", "")
+        kept: list[str] = []
+        for line in lines.splitlines()[-OUTPUT_TAIL_LINES:]:
+            for value in known:
+                line = line.replace(value, "<redacted>")
+            line = _SCHEME.sub(lambda match: match[1] + " <redacted>", line)
+            line = _SENSITIVE.sub(lambda match: match[1] + "<redacted>", line)
+            line = _TOKEN.sub("<redacted>", line)
+            kept.append(line[:_TAIL_LINE_CHARS])
+        while kept and len("\n".join(kept).encode()) > OUTPUT_TAIL_BYTES:
+            kept.pop(0)
+        return "\n".join(kept)
 
 
 def sync_context(root: Path, manifest: ContextManifest, destination: Path) -> int:
@@ -261,14 +304,22 @@ class HostExecution:
         label = f"{self.plan.platform} command {index}/{self.total} ({command[0]})"
         self.log.line(f"### {label} started")
         self.log.say(f"[piceli] {label}: running")
-        receipt, _, _ = self.runner(
+        tail = OutputTail()
+
+        def output(stream: str, block: bytes) -> None:
+            self.log.feed(stream, block)
+            tail.feed(block)
+
+        receipt, stdout, stderr = self.runner(
             [str(path), *command[1:]],
             cwd,
             ProcessLimits(self.spec.timeout_seconds, PROCESS_OUTPUT_BUDGET),
             dict(env),
             self.grant.expires_at,
-            on_output=self.log.feed,
+            on_output=output,
         )
+        if not tail.data:  # a runner that only returns the output
+            tail.feed(bytes(stdout or b"") + bytes(stderr or b""))
         self._verify_tools()
         state = receipt["state"]
         seconds = round(float(receipt["seconds"]), 3)
@@ -285,8 +336,12 @@ class HostExecution:
         self.log.say(f"[piceli] {label}: {state} in {seconds}s")
         if state != "succeeded":
             code = "build-timed-out" if state == "timed-out" else "build-failed"
+            secrets = [value for key, value in env.items() if _SECRET_NAME.search(key)]
             raise BuildSpecError(
-                code, "host build step failed", steps=tuple(self.steps)
+                code,
+                "host build step failed",
+                steps=tuple(self.steps),
+                output_tail=tail.text(secrets),
             )
 
     def _verify_tools(self) -> None:
