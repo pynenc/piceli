@@ -170,6 +170,24 @@ class EvaluationRequest(Record):
     idempotency_key: str = Field(min_length=1, max_length=128)
 
 
+class PlanStep(Record):
+    """Exact executor action order; dependency level is absent for prune actions."""
+
+    ordinal: int = Field(ge=0)
+    level: int | None = None
+    resource: ResourceIdentity
+    operation: str
+    dependencies: list[ResourceIdentity] = Field(default_factory=list)
+
+
+class DesiredResource(Record):
+    """Public desired manifest; masked JSON pointers are not comparable values."""
+
+    resource: ResourceIdentity
+    manifest: dict[str, JsonValue]
+    not_compared: list[str] = Field(default_factory=list)
+
+
 class PlanRecord(Record):
     id: str
     application_id: str
@@ -192,6 +210,34 @@ class PlanRecord(Record):
     precondition_digest: str | None = None
     authorization: Literal["manual", "policy"] = "manual"
     policy_digest: str | None = None
+    steps: list[PlanStep] = Field(default_factory=list)
+    desired_resources: list[DesiredResource] = Field(default_factory=list)
+    desired_resources_complete: bool = False
+
+
+class PlanSummary(Record):
+    """Stored plan identity and counts, without manifests or private engine inputs."""
+
+    id: str
+    application_id: str
+    digest: str
+    target: Target
+    source: SourceRevision | None = None
+    intent: Literal["deploy", "rollback"]
+    release: str
+    created_at: str
+    expires_at: str
+    summary: dict[str, int]
+    plan_kind: Literal["release", "pipeline-preview", "pipeline-materialized"] = (
+        "release"
+    )
+    desired_resources_complete: bool = False
+
+
+class PlanPage(Record):
+    items: list[PlanSummary]
+    cursor: str
+    next_page: str | None = None
 
 
 class Evaluation(Record):
@@ -280,6 +326,40 @@ class Stage(Record):
     reason: str | None = None
 
 
+class JournalAction(Record):
+    """Last durable resource state and recorded write time, not event timestamps."""
+
+    ordinal: int = Field(ge=0)
+    resource: ResourceIdentity
+    operation: str
+    state: str
+    written_at: str | None = None
+
+
+class JournalEvent(Record):
+    sequence: int = Field(ge=0)
+    ordinal: int | None = None
+    state: str
+
+
+class JournalLog(Record):
+    """A bounded, redacted pod log tail recorded in an execution diagnosis."""
+
+    resource: ResourceIdentity
+    pod: str
+    container: str
+    lines: list[str]
+
+
+class ExecutionJournalRecord(Record):
+    execution_id: str
+    state: str
+    actions: list[JournalAction] = Field(default_factory=list)
+    events: list[JournalEvent] = Field(default_factory=list)
+    logs: list[JournalLog] = Field(default_factory=list)
+    truncated: bool = False
+
+
 class Operation(Record):
     id: str
     application_id: str
@@ -307,6 +387,7 @@ class Operation(Record):
     engine_release: str | None = None
     pipeline_run_id: str | None = None
     receipts: list[dict[str, JsonValue]] = Field(default_factory=list)
+    journal: ExecutionJournalRecord | None = None
     deployment_outcome: Literal["unknown", "succeeded", "failed"] = "unknown"
     checks_outcome: Literal["unknown", "succeeded", "failed", "not_configured"] = (
         "unknown"

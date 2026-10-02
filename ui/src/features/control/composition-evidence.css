@@ -1,0 +1,75 @@
+/* The inspector explains one selected version and its reported destinations. */
+.version-story .inspector-content{display:block;padding:0!important;min-width:0}
+.version-story .inspector-section{padding:19px 18px;border-bottom:1px solid var(--line);min-width:0}
+.version-story .inspector-section:last-child{border-bottom:0}
+.version-story .inspector-section-title{margin-bottom:15px}
+.version-story .inspector-section-title .eyebrow{font-size:9px;letter-spacing:.07em;color:var(--accent);display:block;margin:0 0 6px}
+.version-story h3{font-size:13px;font-weight:650;line-height:1.5;margin:0 0 12px}
+.version-story .inspector-section-title h3{margin:0}
+.version-story .inspector-component-state .facts{margin:0;font-size:11px;gap:11px}
+.version-story .inspector-component-state .notice{margin:14px 0 0}
+.version-story .inspector-context,.version-story .inspector-missing{font-size:11px;line-height:1.65;color:var(--muted);margin:9px 0 0;overflow-wrap:anywhere}
+.version-story .inspector-missing{padding-left:10px;border-left:2px solid var(--line)}
+.inspector-version-chain{list-style:none;padding:0;margin:0;display:grid;gap:0}
+.inspector-version-chain>li{display:grid;grid-template-columns:25px minmax(0,1fr);gap:10px;position:relative;padding-bottom:24px}
+.inspector-version-chain>li:last-child{padding-bottom:0}
+.inspector-version-chain>li:not(:last-child)::before{content:'';position:absolute;left:11px;top:26px;bottom:3px;border-left:1px solid var(--line)}
+.inspector-version-chain>li>span{position:relative;display:grid;place-items:center;width:24px;height:24px;border:1px solid var(--line);border-radius:7px;background:var(--raised);color:var(--accent);font-size:9px;font-weight:650}
+.inspector-version-chain>li>div{min-width:0;padding-top:2px}
+.inspector-version-chain dl{margin:0;display:block}
+.inspector-version-chain dt{font-size:10px;color:var(--muted);margin-bottom:7px}
+.inspector-version-chain dd{font-size:12px;line-height:1.7;margin:0 0 11px;overflow-wrap:anywhere}
+.inspector-version-chain dd:last-child{margin-bottom:0}
+.inspector-version-chain dd>code{font-size:10px;line-height:1.7;display:block;padding:8px 10px;border:1px solid var(--line);border-radius:5px;background:var(--bg);color:var(--text);overflow-wrap:anywhere}
+.inspector-version-chain strong{font-size:12px}
+.version-story .inspector-text-button{padding:0;background:none;border:0;border-radius:0;color:var(--accent);font-size:12px;min-height:24px;text-align:left;overflow-wrap:anywhere;box-shadow:none}
+.version-story .inspector-text-link{display:inline-block;color:var(--accent);font-size:11px;font-weight:550;margin-top:10px;line-height:1.6}
+.inspector-ref-matches{margin-top:12px}
+.inspector-ref-matches>span{font-size:9px;color:var(--muted);line-height:1.6}
+.inspector-ref-matches ul{display:flex;flex-wrap:wrap;gap:5px;list-style:none;padding:0;margin:6px 0 0}
+.inspector-ref-matches li{font-size:10px;padding:3px 6px;border-radius:4px;background:var(--positive-bg,#e9f5ee);color:var(--positive,#23745b);overflow-wrap:anywhere;max-width:100%}
+.inspector-counterparts{display:grid;gap:10px;margin-top:15px}
+.inspector-counterparts>article{padding:12px;border:1px solid var(--line);border-radius:7px;background:var(--bg);min-width:0}
+.inspector-counterparts header{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.inspector-counterparts header>button{display:flex;align-items:center;gap:8px;color:var(--text);font-size:12px;font-weight:650;padding:0;min-height:24px;background:none;box-shadow:none;border:0;text-align:left;overflow-wrap:anywhere}
+.inspector-counterparts header>button>span{color:var(--accent)}
+.inspector-counterparts header>.badge{font-size:9px;padding:3px 5px}
+.inspector-version-result{display:flex;gap:5px;flex-wrap:wrap;margin:12px 0;font-size:9px}
+.inspector-version-result>span{padding:3px 6px;border-radius:4px;background:var(--raised);color:var(--muted)}
+.inspector-version-result [data-comparison=different]{background:var(--accent-bg);color:var(--accent)}
+.inspector-version-result [data-comparison=same]{background:var(--positive-bg,#e9f5ee);color:var(--positive,#23745b)}
+.inspector-counterparts details{font-size:10px;color:var(--muted)}
+.inspector-counterparts details dl{margin:12px 0 0;font-size:10px}
+.inspector-counterparts details dd{margin:5px 0 10px;font-size:10px;color:var(--text);overflow-wrap:anywhere;line-height:1.7}
+.version-story .inspector-ref-list{gap:12px;margin:16px 0}
+.version-story .inspector-ref-list>li{border:1px solid var(--line);border-radius:6px;background:var(--bg);padding:11px;gap:8px;overflow-wrap:anywhere}
+.inspector-ref-list li>a{font-size:10px}
+.inspector-source-destinations{display:grid;gap:13px}
+.inspector-source-destinations article{border:1px solid var(--line);border-radius:7px;padding:12px;min-width:0}
+.inspector-source-destinations header{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:12px;margin-bottom:7px}
+.inspector-source-destinations header>.badge{font-size:9px}
+.inspector-source-destinations article>div{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;padding-top:8px;font-size:10px;color:var(--muted)}
+.inspector-source-destinations button,.inspector-component-links button{min-height:24px;padding:0;background:none;border:0;box-shadow:none;color:var(--accent);font-size:11px;overflow-wrap:anywhere}
+.inspector-component-links{list-style:none;padding:0;margin:0;display:grid;gap:10px}
+.inspector-component-links li{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.inspector-component-links .badge{font-size:9px}
+.inspector-application-links{display:grid;gap:8px;margin:15px 0 0}
+.inspector-application-links>a{font-size:11px;border:1px solid var(--line);border-radius:6px;background:var(--panel);padding:9px 11px;line-height:1.6}
+.inspector-application-links>a:hover{border-color:var(--accent);background:var(--accent-bg)}
+.version-story .inspector-content>.composition-inspector-link{display:block;padding:16px 18px;font-size:11px}
+
+/* Comparison tools retain the readable matrix and make version provenance explorable. */
+.version-comparison-focus{display:flex;align-items:center;justify-content:space-between;gap:15px;padding:15px 20px;border-bottom:1px solid var(--line);background:var(--panel);flex-wrap:wrap}
+.version-comparison-focus label{display:flex;align-items:center;gap:10px;font-size:11px;color:var(--muted)}
+.version-comparison-focus select{font-size:11px;min-width:150px;max-width:100%;min-height:34px}
+.version-comparison-focus button{font-size:11px;min-height:34px}
+.composition-compare-controls .version-swap{align-self:end;min-height:38px;min-width:38px;padding:4px;font-size:20px;color:var(--accent)}
+.version-comparison-caption{margin:0;padding:12px 20px;border-bottom:1px solid var(--line);font-size:11px;color:var(--muted);line-height:1.7}
+.composition-version-cell .version-source-link{font-size:11px;font-weight:600;line-height:1.6}
+.composition-version-cell .version-commit-link{font-size:11px;display:inline-block;width:fit-content;max-width:100%;overflow-wrap:anywhere}
+.composition-version-cell .version-ref-chips{display:flex;flex-wrap:wrap;gap:4px;list-style:none;padding:0;margin:0}
+.version-ref-chips li{font-size:9px;color:var(--positive,#23745b);background:var(--positive-bg,#e9f5ee);border-radius:4px;padding:3px 5px;overflow-wrap:anywhere}
+.composition-version-cell .version-evidence-note{font-size:10px;line-height:1.6;color:var(--muted)}
+.version-row-reasons{margin:9px 0 0;padding:0;list-style:none;display:grid;gap:6px;font-size:10px;color:var(--muted);line-height:1.6;max-width:25ch}
+.composition-version-matrix tbody tr[data-focused=true]{background:var(--accent-bg)}
+@media(max-width:760px){.version-story .inspector-section{padding:18px}.version-comparison-focus{padding:14px 16px}.version-comparison-focus label{width:100%;justify-content:space-between}.version-comparison-focus select{min-width:0;flex:1;max-width:65%}.version-comparison-caption{padding-inline:16px}}

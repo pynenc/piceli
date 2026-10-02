@@ -48,6 +48,7 @@ export const api = {
   evaluate: (application_id: string, body: EvaluationRequest) => service().POST('/api/v1/applications/{application_id}/evaluations', { params: { path: { application_id } }, body }).then(data),
   evaluation: (evaluation_id: string, signal?: AbortSignal) => service().GET('/api/v1/evaluations/{evaluation_id}', { params: { path: { evaluation_id } }, signal }).then(data),
   plan: (plan_id: string, signal?: AbortSignal) => service().GET('/api/v1/plans/{plan_id}', { params: { path: { plan_id } }, signal }).then(data),
+  plans: (application_id: string, page?: string, signal?: AbortSignal) => service().GET('/api/v1/applications/{application_id}/plans', { params: { path: { application_id }, query: { page } }, signal }).then(data),
   deploy: (application_id: string, body: OperationRequest) => service().POST('/api/v1/applications/{application_id}/operations', { params: { path: { application_id } }, body }).then(data),
   operations: (application_id: string, signal?: AbortSignal) => service().GET('/api/v1/applications/{application_id}/operations', { params: { path: { application_id } }, signal }).then(data),
   operation: (operation_id: string, signal?: AbortSignal) => service().GET('/api/v1/operations/{operation_id}', { params: { path: { operation_id } }, signal }).then(data),

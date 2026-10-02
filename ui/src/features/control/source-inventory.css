@@ -1,0 +1,56 @@
+.composition-sources>.heading{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:15px}
+.composition-sources>.controller-line{margin-bottom:15px}
+.source-inventory{background:var(--panel);border:1px solid var(--line);border-radius:9px;overflow:hidden}
+.source-inventory-tools{display:flex;align-items:center;gap:12px;padding:11px 15px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.source-inventory-tools>label{display:flex;align-items:center;gap:10px;flex:1;min-width:250px;font-size:11px;color:var(--muted)}
+.source-inventory-tools input{flex:1;max-width:390px;padding:7px 10px;font-size:12px;min-height:34px}
+.source-inventory-tools>p{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.source-inventory-tools>button{font-size:11px;padding:5px 8px;min-height:32px}
+.source-inventory-columns,.source-inventory-row{display:grid;grid-template-columns:minmax(200px,.95fr) minmax(170px,.7fr) minmax(280px,1.35fr);gap:22px;padding:12px 16px}
+.source-inventory-columns{background:var(--bg);font-size:10px;color:var(--muted);padding-block:8px;border-bottom:1px solid var(--line)}
+.source-inventory-row+.source-inventory-row{border-top:1px solid var(--line)}
+.source-inventory-row>*{min-width:0}
+.source-inventory-row h2{font-size:13px;line-height:1.4;overflow-wrap:anywhere}
+.source-inventory-row h3{font-size:10px;color:var(--muted);font-weight:500;margin:0 0 5px}
+.source-inventory-row h3>span{margin-left:3px;font-variant-numeric:tabular-nums}
+.source-identity-heading{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:5px}
+.source-identity-heading .badge{font-size:9px;padding:2px 5px;line-height:1.4}
+.source-url{display:block;overflow-wrap:anywhere;font-size:10px;color:var(--muted);line-height:1.5}
+.source-observation{display:flex;align-items:baseline;flex-wrap:wrap;gap:3px 10px;margin-top:7px;font-size:10px;color:var(--muted)}
+.source-observation>span{min-width:0;overflow-wrap:anywhere}
+.source-observation time{font-variant-numeric:tabular-nums}
+.source-observation a{white-space:nowrap}
+.source-error{margin-top:6px;font-size:11px;line-height:1.45;color:var(--danger);overflow-wrap:anywhere}
+.source-refs{display:grid;gap:2px;align-items:start}
+.source-ref{min-width:0;font-size:11px;border-radius:4px}
+.source-ref>summary{display:flex;align-items:center;gap:7px;min-height:27px;cursor:pointer;padding:3px 5px;list-style:none;border-radius:4px}
+.source-ref>summary::-webkit-details-marker{display:none}
+.source-ref>summary::before{content:'›';font-size:14px;line-height:1;color:var(--muted);width:8px;flex-shrink:0}
+.source-ref[open]>summary::before{transform:rotate(90deg)}
+.source-ref>summary:hover,.source-ref[open]{background:var(--bg)}
+.source-ref>summary:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.source-ref-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;font-weight:550}
+.source-ref[open] .source-ref-name{white-space:normal;overflow-wrap:anywhere}
+.source-ref>summary code{color:var(--muted);font-size:10px}
+.source-ref-evidence{display:grid;gap:5px;padding:5px 8px 8px 20px;min-width:0}
+.source-ref-evidence code{font-size:10px;overflow-wrap:anywhere;color:var(--text)}
+.source-ref-evidence a{font-size:10px;justify-self:start;padding-block:3px}
+.source-destinations ul{list-style:none;padding:0;margin:0;display:grid;gap:0}
+.source-destinations li{display:grid;grid-template-columns:minmax(80px,.85fr) minmax(0,1fr) 25px;gap:8px;align-items:center;padding:6px 0;border-top:1px solid var(--line)}
+.source-destinations li:first-child{border-top:0;padding-top:2px}
+.source-destination-identity{display:grid;min-width:0;gap:1px;font-size:11px}
+.source-destination-identity>a{font-weight:550;overflow-wrap:anywhere}
+.source-destination-identity>span{font-size:10px;color:var(--muted);overflow-wrap:anywhere}
+.source-destination-components{display:flex;align-items:center;flex-wrap:wrap;gap:4px;min-width:0}
+.source-destination-components>a{padding:2px 6px;background:var(--bg);border:1px solid var(--line);border-radius:4px;font-size:10px;line-height:1.5;color:var(--text);overflow-wrap:anywhere}
+.source-destination-components>a:hover{border-color:var(--accent);color:var(--accent)}
+.source-missing-association,.source-empty-association{font-size:10px;color:var(--muted);line-height:1.5}
+.source-topology-link{display:grid;place-items:center;width:25px;height:28px;border:1px solid transparent;border-radius:4px}
+.source-topology-link:hover{background:var(--accent-soft,var(--accent-bg));border-color:var(--line)}
+.source-topology-link svg{width:17px;height:17px}
+.source-no-matches{padding:30px 16px;text-align:center}
+.source-no-matches h2{font-size:14px;margin-bottom:5px}
+.source-no-matches p{font-size:12px;color:var(--muted)}
+@media(max-width:1100px){.source-inventory-columns,.source-inventory-row{grid-template-columns:minmax(190px,.9fr) minmax(155px,.75fr) minmax(245px,1.2fr);gap:14px;padding-inline:13px}}
+@media(max-width:950px){.source-inventory-columns{display:none}.source-inventory-row{grid-template-columns:minmax(180px,1fr) minmax(165px,1fr);gap:13px 20px;padding:14px}.source-destinations{grid-column:1/-1}.source-destinations li{grid-template-columns:minmax(150px,.6fr) minmax(0,1.4fr) 30px}.source-topology-link{width:30px;height:30px}}
+@media(max-width:580px){.composition-sources>.heading{align-items:flex-start}.source-inventory-tools{padding:10px 12px;gap:8px}.source-inventory-tools>label{min-width:100%;display:grid;gap:5px}.source-inventory-tools input{max-width:none;width:100%}.source-inventory-tools>p{margin-right:auto}.source-inventory-row{grid-template-columns:minmax(0,1fr);gap:12px;padding:14px 12px}.source-identity-heading{margin-bottom:4px}.source-observation{margin-top:5px}.source-refs{grid-template-columns:repeat(2,minmax(0,1fr));gap:2px 10px}.source-ref[open]{grid-column:1/-1}.source-destinations li{grid-template-columns:minmax(95px,.8fr) minmax(0,1.2fr) 30px;gap:8px;padding-block:7px}.source-inventory-row h3{margin-bottom:4px}.source-destination-components>a{min-height:28px;padding:5px 7px}.source-ref>summary{min-height:32px}}

@@ -102,6 +102,12 @@ object with `--replace` or `replace = [...]` in the spec; see {doc}`release_cli`
 
 ### Observe and operate
 
+- **`piceli ui`**: the experimental browser workspace connects composition
+  sources/components/environments with observed workloads and configuration.
+  Deployment history lists saved plans and runs, compares recorded desired
+  revisions, and exposes visual transitions, captured logs and raw journals.
+  It uses the same exact-plan approvals and configured capabilities; see
+  {doc}`ui`. From a checkout, `make ui` opens a disposable preview.
 - **`piceli observe`**: reconciles a session archive with a live namespace and
   reports declared, missing and undeclared objects. Also bounded logs and saved
   loopback port forwards.

@@ -1115,7 +1115,7 @@ Install the GitOps controller (plan first; --approve HASH installs).
 | `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
 | `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
 | `--branches` | text | `main` | Comma-separated branch globs, e.g. 'main,wp-*' |
-| `--poll` | text | `60s` | Poll interval: 60, 60s, 5m |
+| `--poll` | text |  | Poll interval: 60, 60s, 5m (default: a composition's Controller(poll=), else 60s) |
 | `--credentials-secret` | text |  | Secret in the controller's namespace with the Git credentials (username/password or ssh-privatekey/known_hosts); mounted, never read |
 | `--namespace` | text | `piceli-system` | The controller's namespace |
 | `--env` | text |  | The pipeline's environment, if it has several |

@@ -1,0 +1,56 @@
+.application-header { margin-bottom: 8px; }
+.application-titlebar, .application-title { display:flex; align-items:center; gap:13px; }
+.application-titlebar { justify-content:space-between; gap:20px; }
+.application-title { min-width:0; }
+.application-title>div { min-width:0; }
+.application-title h1 { font-size:26px; line-height:1.1; }
+.application-title .eyebrow { margin-bottom:5px; font-size:9px; }
+.application-back { color:var(--muted); font-size:20px; padding:8px 3px; }
+.application-symbol { display:grid; place-items:center; flex:0 0 auto; width:42px; height:42px; color:var(--accent); background:var(--accent-bg); border:1px solid color-mix(in srgb,var(--accent) 20%,var(--panel)); border-radius:11px; }
+.application-symbol .icon { width:21px; height:21px; }
+.application-coordinate { display:flex; flex-wrap:wrap; gap:7px 20px; margin:14px 0; color:var(--muted); font-size:11px; }
+.application-coordinate>span { min-width:0; overflow-wrap:anywhere; }
+.application-coordinate strong { font-weight:550; color:var(--text); margin-left:4px; }
+.application-coordinate code { font-size:10px; }
+.application-status { display:flex; flex-wrap:wrap; align-items:center; gap:10px 25px; padding:11px 0; border-block:1px solid var(--line); }
+.application-status>span { display:flex; align-items:center; flex-wrap:wrap; gap:7px; min-width:0; }
+.application-status .statuslabel { display:inline; margin:0; font-size:10px; }
+.application-observed { color:var(--muted); font-size:10px; }
+.application-header>.notice { margin:12px 0; }
+.application-environment-context { display:flex; flex-wrap:wrap; align-items:center; gap:9px 18px; margin:12px 0; font-size:11px; }
+.environment-context-label { display:flex; align-items:center; gap:6px; color:var(--muted); font-size:10px; }
+.environment-context-label .icon { width:14px; height:14px; }
+.application-environment-context>div { display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px; min-width:0; }
+.environment-context-name { font-weight:650; padding:4px 8px; border:1px solid var(--line); background:var(--panel); border-radius:5px; overflow-wrap:anywhere; }
+.environment-context-components { display:flex; flex-wrap:wrap; gap:8px; }
+.environment-context-components a { color:var(--muted); border-bottom:1px dashed var(--line); overflow-wrap:anywhere; }
+.environment-context-versions { font-size:10px; }
+.application-workspace>.tabs { margin-bottom:17px; border-bottom:0; gap:6px; }
+.application-workspace>.tabs a { min-height:34px; padding:8px 13px; border:1px solid transparent; border-radius:6px; }
+.application-workspace>.tabs a.active { background:var(--panel); border-color:var(--line); box-shadow:var(--shadow); }
+.application-workspace .application-connections { gap:0; margin-bottom:16px; background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+.application-workspace .application-connections article { padding:12px 15px; border:0; border-radius:0; border-right:1px solid var(--line); gap:10px; }
+.application-workspace .application-connections article:last-child { border-right:0; }
+.application-workspace .application-connections .connection-icon { width:27px; height:27px; border:0; border-radius:6px; }
+.application-workspace .application-connections .eyebrow { margin-bottom:4px; font-size:8px; }
+.application-workspace .application-connections h2 { font-size:12px; }
+.application-workspace .application-connections p:not(.eyebrow) { margin:5px 0; font-size:10px; }
+.application-workspace .application-connections a { font-size:10px; }
+@media(min-width:1100px) { .application-workspace .application-connections { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+@media(max-width:1099px) {
+ .application-workspace .application-connections { grid-template-columns:1fr; }
+ .application-workspace .application-connections article { border-right:0; border-bottom:1px solid var(--line); }
+ .application-workspace .application-connections article:last-child { border-bottom:0; }
+}
+@media(max-width:760px) {
+ .application-titlebar { align-items:flex-start; flex-wrap:wrap; gap:12px; }
+ .application-titlebar .run-actions { margin-left:auto; }
+ .application-title h1 { font-size:25px; }
+ .application-coordinate { gap:5px 15px; margin:11px 0; }
+ .application-status { display:grid; grid-template-columns:1fr 1fr; gap:10px; padding:11px 0; }
+ .application-status>span { align-items:flex-start; gap:5px; }
+ .application-status .statuslabel { flex-basis:100%; }
+ .application-observed { display:block; flex-basis:100%; }
+ .application-workspace>.tabs { gap:2px; }
+ .application-workspace>.tabs a { padding-inline:10px; }
+}

@@ -63,6 +63,55 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   filesystem as the registry's use.
 - New error code `registry-storage-unreadable` (reported in the retention
   report's `storage_listing`, not a refusal).
+- **History discovery:** a first-level Deployment history destination and an
+  application Plans tab expose paginated saved plans, including expired plans
+  and plans with no recorded run. Exact plan/run identities connect reviews,
+  revision comparison and direct captured-log links; existing authorization
+  and approval checks remain in place.
+- **Denser navigation:** Sources presents refs, polling and environment/component
+  connections in compact searchable rows. Cluster returns to the Workspace
+  group, and a simplified vector mushroom/network mark fits the sidebar and
+  browser icon.
+- **Deployment evidence:** ordered resource steps and dependencies from the
+  engine plan, recorded execution transitions with visual and raw evidence,
+  and read-only comparison of desired configurations across recorded revisions.
+  Source revisions, exact plan identities and run outcomes stay connected;
+  missing historical snapshots and redacted fields are reported explicitly.
+- **Infrastructure explorer:** composition sessions now open on the graph.
+  An environment switchboard, expanded canvas and compact application headers
+  bring infrastructure into the first viewport. Inspectors connect exact
+  versions across environments and navigate observed resource owners/children;
+  runtime pages link back to their published composition identity.
+- **Connected workspace:** original Piceli branding with warm orange accents;
+  a source/component/environment canvas with node inspection, zoom and keyboard
+  navigation; exact environment version comparison and contextual GitHub links;
+  separate views for reported problems, decisions and lifecycle states.
+- **Navigation and evidence:** on-demand Ctrl/⌘ K workspace search, URL-backed
+  application state filters, resource ownership lanes and neighborhood focus,
+  searchable per-resource before/after changes, and recorded-operation timelines.
+- **Review continuity:** history readers can open an exact recorded plan without
+  source-evaluation permission; preparing or executing a new review still needs
+  its existing capability. Named-environment confirmation binds to the exact
+  environment, action and reviewed identity, including refreshed plan hashes.
+- **Web UI:** Harbor workspace layout with grouped capability-aware navigation,
+  application cards/table, compact environments, a composition overview and
+  selected component evidence. Resource relationships use observed owner UIDs;
+  source associations use reported source identity. Existing routes, inspection,
+  logs, access, sync and reviewed actions remain available.
+- **Review:** separate plan evidence and exact approval context, real Pipeline
+  stage progression and cluster-build placement. Changing the plan identity or
+  digest clears acknowledgement; open expired Pipeline/build plans stop being
+  approvable without waiting for a page refresh.
+- **Appearance:** responsive layouts and a remembered Light/Dark/System choice,
+  using bundled assets without external fonts or diagram dependencies.
+- **Contributors:** `make ui-serve PICELI_UI_ARGS='...'` builds and starts the
+  current UI for an explicit target; `make test-browser-harbor` covers the new
+  workspace journeys at desktop, tablet and phone sizes.
+- **One-command preview:** `make ui` prepares the frontend, starts disposable
+  sample state and opens the current UI at `http://127.0.0.1:4178`.
+  Plain bookmarks and fresh browsers work without copying a token; only the
+  disposable fixture bootstraps its session automatically. Real-target
+  authentication is unchanged. No cluster setup is needed.
 
 ## Version 0.14.4
 

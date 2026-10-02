@@ -32,6 +32,7 @@ Priorities may change. Progress is tracked in
 | Reusable, versioned packages (Helm equivalent) | ❌ Not yet |
 | Custom resources (CRDs) | 🟡 Preview: `app.resource` with models from `piceli codegen crd` |
 | Local operations UI and JSON API | 🟡 Early preview |
+| Web workspace: infrastructure topology, compact Sources, resource inspection and saved deployment evidence | 🟡 Experimental: {doc}`ui`; one-command preview, exact version/configuration comparison, plans, journal transitions and captured logs |
 | Continuous delivery from Git | 🟡 Experimental: `piceli gitops enable` installs a controller that keeps one environment per branch ({doc}`gitops`, {doc}`environments`); `piceli publish` and `render --out` export manifests |
 | Cloud infrastructure lifecycle (Terraform/OpenTofu equivalent) | ❌ Not yet; GKE cluster helpers only |
 
@@ -81,6 +82,8 @@ Every feature page starts with its maturity, and this table lists them all:
 | Mirror third-party images by digest (`mirror=`) and take over a live node registry (`adopt=`/`replace=`) | {doc}`deploy` | preview |
 | Access and status from the model (`app.access.forward`, `piceli access`, `piceli status`) | {doc}`access` | preview |
 | Operations lens (`piceli observe`) | {doc}`operations_lens` | preview |
+| Web workspace, saved-plan archive, revision comparison and deployment journals | {doc}`ui` | experimental |
+| OIDC-scoped in-cluster UI installation | {doc}`ui_cluster_install` | experimental |
 | CLI contract: `piceli explain`, `piceli help-json`, error codes | {doc}`agents` | preview |
 | Owner-declared approval policy (`auto_approve`, `--approve-if-policy`) | {ref}`deploy-approval-policy` | preview |
 | Agent skill (`skills/piceli`, run in CI against the built wheel) | {doc}`agents` | preview |
@@ -153,7 +156,10 @@ audience.
 
 - An in-cluster controller that reconciles Git or OCI-published compositions,
   with health assessment, sync status, history and rollback.
-- A web UI with a resource tree, diff and release history.
+- ✅ Experimental web workspace with infrastructure topology, resource ownership
+  diagrams, per-resource diffs, saved plans, revision comparisons and recorded
+  deployment journals/logs (see {doc}`ui`). History remains bounded by the
+  evidence the service stores.
 
 ### 6. Beyond Kubernetes
 

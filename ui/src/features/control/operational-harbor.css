@@ -1,0 +1,48 @@
+.branch-layout{margin-bottom:22px}
+.branch-layout.with-actions{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:22px;align-items:start}
+.branch-inventory{display:grid;gap:15px}
+.branch-inventory .control-card{margin:0}
+.branch-environment-card .panelhead{padding:16px 20px}
+.branch-environment-card .panelbody{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:18px 26px;padding:18px 20px}
+.branch-environment-card .facts{grid-template-columns:92px minmax(0,1fr);margin:0;gap:12px}
+.branch-environment-card .facts dd{text-align:left}
+.branch-workloads{min-width:0;border-left:1px solid var(--line);padding-left:22px}
+.branch-workloads h3{margin:0 0 8px!important;font-size:12px;color:var(--muted);font-weight:500}
+.branch-workloads .control-workloads li{align-items:flex-start;flex-wrap:wrap;gap:4px;padding:9px 0}
+.branch-workloads .control-workloads li:first-child{border-top:0;padding-top:0}
+.branch-pending,.branch-resource-link{grid-column:1/-1}
+.branch-pending .notice{margin:0}
+.branch-resource-link{padding-top:12px;border-top:1px solid var(--line)}
+.environment-change-panel .panelhead .eyebrow{margin-bottom:5px}
+.environment-change-panel .intent-form{display:flex;flex-direction:column;align-items:stretch;gap:14px;margin-bottom:0}
+.environment-change-panel .intent-form label{min-width:0}
+.environment-change-panel .intent-form button{width:100%;margin-top:4px}
+.environment-change-panel .control-review .facts{grid-template-columns:85px minmax(0,1fr);text-align:left}
+.environment-change-panel .control-review .facts dd{text-align:left}
+.environment-change-panel .control-review .primary{margin-top:18px;width:100%}
+.gitops-controller{display:flex;align-items:center;margin-bottom:22px}
+.gitops-controller .panelhead{border:0;border-right:1px solid var(--line);min-width:260px;gap:25px}
+.gitops-controller .panelbody{flex:1;padding:17px 22px}
+.gitops-controller .facts{display:grid;grid-template-columns:auto minmax(0,.6fr) auto minmax(0,1fr);margin:0;gap:10px 20px;align-items:center}
+.gitops-controller .facts dd{text-align:left}
+.gitops-inventory{display:grid;gap:15px;margin-bottom:22px}
+.gitops-environment-card{margin:0;display:grid;grid-template-columns:210px minmax(0,1fr)}
+.gitops-environment-card>.panelhead{align-items:flex-start;justify-content:center;flex-direction:column;gap:12px;border-bottom:0;border-right:1px solid var(--line);padding:20px;background:var(--bg)}
+.gitops-environment-card>.panelbody{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:24px;padding:20px}
+.gitops-environment-card .facts{margin:0;grid-template-columns:86px minmax(0,1fr);gap:13px}
+.gitops-environment-card .facts dd{text-align:left}
+.gitops-environment-card .control-review{margin:0;padding:0 0 0 24px;border-top:0;border-left:1px solid var(--line)}
+.gitops-environment-card .confirmation{padding:0;font-size:12px}
+.gitops-environment-card .run-actions{gap:9px;margin:15px 0 0}
+.gitops-environment-card .run-actions button{font-size:12px;padding:8px 11px;white-space:normal}
+.cluster-overview>.statusbar{grid-template-columns:repeat(3,minmax(0,1fr))}
+.cluster-overview .cluster-nodes li{grid-template-columns:minmax(120px,1fr) minmax(90px,.65fr) minmax(140px,1fr) minmax(170px,1.35fr);align-items:center;padding:16px 0}
+.cluster-overview .cluster-node-name strong{font-size:14px}
+.cluster-overview .cluster-services{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:18px;align-items:start;margin-top:22px}
+.cluster-overview .cluster-services>.control-card{margin:0}
+.cluster-overview .cluster-services>.control-card:first-child{grid-row:span 2}
+.cluster-overview .cluster-services .facts{margin:0;grid-template-columns:95px minmax(0,1fr);gap:14px}
+.cluster-overview .cluster-services .facts dd{text-align:left}
+.cluster-overview .cluster-services .control-workloads li{padding:11px 0}
+@media(max-width:1250px){.branch-layout.with-actions{grid-template-columns:1fr}.environment-change-panel .intent-form{flex-direction:row;flex-wrap:wrap;align-items:flex-end}.environment-change-panel .intent-form label{flex:1 1 170px}.environment-change-panel .intent-form button{width:auto}.environment-change-panel .control-review .primary{width:auto}.gitops-environment-card{grid-template-columns:175px minmax(0,1fr)}.gitops-environment-card>.panelbody{grid-template-columns:1fr}.gitops-environment-card .control-review{border-left:0;border-top:1px solid var(--line);padding:18px 0 0}.gitops-controller{display:block}.gitops-controller .panelhead{border-right:0;border-bottom:1px solid var(--line)}.cluster-overview .cluster-nodes li{grid-template-columns:1fr .8fr 1fr 1.2fr}}
+@media(max-width:760px){.branch-environment-card .panelbody{grid-template-columns:1fr;gap:17px;padding:17px}.branch-workloads{border-left:0;border-top:1px solid var(--line);padding:14px 0 0}.branch-workloads .control-workloads li{flex-direction:row}.branch-environment-card .panelhead{padding:17px}.environment-change-panel .intent-form{flex-direction:column;align-items:stretch}.environment-change-panel .intent-form label{flex:auto}.environment-change-panel .control-review .primary{width:100%}.gitops-controller .facts{grid-template-columns:75px minmax(0,1fr)}.gitops-environment-card{display:block}.gitops-environment-card>.panelhead{flex-direction:row;align-items:center;justify-content:space-between;border-right:0;border-bottom:1px solid var(--line);padding:17px}.gitops-environment-card>.panelbody{padding:17px;gap:18px}.gitops-environment-card .run-actions{flex-direction:column;align-items:stretch}.cluster-overview>.statusbar{grid-template-columns:1fr}.cluster-overview>.statusbar .statusitem{border-right:0;border-bottom:1px solid var(--line)}.cluster-overview>.statusbar .statusitem:last-child{border:0}.cluster-overview .cluster-nodes li{grid-template-columns:1fr 1fr;gap:16px}.cluster-overview .cluster-nodes li>div:last-child{grid-column:1/-1}.cluster-overview .cluster-services{grid-template-columns:1fr}.cluster-overview .cluster-services>.control-card:first-child{grid-row:auto}}

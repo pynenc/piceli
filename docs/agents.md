@@ -20,6 +20,7 @@ See the {doc}`roadmap` for every feature's status.
 | What an error code means and what to do next | `piceli explain <code> --json` |
 | The same, as pages | {doc}`reference/cli`, {doc}`reference/errors` |
 | An index of the documentation for language models | [`llms.txt`](https://docs.pynenc.org/projects/piceli/en/stable/llms.txt) |
+| The web workspace, one-command checkout preview, saved plans, revision differences and deployment logs | {doc}`ui`; history reads saved evidence and does not renew approval or prove desired changes reached the cluster |
 | A ready agent skill (`SKILL.md` and scripts: install, plan, ask, deploy, status, diagnose, resume, roll back) | [`skills/piceli`](https://github.com/pynenc/piceli/tree/main/skills/piceli); its walkthrough runs in CI against the built wheel |
 | Whether Piceli fits a task, and what it does not do today | {doc}`when_to_use`, {doc}`comparisons` |
 | How well models follow these rules (the rules below are scored; breaking one fails the task) | {doc}`contributing/evals` |

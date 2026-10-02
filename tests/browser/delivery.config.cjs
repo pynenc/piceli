@@ -4,7 +4,8 @@ const { defineConfig } = require('./runtime.cjs');
 if (!process.env.PICELI_UI_TEST_OUTPUT || !process.env.PICELI_DELIVERY_RENDERER) {
   throw new Error('Run through uv run --frozen --extra ui python tests/browser/run_delivery.py.');
 }
-const origin = 'http://127.0.0.1:4178';
+const port = process.env.PICELI_UI_DELIVERY_PORT || '4178';
+const origin = `http://127.0.0.1:${port}`;
 module.exports = defineConfig({
   testDir: __dirname,
   testMatch: 'delivery.spec.cjs',
@@ -28,7 +29,7 @@ module.exports = defineConfig({
     { name: 'phone', use: { viewport: { width: 390, height: 844 } } },
   ],
   webServer: {
-    command: 'uv run --frozen --extra ui python tests/browser/serve_delivery.py --port 4178',
+    command: `uv run --frozen --extra ui python tests/browser/serve_delivery.py --port ${port}`,
     cwd: path.resolve(__dirname, '../..'),
     url: origin,
     reuseExistingServer: false,

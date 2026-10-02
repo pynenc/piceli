@@ -86,28 +86,70 @@ for the complete list, including breaking changes.
 ## Web UI
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/pynenc/piceli/main/docs/_static/ui/environments.gif" alt="The Piceli web UI listing per-branch environments with their namespace, commit and health" width="720">
+  <img src="docs/_static/ui/composition-overview.png" alt="Piceli infrastructure overview connecting sources, components and environments with a selected component inspector" width="720">
 </p>
 
-`pip install "piceli[ui]"` adds a web UI (experimental). Run it locally with
-`piceli ui serve`, or install it in the cluster behind OIDC
-(`piceli ui cluster-serve`). It shows:
+Piceli's experimental web workspace connects infrastructure, configuration,
+source versions and deployment evidence:
 
-- **Applications**: objects, workloads, logs and supervised port forwards.
-- **Environments**: one environment per Git branch, with namespace, commit,
-  health and workloads.
-- **GitOps**: the controller's status, each branch's state and pending plan
-  hash, with approve and promote.
-- **Pipelines**: the plan field by field, then the approval of its exact hash
-  (two approvals when images must be delivered) before anything is applied.
-- **Logs and access**: scoped container logs and local forwards.
+- **Infrastructure overview**: explore source → component → environment
+  relationships, inspect a selected component, compare commits and image
+  digests across environments, and follow reported problems to their workloads.
+- **Sources and environments**: compact repository/ref rows link directly to
+  their components and environments. Full revisions, polling errors, health
+  and the existing Sync, Promote, Approve and Wake flows remain accessible.
+- **Applications and resources**: searchable cards or tables, Kubernetes
+  ownership diagrams, configuration and conditions, scoped container logs and
+  supervised access forwards.
+- **Deployment history**: previous saved plans, including expired reviews and
+  plans without recorded runs. Open a plan for its execution order,
+  dependencies and searchable resource diffs; compare desired configurations
+  between recorded revisions.
+- **Runs and logs**: per-resource outcomes, visual journal transitions,
+  captured diagnostic output, raw journal evidence and recovery links.
+- **Cluster, GitOps and Pipelines**: node/controller/registry status, branch
+  state and exact-plan approvals, including the separate approval after image
+  delivery. Actions depend on the session's configured permissions.
+
+From a source checkout, with `uv`, Node.js and npm installed, open the current
+UI with one command:
+
+```sh
+make ui
+```
+
+It builds the production frontend and opens a disposable sample workspace,
+normally at `http://127.0.0.1:4178`. No cluster or credentials are required;
+plain bookmarks and fresh browsers work. Keep the terminal running and press
+Ctrl+C to stop. If the default port is busy, the command prints and opens the
+free port it selected.
+
+For your own cluster, install `piceli[ui]` and name the target explicitly:
+
+```sh
+pip install "piceli[ui]"
+piceli ui serve --kubeconfig /absolute/path/config --context my-context --namespace my-app
+```
+
+Open the launch URL printed by this real-target service, including its
+one-time token. Use `--profile NAME` for a saved credential profile, or the
+[UI guide](docs/ui.md) for trusted release/Pipeline definitions and in-cluster
+installation. Composition users open an installed UI with
+`piceli access ui --cluster infra.py:my_cluster`.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/pynenc/piceli/main/docs/_static/ui/pipeline-plan.png" alt="A Pipeline plan with its stages and the approval step" width="720">
+  <img src="docs/_static/ui/deployment-history.gif" alt="Browsing saved Piceli plans, opening an expired plan's resource changes and navigating directly to captured deployment logs" width="720">
 </p>
 
-See the [web UI page](https://docs.pynenc.org/projects/piceli/en/stable/ui.html)
-and the [in-cluster installation](https://docs.pynenc.org/projects/piceli/en/stable/ui_cluster_install.html).
+*Screenshots and recording use disposable contributor fixtures. History shows
+plans and execution evidence saved by the service; missing snapshots and
+uncaptured output are labelled explicitly. Captured logs retain their separate
+logs permission, and opening a historical plan does not renew its approval.*
+
+See the [web UI guide](docs/ui.md) for the navigation map and the
+[in-cluster installation guide](docs/ui_cluster_install.md) for OIDC and
+deployment permissions. The workspace supports Light, Dark and System
+appearance, keyboard search with Ctrl/⌘ K, and desktop, tablet and phone layouts.
 
 ## GitOps and per-branch environments (0.13.0)
 
@@ -232,8 +274,9 @@ Next steps:
   one environment per branch at its head; `piceli env` and `piceli envs`
   operate on them.
 - **Web UI (experimental)**: `pip install "piceli[ui]"` and `piceli ui serve`
-  open a local browser UI to inspect an app and deploy it through the same
-  reviewed plans; it can also be installed in the cluster with OIDC.
+  provide an infrastructure explorer, compact source/environment inventories,
+  resource inspection and saved deployment evidence through the same reviewed
+  plans; it can also be installed in the cluster with OIDC.
   In-cluster delivery from the UI is disabled by default; see
   the [web UI page](https://docs.pynenc.org/projects/piceli/en/stable/ui.html).
 

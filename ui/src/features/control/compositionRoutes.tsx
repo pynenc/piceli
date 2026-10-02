@@ -4,9 +4,11 @@ import { lazy } from 'react';
 import { NavLink, Route } from 'react-router-dom';
 import type { Capabilities } from '../../api/generated';
 import { Notice } from '../../components/State';
+import { Icon } from '../../components/Icon';
 import { NamedEnvironmentActions } from './NamedEnvironmentActions';
 
 const CompositionEnvironments = lazy(async () => ({ default: (await import('./Composition')).CompositionEnvironments }));
+const CompositionOverview = lazy(async () => ({ default: (await import('./Composition')).CompositionOverview }));
 const CompositionEnvironment = lazy(async () => ({ default: (await import('./Composition')).CompositionEnvironment }));
 const CompositionSources = lazy(async () => ({ default: (await import('./Composition')).CompositionSources }));
 
@@ -18,22 +20,24 @@ function Unavailable() {
 
 export function compositionNav(capabilities?: Capabilities) {
   if (!allowed(capabilities)) return null;
-  return <><NavLink to="/composition" end>◈ <span>Environments</span></NavLink><NavLink to="/composition/sources">⑂ <span>Sources</span></NavLink></>;
+  return <><NavLink to="/composition/overview"><Icon name="overview" /><span>Overview</span></NavLink><NavLink to="/composition" end><Icon name="environments" /><span>Environments</span></NavLink><NavLink to="/composition/sources"><Icon name="sources" /><span>Sources</span></NavLink></>;
 }
 
 export function compositionTitle(pathname: string): string | null {
+  if (pathname === '/composition/overview') return 'Overview';
   if (pathname.startsWith('/composition/sources')) return 'Sources';
   return pathname.startsWith('/composition') ? 'Environments' : null;
 }
 
 export function compositionHome(capabilities?: Capabilities): string | null {
-  return allowed(capabilities) ? '/composition' : null;
+  return allowed(capabilities) ? '/composition/overview' : null;
 }
 
 export function compositionRoutes(capabilities?: Capabilities) {
   const canSync = capabilities?.actions.composition_sync?.allowed === true;
   const ok = allowed(capabilities);
   return <>
+    <Route path="/composition/overview" element={ok ? <CompositionOverview canSync={canSync} /> : <Unavailable />} />
     <Route path="/composition" element={ok ? <CompositionEnvironments canSync={canSync} /> : <Unavailable />} />
     <Route path="/composition/sources" element={ok ? <CompositionSources /> : <Unavailable />} />
     <Route path="/composition/environments/:env" element={ok ? <CompositionEnvironment canSync={canSync} actions={environment => <NamedEnvironmentActions environment={environment} canChange={canSync} />} /> : <Unavailable />} />

@@ -46,8 +46,8 @@ function open(path: string, { sync = true, configured = true, refuse = false } =
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); document.cookie = 'piceli_csrf_this=; Max-Age=0; path=/'; document.querySelector('meta[name="piceli-csrf-cookie"]')?.remove(); });
 
-it('opens on the environments overview with revisions per source and sync', async () => {
-  const posts = open('/');
+it('opens the environment inventory with revisions per source and sync', async () => {
+  const posts = open('/composition');
   const card = await screen.findByRole('region', { name: 'Environment main' });
   expect(within(card).getByText('3f9c2d1')).toBeTruthy();
   expect(within(card).getByText('product')).toBeTruthy();
@@ -57,6 +57,17 @@ it('opens on the environments overview with revisions per source and sync', asyn
   await userEvent.setup().click(within(card).getByRole('button', { name: 'Sync main' }));
   expect(await within(card).findByText(/Sync requested/)).toBeTruthy();
   expect(posts).toEqual([{ env: 'main', component: null }]);
+});
+
+it('opens the infrastructure graph at the root and keeps the environment inventory one click away', async () => {
+  open('/');
+  expect(await screen.findByRole('region', { name: 'Infrastructure topology' })).toBeTruthy();
+  const nav = screen.getByRole('navigation', { name: 'Main navigation' });
+  const environments = within(nav).getByRole('link', { name: 'Environments' });
+  expect(environments.getAttribute('href')).toBe('/composition');
+  await userEvent.setup().click(environments);
+  expect(await screen.findByRole('heading', { name: 'Environments' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Sync main' })).toBeTruthy();
 });
 
 it('shows components, syncs one, and links the workloads and logs', async () => {
@@ -92,8 +103,9 @@ it('lists sources with their refs', async () => {
   open('/composition/sources');
   const source = await screen.findByRole('region', { name: 'Source product' });
   expect(within(source).getByText('https://git.example/shop/product.git')).toBeTruthy();
-  expect(within(source).getByText('main')).toBeTruthy();
-  expect(within(source).getByText('3f9c2d1')).toBeTruthy();
+  const refs = within(source).getByRole('region', { name: 'Refs for product' });
+  expect(within(refs).getByText('main')).toBeTruthy();
+  expect(within(refs).getByText('3f9c2d1')).toBeTruthy();
 });
 
 it('shortens commits and digests', () => {

@@ -11,6 +11,20 @@ The decision rule is stable within a minor release. The `diffs` JSON fields
 may gain fields; existing fields keep their meaning. See the {doc}`roadmap`.
 ```
 
+## Inspect the same evidence in the browser
+
+In the {doc}`web workspace <ui>`, open **Delivery → Deployment history** and
+select an application. **Plans → Open plan** shows a saved review's ordered
+action/dependency phases and searchable resource changes, including expired
+reviews and plans without recorded runs. **Compare revisions** compares the
+desired configurations stored with two recorded runs, including exact source
+revisions and before/after fields.
+
+**Runs & logs** connects plans to execution outcomes, visual journal transitions,
+captured diagnostic logs and raw journal evidence. These are service records;
+the archive does not import arbitrary CLI files or reconstruct missing output.
+Opening a historical plan is read-only and does not renew its approval.
+
 ## The problem: the live object is never the manifest
 
 The API server changes what it stores. A Deployment created from a 20-line

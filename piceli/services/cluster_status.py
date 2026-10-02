@@ -102,6 +102,10 @@ def _public_status(raw: Mapping[str, Any]) -> dict[str, Any]:
                 "used_bytes": storage.get("used_bytes")
                 if isinstance(storage.get("used_bytes"), int)
                 else None,
+                # Where the claim's use was measured; anything else is unknown.
+                "used_source": storage.get("used_source")
+                if storage.get("used_source") in ("volume-stats", "du")
+                else None,
             }
             if isinstance(storage, Mapping)
             else None,
