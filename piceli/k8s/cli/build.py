@@ -261,6 +261,7 @@ def job_run(
                 say=say,
             )
         except BuildSpecError as error:
+            _say_tail(error)
             reject(error.code, str(error))
         except PipelineError as error:
             reject(error.code, str(error), exit_code=EXIT_FAILED)
@@ -288,6 +289,7 @@ def job_run(
                 say=say,
             )
         except BuildSpecError as error:
+            _say_tail(error)
             reject(error.code, str(error))
         except PipelineError as error:
             reject(error.code, str(error), exit_code=EXIT_FAILED)
@@ -318,8 +320,20 @@ def job_run(
             say=say,
         )
     except BuildSpecError as error:
+        _say_tail(error)
         reject(error.code, str(error))
     except PipelineError as error:
         reject(error.code, str(error), exit_code=EXIT_FAILED)
     sys.stdout.write("\n" + encode_receipt(receipt) + "\n")
     sys.stdout.flush()
+
+
+def _say_tail(error: Exception) -> None:
+    """The end of a failed command's output, into the Job's log (redacted)."""
+    tail = getattr(error, "output_tail", "")
+    if not tail:
+        return
+    lines = tail.splitlines()
+    say(f"[piceli] the failing command's last {len(lines)} line(s) of output:")
+    for line in lines:
+        say(f"  | {line}")

@@ -23,6 +23,10 @@ FROM ${RUST_IMAGE} AS rust
 
 # --- controller: piceli (with the UI it serves in the cluster) and git -------
 FROM ${PYTHON_IMAGE} AS controller
+# Links the GHCR package to the repository (its page, README and access).
+LABEL org.opencontainers.image.source="https://github.com/pynenc/piceli" \
+      org.opencontainers.image.description="Piceli GitOps controller and in-cluster UI" \
+      org.opencontainers.image.licenses="MIT"
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git openssh-client ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -35,12 +39,15 @@ CMD ["piceli", "--help"]
 
 # --- builder: the controller plus the host-build tools for Rust and Python --
 # cargo (rustup, with the linux and wasm32 targets), cargo-zigbuild, zig, uv,
-# python3, sh. The toolchain is read-only; cargo writes under $HOME, which the
-# build Job points at its work directory.
+# python3, sh, and what crates with C builds need (jemalloc-sys: make;
+# aws-lc-sys: cmake; pkg-config, curl, xz). The toolchain is read-only; cargo
+# writes under $HOME, which the build Job points at its work directory.
 FROM controller AS builder
+LABEL org.opencontainers.image.description="Piceli cluster build Job (Rust and Python host builds)"
 USER root
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends gcc libc6-dev \
+    && apt-get install -y --no-install-recommends \
+       gcc g++ libc6-dev make cmake pkg-config curl xz-utils \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=rust /usr/local/rustup /usr/local/rustup
 COPY --from=rust /usr/local/cargo/bin /usr/local/cargo/bin

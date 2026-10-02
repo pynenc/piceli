@@ -35,7 +35,7 @@ import re
 import tempfile
 import time
 import uuid
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -102,6 +102,7 @@ from piceli.k8s.ops.secret_versions import (
     SecretVersionRef,
     SecretVersionStore,
     private_directory,
+    replace_pointer,
 )
 from piceli.k8s.ops.session import composition_from_archive
 from piceli.k8s.orphans import (
@@ -2028,6 +2029,45 @@ class ReleaseRunner:
                 "the approved plan expired; run plan again", code="plan-expired"
             )
         return dict(value)
+
+    def release_config(
+        self, release: str, wanted: Collection[tuple[str, str]]
+    ) -> dict[tuple[str, str], dict[str, Any]]:
+        """The Secrets and ConfigMaps of a planned release, with their values.
+
+        ``wanted`` names ``(kind, name)`` pairs; only ``Secret`` and
+        ``ConfigMap`` objects the stored release declares are returned, as
+        full manifests with their private values resolved from the release's
+        secret store. Reads local state only (no cluster).
+
+        For the pre-rollout check of :mod:`piceli.pipeline.prerollout_stage`,
+        which needs the real values of objects the release creates: the
+        result holds secret values, so it must never be printed, journaled or
+        returned to a caller.
+        """
+        catalog, journal, store = self._open()
+        try:
+            record = catalog.get(release)
+            archived = record.archive.to_dict()["revision"]["authorization"]
+            target = PlanTarget(**archived["target"])
+            found: dict[tuple[str, str], dict[str, Any]] = {}
+            for component in composition_from_archive(record.archive).components:
+                for resource in component.resources:
+                    key = (resource.ref.kind, resource.ref.name)
+                    if key[0] not in {"Secret", "ConfigMap"} or key not in wanted:
+                        continue
+                    manifest = resource.manifest
+                    for binding in resource.secret_bindings:
+                        replace_pointer(
+                            manifest,
+                            binding.json_pointer,
+                            store.resolve(target, binding.reference),
+                        )
+                    found[key] = manifest
+            return found
+        finally:
+            journal.close()
+            store.close()
 
     # ---------------------------------------------------------------- apply
     def _limits(self) -> ExecutionLimits:

@@ -4,6 +4,65 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.14.2
+
+- **Images:** `ghcr.io/pynenc/piceli-controller` and `piceli-builder` are
+  linked to the repository and public (anonymous pull); the release checks
+  an anonymous pull before it finishes. The builder adds `make`, `cmake`,
+  `g++`, `pkg-config`, `curl` and `xz` for crates with C builds
+  (`jemalloc-sys`, `aws-lc-sys`).
+- **Fix:** a failed cluster build is diagnosable. The build Job's log ends
+  with the failing command's last 200 lines of output (at most 16 KiB,
+  redacted like pre-rollout logs: known secret values, `password=…`-style
+  pairs, token-like strings); the failed Job and its pod are kept until the
+  next build of the same branch (or, for a composition, of the same cache)
+  replaces them; the controller status shows `failure.log_tail` (scrubbed,
+  at most 4000 characters) and `failure.kept_job`.
+- **Fix:** the deployer ClusterRole `piceli-gitops-deployer` reads
+  `metrics.k8s.io` pods and nodes (`get`, `list`, `watch`), so a release can
+  create a Role that grants them without an escalation refusal, and
+  updates the `scale` subresource of Deployments and StatefulSets (`get`,
+  `update`, `patch`) for restore points.
+- **Fix:** after a partial apply the controller (single repository and
+  composition) no longer retries the stale approval until it fails
+  (`env-plan-changed`): it plans again, applies when the auto-approve policy
+  covers the new plan, and otherwise waits in `approval-required` with the new
+  hash.
+- **Fix:** `piceli gitops enable` with changed settings (a new
+  `--builder-image`) restarts the controller: its pod template carries the
+  configuration's hash (`piceli.io/config-hash`). `piceli cluster init` keeps
+  the `--cluster-rbac` rule `gitops enable` added to ClusterRole
+  `piceli-gitops` instead of removing it.
+- **Fix:** deleting a branch removes its environment again: the controller's
+  ClusterRole `piceli-gitops` may `get`, `list` and `delete`
+  PersistentVolumes (a teardown removes the volumes bound to the
+  environment's claims; listing them was refused with HTTP 403 and the
+  teardown looped on `env-cluster-unavailable`). A refused Kubernetes request
+  now names its verb, resource and namespace in the message, the log and the
+  status (`failure.denied`), never the server's answer.
+- **Fix:** pre-rollout checks of a first install no longer always fail
+  `prerollout-failed`. A Secret or ConfigMap the release itself creates did
+  not exist yet and was mounted `optional`; the check now reads a labelled
+  copy with the release's real values (`piceli.io/pre-rollout: staged`),
+  created just before its Job and deleted with it (or by the next run after
+  an interrupt), listed under `staged` in the stage output. The release's
+  own objects are still created only by the approved apply; when the values
+  cannot be read the reference stays `optional` and `unverified`.
+- **Fix:** `Checks.http` and `Checks.metric` reach their target through the
+  API server proxy (`services/NAME:PORT/proxy`, or a ready pod's
+  `pods/NAME:PORT/proxy` for a Deployment) instead of `kubectl port-forward`,
+  so they work in the controller image, which has no `kubectl`
+  (`check-forward-unavailable`, FileNotFoundError). The identity needs `get`
+  on `services/proxy` and `pods/proxy`; when the API refuses the proxy and
+  `kubectl` is installed, the check falls back to the port forward.
+  `CheckContext.forward` still uses `kubectl`; `CheckContext.proxy_get` is
+  new. The fake API serves the proxy (`FakeAPI.proxy`, `forbid_proxy`).
+- **Fix:** an environment with a `Stack` runs only the pipeline checks of the
+  workloads it deploys: a check whose Service or workload target the stack
+  leaves out is skipped and listed as `{"check", "target", "why":
+  "not-in-stack"}` under `skipped` in the plan's and the run's checks stage.
+  Checks without such a target (`python`, `pod/NAME`) still run.
+
 ## Version 0.14.1
 
 - **Fix:** the GitOps controller's copy of third-party images and the

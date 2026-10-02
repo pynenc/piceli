@@ -67,9 +67,14 @@ _ANNOTATION_VALUE_MAX = 1024
 class GitOpsError(ValueError):
     """The render cannot be handed off. ``code`` is a registered error code."""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self, code: str, message: str, *, details: Mapping[str, Any] | None = None
+    ) -> None:
         super().__init__(message)
         self.code = code
+        #: Printable structured data (a build's scrubbed log tail, the
+        #: request the API denied); never a secret value.
+        self.details = dict(details or {})
 
 
 @dataclass(frozen=True)

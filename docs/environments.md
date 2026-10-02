@@ -368,6 +368,10 @@ envs = EnvConfig(
   Service, autoscaler, …); configs, Secrets and accounts always render. A
   name that is no workload is refused (`env-stack-unknown`), and so is a
   kept object that depends on a left-out component (`env-stack-incomplete`).
+  The pipeline's checks follow the stack: a check whose Service or workload
+  target the environment does not render is skipped and listed as
+  `not-in-stack` under `skipped` in the checks stage; a check without such a
+  target (`python`, `pod/NAME`) still runs.
 - **Placement.** `on_nodes=["node-a", ...]` adds a required node affinity
   `kubernetes.io/hostname In [...]` to every workload; a mapping
   `{"label": "value"}` is merged into `nodeSelector`. A workload pinned to

@@ -5,9 +5,13 @@ kubeconfig file and context (never ``KUBECONFIG``, ``~/.kube/config`` or the
 file's ``current-context``), the release being checked and its images. It
 gives checks three ways to reach the application:
 
+* :meth:`CheckContext.http_get` — one GET through the API server proxy
+  (``services/NAME:PORT/proxy``, or a ready pod's ``pods/NAME:PORT/proxy``
+  for a workload): no ``kubectl`` and no local port, so it works in a
+  controller pod;
 * :meth:`CheckContext.forward` — a temporary loopback port forward, supervised
-  by :class:`~piceli.k8s.observe.ForwardSupervisor` and stopped afterwards;
-* :meth:`CheckContext.http_get` — one GET through such a forward;
+  by :class:`~piceli.k8s.observe.ForwardSupervisor` and stopped afterwards
+  (needs ``kubectl``);
 * :meth:`CheckContext.exec` — a command in a ready pod, through the Kubernetes
   API (``pods/exec``).
 
@@ -20,6 +24,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import shutil
 import socket
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -28,6 +33,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Literal
+from urllib.parse import quote
 
 from piceli.checks.model import EXEC_KINDS, HTTP_KINDS, split_target
 
@@ -125,10 +131,12 @@ class CheckContext:
     :param base: Directory that relative ``python`` check files resolve from.
     :param transport: ``https`` (default) or ``loopback-http`` (test APIs).
     :param request_seconds: Timeout of each Kubernetes API request.
-    :param kubectl: The ``kubectl`` used for port forwards.
+    :param kubectl: The ``kubectl`` used for port forwards (:meth:`forward`,
+        and :meth:`http_get` when the API refuses its proxy).
     :param forward_seconds: How long a forward may take to become healthy.
     :param forwarder: Replaces the supervised ``kubectl port-forward``
-        (tests, or another transport).
+        (tests, or another transport); :meth:`http_get` then goes through it
+        instead of the API server proxy.
     :param executor: Replaces the Kubernetes API exec (tests).
     :param api_client: An existing ``kubernetes.client.ApiClient`` to use
         instead of building one; the caller keeps ownership.
@@ -178,7 +186,7 @@ class CheckContext:
         self.request_seconds = request_seconds
         self.kubectl = kubectl
         self.forward_seconds = forward_seconds
-        self._forwarder = forwarder or supervised_forward
+        self._forwarder = forwarder
         self._executor = executor or api_exec
         self._client = api_client
         self._owns_client = api_client is None
@@ -337,7 +345,8 @@ class CheckContext:
         """
         kind, name = split_target(target, HTTP_KINDS)
         remote = port if port is not None else self.resolve_port(f"{kind}/{name}")
-        return self._forwarder(self, f"{kind}/{name}", remote)
+        forwarder = self._forwarder or supervised_forward
+        return forwarder(self, f"{kind}/{name}", remote)
 
     def http_get(
         self,
@@ -347,9 +356,57 @@ class CheckContext:
         port: int | None = None,
         timeout: float = 10.0,
     ) -> HttpResponse:
-        """One ``GET path`` to ``target`` through a temporary forward."""
+        """One ``GET path`` (may include a query) to ``target``.
+
+        Goes through the API server proxy (:meth:`proxy_get`), which needs no
+        ``kubectl``. When the API refuses the proxy (HTTP 401/403) and the
+        context's ``kubectl`` is on ``PATH``, it falls back to a temporary
+        port forward. With an injected ``forwarder`` it always uses that.
+        """
+        if self._forwarder is None:
+            try:
+                return self.proxy_get(target, path, port=port, timeout=timeout)
+            except ProxyRefused:
+                if shutil.which(self.kubectl) is None:
+                    raise
         with self.forward(target, port) as url:
             return http_get(url, path, timeout=timeout)
+
+    def proxy_get(
+        self,
+        target: str,
+        path: str = "/",
+        *,
+        port: int | None = None,
+        timeout: float = 10.0,
+    ) -> HttpResponse:
+        """One ``GET path`` to ``target`` through the API server proxy.
+
+        A Service is reached at ``services/NAME:PORT/proxy``; a Deployment at
+        its newest ready pod's ``pods/NAME:PORT/proxy``. ``port`` defaults to
+        the target's first declared port. Needs ``get`` on ``services/proxy``
+        (or ``pods/proxy``) in the namespace.
+
+        :raises ProxyRefused: (``check-forward-unavailable``) the API refused
+            the proxy (HTTP 401/403).
+        """
+        kind, name = split_target(target, HTTP_KINDS)
+        remote = port if port is not None else self.resolve_port(f"{kind}/{name}")
+        if kind == "service":
+            resource = "services"
+        else:
+            resource = "pods"
+            if kind != "pod":
+                name = self.ready_pod(f"{kind}/{name}")
+        return api_proxy_get(
+            self.api_client(),
+            f"/api/v1/namespaces/{quote(self.namespace, safe='')}/{resource}/"
+            f"{quote(name, safe='')}:{remote}/proxy",
+            path,
+            label=f"{kind}/{target.split('/', 1)[1]}",
+            permission=f"{resource}/proxy",
+            timeout=timeout,
+        )
 
     def exec(
         self,
@@ -363,6 +420,97 @@ class CheckContext:
         if isinstance(command, str) or not command:
             raise ValueError("command must be a non-empty argv list")
         return self._executor(self, target, list(command), container, timeout)
+
+
+class ProxyRefused(CheckError):
+    """The API server refused its proxy (HTTP 401/403): a missing permission."""
+
+
+def _api_status(response: Any, body: bytes) -> dict[str, Any] | None:
+    """The API server's own ``v1`` ``Status`` answer, or ``None`` (the app's)."""
+    content_type = str(response.headers.get("Content-Type") or "")
+    if "application/json" not in content_type:
+        return None
+    try:
+        value = json.loads(body)
+    except ValueError:
+        return None
+    if (
+        isinstance(value, dict)
+        and value.get("kind") == "Status"
+        and value.get("apiVersion") == "v1"
+    ):
+        return value
+    return None
+
+
+def api_proxy_get(
+    client: Any,
+    base_path: str,
+    path: str,
+    *,
+    label: str,
+    permission: str,
+    timeout: float,
+) -> HttpResponse:
+    """``GET base_path + path`` on the API server with the client's credentials.
+
+    ``base_path`` is a ``…/NAME:PORT/proxy`` subresource. Redirects are not
+    followed (the app's status is what the check sees). An answer of the API
+    server itself (a ``v1`` ``Status``) is told apart from the app's: a
+    refusal raises :class:`ProxyRefused`, a missing target
+    ``check-target-not-found`` and an unreachable endpoint
+    ``check-forward-unavailable``. Server messages are never repeated.
+    """
+    import urllib3
+
+    headers: dict[str, str] = {"Accept": "*/*", "Connection": "close"}
+    # Refreshes an exec-plugin credential (and its TLS context) when stale.
+    client.update_params_for_auth(headers, [], ["BearerToken"])
+    url = str(client.configuration.host).rstrip("/") + base_path + path
+    try:
+        response = client.rest_client.pool_manager.request(
+            "GET",
+            url,
+            headers=headers,
+            redirect=False,
+            retries=False,
+            preload_content=False,
+            timeout=urllib3.Timeout(total=timeout),
+        )
+    except urllib3.exceptions.TimeoutError:
+        raise CheckError("check-timed-out", f"GET {path} timed out") from None
+    except Exception as error:  # transport details may contain credentials
+        raise CheckError(
+            "check-forward-unavailable",
+            f"GET {path} through the API proxy failed: {type(error).__name__}",
+        ) from None
+    try:
+        body = response.read(_MAX_BODY)
+    except urllib3.exceptions.TimeoutError:
+        raise CheckError("check-timed-out", f"GET {path} timed out") from None
+    except Exception as error:
+        raise CheckError(
+            "check-forward-unavailable",
+            f"GET {path} through the API proxy failed: {type(error).__name__}",
+        ) from None
+    finally:
+        response.release_conn()
+    status = int(response.status)
+    if status >= 400 and _api_status(response, body) is not None:
+        if status in {401, 403}:
+            raise ProxyRefused(
+                "check-forward-unavailable",
+                f"the API refused the proxy to {label} (HTTP {status}); "
+                f"the identity needs get on {permission}",
+            )
+        if status == 404:
+            raise CheckError("check-target-not-found", f"{label} not found")
+        raise CheckError(
+            "check-forward-unavailable",
+            f"the API server could not reach {label} (HTTP {status})",
+        )
+    return HttpResponse(status, body)
 
 
 def http_get(base_url: str, path: str, *, timeout: float) -> HttpResponse:

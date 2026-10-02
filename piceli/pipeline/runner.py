@@ -77,6 +77,7 @@ from piceli.pipeline.compose import (
     registry_owner,
     registry_release_spec,
     release_spec,
+    scoped_checks,
     used_handles,
     used_mirrors,
     uses_pending_image,
@@ -1426,11 +1427,16 @@ class PipelineRunner:
     def _plan_checks(
         self, _work: _Work, _reapply: bool
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        described = [describe_check(check) for check in self.pipeline.checks]
-        value = {
+        kept, skipped = scoped_checks(self.pipeline)
+        described = [describe_check(check) for check in kept]
+        value: dict[str, Any] = {
             "checks": described,
             "rollback_on_failed_checks": self.pipeline.rollback_on_failed_checks,
         }
+        if skipped:
+            # Bound into the hash only when an environment's stack drops a
+            # check, so other pipelines keep their combined hash.
+            value["skipped"] = skipped
         return dict(value), value
 
     # ------------------------------------------------------ approval policy
@@ -2448,10 +2454,19 @@ class PipelineRunner:
         if self._unchanged(work, reapply):
             return "skipped", {"why": "unchanged", "checks": [], "skipped": []}
         rendered = render_delivered(self.pipeline, self._release_images(work))
+        runner, release = work.runner, work.release_plan.release
+        assert runner is not None
+
+        def release_config(
+            wanted: set[tuple[str, str]],
+        ) -> Mapping[tuple[str, str], Any]:
+            return runner.release_config(release, wanted)
+
         return self._prerollout().run(
             rendered,
             changed=changing(work.release_plan.to_dict()["actions"]),
             run_id=self.run.run_id,
+            release_config=release_config,
         )
 
     # -------------------------------------------------------- stage: checks
@@ -2461,8 +2476,12 @@ class PipelineRunner:
         work = self._work
         assert work is not None and self.run is not None
         pipeline = self.pipeline
-        if not pipeline.checks:
-            return "skipped", {"passed": True, "why": "no checks"}
+        checks, skipped = scoped_checks(pipeline)
+        extra: dict[str, Any] = {"skipped": skipped} if skipped else {}
+        for item in skipped:
+            self.say(f"[checks] {item['check']}: skipped (not in stack)")
+        if not checks:
+            return "skipped", {"passed": True, "why": "no checks", **extra}
         release = self.run.output("plan").get("release")
         if self.run.stage("apply").get(
             "state"
@@ -2481,11 +2500,12 @@ class PipelineRunner:
             state_dir=pipeline.state_dir,
             base=pipeline.base,
         )
-        report = runner(pipeline.checks, context)
+        report = runner(checks, context)
         passed = bool(report.passed)
         output: dict[str, Any] = {
             "passed": passed,
             "results": [describe_result(item) for item in report.results],
+            **extra,
         }
         self.say(f"[checks] {release}: {'passed' if passed else 'FAILED'}")
         if passed:

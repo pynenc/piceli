@@ -603,6 +603,9 @@ def test_default_forwarder_supervises_a_kubectl_port_forward(tmp_path) -> None:
         "shop",
         "shop-1",
         kubectl=str(kubectl),
+        # http checks use the API server proxy by default (0.14.2); the
+        # supervised kubectl forward is the explicit forwarder.
+        forwarder=supervised_forward,
     )
     report = run_checks(
         Checks.http(

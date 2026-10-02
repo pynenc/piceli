@@ -43,35 +43,36 @@ def cluster(tmp_path: Path) -> Iterator[tuple[FakeAPI, Path]]:
 
 
 def _enable(kubeconfig: Path, *extra: str) -> Any:
-    return CliRunner().invoke(
-        app,
-        [
-            "gitops",
-            "enable",
-            "deploy/app.py:pipeline",
-            "--repo",
-            "https://git.example.com/org/app.git",
-            "--branches",
-            "main,wp-*",
-            "--poll",
-            "2m",
-            "--image",
-            IMAGE,
-            "--credentials-secret",
-            "git-creds",
-            "--builder-image",
-            BUILDER,
-            "--builder-selector",
-            "piceli.io/builder=true",
-            "--kubeconfig",
-            str(kubeconfig),
-            "--context",
-            "fake",
-            "--transport",
-            "loopback-http",
-            *extra,
-        ],
-    )
+    return CliRunner().invoke(app, _enable_args(kubeconfig, *extra))
+
+
+def _enable_args(kubeconfig: Path, *extra: str) -> list[str]:
+    return [
+        "gitops",
+        "enable",
+        "deploy/app.py:pipeline",
+        "--repo",
+        "https://git.example.com/org/app.git",
+        "--branches",
+        "main,wp-*",
+        "--poll",
+        "2m",
+        "--image",
+        IMAGE,
+        "--credentials-secret",
+        "git-creds",
+        "--builder-image",
+        BUILDER,
+        "--builder-selector",
+        "piceli.io/builder=true",
+        "--kubeconfig",
+        str(kubeconfig),
+        "--context",
+        "fake",
+        "--transport",
+        "loopback-http",
+        *extra,
+    ]
 
 
 def _object(api: FakeAPI, kind: str, name: str) -> dict[str, Any]:
@@ -131,11 +132,20 @@ def test_enable_plans_then_installs_with_the_hash(
     assert "git-creds" not in json.dumps(config)
     ControllerConfig.from_dict(config)  # what `gitops run --config` reads
 
-    # Least privilege: the cluster-wide role reads nodes, manages namespaces
-    # and binds only the deployer role; the rest is namespaced.
+    # Least privilege: the cluster-wide role reads nodes, manages namespaces,
+    # removes a torn-down branch's volumes and binds only the deployer role;
+    # the rest is namespaced.
     cluster_rules = _object(api, "ClusterRole", NAME)["rules"]
     resources = {r for rule in cluster_rules for r in rule["resources"]}
-    assert resources == {"nodes", "namespaces", "rolebindings", "clusterroles"}
+    assert resources == {
+        "nodes",
+        "namespaces",
+        "persistentvolumes",
+        "rolebindings",
+        "clusterroles",
+    }
+    volumes = next(r for r in cluster_rules if "persistentvolumes" in r["resources"])
+    assert volumes["verbs"] == ["get", "list", "delete"]
     bind = next(rule for rule in cluster_rules if "bind" in rule["verbs"])
     assert bind["resourceNames"] == [DEPLOYER] and bind["verbs"] == ["bind"]
     nodes = next(rule for rule in cluster_rules if "nodes" in rule["resources"])
@@ -322,3 +332,97 @@ def test_default_ports_read_pushed_images(
         "images": images,
     }
     assert ports.pushed_images(None, "wp-2", "piceli-system") is None
+
+
+def test_a_config_change_rolls_the_controller(
+    cluster: tuple[FakeAPI, Path],
+) -> None:
+    api, kubeconfig = cluster
+    first = json.loads(_enable(kubeconfig).stdout)
+    assert _enable(kubeconfig, "--approve", first["plan_hash"]).exit_code == 0
+    template = _object(api, "Deployment", NAME)["spec"]["template"]
+    before = template["metadata"].get("annotations", {}).get("piceli.io/config-hash")
+    assert before is not None and before.startswith("sha256:")
+    # Only the builder image changes: the Deployment must roll too, or the
+    # running controller keeps reading the old configuration.
+    builder = "registry.example.com/builder@sha256:" + "c" * 64
+    args = [a if a != BUILDER else builder for a in _enable_args(kubeconfig)]
+    planned = CliRunner().invoke(app, args)
+    assert planned.exit_code == 3, planned.output
+    changes = {
+        (c["kind"], c["name"]): c["operation"]
+        for c in json.loads(planned.stdout)["changes"]
+    }
+    assert changes[("ConfigMap", "piceli-gitops-config")] == "apply"
+    assert changes[("Deployment", NAME)] == "apply"
+    done = CliRunner().invoke(
+        app, [*args, "--approve", json.loads(planned.stdout)["plan_hash"]]
+    )
+    assert done.exit_code == 0, done.output
+    template = _object(api, "Deployment", NAME)["spec"]["template"]
+    assert template["metadata"]["annotations"]["piceli.io/config-hash"] != before
+
+
+def test_the_deployer_role_covers_metrics_and_scale_for_releases() -> None:
+    from piceli.gitops.install import render_foundation
+
+    deployer = next(
+        item
+        for item in render_foundation("piceli-system")
+        if item["kind"] == "ClusterRole" and item["metadata"]["name"] == DEPLOYER
+    )
+
+    def allowed(group: str, resource: str, verb: str) -> bool:
+        return any(
+            group in rule["apiGroups"]
+            and resource in rule["resources"]
+            and verb in rule["verbs"]
+            for rule in deployer["rules"]
+        )
+
+    # A release may create a Role granting metrics reads only when the
+    # deployer holds them (the API refuses an escalation otherwise).
+    for resource in ("pods", "nodes"):
+        for verb in ("get", "list", "watch"):
+            assert allowed("metrics.k8s.io", resource, verb), (resource, verb)
+    # Restore points scale workloads down and back up.
+    for resource in ("deployments/scale", "statefulsets/scale"):
+        for verb in ("get", "update", "patch"):
+            assert allowed("apps", resource, verb), (resource, verb)
+    # Checks reach their targets through the API server proxy, read only.
+    for resource in ("services/proxy", "pods/proxy"):
+        assert allowed("", resource, "get"), resource
+        assert not allowed("", resource, "create"), resource
+    # First-install checks stage copies of the release's Secrets/ConfigMaps.
+    for resource in ("secrets", "configmaps"):
+        for verb in ("create", "delete", "list"):
+            assert allowed("", resource, verb), (resource, verb)
+    assert not allowed("metrics.k8s.io", "pods", "delete")
+
+
+def test_default_ports_keep_a_failed_builds_details(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from piceli.artifacts import cluster_build
+    from piceli.gitops import GitOpsError
+    from piceli.pipeline.errors import PipelineError
+
+    details = {"outcome": {"state": "failed", "log_tail": "  | error: x"}}
+
+    def run_build_job(pipeline: Any, commit: str, **kwargs: Any) -> dict[str, Any]:
+        raise PipelineError("cluster-build-failed", "ended failed", details=details)
+
+    monkeypatch.setattr(cluster_build, "run_build_job", run_build_job)
+    config = ControllerConfig(
+        pipeline="deploy/app.py:pipeline",
+        repo="https://git.example.com/org/app.git",
+        branches=("wp-*",),
+        builder_image=BUILDER,
+    )
+    ports = DefaultPorts(
+        tmp_path / "kubeconfig", "fake", tmp_path, namespace="ns", config=config
+    )
+    with pytest.raises(GitOpsError) as failed:
+        ports.build(object(), "c" * 40, cache_key="b", platforms=(), checkout=tmp_path)
+    assert failed.value.code == "cluster-build-failed"
+    assert failed.value.details == details

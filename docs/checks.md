@@ -21,9 +21,12 @@ the error rate stays low. A release is `ready` only when its checks pass.
 ## Prerequisites
 
 - A working `piceli release` spec (see {doc}`release_cli`).
-- `kubectl` on `PATH` for `http` and `metric` checks. They open a temporary
-  loopback port forward with the spec's kubeconfig and context, never the
-  current context.
+- For `http` and `metric` checks, the spec's credentials need `get` on
+  `services/proxy` (a `service/` target) or `pods/proxy` (a `deployment/` or
+  `pod/` target) in the namespace. They go through the API server proxy with
+  the spec's kubeconfig and context, never the current context, and need no
+  `kubectl`; when the API refuses the proxy and `kubectl` is on `PATH`, they
+  fall back to a temporary loopback port forward.
 - For `exec` checks, the spec's credentials need `create` on `pods/exec` in
   the namespace.
 
@@ -138,7 +141,7 @@ in order; every check runs even after one failed.
 
 | Type | Passes when | Keys |
 | --- | --- | --- |
-| `http` | `GET path` through a temporary supervised port forward returns a status in `expect` and the body contains `body_contains` | `target` (`service/`, `deployment/` or `pod/NAME`), `path` (`/`), `port` (the target's first port), `expect` (`[200, 299]`; one code or `[low, high]`), `body_contains` |
+| `http` | `GET path` through the API server proxy returns a status in `expect` and the body contains `body_contains` | `target` (`service/`, `deployment/` or `pod/NAME`), `path` (`/`), `port` (the target's first port), `expect` (`[200, 299]`; one code or `[low, high]`), `body_contains` |
 | `exec` | `command` in the newest ready pod of `target` exits `expect_exit` and stdout contains `output_contains` | `target` (`deployment/`, `statefulset/`, `daemonset/` or `pod/NAME`), `command` (argv list), `container` (the first), `expect_exit` (`0`), `output_contains` |
 | `metric` | a Prometheus-compatible query returns at least one sample and every sample satisfies `value <op> threshold` | `target`, `query`, `op` (`<`, `<=`, `>`, `>=`, `==`, `!=`; default `<=`), `threshold`, `port`, `path` (`/api/v1/query`), `empty` (`fail` or `pass` when there are no samples) |
 | `python` | the function returns `None` or `True` | `call`: `module:function` or `path/file.py:function` (relative to `release.toml`) |
@@ -182,7 +185,7 @@ from piceli.checks import CheckContext, CheckFailed
 
 
 def smoke(ctx: CheckContext) -> str | None:
-    response = ctx.http_get("service/web", "/api/health")  # through a forward
+    response = ctx.http_get("service/web", "/api/health")  # API server proxy
     if response.status != 200:
         raise CheckFailed(f"health returned {response.status}")
     result = ctx.exec("deployment/api", ["api", "check-db"])  # pods/exec
@@ -230,7 +233,10 @@ kubectl="kubectl", forward_seconds=20.0, forwarder=None, executor=None,
 api_client=None)`: building one contacts nothing; the API client is created on
 first use and closed by `close()` or the `with` block. `base` is where relative
 `python` check files resolve from. `forwarder`, `executor` and `api_client`
-replace the port forward, the exec transport and the client (tests).
+replace the transport of `http_get` (a port forward instead of the API server
+proxy), the exec transport and the client (tests). `ctx.forward(target)`
+still opens a supervised `kubectl port-forward` for a Python check that needs
+a local URL.
 `CheckResult` also has `type`, `attempts` and `code` (`None` when passed).
 
 ## Release states and rollback
@@ -283,7 +289,7 @@ the fix.
 | Code | Means | Next step |
 | --- | --- | --- |
 | `check-failed` | The condition was not met (status, body, exit code, threshold, a Python check returned False) | Read `detail`, fix the application, apply a new release |
-| `check-forward-unavailable` | The temporary port forward did not become healthy | Check `kubectl` is on `PATH` and a ready pod listens on the port |
+| `check-forward-unavailable` | The API refused its proxy, could not reach a ready endpoint, or the port forward did not become healthy | Grant `get` on `services/proxy`/`pods/proxy`, and check that a ready pod listens on the port |
 | `check-target-not-found` | No such Service/workload/pod, or no ready pod | Check the target name against the composition |
 | `check-port-unknown` | No `port` and the target declares none | Set `port` |
 | `check-timed-out` | An attempt exceeded `timeout` | Raise `timeout` or `retries` |

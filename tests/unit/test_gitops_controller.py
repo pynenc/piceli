@@ -523,3 +523,136 @@ def test_sync_redeploys_an_environment_at_its_commit(
         "gitops-request-invalid",
     ]
     assert len(ports.kinds("up")) == 2
+
+
+class PartialApplyPorts(FakePorts):
+    """The approved apply stops half way; the plan then differs from the approval."""
+
+    def __init__(self, *, policy: bool = False) -> None:
+        super().__init__(policy=policy)
+        self.half_applied = False
+
+    def env_up(
+        self,
+        pipeline: Any,
+        branch: str,
+        *,
+        commit: str,
+        receipt: Any,
+        digests: Any,
+        approve: str | None,
+    ) -> EnvOutcome:
+        from piceli.envs.model import EnvError
+        from piceli.pipeline.errors import PipelineError
+
+        self.calls.append(("up", branch, commit, approve, digests))
+        current = plan_hash(branch, commit + ("+half" if self.half_applied else ""))
+        if approve == APPROVE_POLICY and self.policy and self.half_applied:
+            # The rest of the plan is inside the owner's policy.
+            return EnvOutcome("deployed", namespace="app-" + branch)
+        if approve is None or approve == APPROVE_POLICY:
+            return EnvOutcome("approval-required", plan_hash=current)
+        if approve != current:
+            raise EnvError(
+                "env-plan-changed",
+                "the approved hash is not the environment's current plan",
+            )
+        if not self.half_applied:
+            self.half_applied = True
+            raise PipelineError("pipeline-apply-not-ready", "half applied", failed=True)
+        return EnvOutcome("deployed", namespace="app-" + branch)
+
+
+def test_a_stale_approval_after_a_partial_apply_asks_for_a_new_one(
+    tmp_path: Path, repo: Repo
+) -> None:
+    ports = PartialApplyPorts()
+    controller, channel, clock = make(tmp_path, repo, ports, max_attempts=3)
+    sha = repo.push_branch("wp-half", "x")
+    status = controller.poll_once()
+    first = status["envs"]["wp-half"]["plan_hash"]
+    assert first == plan_hash("wp-half", sha)
+    channel.add_request(*approve_request("wp-half", first))
+    status = controller.poll_once()  # the approved apply stops half way
+    assert status["envs"]["wp-half"]["state"] == "retrying"
+    clock.now += 30
+    status = controller.poll_once()
+    env = status["envs"]["wp-half"]
+    # Re-planned: a new hash to approve, not a retry of the stale approval.
+    assert env["state"] == "approval-required", env
+    assert env["plan_hash"] == plan_hash("wp-half", sha + "+half") != first
+    assert ports.kinds("up")[-1][3] is None
+    clock.now += 10_000
+    status = controller.poll_once()  # waits for the owner, never gives up
+    assert status["envs"]["wp-half"]["state"] == "approval-required"
+    channel.add_request(*approve_request("wp-half", env["plan_hash"]))
+    status = controller.poll_once()
+    assert status["envs"]["wp-half"]["state"] == "deployed"
+
+
+def test_a_stale_approval_is_replaced_by_the_policy_when_it_covers_the_plan(
+    tmp_path: Path, repo: Repo
+) -> None:
+    ports = PartialApplyPorts(policy=True)
+    controller, channel, clock = make(tmp_path, repo, ports)
+    sha = repo.push_branch("wp-pol", "x")
+    status = controller.poll_once()  # outside the policy: the owner approves
+    assert status["envs"]["wp-pol"]["state"] == "approval-required"
+    channel.add_request(*approve_request("wp-pol", plan_hash("wp-pol", sha)))
+    controller.poll_once()  # half applied
+    clock.now += 30
+    status = controller.poll_once()
+    assert status["envs"]["wp-pol"]["state"] == "deployed"
+    assert ports.kinds("up")[-1][3] == APPROVE_POLICY
+
+
+def test_a_failed_build_and_a_denied_teardown_show_their_detail(
+    tmp_path: Path, repo: Repo
+) -> None:
+    from piceli.envs.model import EnvError
+
+    lines: list[str] = []
+    ports = FakePorts()
+    tail = "  | error: linker cc not found"
+
+    def build(*_: Any, **__: Any) -> Mapping[str, Any]:
+        raise GitOpsError(
+            "cluster-build-failed",
+            "the build Job ended failed",
+            details={
+                "outcome": {"state": "failed", "log_tail": tail, "cleaned": False},
+                "kept_job": "piceli-build-abc",
+                "log_access": "read",
+            },
+        )
+
+    denied = {
+        "verb": "list",
+        "resource": "persistentvolumes",
+        "namespace": None,
+        "status": 403,
+    }
+
+    def env_down(pipeline: Any, branch: str) -> None:
+        raise EnvError(
+            "env-cluster-unavailable",
+            "the Kubernetes API refused list persistentvolumes (HTTP 403)",
+            failed=True,
+            details={"denied": denied},
+        )
+
+    ports.build = build  # type: ignore[method-assign]
+    ports.env_down = env_down  # type: ignore[method-assign]
+    controller, _, _ = make(tmp_path, repo, ports)
+    controller.log = lines.append
+    repo.push_branch("wp-9", "x")
+    status = controller.poll_once()
+    env = status["envs"]["wp-9"]
+    assert env["reason"] == "cluster-build-failed"
+    assert env["failure"] == {"log_tail": tail, "kept_job": "piceli-build-abc"}
+    repo.delete_branch("wp-9")
+    status = controller.poll_once()
+    env = status["envs"]["wp-9"]
+    assert env["state"] == "deleting" and env["reason"] == "env-cluster-unavailable"
+    assert env["failure"] == {"denied": denied}
+    assert any("list persistentvolumes" in line for line in lines)
