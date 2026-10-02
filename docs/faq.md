@@ -82,11 +82,37 @@ into a node's containerd. See {doc}`node_delivery`.
 
 Yes. `piceli gitops enable` installs a controller that polls a Git repository and keeps one environment per branch at its head, with the same plans, approvals and checks as `piceli deploy`; `piceli env`, `piceli envs` and `piceli promote` operate on them. The controller is experimental. See {doc}`gitops` and {doc}`environments`; the {doc}`web UI <ui>` shows both.
 
-## Is the web UI safe to expose?
+## Can I try the web UI without a cluster?
 
-No. `piceli observe serve` and `piceli operator serve` bind to `127.0.0.1` only
-and are meant for the operator's own machine. Do not put them behind a public
-proxy.
+Yes. From a source checkout with `uv`, Node.js and npm installed, run `make ui`.
+It builds the current frontend and opens a disposable sample workspace, normally
+at `http://127.0.0.1:4178`. Explore infrastructure, Sources and Cluster, or use
+Deployment history for saved plans, revision differences and captured logs.
+Ctrl+C stops the preview and removes its service state. See {doc}`ui`.
+
+## Where do previous plans and deployment logs appear?
+
+Open **Delivery → Deployment history**, select an application, then choose
+**Plans**, **Runs & logs** or **Compare revisions**. The application's **Plans**
+tab lists the same saved reviews. **Open logs** focuses the run's captured-log
+panel; visual transitions and the raw journal remain alongside it. The archive
+includes expired plans and plans with no recorded run. Older incomplete
+snapshots or uncaptured output are shown as missing evidence; arbitrary CLI
+plan files are not imported. See {doc}`ui` for the task-to-page map.
+
+## How should I expose the web UI?
+
+The local `piceli ui serve` process binds to loopback and uses its printed
+launch-token URL. Keep that local mode on the operator's machine, or reach it
+through an SSH tunnel. The disposable `make ui` preview also stays local;
+automatic browser-session setup belongs to that fixture.
+
+An installed UI can use a configured TLS gateway, OIDC login and namespace/
+action grants. Observation is the default installed profile; source execution
+and deployment need their own configured permissions and approvals. Follow
+{doc}`ui_cluster_install` for the installation and exposure requirements.
+The older `piceli observe serve` and `piceli operator serve` interfaces remain
+loopback-only. See {doc}`ui` for the supported modes.
 
 ## How does Piceli relate to Pynenc?
 

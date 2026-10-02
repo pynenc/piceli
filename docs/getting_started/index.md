@@ -27,6 +27,22 @@ If an API described here is missing, install from the `main` branch:
 `pip install git+https://github.com/pynenc/piceli.git`.
 ```
 
+## Explore the browser workspace first
+
+To explore the browser workspace first, run this from a Piceli source checkout
+with `uv`, Node.js and npm installed:
+
+```sh
+make ui
+```
+
+This builds the current UI and opens disposable sample data without cluster or
+credential setup. Start with **Overview** for infrastructure relationships, or
+**Deployment history** for previous plans, revision changes and captured logs.
+See {doc}`../ui` for the navigation map and {doc}`../contributing/index` for
+checkout setup. The following deployment journey uses your own disposable
+cluster.
+
 ## Prerequisites
 
 - Python 3.12 or later.

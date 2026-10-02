@@ -23,7 +23,7 @@ make test                 # unit + acceptance tests; never contacts a cluster
 must pass:
 
 ```bash
-uv run --frozen pytest
+uv run --frozen pytest -n auto
 uv run --frozen mypy
 uv run --frozen ruff check . && uv run --frozen ruff format --check .
 uv run --frozen --group docs sphinx-build -W --keep-going -b html docs docs/_build/html
@@ -38,6 +38,20 @@ a supported node image (see `.github/kind-nodes.json`), for example
 `PICELI_KIND_KUBECONFIG=/tmp/it.kubeconfig PICELI_KIND_CONTEXT=kind-piceli-it
 PICELI_KIND_NODE=piceli-it-control-plane make test-integration`. Never point
 them at a shared cluster.
+
+## Working on the web UI
+
+With `uv`, Node.js and npm installed, run `make ui` from the checkout. It
+prepares the locked frontend dependencies, builds the current UI and opens a
+disposable sample workspace, normally at `http://127.0.0.1:4178`; no cluster or
+credentials are needed. Ctrl+C stops it and removes the preview state.
+
+Run `npm test` from `ui/` for frontend regressions, then `make ui-check ui-build`
+from the repository root. The [browser guide](tests/browser/README.md) lists
+the workspace, deployment/recovery and preview acceptance suites. `make ui-clips`
+records fixed journeys into an ignored gallery (Chromium and `ffmpeg` required).
+The [UI guide](docs/ui.md) maps the pages, saved-plan history, revision
+comparison, captured logs and real-target launch commands.
 
 ## Pull requests
 
