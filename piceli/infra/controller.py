@@ -63,8 +63,15 @@ from piceli.gitops.config import (
     MIN_POLL_SECONDS,
     backoff,
 )
-from piceli.gitops.controller import _iso, _seconds, _version, _version_key, error_code
-from piceli.gitops.ports import APPROVE_POLICY, EnvOutcome
+from piceli.gitops.controller import (
+    _iso,
+    _seconds,
+    _version,
+    _version_key,
+    error_code,
+    replan_stale,
+)
+from piceli.gitops.ports import EnvOutcome
 from piceli.gitops.repo import RemoteRefs
 from piceli.gitops.state import (
     STATUS_SCHEMA,
@@ -994,17 +1001,19 @@ class CompositionController:
         namespace = self.ports.prepare_env(pipeline, name)
         if namespace:
             record["namespace"] = namespace
-        approve: str | None = record.get("approved_hash")
-        if approve is None and instance.env.auto_approve:
-            approve = APPROVE_POLICY
         outcome = EnvOutcome.from_result(
-            self.ports.env_up(
-                pipeline,
-                name,
-                commit=str(record.get("commit") or ""),
-                receipt=None,
-                digests=None,
-                approve=approve,
+            replan_stale(
+                record,
+                lambda approve: self.ports.env_up(
+                    pipeline,
+                    name,
+                    commit=str(record.get("commit") or ""),
+                    receipt=None,
+                    digests=None,
+                    approve=approve,
+                ),
+                policy=bool(instance.env.auto_approve),
+                log=self.log,
             )
         )
         self._outcome(record, outcome)
@@ -1128,17 +1137,19 @@ class CompositionController:
         namespace = self.ports.prepare_env(target, name)
         if namespace:
             record["namespace"] = namespace
-        approve: str | None = record.get("approved_hash")
-        if approve is None and env.auto_approve:
-            approve = APPROVE_POLICY
         outcome = EnvOutcome.from_result(
-            self.ports.env_up(
-                target,
-                name,
-                commit=str(record.get("commit") or ""),
-                receipt=None,
-                digests=refs,
-                approve=approve,
+            replan_stale(
+                record,
+                lambda approve: self.ports.env_up(
+                    target,
+                    name,
+                    commit=str(record.get("commit") or ""),
+                    receipt=None,
+                    digests=refs,
+                    approve=approve,
+                ),
+                policy=bool(env.auto_approve),
+                log=self.log,
             )
         )
         self._outcome(record, outcome)

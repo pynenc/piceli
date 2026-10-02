@@ -86,6 +86,44 @@ def error_code(error: BaseException) -> str:
     return "gitops-step-failed"
 
 
+#: Codes of an approved hash that no longer matches the plan (a partial
+#: apply, a drift): the controller plans again instead of retrying it.
+STALE_APPROVAL_CODES = frozenset({"env-plan-changed", "pipeline-plan-changed"})
+
+
+def replan_stale(
+    record: dict[str, Any],
+    env_up: Callable[[str | None], Any],
+    *,
+    policy: bool,
+    log: Callable[[str], None] = lambda _: None,
+) -> Any:
+    """``env_up`` with the record's approval; a stale approval is planned again.
+
+    The approval is the record's ``approved_hash``, else :data:`APPROVE_POLICY`
+    when ``policy`` covers the environment, else ``None`` (plan only). When an
+    approved hash no longer matches the plan (:data:`STALE_APPROVAL_CODES`,
+    after a partial apply), the approval is dropped and the environment is
+    planned again: the policy applies it when it covers the new plan, or the
+    result asks for a new approval with the new hash.
+    """
+    fallback = APPROVE_POLICY if policy else None
+    approved: str | None = record.get("approved_hash")
+    if approved is None:
+        return env_up(fallback)
+    try:
+        return env_up(approved)
+    except Exception as error:
+        if error_code(error) not in STALE_APPROVAL_CODES:
+            raise
+        record["approved_hash"] = None
+        log(
+            f"{record['branch']}: the approved plan changed ({error_code(error)}); "
+            "planning again"
+        )
+        return env_up(fallback)
+
+
 def _version() -> str:
     try:
         return importlib.metadata.version("piceli")
@@ -460,18 +498,22 @@ class Controller:
                 digests = dict(pushed["images"])
             else:
                 receipt = self._receipt(pipeline, branch, commit, tree)
-            approve: str | None = record.get("approved_hash")
-            if approve is None and getattr(pipeline, "auto_approve", None) is not None:
-                if not fixed or (rule is not None and rule.auto_approve):
-                    approve = APPROVE_POLICY
+            policy = getattr(pipeline, "auto_approve", None) is not None and (
+                not fixed or (rule is not None and rule.auto_approve)
+            )
             outcome = EnvOutcome.from_result(
-                self.ports.env_up(
-                    pipeline,
-                    branch,
-                    commit=commit,
-                    receipt=receipt,
-                    digests=digests,
-                    approve=approve,
+                replan_stale(
+                    record,
+                    lambda approve: self.ports.env_up(
+                        pipeline,
+                        branch,
+                        commit=commit,
+                        receipt=receipt,
+                        digests=digests,
+                        approve=approve,
+                    ),
+                    policy=policy,
+                    log=self.log,
                 )
             )
         self._outcome(record, outcome)

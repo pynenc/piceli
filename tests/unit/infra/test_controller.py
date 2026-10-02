@@ -281,3 +281,54 @@ def test_status_publishes_promote_policy_and_branch_heads(
     policies = {e["name"]: e["promote"] for e in status["controller"]["environments"]}
     assert policies["rc"] is True and policies["main"] is False
     assert status["sources"]["shop"]["refs"]["refs/heads/feature"] == head
+
+
+def test_a_stale_approval_after_a_partial_apply_asks_for_a_new_one(
+    world: dict[str, Any],
+) -> None:
+    from piceli.envs import Environment
+    from piceli.envs.model import EnvError
+    from piceli.gitops.state import approve_request
+    from piceli.pipeline.errors import PipelineError
+
+    controller, channel, ports = world["controller"], world["channel"], world["ports"]
+    composition = controller.composition
+    main = composition.environment("main")
+    manual = Environment(
+        "main",
+        namespace=main.namespace,
+        stack=main.stack,
+        follow={source: list(items) for source, items in main.sources},
+    )
+    object.__setattr__(
+        composition, "environments", (manual, *composition.environments[1:])
+    )
+    first, second = "sha256:" + "d" * 64, "sha256:" + "e" * 64
+    calls: list[str | None] = []
+
+    def env_up(pipeline: Any, name: str, **kwargs: Any) -> dict[str, Any]:
+        approve = kwargs["approve"]
+        calls.append(approve)
+        current = second if len(calls) > 2 else first
+        if approve is None:
+            return {"state": "approval-required", "plan_hash": current}
+        if approve != current:
+            raise EnvError("env-plan-changed", "the approved hash is stale")
+        if len(calls) == 2:
+            raise PipelineError("pipeline-apply-not-ready", "half", failed=True)
+        return {"state": "ready", "namespace": "ns-main"}
+
+    ports.env_up = env_up
+    status = controller.poll_once()
+    assert status["envs"]["main"]["plan_hash"] == first
+    channel.add_request(*approve_request("main", first))
+    status = controller.poll_once()  # half applied
+    assert status["envs"]["main"]["state"] == "retrying"
+    world["clock"]["now"] += 10_000
+    status = controller.poll_once()
+    env = status["envs"]["main"]
+    assert env["state"] == "approval-required", env
+    assert env["plan_hash"] == second and calls[-1] is None
+    channel.add_request(*approve_request("main", second))
+    status = controller.poll_once()
+    assert status["envs"]["main"]["state"] == "deployed"
