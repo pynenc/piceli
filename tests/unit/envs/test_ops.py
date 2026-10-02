@@ -105,6 +105,12 @@ class Cluster:
     def delete_volume(self, name: str) -> None:
         self.calls.append(f"delete volume {name}")
 
+    def cluster_objects(self, namespace: str) -> list[tuple[str, str]]:
+        return []
+
+    def delete_cluster_object(self, kind: str, name: str) -> None:
+        self.calls.append(f"delete {kind} {name}")
+
     def pushed(self, namespace: str, branch: str) -> None:
         return None
 
@@ -201,7 +207,11 @@ def test_down_is_planned_guarded_and_never_touches_main(tmp_path: Path) -> None:
         assert error.value.code == "env-main-protected"
     plan = env_down(pipeline, "wp-a", cluster=cluster)
     assert plan["state"] == "approval-required"
-    assert plan["delete"] == {"claims": ["data-db-0"], "volumes": ["pv-1"]}
+    assert plan["delete"] == {
+        "claims": ["data-db-0"],
+        "volumes": ["pv-1"],
+        "cluster_objects": [],
+    }
     assert cluster.calls == []
     with pytest.raises(EnvError) as error:
         env_down(pipeline, "wp-a", cluster=cluster, approve="sha256:bad")

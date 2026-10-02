@@ -286,6 +286,14 @@ def enable(
             help="Also allow ClusterRoles/ClusterRoleBindings (apps that declare them)",
         ),
     ] = False,
+    delete_volumes: Annotated[
+        bool,
+        typer.Option(
+            "--delete-volumes",
+            help="Let branch teardown delete the PersistentVolumes bound to the "
+            "environment's claims (cluster-wide delete on PersistentVolumes)",
+        ),
+    ] = False,
     platform: Annotated[
         list[str] | None,
         typer.Option(
@@ -372,7 +380,7 @@ def enable(
             pipeline, root=root, image=image, kubeconfig=kubeconfig, context=context,
             poll=poll, credentials_secret=credentials_secret, namespace=namespace,
             storage=storage, storage_class=storage_class, cluster_rbac=cluster_rbac,
-            platform=platform, builder_image=builder_image,
+            delete_volumes=delete_volumes, platform=platform, builder_image=builder_image,
             build_git_secret=build_git_secret, builder_selector=builder_selector,
             build_storage=build_storage, approve=approve, allow_exec=allow_exec,
             exec_sha256=exec_sha256, transport=transport, repo=repo,
@@ -409,6 +417,7 @@ def enable(
             storage=storage,
             storage_class=storage_class,
             cluster_rbac=cluster_rbac,
+            delete_volumes=delete_volumes,
         )
     if not config.deploys_main and config.rule(main_branch) is None:
         say(f"note: {main_branch} matches no --branches glob; tags will not deploy it")
@@ -434,7 +443,7 @@ def enable(
         build_storage=build_storage, build_registry=build_registry,
         node_registry=node_registry,
         root=None if root == Path(".") else str(root),
-        flags={"--main-auto-approve": main_auto_approve, "--cluster-rbac": cluster_rbac, "--allow-exec": allow_exec},
+        flags={"--main-auto-approve": main_auto_approve, "--cluster-rbac": cluster_rbac, "--delete-volumes": delete_volumes, "--allow-exec": allow_exec},
         repeat={"--platform": platform or [], "--builder-selector": builder_selector or []},
         transport=transport,
     )  # fmt: skip
@@ -462,6 +471,7 @@ def _enable_composition(
     storage: str,
     storage_class: str | None,
     cluster_rbac: bool,
+    delete_volumes: bool,
     platform: list[str] | None,
     builder_image: str | None,
     build_git_secret: str | None,
@@ -512,6 +522,8 @@ def _enable_composition(
             storage_class=storage_class,
             cluster_rbac=cluster_rbac,
             node=controller.on if controller is not None else None,
+            delete_volumes=delete_volumes
+            or (controller is not None and controller.delete_volumes),
         )
     if kubeconfig is None and composition.cluster is not None:
         # The cluster's credential profile (`piceli login`), never in Git.
@@ -548,7 +560,7 @@ def _enable_composition(
         storage=storage, storage_class=storage_class, builder_image=builder_image,
         build_git_secret=build_git_secret, build_storage=build_storage,
         root=None if root == Path(".") else str(root),
-        flags={"--cluster-rbac": cluster_rbac, "--allow-exec": allow_exec},
+        flags={"--cluster-rbac": cluster_rbac, "--delete-volumes": delete_volumes, "--allow-exec": allow_exec},
         repeat={"--platform": platform or [], "--builder-selector": builder_selector or []},
         transport=transport,
     )  # fmt: skip

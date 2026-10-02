@@ -67,12 +67,19 @@ class Node:
 
 @dataclass(frozen=True)
 class Controller:
-    """Where the GitOps controller runs and how often it polls its sources."""
+    """Where the GitOps controller runs and how often it polls its sources.
+
+    ``delete_volumes=True`` lets branch teardown delete the PersistentVolumes
+    bound to the environment's claims (a ``Retain`` storage class keeps them
+    otherwise); it grants the controller delete on PersistentVolumes
+    cluster-wide, so it is off by default and teardown reports them instead.
+    """
 
     on: str
     poll: str = "1m"
     sync: Literal["on change"] = "on change"
     image: str | None = None
+    delete_volumes: bool = False
 
     def __post_init__(self) -> None:
         from piceli.infra.cluster import check_controller

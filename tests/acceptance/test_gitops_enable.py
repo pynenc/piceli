@@ -141,11 +141,19 @@ def test_enable_plans_then_installs_with_the_hash(
         "nodes",
         "namespaces",
         "persistentvolumes",
+        "endpointslices",
         "rolebindings",
         "clusterroles",
     }
+    slices = next(r for r in cluster_rules if "endpointslices" in r["resources"])
+    assert slices["resourceNames"] == ["kubernetes"] and slices["verbs"] == ["get"]
     volumes = next(r for r in cluster_rules if "persistentvolumes" in r["resources"])
-    assert volumes["verbs"] == ["get", "list", "delete"]
+    # Reading volumes only; deleting them is the --delete-volumes opt-in.
+    assert volumes["verbs"] == ["get", "list"]
+    assert not any(
+        "persistentvolumes" in r["resources"] and "delete" in r["verbs"]
+        for r in cluster_rules
+    )
     bind = next(rule for rule in cluster_rules if "bind" in rule["verbs"])
     assert bind["resourceNames"] == [DEPLOYER] and bind["verbs"] == ["bind"]
     nodes = next(rule for rule in cluster_rules if "nodes" in rule["resources"])
@@ -426,3 +434,37 @@ def test_default_ports_keep_a_failed_builds_details(
         ports.build(object(), "c" * 40, cache_key="b", platforms=(), checkout=tmp_path)
     assert failed.value.code == "cluster-build-failed"
     assert failed.value.details == details
+
+
+def test_delete_volumes_is_an_explicit_opt_in() -> None:
+    from piceli.gitops.install import has_volume_delete, render_foundation
+    from piceli.infra import Controller
+    from piceli.infra.cluster import ClusterError
+
+    def role(**options: bool) -> dict[str, object]:
+        return next(
+            item
+            for item in render_foundation("piceli-system", **options)
+            if item["kind"] == "ClusterRole" and item["metadata"]["name"] == NAME
+        )
+
+    assert not has_volume_delete(role())
+    assert has_volume_delete(role(delete_volumes=True))
+    assert Controller(on="node-a", delete_volumes=True).delete_volumes
+    with pytest.raises(ClusterError):
+        Controller(on="node-a", delete_volumes="yes")  # type: ignore[arg-type]
+
+
+def test_enable_with_delete_volumes_grants_the_volume_delete(
+    cluster: tuple[FakeAPI, Path],
+) -> None:
+    from piceli.gitops.install import has_volume_delete
+
+    api, kubeconfig = cluster
+    planned = _enable(kubeconfig, "--delete-volumes")
+    assert planned.exit_code == 3, planned.output
+    body = json.loads(planned.stdout)
+    assert "--delete-volumes" in body["approve_command"]
+    done = _enable(kubeconfig, "--delete-volumes", "--approve", body["plan_hash"])
+    assert done.exit_code == 0, done.output
+    assert has_volume_delete(_object(api, "ClusterRole", NAME))

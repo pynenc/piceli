@@ -4,6 +4,24 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.14.3
+
+- **Branch environments may reach the API server:**
+  `EnvConfig(allow_api=True)` / `Environment.per_branch(..., allow_api=True)`
+  adds the API server's endpoints (read from the EndpointSlice
+  `default/kubernetes` at `env up`) to the isolation policy, instead of node
+  IPs in `allow_egress`.
+- **Teardown removes the release's cluster-wide objects:** the ClusterRoles
+  and ClusterRoleBindings a branch's release created (labelled
+  `piceli.io/env-namespace`, or named `<namespace>:<app>:<name>`, and marked
+  as Piceli's) are deleted with the branch.
+- **Deleting volumes is an opt-in:** the controller reads PersistentVolumes;
+  `gitops enable --delete-volumes` / `Controller(delete_volumes=True)` lets
+  teardown delete those bound to the branch's claims. Without it teardown
+  completes and reports them (`volumes_left`); `cluster init` keeps the rule.
+- **Images:** the release can also copy the controller and builder images to
+  Docker Hub (`docker.io/pynenc/piceli-*`) when its credentials are set.
+
 ## Version 0.14.2
 
 - **Images:** `ghcr.io/pynenc/piceli-controller` and `piceli-builder` are

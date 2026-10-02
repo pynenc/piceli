@@ -141,6 +141,17 @@ CLUSTER_RBAC_RULE: dict[str, Any] = {
     "verbs": ["get", "list", "watch", "create", "update", "patch", "delete", "bind", "escalate"],
 }  # fmt: skip
 
+#: The rule ``delete_volumes=True`` (``gitops enable --delete-volumes``,
+#: ``Controller(delete_volumes=True)``) adds: branch teardown deletes the
+#: PersistentVolumes bound to the environment's claims (a ``Retain`` storage
+#: class keeps them otherwise). Kubernetes cannot narrow it to those volumes,
+#: so it is the owner's opt-in; without it teardown reports them.
+VOLUME_DELETE_RULE: dict[str, Any] = {
+    "apiGroups": [""],
+    "resources": ["persistentvolumes"],
+    "verbs": ["delete"],
+}
+
 #: Pod-template annotation of the controller's Deployment: the hash of its
 #: configuration, so a changed configuration rolls the controller.
 CONFIG_HASH_ANNOTATION = "piceli.io/config-hash"
@@ -150,6 +161,12 @@ def has_cluster_rbac(role: Mapping[str, Any] | None) -> bool:
     """Whether a live ``piceli-gitops`` ClusterRole holds :data:`CLUSTER_RBAC_RULE`."""
     rules = (role or {}).get("rules") or ()
     return any(_subset(CLUSTER_RBAC_RULE, rule) for rule in rules)
+
+
+def has_volume_delete(role: Mapping[str, Any] | None) -> bool:
+    """Whether a live ``piceli-gitops`` ClusterRole holds :data:`VOLUME_DELETE_RULE`."""
+    rules = (role or {}).get("rules") or ()
+    return any(_subset(VOLUME_DELETE_RULE, rule) for rule in rules)
 
 
 @dataclass(frozen=True)
@@ -163,6 +180,8 @@ class InstallSettings:
     :param storage_class: Its StorageClass (default: the cluster's).
     :param cluster_rbac: Allow ClusterRoles/ClusterRoleBindings (apps that
         declare cluster-scoped RBAC).
+    :param delete_volumes: Let branch teardown delete the PersistentVolumes
+        bound to the environment's claims (:data:`VOLUME_DELETE_RULE`).
     :param node: Pin the controller to this node (``kubernetes.io/hostname``,
         a composition's ``Controller(on=)``); default: any node.
     """
@@ -173,6 +192,7 @@ class InstallSettings:
     storage_class: str | None = None
     cluster_rbac: bool = False
     node: str | None = None
+    delete_volumes: bool = False
 
     def __post_init__(self) -> None:
         if not _IMAGE.fullmatch(self.image):
@@ -203,6 +223,8 @@ class InstallSettings:
         }
         if self.node is not None:
             body["node"] = self.node
+        if self.delete_volumes:
+            body["delete_volumes"] = True
         return body
 
 
@@ -227,6 +249,7 @@ def render_controller(
         storage=settings.storage,
         storage_class=settings.storage_class,
         cluster_rbac=settings.cluster_rbac,
+        delete_volumes=settings.delete_volumes,
     ) + _render_workload(config, settings)
 
 
@@ -236,6 +259,7 @@ def render_foundation(
     storage: str = "10Gi",
     storage_class: str | None = None,
     cluster_rbac: bool = False,
+    delete_volumes: bool = False,
 ) -> list[dict[str, Any]]:
     """What the controller needs before it runs: namespace, identity, RBAC, state.
 
@@ -251,11 +275,19 @@ def render_foundation(
             "verbs": ["get", "list", "watch", "create", "patch", "delete"],
         },
         {
-            # Branch teardown: the volumes bound to the environment's claims
-            # (env down lists them, then deletes those of its namespace).
+            # Branch teardown finds the volumes bound to the environment's
+            # claims; deleting them is the opt-in VOLUME_DELETE_RULE.
             "apiGroups": [""],
             "resources": ["persistentvolumes"],
-            "verbs": ["get", "list", "delete"],
+            "verbs": ["get", "list"],
+        },
+        {
+            # Branch environments with allow_api: the API server's addresses
+            # (only the EndpointSlice named `kubernetes`).
+            "apiGroups": ["discovery.k8s.io"],
+            "resources": ["endpointslices"],
+            "resourceNames": ["kubernetes"],
+            "verbs": ["get"],
         },
         {
             "apiGroups": [_RBAC],
@@ -271,6 +303,8 @@ def render_foundation(
     ]
     if cluster_rbac:
         cluster_rules.append(dict(CLUSTER_RBAC_RULE))
+    if delete_volumes:
+        cluster_rules.append(dict(VOLUME_DELETE_RULE))
     own_rules = [
         {
             "apiGroups": [""],
