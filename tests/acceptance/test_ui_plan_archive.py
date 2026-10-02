@@ -46,3 +46,23 @@ def test_plan_archive_http_is_paginated_read_only_and_validates_requests(
         assert operations.store.records("operation") == []
         operations.evaluator.preview.assert_not_called()
         operations.evaluator.render.assert_not_called()
+
+
+def test_plan_archive_requires_the_same_session_as_every_other_api(
+    tmp_path: Path,
+) -> None:
+    operations = archive_service(tmp_path)
+    stored_plan(operations, "first", "2026-10-02T10:00:00Z")
+    with TestClient(
+        create_app(operations.query, operations=operations), base_url=ORIGIN
+    ) as client:
+        refused = client.get(API + "/applications/shop/plans")
+        assert refused.status_code == 403
+        assert refused.json()["code"] == "ui-request-rejected"
+        assert "first" not in refused.text
+        assert launch(client).status_code == 200
+        cross_site = client.get(
+            API + "/applications/shop/plans",
+            headers={"sec-fetch-site": "cross-site"},
+        )
+        assert cross_site.status_code == 403
