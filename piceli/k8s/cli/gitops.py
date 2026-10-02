@@ -238,8 +238,13 @@ def enable(
         ),
     ] = "main",
     poll: Annotated[
-        str, typer.Option("--poll", help="Poll interval: 60, 60s, 5m")
-    ] = "60s",
+        str | None,
+        typer.Option(
+            "--poll",
+            help="Poll interval: 60, 60s, 5m (default: a composition's "
+            "Controller(poll=), else 60s)",
+        ),
+    ] = None,
     credentials_secret: Annotated[
         str | None,
         typer.Option(
@@ -396,7 +401,7 @@ def enable(
             repo=repo,
             branches=tuple(branches.split(",")),
             env=env,
-            poll_seconds=parse_duration(poll),
+            poll_seconds=parse_duration(poll or "60s"),
             main_branch=main_branch,
             tags=tags,
             main_auto_approve=main_auto_approve,
@@ -465,7 +470,7 @@ def _enable_composition(
     image: str,
     kubeconfig: Path | None,
     context: str | None,
-    poll: str,
+    poll: str | None,
     credentials_secret: str | None,
     namespace: str,
     storage: str,
@@ -505,7 +510,15 @@ def _enable_composition(
             composition=composition.to_dict(),
             repo=None if followed is None else followed.to_dict(),
             namespace=namespace,
-            poll_seconds=parse_duration(poll),
+            poll_seconds=parse_duration(
+                poll
+                or (
+                    composition.cluster.controller.poll
+                    if composition.cluster is not None
+                    and composition.cluster.controller is not None
+                    else "60s"
+                )
+            ),
             platforms=tuple(platform or ("linux/amd64",)),
             builder_image=builder_image,
             build_git_secret=build_git_secret or "piceli-build-git",
@@ -554,6 +567,12 @@ def _enable_composition(
         say(f"environment {item.name} ({item.namespace}): follows {rules}")
     objects = render_controller(config, settings)
     ui_objects, ui = _ui_objects(composition.cluster, namespace, image)
+    if composition.cluster is not None and namespace == "piceli-system":
+        # The stored declaration `cluster init` keeps (piceli-cluster): the
+        # same upgrade updates it, so a later `cluster init` plans nothing.
+        from piceli.infra.cluster_init import cluster_config
+
+        ui_objects = [cluster_config(composition.cluster), *ui_objects]
     seen = {_object_key(item) for item in objects}
     objects += [item for item in ui_objects if _object_key(item) not in seen]
     command = _command_line(

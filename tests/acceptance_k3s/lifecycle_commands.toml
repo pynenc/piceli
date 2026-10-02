@@ -1,0 +1,142 @@
+# Every command an adoption note gives for this lifecycle, as the acceptance
+# runs it (tests/acceptance_k3s/lifecycle.py). The note copies these blocks:
+# `python tests/acceptance_k3s/lifecycle.py --print-commands` prints them with
+# the note's placeholders below instead of the disposable cluster's values.
+#
+# Fields: `run` (one command line, split like a shell would; no pipes),
+# `exit` (accepted exit codes), `capture` (JSON key of stdout -> variable),
+# `when` (run only when that variable is set), `stdin` (a secret variable fed
+# on stdin, never printed), `note` (false: harness plumbing, not in the note).
+# Commands run from a clone of the composition repository (infra.py there).
+
+[note]
+# Placeholder -> what the note prints instead.
+piceli = "piceli"
+kubectl = "kubectl"
+kubeconfig = "~/my-cluster.yaml"
+context = "default"
+repo = "https://git.example.com/team/infra.git"
+image = "ghcr.io/pynenc/piceli-controller@sha256:<controller digest>"
+builder_image = "ghcr.io/pynenc/piceli-builder@sha256:<builder digest>"
+platform = "linux/arm64"
+plan_hash = "<plan hash>"
+rc_hash = "<plan hash>"
+main_hash = "<plan hash>"
+sha = "<commit>"
+retention_digest = "<plan digest>"
+
+[groups]
+# Once per machine and cluster; re-running it is idempotent.
+bootstrap = [
+  "login",
+  "cluster-init-plan",
+  "cluster-init-approve",
+  "secrets-git",
+  "gitops-enable-plan",
+  "gitops-enable-approve",
+]
+# Upgrade: pin the new piceli and image digests (in infra.py), push, then
+# `gitops enable` alone (from 0.14.5 its plan also updates the in-cluster UI,
+# result key "ui": "included"; no separate cluster init).
+upgrade = [
+  "gitops-enable-plan",
+  "gitops-enable-approve",
+]
+status = ["cluster-status", "registry-status", "gitops-status"]
+promote = ["promote-rc", "gitops-status"]
+approve-rc = ["approve-rc"]
+# main's first install creates cluster RBAC (a ClusterRole), outside the
+# pipeline's approval policy: approve that one plan.
+approve-main = ["gitops-status", "approve-main"]
+retention = [
+  "registry-status",
+  "retention-plan",
+  "retention-approve",
+  "registry-gc-dry-run",
+  "registry-gc",
+  "registry-status",
+]
+
+[steps.login]
+run = "{piceli} login lifecycle --kubeconfig {kubeconfig} --context {context}"
+exit = [0]
+
+[steps.cluster-init-plan]
+run = "{piceli} cluster init infra.py:cluster"
+exit = [0, 3]          # 0: unchanged
+capture = { plan_hash = "plan_hash" }
+reset = ["plan_hash"]
+
+[steps.cluster-init-approve]
+run = "{piceli} cluster init infra.py:cluster --approve {plan_hash}"
+exit = [0]
+when = "plan_hash"
+
+[steps.secrets-git]
+run = "{piceli} secrets git --cluster infra.py:cluster --prompt"
+exit = [0]
+stdin = "git_token"
+
+[steps.gitops-enable-plan]
+run = """{piceli} gitops enable infra.py --repo {repo} --image {image} \
+  --builder-image {builder_image} --credentials-secret piceli-build-git \
+  --platform {platform} --storage-class lifecycle-retain --cluster-rbac"""
+exit = [0, 3]
+capture = { plan_hash = "plan_hash" }
+reset = ["plan_hash"]
+
+[steps.gitops-enable-approve]
+run = """{piceli} gitops enable infra.py --repo {repo} --image {image} \
+  --builder-image {builder_image} --credentials-secret piceli-build-git \
+  --platform {platform} --storage-class lifecycle-retain --cluster-rbac \
+  --approve {plan_hash}"""
+exit = [0]
+when = "plan_hash"
+
+[steps.cluster-status]
+run = "{piceli} cluster status infra.py:cluster --json"
+exit = [0]
+
+[steps.gitops-status]
+run = "{piceli} gitops status --kubeconfig {kubeconfig} --context {context} --json"
+exit = [0]
+
+[steps.promote-rc]
+run = "{piceli} promote rc main@{sha} --kubeconfig {kubeconfig} --context {context}"
+exit = [0]
+
+[steps.approve-main]
+run = "{piceli} gitops approve main {main_hash} --kubeconfig {kubeconfig} --context {context}"
+exit = [0]
+
+[steps.approve-rc]
+run = "{piceli} gitops approve rc {rc_hash} --kubeconfig {kubeconfig} --context {context}"
+exit = [0]
+
+[steps.registry-status]
+# From 0.14.5 it accepts the composition's Cluster; storage.used_source is
+# "du" or "volume-stats" (the claim), never the node filesystem.
+run = "{piceli} registry status infra.py:cluster --json"
+exit = [0]
+
+[steps.retention-plan]
+# Plan (exit 3): the JSON lists every deletion with why and bytes, and the
+# approve_command. Reads the cluster's live inventory itself.
+run = "{piceli} artifacts retention --cluster infra.py:cluster --delete"
+exit = [3]
+capture = { retention_digest = "digest" }
+
+[steps.retention-approve]
+run = "{piceli} artifacts retention --cluster infra.py:cluster --delete --approve {retention_digest}"
+exit = [0]
+when = "retention_digest"
+
+[steps.registry-gc-dry-run]
+run = """{kubectl} --kubeconfig {kubeconfig} --context {context} -n piceli-system \
+  exec deploy/piceli-registry -- registry garbage-collect --dry-run /etc/distribution/config.yml"""
+exit = [0]
+
+[steps.registry-gc]
+run = """{kubectl} --kubeconfig {kubeconfig} --context {context} -n piceli-system \
+  exec deploy/piceli-registry -- registry garbage-collect /etc/distribution/config.yml"""
+exit = [0]
