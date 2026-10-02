@@ -6,8 +6,6 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ## Version 0.14.2
 
-## Version 0.14.2
-
 - **Images:** `ghcr.io/pynenc/piceli-controller` and `piceli-builder` are
   linked to the repository and public (anonymous pull); the release checks
   an anonymous pull before it finishes. The builder adds `make`, `cmake`,
