@@ -310,6 +310,10 @@ class CheckContext:
             raise CheckError(
                 "check-target-not-found", f"{target} has no matchLabels selector"
             )
+        return self._ready_pod_matching(labels, target)
+
+    def _ready_pod_matching(self, labels: Mapping[str, Any], target: str) -> str:
+        """The newest ready pod whose labels match ``labels``."""
         selector = ",".join(f"{key}={value}" for key, value in sorted(labels.items()))
         listing = self._read(
             f"/api/v1/namespaces/{self.namespace}/pods", [("labelSelector", selector)]
@@ -358,12 +362,21 @@ class CheckContext:
     ) -> HttpResponse:
         """One ``GET path`` (may include a query) to ``target``.
 
-        Goes through the API server proxy (:meth:`proxy_get`), which needs no
-        ``kubectl``. When the API refuses the proxy (HTTP 401/403) and the
-        context's ``kubectl`` is on ``PATH``, it falls back to a temporary
-        port forward. With an injected ``forwarder`` it always uses that.
+        First through a port forward of the API (:meth:`forward_get`): the
+        connection starts inside the target pod's network namespace, so an
+        isolated environment's NetworkPolicy (which admits only its own
+        namespace) does not stand in the way, whatever the CNI, and the
+        policy is not widened. When the API refuses the port forward, through
+        the API server proxy (:meth:`proxy_get`); when that is refused too and
+        ``kubectl`` is on ``PATH``, a temporary ``kubectl port-forward``.
+        None needs ``kubectl``. With an injected ``forwarder`` it always uses
+        that.
         """
         if self._forwarder is None:
+            try:
+                return self.forward_get(target, path, port=port, timeout=timeout)
+            except ForwardRefused:
+                pass
             try:
                 return self.proxy_get(target, path, port=port, timeout=timeout)
             except ProxyRefused:
@@ -371,6 +384,75 @@ class CheckContext:
                     raise
         with self.forward(target, port) as url:
             return http_get(url, path, timeout=timeout)
+
+    def backend(self, target: str, port: int | None = None) -> tuple[str, int]:
+        """The ready pod and container port that serve ``target``'s ``port``.
+
+        A Service resolves through its selector and ``targetPort`` (a number
+        or a container port name); a workload to its newest ready pod.
+        """
+        kind, name = split_target(target, HTTP_KINDS)
+        remote = port if port is not None else self.resolve_port(f"{kind}/{name}")
+        if kind == "pod":
+            self._object(kind, name)
+            return name, remote
+        if kind != "service":
+            return self.ready_pod(f"{kind}/{name}"), remote
+        spec = self._object("service", name).get("spec") or {}
+        entry = next(
+            (p for p in spec.get("ports") or () if p.get("port") == remote), None
+        )
+        if entry is None:
+            raise CheckError(
+                "check-port-unknown", f"service/{name} has no port {remote}"
+            )
+        wanted = entry.get("targetPort", remote)
+        selector = spec.get("selector") or {}
+        if not selector:
+            raise CheckError(
+                "check-target-not-found", f"service/{name} has no selector"
+            )
+        pod = self._ready_pod_matching(selector, f"service/{name}")
+        if isinstance(wanted, int):
+            return pod, wanted
+        found = self._read(f"/api/v1/namespaces/{self.namespace}/pods/{pod}") or {}
+        for container in (found.get("spec") or {}).get("containers") or ():
+            for item in container.get("ports") or ():
+                if item.get("name") == wanted and isinstance(
+                    item.get("containerPort"), int
+                ):
+                    return pod, int(item["containerPort"])
+        raise CheckError(
+            "check-port-unknown", f"service/{name} targets an unknown port {wanted!r}"
+        )
+
+    def forward_get(
+        self,
+        target: str,
+        path: str = "/",
+        *,
+        port: int | None = None,
+        timeout: float = 10.0,
+    ) -> HttpResponse:
+        """One ``GET path`` to ``target`` through a port forward of the API.
+
+        Needs ``create`` on ``pods/portforward`` in the namespace; no
+        ``kubectl``. The connection is made inside the pod's network
+        namespace (no NetworkPolicy applies to it).
+
+        :raises ForwardRefused: (``check-forward-unavailable``) the API
+            refused the port forward (HTTP 401/403) or cannot upgrade it.
+        """
+        pod, remote = self.backend(target, port)
+        return api_forward_get(
+            self.api_client(),
+            self.namespace,
+            pod,
+            remote,
+            path,
+            label=target,
+            timeout=timeout,
+        )
 
     def proxy_get(
         self,
@@ -424,6 +506,129 @@ class CheckContext:
 
 class ProxyRefused(CheckError):
     """The API server refused its proxy (HTTP 401/403): a missing permission."""
+
+
+class ForwardRefused(CheckError):
+    """The API refused a port forward (permission, or no websocket upgrade)."""
+
+
+def _open_port_forward(
+    client: Any, namespace: str, pod: str, port: int, label: str, timeout: float
+) -> Any:
+    """A ``pods/portforward`` websocket with the client's own TLS and credentials.
+
+    The client keeps its TLS material in memory (the connection pool's SSL
+    context, never a file), so the websocket gets that context: the library's
+    own helper only knows file paths. The channel protocol is the library's
+    :class:`~kubernetes.stream.ws_client.PortForward`.
+    """
+    import ssl
+
+    from kubernetes.stream.ws_client import (
+        V4_CHANNEL_PROTOCOL,
+        PortForward,
+        get_websocket_url,
+    )
+    from websocket import WebSocket, WebSocketBadStatusException
+
+    configuration = client.configuration
+    headers: dict[str, str] = {}
+    # Refreshes an exec-plugin credential (and its TLS context) when stale.
+    client.update_params_for_auth(headers, [], ["BearerToken"])
+    header = [f"sec-websocket-protocol: {V4_CHANNEL_PROTOCOL}"]
+    if "authorization" in {key.lower() for key in headers}:
+        value = next(v for k, v in headers.items() if k.lower() == "authorization")
+        header.append(f"authorization: {value}")
+    pool = getattr(getattr(client, "rest_client", None), "pool_manager", None)
+    context = (getattr(pool, "connection_pool_kw", None) or {}).get("ssl_context")
+    sslopt: dict[str, Any]
+    if context is not None:
+        sslopt = {"context": context}
+    elif configuration.verify_ssl:
+        sslopt = {"cert_reqs": ssl.CERT_REQUIRED}
+        if configuration.ssl_ca_cert:
+            sslopt["ca_certs"] = configuration.ssl_ca_cert
+        if configuration.cert_file:
+            sslopt["certfile"] = configuration.cert_file
+        if configuration.key_file:
+            sslopt["keyfile"] = configuration.key_file
+    else:
+        sslopt = {"cert_reqs": ssl.CERT_NONE}
+    if configuration.tls_server_name:
+        sslopt["server_hostname"] = configuration.tls_server_name
+    url = get_websocket_url(
+        str(configuration.host).rstrip("/")
+        + f"/api/v1/namespaces/{quote(namespace, safe='')}/pods/"
+        + f"{quote(pod, safe='')}/portforward",
+        [("ports", str(port))],
+    )
+    websocket = WebSocket(sslopt=sslopt, skip_utf8_validation=False)
+    try:
+        websocket.connect(url, header=header, timeout=timeout)
+    except WebSocketBadStatusException as error:
+        status = int(getattr(error, "status_code", 0) or 0)
+        raise ForwardRefused(
+            "check-forward-unavailable",
+            f"the API refused a port forward to {label} (HTTP {status}); "
+            "the identity needs create on pods/portforward",
+        ) from None
+    except Exception as error:  # transport details may hold credentials
+        raise ForwardRefused(
+            "check-forward-unavailable",
+            f"no port forward to {label}: {type(error).__name__}",
+        ) from None
+    return PortForward(websocket, [port])
+
+
+def api_forward_get(
+    client: Any,
+    namespace: str,
+    pod: str,
+    port: int,
+    path: str,
+    *,
+    label: str,
+    timeout: float,
+) -> HttpResponse:
+    """``GET path`` on ``pod``'s ``port`` through the API's ``pods/portforward``.
+
+    The kubelet connects inside the pod's network namespace, so the request
+    never crosses a NetworkPolicy. Redirects are not followed; only the
+    app's answer is returned. Server messages are never repeated.
+    """
+    import http.client
+
+    forward = _open_port_forward(client, namespace, pod, port, label, timeout)
+    try:
+        sock = forward.socket(port)
+        sock.settimeout(timeout)
+        connection = http.client.HTTPConnection("localhost", port, timeout=timeout)
+        connection.sock = sock  # the forwarded stream, already connected
+        try:
+            connection.request(
+                "GET", path, headers={"Accept": "*/*", "Connection": "close"}
+            )
+            response = connection.getresponse()
+            body = response.read(_MAX_BODY)
+            status = int(response.status)
+        except TimeoutError:
+            raise CheckError("check-timed-out", f"GET {path} timed out") from None
+        except (OSError, http.client.HTTPException) as error:
+            error_code = forward.error(port) if hasattr(forward, "error") else None
+            raise CheckError(
+                "check-forward-unavailable",
+                f"GET {path} through a port forward to {label} failed: "
+                f"{type(error).__name__}"
+                + (" (nothing listens on the port)" if error_code else ""),
+            ) from None
+        finally:
+            connection.close()
+    finally:
+        try:
+            forward.close()
+        except Exception:
+            pass
+    return HttpResponse(status, body)
 
 
 def _api_status(response: Any, body: bytes) -> dict[str, Any] | None:

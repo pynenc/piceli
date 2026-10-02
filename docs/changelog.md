@@ -4,6 +4,20 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.14.4
+
+- **Fix:** `Checks.http` and `Checks.metric` pass in an isolated branch
+  environment. They reach a ready pod of the target through a port forward
+  of the API (from Python, no `kubectl`): the connection starts inside the
+  pod, so the environment's isolation policy, which refuses the API server's
+  proxy when the API server runs on another node (k3s), is neither in the
+  way nor widened. The API proxy stays as a fallback.
+- **Fix:** a failed build of a composition shows the failing command's
+  output (redacted) in the build Job's log and in `gitops status`
+  (`failure.log_tail`).
+- **Fix:** branch teardown removes the failed build Job kept for that
+  branch.
+
 ## Version 0.14.3
 
 - **Branch environments may reach the API server:**

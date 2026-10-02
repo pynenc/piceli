@@ -149,3 +149,55 @@ def test_a_refused_proxy_falls_back_to_kubectl_when_it_is_installed(
     ).results
     assert forwards == [("service/web", 80)]
     assert result.detail == "stub forward"
+
+
+def test_an_isolated_environment_is_reached_by_a_port_forward(
+    cluster, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An isolated environment's policy refuses the API proxy (HTTP 503):
+    the check goes through a port forward, which starts inside the pod."""
+    from piceli.checks import context as module
+    from piceli.checks.context import HttpResponse
+
+    api, context = cluster
+    # The pod serves on a named container port behind the Service's port 80.
+    pod = api.objects[("Pod", "web-1")]
+    pod["spec"]["containers"][0]["ports"] = [{"name": "http", "containerPort": 8080}]
+    api.objects[("Service", "web")]["spec"]["ports"] = [
+        {"port": 80, "targetPort": "http"}
+    ]
+    api.proxy("service/web", 80, "/login", status=503)  # what isolation causes
+    forwarded: list[tuple[str, int, str]] = []
+
+    def forward_get(client, namespace, pod_name, port, path, **_: Any) -> HttpResponse:
+        forwarded.append((pod_name, port, path))
+        return HttpResponse(200, b"<form>sign in</form>")
+
+    monkeypatch.setattr(module, "api_forward_get", forward_get)
+    report = run_checks(
+        [Checks.http("service/web", "/login", body_contains="sign in", retries=0)],
+        context,
+    )
+    assert report.passed, report.to_dict()
+    assert forwarded == [("web-1", 8080, "/login")]
+    assert _proxied(api) == []  # the proxy was not needed
+
+
+def test_a_refused_port_forward_falls_back_to_the_proxy(
+    cluster, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from piceli.checks import context as module
+
+    api, context = cluster
+
+    def refused(*_: Any, **__: Any) -> Any:
+        raise module.ForwardRefused("check-forward-unavailable", "HTTP 403")
+
+    monkeypatch.setattr(module, "api_forward_get", refused)
+    api.proxy("service/web", 80, "/login", body=b"<form>sign in</form>")
+    report = run_checks(
+        [Checks.http("service/web", "/login", body_contains="sign in", retries=0)],
+        context,
+    )
+    assert report.passed, report.to_dict()
+    assert len(_proxied(api)) == 1
