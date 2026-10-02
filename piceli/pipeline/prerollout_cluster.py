@@ -24,6 +24,7 @@ from piceli.pipeline.prerollout import (
     APP_LABEL,
     CHECK_LABEL,
     DEADLINE_SLACK_SECONDS,
+    STAGED,
     scrub,
 )
 
@@ -193,16 +194,84 @@ class PreRolloutCluster:
 
     # ------------------------------------------------------------- writes
     def remove_stale(self, app: str) -> int:
-        """Delete check Jobs of ``app`` that an earlier, interrupted run left."""
+        """Delete check Jobs and staged copies of ``app`` an interrupted run left."""
+        selector = f"{CHECK_LABEL},{APP_LABEL}={app}"
         found = self._get(
             "/apis/batch/v1/namespaces/" + self.namespace + "/jobs",
-            labelSelector=f"{CHECK_LABEL},{APP_LABEL}={app}",
+            labelSelector=selector,
         )
         removed = 0
         for job in (found or {}).get("items") or []:
             self.delete_job(job["metadata"]["name"])
             removed += 1
+        for kind in ("Secret", "ConfigMap"):
+            try:
+                copies = self._get(self._ns(_plural(kind)), labelSelector=selector)
+            except Unreadable:
+                continue
+            for item in (copies or {}).get("items") or []:
+                if self.delete_object(kind, item["metadata"]["name"]):
+                    removed += 1
         return removed
+
+    def create_object(self, body: Mapping[str, Any]) -> None:
+        """Create a staged copy of a Secret or ConfigMap (never prints its data).
+
+        :raises PipelineError: ``prerollout-unavailable`` when the API refuses.
+        """
+        from kubernetes.client.exceptions import ApiException
+
+        kind = str(body["kind"])
+        try:
+            self._send(
+                self._ns(_plural(kind)), "POST", body, fieldManager="piceli-prerollout"
+            )
+        except ApiException as error:
+            raise PipelineError(
+                "prerollout-unavailable",
+                f"the API refused to create the check's copy of a {kind} "
+                f"(HTTP {error.status})",
+                failed=True,
+            ) from None
+
+    def delete_object(self, kind: str, name: str) -> bool:
+        """Delete a staged copy; ``True`` when it is gone or was absent.
+
+        Only an object labelled as a staged copy (:data:`STAGED`) is deleted,
+        with its UID and resourceVersion as preconditions.
+        """
+        from kubernetes.client.exceptions import ApiException
+
+        path = self._ns(_plural(kind), name)
+        for _ in range(4):
+            try:
+                current = self._get(path)
+            except (Unreadable, ApiException):
+                return False
+            if current is None:
+                return True
+            meta = current["metadata"]
+            if (meta.get("labels") or {}).get(CHECK_LABEL) != STAGED:
+                return False
+            try:
+                self._send(
+                    path,
+                    "DELETE",
+                    {
+                        "propagationPolicy": "Background",
+                        "preconditions": {
+                            "uid": meta["uid"],
+                            "resourceVersion": meta["resourceVersion"],
+                        },
+                    },
+                )
+                return True
+            except ApiException as error:
+                if error.status == 404:
+                    return True
+                if error.status != 409:
+                    return False
+        return False
 
     def _send(self, path: str, method: str, body: Any, **query: Any) -> Any:
         return self.client.call_api(
@@ -379,6 +448,10 @@ class PreRolloutCluster:
 
 
 # ---------------------------------------------------------------- helpers
+
+
+def _plural(kind: str) -> str:
+    return "secrets" if kind == "Secret" else "configmaps"
 
 
 def _raw(response: Any) -> Any:

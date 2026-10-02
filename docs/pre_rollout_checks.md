@@ -148,17 +148,28 @@ A check fails with one of:
 ### Secrets that this release creates or changes
 
 The check runs **before** `apply`, so it reads Secrets and ConfigMaps as they
-are in the cluster now:
+are in the cluster now, except the ones the release creates:
 
-- one the release **creates** does not exist yet: it is marked `optional` for
-  the check and listed as `unverified` in the outcome (the check cannot prove
-  that mount);
+- one the release **creates** does not exist yet (always the case on a first
+  install into an empty namespace): the check gets a **staged copy** of it, a
+  Secret or ConfigMap with the release's real data under another name
+  (`<workload>-chks0-<run>`, labelled `piceli.io/pre-rollout: staged`). The
+  copy is created just before the check Job, read instead of the original by
+  the check pod only, and deleted with the Job whether the check passes or
+  fails; a copy an interrupted run left is removed by the next run. The
+  outcome lists it under `staged`. The release's own objects are still
+  created only by `apply`, so the approved plan (and its hash) is exactly
+  what is applied, and nothing of the release exists when a check fails;
+- if the release's values cannot be read from its local state, the reference
+  is marked `optional` instead and listed as `unverified` (the check cannot
+  prove that mount);
 - one the release **changes** is read in its current, older form.
 
-So a first release cannot prove Secrets it creates itself, and a release that
-adds a key to a mounted Secret is checked against the old Secret. Objects the
-release does not touch (created out of band, or by an earlier release) are
-checked exactly as the pods will see them.
+So a release that adds a key to a mounted Secret is checked against the old
+Secret. Objects the release does not touch (created out of band, or by an
+earlier release) are checked exactly as the pods will see them. Copies hold
+secret values like the originals; their values are never printed and are
+redacted from the check's log tail.
 
 ## The run summary and events
 
@@ -193,7 +204,10 @@ run. Scrubbing is best effort; do not print secrets from a check command.
 
 The deploying identity needs, in the target namespace: `create`, `get`,
 `list` and `delete` on `jobs.batch`; `get` and `list` on `pods`, `pods/log`
-and `events`; `get` on `secrets`, `configmaps` and `persistentvolumeclaims`.
+and `events`; `get` on `secrets`, `configmaps` and `persistentvolumeclaims`;
+and, to stage copies of the Secrets and ConfigMaps a release creates,
+`create`, `list` and `delete` on `secrets` and `configmaps` (a deployer that
+applies releases has them already).
 `get secrets` is used to read key names and to redact values from logs; if it
 is denied, those reads are skipped and the Job itself is the check.
 

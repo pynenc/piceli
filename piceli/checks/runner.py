@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import quote
 
-from piceli.checks.context import CheckContext, CheckError, CheckFailed, http_get
+from piceli.checks.context import CheckContext, CheckError, CheckFailed
 from piceli.checks.model import (
     Check,
     CheckSpecError,
@@ -152,12 +152,12 @@ def _samples(document: Any) -> list[float]:
 
 
 def _metric(check: MetricCheck, context: CheckContext) -> str:
-    with context.forward(check.target, check.port) as url:
-        response = http_get(
-            url,
-            f"{check.path}?query={quote(check.query, safe='')}",
-            timeout=check.timeout,
-        )
+    response = context.http_get(
+        check.target,
+        f"{check.path}?query={quote(check.query, safe='')}",
+        port=check.port,
+        timeout=check.timeout,
+    )
     if response.status != 200:
         raise CheckError(
             "check-metric-invalid", f"query returned HTTP {response.status}"

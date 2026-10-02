@@ -5,7 +5,7 @@ Maturity: **preview** (the API may change before 1.0).
 Four check types, each usable from Python (:class:`Checks`) and from
 ``release.toml`` (``[[checks]]``):
 
-* ``http`` — GET a path through a temporary supervised loopback port forward;
+* ``http`` — GET a path through the API server proxy;
 * ``exec`` — run a command in a ready pod through the Kubernetes API;
 * ``metric`` — query a Prometheus-compatible endpoint and compare the samples;
 * ``python`` — call a function with the :class:`CheckContext`.

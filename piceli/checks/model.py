@@ -160,7 +160,7 @@ def _slug(*parts: str) -> str:
 
 
 class HttpCheck(_Check):
-    """GET ``path`` through a temporary supervised loopback port forward.
+    """GET ``path`` through the API server proxy (no ``kubectl`` needed).
 
     :param target: ``service/NAME``, ``deployment/NAME`` or ``pod/NAME`` (or an
         App ``Service``/``Deployment`` handle).
@@ -269,8 +269,7 @@ Comparison = Literal["<", "<=", ">", ">=", "==", "!="]
 class MetricCheck(_Check):
     """Query a Prometheus-compatible endpoint and compare every sample.
 
-    The endpoint is reached through a temporary supervised port forward to
-    ``target``; ``GET {path}?query=<query>`` must return the Prometheus HTTP
+    The endpoint is reached through the API server proxy of ``target``; ``GET {path}?query=<query>`` must return the Prometheus HTTP
     API JSON (``vector`` or ``scalar``). The check passes when there is at
     least one sample (unless ``empty = "pass"``) and every sample value
     satisfies ``value <op> threshold``.

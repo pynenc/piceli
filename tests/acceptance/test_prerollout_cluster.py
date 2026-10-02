@@ -182,3 +182,20 @@ def test_reads_report_absent_keys_and_unreadable_objects(cluster) -> None:
         "modes": ["ReadWriteOnce"],
     }
     assert runner.read_claim("nope") is None
+
+
+def test_staged_copies_are_removed_but_never_an_unlabelled_object(cluster) -> None:
+    api, runner, _ = cluster
+    copy = manifest("Secret", "db-chks0-abc")
+    copy["metadata"]["labels"] = {
+        "piceli.io/pre-rollout": "staged",
+        "piceli.io/pre-rollout-app": "shop",
+    }
+    runner.create_object(copy)
+    api.put(manifest("Secret", "credentials"))
+    # The release's own object is never deleted, even when asked by name.
+    assert runner.delete_object("Secret", "credentials") is False
+    assert ("Secret", "credentials") in api.objects
+    assert runner.remove_stale("shop") == 1
+    assert ("Secret", "db-chks0-abc") not in api.objects
+    assert runner.delete_object("Secret", "db-chks0-abc") is True  # already gone

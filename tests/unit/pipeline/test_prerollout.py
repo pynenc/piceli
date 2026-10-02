@@ -181,3 +181,56 @@ def test_scrub_keeps_a_bounded_tail_without_secret_like_text() -> None:
     assert "ghp_" not in dirty and "pw1234" not in dirty
     assert "hello" in dirty
     assert len(scrub("x " * 5000)) <= 4000
+
+
+def test_staged_copies_replace_references_and_keep_only_data() -> None:
+    from piceli.pipeline.prerollout import staged_copy, staged_name, staged_values
+
+    pod = build(
+        renamed={("Secret", "creds"): "db-chks0-abcd1234"},
+        optional=[("Secret", "creds"), ("ConfigMap", "db-conf")],
+    )["spec"]["template"]["spec"]
+    env = {item["name"]: item for item in pod["containers"][0]["env"]}
+    # A staged copy wins over optional: the check reads the real value.
+    assert env["PW"]["valueFrom"]["secretKeyRef"] == {
+        "name": "db-chks0-abcd1234",
+        "key": "pw",
+    }
+    volumes = {item["name"]: item for item in pod["volumes"]}
+    assert volumes["db-conf"]["configMap"]["optional"] is True
+    assert staged_name("db", "20260101T000000Z-abcd1234", "Secret", 0) == (
+        "db-chks0-abcd1234"
+    )
+    copy = staged_copy(
+        {
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {
+                "name": "creds",
+                "labels": {"app.kubernetes.io/name": "shop"},
+                "annotations": {"piceli.io/owner": "shop"},
+            },
+            "type": "kubernetes.io/basic-auth",
+            "data": {"pw": "c2VjcmV0LXZhbHVl"},
+        },
+        name="db-chks0-abcd1234",
+        namespace="shop",
+        app="shop",
+        run="20260101T000000Z-abcd1234",
+    )
+    assert copy == {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {
+            "name": "db-chks0-abcd1234",
+            "namespace": "shop",
+            "labels": {
+                "piceli.io/pre-rollout": "staged",
+                "piceli.io/pre-rollout-app": "shop",
+                "piceli.io/pre-rollout-run": "abcd1234",
+            },
+        },
+        "type": "kubernetes.io/basic-auth",
+        "data": {"pw": "c2VjcmV0LXZhbHVl"},
+    }
+    assert staged_values(copy) == ["secret-value"]

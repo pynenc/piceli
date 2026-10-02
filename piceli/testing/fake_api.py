@@ -445,6 +445,11 @@ class FakeAPI:
     - ``job_results``: ``{Job name prefix: outcome}`` for Jobs a client creates
       (see :meth:`job_result`); a Job without a match completes when
       :attr:`ready` is true, as before.
+    - ``proxied``: ``{(kind, name, port, path): (status, body)}`` answered at
+      the API server proxy ``services/NAME:PORT/proxy/PATH`` and
+      ``pods/NAME:PORT/proxy/PATH`` (see :meth:`proxy`); an unregistered path
+      of an existing object answers ``503`` (no endpoint), and with
+      ``forbid_proxy`` every proxy request is refused with ``403`` (0.14.2).
     - ``intercept``: an optional ``(request, phase) -> bool`` called for
       every request with ``phase`` ``"received"`` (before the server acts on
       it) and ``"committed"`` (after it acted, before the response). Returning
@@ -486,6 +491,8 @@ class FakeAPI:
         self.pod_failures: dict[str, dict[str, Any]] = {}
         self.pod_logs: dict[tuple[str, str, bool], str] = {}
         self.job_results: dict[str, dict[str, Any]] = {}
+        self.proxied: dict[tuple[str, str, int, str], tuple[int, bytes]] = {}
+        self.forbid_proxy = False
         self.events: list[dict[str, Any]] = []
         self.put(manifest("Namespace", "kube-system"), uid="cluster-uid")
         self.put(manifest("Namespace", namespace), uid="namespace-uid")
@@ -673,6 +680,43 @@ class FakeAPI:
                 "events": tuple(events),
                 "container": container,
             }
+
+    def proxy(
+        self, target: str, port: int, path: str, *, status: int = 200, body: bytes = b""
+    ) -> None:
+        """Answer ``GET path`` through the API server proxy of ``target`` (0.14.2).
+
+        ``target`` is ``service/NAME`` or ``pod/NAME``; ``path`` excludes the
+        query string.
+        """
+        kind, _, name = target.partition("/")
+        with self.lock:
+            self.proxied[(kind, name, int(port), path)] = (status, body)
+
+    def _serve_proxy(self, path: str, method: str) -> tuple[int, Any] | None:
+        """``services|pods/NAME:PORT/proxy/PATH`` of the namespace, or ``None``."""
+        base = f"/api/v1/namespaces/{self.namespace}/"
+        if not path.startswith(base):
+            return None
+        rest = path[len(base) :].split("/", 3)
+        if len(rest) < 3 or rest[0] not in {"services", "pods"} or rest[2] != "proxy":
+            return None
+        name, _, port = unquote(rest[1]).partition(":")
+        kind = "service" if rest[0] == "services" else "pod"
+        if self.forbid_proxy:
+            return 403, _status(403, "Forbidden", f"{rest[0]}/proxy is forbidden")
+        if method != "GET":
+            return 405, _status(405, "MethodNotAllowed", "only GET is served")
+        if (kind.capitalize(), name) not in self.objects:
+            return 404, _status(404, "NotFound", f"{rest[0]} {name!r} not found")
+        found = self.proxied.get(
+            (kind, name, int(port or 0), "/" + (rest[3] if len(rest) > 3 else ""))
+        )
+        if found is None:
+            return 503, _status(
+                503, "ServiceUnavailable", f"no endpoints available for {name!r}"
+            )
+        return found[0], found[1]
 
     def _job_result(self, name: str) -> dict[str, Any] | None:
         for prefix, result in self.job_results.items():
@@ -1235,6 +1279,8 @@ class FakeAPI:
                     ],
                 }
         extra = self._serve_pod_extras(path, method, query)
+        if extra is None:
+            extra = self._serve_proxy(path, method)
         if extra is not None:
             return extra
         if path == "/api/v1/nodes" and method == "GET":
@@ -1667,6 +1713,19 @@ def fake_cluster(
             yield FakeCluster(served, url, provider)
         finally:
             provider.client.close()
+
+
+def _status(code: int, reason: str, message: str) -> dict[str, Any]:
+    """A ``v1`` ``Status`` failure, as the API server answers its own errors."""
+    return {
+        "kind": "Status",
+        "apiVersion": "v1",
+        "metadata": {},
+        "status": "Failure",
+        "message": message,
+        "reason": reason,
+        "code": code,
+    }
 
 
 def _selected(value: dict[str, Any], selector: str) -> bool:

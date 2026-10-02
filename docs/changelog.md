@@ -40,6 +40,28 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   teardown looped on `env-cluster-unavailable`). A refused Kubernetes request
   now names its verb, resource and namespace in the message, the log and the
   status (`failure.denied`), never the server's answer.
+- **Fix:** pre-rollout checks of a first install no longer always fail
+  `prerollout-failed`. A Secret or ConfigMap the release itself creates did
+  not exist yet and was mounted `optional`; the check now reads a labelled
+  copy with the release's real values (`piceli.io/pre-rollout: staged`),
+  created just before its Job and deleted with it (or by the next run after
+  an interrupt), listed under `staged` in the stage output. The release's
+  own objects are still created only by the approved apply; when the values
+  cannot be read the reference stays `optional` and `unverified`.
+- **Fix:** `Checks.http` and `Checks.metric` reach their target through the
+  API server proxy (`services/NAME:PORT/proxy`, or a ready pod's
+  `pods/NAME:PORT/proxy` for a Deployment) instead of `kubectl port-forward`,
+  so they work in the controller image, which has no `kubectl`
+  (`check-forward-unavailable`, FileNotFoundError). The identity needs `get`
+  on `services/proxy` and `pods/proxy`; when the API refuses the proxy and
+  `kubectl` is installed, the check falls back to the port forward.
+  `CheckContext.forward` still uses `kubectl`; `CheckContext.proxy_get` is
+  new. The fake API serves the proxy (`FakeAPI.proxy`, `forbid_proxy`).
+- **Fix:** an environment with a `Stack` runs only the pipeline checks of the
+  workloads it deploys: a check whose Service or workload target the stack
+  leaves out is skipped and listed as `{"check", "target", "why":
+  "not-in-stack"}` under `skipped` in the plan's and the run's checks stage.
+  Checks without such a target (`python`, `pod/NAME`) still run.
 
 ## Version 0.14.1
 

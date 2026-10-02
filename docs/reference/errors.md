@@ -2998,9 +2998,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-check-forward-unavailable)=
 ### `check-forward-unavailable`
 
-**Check port forward unavailable.** The temporary loopback port forward to the target did not become healthy in time, or the connection through it failed.
+**Check port forward unavailable.** The API server refused its proxy to the target (a missing `services/proxy` or `pods/proxy` permission) or could not reach a ready endpoint, or the temporary port forward did not become healthy in time.
 
-- **Fix:** Make sure `kubectl` is on PATH and the target has a ready pod listening on the port; run `piceli release check` to retry.
+- **Fix:** Grant `get` on `services/proxy` and `pods/proxy` in the namespace and make sure the target has a ready pod listening on the port; run `piceli release check` to retry.
 - **Retry-safe:** yes
 
 (error-check-invalid)=
