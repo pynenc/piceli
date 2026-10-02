@@ -282,9 +282,12 @@ def test_the_controllers_old_in_cluster_copy_is_collectable(
     hosted = "sha256:" + "e" * 64  # the controller now runs from a hosted registry
     cluster[:] = [
         _pod("controller-2", f"{HOSTED}/controller@{hosted}", hosted),
-        {
+        {  # Piceli's own controller: its old copy is no environment's rollback
             "kind": "Deployment",
-            "metadata": {"name": "controller"},
+            "metadata": {
+                "name": "controller",
+                "labels": {"piceli.io/component": "gitops"},
+            },
             "spec": {
                 "replicas": 1,
                 "template": _template(f"{HOSTED}/controller@{hosted}"),
@@ -427,3 +430,27 @@ def test_the_controller_status_keeps_the_digests_it_names() -> None:
     }
     digests, _ = live_images([status])
     assert digests == {digest: {"controller"}}
+
+
+def test_an_apps_newest_rollout_history_is_its_rollback_target() -> None:
+    """The newest scaled-down ReplicaSet of an app's Deployment is kept for
+    ``rollout undo``; older ones are not (and Piceli's controller has none)."""
+    old, prev = ("sha256:" + x * 64 for x in "12")
+
+    def history(name: str, image: str, revision: str) -> dict[str, Any]:
+        item = _old_replica_set(image)
+        item["metadata"].update(
+            name=name,
+            annotations={"deployment.kubernetes.io/revision": revision},
+            ownerReferences=[{"kind": "Deployment", "name": "api"}],
+        )
+        return item
+
+    live = LiveWorkloads.from_objects(
+        [
+            history("api-1", f"{HOST}/app/api@{old}", "1"),
+            history("api-2", f"{HOST}/app/api@{prev}", "2"),
+        ]
+    )
+    assert live.rollback == {prev: {"replicaset:rollback"}}
+    assert old not in live.digests and prev not in live.digests

@@ -5196,14 +5196,18 @@
    "artifacts retention": {
     "arguments": [],
     "flags": [
+     "--allow-exec",
      "--approve",
      "--budget",
      "--ca-file",
+     "--cluster",
      "--collect-unledgered",
      "--context",
      "--credentials",
      "--delete",
      "--docker-config",
+     "--env",
+     "--exec-sha256",
      "--forward-remote-port",
      "--keep",
      "--kubeconfig",
@@ -5219,6 +5223,7 @@
      "--repository",
      "--timeout",
      "--to",
+     "--transport",
      "--via-forward"
     ],
     "subcommands": []
@@ -7058,6 +7063,7 @@
    "registry-not-oci-v2",
    "registry-options-on-node-target",
    "registry-response-too-large",
+   "registry-storage-unreadable",
    "registry-unauthorized",
    "registry-unreachable",
    "release-changes-pending",
@@ -8178,6 +8184,8 @@
   "piceli.artifacts.publish",
   "piceli.artifacts.registry",
   "piceli.artifacts.registry_delivery",
+  "piceli.artifacts.registry_ref",
+  "piceli.artifacts.registry_storage",
   "piceli.artifacts.retention",
   "piceli.artifacts.retention_cli",
   "piceli.artifacts.runnable",

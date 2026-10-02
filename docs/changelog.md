@@ -4,6 +4,38 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.14.5
+
+- **Fix:** retention of the in-cluster registry works out what to keep on
+  its own. `piceli artifacts retention --cluster infra.py:CLUSTER --delete`
+  derives the registry, the port-forward to its Service and the cluster read
+  (every namespace) from the declared Cluster, and lists every manifest the
+  registry stores with a read-only `find` in the registry pod (`pods/exec`),
+  so digest-only images nothing names any more (old builders) are found
+  without receipts. It keeps what runs, what Piceli uses (the controller and
+  UI Deployments, the builder in `piceli-gitops-config`) and every
+  workload's rollback target, and collects the rest, tagged or not; the
+  approval command is printed in full. `--to` and the other flags work as
+  before.
+- **Fix:** a Deployment's newest scaled-down ReplicaSet and a StatefulSet's
+  previous ControllerRevision are kept as the rollback target (reason
+  `rollback`; older history stays collectable, and Piceli's own controller,
+  UI and registry have none), with or without `--cluster`. The delete
+  refuses a plan that names one. ControllerRevisions are read (the cluster
+  read needs `list` on `controllerrevisions`).
+- **Fix:** `piceli registry status|install|uninstall|forward` accept a
+  declared `Cluster` (`infra.py:CLUSTER`) or the composition module
+  (`infra.py`) and reach the cluster through its credential profile;
+  `infra.py:CLUSTER` was refused with `cluster-registry-invalid`.
+- **Fix:** `piceli registry status` reports the registry claim's use: the
+  kubelet's volume stats only when they are the claim's own filesystem,
+  else `du` in the registry pod; the node filesystem a `local-path` claim
+  shares is shown as such (`storage.used_source`, `storage.filesystem`), never
+  as the registry's use. The UI's cluster view no longer shows the node's
+  filesystem as the registry's use.
+- New error code `registry-storage-unreadable` (reported in the retention
+  report's `storage_listing`, not a refusal).
+
 ## Version 0.14.4
 
 - **Fix:** `Checks.http` and `Checks.metric` pass in an isolated branch
