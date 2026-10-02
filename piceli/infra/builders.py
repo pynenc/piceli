@@ -268,9 +268,9 @@ class LocalBuilder:
                     grant = HostBuildGrant(plan.plan_hash, time.time() + 3600)
                     receipt = spec.run(grant, Path(out), progress=self.say).to_dict()
                 except BuildSpecError as error:
-                    raise CompositionError(
-                        "component-build-failed",
+                    raise build_failed(
                         f"component {item.component!r}: host build failed ({error.code})",
+                        error,
                     ) from None
                 entry = receipt["outputs"]["images"][item.component]
                 delivered = self._backend().registry_deliver(
@@ -501,6 +501,24 @@ def _run(cluster: Any, job: Mapping[str, Any]) -> Any:
     from piceli.artifacts.cluster_build import build_key
 
     return run_build(job, build_key(job))
+
+
+def build_failed(message: str, error: Any) -> CompositionError:
+    """``component-build-failed`` keeping the failing command's output tail.
+
+    The tail is already redacted (:attr:`BuildSpecError.output_tail`); it is
+    printed into the build Job's log by ``piceli build job-run`` and kept in
+    the error's details, which the controller's status shows
+    (``failure.log_tail``).
+    """
+    tail = str(getattr(error, "output_tail", "") or "")
+    failed = CompositionError(
+        "component-build-failed",
+        message,
+        details={"outcome": {"log_tail": tail}} if tail else None,
+    )
+    failed.output_tail = tail  # type: ignore[attr-defined]
+    return failed
 
 
 def _job_failed(outcome: Any, what: str) -> CompositionError:

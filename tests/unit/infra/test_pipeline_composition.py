@@ -515,3 +515,82 @@ def test_pipeline_environments_refuse_contract_components() -> None:
         )
     with pytest.raises(EnvError):
         Environment("main", namespace="shop", pipeline="app.py:pipeline")
+
+
+FAILING_SPEC = SPEC.replace(
+    'tools = ["true"]\ncommands = [["true"]]',
+    'tools = ["sh"]\ncommands = [["sh", "-c", "echo compiling; '
+    'echo \\"error: expected item token=s3cr3t-not-printed\\" >&2; exit 1"]]',
+)
+
+
+def _failing_sources(tmp_path: Path) -> Path:
+    sources = tmp_path / "sources"
+    sources.mkdir()
+    files = {
+        "infra": {"host-build.toml": FAILING_SPEC, "config/api.json": "{}\n"},
+        "api": {"site/index.html": "<h1>hi</h1>\n"},
+        "worker": {"jobs/run.sh": "echo hi\n"},
+    }
+    for name, content in files.items():
+        repo = Repo(tmp_path / "remotes", name, content)
+        repo.work.rename(sources / name)
+    return sources
+
+
+def test_a_failed_composition_build_keeps_the_commands_output(tmp_path: Path) -> None:
+    from piceli.infra import CompositionError
+
+    with pytest.raises(CompositionError) as failed:
+        job_run_spec(
+            sources=_failing_sources(tmp_path),
+            spec="infra/host-build.toml",
+            images=[
+                {
+                    "image": "worker",
+                    "repository": "x/worker",
+                    "key": "sha256:" + "7" * 64,
+                }
+            ],
+            platforms=("linux/arm64",),
+            cache=tmp_path / "cache",
+            out=tmp_path / "out",
+            registry_url="oci://registry.example:5000",
+            node_registry="registry.example:5000",
+        )
+    assert failed.value.code == "component-build-failed"
+    tail = failed.value.output_tail
+    assert "compiling" in tail and "error: expected item" in tail
+    assert "s3cr3t-not-printed" not in tail
+    # What `gitops status` shows (failure.log_tail) for a local build.
+    from piceli.gitops.controller import failure_detail
+
+    detail = failure_detail(failed.value)
+    assert detail is not None and "error: expected item" in detail["log_tail"]
+
+
+def test_the_composition_build_job_prints_the_failing_commands_tail(
+    tmp_path: Path,
+) -> None:
+    from typer.testing import CliRunner
+
+    from piceli.k8s.cli import app
+
+    image = {"image": "worker", "repository": "x/worker", "key": "sha256:" + "7" * 64}
+    result = CliRunner().invoke(
+        app,
+        [
+            "build", "job-run",
+            "--sources", str(_failing_sources(tmp_path)),
+            "--spec", "infra/host-build.toml",
+            "--image", json.dumps(image),
+            "--platform", "linux/arm64",
+            "--cache", str(tmp_path / "cache"),
+            "--out", str(tmp_path / "out"),
+            "--registry-url", "oci://registry.example:5000",
+        ],
+    )  # fmt: skip
+    assert result.exit_code != 0, result.output
+    # The pod log (the Job's output) holds what the command printed last.
+    assert "error: expected item" in result.stderr
+    assert "s3cr3t-not-printed" not in result.output + result.stderr
