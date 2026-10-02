@@ -349,6 +349,7 @@ def check_job(
     claims: Mapping[str, str] | None = None,
     node: str | None = None,
     optional: Iterable[tuple[str, str]] = (),
+    renamed: Mapping[tuple[str, str], str] | None = None,
 ) -> dict[str, Any]:
     """The check Job of ``manifest``'s workload (see the module docstring).
 
@@ -360,6 +361,8 @@ def check_job(
     :param optional: ``(kind, name)`` of Secrets and ConfigMaps that do not
         exist yet because this release creates them; they are marked optional
         so the check still runs.
+    :param renamed: ``(kind, name)`` -> name of a staged copy: references to
+        a Secret or ConfigMap this release creates read the copy instead.
     """
     pod = _pod(manifest)
     main = main_container(manifest)
@@ -381,7 +384,7 @@ def check_job(
         },
         "command": list(command),
     }
-    _mark_optional(container, skip)
+    _mark_optional(container, skip, renamed)
     mounts: list[dict[str, Any]] = []
     volumes: dict[str, dict[str, Any]] = {}
     pod_volumes = {
@@ -407,7 +410,9 @@ def check_job(
                 "persistentVolumeClaim": {"claimName": claim, "readOnly": True},
             }
         elif source is not None and any(key in source for key in KEPT_VOLUMES):
-            volumes[name] = _optional_volume(json.loads(canonical(source)), skip)
+            volumes[name] = _optional_volume(
+                json.loads(canonical(source)), skip, renamed
+            )
         elif source is not None or name in templates:
             volumes[name] = _emptydir(name)
         else:
@@ -456,8 +461,30 @@ def check_job(
     }
 
 
-def _mark_optional(container: dict[str, Any], skip: set[tuple[str, str]]) -> None:
-    if not skip:
+def _adjust(
+    ref: Any,
+    kind: str,
+    field: str,
+    skip: set[tuple[str, str]],
+    renamed: Mapping[tuple[str, str], str],
+) -> None:
+    """Point ``ref`` at a staged copy, or mark it optional when it is skipped."""
+    if not isinstance(ref, dict):
+        return
+    key = (kind, ref.get(field))
+    if key in renamed:
+        ref[field] = renamed[key]  # type: ignore[index]
+    elif key in skip:
+        ref["optional"] = True
+
+
+def _mark_optional(
+    container: dict[str, Any],
+    skip: set[tuple[str, str]],
+    renamed: Mapping[tuple[str, str], str] | None = None,
+) -> None:
+    renamed = renamed or {}
+    if not skip and not renamed:
         return
     for item in container.get("env") or []:
         source = item.get("valueFrom") or {}
@@ -465,36 +492,87 @@ def _mark_optional(container: dict[str, Any], skip: set[tuple[str, str]]) -> Non
             ("secretKeyRef", "Secret"),
             ("configMapKeyRef", "ConfigMap"),
         ):
-            ref = source.get(field)
-            if isinstance(ref, dict) and (kind, ref.get("name")) in skip:
-                ref["optional"] = True
+            _adjust(source.get(field), kind, "name", skip, renamed)
     for item in container.get("envFrom") or []:
         for field, kind in (("secretRef", "Secret"), ("configMapRef", "ConfigMap")):
-            ref = item.get(field)
-            if isinstance(ref, dict) and (kind, ref.get("name")) in skip:
-                ref["optional"] = True
+            _adjust(item.get(field), kind, "name", skip, renamed)
 
 
 def _optional_volume(
-    volume: dict[str, Any], skip: set[tuple[str, str]]
+    volume: dict[str, Any],
+    skip: set[tuple[str, str]],
+    renamed: Mapping[tuple[str, str], str] | None = None,
 ) -> dict[str, Any]:
-    if not skip:
+    renamed = renamed or {}
+    if not skip and not renamed:
         return volume
-    secret = volume.get("secret")
-    if isinstance(secret, dict) and ("Secret", secret.get("secretName")) in skip:
-        secret["optional"] = True
-    config = volume.get("configMap")
-    if isinstance(config, dict) and ("ConfigMap", config.get("name")) in skip:
-        config["optional"] = True
+    _adjust(volume.get("secret"), "Secret", "secretName", skip, renamed)
+    _adjust(volume.get("configMap"), "ConfigMap", "name", skip, renamed)
     for source in (volume.get("projected") or {}).get("sources") or []:
         if isinstance(source, dict):
-            inner = source.get("secret")
-            if isinstance(inner, dict) and ("Secret", inner.get("name")) in skip:
-                inner["optional"] = True
-            inner = source.get("configMap")
-            if isinstance(inner, dict) and ("ConfigMap", inner.get("name")) in skip:
-                inner["optional"] = True
+            _adjust(source.get("secret"), "Secret", "name", skip, renamed)
+            _adjust(source.get("configMap"), "ConfigMap", "name", skip, renamed)
     return volume
+
+
+#: Label value of a staged copy of a release's own Secret or ConfigMap.
+STAGED = "staged"
+#: A Secret type a copy cannot keep (the API server fills such a Secret).
+SERVICE_ACCOUNT_TOKEN = "kubernetes.io/service-account-token"
+
+
+def staged_name(workload: str, run: str, kind: str, index: int) -> str:
+    """The name of a check's copy of a release-owned Secret or ConfigMap."""
+    tag = "s" if kind == "Secret" else "c"
+    return f"{_short(workload, 30)}-chk{tag}{index}-{_short(run[-8:], 8)}"
+
+
+def staged_copy(
+    manifest: Mapping[str, Any], *, name: str, namespace: str, app: str, run: str
+) -> dict[str, Any]:
+    """A labelled copy of a Secret or ConfigMap under ``name``, with its data.
+
+    Only the data and (for a Secret) the type are kept: never the owner
+    annotations or labels of the release, so the copy is no part of it.
+    """
+    kind = str(manifest["kind"])
+    body: dict[str, Any] = {
+        "apiVersion": "v1",
+        "kind": kind,
+        "metadata": {
+            "name": name,
+            "namespace": namespace,
+            "labels": {
+                CHECK_LABEL: STAGED,
+                APP_LABEL: _short(app, 63),
+                RUN_LABEL: _short(run[-8:], 8),
+            },
+        },
+    }
+    for key in ("data", "binaryData", "stringData"):
+        if isinstance(manifest.get(key), dict):
+            body[key] = json.loads(canonical(manifest[key]))
+    kept_type = manifest.get("type")
+    if kind == "Secret" and kept_type and kept_type != SERVICE_ACCOUNT_TOKEN:
+        body["type"] = kept_type
+    return body
+
+
+
+def staged_values(manifest: Mapping[str, Any]) -> list[str]:
+    """The decoded values of a staged Secret, for redaction only."""
+    if manifest.get("kind") != "Secret":
+        return []
+    import base64
+
+    values: list[str] = []
+    for value in (manifest.get("data") or {}).values():
+        try:
+            values.append(base64.b64decode(str(value)).decode())
+        except Exception:
+            continue
+    values.extend(str(value) for value in (manifest.get("stringData") or {}).values())
+    return values
 
 
 def job_digest(job: Mapping[str, Any]) -> str:

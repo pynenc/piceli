@@ -25,6 +25,9 @@ from piceli.pipeline.prerollout import (
     describe_checks,
     references,
     replicas,
+    staged_copy,
+    staged_name,
+    staged_values,
 )
 from piceli.pipeline.prerollout_cluster import (
     Outcome,
@@ -37,6 +40,9 @@ if TYPE_CHECKING:
     from piceli.pipeline.model import Pipeline
 
 ClusterFactory = Callable[[], PreRolloutCluster]
+#: ``release_config(wanted)`` → the full manifests (values resolved) of the
+#: release's own Secrets and ConfigMaps named in ``wanted``.
+ReleaseConfig = Callable[[set[tuple[str, str]]], Mapping[tuple[str, str], Any]]
 EXCLUSIVE = "ReadWriteOncePod"
 
 
@@ -124,6 +130,7 @@ class PreRolloutStage:
         self.pipeline = pipeline
         self.open = cluster
         self.say = say
+        self.release_config: ReleaseConfig | None = None
 
     # -------------------------------------------------------------- plan
     def plan(self, rendered: Rendered) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -169,8 +176,20 @@ class PreRolloutStage:
         *,
         changed: set[tuple[str, str]],
         run_id: str,
+        release_config: ReleaseConfig | None = None,
     ) -> tuple[str, dict[str, Any]]:
-        """Run the checks of every changing workload; raise on the first failure."""
+        """Run the checks of every changing workload; raise on the first failure.
+
+        :param release_config: Reads the release's own Secrets and ConfigMaps
+            with their values. A check that reads one that does not exist yet
+            (a first install) gets a labelled copy of it under another name,
+            created just before its Job and deleted with it, so the check
+            sees the values the pods will. The release's objects themselves
+            are created only by ``apply``, which keeps the approved plan
+            exact. Without it (or when a value cannot be read) the reference
+            is made optional and listed as ``unverified``.
+        """
+        self.release_config = release_config
         declared = self.pipeline.app.pre_rollouts
         output: dict[str, Any] = {"checks": [], "skipped": []}
         with closing(self.open()) as cluster:
@@ -207,12 +226,81 @@ class PreRolloutStage:
         redact = cluster.secret_values(
             sorted({ref.name for ref in refs if ref.kind == "Secret"})
         )
+        staged = self._stage(cluster, item, unverified, run_id, redact)
+        try:
+            self._jobs(
+                cluster, manifest, item, run_id, output, label, redact, staged, unverified
+            )
+        finally:
+            for (kind, _), copy in staged.items():
+                cluster.delete_object(kind, copy)
+
+    def _stage(
+        self,
+        cluster: PreRolloutCluster,
+        item: PreRollout,
+        unverified: list[tuple[str, str]],
+        run_id: str,
+        redact: list[str],
+    ) -> dict[tuple[str, str], str]:
+        """Copies of the absent release-owned objects ``item`` reads: ``{ref: copy}``."""
+        if not unverified or self.release_config is None:
+            return {}
+        try:
+            found = self.release_config(set(unverified))
+        except Exception:  # unreadable state: fall back to optional references
+            return {}
+        staged: dict[tuple[str, str], str] = {}
+        try:
+            for index, pair in enumerate(sorted(found)):
+                name = staged_name(item.workload, run_id, pair[0], index)
+                body = staged_copy(
+                    found[pair],
+                    name=name,
+                    namespace=self.pipeline.target.namespace,
+                    app=self.pipeline.app.name,
+                    run=run_id,
+                )
+                redact.extend(staged_values(body))
+                cluster.create_object(body)
+                staged[pair] = name
+        except BaseException:
+            for (kind, _), copy in staged.items():
+                cluster.delete_object(kind, copy)
+            raise
+        if staged:
+            self.say(
+                f"[prerollout] {item.workload}: staged "
+                + ", ".join(f"{k}/{n}" for k, n in sorted(staged))
+                + " for the check (this release creates them)"
+            )
+        return staged
+
+    def _jobs(
+        self,
+        cluster: PreRolloutCluster,
+        manifest: dict[str, Any],
+        item: PreRollout,
+        run_id: str,
+        output: dict[str, Any],
+        label: str,
+        redact: list[str],
+        staged: dict[tuple[str, str], str],
+        unverified: list[tuple[str, str]],
+    ) -> None:
+        optional = [pair for pair in unverified if pair not in staged]
         common: dict[str, Any] = {
             "app": self.pipeline.app.name,
             "namespace": self.pipeline.target.namespace,
             "run": run_id,
-            "optional": unverified,
+            "optional": optional,
+            "renamed": staged,
         }
+        note: dict[str, Any] = {}
+        if optional:
+            note["unverified"] = [f"{k}/{n}" for k, n in optional]
+        if staged:
+            note["staged"] = [f"{k}/{n}" for k, n in sorted(staged)]
         if item.command is not None:
             job = check_job(
                 manifest,
@@ -221,12 +309,7 @@ class PreRolloutStage:
                 timeout_seconds=item.timeout_seconds,
                 **common,
             )
-            note: dict[str, Any] = (
-                {"unverified": [f"{k}/{n}" for k, n in unverified]}
-                if unverified
-                else {}
-            )
-            self._execute(cluster, job, label, "config", redact, output, note)
+            self._execute(cluster, job, label, "config", redact, output, dict(note))
         if item.upgrade is None:
             return
         upgrade = item.upgrade
@@ -277,6 +360,8 @@ class PreRolloutStage:
             extra: dict[str, Any] = {"claims": sorted(claims.values())}
             if node:
                 extra["node"] = node
+            if staged:
+                extra["staged"] = note["staged"]
             self._execute(cluster, job, label, "upgrade", redact, output, extra)
             opened += 1
         if not opened and not any(

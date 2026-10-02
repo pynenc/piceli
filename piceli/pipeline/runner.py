@@ -2454,10 +2454,19 @@ class PipelineRunner:
         if self._unchanged(work, reapply):
             return "skipped", {"why": "unchanged", "checks": [], "skipped": []}
         rendered = render_delivered(self.pipeline, self._release_images(work))
+        runner, release = work.runner, work.release_plan.release
+        assert runner is not None
+
+        def release_config(
+            wanted: set[tuple[str, str]],
+        ) -> Mapping[tuple[str, str], Any]:
+            return runner.release_config(release, wanted)
+
         return self._prerollout().run(
             rendered,
             changed=changing(work.release_plan.to_dict()["actions"]),
             run_id=self.run.run_id,
+            release_config=release_config,
         )
 
     # -------------------------------------------------------- stage: checks

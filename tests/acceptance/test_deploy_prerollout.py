@@ -99,10 +99,13 @@ def test_the_check_runs_with_the_new_image_and_real_mounts_before_apply(
     (container,) = pod["containers"]
     assert container["image"] == db_image(api)  # the image the pods now run
     assert container["command"] == ["db", "check-config"]
-    assert {item["name"]: item for item in container["env"]}["TOKEN"]["valueFrom"] == {
-        # Created by this very release: absent now, so optional for the check.
-        "secretKeyRef": {"name": "credentials", "key": "password", "optional": True}
+    token = {item["name"]: item for item in container["env"]}["TOKEN"]["valueFrom"]
+    # Created by this very release: absent now, so the check reads a staged
+    # copy with the release's values (0.14.2), never an optional reference.
+    assert token == {
+        "secretKeyRef": {"name": token["secretKeyRef"]["name"], "key": "password"}
     }
+    assert token["secretKeyRef"]["name"].startswith("db-chks0-")
     volumes = {item["name"]: item for item in pod["volumes"]}
     assert volumes["db-config"]["secret"]["secretName"] == "db-config"
     assert "persistentVolumeClaim" not in json.dumps(pod)  # config check: no data
@@ -120,7 +123,9 @@ def test_the_check_runs_with_the_new_image_and_real_mounts_before_apply(
     output = run_record(tmp_path)["stages"]["prerollout"]["output"]
     assert output["checks"][0]["state"] == "passed"
     assert output["checks"][0]["cleaned"] is True
-    assert output["checks"][0]["unverified"] == ["Secret/credentials"]
+    assert output["checks"][0]["staged"] == ["Secret/credentials"]
+    assert "unverified" not in output["checks"][0]
+    assert not [key for key in api.objects if key[1].startswith("db-chk")]
 
 
 def test_a_new_image_that_cannot_read_a_secret_stops_the_release_before_the_pods_change(
@@ -366,3 +371,143 @@ def test_the_text_plan_prints_one_line_per_prerollout_check(shop) -> None:
     assert all(len(line) <= 100 for line in lines)
     order = [x.split()[0] for x in result.stderr.splitlines() if x.startswith("  ")]
     assert order.index("prerollout") < order.index("plan")
+
+
+FIRST = """
+from piceli import ConfigVolume
+settings = app.config("db-settings", {"mode": "fast"})
+db = app.stateful_set(
+    "db", image=images["web"], ports=[5432],
+    env={"TOKEN": credentials.key("password"), "MODE": settings.key("mode")},
+    volumes={"/etc/db": ConfigVolume(settings)},
+    replicas=1,
+)
+app.pre_rollout(db, ["db", "check-config"])
+"""
+
+
+def test_a_first_install_check_sees_the_release_secrets_and_configs(shop) -> None:
+    """0.14.1: the release's own Secret/ConfigMap were absent and optional, so a
+    first install into an empty namespace always failed ``prerollout-failed``.
+    """
+    api, tmp_path = shop
+    text = (tmp_path / "app.py").read_text()
+    (tmp_path / "app.py").write_text(
+        text.replace("CHECKS = []", FIRST + "\nCHECKS = []")
+    )
+    order: list[str] = []
+
+    def watch(request: dict[str, Any], phase: str) -> bool:
+        """Record every write as ``METHOD resource name`` in arrival order."""
+        if phase == "received" and request["method"] != "GET":
+            parts = request["path"].split("/")
+            if request["method"] == "POST":
+                resource, name = parts[-1], request["body"]["metadata"]["name"]
+            else:
+                resource, name = parts[-2], parts[-1]
+            order.append(f"{request['method']} {resource} {name}")
+        return False
+
+    api.intercept = watch
+    code, events, result = deploy(tmp_path, "--auto-approve", "--json")
+    assert code == 0, result.stdout + result.stderr
+    assert events[-1]["stages"]["prerollout"] == "done"
+    (job,) = jobs(api)
+    container = job["spec"]["template"]["spec"]["containers"][0]
+    env = {item["name"]: item["valueFrom"] for item in container["env"]}
+    secret_copy = env["TOKEN"]["secretKeyRef"]["name"]
+    config_copy = env["MODE"]["configMapKeyRef"]["name"]
+    # The check reads copies with the release's real values, not optional refs.
+    assert "optional" not in env["TOKEN"]["secretKeyRef"]
+    assert "optional" not in env["MODE"]["configMapKeyRef"]
+    assert secret_copy != "credentials" and config_copy != "db-settings"
+    volumes = {
+        item["name"]: item for item in job["spec"]["template"]["spec"]["volumes"]
+    }
+    assert volumes["db-settings"]["configMap"]["name"] == config_copy
+    staged = {
+        request["body"]["metadata"]["name"]: request["body"]
+        for request in api.requests
+        if request["method"] == "POST"
+        and request["path"].endswith(("/secrets", "/configmaps"))
+    }
+    real = api.objects[("Secret", "credentials")]
+    assert staged[secret_copy]["data"] == real["data"]
+    assert (
+        staged[config_copy]["data"] == api.objects[("ConfigMap", "db-settings")]["data"]
+    )
+    assert staged[secret_copy]["metadata"]["labels"]["piceli.io/pre-rollout"] == (
+        "staged"
+    )
+    # Staged before the Job, removed after it and before the release writes
+    # its own objects (the approved plan still creates them).
+    job_at = order.index(f"POST jobs {job['metadata']['name']}")
+    assert order.index(f"POST secrets {secret_copy}") < job_at
+    assert order.index(f"POST configmaps {config_copy}") < job_at
+    removed = order.index(f"DELETE secrets {secret_copy}")
+    assert job_at < removed
+    assert order.index(f"DELETE configmaps {config_copy}") > job_at
+    release_writes = [
+        index
+        for index, line in enumerate(order)
+        if line.endswith((" credentials", " db-settings"))
+    ]
+    assert release_writes and min(release_writes) > removed
+    assert ("Secret", secret_copy) not in api.objects
+    assert ("ConfigMap", config_copy) not in api.objects
+    output = run_record(tmp_path)["stages"]["prerollout"]["output"]
+    (check,) = output["checks"]
+    assert check["state"] == "passed" and "unverified" not in check
+    assert check["staged"] == ["ConfigMap/db-settings", "Secret/credentials"]
+    # The value is never printed.
+    import base64
+
+    value = base64.b64decode(real["data"]["password"]).decode()
+    assert value not in result.stdout + result.stderr
+    assert value not in json.dumps(run_record(tmp_path))
+
+
+def test_a_failing_first_install_check_removes_its_copies_and_applies_nothing(
+    shop,
+) -> None:
+    api, tmp_path = shop
+    text = (tmp_path / "app.py").read_text()
+    (tmp_path / "app.py").write_text(
+        text.replace("CHECKS = []", FIRST + "\nCHECKS = []")
+    )
+    api.job_result("db-cfg", exit_code=3, logs="mode fast needs TOKEN\n")
+    code, events, result = deploy(tmp_path, "--auto-approve", "--json")
+    assert code == 1, result.stdout + result.stderr
+    assert events[-1]["reason"] == "prerollout-failed"
+    assert events[-1]["stages"]["apply"] == "pending"
+    # Neither the copies nor anything of the release is in the namespace.
+    assert {key[0] for key in api.objects} <= {"Namespace"}
+    check = run_record(tmp_path)["stages"]["prerollout"]["output"]["checks"][0]
+    assert check["staged"] == ["ConfigMap/db-settings", "Secret/credentials"]
+
+
+def test_without_the_release_values_the_check_falls_back_to_optional(
+    shop, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from piceli.k8s.release_runner import ReleaseRunner
+
+    def unreadable(*_: Any) -> Any:
+        raise ValueError("private version missing or outside target")
+
+    monkeypatch.setattr(ReleaseRunner, "release_config", unreadable)
+    api, tmp_path = shop
+    text = (tmp_path / "app.py").read_text()
+    (tmp_path / "app.py").write_text(
+        text.replace("CHECKS = []", FIRST + "\nCHECKS = []")
+    )
+    code, _, result = deploy(tmp_path, "--auto-approve", "--json")
+    assert code == 0, result.stdout + result.stderr
+    (job,) = jobs(api)
+    env = {
+        item["name"]: item["valueFrom"]
+        for item in job["spec"]["template"]["spec"]["containers"][0]["env"]
+    }
+    assert env["TOKEN"]["secretKeyRef"]["optional"] is True
+    check = run_record(tmp_path)["stages"]["prerollout"]["output"]["checks"][0]
+    assert sorted(check["unverified"]) == ["ConfigMap/db-settings", "Secret/credentials"]
+    assert "staged" not in check
