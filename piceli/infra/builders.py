@@ -487,6 +487,10 @@ def component_job(
     }  # fmt: skip
 
 
+#: The environment a build Job was for (removed with the environment).
+BUILD_ENV_LABEL = "piceli.io/build-env"
+
+
 def _cache_label(claim: str) -> str:
     from piceli.artifacts.cluster_build import slug
 
@@ -757,6 +761,27 @@ class JobBuilder:
         self.mirror_route = mirror_route
         self.backend = backend
         self.say = say
+        #: The environment the next build is for (the controller sets it):
+        #: its Jobs carry ``piceli.io/build-env`` so its teardown removes a
+        #: failed Job kept for it (:meth:`forget`).
+        self.environment: str | None = None
+
+    def _for_environment(self, job: dict[str, Any]) -> dict[str, Any]:
+        if self.environment:
+            value = _cache_label(self.environment)
+            for labels in (
+                job["metadata"]["labels"],
+                job["spec"]["template"]["metadata"]["labels"],
+            ):
+                labels[BUILD_ENV_LABEL] = value
+        return job
+
+    def forget(self, environment: str) -> list[str]:
+        """Delete the failed build Jobs kept for ``environment`` (its teardown)."""
+        remove = getattr(self.cluster, "remove_kept", None)
+        if remove is None:
+            return []
+        return list(remove({BUILD_ENV_LABEL: _cache_label(environment)}))
 
     def build(
         self, items: Sequence[BuildItem], checkout: Callable[[str, str, Path], Any]
@@ -771,7 +796,7 @@ class JobBuilder:
                 raise _unsupported(item.component, "dockerfile")
         if not items:
             return {}
-        job = component_job(self.settings, items, self.urls)
+        job = self._for_environment(component_job(self.settings, items, self.urls))
         claim = {
             "apiVersion": "v1",
             "kind": "PersistentVolumeClaim",
@@ -821,7 +846,7 @@ class JobBuilder:
 
         if not request.images:
             return {}
-        job = spec_job(self.settings, request, self.urls)
+        job = self._for_environment(spec_job(self.settings, request, self.urls))
         self.cluster.ensure_claim(self._claim())
         self.say(
             f"[build] Job {job['metadata']['name']}: "

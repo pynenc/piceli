@@ -468,3 +468,43 @@ def test_enable_with_delete_volumes_grants_the_volume_delete(
     done = _enable(kubeconfig, "--delete-volumes", "--approve", body["plan_hash"])
     assert done.exit_code == 0, done.output
     assert has_volume_delete(_object(api, "ClusterRole", NAME))
+
+
+def test_branch_teardown_removes_the_failed_build_job_kept_for_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from types import SimpleNamespace
+
+    from piceli.artifacts import cluster_build
+    from piceli.pipeline import backend
+
+    removed: list[dict[str, str]] = []
+
+    class Cluster:
+        def __init__(self, client: Any, namespace: str, **_: Any) -> None:
+            assert namespace == "ns"  # the controller's namespace
+
+        def remove_kept(self, key: dict[str, str]) -> list[str]:
+            removed.append(dict(key))
+            return ["piceli-build-x"]
+
+    monkeypatch.setattr(cluster_build, "BuildCluster", Cluster)
+    monkeypatch.setattr(backend.Backend, "_api", lambda self, target: object())
+    config = ControllerConfig(
+        pipeline="deploy/app.py:pipeline",
+        repo="https://git.example.com/org/app.git",
+        branches=("wp-*",),
+        builder_image=BUILDER,
+    )
+    ports = DefaultPorts(
+        tmp_path / "kubeconfig", "fake", tmp_path, namespace="ns", config=config
+    )
+    envs = SimpleNamespace(env_down=lambda *a, **k: {"state": "removed"})
+    monkeypatch.setattr(ports, "_envs", lambda: envs)
+    ports.env_down(SimpleNamespace(target=object()), "wp/Broken")
+    assert removed == [
+        {
+            cluster_build.BUILD_LABEL: "true",
+            cluster_build.CACHE_LABEL: cluster_build.slug("wp/Broken", 50),
+        }
+    ]

@@ -345,6 +345,7 @@ class DefaultCompositionPorts:
         self.context = context
         self.state_dir = state_dir
         self.transport = transport
+        self.log: Callable[[str], None] = getattr(envs, "log", None) or (lambda _: None)
 
     def pipeline(
         self,
@@ -389,6 +390,18 @@ class DefaultCompositionPorts:
 
     def env_down(self, pipeline: Any, name: str) -> None:
         self.envs.env_down(pipeline, name)
+        # A failed build Job kept for diagnosis goes with its environment.
+        forget = getattr(self.builder, "forget", None)
+        if callable(forget):
+            try:
+                removed = forget(name)
+            except Exception as error:  # never fail a teardown on it
+                self.log(
+                    f"{name}: kept build Jobs not removed ({type(error).__name__})"
+                )
+            else:
+                for job in removed:
+                    self.log(f"{name}: removed kept build Job {job}")
 
     def env_stop(self, pipeline: Any, name: str) -> None:
         self.envs.env_stop(pipeline, name)
@@ -910,6 +923,9 @@ class CompositionController:
 
     def _deploy(self, record: dict[str, Any]) -> None:
         name = record["branch"]
+        if hasattr(self.ports.builder, "environment"):
+            # Its build Jobs are labelled with it (removed at its teardown).
+            self.ports.builder.environment = name
         instance = self._instance(name)
         if instance is None:
             raise CompositionError("composition-invalid", f"no environment {name!r}")

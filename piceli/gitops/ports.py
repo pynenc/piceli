@@ -348,6 +348,30 @@ class DefaultPorts:
                 f"env down {branch} --approve {result.get('env_hash')} (or "
                 "EnvConfig(auto_approve=True))",
             )
+        self._forget_builds(pipeline, branch)
+
+    def _forget_builds(self, pipeline: Any, branch: str) -> None:
+        """Delete the failed build Job kept for ``branch`` (it builds no more)."""
+        if self.config.builder_image is None:
+            return
+        from piceli.artifacts.cluster_build import (
+            BUILD_LABEL,
+            CACHE_LABEL,
+            BuildCluster,
+            slug,
+        )
+        from piceli.pipeline.backend import Backend
+
+        try:
+            cluster = BuildCluster(Backend()._api(pipeline.target), self.namespace)
+            removed = cluster.remove_kept(
+                {BUILD_LABEL: "true", CACHE_LABEL: slug(branch, 50)}
+            )
+        except Exception as error:  # never fail a teardown on it
+            self.log(f"{branch}: kept build Jobs not removed ({type(error).__name__})")
+            return
+        for job in removed:
+            self.log(f"{branch}: removed kept build Job {job}")
 
     def env_stop(self, pipeline: Any, branch: str) -> None:
         result = self._envs().env_stop(
