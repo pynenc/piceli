@@ -14,6 +14,10 @@ manifest, whether it is **kept** or **collectable**:
   scaled-down rollout history, the environment records and pushed images of
   branch environments, and the GitOps controller's status (or a file): a
   digest a running workload uses is never deleted;
+* **rollback targets**: the previous release of every Deployment and
+  StatefulSet (its newest scaled-down ReplicaSet, or its newest
+  ControllerRevision that is not the current one), except Piceli's own
+  controller, UI and registry, whose old copies are collectable;
 * the children of a kept index, and the referrers (SBOM, provenance,
   signatures) of a kept manifest, are kept with it;
 * a tagged manifest that no receipt mentions is **unledgered**: kept unless
@@ -27,6 +31,11 @@ Besides tags and receipts, the inventory probes every digest the cluster
 still names (finished pods and Jobs, rollout history included) in the
 repository its reference names: a manifest pushed by digest that no receipt
 mentions is found that way and, when nothing live uses it, collected.
+
+For the in-cluster registry (``Registry.in_cluster``) the inventory can also
+list every manifest the registry stores (``stored``, read from its storage:
+:mod:`piceli.artifacts.registry_storage`), so a digest-only manifest that
+nothing names any more (an old builder) is found and collected too.
 
 Deleting is approval-gated: the plan hash covers the exact ``(repository,
 digest)`` list, and a delete whose freshly computed plan differs is refused.
@@ -79,6 +88,33 @@ class RetentionError(RuntimeError):
     def __init__(self, code: str) -> None:
         super().__init__(code)
         self.code = code
+
+
+@dataclass(frozen=True)
+class StableTarget:
+    """A registry by its stable name (``name.namespace.svc:port``), read through
+    another endpoint (a port-forward): a plan binds to the name, never to the
+    forwarded port. ``repository`` ``""`` is the whole registry."""
+
+    registry: str
+    repository: str = ""
+    tls: bool = False
+
+    @property
+    def identity(self) -> str:
+        tls = "true" if self.tls else "false"
+        return f"oci://{self.registry}/{self.repository}?tls={tls}"
+
+    def public(self) -> dict[str, object]:
+        return {
+            "registry": self.registry,
+            "repository": self.repository or None,
+            "tag": None,
+            "tls": self.tls,
+        }
+
+
+Target = RegistryTarget | StableTarget
 
 
 # --------------------------------------------------------------------- policy
@@ -289,11 +325,16 @@ WORKLOAD_KINDS = (
     "ReplicaSet",
     "Job",
     "CronJob",
+    "ControllerRevision",
 )
 
 
 def _pod_specs(item: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     """The pod spec of a Pod, or the pod template's spec of a workload."""
+    if item.get("kind") == "ControllerRevision":
+        data = item.get("data") or {}
+        template = (data.get("spec") or {}).get("template") or {}
+        return [template.get("spec") or {}]
     spec = item.get("spec") or {}
     if item.get("kind") == "CronJob":
         spec = ((spec.get("jobTemplate") or {}).get("spec")) or {}
@@ -307,6 +348,8 @@ def _pod_specs(item: Mapping[str, Any]) -> list[Mapping[str, Any]]:
 ENV_RECORD = "piceli-env"
 ENV_PUSHED_PREFIX = "piceli-env-"
 CONTROLLER_STATUS = "piceli-gitops-status"
+#: The GitOps controller's configuration: the builder image it runs now.
+CONTROLLER_CONFIG = "piceli-gitops-config"
 #: The label every one of them carries (the cluster read selects on it).
 MANAGED_SELECTOR = "app.kubernetes.io/managed-by=piceli"
 
@@ -317,11 +360,14 @@ def not_live(item: Mapping[str, Any]) -> str | None:
     ``finished``: a pod that Succeeded or Failed, or a Job with a true
     ``Complete`` or ``Failed`` condition (a CronJob's template stays live).
     ``history``: a ReplicaSet a Deployment owns that is scaled to zero with no
-    pod left, kept only for ``rollout undo``. Everything else is live,
+    pod left, kept only for ``rollout undo``, and every ControllerRevision
+    (the StatefulSet's template is what runs). Everything else is live,
     including a workload scaled to zero by hand.
     """
     kind = str(item.get("kind") or "Pod")
     status = item.get("status") or {}
+    if kind == "ControllerRevision":
+        return "history"
     if kind == "Pod" and status.get("phase") in {"Succeeded", "Failed"}:
         return "finished"
     if kind == "Job":
@@ -348,13 +394,16 @@ def not_live(item: Mapping[str, Any]) -> str | None:
 
 
 def _record_kind(item: Mapping[str, Any]) -> str | None:
-    """``environment`` or ``controller`` for a Piceli ConfigMap that names
-    images in use; ``None`` for any other ConfigMap."""
+    """``environment``, ``controller`` or ``piceli`` (the controller's
+    configuration: its builder) for a Piceli ConfigMap that names images in
+    use; ``None`` for any other ConfigMap."""
     name = str((item.get("metadata") or {}).get("name") or "")
     if name == ENV_RECORD or name.startswith(ENV_PUSHED_PREFIX):
         return "environment"
     if name == CONTROLLER_STATUS:
         return "controller"
+    if name == CONTROLLER_CONFIG:
+        return "piceli"
     return None
 
 
@@ -513,6 +562,125 @@ def _image(reference: str, digests: set[str], tags: set[tuple[str, str]]) -> Non
         tags.add((path, tag))
 
 
+#: Labels of Piceli's own workloads (controller, UI, registry): their old
+#: copies are not an environment's rollback target.
+_PICELI_COMPONENTS = {"gitops", "ui", "cluster"}
+_REVISION = "deployment.kubernetes.io/revision"
+
+
+def piceli_component(item: Mapping[str, Any]) -> bool:
+    """Whether a workload is Piceli's own (controller, UI, in-cluster registry)."""
+    labels = (item.get("metadata") or {}).get("labels") or {}
+    return (
+        labels.get("piceli.io/component") in _PICELI_COMPONENTS
+        or labels.get("app.kubernetes.io/name") == "piceli-cluster-registry"
+    )
+
+
+def _number(value: Any) -> int:
+    try:
+        return int(str(value))
+    except ValueError:
+        return 0
+
+
+def _owner(item: Mapping[str, Any], kind: str) -> str | None:
+    for owner in (item.get("metadata") or {}).get("ownerReferences") or ():
+        if isinstance(owner, Mapping) and owner.get("kind") == kind:
+            return str(owner.get("name"))
+    return None
+
+
+def rollback_targets(
+    items: Iterable[Mapping[str, Any]],
+) -> tuple[dict[str, set[str]], dict[tuple[str, str], set[str]]]:
+    """``({digest: kinds}, {(path, tag): kinds})`` of every workload's rollback
+    target: the previous release ``rollout undo`` returns to.
+
+    - a Deployment's newest scaled-down ReplicaSet (by revision) that is not
+      the Deployment's current revision;
+    - a StatefulSet's newest ControllerRevision that is not its update
+      revision (and its current revision while a rollout runs).
+
+    An owner that is not among ``items`` keeps its newest old revision too
+    (conservative). Piceli's own controller, UI and registry
+    (:func:`piceli_component`) have none: their old copies are collectable.
+    """
+    owners: dict[tuple[str, str, str], Mapping[str, Any]] = {}
+    groups: dict[tuple[str, str, str], list[Mapping[str, Any]]] = {}
+    for item in items:
+        kind = str(item.get("kind") or "Pod")
+        meta = item.get("metadata") or {}
+        ns = str(meta.get("namespace") or "")
+        if kind in {"Deployment", "StatefulSet"}:
+            owners[(ns, kind, str(meta.get("name")))] = item
+        owned = {"ReplicaSet": "Deployment", "ControllerRevision": "StatefulSet"}
+        if kind in owned:
+            name = _owner(item, owned[kind])
+            if name is not None:
+                groups.setdefault((ns, owned[kind], name), []).append(item)
+    chosen: list[tuple[str, Mapping[str, Any]]] = []
+    for key, members in sorted(groups.items()):
+        owner = owners.get(key)
+        if owner is not None and piceli_component(owner):
+            continue
+        if key[1] == "Deployment":
+            current = ((owner or {}).get("metadata") or {}).get("annotations") or {}
+            now = current.get(_REVISION)
+            candidates = [
+                rs
+                for rs in members
+                if not_live(rs) == "history"
+                and (
+                    now is None
+                    or ((rs.get("metadata") or {}).get("annotations") or {}).get(
+                        _REVISION
+                    )
+                    != now
+                )
+            ]
+
+            def order(rs: Mapping[str, Any]) -> tuple[int, str]:
+                meta = rs.get("metadata") or {}
+                return (
+                    _number((meta.get("annotations") or {}).get(_REVISION)),
+                    str(meta.get("creationTimestamp") or ""),
+                )
+
+            if candidates:
+                chosen.append(("replicaset", max(candidates, key=order)))
+            continue
+        status = (owner or {}).get("status") or {}
+        update, running = status.get("updateRevision"), status.get("currentRevision")
+        by_revision = sorted(members, key=lambda cr: _number(cr.get("revision")))
+        if owner is None or not update:
+            older = by_revision[:-1]  # the newest is (or was) what runs
+        else:
+            older = [
+                cr
+                for cr in by_revision
+                if (cr.get("metadata") or {}).get("name") != update
+            ]
+        if older:
+            chosen.append(("controllerrevision", older[-1]))
+        for cr in by_revision:
+            name = (cr.get("metadata") or {}).get("name")
+            if running and running != update and name == running:
+                chosen.append(("controllerrevision", cr))
+    digests: dict[str, set[str]] = {}
+    tags: dict[tuple[str, str], set[str]] = {}
+    for label, item in chosen:
+        found: set[str] = set()
+        found_tags: set[tuple[str, str]] = set()
+        for reference in _object_references(item):
+            _image(reference, found, found_tags)
+        for digest in found:
+            digests.setdefault(digest, set()).add(f"{label}:rollback")
+        for pair in found_tags:
+            tags.setdefault(pair, set()).add(f"{label}:rollback")
+    return digests, tags
+
+
 @dataclass(frozen=True)
 class LiveWorkloads:
     """What running workloads use. ``known`` is ``False`` when nothing was read."""
@@ -525,6 +693,11 @@ class LiveWorkloads:
     tag_by: Mapping[tuple[str, str], frozenset[str]] = field(default_factory=dict)
     #: Every digest the cluster names, live or not: (path or None, digest) -> kinds.
     refs: Mapping[tuple[str | None, str], frozenset[str]] = field(default_factory=dict)
+    #: Rollback targets (:func:`rollback_targets`): digest -> kinds.
+    rollback: Mapping[str, frozenset[str]] = field(default_factory=dict)
+    rollback_tags: Mapping[tuple[str, str], frozenset[str]] = field(
+        default_factory=dict
+    )
 
     @classmethod
     def unknown(cls) -> LiveWorkloads:
@@ -532,8 +705,11 @@ class LiveWorkloads:
 
     @classmethod
     def from_objects(cls, items: Iterable[Mapping[str, Any]]) -> LiveWorkloads:
-        """Pods, workload pod templates and records (see :func:`live_images`)."""
+        """Pods, workload pod templates and records (see :func:`live_images`),
+        and the rollback targets of workloads (:func:`rollback_targets`)."""
+        items = list(items)
         digests, tags, refs = _scan(items)
+        back, back_tags = rollback_targets(items)
         return cls(
             True,
             frozenset(digests),
@@ -542,6 +718,8 @@ class LiveWorkloads:
             {d: frozenset(k) for d, k in digests.items()},
             {t: frozenset(k) for t, k in tags.items()},
             {r: frozenset(k) for r, k in refs.items()},
+            {d: frozenset(k) for d, k in back.items()},
+            {t: frozenset(k) for t, k in back_tags.items()},
         )
 
     @classmethod
@@ -566,6 +744,8 @@ class LiveWorkloads:
             union("by"),
             union("tag_by"),
             union("refs"),
+            union("rollback"),
+            union("rollback_tags"),
         )
 
     def probes(self) -> set[tuple[str | None, str]]:
@@ -612,6 +792,7 @@ _LISTS = (
     ("AppsV1Api", "replica_set", "ReplicaSet"),
     ("BatchV1Api", "job", "Job"),
     ("BatchV1Api", "cron_job", "CronJob"),
+    ("AppsV1Api", "controller_revision", "ControllerRevision"),
     ("CoreV1Api", "config_map", "ConfigMap"),
 )
 
@@ -623,10 +804,12 @@ def read_live_pods(
     *,
     transport: str = "https",
     timeout: float = 30.0,
+    exec_policy: Any = None,
 ) -> list[dict[str, Any]]:
     """Pods and the pod templates of Deployments, StatefulSets, DaemonSets,
-    ReplicaSets, Jobs and CronJobs, and Piceli's ConfigMaps (environment
-    records, pushed images, controller status; selected by label), in
+    ReplicaSets, ControllerRevisions, Jobs and CronJobs, and Piceli's
+    ConfigMaps (environment records, pushed images, controller status and
+    configuration; selected by label), in
     ``namespaces`` (default: all), read with an explicit context. Each item
     carries its ``kind``. Any failed list (for example a missing permission)
     raises: the inventory would be incomplete."""
@@ -638,6 +821,7 @@ def read_live_pods(
         kubeconfig,
         context,
         transport=transport,  # type: ignore[arg-type]
+        exec_policy=exec_policy,
     )
     try:
         items: list[dict[str, Any]] = []
@@ -758,28 +942,33 @@ def _parse_manifest(digest: str, body: bytes, media: str) -> ManifestInfo:
 
 
 def in_scope(repository: str, prefix: str) -> bool:
-    return repository == prefix or repository.startswith(prefix + "/")
+    """Whether ``repository`` is ``prefix`` or under it (``""``: everything)."""
+    return not prefix or repository == prefix or repository.startswith(prefix + "/")
 
 
 def collect_inventory(
-    target: RegistryTarget,
+    target: Target,
     endpoint: RegistryEndpoint,
     releases: Sequence[Release],
     *,
     repositories: Sequence[str] = (),
     client_factory: ClientFactory = default_client,
     probes: Iterable[tuple[str | None, str]] = (),
+    stored: Iterable[tuple[str, str]] = (),
 ) -> Inventory:
     """Read the registry: repositories under the target's prefix, their tags,
     and every manifest those tags, ``releases`` and ``probes`` reach (with
     children and referrers). A probe ``(path, digest)`` is looked up in that
     repository (``None``: in every one): the registry API lists no untagged
     manifest, so a digest pushed without a tag or receipt is found through
-    whatever still names it. Any read failure raises: an unknown inventory
-    never licenses a deletion."""
+    whatever still names it, or through ``stored``: ``(repository, digest)``
+    of every manifest read from the registry's own storage. Any read
+    failure raises: an unknown inventory never licenses a deletion."""
     probes = set(probes)
+    stored = {item for item in stored if in_scope(item[0], target.repository)}
     prefix = target.repository
     names = {repo for repo in repositories if in_scope(repo, prefix)}
+    names.update(repo for repo, _ in stored)
     names.update(repo for release in releases for repo, _ in release.digests)
     names = {repo for repo in names if in_scope(repo, prefix)}
     catalog = client_factory(endpoint, "pull").list_repositories()
@@ -799,6 +988,8 @@ def collect_inventory(
     for path, digest in probes:
         for repo in names if path is None else ({path} & names):
             wanted.setdefault(repo, set()).add(digest)
+    for repo, digest in stored:
+        wanted.setdefault(repo, set()).add(digest)
     for repo in sorted(names):
         client = client_factory(endpoint, "pull")
         client.authenticate(repo)
@@ -865,7 +1056,7 @@ def collect_inventory(
 class RetentionPlan:
     """The decision: kept and collectable manifests, and the exact delete list."""
 
-    target: RegistryTarget
+    target: Target
     policy: RetentionPolicy
     releases: tuple[dict[str, Any], ...]
     kept: dict[str, tuple[str, ...]]  # digest -> reasons
@@ -920,6 +1111,7 @@ class RetentionPlan:
                 "read": self.live.known,
                 "source": self.live.source,
                 "digests": len(self.live.digests),
+                "rollback": len(self.live.rollback),
                 "by": {
                     kind: sum(1 for kinds in self.live.by.values() if kind in kinds)
                     for kind in sorted({k for v in self.live.by.values() for k in v})
@@ -965,7 +1157,7 @@ GARBAGE_COLLECT = {
 
 
 def plan_retention(
-    target: RegistryTarget,
+    target: Target,
     inventory: Inventory,
     releases: Sequence[Release],
     policy: RetentionPolicy,
@@ -984,6 +1176,9 @@ def plan_retention(
         keep(pin, "pinned")
     for digest in sorted(live.digests):
         keep(digest, "live")
+    # The previous release of every workload: what ``rollout undo`` pulls.
+    for digest in sorted(live.rollback):
+        keep(digest, "rollback")
     live_by: dict[str, set[str]] = {}
     for digest in sorted(live.digests):
         if digest in inventory.manifests:
@@ -992,6 +1187,8 @@ def plan_retention(
         if (repo, tag) in live.tags:
             keep(digest, "live")
             live_by.setdefault(digest, set()).update(live.tag_by.get((repo, tag), ()))
+        if (repo, tag) in live.rollback_tags:
+            keep(digest, "rollback")
     if not policy.collect_unledgered:
         referrers = {d for found in inventory.referrers.values() for d in found}
         for digest, info in inventory.manifests.items():
@@ -1088,7 +1285,8 @@ def delete_collectable(
     hash, and (``retention-live-unknown``) when no live inventory was read, or
     when ``keep=0`` (no release kept) rests on anything less than a read of
     the cluster.
-    Never deletes a digest that the plan keeps or that a live workload uses.
+    Never deletes a digest that the plan keeps, that a live workload uses or
+    that is a workload's rollback target.
     Order: indexes, then their children, so no kept index ever loses a child.
     """
     if grant.digest != plan.digest:
@@ -1097,7 +1295,7 @@ def delete_collectable(
         raise RetentionError(code="retention-live-unknown")
     if plan.policy.keep == 0 and "cluster" not in (plan.live.source or ""):
         raise RetentionError(code="retention-live-unknown")
-    protected = set(plan.kept) | set(plan.live.digests)
+    protected = set(plan.kept) | set(plan.live.digests) | set(plan.live.rollback)
     if any(digest in protected for _, digest in plan.collectable):
         raise RetentionError(code="retention-not-approved")
     order = sorted(

@@ -77,6 +77,7 @@ TYPES: Mapping[str, tuple[str, str, bool]] = {
     "services": ("v1", "Service", True),
     "pods": ("v1", "Pod", True),
     "replicasets": ("apps/v1", "ReplicaSet", True),
+    "controllerrevisions": ("apps/v1", "ControllerRevision", True),
     "persistentvolumeclaims": ("v1", "PersistentVolumeClaim", True),
     "persistentvolumes": ("v1", "PersistentVolume", False),
     "storageclasses": ("storage.k8s.io/v1", "StorageClass", False),

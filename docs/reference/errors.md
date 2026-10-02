@@ -430,6 +430,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`registry-not-oci-v2`](#error-registry-not-oci-v2) | artifacts-registry | no |
 | [`registry-options-on-node-target`](#error-registry-options-on-node-target) | artifacts-input | no |
 | [`registry-response-too-large`](#error-registry-response-too-large) | artifacts-registry | no |
+| [`registry-storage-unreadable`](#error-registry-storage-unreadable) | retention | yes |
 | [`registry-unauthorized`](#error-registry-unauthorized) | artifacts-registry | no |
 | [`registry-unreachable`](#error-registry-unreachable) | artifacts-registry | yes |
 | [`release-changes-pending`](#error-release-changes-pending) | release | no |
@@ -4823,6 +4824,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Enable deletes on the registry (Piceli's node-local registry already does), or use the hosted registry's own lifecycle policy. Manifests deleted before the refusal are listed in the receipt.
 - **Retry-safe:** no
+
+(error-registry-storage-unreadable)=
+### `registry-storage-unreadable`
+
+**In-cluster registry storage not listed.** `piceli artifacts retention --cluster` lists every manifest the in-cluster registry stores (digest-only ones have no API) by running a read-only `find` in the registry pod over `pods/exec`, and `piceli registry status` measures the claim with `du` the same way. No registry pod was running, or the exec was refused (the credential lacks `get`/`create` on `pods/exec` in the registry's namespace) or failed. Retention then only finds manifests something still names; nothing else changes.
+
+- **Fix:** Grant `pods/exec` (verbs `get` and `create`) and `list` on `pods` in the registry's namespace to the credential, check that the registry pod is Running (`piceli registry status`), and run the command again.
+- **Retry-safe:** yes
 
 (error-retention-invalid)=
 ### `retention-invalid`
