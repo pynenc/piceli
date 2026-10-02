@@ -8,7 +8,10 @@ ConfigMap ``piceli-gitops-status``) and keeps only the documented fields:
   ``{source: sha}``, ``last_sync`` (else ``updated_at``) and
   ``components.<name>``: ``source``, ``commit``, ``digest``, ``state``
   (``synced``, ``building``, ``rolling``, ``failed``, ``unchanged``),
-  ``health``, ``updated_at``.
+  ``health``, ``updated_at``;
+- ``envs.<env>.last_action`` and ``verification`` (``state``, ``trigger``,
+  ``checks_hash``, ``at`` and the ``check``/``code`` of each failed check;
+  never the checks' free-text detail).
 
 A Sync writes the same request as ``piceli gitops sync ENV [--component
 NAME]``: a ``sync`` entry in the ConfigMap ``piceli-gitops-requests``. The
@@ -119,6 +122,26 @@ def _component(name: str, value: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _verification(value: Any) -> dict[str, Any] | None:
+    """A checks-only verification, without the checks' output or detail."""
+    if not isinstance(value, Mapping):
+        return None
+    failed = value.get("failed")
+    return {
+        "state": _text(value.get("state")) or "unknown",
+        "trigger": _text(value.get("trigger")),
+        "checks_hash": _text(value.get("checks_hash")),
+        "at": _text(value.get("at")),
+        "failed": [
+            {"check": _text(item.get("check")), "code": _text(item.get("code"))}
+            for item in failed
+            if isinstance(item, Mapping)
+        ]
+        if isinstance(failed, list)
+        else [],
+    }
+
+
 def _environment(name: str, value: Mapping[str, Any]) -> dict[str, Any]:
     components = value.get("components")
     namespace = value.get("namespace")
@@ -132,6 +155,8 @@ def _environment(name: str, value: Mapping[str, Any]) -> dict[str, Any]:
         "revision": _revision(value.get("revision")),
         "last_sync": _text(value.get("last_sync")) or _text(value.get("updated_at")),
         "reason": _text(value.get("reason")),
+        "last_action": _text(value.get("last_action")),
+        "verification": _verification(value.get("verification")),
         "plan_hash": value.get("plan_hash")
         if isinstance(value.get("plan_hash"), str)
         and _DIGEST.fullmatch(value["plan_hash"])

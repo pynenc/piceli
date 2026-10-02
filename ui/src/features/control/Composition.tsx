@@ -6,7 +6,7 @@ import { api, applicationPath } from '../../api/client';
 import { Badge, Failure, formatTime, Loading, Notice } from '../../components/State';
 import './composition-harbor.css';
 import { CompositionTopology } from './CompositionTopology';
-import { CompositionInspector } from './CompositionInspector';
+import { CompositionInspector, EnvironmentVerification } from './CompositionInspector';
 import { CompositionVersions } from './CompositionVersions';
 import { CompositionAttention } from './CompositionAttention';
 import { CompositionEnvironmentRail } from './CompositionEnvironmentRail';
@@ -21,7 +21,10 @@ export type Environment = {
   name: string; namespace?: string | null; state: string; health: string;
   revision: Record<string, string>; last_sync?: string | null; reason?: string | null;
   plan_hash?: string | null; components: Component[]; application_id?: string | null;
+  last_action?: string | null; verification?: Verification | null;
 };
+/** A checks-only run against the running release: nothing applied or rolled back. */
+export type Verification = { state: string; trigger?: string | null; checks_hash?: string | null; at?: string | null; failed: { check?: string | null; code?: string | null }[] };
 export type Source = { name: string; url?: string | null; refs: Record<string, string>; last_poll?: string | null; error?: string | null };
 type Controller = { state?: string | null; last_poll?: string | null; poll_seconds?: number | null } | null;
 type Overview = { configured: boolean; controller: Controller; sources: Source[]; environments: Environment[] };
@@ -171,7 +174,7 @@ export function CompositionEnvironment({ canSync, actions }: { canSync: boolean;
     {query.isError && <Failure error={query.error} retry={() => void query.refetch()} />}
     {item && <>
       <div className="heading detail-heading"><div><p className="eyebrow">Environment</p><h1>{item.name}</h1><p className="subtitle">{item.namespace ?? 'Namespace pending'}</p></div><div className="run-actions"><button onClick={() => void query.refetch()} disabled={query.isFetching}>Refresh</button>{actions?.(item)}{canSync && <SyncButton env={item.name} sync={sync} label={`Sync ${item.name}`} />}</div></div>
-      <div className="statusbar" aria-label="Environment state"><div className="statusitem"><span className="statuslabel">Health</span><Badge value={item.health} /></div><div className="statusitem"><span className="statuslabel">State</span><Badge value={item.state} />{item.reason && <p>{item.reason}</p>}</div><div className="statusitem"><span className="statuslabel">Last sync</span><p>{formatTime(item.last_sync)}</p></div><div className="statusitem"><span className="statuslabel">Revision</span><Revision revision={item.revision} /></div></div>
+      <div className="statusbar" aria-label="Environment state"><div className="statusitem"><span className="statuslabel">Health</span><Badge value={item.health} /></div><div className="statusitem"><span className="statuslabel">State</span><Badge value={item.state} />{item.reason && <p>{item.reason}</p>}</div><div className="statusitem"><span className="statuslabel">Last sync</span><p>{formatTime(item.last_sync)}</p></div><div className="statusitem"><span className="statuslabel">Revision</span><Revision revision={item.revision} /></div></div><EnvironmentVerification verification={item.verification} />
       <SyncError sync={sync} />
       <section className="panel control-card" aria-label="Components"><div className="panelhead"><h2>Components <span className="count">{item.components.length}</span></h2></div>
         {item.components.length === 0 ? <p className="panelbody muted">No components reported for this environment yet.</p> : <ul className="component-list">{item.components.map(component => <li key={component.name}>

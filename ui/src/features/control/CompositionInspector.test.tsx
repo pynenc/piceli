@@ -116,3 +116,23 @@ it('keeps incomplete selected commit evidence unknown and does not derive extern
   expect(preview.getByText('Full commit needed')).toBeTruthy();
   expect(preview.queryByText('Same commit')).toBeNull();
 });
+
+it('shows the controller’s last action and a failed checks verification without rolling', () => {
+  const verified: Environment = { ...environment, health: 'degraded', last_action: 'verified', verification: { state: 'failed', trigger: 'checks-changed', checks_hash: 'e'.repeat(64), at: '2026-10-01T09:02:00Z', failed: [{ check: 'http-ready', code: 'check-failed' }] } };
+  open({ selection: { kind: 'environment', name: verified.name }, environment: verified, component: undefined, requestedComponent: null });
+  const inspector = within(screen.getByRole('complementary', { name: 'Selected environment' }));
+  expect(inspector.getByText('Last action')).toBeTruthy();
+  expect(inspector.getByText('Verified')).toBeTruthy();
+  const notice = inspector.getByText('Checks verification failed').closest('.notice')!;
+  expect(notice.textContent).toContain('http-ready');
+  expect(notice.textContent).toContain('check-failed');
+  expect(notice.textContent).toContain('nothing was rolled back');
+});
+
+it('does not invent verification evidence an older controller never reported', () => {
+  open({ selection: { kind: 'environment', name: environment.name }, component: undefined, requestedComponent: null });
+  const inspector = within(screen.getByRole('complementary', { name: 'Selected environment' }));
+  expect(inspector.getByText('Last action')).toBeTruthy();
+  expect(inspector.getByText('Not reported')).toBeTruthy();
+  expect(inspector.queryByText(/verification/i)).toBeNull();
+});

@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 import { Badge, formatTime, Notice } from '../../components/State';
 import { githubCommitUrl, githubRepositoryUrl } from '../../components/sourceLinks';
-import type { Component, Environment, Source } from './Composition';
+import type { Component, Environment, Source, Verification } from './Composition';
 import type { CompositionSelection } from './compositionGraph';
 import { ApplicationDestinations, Counterparts, RefMatches, SourceDestinations, type InspectComponent } from './InspectorConnections';
 import { componentPath, sourcePath } from './versionEvidence';
@@ -27,7 +27,7 @@ export function CompositionInspector({ selection, environment, component, source
         {repositoryUrl && <a className="button" href={repositoryUrl} target="_blank" rel="noreferrer">Open repository ↗</a>}
       </section>{source && <SourceDestinations source={source} environments={environments} onInspect={onInspect} />}<Link className="composition-inspector-link" to="/composition/sources">Inspect all sources →</Link>
     </div> : kind === 'environment' ? <div className="panelbody inspector-content">
-      <section className="inspector-section"><dl className="facts"><dt>State</dt><dd><Badge value={environment.state} /></dd><dt>Health</dt><dd><Badge value={environment.health} /></dd><dt>Components</dt><dd>{environment.components.length}</dd><dt>Last sync</dt><dd>{formatTime(environment.last_sync)}</dd></dl>{environment.reason && <Notice title="Environment status">{environment.reason}</Notice>}
+      <section className="inspector-section"><dl className="facts"><dt>State</dt><dd><Badge value={environment.state} /></dd><dt>Health</dt><dd><Badge value={environment.health} /></dd><dt>Components</dt><dd>{environment.components.length}</dd><dt>Last sync</dt><dd>{formatTime(environment.last_sync)}</dd><dt>Last action</dt><dd>{environment.last_action ? <Badge value={environment.last_action} /> : 'Not reported'}</dd></dl>{environment.reason && <Notice title="Environment status">{environment.reason}</Notice>}<EnvironmentVerification verification={environment.verification} />
         <h3>Tracked revisions</h3><ul className="composition-inspector-refs">{Object.entries(environment.revision).map(([name, sha]) => <li key={name}>{onInspectSource ? <button className="inspector-text-button" onClick={() => onInspectSource(name)}>{name} →</button> : <Link to={sourcePath(environment.name, name)}>{name} →</Link>}<code>{sha}</code></li>)}</ul>{!Object.keys(environment.revision).length && <p className="inspector-missing">No source revisions reported.</p>}
         <Link className="button" to={environmentPath}>Open {environment.name}</Link>
       </section><section className="inspector-section"><h3>Explore components</h3><ul className="inspector-component-links">{environment.components.map(item => <li key={item.name}>{onInspect ? <button onClick={() => onInspect(environment.name, item.name)}>{item.name} →</button> : <Link to={componentPath(environment.name, item.name)}>{item.name} →</Link>}<Badge value={item.state} /></li>)}</ul>{!environment.components.length && <p className="inspector-missing">No components reported.</p>}</section><ApplicationDestinations environment={environment} />
@@ -42,4 +42,15 @@ export function CompositionInspector({ selection, environment, component, source
       <ApplicationDestinations environment={environment} />
     </div> : missingComponent ? <div className="panelbody"><Notice title="Selected component unavailable"><p><code>{requestedComponent}</code> is not in the reported environment. Select another component or clear this selection.</p><button onClick={onClear}>Clear component selection</button></Notice></div> : <p className="panelbody small muted">Select an environment with reported components to inspect its source, state and image.</p>}
   </aside>;
+}
+
+/** The controller's checks verification; failing checks never roll the release back. */
+export function EnvironmentVerification({ verification }: { verification?: Verification | null }) {
+  if (!verification) return null;
+  const failed = verification.state === 'failed';
+  return <Notice title={failed ? 'Checks verification failed' : 'Checks verified'} danger={failed}>
+    <p className="small">{verification.trigger === 'checks-changed' ? 'The check set changed, so the checks ran against the running release.' : 'The checks ran against the running release.'} Nothing was applied{failed ? ' and nothing was rolled back' : ''}.{verification.at ? ` ${formatTime(verification.at)}.` : ''}</p>
+    {failed && (verification.failed.length ? <ul className="small">{verification.failed.map((item, index) => <li key={index}><strong>{item.check ?? 'check'}</strong> · <code>{item.code ?? 'check-failed'}</code></li>)}</ul> : <p className="small">No failing check was reported.</p>)}
+    {verification.checks_hash && <p className="small muted">Checks <code>{verification.checks_hash.slice(0, 12)}</code></p>}
+  </Notice>;
 }

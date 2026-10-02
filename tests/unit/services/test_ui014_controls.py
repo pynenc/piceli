@@ -190,6 +190,7 @@ def test_cluster_projection_whitelists_status_and_shows_k3s_restart(
     view = ClusterStatusControl(_query(tmp_path), "cluster", lambda: raw).status()
     assert view["nodes"][0]["mirror"] == {"kind": "k3s", "state": "needs-restart"}
     assert view["registry"]["storage"]["used_bytes"] == 1024
+    assert view["registry"]["storage"]["used_source"] is None
     assert view["controller"]["poll_failures"] == 2
     assert "never-expose" not in str(view)
 
@@ -269,4 +270,26 @@ def test_live_cluster_status_projects_declaration_and_k3s_report(
         "mirror": {"kind": "k3s", "state": "needs-restart"},
     }
     assert result["registry"]["storage"]["used_bytes"] is None
+    assert result["registry"]["storage"]["used_source"] is None
     assert "private-profile" not in str(result)
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [("du", "du"), ("volume-stats", "volume-stats"), ("node", None), (7, None)],
+)
+def test_cluster_projection_says_where_registry_use_was_measured(
+    tmp_path: Path, source: Any, expected: str | None
+) -> None:
+    raw = {
+        "registry": {
+            "state": "ready",
+            "storage": {
+                "claim": "registry-data",
+                "used_bytes": 1024,
+                "used_source": source,
+            },
+        }
+    }
+    view = ClusterStatusControl(_query(tmp_path), "cluster", lambda: raw).status()
+    assert view["registry"]["storage"]["used_source"] == expected
