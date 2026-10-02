@@ -558,7 +558,6 @@ def staged_copy(
     return body
 
 
-
 def staged_values(manifest: Mapping[str, Any]) -> list[str]:
     """The decoded values of a staged Secret, for redaction only."""
     if manifest.get("kind") != "Secret":

@@ -11,8 +11,10 @@ reader provides is replaced:
   names the in-process fake API (serving namespace ``hello``) under the
   README's context ``kind-hello``, and the target gets
   ``transport="loopback-http"`` (the fake API speaks plain HTTP on loopback);
-* ``kubectl``: a fake on ``PATH`` whose ``port-forward`` serves ``200 OK``
-  where nginx would, so the README's HTTP check really runs;
+* nginx: the README's HTTP check goes through the API server proxy (0.14.2),
+  so a ready Pod ``web-1`` and its proxy answer (``FakeAPI.proxy``) stand in
+  for it before the approved deploy, and the check really runs; ``kubectl``
+  stays a fake on ``PATH`` whose ``port-forward`` serves ``200 OK``;
 * the kubelet: two ready Pods are added once the Deployment exists, so
   ``piceli status`` has something to report.
 
@@ -89,6 +91,7 @@ def _pod(name: str, namespace: str, image: str) -> dict[str, Any]:
         },
         "status": {
             "phase": "Running",
+            "conditions": [{"type": "Ready", "status": "True"}],
             "containerStatuses": [
                 {"name": "web", "image": image, "ready": True, "restartCount": 0}
             ],
@@ -150,6 +153,8 @@ def test_readme_quick_start_runs_as_written(
         }
         assert creates == {"Deployment/web", "Service/web"}
 
+        api.objects[("Pod", "web-1")] = _pod("web-1", "hello", "nginx")
+        api.proxy("pod/web-1", 80, "/", body=b"<h1>Welcome to nginx!</h1>")
         index = approve.index("<combined-hash>")
         approve[index] = planned["combined_hash"]
         result = runner.invoke(cli, [*approve, "--json"])

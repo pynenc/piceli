@@ -642,7 +642,9 @@ def scoped_checks(pipeline: Pipeline) -> tuple[tuple[Any, ...], list[dict[str, A
     skipped: list[dict[str, Any]] = []
     for check in checks:
         target = getattr(check, "target", None)
-        kind, _, name = target.partition("/") if isinstance(target, str) else ("", "", "")
+        kind, _, name = (
+            target.partition("/") if isinstance(target, str) else ("", "", "")
+        )
         wanted = _CHECK_KINDS.get(kind.lower())
         if wanted is None or not name or (wanted, name) in rendered:
             kept.append(check)

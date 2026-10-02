@@ -1907,6 +1907,7 @@
     "inject",
     "job_result",
     "managers",
+    "proxy",
     "put",
     "route",
     "scale"
@@ -1948,6 +1949,13 @@
     "managers": [
      "kind",
      "name"
+    ],
+    "proxy": [
+     "body",
+     "path",
+     "port",
+     "status",
+     "target"
     ],
     "put": [
      "managers",

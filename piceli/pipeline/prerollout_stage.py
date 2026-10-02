@@ -229,7 +229,15 @@ class PreRolloutStage:
         staged = self._stage(cluster, item, unverified, run_id, redact)
         try:
             self._jobs(
-                cluster, manifest, item, run_id, output, label, redact, staged, unverified
+                cluster,
+                manifest,
+                item,
+                run_id,
+                output,
+                label,
+                redact,
+                staged,
+                unverified,
             )
         finally:
             for (kind, _), copy in staged.items():

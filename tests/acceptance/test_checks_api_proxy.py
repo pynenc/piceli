@@ -13,7 +13,6 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-
 import pytest
 
 from piceli.checks import CheckContext, Checks, run_checks
@@ -49,9 +48,7 @@ def cluster(tmp_path: Path) -> Iterator[tuple[FakeAPI, CheckContext]]:
 
 
 def _proxied(api: FakeAPI) -> list[str]:
-    return [
-        request["path"] for request in api.requests if "/proxy" in request["path"]
-    ]
+    return [request["path"] for request in api.requests if "/proxy" in request["path"]]
 
 
 def test_an_http_check_passes_without_kubectl(cluster) -> None:
@@ -123,8 +120,6 @@ def test_no_endpoint_is_a_forward_failure(cluster) -> None:
     ).results
     assert result.code == "check-forward-unavailable"
     assert "HTTP 503" in result.detail
-
-
 
 
 def test_a_refused_proxy_falls_back_to_kubectl_when_it_is_installed(

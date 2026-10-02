@@ -509,5 +509,8 @@ def test_without_the_release_values_the_check_falls_back_to_optional(
     }
     assert env["TOKEN"]["secretKeyRef"]["optional"] is True
     check = run_record(tmp_path)["stages"]["prerollout"]["output"]["checks"][0]
-    assert sorted(check["unverified"]) == ["ConfigMap/db-settings", "Secret/credentials"]
+    assert sorted(check["unverified"]) == [
+        "ConfigMap/db-settings",
+        "Secret/credentials",
+    ]
     assert "staged" not in check
