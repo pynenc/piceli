@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../../api/client';
 import { Badge, Failure, formatTime, Loading, Notice } from '../../components/State';
+import '../control/operational-harbor.css';
 
 export type ClusterStatus = {
   schema: string; state: string; cluster: string;
@@ -13,7 +14,7 @@ export type ClusterStatus = {
 export function Cluster() {
   const query = useQuery({ queryKey: ['cluster-status'], queryFn: ({ signal }) => api.clusterStatus(signal).then(value => value as ClusterStatus), refetchInterval: 15000 });
   const status = query.data;
-  return <>
+  return <div className="cluster-overview">
     <div className="heading detail-heading"><div><p className="eyebrow">Infrastructure</p><h1>Cluster</h1><p className="subtitle">Node placement, local registry, controller and UI health.</p></div><button onClick={() => void query.refetch()} disabled={query.isFetching}>Refresh status</button></div>
     {query.isPending && <Loading text="Loading cluster status…" />}
     {query.isError && <Failure error={query.error} retry={() => void query.refetch()} />}
@@ -35,5 +36,5 @@ export function Cluster() {
         <section className="panel control-card" aria-label="UI health"><div className="panelhead"><h2>UI</h2><Badge value={status.ui?.health ?? 'unknown'} /></div><div className="panelbody"><p className="small muted">Health of the installed UI Deployment.</p></div></section>
       </div>
     </>}
-  </>;
+  </div>;
 }

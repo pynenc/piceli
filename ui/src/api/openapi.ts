@@ -126,6 +126,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/applications/{application_id}/plans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Plan List */
+        get: operations["plan_list_api_v1_applications__application_id__plans_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/applications/{application_id}/releases": {
         parameters: {
             query?: never;
@@ -1032,6 +1049,19 @@ export interface components {
             /** Env */
             env: string;
         };
+        /**
+         * DesiredResource
+         * @description Public desired manifest; masked JSON pointers are not comparable values.
+         */
+        DesiredResource: {
+            /** Manifest */
+            manifest: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Not Compared */
+            not_compared?: string[];
+            resource: components["schemas"]["ResourceIdentity"];
+        };
         /** EnvironmentActionRequest */
         EnvironmentActionRequest: {
             /** Approved Hash */
@@ -1111,6 +1141,24 @@ export interface components {
             /** Preview Id */
             preview_id: string;
         };
+        /** ExecutionJournalRecord */
+        ExecutionJournalRecord: {
+            /** Actions */
+            actions?: components["schemas"]["JournalAction"][];
+            /** Events */
+            events?: components["schemas"]["JournalEvent"][];
+            /** Execution Id */
+            execution_id: string;
+            /** Logs */
+            logs?: components["schemas"]["JournalLog"][];
+            /** State */
+            state: string;
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated: boolean;
+        };
         /** FieldChange */
         FieldChange: {
             after?: components["schemas"]["JsonValue"];
@@ -1153,6 +1201,43 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * JournalAction
+         * @description Last durable resource state and recorded write time, not event timestamps.
+         */
+        JournalAction: {
+            /** Operation */
+            operation: string;
+            /** Ordinal */
+            ordinal: number;
+            resource: components["schemas"]["ResourceIdentity"];
+            /** State */
+            state: string;
+            /** Written At */
+            written_at?: string | null;
+        };
+        /** JournalEvent */
+        JournalEvent: {
+            /** Ordinal */
+            ordinal?: number | null;
+            /** Sequence */
+            sequence: number;
+            /** State */
+            state: string;
+        };
+        /**
+         * JournalLog
+         * @description A bounded, redacted pod log tail recorded in an execution diagnosis.
+         */
+        JournalLog: {
+            /** Container */
+            container: string;
+            /** Lines */
+            lines: string[];
+            /** Pod */
+            pod: string;
+            resource: components["schemas"]["ResourceIdentity"];
         };
         JsonValue: unknown;
         /** LogBatch */
@@ -1241,6 +1326,7 @@ export interface components {
             error_code?: string | null;
             /** Id */
             id: string;
+            journal?: components["schemas"]["ExecutionJournalRecord"] | null;
             /** Pipeline Run Id */
             pipeline_run_id?: string | null;
             /** Plan Id */
@@ -1291,6 +1377,15 @@ export interface components {
             /** Scope */
             scope: string;
         };
+        /** PlanPage */
+        PlanPage: {
+            /** Cursor */
+            cursor: string;
+            /** Items */
+            items: components["schemas"]["PlanSummary"][];
+            /** Next Page */
+            next_page?: string | null;
+        };
         /** PlanRecord */
         PlanRecord: {
             /** Actions */
@@ -1309,6 +1404,13 @@ export interface components {
             checks?: {
                 [key: string]: components["schemas"]["JsonValue"];
             };
+            /** Desired Resources */
+            desired_resources?: components["schemas"]["DesiredResource"][];
+            /**
+             * Desired Resources Complete
+             * @default false
+             */
+            desired_resources_complete: boolean;
             /** Diffs */
             diffs: components["schemas"]["ResourceDiff"][];
             /** Digest */
@@ -1339,6 +1441,8 @@ export interface components {
             /** Release */
             release: string;
             source?: components["schemas"]["SourceRevision"] | null;
+            /** Steps */
+            steps?: components["schemas"]["PlanStep"][];
             /** Summary */
             summary: {
                 [key: string]: number;
@@ -1357,6 +1461,61 @@ export interface components {
             intent: "deploy" | "rollback";
             /** Release */
             release?: string | null;
+        };
+        /**
+         * PlanStep
+         * @description Exact executor action order; dependency level is absent for prune actions.
+         */
+        PlanStep: {
+            /** Dependencies */
+            dependencies?: components["schemas"]["ResourceIdentity"][];
+            /** Level */
+            level?: number | null;
+            /** Operation */
+            operation: string;
+            /** Ordinal */
+            ordinal: number;
+            resource: components["schemas"]["ResourceIdentity"];
+        };
+        /**
+         * PlanSummary
+         * @description Stored plan identity and counts, without manifests or private engine inputs.
+         */
+        PlanSummary: {
+            /** Application Id */
+            application_id: string;
+            /** Created At */
+            created_at: string;
+            /**
+             * Desired Resources Complete
+             * @default false
+             */
+            desired_resources_complete: boolean;
+            /** Digest */
+            digest: string;
+            /** Expires At */
+            expires_at: string;
+            /** Id */
+            id: string;
+            /**
+             * Intent
+             * @enum {string}
+             */
+            intent: "deploy" | "rollback";
+            /**
+             * Plan Kind
+             * @default release
+             * @enum {string}
+             */
+            plan_kind: "release" | "pipeline-preview" | "pipeline-materialized";
+            /** Release */
+            release: string;
+            source?: components["schemas"]["SourceRevision"] | null;
+            /** Summary */
+            summary: {
+                [key: string]: number;
+            };
+            target: components["schemas"]["Target"];
         };
         /** Principal */
         Principal: {
@@ -1934,6 +2093,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Operation"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    plan_list_api_v1_applications__application_id__plans_get: {
+        parameters: {
+            query?: {
+                page?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                application_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanPage"];
                 };
             };
             /** @description Validation Error */

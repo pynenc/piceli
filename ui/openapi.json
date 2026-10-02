@@ -446,6 +446,35 @@
         "title": "CompositionSyncRequest",
         "type": "object"
       },
+      "DesiredResource": {
+        "additionalProperties": false,
+        "description": "Public desired manifest; masked JSON pointers are not comparable values.",
+        "properties": {
+          "manifest": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Manifest",
+            "type": "object"
+          },
+          "not_compared": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Not Compared",
+            "type": "array"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/ResourceIdentity"
+          }
+        },
+        "required": [
+          "resource",
+          "manifest"
+        ],
+        "title": "DesiredResource",
+        "type": "object"
+      },
       "EnvironmentActionRequest": {
         "additionalProperties": false,
         "properties": {
@@ -696,6 +725,51 @@
         "title": "EvaluationRequest",
         "type": "object"
       },
+      "ExecutionJournalRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/JournalAction"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/JournalEvent"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "execution_id": {
+            "title": "Execution Id",
+            "type": "string"
+          },
+          "logs": {
+            "items": {
+              "$ref": "#/components/schemas/JournalLog"
+            },
+            "title": "Logs",
+            "type": "array"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "execution_id",
+          "state"
+        ],
+        "title": "ExecutionJournalRecord",
+        "type": "object"
+      },
       "FieldChange": {
         "additionalProperties": false,
         "properties": {
@@ -823,6 +897,110 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "JournalAction": {
+        "additionalProperties": false,
+        "description": "Last durable resource state and recorded write time, not event timestamps.",
+        "properties": {
+          "operation": {
+            "title": "Operation",
+            "type": "string"
+          },
+          "ordinal": {
+            "minimum": 0.0,
+            "title": "Ordinal",
+            "type": "integer"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/ResourceIdentity"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "written_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Written At"
+          }
+        },
+        "required": [
+          "ordinal",
+          "resource",
+          "operation",
+          "state"
+        ],
+        "title": "JournalAction",
+        "type": "object"
+      },
+      "JournalEvent": {
+        "additionalProperties": false,
+        "properties": {
+          "ordinal": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ordinal"
+          },
+          "sequence": {
+            "minimum": 0.0,
+            "title": "Sequence",
+            "type": "integer"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sequence",
+          "state"
+        ],
+        "title": "JournalEvent",
+        "type": "object"
+      },
+      "JournalLog": {
+        "additionalProperties": false,
+        "description": "A bounded, redacted pod log tail recorded in an execution diagnosis.",
+        "properties": {
+          "container": {
+            "title": "Container",
+            "type": "string"
+          },
+          "lines": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Lines",
+            "type": "array"
+          },
+          "pod": {
+            "title": "Pod",
+            "type": "string"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/ResourceIdentity"
+          }
+        },
+        "required": [
+          "resource",
+          "pod",
+          "container",
+          "lines"
+        ],
+        "title": "JournalLog",
         "type": "object"
       },
       "JsonValue": {},
@@ -1055,6 +1233,16 @@
             "title": "Id",
             "type": "string"
           },
+          "journal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExecutionJournalRecord"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "pipeline_run_id": {
             "anyOf": [
               {
@@ -1218,6 +1406,39 @@
         "title": "PartialError",
         "type": "object"
       },
+      "PlanPage": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "title": "Cursor",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PlanSummary"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_page": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Page"
+          }
+        },
+        "required": [
+          "items",
+          "cursor"
+        ],
+        "title": "PlanPage",
+        "type": "object"
+      },
       "PlanRecord": {
         "additionalProperties": false,
         "properties": {
@@ -1250,6 +1471,18 @@
             },
             "title": "Checks",
             "type": "object"
+          },
+          "desired_resources": {
+            "items": {
+              "$ref": "#/components/schemas/DesiredResource"
+            },
+            "title": "Desired Resources",
+            "type": "array"
+          },
+          "desired_resources_complete": {
+            "default": false,
+            "title": "Desired Resources Complete",
+            "type": "boolean"
           },
           "diffs": {
             "items": {
@@ -1346,6 +1579,13 @@
               }
             ]
           },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/PlanStep"
+            },
+            "title": "Steps",
+            "type": "array"
+          },
           "summary": {
             "additionalProperties": {
               "type": "integer"
@@ -1403,6 +1643,135 @@
           }
         },
         "title": "PlanRequest",
+        "type": "object"
+      },
+      "PlanStep": {
+        "additionalProperties": false,
+        "description": "Exact executor action order; dependency level is absent for prune actions.",
+        "properties": {
+          "dependencies": {
+            "items": {
+              "$ref": "#/components/schemas/ResourceIdentity"
+            },
+            "title": "Dependencies",
+            "type": "array"
+          },
+          "level": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Level"
+          },
+          "operation": {
+            "title": "Operation",
+            "type": "string"
+          },
+          "ordinal": {
+            "minimum": 0.0,
+            "title": "Ordinal",
+            "type": "integer"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/ResourceIdentity"
+          }
+        },
+        "required": [
+          "ordinal",
+          "resource",
+          "operation"
+        ],
+        "title": "PlanStep",
+        "type": "object"
+      },
+      "PlanSummary": {
+        "additionalProperties": false,
+        "description": "Stored plan identity and counts, without manifests or private engine inputs.",
+        "properties": {
+          "application_id": {
+            "title": "Application Id",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "desired_resources_complete": {
+            "default": false,
+            "title": "Desired Resources Complete",
+            "type": "boolean"
+          },
+          "digest": {
+            "title": "Digest",
+            "type": "string"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "intent": {
+            "enum": [
+              "deploy",
+              "rollback"
+            ],
+            "title": "Intent",
+            "type": "string"
+          },
+          "plan_kind": {
+            "default": "release",
+            "enum": [
+              "release",
+              "pipeline-preview",
+              "pipeline-materialized"
+            ],
+            "title": "Plan Kind",
+            "type": "string"
+          },
+          "release": {
+            "title": "Release",
+            "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SourceRevision"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "summary": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Summary",
+            "type": "object"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          }
+        },
+        "required": [
+          "id",
+          "application_id",
+          "digest",
+          "target",
+          "intent",
+          "release",
+          "created_at",
+          "expires_at",
+          "summary"
+        ],
+        "title": "PlanSummary",
         "type": "object"
       },
       "Principal": {
@@ -2590,6 +2959,71 @@
           }
         },
         "summary": "Admit"
+      }
+    },
+    "/api/v1/applications/{application_id}/plans": {
+      "get": {
+        "operationId": "plan_list_api_v1_applications__application_id__plans_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "application_id",
+            "required": true,
+            "schema": {
+              "title": "Application Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Page"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 25,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Plan List"
       }
     },
     "/api/v1/applications/{application_id}/releases": {

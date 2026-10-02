@@ -1,8 +1,17 @@
 import { useState, type ReactNode } from 'react';
+import * as Dialog from '@radix-ui/react-dialog';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { api, applicationPath } from '../../api/client';
 import { Badge, Failure, formatTime, Loading, Notice } from '../../components/State';
+import './composition-harbor.css';
+import { CompositionTopology } from './CompositionTopology';
+import { CompositionInspector } from './CompositionInspector';
+import { CompositionVersions } from './CompositionVersions';
+import { CompositionAttention } from './CompositionAttention';
+import { CompositionEnvironmentRail } from './CompositionEnvironmentRail';
+import type { CompositionSelection } from './compositionGraph';
+import { SourceInventory } from './SourceInventory';
 
 export type Component = {
   name: string; source?: string | null; commit?: string | null; digest?: string | null;
@@ -73,6 +82,65 @@ function NotConfigured() {
   return <Notice title="No GitOps controller status yet">Enable GitOps for the composition with <code>piceli gitops enable MODULE</code>. This page fills in after the controller’s first poll.</Notice>;
 }
 
+function EnvironmentInventory({ environments, canSync, sync }: { environments: Environment[]; canSync: boolean; sync: ReturnType<typeof useSync> }) {
+  return <div className="composition-inventory">{environments.map(env => <section className="panel composition-inventory-row" key={env.name} aria-label={`Environment ${env.name}`}>
+    <div className="composition-inventory-name"><h2><Link to={environmentPath(env.name)}>{env.name}</Link></h2><p className="small muted">{env.namespace ?? 'Namespace pending'}</p></div>
+    <div className="composition-inventory-state"><span className="state-label">Health / state</span><div><Badge value={env.health} /> <Badge value={env.state} /></div>{env.reason && <p className="small muted">{env.reason}</p>}</div>
+    <div className="composition-inventory-revision"><span className="state-label">Revision per source</span><Revision revision={env.revision} /></div>
+    <div className="composition-inventory-components"><span className="state-label">Components</span><p className="small">{componentSummary(env.components)}</p><p className="small muted">Last sync {formatTime(env.last_sync)}</p></div>
+    <div className="composition-inventory-actions"><Link className="button" to={environmentPath(env.name)}>Open environment</Link>{canSync && <SyncButton env={env.name} sync={sync} label={`Sync ${env.name}`} />}</div>
+    {env.state === 'approval-required' && <div className="composition-inventory-notice"><Notice title="Approval pending">Approve the pending plan with <code>piceli gitops approve {env.name} {env.plan_hash ?? 'HASH'}</code>.</Notice></div>}
+  </section>)}</div>;
+}
+
+/** Sources, versions and attention are alternate views of the same reported snapshot. */
+export function CompositionOverview({ canSync }: { canSync: boolean }) {
+  const query = useQuery({ queryKey: ['composition'], queryFn: ({ signal }) => api.composition(signal).then(asOverview), refetchInterval: 10000 });
+  const [params, setParams] = useSearchParams();
+  const sync = useSync();
+  const [expanded, setExpanded] = useState(false);
+  const data = query.data;
+  const environments = data?.environments ?? [];
+  const requestedEnvironment = params.get('environment');
+  const requestedComponent = params.get('component');
+  const environment = requestedEnvironment === null ? environments[0] : environments.find(item => item.name === requestedEnvironment);
+  const component = requestedComponent === null ? environment?.components[0] : environment?.components.find(item => item.name === requestedComponent);
+  const missingEnvironment = requestedEnvironment !== null && !environment;
+  const allEnvironments = params.get('scope') === 'all';
+  const view = params.get('view') === 'versions' ? 'versions' : params.get('view') === 'attention' ? 'attention' : 'topology';
+  const selection: CompositionSelection | null = params.get('node') === 'source' && params.has('source') ? { kind: 'source', name: params.get('source')! } : environment && params.get('node') === 'environment' ? { kind: 'environment', name: environment.name } : component && environment ? { kind: 'component', name: component.name, environment: environment.name } : null;
+  const selectedSource = data?.sources.find(item => item.name === (selection?.kind === 'source' ? selection.name : component?.source));
+  const setView = (value: string) => { const next = new URLSearchParams(params); if (value === 'topology') next.delete('view'); else next.set('view', value); setParams(next, { replace: true }); };
+  const selectEnvironment = (name: string) => { const next = new URLSearchParams(params); next.set('environment', name); next.delete('component'); next.delete('node'); next.delete('source'); setParams(next); };
+  const selectNode = (node: CompositionSelection) => { const next = new URLSearchParams(params); next.delete('view'); next.delete('node'); next.delete('source'); if (node.kind === 'component') { next.set('environment', node.environment); next.set('component', node.name); } else if (node.kind === 'source') { next.set('node', 'source'); next.set('source', node.name); } else { next.set('node', 'environment'); next.set('environment', node.name); next.delete('component'); } setParams(next, { replace: true }); };
+  const clearSelection = (scope: 'environment' | 'component') => { const next = new URLSearchParams(params); if (scope === 'environment') next.delete('environment'); next.delete('component'); next.delete('node'); next.delete('source'); setParams(next, { replace: true }); };
+  const scopeEnvironment = (name: string) => { const next = new URLSearchParams(params); next.set('environment', name); for (const key of ['scope', 'component', 'node', 'source']) next.delete(key); setParams(next); };
+  const explorer = () => data && environment ? <div className="composition-explorer">
+    <CompositionEnvironmentRail environments={environments} selected={environment.name} allEnvironments={allEnvironments} onSelect={scopeEnvironment} />
+    <div className="composition-landscape">
+      <section className="composition-map" aria-label="Component dependencies">
+        <div className="composition-map-heading"><div><h2>System schematic</h2><p>{allEnvironments ? 'All environments' : environment.namespace ?? 'Namespace pending'}</p></div><div className="composition-scope-controls"><label className="composition-environment-picker"><span className="sr-only">Environment</span><select value={environment.name} onChange={event => selectEnvironment(event.target.value)}>{environments.map(item => <option key={item.name} value={item.name}>{item.name}</option>)}</select></label><label className="composition-all-scope"><input type="checkbox" checked={allEnvironments} onChange={event => { const next = new URLSearchParams(params); if (event.target.checked) next.set('scope', 'all'); else next.delete('scope'); setParams(next, { replace: true }); }} /> All environments</label></div></div>
+        <CompositionTopology sources={data.sources} environments={allEnvironments ? environments : [environment]} selected={selection} onSelect={selectNode} />
+        {!environment.components.length && !allEnvironments && <div className="composition-empty-map"><h3>No components reported</h3><p>Component relationships appear after the controller publishes them.</p></div>}
+      </section>
+      <CompositionInspector selection={selection} environment={environment} component={component} source={selectedSource} requestedComponent={requestedComponent} onClear={() => clearSelection('component')} environments={environments} sources={data.sources} onInspect={(name, componentName) => selectNode({ kind: 'component', environment: name, name: componentName })} onInspectSource={name => selectNode({ kind: 'source', name })} />
+    </div>
+  </div> : null;
+  return <div className="composition-overview">
+    <div className="heading detail-heading composition-explorer-heading"><div><h1>Your delivery landscape</h1>{data?.configured ? <div className="composition-statusline" aria-label="Composition summary"><span><strong>{environments.length}</strong> environments</span><span><strong>{environments.reduce((count, item) => count + item.components.length, 0)}</strong> components</span><span><strong>{environments.filter(item => item.state === 'approval-required').length}</strong> awaiting approval</span><span className="composition-controller-status" title={`Last controller poll: ${formatTime(data.controller?.last_poll)}`}>Controller <Badge value={data.controller?.state ?? 'unknown'} /></span></div> : <p className="subtitle">Sources, components and environments.</p>}</div><button onClick={() => void query.refetch()} disabled={query.isFetching}>Refresh overview</button></div>
+    {query.isPending && <Loading text="Loading composition…" />}{query.isError && <Failure error={query.error} retry={() => void query.refetch()} />}
+    {data && !data.configured && <NotConfigured />}
+    {data?.configured && <Dialog.Root open={expanded} onOpenChange={setExpanded}>
+      <div className="composition-viewbar"><div className="composition-view-tabs" role="group" aria-label="Infrastructure view">{['topology', 'versions', 'attention'].map(item => <button key={item} aria-pressed={view === item} onClick={() => setView(item)}>{item[0].toUpperCase() + item.slice(1)}</button>)}</div>{view === 'topology' && environment ? <Dialog.Trigger asChild><button className="composition-expand" aria-label="Expand topology"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M7 2H2v5M13 2h5v5M2 13v5h5m11-5v5h-5" /></svg>Expand topology</button></Dialog.Trigger> : <span className="small muted">Controller snapshot</span>}</div>
+      {view === 'versions' ? <CompositionVersions environments={environments} sources={data.sources} onInspect={(name, componentName) => selectNode({ kind: 'component', environment: name, name: componentName })} /> : view === 'attention' ? <CompositionAttention environments={environments} sources={data.sources} /> : <>
+        {environment ? !expanded && explorer() : missingEnvironment ? <Notice title="Selected environment unavailable"><p><code>{requestedEnvironment}</code> is not in the reported snapshot. Its selection is preserved in the address.</p><button onClick={() => clearSelection('environment')}>Reset environment selection</button></Notice> : <section className="panel empty"><h2>No environments yet</h2><p>The controller has not resolved an environment. Check its sources and refresh.</p></section>}
+        <details className="composition-inventory-disclosure"><summary><span>Environment inventory</span><span>{environments.length} environments</span></summary><div className="composition-section-heading"><p className="small muted">Reported revisions, health and controller actions.</p><Link to="/composition">Open environments →</Link></div><SyncError sync={sync} /><EnvironmentInventory environments={environments} canSync={canSync} sync={sync} /></details>
+      </>}
+      <Dialog.Portal><Dialog.Overlay className="composition-expanded-overlay" /><Dialog.Content className="composition-expanded"><header className="composition-expanded-heading"><div><Dialog.Title>Infrastructure explorer</Dialog.Title><Dialog.Description>Select an environment or follow the connections. Escape returns to overview.</Dialog.Description></div><Dialog.Close className="composition-close">Close expanded topology <span aria-hidden="true">×</span></Dialog.Close></header>{environment ? explorer() : <Notice title="Selected environment unavailable"><p>The selected environment is no longer in the controller snapshot.</p><button onClick={() => clearSelection('environment')}>Reset environment selection</button></Notice>}</Dialog.Content></Dialog.Portal>
+    </Dialog.Root>}
+  </div>;
+}
+
 export function CompositionEnvironments({ canSync }: { canSync: boolean }) {
   const query = useQuery({ queryKey: ['composition'], queryFn: ({ signal }) => api.composition(signal).then(asOverview), refetchInterval: 10000 });
   const sync = useSync();
@@ -84,14 +152,7 @@ export function CompositionEnvironments({ canSync }: { canSync: boolean }) {
     {query.data?.configured && <ControllerLine controller={query.data.controller} />}
     <SyncError sync={sync} />
     {query.data?.configured && query.data.environments.length === 0 && <section className="panel empty"><h2>No environments yet</h2><p>The controller has not resolved an environment. Check its sources and refresh.</p></section>}
-    <div className="composition-grid">{query.data?.environments.map(env => <section className="panel control-card composition-card" key={env.name} aria-label={`Environment ${env.name}`}>
-      <div className="panelhead"><div><h2><Link to={environmentPath(env.name)}>{env.name}</Link></h2><p className="small muted">{env.namespace ?? 'Namespace pending'}</p></div><Badge value={env.health} /></div>
-      <div className="panelbody">
-        <dl className="facts"><dt>State</dt><dd><Badge value={env.state} /></dd><dt>Revision</dt><dd><Revision revision={env.revision} /></dd><dt>Last sync</dt><dd>{formatTime(env.last_sync)}</dd><dt>Components</dt><dd>{componentSummary(env.components)}</dd></dl>
-        {env.state === 'approval-required' && <Notice title="Approval pending">Approve the pending plan with <code>piceli gitops approve {env.name} {env.plan_hash ?? 'HASH'}</code>.</Notice>}
-        <div className="run-actions"><Link className="button" to={environmentPath(env.name)}>Open environment</Link>{canSync && <SyncButton env={env.name} sync={sync} label={`Sync ${env.name}`} />}</div>
-      </div>
-    </section>)}</div>
+    <EnvironmentInventory environments={query.data?.environments ?? []} canSync={canSync} sync={sync} />
   </>;
 }
 
@@ -104,7 +165,7 @@ export function CompositionEnvironment({ canSync, actions }: { canSync: boolean;
   const query = useQuery({ queryKey: ['composition', 'environment', env], queryFn: ({ signal }) => api.compositionEnvironment(env, signal).then(asDetail), refetchInterval: 10000 });
   const sync = useSync();
   const item = query.data?.environment;
-  return <>
+  return <div className="composition-detail">
     <Link className="back-link" to="/composition">← Environments</Link>
     {query.isPending && <Loading text="Loading environment…" />}
     {query.isError && <Failure error={query.error} retry={() => void query.refetch()} />}
@@ -122,22 +183,17 @@ export function CompositionEnvironment({ canSync, actions }: { canSync: boolean;
       </section>
       <section className="panel control-card"><div className="panelhead"><h2>Workloads and logs</h2></div><div className="panelbody">{item.application_id ? <Link className="button" to={`${applicationPath(item.application_id)}/resources`}>Open workloads, pods and logs</Link> : <p className="small muted">The namespace is not created yet; workloads appear after the first sync.</p>}</div></section>
     </>}
-  </>;
+  </div>;
 }
 
 export function CompositionSources() {
   const query = useQuery({ queryKey: ['composition'], queryFn: ({ signal }) => api.composition(signal).then(asOverview), refetchInterval: 10000 });
-  return <>
-    <div className="heading"><p className="eyebrow">Composition</p><h1>Sources</h1><p className="subtitle">Git repositories the controller polls, with the commit of each ref it follows.</p></div>
+  return <div className="composition-sources">
+    <div className="heading"><div><h1>Sources</h1><p className="subtitle">Repositories, tracked refs and their destinations.</p></div><button onClick={() => void query.refetch()} disabled={query.isFetching}>Refresh sources</button></div>
     {query.isPending && <Loading text="Loading sources…" />}
     {query.isError && <Failure error={query.error} retry={() => void query.refetch()} />}
     {query.data && !query.data.configured && <NotConfigured />}
     {query.data?.configured && <ControllerLine controller={query.data.controller} />}
-    {query.data?.sources.map(source => <section className="panel control-card" key={source.name} aria-label={`Source ${source.name}`}>
-      <div className="panelhead"><div><h2>{source.name}</h2><p className="small muted"><code>{source.url ?? 'URL not reported'}</code></p></div>{source.error ? <Badge value="failed" /> : <Badge value="connected" />}</div>
-      <div className="panelbody"><dl className="facts"><dt>Last poll</dt><dd>{formatTime(source.last_poll)}</dd>{source.error && <><dt>Error</dt><dd>{source.error}</dd></>}</dl>
-        <h3>Refs</h3>{Object.keys(source.refs).length ? <ul className="control-workloads">{Object.entries(source.refs).map(([ref, sha]) => <li key={ref}><strong>{ref}</strong><code title={sha}>{shortSha(sha)}</code></li>)}</ul> : <p className="small muted">No ref resolved yet.</p>}
-      </div>
-    </section>)}
-  </>;
+    {query.data?.configured && <SourceInventory sources={query.data.sources} environments={query.data.environments} />}
+  </div>;
 }
