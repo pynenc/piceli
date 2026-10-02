@@ -361,3 +361,25 @@ def test_the_real_ui_installer_needs_a_pinned_image(
     assert node_a["mirror"]["kind"] == "containerd"
     assert node_a["mirror"]["state"] in {"ready", "pending", "missing"}
     assert api.objects[("Deployment", "piceli-ui")]["spec"]["template"]["spec"]
+
+
+def test_init_keeps_the_cluster_rbac_rule_gitops_enable_added(
+    cluster: tuple[FakeAPI, str], tmp_path: Path
+) -> None:
+    from piceli.gitops.install import NAME, render_foundation
+
+    api, url = cluster
+    ref = _composition(tmp_path, url)
+    planned = json.loads(_init(ref).stdout)
+    assert _init(ref, "--approve", planned["plan_hash"]).exit_code == 0
+    # `gitops enable --cluster-rbac` widened the controller's ClusterRole.
+    wider = next(
+        item
+        for item in render_foundation("piceli-system", cluster_rbac=True)
+        if item["kind"] == "ClusterRole" and item["metadata"]["name"] == NAME
+    )
+    api.objects[("ClusterRole", NAME)]["rules"] = wider["rules"]
+    again = _init(ref)
+    assert again.exit_code == 0, again.output
+    assert json.loads(again.stdout)["state"] == "unchanged"
+    assert api.objects[("ClusterRole", NAME)]["rules"] == wider["rules"]

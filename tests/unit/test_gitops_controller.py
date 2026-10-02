@@ -559,9 +559,7 @@ class PartialApplyPorts(FakePorts):
             )
         if not self.half_applied:
             self.half_applied = True
-            raise PipelineError(
-                "pipeline-apply-not-ready", "half applied", failed=True
-            )
+            raise PipelineError("pipeline-apply-not-ready", "half applied", failed=True)
         return EnvOutcome("deployed", namespace="app-" + branch)
 
 
@@ -606,3 +604,55 @@ def test_a_stale_approval_is_replaced_by_the_policy_when_it_covers_the_plan(
     status = controller.poll_once()
     assert status["envs"]["wp-pol"]["state"] == "deployed"
     assert ports.kinds("up")[-1][3] == APPROVE_POLICY
+
+
+def test_a_failed_build_and_a_denied_teardown_show_their_detail(
+    tmp_path: Path, repo: Repo
+) -> None:
+    from piceli.envs.model import EnvError
+
+    lines: list[str] = []
+    ports = FakePorts()
+    tail = "  | error: linker cc not found"
+
+    def build(*_: Any, **__: Any) -> Mapping[str, Any]:
+        raise GitOpsError(
+            "cluster-build-failed",
+            "the build Job ended failed",
+            details={
+                "outcome": {"state": "failed", "log_tail": tail, "cleaned": False},
+                "kept_job": "piceli-build-abc",
+                "log_access": "read",
+            },
+        )
+
+    denied = {
+        "verb": "list",
+        "resource": "persistentvolumes",
+        "namespace": None,
+        "status": 403,
+    }
+
+    def env_down(pipeline: Any, branch: str) -> None:
+        raise EnvError(
+            "env-cluster-unavailable",
+            "the Kubernetes API refused list persistentvolumes (HTTP 403)",
+            failed=True,
+            details={"denied": denied},
+        )
+
+    ports.build = build  # type: ignore[method-assign]
+    ports.env_down = env_down  # type: ignore[method-assign]
+    controller, _, _ = make(tmp_path, repo, ports)
+    controller.log = lines.append
+    repo.push_branch("wp-9", "x")
+    status = controller.poll_once()
+    env = status["envs"]["wp-9"]
+    assert env["reason"] == "cluster-build-failed"
+    assert env["failure"] == {"log_tail": tail, "kept_job": "piceli-build-abc"}
+    repo.delete_branch("wp-9")
+    status = controller.poll_once()
+    env = status["envs"]["wp-9"]
+    assert env["state"] == "deleting" and env["reason"] == "env-cluster-unavailable"
+    assert env["failure"] == {"denied": denied}
+    assert any("list persistentvolumes" in line for line in lines)

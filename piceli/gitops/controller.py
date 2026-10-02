@@ -26,7 +26,9 @@ One poll (:meth:`Controller.poll_once`):
    escapes a step: one bad branch never stops the others.
 
 Everything recorded is a commit id, a hash, a state or a registered error
-code; never Git output, process output or secret values.
+code, never Git output or secret values; a failed step adds ``failure``
+(:func:`failure_detail`): a failed build's scrubbed, bounded log tail and
+kept Job, or the request the Kubernetes API refused.
 
 Importing this module is side-effect free.
 """
@@ -89,6 +91,37 @@ def error_code(error: BaseException) -> str:
 #: Codes of an approved hash that no longer matches the plan (a partial
 #: apply, a drift): the controller plans again instead of retrying it.
 STALE_APPROVAL_CODES = frozenset({"env-plan-changed", "pipeline-plan-changed"})
+
+
+#: The longest build log tail a status keeps (characters).
+FAILURE_TAIL_CHARS = 4000
+
+
+def failure_detail(error: BaseException) -> dict[str, Any] | None:
+    """What a status shows of a failed step besides its code, or ``None``.
+
+    ``log_tail``: the scrubbed end of a failed build Job's log (bounded);
+    ``kept_job``: the failed build Job kept for diagnosis until the next
+    build; ``denied`` / ``refused``: the request the Kubernetes API refused
+    (verb, resource, namespace, HTTP status), as Piceli asked for it.
+    """
+    details = getattr(error, "details", None)
+    if not isinstance(details, Mapping):
+        return None
+    found: dict[str, Any] = {}
+    outcome = details.get("outcome")
+    tail = outcome.get("log_tail") if isinstance(outcome, Mapping) else None
+    if isinstance(tail, str) and tail:
+        found["log_tail"] = tail[-FAILURE_TAIL_CHARS:]
+    if isinstance(details.get("kept_job"), str):
+        found["kept_job"] = details["kept_job"]
+    for key in ("denied", "refused"):
+        value = details.get(key)
+        if isinstance(value, Mapping):
+            found[key] = {
+                k: value.get(k) for k in ("verb", "resource", "namespace", "status")
+            }
+    return found or None
 
 
 def replan_stale(
@@ -200,9 +233,15 @@ class Controller:
         record.update(values)
         record["updated_at"] = _iso(self.clock())
 
-    def _fail(self, record: dict[str, Any], reason: str) -> None:
+    def _fail(
+        self,
+        record: dict[str, Any],
+        reason: str,
+        error: BaseException | None = None,
+    ) -> None:
         attempts = int(record.get("attempts") or 0) + 1
         deleting = record.get("state") == "deleting"
+        record["failure"] = None if error is None else failure_detail(error)
         if attempts >= self.config.max_attempts and not deleting:
             self._set(
                 record,
@@ -558,6 +597,7 @@ class Controller:
                 plan_hash=None,
                 approved_hash=None,
                 reason=None,
+                failure=None,
             )
             self.log(f"{record['branch']}: deployed {record['commit'][:12]}")
         elif outcome.state == "approval-required":
@@ -568,6 +608,7 @@ class Controller:
                 approved_hash=None,
                 next_attempt_at=None,
                 reason=outcome.reason,
+                failure=None,
             )
             self.log(
                 f"{record['branch']}: approval required; piceli gitops approve "
@@ -635,7 +676,10 @@ class Controller:
             else:
                 self._deploy(record)
         except Exception as error:  # one bad branch never stops the loop
-            self._fail(record, error_code(error))
+            if isinstance(error, GitOpsError) or hasattr(error, "failed"):
+                # Registered errors carry printable messages (no secret).
+                self.log(f"{record['branch']}: {error}")
+            self._fail(record, error_code(error), error)
         finally:
             self.busy = False
             save_state(self.state_dir, self.state)

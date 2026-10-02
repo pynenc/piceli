@@ -71,7 +71,10 @@ Approval stays the owner's:
 - `piceli gitops approve BRANCH sha256:<hash>` releases the waiting plan; the
   controller applies it on its next poll only if the plan is still the same
   (a new push or a changed plan makes the approval stale:
-  `gitops-approval-stale`).
+  `gitops-approval-stale`). When the approved plan changes under the
+  controller (an apply that stopped half way), it plans again: the policy
+  applies the new plan when it covers it, otherwise the branch waits in
+  `approval-required` with the new hash.
 
 The controller works **one step at a time**: teardowns first, then deploys,
 oldest push first. A failed step is retried with exponential backoff (30s,
@@ -130,11 +133,11 @@ env push`.
 | --- | --- |
 | Namespace `piceli-system` (`--namespace`) | The controller's home (never deleted by `disable`). |
 | ServiceAccount, Role and RoleBinding `piceli-gitops` | In its namespace only: ConfigMaps (status, requests), Leases, build Jobs, their Pods and logs, cache claims, Events. |
-| ClusterRole and ClusterRoleBinding `piceli-gitops` | Read nodes; create, read and delete namespaces (one per branch); create RoleBindings that bind **only** `piceli-gitops-deployer` (the `bind` verb is limited to that name). No Secrets, nothing else cluster-wide. |
-| ClusterRole `piceli-gitops-deployer` | The namespaced kinds an app deploys; used only through a RoleBinding in each environment's namespace, so the controller can change nothing outside them. `--cluster-rbac` adds ClusterRoles/ClusterRoleBindings for apps that declare them. |
+| ClusterRole and ClusterRoleBinding `piceli-gitops` | Read nodes; create, read and delete namespaces (one per branch); read and delete PersistentVolumes (a branch teardown removes the volumes bound to its claims); create RoleBindings that bind **only** `piceli-gitops-deployer` (the `bind` verb is limited to that name). No Secrets, nothing else cluster-wide. `--cluster-rbac` adds ClusterRoles/ClusterRoleBindings for apps that declare them; `piceli cluster init` keeps that rule. |
+| ClusterRole `piceli-gitops-deployer` | The namespaced kinds an app deploys, the `scale` subresource of Deployments and StatefulSets (restore points) and reads (`get`, `list`, `watch`) of `metrics.k8s.io` pods and nodes, so a release can grant them to its own Role without an escalation refusal; used only through a RoleBinding in each environment's namespace, so the controller can change nothing outside them. |
 | PersistentVolumeClaim `piceli-gitops-state` (`--storage`, `--storage-class`) | The Git mirror, the last-seen commits and tags, build receipts. |
 | ConfigMap `piceli-gitops-config` | The settings (pipeline, repository, globs, poll, build options); never a credential. |
-| Deployment `piceli-gitops` | One replica, `Recreate`, non-root, read-only root filesystem, no privilege escalation; the credentials Secret mounted read-only. |
+| Deployment `piceli-gitops` | One replica, `Recreate`, non-root, read-only root filesystem, no privilege escalation; the credentials Secret mounted read-only. Its pod template carries `piceli.io/config-hash`, so `gitops enable` with changed settings (a new `--builder-image`) restarts the controller. |
 
 **Git credentials** stay in a Secret you create in the controller's namespace
 (`--credentials-secret`): `username` and `password` (a token) for HTTPS, or
@@ -209,7 +212,12 @@ The controller publishes its status in the ConfigMap `piceli-gitops-status`
 `deleting`,
 `stopped`), `plan_hash`, `reason` (an error code), `attempts`,
 `next_attempt_at`, `pushed_at`, `updated_at`, `namespace` and `trigger`
-(`push`, `tag v1.2.0`, `promote BRANCH@SHA`). Dropped requests are listed in
+(`push`, `tag v1.2.0`, `promote BRANCH@SHA`). A failed step adds `failure`:
+`log_tail` (the scrubbed end of a failed build Job's log, at most 4000
+characters) and `kept_job` (that Job, kept with its pod log until the next
+build of the same branch), or `denied` (the `verb`, `resource`, `namespace`
+and HTTP `status` of the request the Kubernetes API refused, as Piceli asked
+for it; never the server's answer). Dropped requests are listed in
 `rejected_requests` with their code.
 
 `piceli gitops approve`, `piceli gitops sync` and `piceli promote` add one

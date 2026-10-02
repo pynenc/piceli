@@ -268,7 +268,7 @@ class DefaultPorts:
                 say=self.log,
             )
         except PipelineError as error:
-            raise GitOpsError(error.code, str(error)) from None
+            raise GitOpsError(error.code, str(error), details=error.details) from None
         return dict(receipt)
 
     def pushed_images(

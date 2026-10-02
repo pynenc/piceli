@@ -147,11 +147,19 @@ class BuildSpecError(ValueError):
     """A rejected spec, grant or build. ``code`` is fixed and path-free."""
 
     def __init__(
-        self, code: str, message: str, *, steps: tuple[dict[str, Any], ...] = ()
+        self,
+        code: str,
+        message: str,
+        *,
+        steps: tuple[dict[str, Any], ...] = (),
+        output_tail: str = "",
     ) -> None:
         super().__init__(message)
         self.code = code
         self.steps = steps
+        #: The redacted, bounded end of a failed command's output (host
+        #: builds); never part of the message.
+        self.output_tail = output_tail
 
 
 def _fail(message: str) -> BuildSpecError:

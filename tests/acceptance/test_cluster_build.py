@@ -296,3 +296,57 @@ def test_env_push_records_a_digest_in_the_branch_namespace(local_api: Any) -> No
     stored = api.objects[("ConfigMap", configmap_name("wp/Fix 1"))]
     assert json.loads(stored["data"]["images"]) == images
     assert stored["data"]["commit"] == COMMIT and "pushed_at" in stored["data"]
+
+
+def test_a_failed_build_job_is_kept_with_its_log_until_the_next_attempt(
+    tmp_path: Path, local_api: Any
+) -> None:
+    from piceli.artifacts.cluster_build import BUILD_LABEL, CACHE_LABEL
+
+    api, _ = local_api
+    api.put(manifest("Secret", "piceli-build-git"))
+    api.objects[("Secret", "piceli-build-git")]["data"] = {
+        "username": "eA==",
+        "password": "eA==",
+    }
+    output = "\n".join(f"  | compiling crate {i}" for i in range(80))
+    api.job_result(
+        "piceli-build-",
+        container="build",
+        exit_code=2,
+        logs=f"[piceli] command 1/1 failed in 3s\n{output}\n"
+        f"  | error: linker cc not found password={SECRET_VALUE}\n"
+        "rejected: host build step failed [build-failed]\n",
+    )
+    pipeline = pipeline_for(tmp_path)
+    args: dict[str, Any] = {"cache_key": "wp/x", "config": config(repo_root=tmp_path)}
+    with pytest.raises(PipelineError) as failed:
+        run_build_job(pipeline, COMMIT, cluster=cluster_for(local_api), **args)
+    details = failed.value.details
+    tail = details["outcome"]["log_tail"]
+    assert "error: linker cc not found" in tail and SECRET_VALUE not in tail
+    assert len(tail) <= 4000
+    jobs = [name for kind, name in api.objects if kind == "Job"]
+    assert jobs == [details["kept_job"]]  # kept: its pod log stays readable
+    assert any(kind == "Pod" for kind, _ in api.objects)
+    kept = api.objects[("Job", jobs[0])]["metadata"]["labels"]
+    assert kept[BUILD_LABEL] == "true" and kept[CACHE_LABEL] == slug("wp/x", 50)
+
+    # Another branch's build leaves it alone; the next attempt for the same
+    # key replaces it.
+    api.job_result("piceli-build-", container="build", exit_code=0, logs="")
+    with pytest.raises(PipelineError):
+        run_build_job(
+            pipeline,
+            "c" * 40,
+            cluster=cluster_for(local_api),
+            cache_key="other",
+            config=config(repo_root=tmp_path),
+        )
+    assert ("Job", jobs[0]) in api.objects
+    receipt = {"state": "succeeded", "outputs": {"images": {}}}
+    api.job_result(
+        "piceli-build-", container="build", logs=f"{encode_receipt(receipt)}\n"
+    )
+    run_build_job(pipeline, COMMIT, cluster=cluster_for(local_api), **args)
+    assert [k for k in api.objects if k[0] == "Job"] == []

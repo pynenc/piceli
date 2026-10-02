@@ -27,6 +27,39 @@ def _status(error: BaseException) -> int | None:
     return status if isinstance(status, int) else None
 
 
+_VERBS = {"read": "get", "list": "list", "create": "create", "patch": "patch",
+           "delete": "delete", "replace": "update"}  # fmt: skip
+
+
+def request_of(method: Any, args: tuple[Any, ...]) -> dict[str, Any]:
+    """What Piceli asked for, from a client method and its arguments.
+
+    ``read_namespaced_persistent_volume_claim("data", "shop")`` is ``{"verb":
+    "get", "resource": "persistentvolumeclaims", "namespace": "shop"}``. Only
+    Piceli's own request: never anything the server answered.
+    """
+    action, _, rest = str(getattr(method, "__name__", "")).partition("_")
+    namespaced = rest.startswith("namespaced_")
+    noun = rest.removeprefix("namespaced_").replace("_", "")
+    resource = (
+        noun[:-1] + "ies"
+        if noun.endswith("y")
+        else noun + "es"
+        if noun.endswith("s")
+        else noun + "s"
+    )
+    namespace = None
+    if namespaced:
+        index = 0 if action in {"list", "create"} else 1
+        value = args[index] if len(args) > index else None
+        namespace = value if isinstance(value, str) else None
+    return {
+        "verb": _VERBS.get(action, action),
+        "resource": resource,
+        "namespace": namespace,
+    }
+
+
 class EnvCluster:
     """Reads and writes of the environment commands, across namespaces.
 
@@ -69,12 +102,23 @@ class EnvCluster:
                 )
             )
         except ApiException as error:
-            if _status(error) == 404:
+            status = _status(error)
+            if status == 404:
                 return None
+            asked = request_of(method, args)
+            where = f" in namespace {asked['namespace']}" if asked["namespace"] else ""
             raise EnvError(
                 "env-cluster-unavailable",
-                f"the Kubernetes API refused a request (HTTP {_status(error)})",
+                f"the Kubernetes API refused {asked['verb']} {asked['resource']}"
+                f"{where} (HTTP {status})",
                 failed=True,
+                # 401/403: RBAC denied it; anything else: the server refused.
+                details={
+                    "denied" if status in {401, 403} else "refused": {
+                        **asked,
+                        "status": status,
+                    }
+                },
             ) from None
 
     def _delete(self, read: Any, delete: Any, *names: str) -> bool:

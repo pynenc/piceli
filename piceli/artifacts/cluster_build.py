@@ -48,7 +48,12 @@ from typing import TYPE_CHECKING, Any
 from piceli.artifacts.node_facts import NodeFacts, NodeFactsError
 from piceli.pipeline.errors import PipelineError
 from piceli.pipeline.prerollout import scrub
-from piceli.pipeline.prerollout_cluster import PreRolloutCluster, Unreadable, _raw
+from piceli.pipeline.prerollout_cluster import (
+    Outcome,
+    PreRolloutCluster,
+    Unreadable,
+    _raw,
+)
 
 if TYPE_CHECKING:
     from piceli.pipeline.model import Pipeline
@@ -507,10 +512,72 @@ def _job(
 
 # ------------------------------------------------------------------- running
 class BuildCluster(PreRolloutCluster):
-    """The Job runner, reading the receipt line the build prints last."""
+    """The Job runner, reading the receipt line the build prints last.
+
+    :meth:`run_build` keeps a failed build Job (and its pod, whose log holds
+    the failing command's output) until the next build of the same key
+    replaces it; a passed Job is removed as before.
+    """
 
     receipt_text: str | None = None
     log_access: str = "not-attempted"
+    _keeping: bool = False
+    _job_failed: bool = False
+    kept_job: str | None = None
+
+    def run_build(self, job: Mapping[str, Any], key: Mapping[str, str]) -> Outcome:
+        """Run a build Job; keep it when it fails (``outcome.extra["kept_job"]``).
+
+        ``key`` are the labels of one build key (a branch's cache): failed
+        Jobs kept by earlier attempts with those labels are removed first.
+        """
+        self.remove_kept(key)
+        self.kept_job = None
+        self._job_failed = False
+        self._keeping = True
+        try:
+            outcome = self.run_job(job)
+        finally:
+            self._keeping = False
+        if self.kept_job is not None:
+            outcome.extra["kept_job"] = self.kept_job
+        return outcome
+
+    def remove_kept(self, key: Mapping[str, str]) -> list[str]:
+        """Delete the failed Jobs with labels ``key``; their names."""
+        selector = ",".join(f"{k}={v}" for k, v in sorted(key.items()))
+        try:
+            found = self._get(self._ns_jobs(), labelSelector=selector) or {}
+        except Unreadable:
+            return []
+        removed = []
+        for item in found.get("items") or ():
+            conditions = (item.get("status") or {}).get("conditions") or ()
+            failed = any(
+                c.get("type") == "Failed" and c.get("status") == "True"
+                for c in conditions
+            )
+            name = (item.get("metadata") or {}).get("name")
+            if failed and isinstance(name, str) and super().delete_job(name):
+                removed.append(name)
+        return removed
+
+    def _ns_jobs(self) -> str:
+        return f"/apis/batch/v1/namespaces/{self.namespace}/jobs"
+
+    def _wait(self, name: str, allowed: float, started: float) -> Outcome:
+        outcome = super()._wait(name, allowed, started)
+        # Only a Job that ran and failed is kept; a stuck or overdue one goes.
+        self._job_failed = outcome.state == "failed" or (
+            outcome.reason == "job-deadline-exceeded"
+        )
+        return outcome
+
+    def delete_job(self, name: str) -> bool:
+        if self._keeping and self._job_failed:
+            self.kept_job = name
+            return False
+        return super().delete_job(name)
 
     def _logs(self, job: str, redact: Any) -> str:
         from kubernetes.client.exceptions import ApiException
@@ -564,6 +631,14 @@ class BuildCluster(PreRolloutCluster):
             fieldManager="piceli-build",
         )
         return True
+
+
+def build_key(job: Mapping[str, Any]) -> dict[str, str]:
+    """The labels of a build Job's key (its branch cache), for :meth:`BuildCluster.run_build`."""
+    labels = job["metadata"].get("labels") or {}
+    return {
+        key: str(labels[key]) for key in (BUILD_LABEL, CACHE_LABEL) if key in labels
+    }
 
 
 def encode_receipt(receipt: Mapping[str, Any]) -> str:
@@ -650,17 +725,23 @@ def run_build_job(
             f"[build] Job {plan.job['metadata']['name']}: {commit[:12]} for "
             f"{', '.join(plan.platforms)}"
         )
-        outcome = cluster.run_job(plan.job)
+        outcome = cluster.run_build(plan.job, build_key(plan.job))
     finally:
         if owned:
             cluster.close()
     if outcome.state != "passed" or cluster.receipt_text is None:
+        kept = outcome.extra.get("kept_job")
         raise PipelineError(
             "cluster-build-failed",
             f"the build Job ended {outcome.state}"
-            + (f" ({outcome.reason})" if outcome.reason else ""),
+            + (f" ({outcome.reason})" if outcome.reason else "")
+            + (f"; Job {kept} is kept until the next build" if kept else ""),
             failed=True,
-            details={"outcome": outcome.public(), "log_access": cluster.log_access},
+            details={
+                "outcome": outcome.public(),
+                "log_access": cluster.log_access,
+                **({"kept_job": kept} if kept else {}),
+            },
         )
     try:
         receipt = decode_receipt(cluster.receipt_text)

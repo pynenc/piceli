@@ -14,12 +14,17 @@ What the controller is allowed to do (the least it needs):
   Pods and their logs, PersistentVolumeClaims and Events: the cluster
   build Jobs and their caches run here;
 - cluster-wide (ClusterRole ``piceli-gitops``): read nodes (build and
-  delivery facts); create, read and delete namespaces (one per branch); and
+  delivery facts); create, read and delete namespaces (one per branch);
+  read and delete persistent volumes (a branch teardown removes the volumes
+  bound to its claims); and
   create RoleBindings that bind **only** the ``piceli-gitops-deployer``
   ClusterRole (the ``bind`` verb is limited to that name), which is how it
   gets rights inside each environment's namespace and nowhere else;
 - ``piceli-gitops-deployer`` (a ClusterRole used only through those
-  RoleBindings): the namespaced kinds an app deploys;
+  RoleBindings): the namespaced kinds an app deploys, the ``scale``
+  subresource of Deployments and StatefulSets (restore points) and reads of
+  ``metrics.k8s.io`` pods and nodes (so a release can grant them to its own
+  Role);
 - with ``cluster_rbac=True`` (the owner's opt-in, for apps that declare
   ClusterRoles): ClusterRoles and ClusterRoleBindings too.
 
@@ -76,6 +81,19 @@ DEPLOYER_RULES: tuple[dict[str, Any], ...] = (
         "verbs": ["get", "list", "watch", "create", "update", "patch", "delete"],
     },
     {
+        # Restore points scale workloads down and back up.
+        "apiGroups": ["apps"],
+        "resources": ["deployments/scale", "statefulsets/scale"],
+        "verbs": ["get", "update", "patch"],
+    },
+    {
+        # Read only; lets a release grant metrics reads to its own Role
+        # (the API refuses a Role wider than its creator: an escalation).
+        "apiGroups": ["metrics.k8s.io"],
+        "resources": ["pods", "nodes"],
+        "verbs": ["get", "list", "watch"],
+    },
+    {
         "apiGroups": ["batch"],
         "resources": ["jobs", "cronjobs"],
         "verbs": ["get", "list", "watch", "create", "update", "patch", "delete"],
@@ -106,6 +124,25 @@ DEPLOYER_RULES: tuple[dict[str, Any], ...] = (
         "verbs": ["get", "list", "watch", "create", "update", "patch", "delete"],
     },
 )  # fmt: skip
+
+
+#: The rule ``cluster_rbac=True`` (``gitops enable --cluster-rbac``) adds to
+#: the controller's ClusterRole.
+CLUSTER_RBAC_RULE: dict[str, Any] = {
+    "apiGroups": [_RBAC],
+    "resources": ["clusterroles", "clusterrolebindings"],
+    "verbs": ["get", "list", "watch", "create", "update", "patch", "delete", "bind", "escalate"],
+}  # fmt: skip
+
+#: Pod-template annotation of the controller's Deployment: the hash of its
+#: configuration, so a changed configuration rolls the controller.
+CONFIG_HASH_ANNOTATION = "piceli.io/config-hash"
+
+
+def has_cluster_rbac(role: Mapping[str, Any] | None) -> bool:
+    """Whether a live ``piceli-gitops`` ClusterRole holds :data:`CLUSTER_RBAC_RULE`."""
+    rules = (role or {}).get("rules") or ()
+    return any(_subset(CLUSTER_RBAC_RULE, rule) for rule in rules)
 
 
 @dataclass(frozen=True)
@@ -207,6 +244,13 @@ def render_foundation(
             "verbs": ["get", "list", "watch", "create", "patch", "delete"],
         },
         {
+            # Branch teardown: the volumes bound to the environment's claims
+            # (env down lists them, then deletes those of its namespace).
+            "apiGroups": [""],
+            "resources": ["persistentvolumes"],
+            "verbs": ["get", "list", "delete"],
+        },
+        {
             "apiGroups": [_RBAC],
             "resources": ["rolebindings"],
             "verbs": ["get", "list", "create", "patch", "delete"],
@@ -219,13 +263,7 @@ def render_foundation(
         },
     ]
     if cluster_rbac:
-        cluster_rules.append(
-            {
-                "apiGroups": [_RBAC],
-                "resources": ["clusterroles", "clusterrolebindings"],
-                "verbs": ["get", "list", "watch", "create", "update", "patch", "delete", "bind", "escalate"],
-            }
-        )  # fmt: skip
+        cluster_rules.append(dict(CLUSTER_RBAC_RULE))
     own_rules = [
         {
             "apiGroups": [""],
@@ -331,6 +369,8 @@ def _render_workload(
         )
         args += ["--credentials-dir", CREDENTIALS_DIR]
     selector = {"app.kubernetes.io/name": NAME}
+    config_json = json.dumps(config.to_dict(), sort_keys=True, indent=2)
+    config_hash = "sha256:" + hashlib.sha256(config_json.encode()).hexdigest()
     deployment: dict[str, Any] = {
         "apiVersion": "apps/v1",
         "kind": "Deployment",
@@ -340,7 +380,11 @@ def _render_workload(
             "strategy": {"type": "Recreate"},
             "selector": {"matchLabels": selector},
             "template": {
-                "metadata": {"labels": {**selector, **MANAGED}},
+                "metadata": {
+                    "labels": {**selector, **MANAGED},
+                    # The ConfigMap is read at start: a new config rolls the pod.
+                    "annotations": {CONFIG_HASH_ANNOTATION: config_hash},
+                },
                 "spec": {
                     "serviceAccountName": NAME,
                     "securityContext": {
@@ -394,9 +438,7 @@ def _render_workload(
             "apiVersion": "v1",
             "kind": "ConfigMap",
             "metadata": _meta(CONFIG_MAP, ns),
-            "data": {
-                "config.json": json.dumps(config.to_dict(), sort_keys=True, indent=2)
-            },
+            "data": {"config.json": config_json},
         },
         deployment,
     ]
@@ -435,6 +477,32 @@ def object_path(manifest: Mapping[str, Any], *, collection: bool = False) -> str
         else f"{root}/namespaces/{meta['namespace']}/{plural}"
     )
     return base if collection else f"{base}/{meta['name']}"
+
+
+_METHOD_VERBS = {
+    "POST": "create",
+    "PATCH": "patch",
+    "PUT": "update",
+    "DELETE": "delete",
+}
+
+
+def asked_for(path: str, method: str) -> dict[str, Any]:
+    """The verb, resource and namespace of a request Piceli makes (not the answer)."""
+    parts = [part for part in path.split("?", 1)[0].split("/") if part]
+    rest = parts[2:] if parts[:1] == ["api"] else parts[3:]
+    namespace = None
+    if len(rest) >= 3 and rest[0] == "namespaces":
+        namespace, rest = rest[1], rest[2:]
+    resource = rest[0] if rest else ""
+    if len(rest) > 2:
+        resource = f"{resource}/{rest[2]}"
+    verb = ("get" if len(rest) > 1 else "list") if method == "GET" else None
+    return {
+        "verb": verb or _METHOD_VERBS.get(method, method.lower()),
+        "resource": resource,
+        "namespace": namespace,
+    }
 
 
 class Api:
@@ -480,9 +548,18 @@ class Api:
         except ApiException as error:
             if error.status == 404 and missing_ok:
                 return None
+            asked = asked_for(path, method)
+            where = f" in namespace {asked['namespace']}" if asked["namespace"] else ""
             raise GitOpsError(
                 "gitops-cluster-failed",
-                f"the API refused {method} {path.rsplit('/', 2)[-2]} (HTTP {error.status})",
+                f"the API refused {asked['verb']} {asked['resource']}{where} "
+                f"(HTTP {error.status})",
+                details={
+                    "denied" if error.status in {401, 403} else "refused": {
+                        **asked,
+                        "status": error.status,
+                    }
+                },
             ) from None
         except OSError:
             raise GitOpsError(

@@ -332,3 +332,28 @@ def test_a_stale_approval_after_a_partial_apply_asks_for_a_new_one(
     channel.add_request(*approve_request("main", second))
     status = controller.poll_once()
     assert status["envs"]["main"]["state"] == "deployed"
+
+
+def test_a_failed_component_build_shows_its_log_tail(world: dict[str, Any]) -> None:
+    from piceli.infra import CompositionError
+
+    controller, ports = world["controller"], world["ports"]
+
+    def build(items: Any, checkout: Any) -> Any:
+        raise CompositionError(
+            "component-build-failed",
+            "the component build Job ended failed",
+            details={
+                "outcome": {"state": "failed", "log_tail": "  | error: x"},
+                "kept_job": "piceli-component-build-1",
+            },
+        )
+
+    ports.builder.build = build
+    status = controller.poll_once()
+    main = status["envs"]["main"]
+    assert main["reason"] == "component-build-failed"
+    assert main["failure"] == {
+        "log_tail": "  | error: x",
+        "kept_job": "piceli-component-build-1",
+    }

@@ -418,6 +418,8 @@ def component_job(
         "app.kubernetes.io/managed-by": "piceli",
         "piceli.io/build": "true",
         "piceli.io/component-build": key,
+        # The build key: a failed Job is kept until the next build on this cache.
+        "piceli.io/build-cache": _cache_label(settings.cache_claim),
     }
     return {
         "apiVersion": "batch/v1",
@@ -483,6 +485,37 @@ def component_job(
             },
         },
     }  # fmt: skip
+
+
+def _cache_label(claim: str) -> str:
+    from piceli.artifacts.cluster_build import slug
+
+    return slug(claim, 50)
+
+
+def _run(cluster: Any, job: Mapping[str, Any]) -> Any:
+    """Run a build Job: a failed one is kept until the next build of its key."""
+    run_build = getattr(cluster, "run_build", None)
+    if run_build is None:
+        return cluster.run_job(job)
+    from piceli.artifacts.cluster_build import build_key
+
+    return run_build(job, build_key(job))
+
+
+def _job_failed(outcome: Any, what: str) -> CompositionError:
+    """``component-build-failed`` with the scrubbed log tail and the kept Job."""
+    kept = (getattr(outcome, "extra", None) or {}).get("kept_job")
+    public = getattr(outcome, "public", None)
+    details: dict[str, Any] = {"outcome": public()} if callable(public) else {}
+    if kept:
+        details["kept_job"] = kept
+    return CompositionError(
+        "component-build-failed",
+        f"the {what} build Job ended {outcome.state}"
+        + (f"; Job {kept} is kept until the next build" if kept else ""),
+        details=details,
+    )
 
 
 def _job_item(item: BuildItem) -> dict[str, Any]:
@@ -739,12 +772,9 @@ class JobBuilder:
             f"[build] Job {job['metadata']['name']}: "
             + ", ".join(item.component for item in items)
         )
-        outcome = self.cluster.run_job(job)
+        outcome = _run(self.cluster, job)
         if outcome.state != "passed" or self.cluster.receipt_text is None:
-            raise CompositionError(
-                "component-build-failed",
-                f"the component build Job ended {outcome.state}",
-            )
+            raise _job_failed(outcome, "component")
         try:
             receipt = decode_receipt(self.cluster.receipt_text)
         except (ValueError, OSError):
@@ -779,11 +809,9 @@ class JobBuilder:
             f"[build] Job {job['metadata']['name']}: "
             + ", ".join(sorted(request.images))
         )
-        outcome = self.cluster.run_job(job)
+        outcome = _run(self.cluster, job)
         if outcome.state != "passed" or self.cluster.receipt_text is None:
-            raise CompositionError(
-                "component-build-failed", f"the image build Job ended {outcome.state}"
-            )
+            raise _job_failed(outcome, "image")
         try:
             receipt = decode_receipt(self.cluster.receipt_text)
         except (ValueError, OSError):

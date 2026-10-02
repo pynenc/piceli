@@ -331,3 +331,66 @@ def test_an_image_may_name_the_contexts_it_reads(tmp_path: Path) -> None:
     document["output"]["image"][1]["contexts"] = ["b", "b"]
     with pytest.raises(BuildSpecError):
         HostBuildSpec.from_dict(document, tmp_path)
+
+
+FAILING = (
+    'commands = [\n  ["sh", "-c", "i=0; while [ $i -lt 1000 ]; do echo \\"line $i\\"; '
+    'i=$((i+1)); done; echo \\"error: linker failed password=hunter2-not-printed\\" >&2; '
+    'exit 3"],\n]\n'
+)
+
+
+def failing_project(project: Path) -> Path:
+    text = project.read_text()
+    start = text.index("commands = [")
+    end = text.index("\n]\n", start) + 3
+    project.write_text(text[:start] + FAILING + text[end:])
+    return project
+
+
+def test_a_failing_command_keeps_a_bounded_redacted_tail_of_its_output(
+    project: Path, tmp_path: Path
+) -> None:
+    from piceli.artifacts.host_execution import OUTPUT_TAIL_BYTES, OUTPUT_TAIL_LINES
+
+    with pytest.raises(BuildSpecError) as failed:
+        build(failing_project(project), tmp_path / "cache", tmp_path / "out")
+    assert failed.value.code == "build-failed"
+    tail = failed.value.output_tail
+    lines = tail.splitlines()
+    assert len(lines) <= OUTPUT_TAIL_LINES and len(tail.encode()) <= OUTPUT_TAIL_BYTES
+    assert "error: linker failed" in tail and "line 999" in tail
+    assert "line 10\n" not in tail  # only the end
+    assert "hunter2-not-printed" not in tail
+    assert "hunter2-not-printed" not in str(failed.value)  # the message stays fixed
+
+
+def test_the_build_job_prints_the_failing_commands_tail(
+    project: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from typer.testing import CliRunner
+
+    from piceli.k8s.cli import app
+
+    failing_project(project)
+    monkeypatch.setenv(
+        "PICELI_BUILD_FACTS", json.dumps({"linux/amd64": FACTS_AMD64.to_dict()})
+    )
+    result = CliRunner().invoke(
+        app,
+        [
+            "build", "job-run",
+            "--source", str(project.parent),
+            "--spec", project.name,
+            "--cache", str(tmp_path / "cache"),
+            "--out", str(tmp_path / "out"),
+            "--registry-url", "oci://127.0.0.1:1/shop",
+            "--commit", "a" * 40,
+        ],
+    )  # fmt: skip
+    assert result.exit_code == 2, result.output
+    assert json.loads(result.stdout)["reason"] == "build-failed"
+    # The pod log (the Job's output) holds what the command printed last.
+    assert "error: linker failed" in result.stderr
+    assert "line 999" in result.stderr
+    assert "hunter2-not-printed" not in result.output + result.stderr
