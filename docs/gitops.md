@@ -111,8 +111,9 @@ their digests:
   `curl`, `xz` for crates with C builds such as `jemalloc-sys` and
   `aws-lc-sys`).
 
-Both packages are public: nodes pull them anonymously. A release checks that
-an anonymous pull works before it finishes. When the project's Docker Hub
+Both packages are public: nodes pull them anonymously. Each release checks
+that an anonymous pull works and warns, with the settings link, when a
+package is private. When the project's Docker Hub
 credentials are configured, the release also copies them, same digests, to
 `docker.io/pynenc/piceli-controller` and `docker.io/pynenc/piceli-builder`.
 

@@ -20,7 +20,9 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   teardown delete those bound to the branch's claims. Without it teardown
   completes and reports them (`volumes_left`); `cluster init` keeps the rule.
 - **Images:** the release can also copy the controller and builder images to
-  Docker Hub (`docker.io/pynenc/piceli-*`) when its credentials are set.
+  Docker Hub (`docker.io/pynenc/piceli-*`) when its credentials are set. A
+  private GHCR package is a warning with the settings link, no longer a
+  failed release (everything is published by then).
 
 ## Version 0.14.2
 
