@@ -38,7 +38,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from piceli.k8s.templates.deployable.node_local_registry import DEFAULT_REGISTRY_IMAGE
@@ -722,13 +722,18 @@ def summarize(
     pods: Sequence[Mapping[str, Any]],
     used_bytes: int | None = None,
     reports: Mapping[str, Mapping[str, str]] | None = None,
+    usage: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The status document of ``piceli registry status`` (pure; tested offline).
 
     ``reports`` maps a node to its agent's report (:func:`parse_report`): each
     mirror then also says its ``runtime``, ``file`` state and whether k3s
-    needs a ``restart`` to load it.
+    needs a ``restart`` to load it. ``usage`` is :func:`claim_usage`'s
+    result (it wins over ``used_bytes``): the claim's own use, where it came
+    from, and the filesystem that holds it.
     """
+    if usage is not None:
+        used_bytes = usage.get("used_bytes")
     installed = deployment is not None
     registry_pods = [
         pod
@@ -807,19 +812,112 @@ def summarize(
             "capacity": (claim_status.get("capacity") or {}).get("storage"),
             "requested": registry.storage,
             "used_bytes": used_bytes,
+            "used_source": (usage or {}).get("used_source")
+            or ("volume-stats" if used_bytes is not None else None),
+            "filesystem": (usage or {}).get("filesystem"),
         }
         if claim is not None
         else None,
     }
 
 
-def used_bytes(summary: Mapping[str, Any], namespace: str, claim: str) -> int | None:
-    """The claim's used bytes from a kubelet ``stats/summary`` document."""
+def volume_stats(
+    summary: Mapping[str, Any], namespace: str, claim: str
+) -> dict[str, int | None] | None:
+    """The kubelet's ``stats/summary`` entry of the claim's volume:
+    ``{used_bytes, capacity_bytes}``, else ``None``."""
     for pod in summary.get("pods") or ():
         if (pod.get("podRef") or {}).get("namespace") != namespace:
             continue
         for volume in pod.get("volume") or ():
             ref = volume.get("pvcRef") or {}
             if ref.get("name") == claim and isinstance(volume.get("usedBytes"), int):
-                return int(volume["usedBytes"])
+                capacity = volume.get("capacityBytes")
+                return {
+                    "used_bytes": int(volume["usedBytes"]),
+                    "capacity_bytes": int(capacity)
+                    if isinstance(capacity, int)
+                    else None,
+                }
     return None
+
+
+def shared_filesystem(
+    summary: Mapping[str, Any],
+    stats: Mapping[str, Any],
+    claim_bytes: int | None = None,
+) -> bool:
+    """Whether the volume entry is a filesystem the claim shares (a node-path
+    volume such as k3s ``local-path`` reports the node's disk): its capacity
+    is the node's or the image filesystem's, or larger than the claim."""
+    capacity = stats.get("capacity_bytes")
+    if not isinstance(capacity, int):
+        return False
+    node = summary.get("node") or {}
+    image_fs = (node.get("runtime") or {}).get("imageFs") or {}
+    if capacity in {
+        (node.get("fs") or {}).get("capacityBytes"),
+        image_fs.get("capacityBytes"),
+    }:
+        return True
+    return claim_bytes is not None and capacity > claim_bytes * 1.1
+
+
+def used_bytes(
+    summary: Mapping[str, Any],
+    namespace: str,
+    claim: str,
+    claim_bytes: int | None = None,
+) -> int | None:
+    """The claim's used bytes from a kubelet ``stats/summary`` document, or
+    ``None`` when the entry is a shared filesystem (never the node's disk
+    called the claim's)."""
+    stats = volume_stats(summary, namespace, claim)
+    if stats is None or shared_filesystem(summary, stats, claim_bytes):
+        return None
+    return stats["used_bytes"]
+
+
+def claim_usage(
+    summary: Mapping[str, Any] | None,
+    namespace: str,
+    claim: str,
+    *,
+    claim_bytes: int | None,
+    du: Callable[[], int | None],
+) -> dict[str, Any]:
+    """The registry claim's use: ``{used_bytes, used_source, filesystem}``.
+
+    The kubelet's volume entry when it is the claim's own filesystem
+    (``volume-stats``); otherwise ``du`` of the registry's storage inside its
+    pod (``du``, called only then); otherwise unknown (``None``).
+    ``filesystem`` is the volume entry itself, ``shared`` when it is not the
+    claim's alone.
+    """
+    stats = volume_stats(summary or {}, namespace, claim) if summary else None
+    filesystem = None
+    if stats is not None:
+        shared = shared_filesystem(summary or {}, stats, claim_bytes)
+        filesystem = {**stats, "shared": shared}
+        if not shared:
+            return {
+                "used_bytes": stats["used_bytes"],
+                "used_source": "volume-stats",
+                "filesystem": filesystem,
+            }
+    measured = du()
+    return {
+        "used_bytes": measured,
+        "used_source": "du" if measured is not None else None,
+        "filesystem": filesystem,
+    }
+
+
+def quantity_bytes(value: Any) -> int | None:
+    """A Kubernetes quantity (``20Gi``) in bytes, ``None`` when unreadable."""
+    try:
+        from kubernetes.utils import parse_quantity
+
+        return int(parse_quantity(str(value)))
+    except Exception:
+        return None
