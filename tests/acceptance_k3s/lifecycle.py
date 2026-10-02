@@ -768,8 +768,17 @@ class Lifecycle:
         for step in ("cluster-init-plan", "gitops-enable-plan"):
             body = done[step].json() or {}
             if not (done[step].code == 0 and body.get("state") == "unchanged"):
+                changes = [
+                    line.strip()
+                    for line in done[step].stderr.splitlines()
+                    if re.search(
+                        r"\b(create|apply|delete|label|update|replace)\b", line
+                    )
+                    and "no-op" not in line
+                ]
                 problems.append(
-                    f"{step} after the upgrade: exit {done[step].code}, {body.get('state')}"
+                    f"{step} after the upgrade: exit {done[step].code}, "
+                    f"{body.get('state')} ({'; '.join(changes[:8]) or 'no change lines'})"
                 )
         # The registry of the composition's Cluster (0.14.5): its claim's usage.
         registry = self.run_step_soft("registry-status", problems)
