@@ -1,0 +1,58 @@
+# The lifecycle composition's images: one host build (no container VM) that
+# reads three contexts, one per source of infra.py. Each image lists the
+# contexts it reads, so a push to `store` rebuilds only the `store` image.
+# The one compiled step is a small C program (cc), so a broken source shows
+# the compiler's own output in the build Job's log.
+revision = "piceli.host-build.v1"
+name = "lifecycle"
+
+[build]
+tools = ["sh", "cc"]
+timeout_seconds = 600
+commands = [
+  ["sh", "-ec", """
+out="$CARGO_TARGET_DIR/lifecycle"; mkdir -p "$out"; \
+cc -O2 -static -Wall -o "$out/web-version" web/tool/version.c"""],
+]
+
+# This repository (the composition): the web site's configuration and the
+# watcher's script.
+[context.infra]
+source = "infra"
+include = ["config/**", "watcher/**"]
+
+[context.web]
+source = "web"
+include = ["site/**", "tool/**"]
+
+[context.store]
+source = "store"
+include = ["bin/**"]
+
+[[output.image]]
+name = "web"
+repository = "lifecycle/web"
+contexts = ["web", "infra"]
+base = { image = "docker.io/library/busybox:1.37.0", digest = "sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e" }
+files = { "web/site" = "/srv/site", "infra/config/web.json" = "/srv/site/config.json" }
+target_files = { "lifecycle/web-version" = "/opt/web/bin/web-version" }
+user = "65534:65534"
+entrypoint = ["httpd", "-f", "-p", "8080", "-h", "/srv/site"]
+
+[[output.image]]
+name = "store"
+repository = "lifecycle/store"
+contexts = ["store"]
+base = { image = "docker.io/library/busybox:1.37.0", digest = "sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e" }
+files = { "store/bin" = "/opt/store" }
+user = "65534:65534"
+entrypoint = ["sh", "/opt/store/run.sh"]
+
+[[output.image]]
+name = "watcher"
+repository = "lifecycle/watcher"
+contexts = ["infra"]
+base = { image = "docker.io/curlimages/curl:8.10.1", digest = "sha256:d9b4541e214bcd85196d6e92e2753ac6d0ea699f0af5741f8c6cccbfcf00ef4b" }
+files = { "infra/watcher" = "/opt/watcher" }
+user = "100:101"
+entrypoint = ["sh", "/opt/watcher/watch.sh"]

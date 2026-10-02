@@ -169,3 +169,7 @@ test-ui-access-retention: ## Run the 30-minute local forward/process retention g
 .PHONY: clean
 clean: ## Remove build, coverage and docs output
 	rm -rf dist htmlcov .coverage .coverage.* docs/_build docs/apidocs
+
+.PHONY: acceptance-k3s
+acceptance-k3s: ## k3s 3-node lifecycle acceptance (needs PICELI_K3S_LIFECYCLE=1; creates and deletes a k3d cluster)
+	$(if $(shell command -v k3d),,nix shell nixpkgs#k3d -c) uv run --frozen python tests/acceptance_k3s/lifecycle.py $(ARGS)

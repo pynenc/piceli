@@ -104,6 +104,11 @@ gitops enable plan:
 $ piceli gitops enable infra.py --image … --approve sha256:…
 ```
 
+The same plan also updates the ConfigMap `piceli-cluster` (the stored
+declaration `cluster init` keeps), so a later `piceli cluster init` plans
+nothing. Without `--poll`, the controller polls at the composition's
+`Controller(poll=)` (else 60s).
+
 ## k3s nodes and restarts
 
 On k3s nodes the registry's agent merges the mirror into

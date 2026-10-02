@@ -173,6 +173,37 @@ def test_enable_upgrades_the_in_cluster_ui_with_the_controller(
     assert pod["containers"][0]["image"] == IMAGE
     again = enable()
     assert json.loads(again.stdout)["state"] == "unchanged"
+    # The stored declaration `cluster init` reads is the composition's (so a
+    # later `cluster init` plans no change of it).
+    from piceli.infra.cluster_init import cluster_config
+    from piceli.infra.composition import load_composition
+
+    stored = api.objects[("ConfigMap", "piceli-cluster")]["data"]
+    declared_cluster = load_composition(str(module), tmp_path).cluster
+    assert stored == cluster_config(declared_cluster)["data"]
+
+
+def test_enable_uses_the_controllers_declared_poll(
+    cluster: tuple[FakeAPI, Path], tmp_path: Path
+) -> None:
+    api, kubeconfig = cluster
+    module = _with_ui(tmp_path, IMAGE)
+    module.write_text(
+        module.read_text().replace(
+            "Controller(on=REGISTRY_NODE,", 'Controller(on=REGISTRY_NODE, poll="5m",'
+        )
+    )
+    planned = CliRunner().invoke(
+        app,
+        [
+            "gitops", "enable", str(module), "--root", str(tmp_path),
+            "--image", IMAGE, "--credentials-secret", "git-token",
+            "--kubeconfig", str(kubeconfig), "--context", "fake",
+            "--transport", "loopback-http",
+        ],
+    )  # fmt: skip
+    assert planned.exit_code == 3, planned.output
+    assert json.loads(planned.stdout)["controller"]["poll_seconds"] == 300
 
 
 def test_enable_without_a_declared_ui_leaves_the_ui_alone(

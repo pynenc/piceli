@@ -6,6 +6,9 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ## Version 0.14.5
 
+- **Fix:** one upgrade command: `gitops enable` of a composition also updates the
+  stored Cluster declaration (`piceli-cluster`), so a later `cluster init` plans
+  nothing; without `--poll` the controller uses `Controller(poll=)`.
 - **Fix:** a changed, added or removed check runs. A deploy whose release did
   not change (nothing to apply) used to skip its checks as "release already
   verified" even when the check set changed. Each checks outcome now records
