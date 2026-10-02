@@ -446,9 +446,15 @@ class StreamedOciRegistryClient:
             return http.client.HTTPSConnection(
                 host, port, timeout=self.endpoint.timeout, context=context
             )
-        if not is_loopback(host):
+        if not self._plain_http_ok(host):
             raise RegistryError("plain-http-refused")
         return http.client.HTTPConnection(host, port, timeout=self.endpoint.timeout)
+
+    def _plain_http_ok(self, host: str) -> bool:
+        """Loopback, or the in-cluster Service this endpoint names (never another)."""
+        return is_loopback(host) or (
+            is_cluster_service(host) and host.lower() == self.endpoint.host.lower()
+        )
 
     def _target(self, path: str) -> str:
         """Resolve a path or a registry-supplied URL against the endpoint origin."""
@@ -699,7 +705,7 @@ class StreamedOciRegistryClient:
                 parts = urllib.parse.urlsplit(urllib.parse.urljoin(current, location))
                 if parts.scheme not in {"http", "https"} or not parts.hostname:
                     raise RegistryError("invalid-blob-redirect")
-                if parts.scheme == "http" and not is_loopback(parts.hostname):
+                if parts.scheme == "http" and not self._plain_http_ok(parts.hostname):
                     raise RegistryError("plain-http-refused")
                 scheme, host = parts.scheme, parts.hostname
                 port = parts.port or _default_port(parts.scheme)

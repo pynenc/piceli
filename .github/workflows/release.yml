@@ -185,3 +185,56 @@ jobs:
           tag: ${{ needs.build.outputs.tag }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  images:
+    # The controller and builder images of the released version, built from
+    # the same wheel PyPI received (images/Dockerfile). A tag already pushed
+    # is never rebuilt; the digests go to the run summary and the release
+    # notes, so users pin them (`gitops enable --image/--builder-image`).
+    needs: [build, tag, release-notes]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # append the digests to the release notes
+      packages: write # push to ghcr.io/pynenc
+    steps:
+      - name: Check out the released commit
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.build.outputs.sha }}
+          path: source
+          persist-credentials: false
+      - uses: actions/download-artifact@v7
+        with:
+          name: dist
+          path: ctx/dist
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push the images that are missing
+        run: |
+          version="${TAG#v}"
+          notes="## Images\n"
+          for target in controller builder; do
+            image="ghcr.io/pynenc/piceli-${target}:${version}"
+            if docker buildx imagetools inspect "$image" >/dev/null 2>&1; then
+              echo "$image already published"
+            else
+              docker buildx build --push --platform linux/amd64,linux/arm64 \
+                --target "$target" -f source/images/Dockerfile -t "$image" ctx
+            fi
+            digest="$(docker buildx imagetools inspect "$image" --format '{{json .Manifest}}' | jq -r .digest)"
+            echo "- \`ghcr.io/pynenc/piceli-${target}@${digest}\` (${version})" >> "$GITHUB_STEP_SUMMARY"
+            notes="${notes}- \`ghcr.io/pynenc/piceli-${target}@${digest}\` (${version})\n"
+          done
+          body="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body -q .body)"
+          if ! grep -q '^## Images' <<<"$body"; then
+            printf '%s\n\n%b' "$body" "$notes" > notes.md
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file notes.md
+          fi
+        env:
+          TAG: ${{ needs.build.outputs.tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

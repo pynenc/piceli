@@ -1366,28 +1366,65 @@ def _refresher(
     return refresh
 
 
+#: After a failed poll the loop waits this long, doubling per failure.
+RETRY_FIRST_SECONDS = 5.0
+#: The longest wait between failed polls.
+RETRY_MAX_SECONDS = 300.0
+
+
 def _forever(
-    controller: Any, refresh: Callable[[], None]
-) -> None:  # pragma: no cover - the pod's loop
+    controller: Any,
+    refresh: Callable[[], None],
+    *,
+    stop: Callable[[], bool] | None = None,
+    sleep: Callable[[float], None] | None = None,
+    clock: Callable[[], float] | None = None,
+    handle_signals: bool = True,
+) -> None:
+    """The pod's loop: poll every ``poll_seconds`` until SIGTERM.
+
+    A failed poll (an API timeout, a dropped connection) never ends the
+    process, which would crash-loop the pod: it is logged by type and
+    retried after 5 s, doubling per consecutive failure up to 5 minutes; a
+    successful poll restores the normal cadence.
+    """
     import signal
     import time
 
+    sleep = sleep or time.sleep
+    clock = clock or time.time
     stopping = {"now": False}
 
-    def stop(_signal: int, _frame: Any) -> None:
-        stopping["now"] = True
+    def stopped() -> bool:
+        return stopping["now"] or (stop is not None and stop())
 
-    signal.signal(signal.SIGTERM, stop)
-    while not stopping["now"]:
-        started = time.time()
+    if handle_signals:
+
+        def on_term(_signal: int, _frame: Any) -> None:
+            stopping["now"] = True
+
+        signal.signal(signal.SIGTERM, on_term)
+    failures = 0
+    while not stopped():
+        started = clock()
         try:
             refresh()
         except Exception as error:  # never crash-loop on a refresh
             say(f"service account refresh failed ({type(error).__name__})")
-        controller.poll_once()
-        deadline = started + controller.config.poll_seconds
-        while not stopping["now"] and time.time() < deadline:
-            time.sleep(1)
+        try:
+            controller.poll_once()
+        except Exception as error:  # never crash-loop on a poll
+            failures += 1
+            wait = min(RETRY_MAX_SECONDS, RETRY_FIRST_SECONDS * 2 ** (failures - 1))
+            say(f"poll failed ({type(error).__name__}); retrying in {wait:.0f}s")
+        else:
+            failures = 0
+            wait = max(1.0, controller.config.poll_seconds - (clock() - started))
+        # Sleep in short steps so SIGTERM stops the pod promptly.
+        while wait > 0 and not stopped():
+            step = min(wait, 1.0) if handle_signals else wait
+            sleep(step)
+            wait -= step
 
 
 def register(root: typer.Typer) -> None:
