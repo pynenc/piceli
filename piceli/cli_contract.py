@@ -792,7 +792,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             reads=(
                 "publish and delivery receipts",
                 "credentials file or Docker config",
-                "kubeconfig (live pods, with --context)",
+                "kubeconfig (live pods, workload templates, environment records, with --context)",
             ),
             writes=(
                 "OCI registry (manifest deletes, only with --delete --approve)",
@@ -804,8 +804,8 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             exit_codes=(0, 1, 2, 3),
             notes="Without --delete it only reads. --delete without --approve "
             "prints the plan and its hash (exit 3). A digest a running workload "
-            "uses is never deleted; blobs are freed by the registry's own "
-            "garbage collection afterwards.",
+            "uses is never deleted; --keep 0 needs --kubeconfig and --context. "
+            "Blobs are freed by the registry's own garbage collection afterwards.",
         ),
         # ------------------------------------------------------ observe
         "observe status": _C(

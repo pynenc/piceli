@@ -4,6 +4,18 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.14.4
+
+- **Retention removes images nothing uses:** `artifacts retention --keep 0`
+  is allowed (with `--kubeconfig` and `--context`) and keeps only live and
+  pinned digests. Liveness is what runs or is referenced now: finished pods
+  and Jobs and a Deployment's scaled-down rollout history no longer keep an
+  image, while environment records, pushed branch images and the GitOps
+  controller status do. Digests the cluster still names are looked up in the
+  registry, so a manifest pushed by digest without a receipt is found and
+  collected. Each deletion now lists `bytes`, `why` and `seen_in`; the guide
+  shows how to garbage-collect `Registry.in_cluster` afterwards.
+
 ## Version 0.14.3
 
 - **Branch environments may reach the API server:**
