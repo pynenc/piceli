@@ -268,9 +268,9 @@ class LocalBuilder:
                     grant = HostBuildGrant(plan.plan_hash, time.time() + 3600)
                     receipt = spec.run(grant, Path(out), progress=self.say).to_dict()
                 except BuildSpecError as error:
-                    raise CompositionError(
-                        "component-build-failed",
+                    raise build_failed(
                         f"component {item.component!r}: host build failed ({error.code})",
+                        error,
                     ) from None
                 entry = receipt["outputs"]["images"][item.component]
                 delivered = self._backend().registry_deliver(
@@ -487,6 +487,10 @@ def component_job(
     }  # fmt: skip
 
 
+#: The environment a build Job was for (removed with the environment).
+BUILD_ENV_LABEL = "piceli.io/build-env"
+
+
 def _cache_label(claim: str) -> str:
     from piceli.artifacts.cluster_build import slug
 
@@ -501,6 +505,24 @@ def _run(cluster: Any, job: Mapping[str, Any]) -> Any:
     from piceli.artifacts.cluster_build import build_key
 
     return run_build(job, build_key(job))
+
+
+def build_failed(message: str, error: Any) -> CompositionError:
+    """``component-build-failed`` keeping the failing command's output tail.
+
+    The tail is already redacted (:attr:`BuildSpecError.output_tail`); it is
+    printed into the build Job's log by ``piceli build job-run`` and kept in
+    the error's details, which the controller's status shows
+    (``failure.log_tail``).
+    """
+    tail = str(getattr(error, "output_tail", "") or "")
+    failed = CompositionError(
+        "component-build-failed",
+        message,
+        details={"outcome": {"log_tail": tail}} if tail else None,
+    )
+    failed.output_tail = tail  # type: ignore[attr-defined]
+    return failed
 
 
 def _job_failed(outcome: Any, what: str) -> CompositionError:
@@ -739,6 +761,27 @@ class JobBuilder:
         self.mirror_route = mirror_route
         self.backend = backend
         self.say = say
+        #: The environment the next build is for (the controller sets it):
+        #: its Jobs carry ``piceli.io/build-env`` so its teardown removes a
+        #: failed Job kept for it (:meth:`forget`).
+        self.environment: str | None = None
+
+    def _for_environment(self, job: dict[str, Any]) -> dict[str, Any]:
+        if self.environment:
+            value = _cache_label(self.environment)
+            for labels in (
+                job["metadata"]["labels"],
+                job["spec"]["template"]["metadata"]["labels"],
+            ):
+                labels[BUILD_ENV_LABEL] = value
+        return job
+
+    def forget(self, environment: str) -> list[str]:
+        """Delete the failed build Jobs kept for ``environment`` (its teardown)."""
+        remove = getattr(self.cluster, "remove_kept", None)
+        if remove is None:
+            return []
+        return list(remove({BUILD_ENV_LABEL: _cache_label(environment)}))
 
     def build(
         self, items: Sequence[BuildItem], checkout: Callable[[str, str, Path], Any]
@@ -753,7 +796,7 @@ class JobBuilder:
                 raise _unsupported(item.component, "dockerfile")
         if not items:
             return {}
-        job = component_job(self.settings, items, self.urls)
+        job = self._for_environment(component_job(self.settings, items, self.urls))
         claim = {
             "apiVersion": "v1",
             "kind": "PersistentVolumeClaim",
@@ -803,7 +846,7 @@ class JobBuilder:
 
         if not request.images:
             return {}
-        job = spec_job(self.settings, request, self.urls)
+        job = self._for_environment(spec_job(self.settings, request, self.urls))
         self.cluster.ensure_claim(self._claim())
         self.say(
             f"[build] Job {job['metadata']['name']}: "

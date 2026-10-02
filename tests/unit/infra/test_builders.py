@@ -246,3 +246,64 @@ def test_a_failed_component_build_keeps_its_job_and_log_tail() -> None:
     # One key per cache claim: the next component build replaces the kept Job.
     labels = cluster.jobs[0]["metadata"]["labels"]
     assert cluster.keys == {BUILD_LABEL: "true", CACHE_LABEL: labels[CACHE_LABEL]}
+
+
+def test_a_kept_failed_build_job_goes_with_its_environment() -> None:
+    """Teardown removes the failed Jobs kept for that environment, no other."""
+    contracts = parse_contracts(TOML)
+    item = _item("site", "shop", "1" * 40, contracts)
+
+    class Failed:
+        state = "failed"
+        extra = {"kept_job": "piceli-component-build-x"}
+
+        def public(self) -> dict[str, Any]:
+            return {"state": "failed"}
+
+    class Cluster(_Cluster):
+        removed: list[dict[str, str]] = []
+
+        def run_build(self, job: dict[str, Any], key: dict[str, str]) -> Failed:
+            self.jobs.append(job)
+            return Failed()
+
+        def remove_kept(self, key: dict[str, str]) -> list[str]:
+            self.removed.append(dict(key))
+            return ["piceli-component-build-x"]
+
+    cluster = Cluster({})
+    settings = JobSettings(
+        image="registry.example/builder@sha256:" + "f" * 64,
+        namespace="piceli-system",
+        registry_url="oci://piceli-registry.piceli-system.svc:5000/shop",
+        node_registry="piceli-registry.piceli-system.svc:5000",
+    )
+    builder = JobBuilder(
+        settings, {"shop": "https://git.example/shop.git"}, cluster, mirror_route=None
+    )
+    builder.environment = "wp-broken"
+    with pytest.raises(CompositionError):
+        builder.build([item], checkout=None)  # type: ignore[arg-type]
+    labels = cluster.jobs[0]["metadata"]["labels"]
+    assert labels["piceli.io/build-env"] == "wp-broken"
+    assert (
+        cluster.jobs[0]["spec"]["template"]["metadata"]["labels"]["piceli.io/build-env"]
+        == "wp-broken"
+    )
+    assert builder.forget("wp-broken") == ["piceli-component-build-x"]
+    assert cluster.removed == [{"piceli.io/build-env": "wp-broken"}]
+
+
+def test_composition_teardown_forgets_the_environments_builds(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    from piceli.infra.controller import DefaultCompositionPorts
+
+    calls: list[str] = []
+    envs = SimpleNamespace(env_down=lambda pipeline, name: calls.append(f"down {name}"))
+    builder = SimpleNamespace(forget=lambda name: calls.append(f"forget {name}") or [])
+    ports = DefaultCompositionPorts(
+        envs, builder, kubeconfig=tmp_path / "k", context="c", state_dir=tmp_path
+    )
+    ports.env_down(object(), "wp-broken")
+    assert calls == ["down wp-broken", "forget wp-broken"]

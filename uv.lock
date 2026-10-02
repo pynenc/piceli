@@ -1717,7 +1717,7 @@ wheels = [
 
 [[package]]
 name = "piceli"
-version = "0.14.3"
+version = "0.14.4"
 source = { editable = "." }
 dependencies = [
     { name = "cron-validator" },

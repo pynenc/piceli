@@ -264,6 +264,7 @@ def job_run(
             _say_tail(error)
             reject(error.code, str(error))
         except PipelineError as error:
+            _say_tail(error)
             reject(error.code, str(error), exit_code=EXIT_FAILED)
         sys.stdout.write("\n" + encode_receipt(receipt) + "\n")
         sys.stdout.flush()
@@ -292,6 +293,7 @@ def job_run(
             _say_tail(error)
             reject(error.code, str(error))
         except PipelineError as error:
+            _say_tail(error)
             reject(error.code, str(error), exit_code=EXIT_FAILED)
         sys.stdout.write("\n" + encode_receipt(receipt) + "\n")
         sys.stdout.flush()

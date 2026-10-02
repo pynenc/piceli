@@ -485,9 +485,11 @@ def test_sizes_and_policy_are_validated() -> None:
     for bad in ("", "GiB", "10XB", "-1"):
         with pytest.raises(RetentionError):
             parse_size(bad)
-    for keep in (0, -1, True):
+    for keep in (-1, True):
         with pytest.raises(RetentionError):
             RetentionPolicy(keep=keep)  # type: ignore[arg-type]
+    # 0 keeps no release: valid, but deleting with it needs a cluster read.
+    assert RetentionPolicy(keep=0).keep == 0
     with pytest.raises(RetentionError):
         RetentionPolicy(pins=frozenset({"latest"}))
 

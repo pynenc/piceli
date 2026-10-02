@@ -493,7 +493,7 @@ Report which registry manifests the last releases, pins and live workloads keep,
 | --- | --- | --- | --- |
 | `--to` | text | required | oci://host[:port]/prefix to inspect |
 | `--receipts` | path |  | publish or delivery receipts, JSON Lines journals or directories of them |
-| `--keep` | integer | `3` | releases kept (minimum) |
+| `--keep` | integer | `3` | releases kept (minimum); 0 keeps only what is live or pinned (needs --kubeconfig and --context) |
 | `--budget` | text |  | keep more releases, newest first, up to e.g. 10GiB |
 | `--pin` | text |  | a digest to keep |
 | `--pin-file` | path |  | digests to keep, one per line |
@@ -520,14 +520,14 @@ Mutually exclusive: `credentials` / `docker_config`.
 
 **Contract**
 
-- **Reads:** publish and delivery receipts, credentials file or Docker config, kubeconfig (live pods, with --context)
+- **Reads:** publish and delivery receipts, credentials file or Docker config, kubeconfig (live pods, workload templates, environment records, with --context)
 - **Writes:** OCI registry (manifest deletes, only with --delete --approve), --out
 - **Cluster:** reads
 - **Approval required:** yes
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** Without --delete it only reads. --delete without --approve prints the plan and its hash (exit 3). A digest a running workload uses is never deleted; blobs are freed by the registry's own garbage collection afterwards.
+- **Notes:** Without --delete it only reads. --delete without --approve prints the plan and its hash (exit 3). A digest a running workload uses is never deleted; --keep 0 needs --kubeconfig and --context. Blobs are freed by the registry's own garbage collection afterwards.
 
 (cli-build-job)=
 ### `piceli build job`
