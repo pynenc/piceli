@@ -245,7 +245,7 @@ stage's outputs.
 | `backup` (only with `restore_points=`) | The claims the release touches and their writers | No workload that writes a retained claim changes its image or storage settings (see {doc}`restore_points`) |
 | `plan` | The release name: a fingerprint of the delivered digests, the rendered objects and the secret settings | Never; it reads live discovery |
 | `apply` | The release name | That release is deployed and ready, the plan creates, deletes, adopts and replaces nothing, and no other field manager owns a desired field (drift) |
-| `checks` | The release name | No checks are declared, or the apply was skipped and this release already passed its checks |
+| `checks` | The release name and the check set (`checks_hash`: the digest of every declared check) | No checks are declared, or the apply was skipped and this release already passed this same check set |
 
 `apply` objects in an unchanged release are live objects whose form differs
 only by server defaults that no dry run could confirm (secret-bound objects
@@ -545,7 +545,17 @@ policy), the release and the delivered image references; a custom
 A run is `ready` only when the checks pass. With
 `rollback_on_failed_checks=True` a failed check re-applies the previous
 release; the rollback is journaled in the run and the result's state is
-`rolled-back`. `Checks` is importable from `piceli` next to `Pipeline`
+`rolled-back`.
+
+When a check changes, is added or is removed but the release does not (the
+apply is skipped), the checks run against the running release: a
+**verification**. The result carries `verification` (`trigger`:
+`checks-changed`, or `unverified` when this release's last checks failed;
+`applied: false`, `checks_hash`, `passed`). A failing verification ends the
+run `failed` (`pipeline-checks-failed`) and **never rolls back**, whatever
+`rollback_on_failed_checks` says: this run rolled nothing out, so the
+running release stays. A `python` check is identified by its declaration
+(the entry point), not by the code behind it. `Checks` is importable from `piceli` next to `Pipeline`
 (`from piceli import Checks`); see {doc}`checks` for every check type.
 
 (deploy-restore-points)=

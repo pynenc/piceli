@@ -3,6 +3,7 @@ client (loopback fake API) with an explicit kubeconfig and context."""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -82,3 +83,127 @@ def test_templates_of_scaled_to_zero_and_scheduled_workloads_are_live(
         )
     live = LiveWorkloads.from_objects(items)
     assert live.by[zero] == {"deployment"} and live.by[cron] == {"cronjob"}
+
+
+def test_environment_records_and_rollout_history_are_read_from_the_cluster(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(fake_api.TYPES, "pods", ("v1", "Pod", True))
+    recorded, old = "sha256:" + "e" * 64, "sha256:" + "f" * 64
+    meta = {"namespace": TARGET.namespace}
+    with serve() as (api, url):
+        kubeconfig = write_kubeconfig(url, tmp_path / "kubeconfig")
+        api.objects[("ConfigMap", "piceli-env")] = {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {
+                "name": "piceli-env",
+                "labels": {"app.kubernetes.io/managed-by": "piceli"},
+                **meta,
+            },
+            "data": {"record": json.dumps({"images": {"api": {"digest": recorded}}})},
+        }
+        api.objects[("ReplicaSet", "api-old")] = {
+            "apiVersion": "apps/v1",
+            "kind": "ReplicaSet",
+            "metadata": {
+                "name": "api-old",
+                "ownerReferences": [
+                    {
+                        "apiVersion": "apps/v1",
+                        "kind": "Deployment",
+                        "name": "api",
+                        "uid": "u",
+                    }
+                ],
+                **meta,
+            },
+            "spec": {
+                "replicas": 0,
+                "template": {
+                    "spec": {
+                        "containers": [
+                            {"name": "c", "image": f"r.example/app/api@{old}"}
+                        ]
+                    }
+                },
+            },
+        }
+        items = read_live_pods(
+            kubeconfig, "fake", [TARGET.namespace], transport="loopback-http"
+        )
+    live = LiveWorkloads.from_objects(items)
+    assert live.by[recorded] == {"environment"}
+    assert old not in live.digests
+    assert live.refs[("app/api", old)] == {"replicaset:history"}
+
+
+def test_rollback_targets_are_read_from_replica_sets_and_controller_revisions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(fake_api.TYPES, "pods", ("v1", "Pod", True))
+    prev_api, prev_db = "sha256:" + "1" * 64, "sha256:" + "2" * 64
+    meta = {"namespace": TARGET.namespace}
+
+    def containers(image: str) -> dict:
+        return {"spec": {"containers": [{"name": "c", "image": image}]}}
+
+    with serve() as (api, url):
+        kubeconfig = write_kubeconfig(url, tmp_path / "kubeconfig")
+        api.objects[("ReplicaSet", "api-2")] = {
+            "apiVersion": "apps/v1",
+            "kind": "ReplicaSet",
+            "metadata": {
+                "name": "api-2",
+                "annotations": {"deployment.kubernetes.io/revision": "2"},
+                "ownerReferences": [
+                    {
+                        "apiVersion": "apps/v1",
+                        "kind": "Deployment",
+                        "name": "api",
+                        "uid": "u",
+                    }
+                ],
+                **meta,
+            },
+            "spec": {
+                "replicas": 0,
+                "template": containers(f"r.example/app/api@{prev_api}"),
+            },
+        }
+        api.objects[("ControllerRevision", "db-r1")] = {
+            "apiVersion": "apps/v1",
+            "kind": "ControllerRevision",
+            "metadata": {
+                "name": "db-r1",
+                "ownerReferences": [
+                    {
+                        "apiVersion": "apps/v1",
+                        "kind": "StatefulSet",
+                        "name": "db",
+                        "uid": "v",
+                    }
+                ],
+                **meta,
+            },
+            "revision": 1,
+            "data": {"spec": {"template": containers(f"r.example/app/db@{prev_db}")}},
+        }
+        api.objects[("ControllerRevision", "db-r2")] = {
+            **api.objects[("ControllerRevision", "db-r1")],
+            "metadata": {
+                **api.objects[("ControllerRevision", "db-r1")]["metadata"],
+                "name": "db-r2",
+            },
+            "revision": 2,
+            "data": {"spec": {"template": containers("r.example/app/db:2")}},
+        }
+        items = read_live_pods(
+            kubeconfig, "fake", [TARGET.namespace], transport="loopback-http"
+        )
+    live = LiveWorkloads.from_objects(items)
+    assert live.rollback == {
+        prev_api: {"replicaset:rollback"},
+        prev_db: {"controllerrevision:rollback"},
+    }
+    assert live.refs[("app/db", prev_db)] == {"controllerrevision:history"}

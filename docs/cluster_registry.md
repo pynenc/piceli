@@ -37,12 +37,17 @@ registry piceli-registry.piceli-system.svc:5000: ready
   mirror on control-plane: ready
   mirror on worker-1: ready
   mirror on worker-2: ready
-  storage piceli-registry-storage: Bound, 20Gi, 1048576 bytes used
+  storage piceli-registry-storage: Bound, 20Gi, 1048576 bytes used (the claim's volume)
 $ piceli deploy deploy/app.py:pipeline --plan
 ```
 
 The argument is a pipeline whose `deliver=` is `Registry.in_cluster(…)` (its
-target names the cluster), or the `Registry.in_cluster(…)` value itself. Without it,
+target names the cluster), the `Registry.in_cluster(…)` value itself, a
+declared `piceli.infra.Cluster` with `registry=Registry.in_cluster(…)`
+(`infra.py:my_cluster`, reached through its credential profile, whose API
+server must be the declared `api`), or the composition module that declares
+it (`infra.py`). `status`, `install`, `uninstall` and `forward` all take it.
+Without it,
 `--on NODE --storage 20Gi --port 5000 --namespace piceli-system` describe the
 registry and `--kubeconfig FILE --context NAME` (or `--profile NAME`) name the
 cluster; Piceli never uses the current context.
@@ -171,6 +176,48 @@ or `k3s-agent` on agents) when convenient. Piceli never restarts k3s.
 Each agent ends its start with one report line
 (`piceli-mirror: {"runtime": "k3s", "file": "written", "restart": "not-needed"}`),
 which `status` reads from its log; the mirror rows then show the runtime.
+
+## Storage use
+
+`piceli registry status` reports the **claim's** use, and says where it
+comes from (`storage.used_source` in `--json`):
+
+- `volume-stats`: the kubelet's statistics of the claim's volume (needs
+  `get` on `nodes/proxy`), when that volume is the claim's own filesystem;
+- `du`: `du -sk /var/lib/registry` run in the registry pod over `pods/exec`
+  (read-only), when the kubelet's figure is a filesystem the claim shares.
+  On a node-path volume, such as k3s's default `local-path`, the kubelet
+  reports the node's disk; that figure is in `storage.filesystem`
+  (`shared: true`) and shown as such, never as the registry's use;
+- `null` (`use unknown`) when neither can be read.
+
+```console
+$ piceli registry status infra.py:my_cluster
+…
+  storage piceli-registry-storage: Bound, 40Gi, 2992108544 bytes used (du of /var/lib/registry in the registry pod); the filesystem that holds it is shared with the node: 26840000000 of 62000000000 bytes used
+```
+
+## Cleaning up
+
+Every deploy and cluster build adds images; nothing removes them on its own.
+Plan, approve, then run the registry's garbage collector (details and the
+permissions needed in {doc}`registry_retention`):
+
+```sh
+piceli artifacts retention --cluster infra.py:my_cluster --delete            # plan, exit 3
+piceli artifacts retention --cluster infra.py:my_cluster --delete --approve <digest>
+kubectl --kubeconfig FILE --context NAME -n piceli-system exec deploy/piceli-registry -- \
+    registry garbage-collect --dry-run /etc/distribution/config.yml
+kubectl --kubeconfig FILE --context NAME -n piceli-system exec deploy/piceli-registry -- \
+    registry garbage-collect /etc/distribution/config.yml
+piceli registry status infra.py:my_cluster
+```
+
+It keeps what runs, each workload's rollback target and what Piceli uses (the
+controller, the builder, the UI), and deletes the rest, including digest-only
+images nothing names. Run the collector when no cluster build Job is running
+(`kubectl … get jobs -A -l piceli.io/build=true`) and nothing pushes; never
+with `--delete-untagged` (every image here is untagged).
 
 ## How images get in
 

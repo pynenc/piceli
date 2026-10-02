@@ -69,8 +69,10 @@ from piceli.gitops.controller import (
     _version,
     _version_key,
     error_code,
+    failed_verification,
     failure_detail,
     replan_stale,
+    verified,
 )
 from piceli.gitops.ports import EnvOutcome
 from piceli.gitops.repo import RemoteRefs
@@ -80,7 +82,9 @@ from piceli.gitops.state import (
     load_state,
     read_json,
     remember_rejected,
+    remove_env_dir,
     save_state,
+    sweep_env_dirs,
     write_json,
 )
 from piceli.infra import CompositionError, Source
@@ -345,6 +349,7 @@ class DefaultCompositionPorts:
         self.context = context
         self.state_dir = state_dir
         self.transport = transport
+        self.log: Callable[[str], None] = getattr(envs, "log", None) or (lambda _: None)
 
     def pipeline(
         self,
@@ -389,9 +394,25 @@ class DefaultCompositionPorts:
 
     def env_down(self, pipeline: Any, name: str) -> None:
         self.envs.env_down(pipeline, name)
+        # A failed build Job kept for diagnosis goes with its environment.
+        forget = getattr(self.builder, "forget", None)
+        if callable(forget):
+            try:
+                removed = forget(name)
+            except Exception as error:  # never fail a teardown on it
+                self.log(
+                    f"{name}: kept build Jobs not removed ({type(error).__name__})"
+                )
+            else:
+                for job in removed:
+                    self.log(f"{name}: removed kept build Job {job}")
 
     def env_stop(self, pipeline: Any, name: str) -> None:
         self.envs.env_stop(pipeline, name)
+
+    def namespace_live(self, namespace: str) -> bool | None:
+        live = getattr(self.envs, "namespace_live", None)
+        return live(namespace) if callable(live) else None
 
 
 # ---------------------------------------------------------------- the loop
@@ -453,6 +474,7 @@ class CompositionController:
             self.state.setdefault(key, {})
         self.refs: dict[str, RemoteRefs] = {}
         self.busy = False
+        self.swept = False  # stale state is swept once, at the first full poll
 
     # ------------------------------------------------------------ helpers
     @property
@@ -910,6 +932,9 @@ class CompositionController:
 
     def _deploy(self, record: dict[str, Any]) -> None:
         name = record["branch"]
+        if hasattr(self.ports.builder, "environment"):
+            # Its build Jobs are labelled with it (removed at its teardown).
+            self.ports.builder.environment = name
         instance = self._instance(name)
         if instance is None:
             raise CompositionError("composition-invalid", f"no environment {name!r}")
@@ -1180,6 +1205,7 @@ class CompositionController:
                 entry["deployed_image"] = entry["image"]
                 entry["health"] = "healthy"
                 entry["updated_at"] = now
+            action = outcome.action or "deployed"
             self._set(
                 record,
                 state="deployed",
@@ -1192,11 +1218,25 @@ class CompositionController:
                 approved_hash=None,
                 reason=None,
                 failure=None,
+                health="healthy",
+                last_action=action,
+                verification=(
+                    verified(outcome, now)
+                    if action != "unchanged"
+                    else record.get("verification")
+                ),
             )
             changed = sorted(k for k, v in components.items() if v["state"] == "synced")
-            self.log(
-                f"{record['branch']}: deployed; rolled {', '.join(changed) or 'nothing'}"
-            )
+            if action == "verified":
+                self.log(
+                    f"{record['branch']}: verified (checks changed); rolled "
+                    f"{', '.join(changed) or 'nothing'}"
+                )
+            else:
+                self.log(
+                    f"{record['branch']}: deployed; rolled "
+                    f"{', '.join(changed) or 'nothing'}"
+                )
         elif outcome.state == "approval-required":
             self._set(
                 record,
@@ -1217,16 +1257,111 @@ class CompositionController:
                     entry["state"] = "failed"
             self._fail(record, outcome.reason or "gitops-step-failed")
 
+    def _degraded(self, record: dict[str, Any], verification: dict[str, Any]) -> None:
+        """Failing checks on an unchanged release: keep it running, mark it degraded.
+
+        Nothing was applied (the components' images did not change), so
+        nothing is rolled back and no retry runs: the environment waits for
+        a new revision or ``piceli gitops sync``, whose passing verification
+        clears it.
+        """
+        now = _iso(self.clock())
+        for entry in (record.get("components") or {}).values():
+            if entry.get("state") == "rolling":
+                entry["state"] = "synced"
+            entry["deployed_image"] = entry.get("image")
+            entry["updated_at"] = now
+        self._set(
+            record,
+            state="deployed",
+            last_sync=now,
+            deployed_commit=record.get("commit"),
+            deployed_revision=dict(record.get("revision") or {}),
+            attempts=0,
+            next_attempt_at=None,
+            plan_hash=None,
+            approved_hash=None,
+            reason="pipeline-checks-failed",
+            failure=None,
+            health="degraded",
+            last_action="verified",
+            verification=verification,
+        )
+        names = ", ".join(item["check"] for item in verification["failed"]) or "checks"
+        self.log(
+            f"{record['branch']}: verification failed ({names}); rolled nothing, "
+            "the release keeps running"
+        )
+
     def _teardown(self, record: dict[str, Any]) -> None:
         name = record["branch"]
         rule = self.composition.branch_rule
         if rule is None:
+            self._forget(name)
             del self._envs()[name]
             return
         # No contracts: a pipeline that only knows the environment's settings.
         self.ports.env_down(self._down_pipeline(rule), name)
+        remove_env_dir(self._branch_dirs(rule), record.get("namespace"))
+        self._forget(name)
         del self._envs()[name]
         self.log(f"{name}: environment removed")
+
+    def _branch_dirs(self, rule: BranchEnvironments) -> Path:
+        """Where the rule's branch environments keep their pipeline state."""
+        return self.state_dir / "pipelines" / rule.name / "branches"
+
+    #: Per-environment memory besides its record (keyed by environment name).
+    _MEMORY = ("env_seen", "promoted", "forced", "rebuild")
+
+    def _forget(self, name: str) -> None:
+        """Drop what the controller remembers of a removed environment."""
+        for key in self._MEMORY:
+            memory = self.state.get(key)
+            if isinstance(memory, dict):
+                memory.pop(name, None)
+
+    def _sweep(self) -> None:
+        """Once per start: drop the state of environments that no longer exist.
+
+        The memory (triggers, promotions, pending syncs) of environments the
+        composition no longer has and no record names is dropped; a record
+        of an environment that is no longer declared, with no branch rule
+        left to tear it down, is dropped when its namespace is gone; the
+        pipeline state of a branch namespace no record names is removed when
+        the namespace is gone (``namespace_live`` answers ``False``). A live
+        environment's state is never deleted.
+        """
+        live = getattr(self.ports, "namespace_live", None)
+        alive = {item.name for item in self._instances()}
+        records = self._envs()
+        rule = self.composition.branch_rule
+        dropped: list[str] = []
+        if rule is None and live is not None:
+            for name, record in list(records.items()):
+                if name in alive or record.get("state") == "deleting":
+                    continue
+                namespace = record.get("namespace")
+                if isinstance(namespace, str) and live(namespace) is False:
+                    del records[name]
+                    dropped.append(name)
+        known = alive | set(records)
+        for key in self._MEMORY:
+            memory = self.state.get(key)
+            if isinstance(memory, dict):
+                for name in [n for n in memory if n not in known]:
+                    del memory[name]
+        removed: list[str] = []
+        if rule is not None:
+            keep = {
+                str(r.get("namespace")) for r in records.values() if r.get("namespace")
+            }
+            removed = sweep_env_dirs(self._branch_dirs(rule), keep, live)
+        if removed or dropped:
+            self.log(
+                f"removed the state of {len(removed) + len(dropped)} environment(s) "
+                "that no longer exist"
+            )
 
     def _idle(self) -> list[dict[str, Any]]:
         rule = self.composition.branch_rule
@@ -1305,7 +1440,11 @@ class CompositionController:
         except Exception as error:  # one bad environment never stops the loop
             if isinstance(error, PipelineError | GitOpsError):
                 self.log(f"{record['branch']}: {error}")  # registered, no secret
-            self._fail(record, error_code(error), error)
+            failed = failed_verification(error, _iso(self.clock()))
+            if failed is not None and record.get("state") != "deleting":
+                self._degraded(record, failed)
+            else:
+                self._fail(record, error_code(error), error)
         finally:
             self.busy = False
             save_state(self.state_dir, self.state)
@@ -1332,6 +1471,12 @@ class CompositionController:
             return self._publish()
         self._requests()
         self._desired()
+        if not self.swept and not failed:  # only on a complete view of the sources
+            self.swept = True
+            try:
+                self._sweep()
+            except OSError as error:  # never fail a poll on it
+                self.log(f"stale state not swept ({type(error).__name__})")
         self.state["baseline"] = True
         save_state(self.state_dir, self.state)
         for record in self._due():

@@ -357,3 +357,201 @@ def test_a_failed_component_build_shows_its_log_tail(world: dict[str, Any]) -> N
         "log_tail": "  | error: x",
         "kept_job": "piceli-component-build-1",
     }
+
+
+def _verification_up(
+    calls: list[str], fail: bool = False
+) -> Any:  # an env_up whose release did not change
+    from piceli.pipeline.errors import PipelineError
+
+    def env_up(pipeline: Any, name: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append(name)
+        verification = {"trigger": "checks-changed", "applied": False}
+        if fail:
+            raise PipelineError(
+                "pipeline-checks-failed",
+                "release main failed its checks",
+                failed=True,
+                details={
+                    "run_state": "failed",
+                    "output": {
+                        "passed": False,
+                        "checks_hash": "sha256:" + "f" * 64,
+                        "verification": verification,
+                        "results": [
+                            {"name": "http-web", "passed": True, "detail": "200"},
+                            {
+                                "name": "http-login",
+                                "passed": False,
+                                "detail": "GET /login returned 500",
+                                "code": "check-failed",
+                            },
+                        ],
+                    },
+                },
+            )
+        return {
+            "state": "ready",
+            "namespace": f"ns-{name}",
+            "result": {
+                "state": "ready",
+                "stages": {"plan": "done", "apply": "skipped", "checks": "done"},
+                "verification": {
+                    **verification,
+                    "checks_hash": "sha256:" + "e" * 64,
+                    "passed": True,
+                },
+            },
+        }
+
+    return env_up
+
+
+def test_a_changed_check_set_is_a_verification_and_a_failure_degrades(
+    world: dict[str, Any],
+) -> None:
+    from piceli.gitops.state import sync_request
+
+    controller, ports, channel = world["controller"], world["ports"], world["channel"]
+    lines: list[str] = []
+    controller.log = lines.append
+    status = controller.poll_once()
+    main = status["envs"]["main"]
+    assert main["last_action"] == "deployed" and main["health"] == "healthy"
+
+    # Only the checks changed: the release is verified, nothing rolls.
+    calls: list[str] = []
+    ports.env_up = _verification_up(calls)
+    channel.add_request(*sync_request("main"))
+    status = controller.poll_once()
+    main = status["envs"]["main"]
+    assert main["state"] == "deployed" and main["last_action"] == "verified"
+    assert main["health"] == "healthy" and main["reason"] is None
+    assert main["verification"] == {
+        "state": "verified",
+        "trigger": "checks-changed",
+        "checks_hash": "sha256:" + "e" * 64,
+        "rolled": [],
+        "at": main["verification"]["at"],
+    }
+    assert set(_components(status, "main").values()) == {"unchanged"}
+    assert "main: verified (checks changed); rolled nothing" in lines
+
+    # A failing changed check: degraded, still deployed, no retry.
+    ports.env_up = _verification_up(calls, fail=True)
+    channel.add_request(*sync_request("main"))
+    status = controller.poll_once()
+    main = status["envs"]["main"]
+    assert main["state"] == "deployed", main
+    assert main["health"] == "degraded"
+    assert main["reason"] == "pipeline-checks-failed"
+    assert main["attempts"] == 0 and main["next_attempt_at"] is None
+    assert main["verification"]["state"] == "failed"
+    assert main["verification"]["rolled"] == []
+    assert main["verification"]["failed"] == [
+        {
+            "check": "http-login",
+            "code": "check-failed",
+            "detail": "GET /login returned 500",
+        }
+    ]
+    assert main["components"]["web"]["health"] == "healthy"
+    count = len(calls)
+    world["clock"]["now"] += 10_000
+    controller.poll_once()
+    assert len(calls) == count  # not retried every poll
+
+    # A passing verification clears it.
+    ports.env_up = _verification_up(calls)
+    channel.add_request(*sync_request("main"))
+    main = controller.poll_once()["envs"]["main"]
+    assert main["health"] == "healthy" and main["reason"] is None
+    assert main["verification"]["state"] == "verified"
+
+
+def test_failed_checks_of_a_rollout_still_fail_and_retry(world: dict[str, Any]) -> None:
+    from piceli.gitops.state import sync_request
+    from piceli.pipeline.errors import PipelineError
+
+    controller, ports, channel = world["controller"], world["ports"], world["channel"]
+    controller.poll_once()
+
+    def env_up(pipeline: Any, name: str, **kwargs: Any) -> dict[str, Any]:
+        raise PipelineError(
+            "pipeline-checks-failed",
+            "release main failed its checks",
+            failed=True,
+            details={"run_state": "rolled-back", "output": {"passed": False}},
+        )
+
+    ports.env_up = env_up
+    channel.add_request(*sync_request("main"))
+    main = controller.poll_once()["envs"]["main"]
+    assert main["state"] == "retrying" and main["reason"] == "pipeline-checks-failed"
+    assert "health" not in main or main["health"] != "degraded"
+
+
+def test_teardown_and_a_restart_remove_the_state_of_gone_branch_envs(
+    world: dict[str, Any],
+) -> None:
+    from piceli.gitops.state import save_state
+
+    controller, ports, shop = world["controller"], world["ports"], world["shop"]
+    controller.poll_once()
+    shop.commit({"web/index.html": "<h1>login</h1>\n"}, branch="wp-login")
+    shop.commit({"web/index.html": "<h1>cart</h1>\n"}, branch="wp-cart")
+    status = controller.poll_once()
+    assert status["envs"]["wp-login"]["namespace"] == "ns-wp-login"
+    state = controller.state_dir
+    branches = state / "pipelines" / "branches" / "branches"
+    for namespace in ("ns-wp-login", "ns-wp-cart", "ns-wp-gone", "ns-wp-live"):
+        (branches / namespace / "runs").mkdir(parents=True)
+    controller.state["rebuild"] = {"wp-login": ["web"]}
+    controller.state["forced"]["wp-login"] = {"trigger": "sync"}
+
+    # Deleting the branch removes its pipeline state and what the
+    # controller remembers of it.
+    shop.delete_branch("wp-login")
+    status = controller.poll_once()
+    assert ports.removed == ["wp-login"] and "wp-login" not in status["envs"]
+    assert not (branches / "ns-wp-login").exists()
+    for key in ("env_seen", "rebuild", "forced", "promoted"):
+        assert "wp-login" not in (controller.state.get(key) or {}), key
+    assert (branches / "ns-wp-cart").is_dir()
+
+    # On start: the stale state of environments that no longer exist goes
+    # once; a live namespace (or one that cannot be looked up) keeps it.
+    controller.state["env_seen"]["wp-old"] = {}
+    controller.state["forced"]["wp-old"] = {"trigger": "sync"}
+    save_state(state, controller.state)
+
+    class Ports(FakePorts):
+        live: set[str] | None = None
+
+        def namespace_live(self, namespace: str) -> bool | None:
+            return None if self.live is None else namespace in self.live
+
+    def restart(live: set[str] | None) -> Any:
+        restarted_ports = Ports()
+        restarted_ports.live = live
+        return CompositionController(
+            controller.config,
+            state_dir=state,
+            sources=controller.sources,
+            ports=restarted_ports,
+            channel=world["channel"],
+            clock=lambda: world["clock"]["now"],
+        )
+
+    restart(None).poll_once()
+    assert (branches / "ns-wp-gone").is_dir()  # unknown: never deleted
+    restarted = restart({"ns-wp-live", "ns-wp-cart"})
+    status = restarted.poll_once()
+    assert not (branches / "ns-wp-gone").exists()
+    assert (branches / "ns-wp-live").is_dir() and (branches / "ns-wp-cart").is_dir()
+    assert "wp-old" not in restarted.state["env_seen"]
+    assert "wp-old" not in restarted.state["forced"]
+    assert status["envs"]["wp-cart"]["state"] == "deployed"
+    (branches / "ns-wp-later").mkdir()
+    restarted.poll_once()
+    assert (branches / "ns-wp-later").is_dir()  # swept once per start

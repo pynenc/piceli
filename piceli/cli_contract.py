@@ -792,7 +792,11 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             reads=(
                 "publish and delivery receipts",
                 "credentials file or Docker config",
-                "kubeconfig (live pods, with --context)",
+                "kubeconfig (live pods, workload templates, environment records, with --context)",
+                "--cluster MODULE:ATTR (Cluster, composition, pipeline or Registry.in_cluster)",
+                "credential profile (with --cluster)",
+                "in-cluster registry storage (read-only find over pods/exec, with --cluster)",
+                "kubectl (port-forward, with --cluster or --via-forward)",
             ),
             writes=(
                 "OCI registry (manifest deletes, only with --delete --approve)",
@@ -804,8 +808,11 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             exit_codes=(0, 1, 2, 3),
             notes="Without --delete it only reads. --delete without --approve "
             "prints the plan and its hash (exit 3). A digest a running workload "
-            "uses is never deleted; blobs are freed by the registry's own "
-            "garbage collection afterwards.",
+            "uses is never deleted, nor a workload's rollback target; --keep 0 "
+            "needs --kubeconfig and --context. --cluster REF derives the "
+            "registry, forward and cluster read, defaults --keep to 0 and "
+            "lists every stored manifest (digest-only ones too). Blobs are "
+            "freed by the registry's own garbage collection afterwards.",
         ),
         # ------------------------------------------------------ observe
         "observe status": _C(
@@ -1263,7 +1270,10 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
         "registry install": _C(
             "Plan and, with --approve HASH, install the in-cluster registry "
             "(Registry.in_cluster) and the containerd mirror on every node.",
-            reads=("kubeconfig", "MODULE:ATTR (optional)"),
+            reads=(
+                "kubeconfig or the Cluster's credential profile",
+                "MODULE:ATTR or composition module (optional)",
+            ),
             cluster="writes",
             approval_required=True,
             contract="conforms",
@@ -1279,7 +1289,10 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
         "registry uninstall": _C(
             "Plan and, with --approve HASH, remove the in-cluster registry and "
             "its node mirrors.",
-            reads=("kubeconfig", "MODULE:ATTR (optional)"),
+            reads=(
+                "kubeconfig or the Cluster's credential profile",
+                "MODULE:ATTR or composition module (optional)",
+            ),
             cluster="writes",
             approval_required=True,
             contract="conforms",
@@ -1292,13 +1305,19 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
         "registry status": _C(
             "Show the in-cluster registry pod, the mirror on every node and the "
             "storage use.",
-            reads=("kubeconfig", "MODULE:ATTR (optional)"),
+            reads=(
+                "kubeconfig or the Cluster's credential profile",
+                "MODULE:ATTR or composition module (optional)",
+            ),
             cluster="reads",
             contract="conforms",
             exit_codes=(0, 2),
             notes="Read-only. state: ready, degraded (registry or a node's "
-            "mirror not ready) or not-installed. Storage use comes from the "
-            "kubelet stats (needs nodes/proxy; null otherwise). " + _EXPLICIT_CONTEXT,
+            "mirror not ready) or not-installed. Storage use is the claim's: "
+            "the kubelet's volume stats when they are the claim's own "
+            "filesystem (needs nodes/proxy), else du in the registry pod "
+            "(needs pods/exec), else null; storage.used_source says which, and "
+            "storage.filesystem the shared filesystem's use. " + _EXPLICIT_CONTEXT,
         ),
         "registry forward": _C(
             "Keep a loopback port-forward to the in-cluster registry Service open "

@@ -44,12 +44,21 @@ class EnvOutcome:
         ``approval-required``; the hash ``piceli gitops approve`` must name).
     :param namespace: The environment's namespace.
     :param reason: A registered error code when it did not deploy.
+    :param action: For ``deployed``, what the deploy did when the result says
+        it: ``deployed`` (it applied), ``verified`` (nothing applied; a
+        changed check set ran against the running release) or
+        ``unchanged`` (nothing applied, the checks were verified already).
+        ``None`` when the result does not say.
+    :param verification: The deploy result's ``verification`` (trigger,
+        ``checks_hash``, passed) when the checks ran as a verification.
     """
 
     state: str
     plan_hash: str | None = None
     namespace: str | None = None
     reason: str | None = None
+    action: str | None = None
+    verification: Mapping[str, Any] | None = None
 
     @classmethod
     def from_result(cls, value: Any) -> EnvOutcome:
@@ -73,11 +82,30 @@ class EnvOutcome:
             state = "deployed"
         elif state not in {"approval-required", "failed"}:
             state = "failed"
+        result = get("result")
+        stages = result.get("stages") if isinstance(result, Mapping) else None
+        verification = (
+            result.get("verification") if isinstance(result, Mapping) else None
+        )
+        if not isinstance(verification, Mapping):
+            verification = get("verification")
+        if not isinstance(verification, Mapping):
+            verification = None
+        action: str | None = None
+        if state == "deployed" and isinstance(stages, Mapping):
+            if stages.get("apply") != "skipped":
+                action = "deployed"
+            else:
+                action = "verified" if verification is not None else "unchanged"
+        elif state == "deployed" and verification is not None:
+            action = "verified"
         return cls(
             state=state,
             plan_hash=get("plan_hash", "combined_hash"),
             namespace=get("namespace"),
             reason=get("reason"),
+            action=action,
+            verification=None if verification is None else dict(verification),
         )
 
 
@@ -142,6 +170,14 @@ class Ports(Protocol):
 
     def env_stop(self, pipeline: Any, branch: str) -> None:
         """Scale an idle branch environment to zero (``EnvConfig(idle_stop=...)``)."""
+        ...
+
+    def namespace_live(self, namespace: str) -> bool | None:
+        """Whether ``namespace`` exists; ``None`` when it cannot be told.
+
+        Optional: the controller removes the local state of an environment it
+        no longer knows only when this answers ``False``.
+        """
         ...
 
 
@@ -348,6 +384,42 @@ class DefaultPorts:
                 f"env down {branch} --approve {result.get('env_hash')} (or "
                 "EnvConfig(auto_approve=True))",
             )
+        self._forget_builds(pipeline, branch)
+
+    def _forget_builds(self, pipeline: Any, branch: str) -> None:
+        """Delete the failed build Job kept for ``branch`` (it builds no more)."""
+        if self.config.builder_image is None:
+            return
+        from piceli.artifacts.cluster_build import (
+            BUILD_LABEL,
+            CACHE_LABEL,
+            BuildCluster,
+            slug,
+        )
+        from piceli.pipeline.backend import Backend
+
+        try:
+            cluster = BuildCluster(Backend()._api(pipeline.target), self.namespace)
+            removed = cluster.remove_kept(
+                {BUILD_LABEL: "true", CACHE_LABEL: slug(branch, 50)}
+            )
+        except Exception as error:  # never fail a teardown on it
+            self.log(f"{branch}: kept build Jobs not removed ({type(error).__name__})")
+            return
+        for job in removed:
+            self.log(f"{branch}: removed kept build Job {job}")
+
+    def namespace_live(self, namespace: str) -> bool | None:
+        from piceli.gitops.install import connect
+
+        try:
+            with connect(
+                self.kubeconfig, self.context, transport=self.transport
+            ) as api:
+                found = api.call(f"/api/v1/namespaces/{namespace}", "GET")
+        except GitOpsError:
+            return None  # unknown: never delete on it
+        return isinstance(found, dict)
 
     def env_stop(self, pipeline: Any, branch: str) -> None:
         result = self._envs().env_stop(

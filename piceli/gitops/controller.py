@@ -53,7 +53,9 @@ from piceli.gitops.state import (
     Channel,
     load_state,
     remember_rejected,
+    remove_env_dir,
     save_state,
+    sweep_env_dirs,
     write_json,
 )
 
@@ -122,6 +124,65 @@ def failure_detail(error: BaseException) -> dict[str, Any] | None:
                 k: value.get(k) for k in ("verb", "resource", "namespace", "status")
             }
     return found or None
+
+
+#: How much of a failing check's detail line a status keeps (characters).
+CHECK_DETAIL_CHARS = 300
+
+
+def verified(outcome: EnvOutcome, at: str) -> dict[str, Any] | None:
+    """A status' ``verification`` for a deploy that only re-ran the checks.
+
+    ``None`` unless the deploy applied nothing and ran a changed check set
+    against the running release (``outcome.action == "verified"``).
+    """
+    found = outcome.verification
+    if outcome.action != "verified" or found is None:
+        return None
+    return {
+        "state": "verified",
+        "trigger": found.get("trigger"),
+        "checks_hash": found.get("checks_hash"),
+        "rolled": [],
+        "at": at,
+    }
+
+
+def failed_verification(error: BaseException, at: str) -> dict[str, Any] | None:
+    """The ``verification`` of failing checks on a release that was not changed.
+
+    ``None`` unless ``error`` is ``pipeline-checks-failed`` from a checks
+    stage that ran as a verification (nothing applied, so nothing was rolled
+    back): the environment keeps running and is marked degraded.
+    """
+    if error_code(error) != "pipeline-checks-failed":
+        return None
+    details = getattr(error, "details", None)
+    output = details.get("output") if isinstance(details, Mapping) else None
+    if not isinstance(output, Mapping):
+        return None
+    found = output.get("verification")
+    if not isinstance(found, Mapping):
+        return None
+    failed = []
+    for item in output.get("results") or ():
+        if not isinstance(item, Mapping) or item.get("passed"):
+            continue
+        failed.append(
+            {
+                "check": str(item.get("name") or item.get("check") or "check"),
+                "code": str(item.get("code") or "check-failed"),
+                "detail": str(item.get("detail") or "")[:CHECK_DETAIL_CHARS],
+            }
+        )
+    return {
+        "state": "failed",
+        "trigger": found.get("trigger"),
+        "checks_hash": output.get("checks_hash"),
+        "rolled": [],
+        "failed": failed,
+        "at": at,
+    }
 
 
 def replan_stale(
@@ -196,6 +257,7 @@ class Controller:
         self.log = log
         self.state = load_state(state_dir)
         self.busy = False  # one step at a time (asserted by the tests)
+        self.swept = False  # stale state is swept once, at the first poll
 
     # ------------------------------------------------------------ helpers
     def _envs(self) -> dict[str, dict[str, Any]]:
@@ -588,6 +650,7 @@ class Controller:
         if outcome.namespace:
             record["namespace"] = outcome.namespace
         if outcome.state == "deployed":
+            action = outcome.action or "deployed"
             self._set(
                 record,
                 state="deployed",
@@ -598,8 +661,21 @@ class Controller:
                 approved_hash=None,
                 reason=None,
                 failure=None,
+                health="healthy",
+                last_action=action,
+                verification=(
+                    verified(outcome, _iso(self.clock()))
+                    if action != "unchanged"
+                    else record.get("verification")
+                ),
             )
-            self.log(f"{record['branch']}: deployed {record['commit'][:12]}")
+            if action == "verified":
+                self.log(
+                    f"{record['branch']}: verified {record['commit'][:12]} "
+                    "(checks changed); rolled nothing"
+                )
+            else:
+                self.log(f"{record['branch']}: deployed {record['commit'][:12]}")
         elif outcome.state == "approval-required":
             self._set(
                 record,
@@ -617,6 +693,33 @@ class Controller:
         else:
             self._fail(record, outcome.reason or "gitops-step-failed")
 
+    def _degraded(self, record: dict[str, Any], verification: dict[str, Any]) -> None:
+        """Failing checks on an unchanged release: keep it running, mark it degraded.
+
+        Nothing was applied, so nothing is rolled back and no retry runs:
+        the environment waits for a new push or ``piceli gitops sync``, whose
+        passing verification clears it.
+        """
+        self._set(
+            record,
+            state="deployed",
+            deployed_commit=record["commit"],
+            attempts=0,
+            next_attempt_at=None,
+            plan_hash=None,
+            approved_hash=None,
+            reason="pipeline-checks-failed",
+            failure=None,
+            health="degraded",
+            last_action="verified",
+            verification=verification,
+        )
+        names = ", ".join(item["check"] for item in verification["failed"]) or "checks"
+        self.log(
+            f"{record['branch']}: verification failed ({names}); the release keeps "
+            "running (not rolled back: its manifests did not change)"
+        )
+
     def _teardown(self, record: dict[str, Any], refs: RemoteRefs) -> None:
         branch = record["branch"]
         # The environment settings live in the pipeline: load it from main's
@@ -633,8 +736,62 @@ class Controller:
                 tree, self.config.pipeline, self.config.env
             )
             self.ports.env_down(pipeline, branch)
+        self._forget(branch, record.get("namespace"))
         del self._envs()[branch]
         self.log(f"{branch}: environment removed")
+
+    def _branch_dirs(self) -> Path:
+        """Where branch environments keep their pipeline state (``env_pipeline``)."""
+        return self.state_dir / "pipelines" / "branches"
+
+    def _forget(self, branch: str, namespace: Any) -> None:
+        """Drop a removed environment's local state: pipeline state, receipts."""
+        remove_env_dir(self._branch_dirs(), namespace)
+        for path in self._receipts():
+            if path.name.rpartition("-")[0] == slug(branch):
+                path.unlink(missing_ok=True)
+
+    def _receipts(self) -> list[Path]:
+        """Kept build receipts (``<branch slug>-<commit>.json``)."""
+        found = []
+        for path in sorted((self.state_dir / "receipts").glob("*.json")):
+            commit = path.stem.rpartition("-")[2]
+            if 40 <= len(commit) <= 64 and all(c in "0123456789abcdef" for c in commit):
+                found.append(path)
+        return found
+
+    def _sweep(self) -> None:
+        """Once per start: drop the state of environments that no longer exist.
+
+        Pipeline state of a branch namespace no environment record names is
+        removed only when the namespace is gone (``Ports.namespace_live``
+        answers ``False``); build receipts of branches without a record, and
+        the trigger memory of named environments no longer configured, go
+        too. A live environment's state is never deleted.
+        """
+        records = self._envs()
+        keep = {str(r.get("namespace")) for r in records.values() if r.get("namespace")}
+        removed = sweep_env_dirs(
+            self._branch_dirs(), keep, getattr(self.ports, "namespace_live", None)
+        )
+        slugs = {slug(branch) for branch in records}
+        receipts = [
+            p for p in self._receipts() if p.stem.rpartition("-")[0] not in slugs
+        ]
+        for path in receipts:
+            path.unlink(missing_ok=True)
+        names = {rule.name for rule in self.config.environments}
+        for key in ("env_heads", "env_tags"):
+            known = self.state.get(key)
+            if isinstance(known, dict):
+                for name in [n for n in known if n not in names]:
+                    del known[name]
+        if removed or receipts:
+            self.log(
+                f"removed the state of {len(removed)} environment(s) that no "
+                f"longer exist and {len(receipts)} build receipt(s) of removed "
+                "branches"
+            )
 
     def _stop(self, record: dict[str, Any], refs: RemoteRefs) -> None:
         """Scale an idle branch environment to zero (the next push starts it)."""
@@ -679,7 +836,11 @@ class Controller:
             if isinstance(error, GitOpsError) or hasattr(error, "failed"):
                 # Registered errors carry printable messages (no secret).
                 self.log(f"{record['branch']}: {error}")
-            self._fail(record, error_code(error), error)
+            failed = failed_verification(error, _iso(self.clock()))
+            if failed is not None and record["state"] != "deleting":
+                self._degraded(record, failed)
+            else:
+                self._fail(record, error_code(error), error)
         finally:
             self.busy = False
             save_state(self.state_dir, self.state)
@@ -702,6 +863,12 @@ class Controller:
         self.state["poll_failures"] = 0
         self._requests(refs)
         self._desired(refs)
+        if not self.swept:
+            self.swept = True
+            try:
+                self._sweep()
+            except OSError as error:  # never fail a poll on it
+                self.log(f"stale state not swept ({type(error).__name__})")
         save_state(self.state_dir, self.state)
         due = self._due()
         idle = self._idle()

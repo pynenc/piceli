@@ -58,7 +58,8 @@ What the controller does on every poll (`--poll`, default 60s):
 | An untagged push to main | Nothing. |
 | A new tag matching `--tags` (default `v*`) | Main is planned at the tag's commit. Tags that exist when the controller starts are the baseline and deploy nothing. |
 | `piceli promote BRANCH@SHA` | Main is planned at that commit (only a commit the controller saw on that branch). |
-| A branch is deleted (or stops matching) | Its environment is torn down (namespace and claims); main's environment never is. |
+| A branch is deleted (or stops matching) | Its environment is torn down (namespace and claims) with the controller's local state of it (pipeline state, build receipts); main's environment never is. |
+| A push changes, adds or removes a check but no manifest | Nothing is applied, backed up or rolled out: the checks run against the running release (a **verification**, `last_action: verified`). A failing check never rolls such a release back: the environment stays `deployed` with `health: degraded` until a passing verification (a later push or `piceli gitops sync`) clears it. |
 
 Approval stays the owner's:
 
@@ -90,6 +91,14 @@ piceli gitops status --kubeconfig cluster.kubeconfig --context my-cluster
 #   wp-login: deployed 8c1d2e3f4a5b in shop-wp-login
 ```
 
+Each deploy records the digest of the check set it verified (its
+`checks_hash`), so unchanged checks never run again on the next sync of an
+unchanged release, and a changed check set always does. On start, the
+controller also drops the local state of environments torn down before (by
+hand, or by an older controller): the state of a namespace that no
+environment names is removed only when the namespace no longer exists; a
+live environment's state is never deleted.
+
 `piceli gitops disable` plans (exit 3) and, with `--approve`, removes the
 controller. It never deletes an environment or the namespace, and keeps the
 state claim unless `--delete-state`.
@@ -104,7 +113,9 @@ their digests:
 
 - `ghcr.io/pynenc/piceli-controller@sha256:…` for `--image` (Piceli with the
   `ui` extra, `git`, `openssh-client`; the UI installed in the cluster runs
-  it too);
+  it too: when a composition's `Cluster` declares a `Ui`, `gitops enable`
+  plans the UI's objects with the new image in the same plan, so one
+  approval upgrades both, see {doc}`cluster_init`);
 - `ghcr.io/pynenc/piceli-builder@sha256:…` for `--builder-image` (the
   controller plus `cargo` with the linux and wasm32 targets,
   `cargo-zigbuild`, `zig`, `uv`, and `gcc`, `make`, `cmake`, `pkg-config`,
@@ -142,7 +153,7 @@ env push`.
 | Namespace `piceli-system` (`--namespace`) | The controller's home (never deleted by `disable`). |
 | ServiceAccount, Role and RoleBinding `piceli-gitops` | In its namespace only: ConfigMaps (status, requests), Leases, build Jobs, their Pods and logs, cache claims, Events. |
 | ClusterRole and ClusterRoleBinding `piceli-gitops` | Read nodes; create, read and delete namespaces (one per branch); read PersistentVolumes (a branch teardown lists the volumes bound to its claims; deleting them is the `--delete-volumes` opt-in below); get the EndpointSlice `default/kubernetes` (the API server's addresses, for `allow_api`); create RoleBindings that bind **only** `piceli-gitops-deployer` (the `bind` verb is limited to that name). No Secrets, nothing else cluster-wide. `--cluster-rbac` adds ClusterRoles/ClusterRoleBindings for apps that declare them; `piceli cluster init` keeps that rule. |
-| ClusterRole `piceli-gitops-deployer` | The namespaced kinds an app deploys, the `scale` subresource of Deployments and StatefulSets (restore points) and reads (`get`, `list`, `watch`) of `metrics.k8s.io` pods and nodes, so a release can grant them to its own Role without an escalation refusal, and `get` on `services/proxy` and `pods/proxy` (HTTP and metric checks go through the API server proxy); used only through a RoleBinding in each environment's namespace, so the controller can change nothing outside them. |
+| ClusterRole `piceli-gitops-deployer` | The namespaced kinds an app deploys, the `scale` subresource of Deployments and StatefulSets (restore points) and reads (`get`, `list`, `watch`) of `metrics.k8s.io` pods and nodes, so a release can grant them to its own Role without an escalation refusal, and `get` on `services/proxy` and `pods/proxy` (HTTP and metric checks use a port forward of the API, `pods/portforward`, and this proxy as a fallback); used only through a RoleBinding in each environment's namespace, so the controller can change nothing outside them. |
 | PersistentVolumeClaim `piceli-gitops-state` (`--storage`, `--storage-class`) | The Git mirror, the last-seen commits and tags, build receipts. |
 | ConfigMap `piceli-gitops-config` | The settings (pipeline, repository, globs, poll, build options); never a credential. |
 | Deployment `piceli-gitops` | One replica, `Recreate`, non-root, read-only root filesystem, no privilege escalation; the credentials Secret mounted read-only. Its pod template carries `piceli.io/config-hash`, so `gitops enable` with changed settings (a new `--builder-image`) restarts the controller. |
@@ -220,7 +231,24 @@ The controller publishes its status in the ConfigMap `piceli-gitops-status`
 `deleting`,
 `stopped`), `plan_hash`, `reason` (an error code), `attempts`,
 `next_attempt_at`, `pushed_at`, `updated_at`, `namespace` and `trigger`
-(`push`, `tag v1.2.0`, `promote BRANCH@SHA`). A failed step adds `failure`:
+(`push`, `tag v1.2.0`, `promote BRANCH@SHA`). A deployed environment has
+`health` (`healthy`, or `degraded` after a failing verification, with
+`reason: pipeline-checks-failed`) and `last_action`: `deployed` (something
+was applied), `verified` (nothing was applied; a changed check set ran
+against the running release) or `unchanged`. `verification` describes the
+last verification (`null` after a deploy that applied):
+
+```json
+{"state": "failed", "trigger": "checks-changed",
+ "checks_hash": "sha256:…", "rolled": [], "at": "2026-10-02T10:00:00Z",
+ "failed": [{"check": "http-login", "code": "check-failed",
+             "detail": "GET /login returned 500"}]}
+```
+
+`state` is `verified` or `failed` (`failed` lists the failing checks);
+`trigger` is `checks-changed` (the check set changed since its last
+verification) or `unverified` (the release's last verification failed, or
+predates 0.14.5); `rolled` is always empty. A failed step adds `failure`:
 `log_tail` (the scrubbed end of a failed build Job's log, at most 4000
 characters) and `kept_job` (that Job, kept with its pod log until the next
 build of the same branch), or `denied` (the `verb`, `resource`, `namespace`

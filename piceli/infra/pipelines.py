@@ -474,9 +474,10 @@ def run_spec_build(
             say(f"[build] {spec.name} for {platform}")
             receipt = spec.run(grant, directory, inputs=inputs, progress=say).to_dict()
         except BuildSpecError as error:
-            raise CompositionError(
-                "component-build-failed",
-                f"build {request.spec}: host build failed ({error.code})",
+            from piceli.infra.builders import build_failed
+
+            raise build_failed(
+                f"build {request.spec}: host build failed ({error.code})", error
             ) from None
         for name, wanted in sorted(request.images.items()):
             entry = receipt["outputs"]["images"].get(name)
