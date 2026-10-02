@@ -389,6 +389,14 @@ def test_the_deployer_role_covers_metrics_and_scale_for_releases() -> None:
     for resource in ("deployments/scale", "statefulsets/scale"):
         for verb in ("get", "update", "patch"):
             assert allowed("apps", resource, verb), (resource, verb)
+    # Checks reach their targets through the API server proxy, read only.
+    for resource in ("services/proxy", "pods/proxy"):
+        assert allowed("", resource, "get"), resource
+        assert not allowed("", resource, "create"), resource
+    # First-install checks stage copies of the release's Secrets/ConfigMaps.
+    for resource in ("secrets", "configmaps"):
+        for verb in ("create", "delete", "list"):
+            assert allowed("", resource, verb), (resource, verb)
     assert not allowed("metrics.k8s.io", "pods", "delete")
 
 

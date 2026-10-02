@@ -94,6 +94,13 @@ DEPLOYER_RULES: tuple[dict[str, Any], ...] = (
         "verbs": ["get", "list", "watch"],
     },
     {
+        # Checks.http and Checks.metric reach their target through the API
+        # server proxy (no kubectl in the controller image): GET only.
+        "apiGroups": [""],
+        "resources": ["services/proxy", "pods/proxy"],
+        "verbs": ["get"],
+    },
+    {
         "apiGroups": ["batch"],
         "resources": ["jobs", "cronjobs"],
         "verbs": ["get", "list", "watch", "create", "update", "patch", "delete"],
