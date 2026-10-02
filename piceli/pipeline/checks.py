@@ -130,6 +130,24 @@ def describe_check(check: Any) -> Any:
     return {"type": type(check).__name__, "repr": repr(check)}
 
 
+def checks_digest(checks: Sequence[Any]) -> str:
+    """``sha256:<hex>`` of the check set (their plan descriptions, in order).
+
+    The checks stage records it with each outcome: a release whose manifests
+    did not change is verified again only when this digest changed (a check
+    changed, was added or was removed).
+    """
+    import hashlib
+    import json
+
+    text = json.dumps(
+        [describe_check(check) for check in checks],
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return "sha256:" + hashlib.sha256(text.encode()).hexdigest()
+
+
 def describe_result(result: Any) -> Any:
     """A JSON-safe view of one check result."""
     return describe_check(result)

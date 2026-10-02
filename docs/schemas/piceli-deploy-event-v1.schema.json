@@ -77,6 +77,17 @@
         "plan_file": {"type": "string", "description": "With --plan --out FILE (planned): the portable plan file written (piceli.deploy-plan-file.v1)."},
         "lock": {"$ref": "#/$defs/lock"},
         "diagnosis": {"$ref": "#/$defs/diagnosis"},
+        "verification": {
+          "type": "object",
+          "description": "Added in 0.14.5. The checks ran against a release whose manifests did not change (a changed check set): nothing was applied and a failure never rolls back.",
+          "required": ["trigger", "applied", "checks_hash", "passed"],
+          "properties": {
+            "trigger": {"enum": ["checks-changed", "unverified"]},
+            "applied": {"const": false},
+            "checks_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            "passed": {"type": "boolean"}
+          }
+        },
         "summary": {
           "type": "object",
           "description": "Added in 0.8.0. A run that executed: its summary files under <state_dir>/runs/<run id>/ (summary.json follows piceli-run-summary-v1.schema.json; summary.md is for people and CI job summaries).",

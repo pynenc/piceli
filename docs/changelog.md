@@ -4,6 +4,34 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.14.5
+
+- **Fix:** a changed, added or removed check runs. A deploy whose release did
+  not change (nothing to apply) used to skip its checks as "release already
+  verified" even when the check set changed. Each checks outcome now records
+  the digest of the check set (`checks_hash`); when it differs the checks run
+  against the running release as a **verification**: nothing is applied,
+  backed up or rolled out, and the result carries `verification`
+  (`trigger: checks-changed`). A failing verification never rolls back the
+  running release, whatever `rollback_on_failed_checks` says. The GitOps
+  controllers (single repository and composition) report it as
+  `last_action: verified` with `verification` (`state`, `trigger`,
+  `checks_hash`, `rolled: []`, `failed`); failing checks keep the
+  environment `deployed` with `health: degraded` and
+  `reason: pipeline-checks-failed`, without retries, until a passing
+  verification clears it. Unchanged checks are still not re-run.
+- **Fix:** the controller forgets torn-down environments. Teardown removes the
+  environment's pipeline state, build receipts and trigger memory (also
+  when its namespace was already gone), and on start the controller removes
+  the state left by earlier teardowns, only for namespaces that no longer
+  exist; a live environment's state is never deleted.
+- **Fix:** `gitops enable infra.py` upgrades the in-cluster UI too. When the
+  composition's `Cluster` declares a `Ui`, the UI's objects (rendered as by
+  `cluster init`, image `Ui(image=)`, else `Controller(image=)`, else
+  `--image`) are in the same plan and approval as the controller; the
+  result says `ui` (`included`, `not-declared`, `unavailable`,
+  `other-namespace`).
+
 ## Version 0.14.4
 
 - **Fix:** `Checks.http` and `Checks.metric` pass in an isolated branch
