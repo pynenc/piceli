@@ -205,16 +205,31 @@ class Journal:
         runs = self.runs()
         return runs[-1] if runs else None
 
-    def last_verified(self, release: str) -> bool:
-        """Whether the newest run that applied or kept ``release`` passed its checks."""
+    def last_checks(self, release: str) -> dict[str, Any] | None:
+        """The newest checks outcome of ``release``: ``{"passed", "checks_hash"}``.
+
+        ``None`` when no run of ``release`` ran (or verified) its checks.
+        ``checks_hash`` is the digest of the check set that outcome covers
+        (``None`` for runs before 0.14.5, which did not record it).
+        """
         for run in reversed(self.runs()):
             checks = run.data["stages"].get("checks", {})
             if run.output("plan").get("release") != release:
                 continue
-            if checks.get("state") in {"done", "skipped"} and checks.get(
-                "output", {}
-            ).get("passed", False):
-                return True
+            output = checks.get("output") or {}
+            if checks.get("state") in {"done", "skipped"} and output.get("passed"):
+                return {"passed": True, "checks_hash": output.get("checks_hash")}
             if checks.get("state") in {"failed", "done"}:
-                return False
-        return False
+                return {"passed": False, "checks_hash": output.get("checks_hash")}
+        return None
+
+    def last_verified(self, release: str, checks_hash: str | None = None) -> bool:
+        """Whether the newest run that applied or kept ``release`` passed its checks.
+
+        With ``checks_hash``, only when that run verified this same check
+        set: a changed, added or removed check is not verified yet.
+        """
+        found = self.last_checks(release)
+        if found is None or not found["passed"]:
+            return False
+        return checks_hash is None or found["checks_hash"] == checks_hash

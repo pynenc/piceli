@@ -11,11 +11,14 @@
   Service open for pushes from this machine.
 
 ``REF`` is ``MODULE:ATTR`` naming a ``Pipeline`` whose ``deliver=`` is
-``Registry.in_cluster(…)`` (its target names the cluster) or the
-``Registry.in_cluster(…)`` value itself; without it, the options describe the
-registry. Cluster commands take an explicit ``--kubeconfig`` and
-``--context`` (or the pipeline's target); never the ambient context. Machine
-output is one JSON object on stdout; human text on stderr.
+``Registry.in_cluster(…)`` (its target names the cluster), the
+``Registry.in_cluster(…)`` value itself, a ``piceli.infra.Cluster`` declared
+with that registry (its credential profile reaches the cluster), or a
+composition module (``infra.py``) whose Cluster has one; without it, the
+options describe the registry. Cluster commands take an explicit
+``--kubeconfig`` and ``--context`` (or the pipeline's target, or the
+Cluster's profile); never the ambient context. Machine output is one JSON
+object on stdout; human text on stderr.
 
 Importing this module is side-effect free.
 """
@@ -24,12 +27,12 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any
 
 import typer
 
+from piceli.artifacts.registry_ref import ClusterAccess as _Cluster
 from piceli.cli_contract import EXIT_APPROVAL, emit_json, reject, say
 from piceli.k8s.cli.cluster_access import AllowExecOption, ExecSha256Option, exec_policy
 
@@ -43,7 +46,8 @@ RefArgument = Annotated[
     str | None,
     typer.Argument(
         help="MODULE:ATTR of a Pipeline delivering to Registry.in_cluster(...), "
-        "or of the Registry.in_cluster(...) value",
+        "of the Registry.in_cluster(...) value or of a piceli.infra.Cluster "
+        "with that registry; or a composition module (infra.py)",
         show_default=False,
     ),
 ]
@@ -121,14 +125,6 @@ _DEFAULTS: dict[str, Any] = {
 }
 
 
-@dataclass(frozen=True)
-class _Cluster:
-    kubeconfig: Path
-    context: str
-    transport: str
-    exec_policy: Any
-
-
 @contextmanager
 def _guard() -> Iterator[None]:
     from piceli.gitops import GitOpsError
@@ -158,8 +154,14 @@ def _resolve(
     *,
     need_node: bool,
 ) -> tuple[Any, Any]:
-    """The ``ClusterRegistry`` and, from a pipeline, its target (else ``None``)."""
-    from piceli.pipeline.model import ClusterRegistry, Pipeline, Registry
+    """The ``ClusterRegistry`` and the reference it came from (else ``None``).
+
+    ``ref`` names the ``Registry.in_cluster(...)`` value, a ``Pipeline``
+    delivering to it, a ``piceli.infra.Cluster`` with that registry, or a
+    composition module (``infra.py``) whose Cluster has one.
+    """
+    from piceli.artifacts.registry_ref import RegistryRefError, load_registry_ref
+    from piceli.pipeline.model import Registry
 
     given = {k: v for k, v in options.items() if v != _DEFAULTS[k]}
     if ref is None:
@@ -179,37 +181,11 @@ def _resolve(
             "the registry is declared in "
             f"{ref}; drop --{next(iter(given)).replace('_', '-')}",
         )
-    from piceli.app.render import RenderError, load_target
-
     try:
-        value = load_target(ref, Path.cwd())
-    except RenderError as error:
-        reject("pipeline-not-found", str(error))
-    except Exception as error:  # the module raised while importing
-        from piceli.k8s.cli.deploy_pipeline import describe_user_error
-
-        reject(
-            "pipeline-load-failed",
-            f"importing {ref} failed: {describe_user_error(error)}",
-        )
-    target = None
-    if isinstance(value, Pipeline):
-        if env is not None:
-            with _guard():
-                value = value.for_environment(env)
-        elif value.needs_environment:
-            reject(
-                "environment-required",
-                f"{ref} deploys one target per environment; pass --env NAME",
-            )
-        target = value.target
-        value = value.deliver
-    if not isinstance(value, ClusterRegistry):
-        reject(
-            "cluster-registry-invalid",
-            f"{ref} is not Registry.in_cluster(...) nor a Pipeline delivering to it",
-        )
-    return value, target
+        found = load_registry_ref(ref, env)
+    except RegistryRefError as error:
+        reject(error.code, str(error))
+    return found.registry, found
 
 
 def _cluster(
@@ -218,24 +194,20 @@ def _cluster(
     transport: str,
     allow_exec: bool,
     exec_sha256: str | None,
-    target: Any,
+    found: Any,
 ) -> _Cluster:
-    if kubeconfig is not None or context is not None or target is None:
-        if kubeconfig is None or not context:
-            reject(
-                "cluster-registry-target-required",
-                "name the cluster with --kubeconfig FILE --context NAME "
-                "(or pass a pipeline whose target names it)",
-            )
-        return _Cluster(
-            kubeconfig, context, transport, exec_policy(allow_exec, exec_sha256)
+    from piceli.artifacts.registry_ref import RegistryRefError, cluster_access
+
+    try:
+        return cluster_access(
+            found,
+            kubeconfig=kubeconfig,
+            context=context,
+            transport=transport,
+            exec_policy=exec_policy(allow_exec, exec_sha256),
         )
-    return _Cluster(
-        Path(target.kubeconfig),
-        target.context,
-        target.transport,
-        target.exec_policy(),
-    )
+    except RegistryRefError as error:
+        reject(error.code, str(error))
 
 
 @contextmanager
@@ -469,6 +441,55 @@ def mirror_note(item: dict[str, Any]) -> str:
     return f" ({item['runtime']})"
 
 
+def _claim_usage(
+    api: Any, registry: Any, claim: dict[str, Any], pod: dict[str, Any]
+) -> dict[str, Any]:
+    """The claim's use: the kubelet's volume stats when they are the claim's
+    own filesystem (needs ``nodes/proxy``), else ``du`` in the registry pod
+    (needs ``pods/exec``), else unknown."""
+    from piceli.artifacts import cluster_registry as cr
+    from piceli.artifacts.registry_storage import read_disk_usage
+
+    summary = None
+    try:
+        found = api.call(
+            f"/api/v1/nodes/{pod['spec']['nodeName']}/proxy/stats/summary", "GET"
+        )
+        summary = found if isinstance(found, dict) else None
+    except typer.Exit:
+        raise
+    except Exception:
+        summary = None
+    status = claim.get("status") or {}
+    size = (status.get("capacity") or {}).get("storage") or registry.storage
+    pod_name = str((pod.get("metadata") or {}).get("name"))
+    return cr.claim_usage(
+        summary,
+        registry.namespace,
+        cr.claim_name(registry),
+        claim_bytes=cr.quantity_bytes(size),
+        du=lambda: read_disk_usage(api.client, registry.namespace, pod_name),
+    )
+
+
+def storage_note(storage: dict[str, Any]) -> str:
+    """``3 GB used (du of /var/lib/registry)`` and the like: never the node's
+    filesystem called the claim's."""
+    used = storage.get("used_bytes")
+    source = {
+        "du": "du of /var/lib/registry in the registry pod",
+        "volume-stats": "the claim's volume",
+    }.get(str(storage.get("used_source")), "")
+    text = f"{used} bytes used ({source})" if used is not None else "use unknown"
+    shared = storage.get("filesystem") or {}
+    if shared.get("shared"):
+        text += (
+            f"; the filesystem that holds it is shared with the node: "
+            f"{shared.get('used_bytes')} of {shared.get('capacity_bytes')} bytes used"
+        )
+    return text
+
+
 @app.command("status")
 def status(
     ref: RefArgument = None,
@@ -521,7 +542,7 @@ def status(
             if node:
                 with _guard():
                     registry = dataclasses.replace(registry, on=node)
-        used = None
+        usage = None
         running = [
             pod
             for pod in pods
@@ -531,19 +552,8 @@ def status(
             == "registry"
             and (pod.get("spec") or {}).get("nodeName")
         ]
-        if running and claim is not None:
-            # The kubelet's volume stats; needs nodes/proxy, else unknown.
-            try:
-                summary = api.call(
-                    f"/api/v1/nodes/{running[0]['spec']['nodeName']}/proxy/stats/summary",
-                    "GET",
-                )
-                if isinstance(summary, dict):
-                    used = cr.used_bytes(summary, ns, cr.claim_name(registry))
-            except typer.Exit:
-                raise
-            except Exception:
-                used = None
+        if running and isinstance(claim, dict):
+            usage = _claim_usage(api, registry, claim, running[0])
         reports = read_reports(api, ns, pods)
     body = cr.summarize(
         registry,
@@ -552,8 +562,8 @@ def status(
         claim=claim if isinstance(claim, dict) else None,
         nodes=nodes,
         pods=pods,
-        used_bytes=used,
         reports=reports,
+        usage=usage,
     )
     say(f"registry {body['host']}: {body['state']}")
     if body["state"] != "not-installed":
@@ -566,14 +576,10 @@ def status(
             say(f"  mirror on {item['node']}: {item['mirror']}{mirror_note(item)}")
         storage = body["storage"] or {}
         if storage:
-            used_text = (
-                f"{storage['used_bytes']} bytes used"
-                if storage.get("used_bytes") is not None
-                else "use unknown"
-            )
             say(
                 f"  storage {storage['claim']}: {storage.get('phase')}, "
-                f"{storage.get('capacity') or storage['requested']}, {used_text}"
+                f"{storage.get('capacity') or storage['requested']}, "
+                f"{storage_note(storage)}"
             )
     else:
         say("  install it with: piceli registry install")

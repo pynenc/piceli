@@ -4,6 +4,63 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.14.5
+
+- **Fix:** a changed, added or removed check runs. A deploy whose release did
+  not change (nothing to apply) used to skip its checks as "release already
+  verified" even when the check set changed. Each checks outcome now records
+  the digest of the check set (`checks_hash`); when it differs the checks run
+  against the running release as a **verification**: nothing is applied,
+  backed up or rolled out, and the result carries `verification`
+  (`trigger: checks-changed`). A failing verification never rolls back the
+  running release, whatever `rollback_on_failed_checks` says. The GitOps
+  controllers (single repository and composition) report it as
+  `last_action: verified` with `verification` (`state`, `trigger`,
+  `checks_hash`, `rolled: []`, `failed`); failing checks keep the
+  environment `deployed` with `health: degraded` and
+  `reason: pipeline-checks-failed`, without retries, until a passing
+  verification clears it. Unchanged checks are still not re-run.
+- **Fix:** the controller forgets torn-down environments. Teardown removes the
+  environment's pipeline state, build receipts and trigger memory (also
+  when its namespace was already gone), and on start the controller removes
+  the state left by earlier teardowns, only for namespaces that no longer
+  exist; a live environment's state is never deleted.
+- **Fix:** `gitops enable infra.py` upgrades the in-cluster UI too. When the
+  composition's `Cluster` declares a `Ui`, the UI's objects (rendered as by
+  `cluster init`, image `Ui(image=)`, else `Controller(image=)`, else
+  `--image`) are in the same plan and approval as the controller; the
+  result says `ui` (`included`, `not-declared`, `unavailable`,
+  `other-namespace`).
+- **Fix:** retention of the in-cluster registry works out what to keep on
+  its own. `piceli artifacts retention --cluster infra.py:CLUSTER --delete`
+  derives the registry, the port-forward to its Service and the cluster read
+  (every namespace) from the declared Cluster, and lists every manifest the
+  registry stores with a read-only `find` in the registry pod (`pods/exec`),
+  so digest-only images nothing names any more (old builders) are found
+  without receipts. It keeps what runs, what Piceli uses (the controller and
+  UI Deployments, the builder in `piceli-gitops-config`) and every
+  workload's rollback target, and collects the rest, tagged or not; the
+  approval command is printed in full. `--to` and the other flags work as
+  before.
+- **Fix:** a Deployment's newest scaled-down ReplicaSet and a StatefulSet's
+  previous ControllerRevision are kept as the rollback target (reason
+  `rollback`; older history stays collectable, and Piceli's own controller,
+  UI and registry have none), with or without `--cluster`. The delete
+  refuses a plan that names one. ControllerRevisions are read (the cluster
+  read needs `list` on `controllerrevisions`).
+- **Fix:** `piceli registry status|install|uninstall|forward` accept a
+  declared `Cluster` (`infra.py:CLUSTER`) or the composition module
+  (`infra.py`) and reach the cluster through its credential profile;
+  `infra.py:CLUSTER` was refused with `cluster-registry-invalid`.
+- **Fix:** `piceli registry status` reports the registry claim's use: the
+  kubelet's volume stats only when they are the claim's own filesystem,
+  else `du` in the registry pod; the node filesystem a `local-path` claim
+  shares is shown as such (`storage.used_source`, `storage.filesystem`), never
+  as the registry's use. The UI's cluster view no longer shows the node's
+  filesystem as the registry's use.
+- New error code `registry-storage-unreadable` (reported in the retention
+  report's `storage_listing`, not a refusal).
+
 ## Version 0.14.4
 
 - **Fix:** `Checks.http` and `Checks.metric` pass in an isolated branch

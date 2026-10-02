@@ -27,7 +27,7 @@ Importing this module is side-effect free.
 from __future__ import annotations
 
 import tempfile
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Annotated, Any
@@ -553,6 +553,9 @@ def _enable_composition(
         )
         say(f"environment {item.name} ({item.namespace}): follows {rules}")
     objects = render_controller(config, settings)
+    ui_objects, ui = _ui_objects(composition.cluster, namespace, image)
+    seen = {_object_key(item) for item in objects}
+    objects += [item for item in ui_objects if _object_key(item) not in seen]
     command = _command_line(
         "piceli gitops enable", entry, kubeconfig, context, namespace,
         poll=poll, image=image, credentials_secret=credentials_secret,
@@ -572,7 +575,72 @@ def _enable_composition(
                 action="enable",
                 config={"controller": config.to_dict(), "install": settings.to_dict()},
             )
-        _run_plan(api, plan, approve, command, {"controller": config.to_dict()})
+        _run_plan(
+            api, plan, approve, command, {"controller": config.to_dict(), "ui": ui}
+        )
+
+
+def _object_key(item: Mapping[str, Any]) -> tuple[str, str | None, str]:
+    meta = item["metadata"]
+    return (item["kind"], meta.get("namespace"), meta["name"])
+
+
+def _ui_objects(
+    cluster: Any, namespace: str, image: str
+) -> tuple[list[dict[str, Any]], str]:
+    """The in-cluster UI's objects ``gitops enable`` re-applies, and its state.
+
+    A composition whose ``Cluster`` declares a ``Ui`` has the UI installed by
+    ``piceli cluster init``; ``gitops enable`` plans the same objects (the
+    same renderer), so one upgrade moves the controller and the UI to a new
+    image under one plan hash. The UI's image is ``Ui(image=)``, else
+    ``Controller(image=)``, else ``--image``. States: ``included``,
+    ``not-declared``, ``unavailable`` (this build has no UI renderer) and
+    ``other-namespace`` (the controller is not in ``piceli-system``, where
+    ``cluster init`` installs the UI).
+    """
+    import dataclasses
+
+    from piceli.infra.cluster_init import NAMESPACE as UI_NAMESPACE
+    from piceli.infra.cluster_init import ui_renderer
+
+    if cluster is None or cluster.ui is None:
+        return [], "not-declared"
+    if namespace != UI_NAMESPACE:
+        say(
+            f"note: the UI lives in {UI_NAMESPACE} (piceli cluster init); this "
+            f"controller is in {namespace}, so its UI is not changed"
+        )
+        return [], "other-namespace"
+    render = ui_renderer()
+    if render is None:
+        return [], "unavailable"
+    controller = cluster.controller
+    declared = cluster.ui.image or (controller.image if controller else None)
+    if declared is None:
+        # The UI runs the controller's image: the one being installed.
+        cluster = dataclasses.replace(
+            cluster, ui=dataclasses.replace(cluster.ui, image=image)
+        )
+    elif cluster.ui.image is None and declared != image:
+        say(
+            "note: the UI runs Controller(image=...) of the composition, which "
+            "is not --image; set both to upgrade them together"
+        )
+    try:
+        objects = render(cluster)
+    except ValueError as error:
+        reject(str(getattr(error, "code", "ui-install-image-unpinned")), str(error))
+    ui_image = next(
+        (
+            item["spec"]["template"]["spec"]["containers"][0]["image"]
+            for item in objects
+            if item["kind"] == "Deployment"
+        ),
+        None,
+    )
+    say(f"ui: piceli-ui in {UI_NAMESPACE} runs {ui_image}")
+    return objects, "included"
 
 
 def composition_repo(
@@ -889,6 +957,12 @@ def status(
             line += f"; approve: piceli gitops approve {branch} {env.get('plan_hash')}"
         elif env.get("reason"):
             line += f" ({env['reason']})"
+        verification = env.get("verification") or {}
+        if env.get("health") == "degraded":
+            failing = [item.get("check") for item in verification.get("failed") or ()]
+            line += "; degraded, failing checks: " + (", ".join(failing) or "?")
+        elif env.get("last_action") == "verified":
+            line += f"; verified ({verification.get('trigger')}), rolled nothing"
         say(line)
     if as_json:
         emit_json(body)
