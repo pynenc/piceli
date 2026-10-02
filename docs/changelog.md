@@ -4,6 +4,22 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.14.1
+
+- **Fix:** the GitOps controller's copy of third-party images and the
+  cluster build Job's push reach `Registry.in_cluster(...)` by its Service
+  name (`piceli-registry.piceli-system.svc:5000`) over plain HTTP. Plain HTTP
+  was refused (`plain-http-refused`) everywhere but loopback; it is now
+  allowed to loopback and to the in-cluster Service the endpoint names, never
+  to another host (also not through a redirect).
+- **Fix:** the GitOps controller no longer exits on a failed poll (an API
+  timeout made its pod crash-loop): it logs the error type and retries after
+  5 s, doubling to at most 5 minutes; a successful poll restores the cadence.
+- **Images:** each release publishes `ghcr.io/pynenc/piceli-controller` and
+  `ghcr.io/pynenc/piceli-builder` (linux/amd64 and linux/arm64), built from
+  the released wheel with `images/Dockerfile`; the release notes list their
+  digests for `gitops enable --image/--builder-image`.
+
 ## Version 0.14.0
 
 - **Web UI:** a Cluster status page presents nodes, registry pods and storage,

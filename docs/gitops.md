@@ -93,23 +93,36 @@ state claim unless `--delete-state`.
 
 ### The controller image
 
-The controller runs the Piceli CLI (`piceli gitops run`), so it needs an
-image with Piceli (the same version as your CLI) and `git`. `--image` must be
-pinned by digest; the controller never pulls a moving tag. A minimal image:
+The controller runs the Piceli CLI (`piceli gitops run`) and `git`; its build
+Jobs run a builder image with Piceli and the host-build tools. Every release
+publishes both, for linux/amd64 and linux/arm64, built from the released
+wheel; the [release notes](https://github.com/pynenc/piceli/releases) list
+their digests:
 
-```dockerfile
-FROM python:3.13-slim
-RUN apt-get update && apt-get install -y --no-install-recommends git openssh-client \
-    && rm -rf /var/lib/apt/lists/* \
-    && pip install --no-cache-dir "piceli==0.13.0"
-USER 65532:65532
+- `ghcr.io/pynenc/piceli-controller@sha256:…` for `--image` (Piceli with the
+  `ui` extra, `git`, `openssh-client`; the UI installed in the cluster runs
+  it too);
+- `ghcr.io/pynenc/piceli-builder@sha256:…` for `--builder-image` (the
+  controller plus `cargo` with the linux and wasm32 targets,
+  `cargo-zigbuild`, `zig`, `uv`, `gcc`).
+
+`--image` must be pinned by digest; the controller never pulls a moving tag,
+and the image's Piceli version should match your CLI's. To build them
+yourself (another registry, more tools), use `images/Dockerfile` with the
+wheel of your version:
+
+```console
+$ pip download --no-deps --dest ctx/dist "piceli==0.14.1"
+$ docker buildx build -f images/Dockerfile --target controller \
+    --platform linux/amd64,linux/arm64 -t REGISTRY/piceli-controller:0.14.1 --push ctx
+$ docker buildx build -f images/Dockerfile --target builder \
+    --platform linux/amd64,linux/arm64 -t REGISTRY/piceli-builder:0.14.1 --push ctx
 ```
 
-Build and push it, then pass `registry/repo@sha256:<digest>` (for example the
-digest `docker buildx build --push` or `piceli artifacts publish` prints).
-Add whatever your pipeline module imports besides Piceli. The build Job uses
-its own image (`--builder-image`, see {doc}`host_builds`); without one, a
-branch deploys only images pushed with `piceli env push`.
+The push prints each digest. Add whatever your pipeline module imports
+besides Piceli with a `FROM …piceli-controller@sha256:…` image of your own.
+Without `--builder-image`, a branch deploys only images pushed with `piceli
+env push`.
 
 ### What gets installed
 
