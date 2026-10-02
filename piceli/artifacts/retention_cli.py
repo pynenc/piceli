@@ -53,7 +53,13 @@ def add_retention_command(sub: Any) -> None:
         default=[],
         help="publish or delivery receipts, JSON Lines journals or directories of them",
     )
-    cmd.add_argument("--keep", type=int, default=3, help="releases kept (minimum)")
+    cmd.add_argument(
+        "--keep",
+        type=int,
+        default=3,
+        help="releases kept (minimum); 0 keeps only what is live or pinned "
+        "(needs --kubeconfig and --context)",
+    )
     cmd.add_argument(
         "--budget", help="keep more releases, newest first, up to e.g. 10GiB"
     )
@@ -94,9 +100,7 @@ def add_retention_command(sub: Any) -> None:
 
 
 def _live(args: argparse.Namespace, seams: dict[str, Any]) -> LiveWorkloads:
-    digests: set[str] = set()
-    tags: set[tuple[str, str]] = set()
-    sources = 0
+    parts: list[LiveWorkloads] = []
     if args.kubeconfig is not None or args.context is not None:
         if args.kubeconfig is None or not args.context:
             raise RetentionError(code="retention-invalid")
@@ -107,25 +111,13 @@ def _live(args: argparse.Namespace, seams: dict[str, Any]) -> LiveWorkloads:
             )
         except Exception as error:  # any cluster failure: the inventory is unknown
             raise RetentionError(code="retention-live-unknown") from error
-        found = LiveWorkloads.from_pods(pods)
-        digests |= found.digests
-        tags |= found.tags
-        sources += 1
+        parts.append(LiveWorkloads.from_objects(pods))
     if args.live_file is not None:
         try:
-            found = LiveWorkloads.from_file(args.live_file)
+            parts.append(LiveWorkloads.from_file(args.live_file))
         except OSError as error:
             raise RetentionError(code="retention-invalid") from error
-        digests |= found.digests
-        sources += 1
-    if not sources:
-        return LiveWorkloads.unknown()
-    return LiveWorkloads(
-        True,
-        frozenset(digests),
-        frozenset(tags),
-        "cluster+file" if sources > 1 else ("cluster" if args.kubeconfig else "file"),
-    )
+    return LiveWorkloads.merge(parts)
 
 
 def run_retention_command(args: argparse.Namespace, **seams: Any) -> int:
@@ -144,6 +136,9 @@ def run_retention_command(args: argparse.Namespace, **seams: Any) -> int:
             pins=frozenset(pins),
             collect_unledgered=args.collect_unledgered,
         )
+        if policy.keep == 0 and (args.kubeconfig is None or not args.context):
+            # Nothing but the live inventory protects a release: read it.
+            raise RetentionError(code="retention-invalid")
         releases = load_releases(args.receipts)
         if args.approve is not None and not args.delete:
             raise RetentionError(code="retention-invalid")
@@ -185,6 +180,7 @@ def run_retention_command(args: argparse.Namespace, **seams: Any) -> int:
                 releases,
                 repositories=args.repository,
                 client_factory=factory,
+                probes=live.probes(),
             )
             plan = plan_retention(target, inventory, releases, policy, live)
             report = {"state": "report", **plan.public(inventory)}

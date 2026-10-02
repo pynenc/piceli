@@ -3725,7 +3725,7 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
     _E(
         "retention-invalid",
         "Invalid retention input",
-        "A `piceli artifacts retention` input is malformed: `--keep` below 1, an unreadable or invalid `--budget` (use `10GiB`, `500MB`), a pin that is not a `sha256:` digest, a receipt that is not JSON, or an option combination that does not go together (`--approve` without `--delete`, `--kubeconfig` without `--context`).",
+        "A `piceli artifacts retention` input is malformed: `--keep` below 0 (or `--keep 0` without the cluster read, `--kubeconfig` with `--context`, that alone protects what is live), an unreadable or invalid `--budget` (use `10GiB`, `500MB`), a pin that is not a `sha256:` digest, a receipt that is not JSON, or an option combination that does not go together (`--approve` without `--delete`, `--kubeconfig` without `--context`).",
         "Correct the option named in the command's help and run it again; nothing was changed.",
         False,
         "retention",
@@ -3733,8 +3733,8 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
     _E(
         "retention-live-unknown",
         "Live workload digests unknown",
-        "Deleting needs to know which digests running workloads use. Either no source was given (`--kubeconfig` with `--context`, or `--live-file`) or reading the pods failed. An unknown inventory never licenses a deletion.",
-        "Pass `--kubeconfig FILE --context NAME` (the cluster whose workloads pull from this registry) or `--live-file`, and check that the context can list pods.",
+        "Deleting needs to know which digests running workloads use. Either no source was given (`--kubeconfig` with `--context`, or `--live-file`) or reading the pods, workload templates or Piceli's environment ConfigMaps failed. An unknown inventory never licenses a deletion.",
+        "Pass `--kubeconfig FILE --context NAME` (the cluster whose workloads pull from this registry) or `--live-file`, and check that the context can list pods, workloads and ConfigMaps.",
         True,
         "retention",
     ),
