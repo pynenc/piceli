@@ -113,8 +113,6 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   release was rolled back: the environment is `failed` with reason
   `checks-failed-rolled-back` until a new revision or `piceli gitops sync`.
 - **Testing:** the fake API (`piceli.testing`) accepts `Foreground` deletes.
-- **Tests:** the local executor's delayed-mutation test no longer depends on a
-  0.25 s window that slow CI runners missed (2 s window, polled to `ready`).
 - **Tests:** the local executor's delayed-mutation test, the heavy-lock tests
   and the saved-forward conflict test no longer depend on timing: the test
   sets "in flight", "applied" and "lock released" itself instead of waiting
