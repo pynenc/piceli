@@ -91,6 +91,41 @@ Docker engine and is refused with `component-build-unsupported`):
   platform (page size); otherwise the facts of the controller's first
   `--platform`.
 
+### Several images from one source
+
+Two images built from different paths of the **same** repository each get
+a change key over their own paths only: declare one context per path, each
+with its own `include`, both with the same `source`, and let each image read
+its own context. A push that changes only `jobs/` rebuilds only `worker`; one
+that changes only `site/` rebuilds only `api`; a file neither includes
+(`README.md`) builds nothing. The build fetches the source once; each context
+selects its own files from that checkout.
+
+```toml
+[context.site]
+source = "api"
+include = ["site/**"]
+
+[context.api_jobs]
+source = "api"
+include = ["jobs/**"]
+
+[[output.image]]
+name = "api"
+repository = "example/api"
+contexts = ["site"]
+files = { "site/site" = "/srv/site" }
+
+[[output.image]]
+name = "worker"
+repository = "example/worker"
+contexts = ["api_jobs"]
+files = { "api_jobs/jobs" = "/opt/jobs" }
+```
+
+One context with both paths in its `include` would give both images the
+same change key, so a change in either path would rebuild both.
+
 ## Deploying it
 
 ```text

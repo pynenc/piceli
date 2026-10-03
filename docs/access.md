@@ -334,6 +334,24 @@ none), `1` (`access-stop-incomplete`) when one still holds it after 5 seconds,
 `--port`). It needs the `/proc` file system (Linux) or `lsof` (macOS) to see a
 port's owner.
 
+The forward of a stale `piceli access ui` (see {doc}`ui`) is stopped with the
+cluster instead of a TARGET:
+
+```sh
+piceli access stop --stale --cluster infra.py:my_cluster   # or: --profile my-cluster
+```
+
+It checks port 8790 (and each `--port`). Piceli's own UI forward is the
+`kubectl port-forward` to `service/piceli-ui` (or the pod behind it) in
+`piceli-system` with that profile's kubeconfig and context, started by a
+`piceli access ui` that still runs (also when run through its console
+script, `python …/bin/piceli access ui`) or orphaned, or a child that
+`piceli access ui` recorded for exactly that forward in its private registry
+(`$XDG_STATE_HOME/piceli/ui/forwards`, the same one `piceli ui serve` uses).
+Its supervisor gets SIGTERM and stops the forward. The JSON has `"app":
+"ui"` and `"namespace": "piceli-system"`. Another cluster's UI forward, or
+anything else on the port, is left alone and named by its pid only.
+
 ## The dashboard
 
 `piceli access TARGET --dashboard 9876` serves the local operations dashboard

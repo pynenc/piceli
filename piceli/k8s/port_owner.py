@@ -24,7 +24,12 @@ import sys
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+from piceli.k8s.owned_processes import forward_label
+
+if TYPE_CHECKING:
+    from piceli.k8s.owned_processes import OwnedProcessRegistry
 
 MAX_COMMAND = 300
 _LISTEN = "0A"  # TCP_LISTEN in /proc/net/tcp
@@ -377,17 +382,36 @@ def _argv(command: str | None) -> list[str] | None:
     return command.split()
 
 
+#: Interpreter flags without a value that may precede ``-m`` or the script.
+_PYTHON_FLAGS = frozenset({"-B", "-E", "-I", "-O", "-OO", "-P", "-s", "-S", "-u"})
+
+
 def _piceli_args(argv: list[str]) -> list[str] | None:
-    """The arguments after ``piceli`` (``…/piceli ARGS``, ``python -m piceli ARGS``)."""
+    """The arguments after ``piceli``.
+
+    ``…/piceli ARGS``, ``python -m piceli ARGS``, and ``python …/piceli ARGS``:
+    the console script as ``ps`` shows it when its shebang interpreter runs
+    it (``uv run piceli …``, a virtualenv's ``bin/piceli``).
+    """
     name = Path(argv[0]).name
     if name == "piceli":
         return argv[1:]
     # macOS framework interpreters advertise .../MacOS/Python in ps, even
     # when launched through a virtualenv's lowercase python executable.
     if re.fullmatch(r"python(?:\d+(?:\.\d+)*)?", name, re.IGNORECASE):
-        for index, item in enumerate(argv[1:-1], start=1):
+        skip = False
+        for index, item in enumerate(argv[1:], start=1):
+            if skip or item in _PYTHON_FLAGS:
+                skip = False
+                continue
+            if item in {"-X", "-W"}:  # a flag with a value: -X dev, -W error
+                skip = True
+                continue
             if item == "-m":
-                return argv[index + 2 :] if argv[index + 1] == "piceli" else None
+                rest = argv[index + 1 :]
+                return rest[1:] if rest[:1] == ["piceli"] else None
+            # The script: only Piceli's own console script counts.
+            return argv[index + 1 :] if Path(item).name == "piceli" else None
     return None
 
 
@@ -409,8 +433,15 @@ def recognise(
     context: str,
     forwards: Iterable[tuple[str, str, int, int]] = (),
     targets: Iterable[str] = (),
+    registry: OwnedProcessRegistry | None = None,
 ) -> Holder:
     """Whether ``owner`` is one of Piceli's own processes for this target.
+
+    With ``registry`` (the private record of the forwards Piceli started,
+    see :mod:`piceli.k8s.owned_processes`), a listener that the registry
+    recorded for exactly one of ``forwards`` (its label) and whose pid still
+    names the recorded process is Piceli's forward too: it is stopped through
+    its recording owner while that owner runs, else by itself.
 
     A **forward** is a ``kubectl`` whose arguments are exactly the ones Piceli
     builds (``--kubeconfig KUBECONFIG --context CONTEXT --namespace NAMESPACE
@@ -425,6 +456,16 @@ def recognise(
     """
     if owner is None:
         return Holder(UNKNOWN)
+    forwards = tuple(forwards)
+    if registry is not None:
+        owned = registry.lookup(owner.pid)
+        labels = {
+            forward_label(kubeconfig, context, namespace, target, local, remote)
+            for namespace, target, local, remote in forwards
+        }
+        if owned is not None and owned.label is not None and owned.label in labels:
+            stop = owned.owner_pid if owned.owner_alive else owner.pid
+            return Holder(PICELI_FORWARD, owner, stop)
     argv = _argv(owner.command)
     if argv is None:
         return Holder(OTHER, owner)

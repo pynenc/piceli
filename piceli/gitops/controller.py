@@ -94,6 +94,12 @@ def error_code(error: BaseException) -> str:
 #: apply, a drift): the controller plans again instead of retrying it.
 STALE_APPROVAL_CODES = frozenset({"env-plan-changed", "pipeline-plan-changed"})
 
+#: The record key with the owner-approved plan hash of the running release:
+#: set when a step deploys with an explicit approval, cleared by any other
+#: deploy (policy, plan without approval), a degraded verification or a
+#: failed step. A plan with exactly this hash is not asked for again.
+DEPLOYED_PLAN_KEY = "deployed_plan_hash"
+
 
 #: The longest build log tail a status keeps (characters).
 FAILURE_TAIL_CHARS = 4000
@@ -204,7 +210,7 @@ def replan_stale(
     fallback = APPROVE_POLICY if policy else None
     approved: str | None = record.get("approved_hash")
     if approved is None:
-        return env_up(fallback)
+        return _approved_before(record, env_up, env_up(fallback), log)
     try:
         return env_up(approved)
     except Exception as error:
@@ -215,7 +221,58 @@ def replan_stale(
             f"{record['branch']}: the approved plan changed ({error_code(error)}); "
             "planning again"
         )
-        return env_up(fallback)
+        return _approved_before(record, env_up, env_up(fallback), log)
+
+
+def owner_approved(record: Mapping[str, Any]) -> str | None:
+    """The hash an owner approved for the step that just deployed, else ``None``.
+
+    ``approved_hash`` holds only explicit approvals (``piceli gitops
+    approve``, or a plan re-applied by :func:`replan_stale` because the owner
+    approved it for the running release); a policy apply never sets it.
+    """
+    approved = record.get("approved_hash")
+    if isinstance(approved, str) and approved.startswith("sha256:"):
+        return approved
+    return None
+
+
+def _approved_before(
+    record: dict[str, Any],
+    env_up: Callable[[str | None], Any],
+    result: Any,
+    log: Callable[[str], None],
+) -> Any:
+    """Apply a plan the owner already approved for the running release.
+
+    The rule (:data:`DEPLOYED_PLAN_KEY`): when a plan asks for approval and
+    its hash is exactly the owner-approved plan hash of the release that is
+    running now (a reverted change plans it again), it is applied with that
+    hash instead of asking twice. Any other hash, an older approved plan
+    included, still asks. A stale hash (the plan moved between the two
+    calls) returns the original ``approval-required`` result.
+    """
+    outcome = EnvOutcome.from_result(result)
+    running = record.get(DEPLOYED_PLAN_KEY)
+    if (
+        outcome.state != "approval-required"
+        or not isinstance(running, str)
+        or not running.startswith("sha256:")
+        or outcome.plan_hash != running
+    ):
+        return result
+    log(
+        f"{record['branch']}: plan {running} already approved and running; "
+        "applying it without asking again"
+    )
+    try:
+        applied = env_up(running)
+    except Exception as error:
+        if error_code(error) not in STALE_APPROVAL_CODES:
+            raise
+        return result
+    record["approved_hash"] = running
+    return applied
 
 
 def _version() -> str:
@@ -278,6 +335,7 @@ class Controller:
             "branch": branch,
             "commit": commit,
             "deployed_commit": (record or {}).get("deployed_commit"),
+            "deployed_plan_hash": (record or {}).get("deployed_plan_hash"),
             "namespace": (record or {}).get("namespace"),
             "state": "pending",
             "trigger": trigger,
@@ -304,6 +362,8 @@ class Controller:
         attempts = int(record.get("attempts") or 0) + 1
         deleting = record.get("state") == "deleting"
         record["failure"] = None if error is None else failure_detail(error)
+        # What runs after a failed step is uncertain: the next plan asks.
+        record["deployed_plan_hash"] = None
         if attempts >= self.config.max_attempts and not deleting:
             self._set(
                 record,
@@ -659,6 +719,7 @@ class Controller:
                 next_attempt_at=None,
                 plan_hash=None,
                 approved_hash=None,
+                deployed_plan_hash=owner_approved(record),
                 reason=None,
                 failure=None,
                 health="healthy",
@@ -708,6 +769,7 @@ class Controller:
             next_attempt_at=None,
             plan_hash=None,
             approved_hash=None,
+            deployed_plan_hash=None,
             reason="pipeline-checks-failed",
             failure=None,
             health="degraded",
@@ -816,6 +878,7 @@ class Controller:
         self._set(
             record,
             state="stopped",
+            deployed_plan_hash=None,
             reason="idle-stop",
             attempts=0,
             next_attempt_at=None,

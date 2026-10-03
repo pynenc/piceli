@@ -3108,7 +3108,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 **Declared local port already in use.** A required forward's local port (or the `--dashboard` port) is already held by another process. Piceli never takes a port over; the rejection lists each port's owner by pid (`holder`: `piceli-forward` or `piceli-server` when it is Piceli's own process for this app, else `other`; another process's command line is never printed).
 
-- **Fix:** When Piceli's own stale process holds it: `piceli access stop --stale TARGET` (add `--port N` for a dashboard port). Otherwise stop the listed pid yourself, or change `local=` in the model, then run the command again.
+- **Fix:** When Piceli's own stale process holds it: `piceli access stop --stale TARGET` (add `--port N` for a dashboard port; for `piceli access ui`, `piceli access stop --stale --cluster MODULE:ATTR` or `--profile NAME`). Otherwise stop the listed pid yourself, or change `local=` in the model, then run the command again.
 - **Retry-safe:** no
 
 (error-access-stop-incomplete)=
@@ -5339,7 +5339,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-access-ui-target-required)=
 ### `access-ui-target-required`
 
-**Which cluster's UI.** `piceli access ui` needs exactly one of `--cluster MODULE:ATTR` (a composition's `Cluster`) or `--profile NAME` (a `piceli login` profile).
+**Which cluster's UI.** `piceli access ui` (and `piceli access stop --stale` for the UI forward, instead of TARGET) needs exactly one of `--cluster MODULE:ATTR` (a composition's `Cluster`) or `--profile NAME` (a `piceli login` profile).
 
 - **Fix:** Run `piceli access ui --cluster infra.py:my_cluster` or `piceli access ui --profile my-cluster`.
 - **Retry-safe:** no

@@ -549,7 +549,13 @@ def access(
 
 
 def stop(
-    target: Annotated[str, typer.Argument(help=TARGET_HELP, show_default=False)],
+    target: Annotated[
+        str | None,
+        typer.Argument(
+            help=TARGET_HELP + "; omit it with --cluster/--profile (the UI forward)",
+            show_default=False,
+        ),
+    ] = None,
     stale: Annotated[
         bool,
         typer.Option(
@@ -568,6 +574,24 @@ def stop(
             "operator serve port); repeatable",
         ),
     ] = None,
+    cluster: Annotated[
+        str | None,
+        typer.Option(
+            "--cluster",
+            help="Instead of TARGET: the Cluster (MODULE:ATTR) whose `piceli access "
+            "ui` forward to stop",
+            show_default=False,
+        ),
+    ] = None,
+    profile: Annotated[
+        str | None,
+        typer.Option(
+            "--profile",
+            help="Instead of TARGET: the credential profile whose `piceli access "
+            "ui` forward to stop",
+            show_default=False,
+        ),
+    ] = None,
 ) -> None:
     """Stop Piceli's stale forwards and servers for the app; never another process.
 
@@ -578,7 +602,15 @@ def stop(
     to that process (a forward's supervisor rather than its ``kubectl``).
     Any other holder is left alone and named by its pid only. Prints one JSON
     object; exit 1 when a Piceli process still holds its port afterwards.
+
+    With ``--cluster MODULE:ATTR`` or ``--profile NAME`` instead of TARGET it
+    checks the port of `piceli access ui` (8790): a stale `piceli access ui`
+    for that cluster's credentials (its supervised forward, or the orphaned
+    one) is stopped the same way.
     """
+    if target is None or cluster is not None or profile is not None:
+        _stop_ui(target, stale, cluster, profile, port)
+        return
     resolved = _resolve(target)
     if not stale:
         say("piceli: access stop only stops stale piceli processes: add --stale")
@@ -587,6 +619,37 @@ def stop(
     if not ports:
         reject("access-none-declared")
     result = stop_stale(ports, holder_check(resolved, _names(target)))
+    _report_stopped(result, {"app": resolved.name, "namespace": resolved.namespace})
+
+
+def _stop_ui(
+    target: str | None,
+    stale: bool,
+    cluster: str | None,
+    profile: str | None,
+    port: list[int] | None,
+) -> None:
+    """``access stop --stale --cluster/--profile``: the UI forward's port."""
+    from piceli.infra.ui_install import NAMESPACE as UI_NAMESPACE
+    from piceli.infra.ui_install import PORT as UI_PORT
+    from piceli.k8s.cli.ui_forward import _credentials, ui_holder_check, ui_registry
+
+    if target is not None:
+        say("piceli: name either TARGET or --cluster/--profile (the UI), not both")
+        reject("access-ui-target-required")
+    if cluster is None and profile is None:
+        say("piceli: name TARGET, or --cluster/--profile for the UI forward")
+        reject("access-target-invalid")
+    kubeconfig, context = _credentials(cluster, profile)
+    if not stale:
+        say("piceli: access stop only stops stale piceli processes: add --stale")
+        reject("access-stop-needs-stale")
+    check = ui_holder_check(kubeconfig, context, registry=ui_registry())
+    result = stop_stale([UI_PORT, *(port or ())], check)
+    _report_stopped(result, {"app": "ui", "namespace": UI_NAMESPACE})
+
+
+def _report_stopped(result: dict[str, Any], identity: dict[str, Any]) -> None:
     for item in result["stopped"]:
         what = "forward" if item["holder"] == "piceli-forward" else "process"
         say(
@@ -600,7 +663,7 @@ def stop(
             f"piceli: port {item['port']} is held by {holder}, not by piceli for "
             "this app: left alone"
         )
-    body = {"app": resolved.name, "namespace": resolved.namespace, **result}
+    body = {**identity, **result}
     if result["failed"]:
         for item in result["failed"]:
             say(

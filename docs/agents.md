@@ -311,7 +311,7 @@ Exporting deploy events (`--otlp-endpoint`, or `OTEL_EXPORTER_OTLP_*` in the env
 | `piceli operator approve`, `piceli operator promote`, `piceli operator restore` | Operator state, catalog or files | The owner's go-ahead |
 | `piceli access` (also `piceli access BRANCH --pipeline MODULE:ATTR` for a branch environment, on free local ports; `piceli access ui --cluster MODULE:ATTR` for the UI `piceli cluster init` installed, which prints one launch URL with its token: show it only to the owner), `piceli logs -f`, `piceli ui serve`, `piceli ui connect`, `piceli observe serve`, `piceli operator serve`, `piceli observe forward-run`, `piceli observe forwards apply`, `piceli observe logs-run` | Long-running local processes and ports | The owner's go-ahead |
 | `piceli ui cluster-observe`, `piceli ui cluster-serve`, `piceli ui forward-serve` (runs only in the pod `piceli cluster init` installs; its Sync button writes GitOps sync requests) | A long-running authenticated service in a named Kubernetes namespace; configured grants permit reviewed deployment and cluster build operations | The owner's approval of the installation, target and grants |
-| `piceli access stop --stale` | Stops Piceli's own local processes for the app (a forward or dashboard the owner may still be using in another terminal); never another process | The owner's go-ahead |
+| `piceli access stop --stale` | Stops Piceli's own local processes for the app (a forward or dashboard the owner may still be using in another terminal), or with `--cluster`/`--profile` a stale `piceli access ui` forward; never another process | The owner's go-ahead |
 
 Never add `--auto-approve` unless the owner has said that this run is an
 unattended CI job for this exact spec.
@@ -501,7 +501,8 @@ never build. The approval rules above apply unchanged:
 7. `access-port-conflict` with `conflicts[].holder` `piceli-forward` or
    `piceli-server`: Piceli's own process for this app holds the port (often
    a `piceli access` left running). Ask the owner before running the
-   suggested `piceli access stop --stale TARGET`. With `holder` `other`,
+   suggested `piceli access stop --stale TARGET` (for `piceli access ui`:
+   `piceli access stop --stale --cluster MODULE:ATTR`). With `holder` `other`,
    report the pid; never stop another process.
 8. `immutable-field-changed` (a Job's pod template, or a StatefulSet's
    service name, pod management, selector or claim templates would change):
