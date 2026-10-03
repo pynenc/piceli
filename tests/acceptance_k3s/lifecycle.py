@@ -47,8 +47,9 @@ From 0.14.6 (stage numbers say what they check, not when they run):
 12. After 7: the in-cluster UI (``piceli access ui``, as a user opens it)
     lists the branch environment's runs in its deployment history.
 13. A stale UI forward: ``piceli access ui`` killed with SIGKILL leaves its
-    ``kubectl``; a second ``access ui`` names it as Piceli's own and
-    ``piceli access stop --stale`` stops it.
+    ``kubectl``; the next ``access ui`` reaps it (piceli recorded it) or,
+    with that record lost, names it as Piceli's own and ``piceli access stop
+    --stale`` stops it.
 14. Last: the UI's deployment history lists every run of main and rc that a
     stage made, newest first, with trigger, commits, plan hash, rolled
     components and check outcomes (and, when ``ui/node_modules`` has
@@ -549,7 +550,10 @@ class Lifecycle:
             app = _application(apps, env)
             shared = app is None
             if shared:
-                app = next((a for a in apps if a.get("name") == "cluster"), None)
+                app = next(
+                    (a for a in apps if "cluster" in {a.get("id"), a.get("name")}),
+                    None,
+                )
             if app is None:
                 problems.append(f"{env}: no application in the UI")
                 continue
@@ -1694,72 +1698,108 @@ class Lifecycle:
         check(not problems, "; ".join(problems))
 
     def stage_13_stale_access(self) -> None:
-        """A forward whose piceli was killed: named as Piceli's own, then stopped."""
+        """A UI forward whose piceli was killed never blocks the next one.
+
+        Two rounds: (a) the killed ``access ui`` recorded its kubectl in
+        piceli's state (``$XDG_STATE_HOME``): the next ``access ui`` reaps
+        it and starts; (b) that record is lost (another state directory):
+        the next ``access ui`` refuses with ``access-port-conflict``, names
+        the holder as Piceli's own forward and hints at ``access stop
+        --stale``, which stops it. Either outcome passes each round; a
+        stale forward called "(not piceli)" or left holding the port fails.
+        """
+        problems: list[str] = []
+        for label, state in (
+            ("recorded", None),
+            ("record lost", str(self.scratch / "state-elsewhere")),
+        ):
+            problems.extend(f"{label}: {p}" for p in self._stale_round(label, state))
+        check(not problems, "; ".join(problems))
+
+    def _stale_round(self, label: str, state: str | None) -> list[str]:
         self._ui_port_free()
-        served = self.serve("access-ui")
+        argv = self.commands.argv("access-ui", {**self.values, "piceli": self.piceli})
+        env = {**self.env, **({"XDG_STATE_HOME": state} if state else {})}
+        first = Served(argv, env=env, cwd=self.infra)
+        self.served.append(first)
         kubectl: list[int] = []
+        second: Served | None = None
+        problems: list[str] = []
         try:
-            served.wait_line(UI_URL, timeout=180)
+            first.wait_line(UI_URL, timeout=180)
             wait_for(f"127.0.0.1:{UI_PORT} forwarded", lambda: port_open(UI_PORT),
                      timeout=120, interval=2)  # fmt: skip
-            kubectl = [pid for pid, cmd in served.children() if "port-forward" in cmd]
+            kubectl = [pid for pid, cmd in first.children() if "port-forward" in cmd]
             check(
                 kubectl,
-                f"no kubectl port-forward child of piceli access ui ({served.pid})",
+                f"no kubectl port-forward child of piceli access ui ({first.pid})",
             )
-            os.kill(served.pid, signal.SIGKILL)
-            served.process.wait(timeout=10)
+            os.kill(first.pid, signal.SIGKILL)
+            first.process.wait(timeout=10)
             time.sleep(2)
             check(
                 any(alive(pid) for pid in kubectl) and port_open(UI_PORT),
                 "kubectl exited with its piceli: nothing stale to detect",
             )
-            log(f"piceli access ui killed; its kubectl (pid {kubectl}) holds "
+            log(f"{label}: piceli access ui killed; its kubectl (pid {kubectl}) holds "
                 f"127.0.0.1:{UI_PORT}")  # fmt: skip
-            problems: list[str] = []
-            again = self.bounded("access-ui", timeout=90)
-            body = again.json() or {}
-            said = redact(again.stderr.strip())[-800:]
-            log(f"access ui again: exit {again.code}, reason {body.get('reason')!r}, "
+            second = self.serve("access-ui")
+            started = wait_for(
+                "the second access ui to start or refuse",
+                lambda: _started(second) or second.process.poll() is not None,
+                timeout=180, interval=1,
+            )  # fmt: skip
+            del started
+            if second.process.poll() is None:
+                # Started: the stale kubectl must be gone (reaped).
+                if any(alive(pid) for pid in kubectl):
+                    problems.append(
+                        f"a second access ui started beside the stale kubectl {kubectl}"
+                    )
+                else:
+                    log(
+                        f"{label}: the second access ui reaped the stale forward and started"
+                    )
+                return problems
+            second.process.wait(timeout=10)
+            time.sleep(0.5)
+            body = Result([], 0, "\n".join(second.out), "").json() or {}
+            said = redact("\n".join(second.err))[-800:]
+            code = second.process.returncode
+            log(f"{label}: second access ui: exit {code}, reason {body.get('reason')!r}, "
                 f"conflicts {json.dumps(body.get('conflicts'))[:400]}")  # fmt: skip
-            if again.code in {0, -9}:
-                problems.append("a second access ui did not refuse the held port")
-            else:
-                holders = [c.get("holder") for c in body.get("conflicts") or []]
-                if body.get("reason") != "access-port-conflict":
-                    problems.append(
-                        f"second access ui: {body.get('reason')!r}, not access-port-conflict"
-                    )
-                if not any(h in {"piceli-forward", "piceli-server"} for h in holders):
-                    problems.append(
-                        f"the conflict does not name Piceli's own forward (holders {holders}; "
-                        f"said: {said.splitlines()[0] if said else ''!r})"
-                    )
-                stop_line = self.commands.line(
-                    "access-stop-stale", {**self.values, "piceli": "piceli"}
+            holders = [c.get("holder") for c in body.get("conflicts") or []]
+            if code != 2 or body.get("reason") != "access-port-conflict":
+                problems.append(
+                    f"second access ui: exit {code}, {body.get('reason')!r}: {said[-300:]}"
                 )
-                hint = " ".join(stop_line.split()[1:4])  # access stop --stale
-                if hint not in said + json.dumps(body):
-                    problems.append(f"no '{hint}' hint in the refusal")
-                if "(not piceli)" in said:
-                    problems.append("the refusal calls Piceli's forward '(not piceli)'")
+            if "piceli-forward" not in holders:
+                problems.append(
+                    f"the conflict does not name Piceli's own forward (holders {holders})"
+                )
+            stop_line = self.commands.line(
+                "access-stop-stale", {**self.values, "piceli": "piceli"}
+            )
+            if stop_line not in said:
+                problems.append(f"no '{stop_line}' hint in the refusal")
+            if "(not piceli)" in said:
+                problems.append("the refusal calls Piceli's forward '(not piceli)'")
             stopped = self.bounded("access-stop-stale", timeout=60)
-            log(f"access stop --stale: exit {stopped.code}: "
+            log(f"{label}: access stop --stale: exit {stopped.code}: "
                 f"{redact(stopped.stdout.strip())[-400:]}")  # fmt: skip
+            gone = [
+                (i.get("port"), i.get("holder"))
+                for i in (stopped.json() or {}).get("stopped") or []
+            ]
             if stopped.code != 0:
                 problems.append(
                     f"access stop --stale: exit {stopped.code}: "
                     f"{redact(stopped.stderr.strip())[-300:]}"
                 )
-            else:
-                gone = [
-                    (i.get("port"), i.get("holder"))
-                    for i in (stopped.json() or {}).get("stopped") or []
-                ]
-                if (UI_PORT, "piceli-forward") not in gone:
-                    problems.append(
-                        f"access stop --stale stopped {gone}, not the UI forward"
-                    )
+            elif (UI_PORT, "piceli-forward") not in gone:
+                problems.append(
+                    f"access stop --stale stopped {gone}, not the UI forward"
+                )
             try:
                 wait_for(
                     "the stale forward stopped",
@@ -1770,12 +1810,18 @@ class Lifecycle:
                 problems.append(
                     f"the stale kubectl (pid {kubectl}) still holds {UI_PORT}"
                 )
-            check(not problems, "; ".join(problems))
+            return problems
         finally:
-            served.stop()
+            for served in (second, first):
+                if served is not None:
+                    children = served.children()
+                    served.stop()
+                    kubectl += [p for p, c in children if "port-forward" in c]
             for pid in kubectl:
                 if any(p == pid and "port-forward" in c for p, _, c in processes()):
                     kill_group(pid)
+            wait_for(f"127.0.0.1:{UI_PORT} free", lambda: not port_open(UI_PORT),
+                     timeout=30, interval=1)  # fmt: skip
 
     def stage_14_ui_history(self) -> None:
         envs = [env for env in ("main", "rc") if self.expected.get(env)]
@@ -1926,6 +1972,11 @@ try {
   await browser.close();
 }
 """
+
+
+def _started(served: Served) -> bool:
+    """Whether a served ``access ui`` printed its URL (the line is not kept)."""
+    return any(re.search(UI_URL, line) for line in list(served.out))
 
 
 def _version(text: str) -> tuple[int, ...]:
