@@ -19,7 +19,8 @@ function remembered(): Record<string, boolean> {
 type Tone = 'danger' | 'warning';
 function Count({ value, tone, label }: { value?: number | null; tone: Tone; label: string }) {
   if (!value) return null;
-  return <span className={`nav-count ${tone}`} aria-label={`${value} ${label}`} title={`${value} ${label}`}>{value}</span>;
+  // Beside the link, not in its name: the page keeps its plain name.
+  return <span className={`nav-count ${tone}`} title={`${value} ${label}`}>{value}<span className="sr-only"> {label}</span></span>;
 }
 
 type Item = { to: string; label: string; icon: Parameters<typeof Icon>[0]['name']; end?: boolean; badge?: ReactNode; children?: { to: string; label: string; state?: string }[] };
@@ -38,8 +39,8 @@ function Entry({ item, open, toggle }: { item: Item; open: boolean; toggle: () =
   const location = useLocation();
   const children = item.children ?? [];
   return <div className={`nav-entry${children.length ? ' has-children' : ''}`}>
-    <div className="nav-row"><NavLink to={item.to} end={item.end}><Icon name={item.icon} /><span>{item.label}</span>{item.badge}</NavLink>
-      {children.length > 0 && <button className="nav-toggle" aria-expanded={open} aria-controls={id} aria-label={`${open ? 'Collapse' : 'Expand'} ${item.label}`} onClick={toggle}><span aria-hidden="true">›</span></button>}</div>
+    <div className="nav-row"><NavLink to={item.to} end={item.end}><Icon name={item.icon} /><span>{item.label}</span></NavLink>{item.badge}
+      {children.length > 0 && <button className="nav-toggle" aria-expanded={open} aria-controls={id} onClick={toggle}><span className="sr-only">{open ? 'Collapse' : 'Expand'} {item.label}</span><span aria-hidden="true">›</span></button>}</div>
     {children.length > 0 && <ul id={id} className="nav-children" hidden={!open}>{children.map(child => { const active = childCurrent(child.to, location); return <li key={child.to}><Link to={child.to} className={active ? 'active' : undefined} aria-current={active ? 'page' : undefined}>{child.state && <i className={`nav-dot ${child.state}`} aria-hidden="true" />}<span>{child.label}</span></Link></li>; })}</ul>}
   </div>;
 }

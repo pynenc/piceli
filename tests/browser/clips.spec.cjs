@@ -310,7 +310,7 @@ test('navigation-badges', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/composition/overview?environment=main');
   const nav = page.getByRole('navigation', { name: 'Main navigation' });
-  await expect(nav.getByLabel(/approvals waiting$/)).toBeVisible();
+  await expect(nav.getByTitle(/approvals waiting$/)).toBeVisible();
   await pause(page, 1200);
   await shot(page, 'overview-compact');
   await nav.getByRole('button', { name: 'Expand Environments' }).click();

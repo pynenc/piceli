@@ -31,8 +31,8 @@ test('overview schematic has no inner scroll area and compact cards', async ({ p
 test('navigation shows alert counts and keyboard sub-menus', async ({ page }, testInfo) => {
   await page.goto('/composition/environments/main');
   const nav = page.getByRole('navigation', { name: 'Main navigation' });
-  await expect(nav.getByLabel(/approvals waiting$/)).toBeVisible();
-  await expect(nav.getByLabel(/registry warnings$/)).toBeVisible();
+  await expect(nav.getByTitle(/approvals waiting$/)).toBeVisible();
+  await expect(nav.getByTitle(/registry warnings$/)).toBeVisible();
   await expect(nav.getByRole('link', { name: 'Logs', exact: true })).toBeVisible();
   if (narrow(testInfo)) return; // phones keep a single scrolling row without sub-menus
   const toggle = nav.getByRole('button', { name: 'Collapse Environments' });

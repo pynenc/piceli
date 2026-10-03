@@ -22,13 +22,14 @@ function open(path: string) {
 it('shows alert counts beside the pages that resolve them', async () => {
   open('/applications');
   const nav = screen.getByRole('navigation', { name: 'Main navigation' });
-  expect(await within(nav).findByLabelText('1 approvals waiting')).toBeTruthy();
-  expect(within(nav).getByLabelText('2 degraded environments')).toBeTruthy();
-  expect(within(nav).getByLabelText('3 stale forwards')).toBeTruthy();
-  expect(within(nav).getByLabelText('1 registry warnings')).toBeTruthy();
-  expect(within(nav).getByLabelText('1 failed builds')).toBeTruthy();
+  expect(await within(nav).findByTitle('1 approvals waiting')).toBeTruthy();
+  expect(within(nav).getByTitle('2 degraded environments')).toBeTruthy();
+  expect(within(nav).getByTitle('3 stale forwards')).toBeTruthy();
+  expect(within(nav).getByTitle('1 registry warnings')).toBeTruthy();
+  expect(within(nav).getByTitle('1 failed builds')).toBeTruthy();
   expect(within(nav).getByRole('link', { name: 'Logs' }).getAttribute('href')).toBe('/logs');
-  expect(within(nav).getByRole('link', { name: /Port forwards/ }).getAttribute('href')).toBe('/forwards');
+  expect(within(nav).getByRole('link', { name: 'Port forwards' }).getAttribute('href')).toBe('/forwards');
+  expect(within(nav).getByRole('link', { name: 'Deployment history' })).toBeTruthy();
 });
 
 it('opens the current sub-menu and remembers an explicit choice', async () => {

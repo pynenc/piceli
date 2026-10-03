@@ -13,8 +13,11 @@
 .nav-toggle:focus-visible { outline: 2px solid #f0a27d; outline-offset: -2px; }
 .nav-toggle > span { transition: transform .12s; }
 .nav-toggle[aria-expanded="true"] > span { transform: rotate(90deg); }
-.nav-entry.has-children .nav-count { margin-right: 4px; }
-.nav-count { margin-left: auto; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; display: inline-grid; place-items: center; font-size: 10px; font-weight: 700; line-height: 1; }
+.nav-row > .nav-count { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); pointer-events: none; }
+.nav-entry.has-children .nav-row > .nav-count { right: 32px; }
+.nav-entry:has(.nav-count) .nav-row > a { padding-right: 34px; }
+.nav-entry.has-children:has(.nav-count) .nav-row > a { padding-right: 56px; }
+.nav-count { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; display: inline-grid; place-items: center; font-size: 10px; font-weight: 700; line-height: 1; }
 .nav-count.danger { background: #6b2f2b; color: #ffd0cb; }
 .nav-count.warning { background: #5c4421; color: #ffe0a8; }
 .nav-children { list-style: none; margin: 0 0 4px 22px; padding: 0 0 0 9px; border-left: 1px solid #443a32; }
