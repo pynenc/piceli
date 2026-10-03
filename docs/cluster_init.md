@@ -84,6 +84,31 @@ applies, then waits up to `--wait` seconds (default 120) for every node's
 mirror agent to report. Init is idempotent: a re-run with nothing to change
 prints `unchanged` (exit 0); after a change it plans only that.
 
+## Upgrading the controller and the UI
+
+`cluster init` installs the UI; an upgrade does not need it again. When the
+composition's `Cluster` declares a `Ui`, `piceli gitops enable infra.py
+--image NEW` plans the UI's own objects too, with the same renderer as init,
+in the same plan and under the same hash as the controller: one approval
+moves both to the new image. The UI runs `Ui(image=)`, else
+`Controller(image=)`, else `--image`, so set `Controller(image=)` (or leave
+both unset) to the image you pass as `--image`. The enable result says
+`"ui": "included"` (or `not-declared`; `other-namespace` when the controller
+is not in `piceli-system`, where init installs the UI).
+
+```console
+$ piceli gitops enable infra.py --image ghcr.io/pynenc/piceli-controller@sha256:NEW …
+gitops enable plan:
+  apply    Deployment/piceli-gitops in piceli-system
+  apply    Deployment/piceli-ui in piceli-system
+$ piceli gitops enable infra.py --image … --approve sha256:…
+```
+
+The same plan also updates the ConfigMap `piceli-cluster` (the stored
+declaration `cluster init` keeps), so a later `piceli cluster init` plans
+nothing. Without `--poll`, the controller polls at the composition's
+`Controller(poll=)` (else 60s).
+
 ## k3s nodes and restarts
 
 On k3s nodes the registry's agent merges the mirror into

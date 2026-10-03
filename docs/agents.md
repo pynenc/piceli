@@ -20,6 +20,7 @@ See the {doc}`roadmap` for every feature's status.
 | What an error code means and what to do next | `piceli explain <code> --json` |
 | The same, as pages | {doc}`reference/cli`, {doc}`reference/errors` |
 | An index of the documentation for language models | [`llms.txt`](https://docs.pynenc.org/projects/piceli/en/stable/llms.txt) |
+| The web workspace, one-command checkout preview, saved plans, revision differences and deployment logs | {doc}`ui`; history reads saved evidence and does not renew approval or prove desired changes reached the cluster |
 | A ready agent skill (`SKILL.md` and scripts: install, plan, ask, deploy, status, diagnose, resume, roll back) | [`skills/piceli`](https://github.com/pynenc/piceli/tree/main/skills/piceli); its walkthrough runs in CI against the built wheel |
 | Whether Piceli fits a task, and what it does not do today | {doc}`when_to_use`, {doc}`comparisons` |
 | How well models follow these rules (the rules below are scored; breaking one fails the task) | {doc}`contributing/evals` |
@@ -97,9 +98,11 @@ noted.
   F --context C` and `piceli logout NAME` only write or remove the local
   reference file (`$PICELI_PROFILES_DIR`); they never contact a cluster, but
   which kubeconfig a profile names is the owner's decision.
-- `piceli registry status [MODULE:ATTR] [--json]` (with `--kubeconfig`/`--context`
-  or the pipeline's target): reads the in-cluster registry's pod, the mirror
-  on each node and the storage use; changes nothing. `piceli registry
+- `piceli registry status [MODULE:ATTR | infra.py] [--json]` (with
+  `--kubeconfig`/`--context`, the pipeline's target or the Cluster's
+  credential profile): reads the in-cluster registry's pod, the mirror on
+  each node and the claim's storage use (`du` in the registry pod when the
+  kubelet's figure is the node's filesystem); changes nothing. `piceli registry
   forward` only opens a loopback port-forward to it.
 - `piceli cluster status MODULE:ATTR [--json]`: reads a declared cluster's
   nodes and labels, the registry and the mirror on each node (and which k3s
@@ -155,6 +158,9 @@ noted.
   `--delete`): reads a registry (and, with `--kubeconfig`/`--context`, the
   cluster's pods, workload pod templates and environment records) and prints which manifests the last releases, pins and
   live workloads keep and which are collectable, with the reclaimable bytes.
+  `piceli artifacts retention --cluster infra.py:CLUSTER` does the same for
+  the in-cluster registry with everything derived from the Cluster (it also
+  lists every stored manifest with a read-only `find` in the registry pod).
   It changes nothing. See {doc}`registry_retention`.
 - `piceli codegen crd FILE` (reads the file) and `piceli codegen crd
   --from-cluster --kubeconfig F --context C --crd NAME` (one read of the CRD

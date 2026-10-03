@@ -169,6 +169,14 @@ class FakePorts:
     def env_down(self, pipeline: Any, branch: str) -> None:
         self.calls.append(("down", branch))
 
+    #: Namespaces that exist (``namespace_live``); ``None`` answers "unknown".
+    live: set[str] | None = None
+
+    def namespace_live(self, namespace: str) -> bool | None:
+        if self.live is None:
+            return None
+        return namespace in self.live
+
     def kinds(self, kind: str) -> list[tuple[Any, ...]]:
         return [call for call in self.calls if call[0] == kind]
 
@@ -326,6 +334,59 @@ def test_deleted_branch_is_torn_down_and_main_never(tmp_path: Path, repo: Repo) 
     assert status["envs"]["main"]["state"] == "deployed"
     controller.poll_once()
     assert ports.kinds("down") == [("down", "wp-4")]
+
+
+def test_teardown_and_a_restart_remove_the_state_of_gone_environments(
+    tmp_path: Path, repo: Repo
+) -> None:
+    ports = FakePorts()
+    controller, _, _ = make(tmp_path, repo, ports, main_auto_approve=True)
+    controller.poll_once()
+    repo.tag("v1")
+    first = repo.push_branch("wp-1", "one")
+    keep = repo.push_branch("wp-2", "two")
+    controller.poll_once()
+    state = tmp_path / "state"
+    branches = state / "pipelines" / "branches"
+    receipts = state / "receipts"
+    for namespace in ("app-wp-1", "app-wp-2", "app-wp-gone", "app-wp-live"):
+        (branches / namespace / "runs").mkdir(parents=True)
+    (receipts / f"wp-gone-{'a' * 40}.json").write_text("{}")
+    assert (receipts / f"wp-1-{first}.json").is_file()
+    main_receipts = sorted(receipts.glob("main-*.json"))
+    assert main_receipts
+
+    # Deleting a branch removes its pipeline state and build receipts.
+    repo.delete_branch("wp-1")
+    status = controller.poll_once()
+    assert ports.kinds("down") == [("down", "wp-1")] and "wp-1" not in status["envs"]
+    assert not (branches / "app-wp-1").exists()
+    assert not list(receipts.glob("wp-1-*.json"))
+    assert (branches / "app-wp-2").is_dir() and (
+        receipts / f"wp-2-{keep}.json"
+    ).is_file()
+
+    # Stale state of environments torn down earlier goes once, on start; a
+    # namespace that is live (or cannot be looked up) keeps its state.
+    restarted, _, _ = make(tmp_path, repo, FakePorts())
+    restarted.ports.live = None  # type: ignore[attr-defined]
+    restarted.poll_once()
+    assert (branches / "app-wp-gone").is_dir()  # unknown: never deleted
+    ports = FakePorts()
+    ports.live = {"app-wp-live", "app-wp-2"}
+    restarted, _, _ = make(tmp_path, repo, ports)
+    status = restarted.poll_once()
+    assert not (branches / "app-wp-gone").exists()
+    assert not (receipts / f"wp-gone-{'a' * 40}.json").exists()
+    assert (branches / "app-wp-live").is_dir()  # live: never deleted
+    assert (branches / "app-wp-2").is_dir()  # its environment exists
+    assert (receipts / f"wp-2-{keep}.json").is_file()
+    assert sorted(receipts.glob("main-*.json")) == main_receipts
+    assert status["envs"]["wp-2"]["state"] == "deployed"
+    # Only once: a later poll sweeps nothing.
+    (branches / "app-wp-later").mkdir()
+    restarted.poll_once()
+    assert (branches / "app-wp-later").is_dir()
 
 
 def test_failed_build_backs_off_then_gives_up_without_blocking_others(

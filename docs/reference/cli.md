@@ -491,9 +491,11 @@ Report which registry manifests the last releases, pins and live workloads keep,
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--to` | text | required | oci://host[:port]/prefix to inspect |
+| `--cluster` | text |  | the in-cluster registry: MODULE:ATTR of a piceli.infra.Cluster (or a composition module infra.py, a Pipeline delivering to Registry.in_cluster, or that value); derives --to, the forward and the cluster read, and lists every stored manifest |
+| `--env` | text |  | with --cluster: the pipeline's environment |
+| `--to` | text |  | oci://host[:port]/prefix to inspect (unless --cluster) |
 | `--receipts` | path |  | publish or delivery receipts, JSON Lines journals or directories of them |
-| `--keep` | integer | `3` | releases kept (minimum); 0 keeps only what is live or pinned (needs --kubeconfig and --context) |
+| `--keep` | integer |  | releases kept (minimum; default 3, with --cluster 0); 0 keeps only what is live, a rollback target or pinned (needs the cluster read) |
 | `--budget` | text |  | keep more releases, newest first, up to e.g. 10GiB |
 | `--pin` | text |  | a digest to keep |
 | `--pin-file` | path |  | digests to keep, one per line |
@@ -508,6 +510,9 @@ Report which registry manifests the last releases, pins and live workloads keep,
 | `--forward-remote-port` | integer | `5000` |  |
 | `--kubectl` | path |  |  |
 | `--kubectl-sha256` | text |  |  |
+| `--allow-exec` | boolean | `False` | allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
+| `--exec-sha256` | text |  | expected sha256:<hex> of the exec plugin |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
 | `--delete` | boolean | `False` |  |
 | `--approve` | text |  | the plan hash printed without --approve |
 | `--credentials` | path |  |  |
@@ -520,14 +525,14 @@ Mutually exclusive: `credentials` / `docker_config`.
 
 **Contract**
 
-- **Reads:** publish and delivery receipts, credentials file or Docker config, kubeconfig (live pods, workload templates, environment records, with --context)
+- **Reads:** publish and delivery receipts, credentials file or Docker config, kubeconfig (live pods, workload templates, environment records, with --context), --cluster MODULE:ATTR (Cluster, composition, pipeline or Registry.in_cluster), credential profile (with --cluster), in-cluster registry storage (read-only find over pods/exec, with --cluster), kubectl (port-forward, with --cluster or --via-forward)
 - **Writes:** OCI registry (manifest deletes, only with --delete --approve), --out
 - **Cluster:** reads
 - **Approval required:** yes
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
-- **Notes:** Without --delete it only reads. --delete without --approve prints the plan and its hash (exit 3). A digest a running workload uses is never deleted; --keep 0 needs --kubeconfig and --context. Blobs are freed by the registry's own garbage collection afterwards.
+- **Notes:** Without --delete it only reads. --delete without --approve prints the plan and its hash (exit 3). A digest a running workload uses is never deleted, nor a workload's rollback target; --keep 0 needs --kubeconfig and --context. --cluster REF derives the registry, forward and cluster read, defaults --keep to 0 and lists every stored manifest (digest-only ones too). Blobs are freed by the registry's own garbage collection afterwards.
 
 (cli-build-job)=
 ### `piceli build job`
@@ -1110,7 +1115,7 @@ Install the GitOps controller (plan first; --approve HASH installs).
 | `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
 | `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
 | `--branches` | text | `main` | Comma-separated branch globs, e.g. 'main,wp-*' |
-| `--poll` | text | `60s` | Poll interval: 60, 60s, 5m |
+| `--poll` | text |  | Poll interval: 60, 60s, 5m (default: a composition's Controller(poll=), else 60s) |
 | `--credentials-secret` | text |  | Secret in the controller's namespace with the Git credentials (username/password or ssh-privatekey/known_hosts); mounted, never read |
 | `--namespace` | text | `piceli-system` | The controller's namespace |
 | `--env` | text |  | The pipeline's environment, if it has several |
@@ -1987,7 +1992,7 @@ Install the in-cluster registry and its node mirror (plan first; --approve HASH 
 
 **Contract**
 
-- **Reads:** kubeconfig, MODULE:ATTR (optional)
+- **Reads:** kubeconfig or the Cluster's credential profile, MODULE:ATTR or composition module (optional)
 - **Writes:** nothing (read-only)
 - **Cluster:** writes
 - **Approval required:** yes
@@ -2016,14 +2021,14 @@ Registry pod, mirror readiness on every node and storage use (read-only).
 
 **Contract**
 
-- **Reads:** kubeconfig, MODULE:ATTR (optional)
+- **Reads:** kubeconfig or the Cluster's credential profile, MODULE:ATTR or composition module (optional)
 - **Writes:** nothing (read-only)
 - **Cluster:** reads
 - **Approval required:** no
 - **Safe to retry:** yes
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
-- **Notes:** Read-only. state: ready, degraded (registry or a node's mirror not ready) or not-installed. Storage use comes from the kubelet stats (needs nodes/proxy; null otherwise). `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`).
+- **Notes:** Read-only. state: ready, degraded (registry or a node's mirror not ready) or not-installed. Storage use is the claim's: the kubelet's volume stats when they are the claim's own filesystem (needs nodes/proxy), else du in the registry pod (needs pods/exec), else null; storage.used_source says which, and storage.filesystem the shared filesystem's use. `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`).
 
 (cli-registry-uninstall)=
 ### `piceli registry uninstall`
@@ -2046,7 +2051,7 @@ Remove the registry and its node mirrors (plan first; --approve HASH removes).
 
 **Contract**
 
-- **Reads:** kubeconfig, MODULE:ATTR (optional)
+- **Reads:** kubeconfig or the Cluster's credential profile, MODULE:ATTR or composition module (optional)
 - **Writes:** nothing (read-only)
 - **Cluster:** writes
 - **Approval required:** yes

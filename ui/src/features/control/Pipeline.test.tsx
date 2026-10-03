@@ -74,7 +74,7 @@ it('requires a second review of the materialized hash before rollout', async () 
   const posts = open({ ...base, materialized: false, phase: 'preliminary' }, second);
   const user = userEvent.setup();
   await user.click(await screen.findByRole('button', { name: 'Prepare new plan' }));
-  await user.click(screen.getByRole('checkbox'));
+  await user.click(await screen.findByRole('checkbox'));
   await user.click(screen.getByRole('button', { name: 'Approve build and delivery' }));
   expect(await screen.findByText('Second approval · materialized plan')).toBeTruthy();
   expect(screen.getByText(second.digest)).toBeTruthy();

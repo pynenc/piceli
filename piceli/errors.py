@@ -3747,6 +3747,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "retention",
     ),
     _E(
+        "registry-storage-unreadable",
+        "In-cluster registry storage not listed",
+        "`piceli artifacts retention --cluster` lists every manifest the in-cluster registry stores (digest-only ones have no API) by running a read-only `find` in the registry pod over `pods/exec`, and `piceli registry status` measures the claim with `du` the same way. No registry pod was running, or the exec was refused (the credential lacks `get`/`create` on `pods/exec` in the registry's namespace) or failed. Retention then only finds manifests something still names; nothing else changes.",
+        "Grant `pods/exec` (verbs `get` and `create`) and `list` on `pods` in the registry's namespace to the credential, check that the registry pod is Running (`piceli registry status`), and run the command again.",
+        True,
+        "retention",
+    ),
+    _E(
         "registry-delete-disabled",
         "Registry does not allow deletes",
         "The registry refused `DELETE` on a manifest (HTTP 405 or `UNSUPPORTED`). Distribution registries delete only with `REGISTRY_STORAGE_DELETE_ENABLED=true` (`storage.delete.enabled`); hosted registries have their own retention settings.",

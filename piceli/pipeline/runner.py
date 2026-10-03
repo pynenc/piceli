@@ -64,7 +64,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from piceli.pipeline.backend import Backend, RegistryRoute, public
-from piceli.pipeline.checks import CheckContext, describe_check, describe_result
+from piceli.pipeline.checks import (
+    CheckContext,
+    checks_digest,
+    describe_check,
+    describe_result,
+)
 from piceli.pipeline.compose import (
     canonical,
     digest,
@@ -1798,6 +1803,15 @@ class PipelineRunner:
         point = run.output("backup").get("restore_point")
         if isinstance(point, str):
             body["restore_point"] = point
+        checks = run.output("checks")
+        if isinstance(checks.get("verification"), Mapping):
+            # The checks re-ran against a release whose manifests did not
+            # change (a changed check set): a verification, not a deploy.
+            body["verification"] = {
+                **checks["verification"],
+                "checks_hash": checks.get("checks_hash"),
+                "passed": bool(checks.get("passed")),
+            }
         return body
 
     # -------------------------------------------------------- stage: inputs
@@ -2480,14 +2494,42 @@ class PipelineRunner:
         extra: dict[str, Any] = {"skipped": skipped} if skipped else {}
         for item in skipped:
             self.say(f"[checks] {item['check']}: skipped (not in stack)")
+        digest = checks_digest(checks)
         if not checks:
-            return "skipped", {"passed": True, "why": "no checks", **extra}
+            return "skipped", {
+                "passed": True,
+                "why": "no checks",
+                "checks_hash": digest,
+                **extra,
+            }
         release = self.run.output("plan").get("release")
-        if self.run.stage("apply").get(
-            "state"
-        ) == "skipped" and self.journal.last_verified(str(release)):
-            self.say(f"[checks] {release}: already verified")
-            return "skipped", {"passed": True, "why": "release already verified"}
+        # The release's manifests did not change (nothing applied): its checks
+        # run only when this check set was not verified against it yet (a
+        # check changed, was added or removed), and a failure never rolls a
+        # release back that this run did not roll out.
+        verifying = self.run.stage("apply").get("state") == "skipped"
+        verification: dict[str, Any] | None = None
+        if verifying:
+            last = self.journal.last_checks(str(release))
+            if last is not None and last["passed"] and last["checks_hash"] == digest:
+                self.say(f"[checks] {release}: already verified")
+                return "skipped", {
+                    "passed": True,
+                    "why": "release already verified",
+                    "checks_hash": digest,
+                }
+            trigger = (
+                "checks-changed"
+                if last is not None
+                and last["checks_hash"] is not None
+                and last["checks_hash"] != digest
+                else "unverified"
+            )
+            verification = {"trigger": trigger, "applied": False}
+            self.say(
+                f"[checks] {release}: manifests unchanged; verifying the running "
+                f"release ({trigger})"
+            )
         runner = self.check_runner or self.backend.check_runner()
         context = CheckContext(
             target=pipeline.target,
@@ -2505,13 +2547,21 @@ class PipelineRunner:
         output: dict[str, Any] = {
             "passed": passed,
             "results": [describe_result(item) for item in report.results],
+            "checks_hash": digest,
+            **({"verification": verification} if verification is not None else {}),
             **extra,
         }
         self.say(f"[checks] {release}: {'passed' if passed else 'FAILED'}")
         if passed:
             return "done", output
         run_state = "failed"
-        if pipeline.rollback_on_failed_checks:
+        if verification is not None:
+            # Nothing was applied: the running release stays (no rollback).
+            self.say(
+                f"[checks] {release}: not rolled back (its manifests did not "
+                "change); the environment is degraded until a check passes"
+            )
+        elif pipeline.rollback_on_failed_checks:
             output["rollback"] = self._rollback(work)
             if output["rollback"].get("state") == "ready":
                 run_state = "rolled-back"

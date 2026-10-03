@@ -58,6 +58,173 @@ test('composition-environments', async ({ page }) => {
   await shot(page, 'composition-sources');
 });
 
+test('composition-overview', async ({ page }) => {
+  await page.goto('/composition/overview?environment=main');
+  await expect(page.getByRole('heading', { name: 'System schematic', exact: true })).toBeVisible();
+  await pause(page);
+  await page.getByRole('button', { name: 'Inspect media in main' }).click();
+  await expect(page.getByRole('complementary', { name: 'Selected component' }).getByRole('heading', { name: 'media', exact: true })).toBeVisible();
+  await pause(page, 1600);
+  await shot(page, 'composition-overview');
+  await page.getByRole('combobox', { name: 'Environment', exact: true }).selectOption('wp-login');
+  await expect(page.getByRole('button', { name: 'Inspect web in wp-login' })).toBeVisible();
+  await pause(page, 1400);
+});
+
+test('compact-source-inventory', async ({ page }) => {
+  await page.goto('/composition/sources');
+  const product = page.getByRole('region', { name: 'Source product', exact: true });
+  await expect(product).toBeVisible();
+  await pause(page, 1300);
+  await shot(page, 'compact-sources');
+  const revision = product.getByLabel('Revision for product ref main', { exact: true });
+  await revision.locator('summary').click();
+  await expect(revision.getByText('3f9c2d1e8a7b4c5d6e0f1a2b3c4d5e6f7a8b9c0d', { exact: true })).toBeVisible();
+  await pause(page, 1300);
+  await shot(page, 'source-full-revision');
+  await page.getByRole('searchbox', { name: 'Filter sources', exact: true }).fill('media');
+  await expect(product).toHaveCount(0);
+  await pause(page, 1000);
+  await page.getByRole('link', { name: 'View assets topology in main', exact: true }).click();
+  await expect(page.getByRole('complementary', { name: 'Selected source', exact: true }).getByRole('heading', { name: 'assets', exact: true })).toBeVisible();
+  await pause(page, 1300);
+});
+
+test('resource-relationships', async ({ page }) => {
+  await page.goto('/applications/shop/resources?view=relationships');
+  await expect(page.getByText('Observed ownership', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Fit graph' }).click();
+  await pause(page, 1400);
+  await shot(page, 'resource-relationships');
+  await page.getByRole('combobox', { name: 'Focus resource' }).selectOption({ label: 'ReplicaSet / api-release' });
+  await expect(page.getByRole('status', { name: 'Graph focus' })).toContainText('1 observed owner · 2 direct children');
+  await pause(page, 1200);
+  await page.getByRole('button', { name: 'Inspect Deployment api in piceli-test', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Resource details', exact: true });
+  await expect(dialog.getByRole('heading', { name: 'api', exact: true })).toBeVisible();
+  await pause(page, 1600);
+  await shot(page, 'resource-inspector');
+  await dialog.getByRole('link', { name: 'Inspect related ReplicaSet api-release in piceli-test', exact: true }).click();
+  await expect(dialog.getByRole('heading', { name: 'api-release', exact: true })).toBeVisible();
+  await pause(page, 1000);
+  await dialog.getByRole('link', { name: 'Inspect related Pod api-release-1 in piceli-test', exact: true }).click();
+  await expect(dialog.getByRole('table', { name: 'Reported conditions' })).toBeVisible();
+  await pause(page, 1200);
+  await shot(page, 'resource-conditions');
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  await pause(page);
+});
+
+test('environment-versions', async ({ page }) => {
+  await page.goto('/composition/overview?view=versions&baseline=main&compare=wp-login');
+  await expect(page.getByRole('heading', { name: 'What changes between environments?', exact: true })).toBeVisible();
+  await pause(page, 1600);
+  await shot(page, 'environment-versions');
+  const web = page.getByRole('row').filter({ has: page.getByRole('rowheader', { name: /^web/ }) });
+  await web.getByText('Exact identities', { exact: true }).first().click();
+  await pause(page, 1400);
+  await web.getByRole('button', { name: 'Inspect target', exact: false }).click();
+  await expect(page.getByRole('complementary', { name: 'Selected component' }).getByRole('heading', { name: 'web', exact: true })).toBeVisible();
+  await pause(page, 1300);
+});
+
+test('environment-attention', async ({ page }) => {
+  await page.goto('/composition/overview?view=attention');
+  await expect(page.getByRole('region', { name: 'Decisions waiting', exact: true }).getByText('Plan awaiting approval', { exact: true })).toBeVisible();
+  await pause(page, 1700);
+  await shot(page, 'environment-attention');
+  await page.getByRole('region', { name: 'In progress & stopped', exact: true }).getByRole('listitem').filter({ hasText: 'main / media' }).getByRole('link', { name: 'Inspect', exact: true }).click();
+  await expect(page.getByRole('complementary', { name: 'Selected component' }).getByRole('heading', { name: 'media', exact: true })).toBeVisible();
+  await pause(page, 1600);
+});
+
+test('workspace-search', async ({ page }) => {
+  await page.goto('/applications');
+  await expect(page.getByRole('link', { name: 'Shop', exact: true })).toBeVisible();
+  await page.keyboard.press('Control+k');
+  await page.getByRole('searchbox', { name: 'Search destinations', exact: true }).fill('media');
+  const result = page.getByRole('link', { name: 'Component: media, main · assets', exact: true });
+  await expect(result).toBeVisible();
+  await pause(page, 1700);
+  await shot(page, 'workspace-search');
+  await result.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('complementary', { name: 'Selected component' }).getByRole('heading', { name: 'media', exact: true })).toBeVisible();
+  await pause(page, 1700);
+});
+
+test('recorded-activity-and-plan', async ({ page }) => {
+  await page.goto('/applications/shop/activity');
+  const failed = page.getByRole('article', { name: 'Run showcase-failed', exact: true });
+  await expect(failed).toBeVisible();
+  await page.getByRole('group', { name: 'Run status filter' }).getByRole('button', { name: /^Needs attention/ }).click();
+  await pause(page, 1500);
+  await shot(page, 'recorded-activity');
+  await failed.getByRole('link', { name: 'Review plan', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Review deployment', exact: true })).toBeVisible();
+  await page.getByRole('navigation', { name: 'Changed resources' }).getByRole('button', { name: /^api Service/ }).click();
+  await expect(page.getByLabel('After /spec/ports/0/port', { exact: true })).toHaveText('80');
+  await pause(page, 1700);
+  await shot(page, 'recorded-plan');
+  await expect(page.getByRole('button', { name: /^Deploy to / })).toBeDisabled();
+  await pause(page, 800);
+});
+
+test('recorded-revision-differences', async ({ page }) => {
+  await page.goto('/applications/shop/activity?history=revisions&compareFrom=showcase-plan-previous&compareTo=showcase-plan');
+  const differences = page.getByRole('region', { name: 'Revision differences', exact: true });
+  await expect(differences.getByRole('heading', { name: '3 resources differ', exact: true })).toBeVisible();
+  await pause(page, 1200);
+  await differences.getByRole('searchbox', { name: 'Search changes', exact: true }).fill('/spec/template/spec/containers/0/image');
+  await expect(differences.getByLabel('After /spec/template/spec/containers/0/image', { exact: true })).toHaveText(JSON.stringify('registry.example/shop/api:v1.5.0'));
+  await pause(page, 1500);
+  await shot(page, 'recorded-revisions');
+  await page.getByRole('link', { name: 'Open To plan', exact: true }).click();
+  const order = page.getByRole('region', { name: 'Execution order', exact: true });
+  await order.getByRole('button', { name: 'Inspect planned action 3: Deployment api', exact: true }).click();
+  await expect(order.getByRole('region', { name: 'Selected action details', exact: true })).toContainText('ConfigMap / piceli-test / public-settings');
+  await pause(page, 1800);
+  await shot(page, 'deployment-phases');
+});
+
+test('recorded-execution-journal', async ({ page }) => {
+  await page.goto('/runs/showcase-failed');
+  const order = page.getByRole('region', { name: 'Execution order', exact: true });
+  await order.getByRole('button', { name: 'Inspect recorded action 3: Deployment api', exact: true }).click();
+  await expect(order.getByRole('region', { name: 'Selected action details', exact: true })).toContainText('Readiness has not been recorded');
+  await pause(page, 1700);
+  await shot(page, 'recorded-execution');
+  const journal = page.getByRole('region', { name: 'Execution journal and logs', exact: true });
+  await journal.getByRole('button', { name: /^Captured logs/ }).click();
+  await expect(journal.getByLabel('Captured output for api-preview / api', { exact: true })).toContainText('Preview fixture: readiness probe did not succeed before the deadline');
+  await pause(page, 1800);
+  await shot(page, 'recorded-journal');
+  await journal.getByText('Raw recorded journal', { exact: true }).click();
+  await expect(journal.getByLabel('Raw recorded journal', { exact: true })).toContainText('preview-execution-failed');
+  await pause(page, 1300);
+});
+
+test('deployment-history-archive', async ({ page }) => {
+  await page.goto('/delivery?application=shop');
+  const unused = page.getByRole('row', { name: 'Plan showcase-plan-unused', exact: true });
+  await expect(unused.getByText('No recorded run', { exact: true })).toBeVisible();
+  await pause(page, 1300);
+  await shot(page, 'deployment-history');
+  await page.getByRole('combobox', { name: 'Filter plans', exact: true }).selectOption('no-runs');
+  await unused.getByText('Full revision', { exact: true }).click();
+  await pause(page, 1300);
+  await shot(page, 'unexecuted-plan');
+  await unused.getByRole('link', { name: 'Open plan', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Resource change workbench', exact: true }).getByLabel('After /spec/replicas', { exact: true })).toHaveText('4');
+  await pause(page, 1300);
+  await page.goto('/delivery?application=shop&deliveryView=runs');
+  await page.getByRole('article', { name: 'Run showcase-failed', exact: true }).getByRole('link', { name: 'Open logs', exact: true }).click();
+  await expect(page.getByLabel('Captured output for api-preview / api', { exact: true })).toContainText('Preview fixture: readiness probe did not succeed before the deadline');
+  await pause(page, 1400);
+  await shot(page, 'direct-recorded-logs');
+});
+
 test('cluster-overview', async ({ page }) => {
   await page.goto('/cluster');
   await expect(page.getByRole('heading', { name: 'Cluster', exact: true })).toBeVisible();

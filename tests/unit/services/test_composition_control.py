@@ -274,3 +274,47 @@ def test_sync_request_matches_directory_channel_round_trip(tmp_path: Path) -> No
     assert channel.requests() == {key: body}
     with pytest.raises(GitOpsError):
         sync_request("Not A Label")
+
+
+def test_environment_reports_last_action_and_verification_without_check_detail(
+    tmp_path: Path,
+) -> None:
+    document = status()
+    document["envs"]["main"].update(
+        {
+            "health": "degraded",
+            "last_action": "verified",
+            "verification": {
+                "state": "failed",
+                "trigger": "checks-changed",
+                "checks_hash": "d" * 64,
+                "rolled": [],
+                "failed": [
+                    {
+                        "check": "http-ready",
+                        "code": "check-failed",
+                        "detail": "Authorization: Bearer never-expose",
+                    },
+                    "not-a-check",
+                ],
+                "at": "2026-10-01T09:02:00Z",
+                "private": "never-expose",
+            },
+        }
+    )
+    document["envs"]["wp-login"]["verification"] = "not-a-mapping"
+    service, _ = _service(tmp_path, Channel(document))
+    environments = {item["name"]: item for item in service.overview()["environments"]}
+    main = environments["main"]
+    assert main["health"] == "degraded"
+    assert main["last_action"] == "verified"
+    assert main["verification"] == {
+        "state": "failed",
+        "trigger": "checks-changed",
+        "checks_hash": "d" * 64,
+        "at": "2026-10-01T09:02:00Z",
+        "failed": [{"check": "http-ready", "code": "check-failed"}],
+    }
+    assert "never-expose" not in repr(service.environment("main"))
+    assert environments["wp-login"]["last_action"] is None
+    assert environments["wp-login"]["verification"] is None

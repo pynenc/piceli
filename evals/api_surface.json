@@ -5196,14 +5196,18 @@
    "artifacts retention": {
     "arguments": [],
     "flags": [
+     "--allow-exec",
      "--approve",
      "--budget",
      "--ca-file",
+     "--cluster",
      "--collect-unledgered",
      "--context",
      "--credentials",
      "--delete",
      "--docker-config",
+     "--env",
+     "--exec-sha256",
      "--forward-remote-port",
      "--keep",
      "--kubeconfig",
@@ -5219,6 +5223,7 @@
      "--repository",
      "--timeout",
      "--to",
+     "--transport",
      "--via-forward"
     ],
     "subcommands": []
@@ -7058,6 +7063,7 @@
    "registry-not-oci-v2",
    "registry-options-on-node-target",
    "registry-response-too-large",
+   "registry-storage-unreadable",
    "registry-unauthorized",
    "registry-unreachable",
    "release-changes-pending",
@@ -8178,6 +8184,8 @@
   "piceli.artifacts.publish",
   "piceli.artifacts.registry",
   "piceli.artifacts.registry_delivery",
+  "piceli.artifacts.registry_ref",
+  "piceli.artifacts.registry_storage",
   "piceli.artifacts.retention",
   "piceli.artifacts.retention_cli",
   "piceli.artifacts.runnable",
@@ -8378,11 +8386,13 @@
   "piceli.services.engine",
   "piceli.services.environment_control",
   "piceli.services.evaluation",
+  "piceli.services.execution_evidence",
   "piceli.services.logs",
   "piceli.services.named_environment_actions",
   "piceli.services.observation",
   "piceli.services.operations",
   "piceli.services.pipeline_control",
+  "piceli.services.plan_evidence",
   "piceli.services.query",
   "piceli.services.registration",
   "piceli.services.remote_access",
@@ -8433,5 +8443,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.14.4"
+ "version": "0.14.5"
 }

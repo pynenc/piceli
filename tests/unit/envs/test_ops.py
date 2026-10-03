@@ -232,6 +232,12 @@ def test_down_is_planned_guarded_and_never_touches_main(tmp_path: Path) -> None:
     ]
     assert not state.exists()
     assert env_down(pipeline, "wp-a", cluster=cluster)["state"] == "absent"
+    # An environment deleted by hand: its local state goes with the teardown.
+    state.mkdir(parents=True)
+    (state / "runs").mkdir()
+    assert env_down(pipeline, "wp-a", cluster=cluster)["state"] == "absent"
+    assert not state.exists()
+    assert (tmp_path / "state").is_dir()  # other environments' state stays
 
 
 def test_down_refuses_a_namespace_of_another_app(tmp_path: Path) -> None:

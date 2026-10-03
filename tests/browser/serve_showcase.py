@@ -34,7 +34,10 @@ from piceli.services.environment_control import EnvironmentControl
 from piceli.services.pipeline_control import PipelineControl
 from piceli.services.query import QueryService
 from piceli.services.registration import Registration
-from piceli.testing import fake_cluster, manifest
+from piceli.testing import fake_cluster
+from tests.browser.preview_navigation import PreviewNavigationBootstrap
+from tests.browser.showcase_delivery import showcase_delivery
+from tests.browser.showcase_resources import seed_resources
 from tests.ui_composition_fixture import STATUS as COMPOSITION
 
 IMAGE = "registry.example/shop@sha256:" + "a" * 64
@@ -160,13 +163,17 @@ def _channel(directory: Path, status: dict = STATUS):  # type: ignore[no-untyped
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=4177)
+    parser.add_argument(
+        "--preview",
+        action="store_true",
+        help="Open disposable showcase pages without copying a launch token",
+    )
     options = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="piceli-ui-showcase-") as directory:
         root = Path(directory)
         os.environ["PICELI_PROFILES_DIR"] = str(root / "profiles")
         with fake_cluster() as cluster:
-            cluster.api.put(manifest("Deployment", "api"), owned=True)
-            cluster.api.put(manifest("ConfigMap", "settings"))
+            seed_resources(cluster.api)
             kubeconfig = cluster.kubeconfig(root / "kubeconfig")
             save_profile("demo-east", kubeconfig, "fake")
             save_profile("demo-west", kubeconfig, "fake")
@@ -219,6 +226,7 @@ def main() -> None:
                 query,
                 origin=f"http://127.0.0.1:{options.port}",
                 launch_token=given,
+                operations=showcase_delivery(query, root / "delivery"),
                 pipeline_control=control,
                 environment_control=environments,
                 composition_control=CompositionControl(
@@ -232,8 +240,14 @@ def main() -> None:
                 active_profile="demo-east",
                 profile_switch=lambda _name: None,
             )
+            if options.preview:
+                app.add_middleware(
+                    PreviewNavigationBootstrap, security=app.state.security
+                )
             with ExitStack() as cleanup:
-                if given:
+                if options.preview:
+                    address = f"http://127.0.0.1:{options.port}/composition/overview"
+                elif given:
                     address = f"http://127.0.0.1:{options.port}/applications"
                 else:
                     token_file = write_launch_token(
@@ -244,7 +258,10 @@ def main() -> None:
                     cleanup.callback(remove_launch_token, token_file)
                     address = app.state.security.launch_url()
                 print(
-                    f"Starting Piceli showcase UI at {address}\nFake data only; Ctrl+C stops.",
+                    f"Starting Piceli showcase UI at {address}\n"
+                    f"Preview changes: http://127.0.0.1:{options.port}/applications/shop/changes?plan=showcase-plan\n"
+                    f"Preview activity: http://127.0.0.1:{options.port}/applications/shop/activity\n"
+                    "Fake data only; delivery history is illustrative and read-only. Ctrl+C stops.",
                     file=sys.stderr,
                     flush=True,
                 )

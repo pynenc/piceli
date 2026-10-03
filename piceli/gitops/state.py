@@ -27,8 +27,10 @@ import fcntl
 import hashlib
 import json
 import os
+import re
+import shutil
 import tempfile
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Protocol
@@ -125,6 +127,52 @@ def controller_lock(state_dir: Path) -> Iterator[None]:
             yield
         finally:
             fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+
+
+_NAMESPACE = re.compile(r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?")
+
+
+def remove_env_dir(directory: Path, namespace: Any) -> bool:
+    """Remove ``directory/<namespace>`` (a branch environment's local state).
+
+    Only a DNS-label ``namespace`` names a child (never a path); ``True``
+    when something was removed.
+    """
+    if not isinstance(namespace, str) or not _NAMESPACE.fullmatch(namespace):
+        return False
+    target = directory / namespace
+    if not target.is_dir() or target.is_symlink():
+        return False
+    shutil.rmtree(target, ignore_errors=True)
+    return True
+
+
+def sweep_env_dirs(
+    directory: Path,
+    keep: set[str],
+    live: Callable[[str], bool | None] | None,
+) -> list[str]:
+    """Remove the local state of branch environments nobody knows any more.
+
+    A child ``directory/<namespace>`` stays when ``namespace`` is in ``keep``
+    (an environment the controller still has), or unless ``live`` answers
+    ``False`` for it: a live environment's state, or one whose namespace
+    cannot be looked up, is never deleted. Returns the removed namespaces.
+    """
+    if live is None or not directory.is_dir():
+        return []
+    removed = []
+    for child in sorted(directory.iterdir()):
+        name = child.name
+        if name in keep or not child.is_dir() or not _NAMESPACE.fullmatch(name):
+            continue
+        try:
+            answer = live(name)
+        except Exception:  # unknown: keep it
+            answer = None
+        if answer is False and remove_env_dir(directory, name):
+            removed.append(name)
+    return removed
 
 
 def remember_rejected(state: dict[str, Any], entry: Mapping[str, Any]) -> None:

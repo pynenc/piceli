@@ -1,6 +1,6 @@
 # Piceli web application
 
-The optional `piceli[ui]` package serves a bundled React application. It does
+The optional `piceli[ui]` package serves an experimental bundled React application. It does
 not need Node at runtime and does not read an ambient kubeconfig or context.
 The UI runs in one of three modes: a local, single-user process with an
 explicit target; the composition UI that `piceli cluster init` installs in the
@@ -8,10 +8,233 @@ cluster and you open through a port-forward; or an OIDC-authenticated service
 installed inside a Kubernetes cluster.
 Each mode offers only the actions configured by its operator.
 
+## Open the current UX with one command
+
+From the Piceli checkout:
+
+```sh
+make ui
+```
+
+From the parent workspace, the same command is `make -C repos/piceli ui`.
+With `uv`, Node.js and npm installed, it prepares the locked frontend
+dependencies, builds the current application, starts a disposable preview at
+<http://127.0.0.1:4178> and opens your browser.
+No cluster, profile or credentials need configuring. The preview uses sample
+state from the existing contributor fixture; it serves the production frontend.
+Keep the terminal running and press Ctrl+C when finished.
+
+You can bookmark the preview, open it in another browser or reload any page.
+The disposable preview handles its browser session automatically; there is no
+token to copy. This applies only to the contributor fixture. Real-target services
+retain their launch-token authentication.
+
+If your browser shows **Open Piceli from its launch address**, check that you
+opened the preview address above while `make ui` is running. An old address may
+point at a different local Piceli service. To choose another port, run
+`make ui PICELI_UI_PREVIEW_ARGS='--port 4180'`. If the default port is busy, the
+preview picks a free port and opens and prints its actual address. An explicitly
+requested busy port produces an error. Existing services are left running.
+
+To print the address without opening the default browser, use
+`make ui PICELI_UI_PREVIEW_ARGS='--no-browser'`.
+
+## Find a view
+
+Navigation shows the pages allowed by the current session and service
+configuration. Composition sessions start at the infrastructure Overview;
+other sessions start at Applications.
+
+| Task | Navigation / path | What to inspect |
+| --- | --- | --- |
+| Explore infrastructure | Workspace → Overview, `/composition/overview` | Source/component/environment topology, selected-component details, Versions and Attention |
+| Scan repositories and refs | Workspace → Sources, `/composition/sources` | Compact rows, full commit disclosures, polling/errors and environment/component links |
+| Operate composition environments | Workspace → Environments, `/composition` | Scope, health, revisions and reviewed lifecycle actions |
+| Inspect running objects | Workspace → Applications, `/applications` | Open an application's Overview or Resources for ownership, configuration, logs and access |
+| Inspect nodes and cluster services | Workspace → Cluster, `/cluster` | Nodes, controller, registry and UI status |
+| Find a previous review | Delivery → Deployment history → Plans, `/delivery` | Saved plans, approval expiry, action counts and exact run links; also the application's Plans tab |
+| Read deployment output | Deployment history → Runs & logs → Open logs | Captured output, visual transitions and raw journal |
+| Compare recorded configurations | Deployment history → Compare revisions | Exact source versions, resource additions/removals and before/after fields |
+| Review a Pipeline or build | Delivery → Pipeline or Cluster build | Real stage/placement details and exact approvals |
+
+## Workspace navigation
+
+The workspace uses a compact vector adaptation of Piceli's mushroom/network
+mark, warm neutral surfaces and orange navigation accents. Available pages are
+grouped into Workspace, Delivery and Operations. **Cluster** is in Workspace
+at `/cluster`, with the existing nodes,
+controller, registry and UI status. Use **Find in workspace** or **Ctrl/⌘ K**
+to jump to an application, environment, component or page. Search loads its
+data only when opened.
+Applications can be scanned as cards or a table, with filters for reported
+problems, available changes and unknown or stale observations. Search, target,
+state and layout stay in the address when shared or reloaded. The appearance
+picker offers Light, Dark and System, and remembers the choice in this browser.
+
+Composition sessions open directly on the infrastructure Overview. Its compact
+environment switchboard keeps scope, state and revisions visible above the canvas.
+Expand the explorer for more space; drag its background or use the zoom controls
+and keyboard to navigate. Escape returns to the overview and its original focus.
+Overview has three views:
+
+- **Topology** maps reported sources to components and environments. Select a
+  node to inspect its configuration, state, commit and image digest, then open
+  its environment or workloads. Show one environment or the whole composition;
+  use zoom, Fit width and arrow-key navigation to explore the graph.
+- **Versions** compares two environments side by side. Exact commits and image
+  digests establish matches and differences; missing observations stay unknown.
+  Known GitHub repositories link to their exact commits and comparisons. A
+  different revision does not by itself establish which version is newer.
+- **Attention** separates reported errors and unhealthy components from pending
+  approvals and lifecycle states. Each item links to its environment or selected
+  component. It reflects the current snapshot, not an incident archive.
+
+Selections and version comparisons survive reload through the page address.
+The selected component shows its matching source refs and counterparts in other
+environments, with exact version comparisons and links back into the graph.
+The environment inventory remains at `/composition`, with its existing Sync,
+Promote, Approve and Wake flows; a collapsed copy is available below the overview.
+Sources uses compact rows for repository, tracked refs, polling status and
+reported environment/component associations. Full commit identities remain
+available through keyboard-accessible disclosure controls. Search covers the
+repository, refs, full revisions and connected components, and survives reload.
+Environment and component links lead directly back into the topology.
+Application pages link back to their controller-reported environment
+and components, using the application identity rather than namespace guesses.
+
+Resources offers Table and Relationships. The diagram connects resources only
+through observed owner UIDs, not guessed service or network dependencies.
+Kind icons, ownership lanes, zoom and a selected-neighborhood filter help trace
+a workload to its controller and pods. Independent networking and configuration
+resources stay separate. Large inventories retain the virtualized ownership
+outline. Selecting a resource opens the same inspector, logs and access panels;
+Escape restores focus to the selected resource. Unknown, stale and partial
+observations remain distinct from healthy or empty state.
+Application Overview starts with the ownership graph; Resources retains its
+table/diagram choice. Compact application headers leave more room for the
+workload evidence. The inspector connects observed owner and child objects and
+presents permitted container, image, port and condition information together.
+
+Deployment review provides a searchable resource list and before/after field
+changes beside the exact approval context. Full unified evidence remains
+available. Activity presents recorded operations as a timeline with search and
+an attention filter; each run links to its plan and any available recovery.
+The deployment sequence shows the engine's actual action order and dependency
+levels. Select a resource to inspect its dependencies and recorded operation;
+objects removed after apply remain distinguishable from dependency levels.
+Run pages connect this sequence to recorded resource transitions, recorded
+write times and outcomes, with the original journal evidence available
+alongside the visual view.
+Raw log tails appear only when the execution recorded and safely published them;
+unavailable output is stated explicitly. Captured pod output requires the same
+logs authorization as live logs; activity access alone does not grant it. Journal
+transitions retain sequence numbers because event timestamps are not recorded.
+
+## Previous plans, revision changes and deployment logs
+
+Open **Delivery → Deployment history** (`/delivery`) and select an application:
+
+- **Plans** lists saved reviews, including expired plans and plans without a
+  recorded run. Search, filters and sorting apply to loaded pages; load more to
+  inspect older records. **Open plan** leads to its ordered deployment steps,
+  dependency levels and per-resource changes without evaluating source again.
+  The same archive is available in each application's **Plans** tab.
+- **Runs & logs** lists recorded execution outcomes and recovery links.
+  **Open logs** opens and focuses the run's captured-log panel directly.
+  The run retains its visual transitions and raw journal alongside captured logs.
+- **Compare revisions** compares desired configurations across recorded runs.
+
+This archive reads plans saved by the UI service. It does not discover arbitrary
+CLI plan files or recover terminal output that was never recorded. Recorded-run
+links require matching application, plan and approval digest; missing or partial
+run evidence is labelled explicitly.
+
+In **Deployment history → Compare revisions** (also
+**Activity → Compare revisions**), choose two recorded plans to compare their
+stored desired configurations. Each side shows its source revision, release,
+exact plan identity and recorded run outcome. Added and removed resources and
+before/after field values are searchable. The comparison is read-only and does
+not renew an expired approval. A failed run's desired configuration does not
+imply that the changes reached the cluster. Older records without complete
+snapshots, redacted fields and mismatched targets remain explicit gaps.
+
+The deployment evidence expands the CLI's plan, diff and journal views:
+
+| Evidence | Where to open it | Browser view |
+| --- | --- | --- |
+| Ordered plan | Plans → Open plan → Execution order | Dependency phases and exact action sequence; select a resource for its dependencies |
+| Detailed changes | Plans → Open plan → resource changes | Searchable before/after fields and full unified evidence |
+| Recorded execution | Runs & logs → Open run | Resource outcomes, recorded write times and visual journal transitions |
+| Raw output | Runs & logs → Open logs | Captured logs; expand Raw recorded journal for the underlying evidence |
+| Revision changes | Compare revisions | Differences between stored desired configurations, with source and run identity on each side |
+
+**Open logs** links to `/runs/<operation-id>?runView=logs#execution-journal`.
+It selects Captured logs, scrolls to the panel and moves keyboard focus there;
+reloading the address keeps that selection. When no output was captured, the
+panel says so and directs you to current workload logs in Resources.
+
+History readers can inspect an exact recorded plan without permission to
+evaluate source or deploy. New review preparation still requires evaluation
+capability. Named-environment acknowledgements bind to the exact reviewed
+environment, action and identity; a changed plan hash needs acknowledgement again.
+Pipeline previews and materialized rollout plans remain separate approvals;
+an open expired plan cannot be approved. No workflow or cluster configuration
+is inferred from the layout.
+
+## Run the current application from a checkout
+
+```sh
+make ui-install
+make ui-serve PICELI_UI_ARGS='--kubeconfig /absolute/path/config --context CONTEXT --namespace NAMESPACE'
+```
+
+`ui-serve` builds the production browser assets and starts `piceli ui serve`
+with those explicit arguments. Replace the example target with your own;
+the command does not choose an ambient context. A saved credential profile
+can be passed with `PICELI_UI_ARGS='--profile NAME'` instead. Open the exact
+launch URL printed by the process, including its one-time token. Ctrl+C stops
+the server. For an already installed composition UI, use `piceli access ui`
+with its explicit cluster declaration as described below.
+
 ## What it shows
 
 The screenshots come from `make ui-clips`, which records fixed journeys on a
 disposable fake Kubernetes API (no real cluster or credential).
+
+```{image} _static/ui/composition-overview.png
+:alt: Piceli infrastructure canvas connecting sources, components and environments beside a selected component inspector
+:width: 720px
+```
+
+```{image} _static/ui/environment-versions.png
+:alt: Comparing exact commits and image digests between two environments
+:width: 720px
+```
+
+```{image} _static/ui/compact-sources.webp
+:alt: Compact source inventory with tracked refs, full revision disclosure and connected environments and components
+:width: 720px
+```
+
+```{image} _static/ui/deployment-history.webp
+:alt: Browsing the saved-plan archive, reviewing an expired plan and opening captured deployment logs directly
+:width: 720px
+```
+
+```{image} _static/ui/recorded-plan.png
+:alt: Recorded plan with per-resource before and after values and its exact approval context
+:width: 720px
+```
+
+```{image} _static/ui/recorded-revisions.png
+:alt: Comparing two recorded source revisions with desired resource configuration changes
+:width: 720px
+```
+
+```{image} _static/ui/recorded-journal.png
+:alt: Recorded deployment resource transitions with captured diagnostic logs and raw journal evidence
+:width: 720px
+```
 
 ```{image} _static/ui/applications.png
 :alt: The Applications page of the Piceli web UI
@@ -59,9 +282,24 @@ cannot deploy.
 
 For service and browser acceptance with that fake API, run `make test-ui-fake`
 (`make test-ui-composition` runs only the composition journeys).
-It uses port 4184 by default (`PICELI_UI_FAKE_TEST_PORT` changes it) and checks
-desktop, tablet and phone. The test runner removes its servers, browser state
-and temporary files on exit.
+`make test-browser-harbor` checks composition selection, source associations,
+application filters/layout, appearance and resource inspector continuity at
+three viewport sizes, using the disposable showcase service.
+`make test-browser-connected` checks the infrastructure graph, version
+comparisons, attention links, workspace search, state filters, saved-plan
+archives and direct captured-log navigation at the same sizes.
+`make test-browser-preview` checks plain-address access and bookmarks in fresh
+browsers. `make test-browser-delivery` checks real-service deployment, update,
+rollback, failure and recovery against the fake API.
+
+`make ui-clips` records fixed journeys, including compact Sources and deployment
+history, into `.ui-clips/<run>/index.html`. Chromium and `ffmpeg` are required;
+the gallery keeps animated WebP, GIF fallbacks and PNGs, with each animation at
+most 1.5 MB. `PICELI_UI_CLIPS_DIR` chooses the retained output directory.
+`make test-ui-fake` uses port 4184 for its first-use browser suite
+(`PICELI_UI_FAKE_TEST_PORT` changes it). Every runner removes its servers,
+browser state and temporary service files on exit. See
+{src}`tests/browser/README.md` for suite selection and recording details.
 
 ## Where the UI can run
 

@@ -13,6 +13,93 @@ New in 0.13.0; it may change in a minor release, with a changelog entry. See
 the {doc}`roadmap`.
 ```
 
+## The in-cluster registry in one command
+
+For the registry of `Registry.in_cluster` (see {doc}`cluster_registry`), name
+the declared cluster and Piceli works out the rest: the registry, the
+port-forward to its Service, the cluster read (every namespace) and the list
+of every manifest the registry stores, tagged or not. No receipts, no pins.
+
+```sh
+# 1. Plan: the deletions and the plan hash (exit 3); changes nothing.
+piceli artifacts retention --cluster infra.py:my_cluster --delete
+
+# 2. Delete exactly that plan (refused if anything changed since).
+piceli artifacts retention --cluster infra.py:my_cluster --delete --approve <digest>
+
+# 3. Free the disk: the registry's garbage collector, dry run first, at a time
+#    when no cluster build Job runs and nothing pushes.
+kubectl --kubeconfig FILE --context NAME -n piceli-system \
+    exec deploy/piceli-registry -- \
+    registry garbage-collect --dry-run /etc/distribution/config.yml
+kubectl --kubeconfig FILE --context NAME -n piceli-system \
+    exec deploy/piceli-registry -- \
+    registry garbage-collect /etc/distribution/config.yml
+
+# 4. The claim's use afterwards.
+piceli registry status infra.py:my_cluster
+```
+
+`--cluster` takes `infra.py:CLUSTER` (a `piceli.infra.Cluster` declared with
+`registry=Registry.in_cluster(...)`, reached through its credential profile),
+the composition module itself (`infra.py`), a pipeline delivering to
+`Registry.in_cluster` (its target names the cluster) or that value (then with
+`--kubeconfig FILE --context NAME`). Without `--delete` it only reports
+(exit 0). With `--cluster`:
+
+- **kept**: every digest a pod in any namespace uses (spec image and
+  `imageID`) and every workload template; each Deployment's and
+  StatefulSet's **rollback target** (below); what Piceli itself uses now: the
+  controller (`piceli-gitops`) and UI Deployments and the builder image in
+  `piceli-gitops-config`; the digests in environment records and the
+  controller's status; pins and, with `--receipts` and `--keep N`, releases;
+  and the platform manifests and referrers of everything kept;
+- **collectable**: everything else in the registry, with or without a tag or
+  a receipt: old controller and builder copies, digest-only images nothing
+  names any more, older rollout history.
+
+`--keep` defaults to 0 and tagged manifests no receipt mentions are
+collectable (`--collect-unledgered` is implied): the cluster is the
+inventory. The approval command is printed in full
+(`approve_command`). The receipt's `garbage_collect.commands` repeat step 3
+for this registry's namespace and name. Piceli has no `registry gc` command:
+the collector must not run while a push is in flight, and a push through a
+port-forward from a laptop cannot be seen from the cluster, so that moment is
+yours to choose.
+
+**Rollback targets.** `kubectl rollout undo` returns a workload to its
+previous release, so that release's images stay: a Deployment's newest
+scaled-down ReplicaSet that is not its current revision, and a StatefulSet's
+newest ControllerRevision that is not its update revision (and, while a
+rollout runs, its current revision). Older history is collectable. Piceli's
+own controller, UI and registry (labelled `piceli.io/component` `gitops`,
+`ui` or `cluster`, or `app.kubernetes.io/name=piceli-cluster-registry`) have
+none: their old copies go. Rows of kept rollback targets carry the reason
+`rollback`; the delete refuses any plan that names one.
+
+**Listing the storage.** The registry API lists tags, not untagged
+manifests, and Piceli pushes by digest. So retention runs one read-only
+command in the registry pod over `pods/exec`:
+
+```sh
+find /var/lib/registry/docker/registry/v2/repositories \
+    -path '*/_manifests/revisions/sha256/*/link' -type f
+```
+
+(no shell, nothing written), and reads each listed manifest through the API.
+When the listing is refused or no registry pod runs, the report says
+`"storage_listing": {"read": false, "reason": "registry-storage-unreadable"}`
+and only manifests something still names are found; nothing else changes.
+
+**Permissions** of the credential that runs it:
+
+| What | Resources and verbs |
+| --- | --- |
+| The cluster read (all namespaces) | `list` on `pods`, `configmaps`; `deployments`, `statefulsets`, `daemonsets`, `replicasets`, `controllerrevisions` (`apps`); `jobs`, `cronjobs` (`batch`) |
+| The storage listing (registry namespace) | `list` on `pods`; `get` and `create` on `pods/exec` |
+| The port-forward (registry namespace) | `get` on `services` and `pods`; `create` on `pods/portforward` |
+| `registry status` claim use | `get` on `nodes/proxy` (kubelet stats), else `pods/exec` as above for `du` |
+
 ## What is kept
 
 A manifest (an image, or an image index with its per-platform manifests) is
@@ -22,7 +109,8 @@ A manifest (an image, or an image index with its per-platform manifests) is
 | --- | --- |
 | One of the last `--keep N` **releases** (default 3; `--keep 0` keeps none, see below), newest first | the publish receipts (`artifacts publish --out`), registry-delivery receipts (`artifacts deliver --receipt`) and JSON Lines journals (`--journal`) you pass with `--receipts` (files or directories) |
 | **Pinned** | `--pin sha256:…` (repeatable) and `--pin-file FILE` (one digest per line, `#` comments) |
-| **Live**: a workload uses or will pull it, or an environment names it | read from the cluster (`--kubeconfig FILE --context NAME`, optionally `--live-namespace`): the pods that have not finished (specs and statuses' `imageID`), **the pod templates** of Deployments, StatefulSets, DaemonSets, ReplicaSets, CronJobs and unfinished Jobs, so a workload scaled to zero or a CronJob between runs still finds its image, and Piceli's ConfigMaps: the environment records (`piceli-env`) and pushed images (`piceli-env-<branch>`) of branch environments, and the GitOps controller's status (`piceli-gitops-status`); `--live-file` adds digests |
+| **Live**: a workload uses or will pull it, or an environment names it | read from the cluster (`--kubeconfig FILE --context NAME`, optionally `--live-namespace`): the pods that have not finished (specs and statuses' `imageID`), **the pod templates** of Deployments, StatefulSets, DaemonSets, ReplicaSets, CronJobs and unfinished Jobs, so a workload scaled to zero or a CronJob between runs still finds its image, and Piceli's ConfigMaps: the environment records (`piceli-env`) and pushed images (`piceli-env-<branch>`) of branch environments, the GitOps controller's status (`piceli-gitops-status`) and configuration (`piceli-gitops-config`: the builder image); `--live-file` adds digests |
+| **Rollback target**: the previous release of a Deployment or StatefulSet | read from the cluster with the live workloads: the newest scaled-down ReplicaSet that is not the Deployment's current revision; the newest ControllerRevision that is not the StatefulSet's update revision (see [rollback targets](#the-in-cluster-registry-in-one-command)) |
 | A child or a referrer of a kept manifest | the platform manifests of a kept index; its SBOM, provenance and signatures (OCI referrers and `sha256-<hex>` fallback tags) |
 | **Unledgered**: tagged, but no receipt mentions it | kept by default; `--collect-unledgered` collects it |
 
@@ -38,10 +126,11 @@ that did not change in a release keeps its newest digest.
 Three kinds of objects still name an image but will never pull it again, so
 they do not make it live: a pod that `Succeeded` or `Failed`, a Job with a
 true `Complete` or `Failed` condition, and a ReplicaSet a Deployment owns
-that is scaled to zero with no pod left (its rollout history). A component
-that moved to another registry (say a controller now pulled from a hosted
-registry by another digest) leaves its old copy collectable. Pin a digest
-(`--pin`) to keep a `kubectl rollout undo` target.
+that is scaled to zero with no pod left (its rollout history). The newest
+such ReplicaSet is still kept, as the workload's rollback target; older ones
+are not. A component that moved to another registry (say a controller now
+pulled from a hosted registry by another digest) leaves its old copy
+collectable.
 
 **Manifests without a tag or receipt.** The registry API lists tags, not
 untagged manifests, and images delivered to `Registry.in_cluster` are pushed
@@ -84,20 +173,23 @@ piceli artifacts retention … --delete --approve <digest>
 The report is one JSON object: `policy`, `live` (how many digests were read
 and from where, by kind: `pod`, `deployment`, … `environment`, `controller`),
 `releases` (kept or not, and why), one row per manifest with its tags, bytes,
-`kept`, `reasons` (`release`, `budget`, `pinned`, `live`, `referenced`,
-`unledgered`, `unreferenced`) and `live_by`, `kept.bytes`,
+`kept`, `reasons` (`release`, `budget`, `pinned`, `live`, `rollback`,
+`referenced`, `unledgered`, `unreferenced`) and `live_by`, `kept.bytes`,
 `collectable.reclaimable_bytes` and the `digest` of the plan. Each entry of
 `collectable.deletions` names exactly what would be removed: `repository`,
 `digest`, `bytes` (the manifest and its layers, before deduplication), `why`
 it is not kept (`old-release` or `over-budget` for a release past the policy,
 `not-live` when only finished or rollout-history objects name it,
 `unledgered`, else `unreferenced`) and `seen_in` (for example
-`replicaset:history`, `pod:finished`, `job:finished`). `--out FILE` also
-writes it.
+`replicaset:history`, `controllerrevision:history`, `pod:finished`,
+`job:finished`). `live.rollback` counts the rollback targets. `--out FILE`
+also writes it.
 
-To remove every image nothing uses, for example on an in-cluster registry
-reached through a port-forward (`--to` takes a repository prefix: run it once
-per top-level prefix, such as `shop` for `shop/api` and `shop/worker`):
+To remove every image nothing uses on a registry reached through a
+port-forward (`--to` takes a repository prefix: run it once per top-level
+prefix, such as `shop` for `shop/api` and `shop/worker`; for the in-cluster
+registry prefer [`--cluster`](#the-in-cluster-registry-in-one-command), which
+also finds manifests nothing names):
 
 ```sh
 # Plan: prints the deletions and the hash (exit 3), changes nothing.
@@ -168,8 +260,9 @@ frees.
   when the registry serves it, `/v2/_catalog`, under the prefix of `--to`.
 - Manifests that nothing tags, no receipt names and no object of the cluster
   names any more are invisible to the registry API; a blob garbage collection
-  without `--delete-untagged` leaves them alone. Pass their digests with
-  `--live-file` only to keep them, never to find them.
+  without `--delete-untagged` leaves them alone. With `--to` pass their
+  digests with `--live-file` only to keep them, never to find them; with
+  `--cluster` the storage listing finds them.
 - A live digest read from a `--live-file` (or an environment record) without
   a repository is looked up in every repository under `--to`.
 - Space shared with repositories outside `--to` is not counted as reclaimable
@@ -192,6 +285,8 @@ successful release, followed by the garbage-collection Job).
 | `retention-invalid` | a malformed `--keep`, `--budget`, pin, receipt or option combination; `--keep 0` without `--kubeconfig` and `--context` |
 | `retention-live-unknown` | `--delete` without a live source, or reading the pods, workloads or Piceli ConfigMaps failed |
 | `retention-not-approved` | `--approve` is not the hash of the plan computed now |
+| `registry-storage-unreadable` | (reported in `storage_listing`, not a refusal) the in-cluster registry's storage could not be listed: no running registry pod, or `pods/exec` refused |
+| `cluster-registry-invalid`, `cluster-registry-target-required`, `cluster-api-mismatch` | `--cluster` names no in-cluster registry, the cluster cannot be named, or the profile points at another API server |
 | `registry-delete-disabled` | the registry refuses `DELETE` |
 
 The registry errors of {doc}`artifact_delivery` (`registry-unauthorized`,

@@ -32,6 +32,10 @@ Other targets (`make help` lists them all):
 | `make evals-check` | Self-tests of the cross-model eval harness in `evals/` (see {doc}`evals`) |
 | `make docs` | Build the documentation with warnings treated as errors |
 | `make build` | Build the sdist and wheel into `dist/` |
+| `make ui` | Build and open the production frontend with disposable sample state; no cluster or credentials required |
+| `make ui-check` / `make ui-build` | Verify browser contracts, TypeScript and lint; bundle frontend assets |
+| `make test-browser-harbor` / `make test-browser-connected` | Check workspace navigation, topology, versions, plan history and logs at desktop, tablet and phone sizes |
+| `make ui-clips` | Record fixed journeys as WebP/GIF clips and screenshots in an ignored gallery |
 
 Add dependencies with `uv add <package>` (or `uv add --group test <package>` for
 development-only tools) so that `pyproject.toml` and `uv.lock` stay in sync.
@@ -40,6 +44,29 @@ CI runs the same commands on Python 3.12, 3.13 and 3.14, plus the integration
 tests on a [kind](https://kind.sigs.k8s.io/) cluster of the newest supported
 Kubernetes minor (nightly: all four, see {doc}`../compatibility`) and a strict
 docs build.
+
+## Working on the web UI
+
+Install Node.js and npm alongside `uv`, then run `make ui`. The command prepares
+the locked frontend dependencies, builds the current application and opens a
+disposable workspace, normally at `http://127.0.0.1:4178`. Plain addresses work
+in a fresh browser. Keep the terminal running; Ctrl+C stops the preview and
+removes its service state. The {doc}`../ui` guide explains each page and real
+target setup.
+
+Before changing a UI workflow, run the frontend regression suite from `ui/`:
+
+```sh
+npm test
+```
+
+After the change, run `make ui-check ui-build` and the browser suites for the
+affected journeys. Plan and run history must remain tied to exact application,
+plan and approval identities; retain separate log permissions and explicit
+missing-evidence states. See {src}`tests/browser/README.md` for suite selection,
+Chromium setup and recording. `make ui-clips` also needs `ffmpeg`; its retained
+gallery contains WebP clips, GIF fallbacks and screenshots. Copy selected
+screenshots into `docs/_static/ui/` when documentation changes.
 
 ## Releases
 

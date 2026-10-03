@@ -89,6 +89,15 @@ ui-check: ## Check the browser contract and TypeScript application
 ui-build: ## Bundle offline browser assets into the Python package
 	cd ui && npm run build
 
+.PHONY: ui ui-serve test-browser-harbor test-browser-connected test-browser-preview
+PICELI_UI_PREVIEW_ARGS ?=
+ui: ## Install, build and open the current app with disposable example data (no cluster needed)
+	uv run --frozen --extra ui python scripts/ui_preview.py $(PICELI_UI_PREVIEW_ARGS)
+
+PICELI_UI_ARGS ?=
+ui-serve: ui-build ## Build and serve the real UI; pass explicit scope through PICELI_UI_ARGS
+	uv run --frozen --extra ui piceli ui serve $(PICELI_UI_ARGS)
+
 ui-fake-serve: ## Open a read-only local UI with a disposable fake Kubernetes API (prints its launch URL)
 	uv run --frozen --extra ui python tests/browser/serve_ui.py --port $(PICELI_UI_FAKE_PORT)
 
@@ -111,6 +120,15 @@ test-ui-package: ## Verify installed wheel/sdist offline assets without Node
 
 test-browser: ## Run real-service browser journeys with temporary artifacts
 	uv run --frozen --extra ui python tests/browser/run.py
+
+test-browser-harbor: ## Check Harbor navigation, topology, themes and URL continuity at three sizes
+	uv run --frozen --extra ui python tests/browser/run.py --config ../tests/browser/harbor.config.cjs
+
+test-browser-connected: ## Check topology, versions, attention, search and fleet filters at three sizes
+	uv run --frozen --extra ui python tests/browser/run.py --config ../tests/browser/connected.config.cjs
+
+test-browser-preview: ## Check plain preview URLs and fixture-only browser bootstrap
+	uv run --frozen --extra ui python tests/browser/run.py --config ../tests/browser/preview.config.cjs
 
 test-browser-cluster-oidc: ## Run signed OIDC login and grant revocation in Chromium over disposable HTTPS
 	uv run --frozen --extra ui python tests/browser/run_cluster_oidc.py
@@ -151,3 +169,7 @@ test-ui-access-retention: ## Run the 30-minute local forward/process retention g
 .PHONY: clean
 clean: ## Remove build, coverage and docs output
 	rm -rf dist htmlcov .coverage .coverage.* docs/_build docs/apidocs
+
+.PHONY: acceptance-k3s
+acceptance-k3s: ## k3s 3-node lifecycle acceptance (needs PICELI_K3S_LIFECYCLE=1; creates and deletes a k3d cluster)
+	$(if $(shell command -v k3d),,nix shell nixpkgs#k3d -c) uv run --frozen python tests/acceptance_k3s/lifecycle.py $(ARGS)

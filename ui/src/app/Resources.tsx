@@ -11,8 +11,11 @@ import { AccessPanel } from '../features/access/AccessPanel';
 import { LogPanel } from '../features/logs/LogPanel';
 import { useObservationEvents } from '../features/observation/useObservationEvents';
 import { orderByOwner, type RelatedResource } from '../features/observation/topology';
+import { ResourceKindIcon, ResourceTopology } from './ResourceTopology';
+import { ResourceConditions, ResourceConfiguration, ResourceRelationships } from './ResourceEvidence';
+export { ResourceConfiguration } from './ResourceEvidence';
 
-export function Resources({ application }: { application: Application }) {
+export function Resources({ application, defaultView = 'table' }: { application: Application; defaultView?: 'table' | 'relationships' }) {
   const [params, setParams] = useSearchParams();
   const client = useQueryClient();
   const refreshed = useRef(0);
@@ -39,23 +42,22 @@ export function Resources({ application }: { application: Application }) {
   const observation = useObservationEvents(application.id, pages?.[0]?.event_cursor);
   const resources = pages?.flatMap(page => page.items) ?? [];
   const filtered = resources.filter(r => `${r.identity.name} ${r.identity.kind} ${r.identity.namespace}`.toLowerCase().includes(filter.toLowerCase()));
-  const view = params.get('view') === 'relationships' ? 'relationships' : 'table';
+  const view = (params.get('view') ?? defaultView) === 'relationships' ? 'relationships' : 'table';
   const rows: RelatedResource[] = view === 'relationships' ? orderByOwner(filtered) : filtered.map(resource => ({ resource, depth: 0 }));
   const partial = pages?.flatMap(page => page.partial ?? []) ?? [];
   const change = (key: string, value: string) => { const next = new URLSearchParams(params); if (value) next.set(key, value); else next.delete(key); setParams(next, { replace: true }); };
   const close = () => { const next = new URLSearchParams(params); next.delete('resource'); next.delete('panel'); setParams(next, { replace: true }); };
   const select = (resource: Resource) => { trigger.current = document.activeElement as HTMLElement; const next = new URLSearchParams(params); next.set('resource', resource.id); next.set('panel', 'summary'); setParams(next); };
   return <><section className="panel resource-panel"><div className="panelhead"><div><h2 ref={heading} tabIndex={-1}>Resources <span className="count">{resources.length}{query.hasNextPage ? '+' : ''}</span></h2><p className="small muted">Presence, health and desired/live state are separate observations.</p></div><button onClick={() => void query.refetch()} disabled={query.isFetching}>Refresh resources</button></div>
-    <div className="resource-views" role="group" aria-label="Resource view"><button aria-pressed={view === 'table'} onClick={() => change('view', '')}>Table</button><button aria-pressed={view === 'relationships'} onClick={() => change('view', 'relationships')}>Relationships</button></div>
-    <div className="resource-filter"><label htmlFor="resource-filter">Filter resources</label><input id="resource-filter" type="search" placeholder="Name, kind or namespace…" value={filter} onChange={e => setFilter(e.target.value)} /></div>
+    <div className="resource-toolbar"><div className="resource-filter"><label htmlFor="resource-filter">Filter resources</label><input id="resource-filter" type="search" placeholder="Name, kind or namespace…" value={filter} onChange={e => setFilter(e.target.value)} /></div><div className="resource-views" role="group" aria-label="Resource view"><button aria-pressed={view === 'table'} onClick={() => change('view', 'table')}>Table</button><button aria-pressed={view === 'relationships'} onClick={() => change('view', 'relationships')}>Relationships</button></div></div>
     {query.isPending && <Loading />}{query.isError && <Failure error={query.error} retry={() => void query.refetch()} />}
     {pages && <><div className="resource-notices">{pages.map((p, i) => <FreshnessNotice key={i} freshness={p.freshness} disconnected={query.isError} />)}{observation.gap && <Notice title="Observation history expired">Some resource changes were missed. The current scope was fetched again.</Notice>}{!observation.connected && <Notice title="Live observation disconnected">The resource list is refreshing while the observation stream reconnects.</Notice>}{partial.length > 0 && <Notice title="Partial observation"><p>Some resources could not be read. The resources below are the visible portion of this scope.</p><ul>{partial.map((e, i) => <li key={i}>{e.scope}: {e.code}</li>)}</ul></Notice>}</div>
-      {filtered.length ? <ResourceList rows={rows} relationships={view === 'relationships'} onSelect={select} /> : <div className="empty"><h3>{filter ? 'No matching resources' : partial.length ? 'No resources visible in this partial observation' : 'No resources observed'}</h3><p>{filter ? 'Try another name, kind or namespace.' : partial.length ? 'Resolve the observation errors to see the complete scope.' : 'This target scope currently contains no observed resources.'}</p></div>}
+      {filtered.length ? view === 'relationships' && rows.length <= 100 ? <ResourceTopology rows={rows} selectedId={selected} onSelect={select} /> : <>{view === 'relationships' && <p className="resource-topology-dense">Ownership outline · {rows.length} resources. Filter this inventory to explore a diagram of up to 100 resources.</p>}<ResourceList rows={rows} relationships={view === 'relationships'} onSelect={select} /></> : <div className="empty"><h3>{filter ? 'No matching resources' : partial.length ? 'No resources visible in this partial observation' : 'No resources observed'}</h3><p>{filter ? 'Try another name, kind or namespace.' : partial.length ? 'Resolve the observation errors to see the complete scope.' : 'This target scope currently contains no observed resources.'}</p></div>}
       {query.hasNextPage && <button className="load-more" onClick={() => void query.fetchNextPage()} disabled={query.isFetchingNextPage}>Load more resources</button>}
     </>}
   </section><Dialog.Root open={Boolean(selected)} onOpenChange={open => { if (!open) close(); }}><Dialog.Portal><Dialog.Overlay className="dialog-overlay" /><Dialog.Content className="inspector" onCloseAutoFocus={event => { event.preventDefault(); if (trigger.current?.isConnected) trigger.current.focus(); else heading.current?.focus(); }}>
     <div className="inspector-heading"><div><p className="eyebrow">Resource inspector</p><Dialog.Title>Resource details</Dialog.Title></div><Dialog.Close aria-label="Close resource inspector">✕</Dialog.Close></div><Dialog.Description className="sr-only">Inspect the selected resource in its application and target context.</Dialog.Description>
-    {selected && <Inspector resourceId={selected} panel={panel} setPanel={value => change('panel', value)} application={application} freshness={pages?.[0]?.freshness ?? application.freshness} />}
+    {selected && <Inspector resourceId={selected} panel={panel} setPanel={value => change('panel', value)} application={application} inventory={resources} freshness={pages?.[0]?.freshness ?? application.freshness} />}
   </Dialog.Content></Dialog.Portal></Dialog.Root></>;
 }
 function ResourceList({ rows, relationships, onSelect }: { rows: RelatedResource[]; relationships: boolean; onSelect: (r: Resource) => void }) {
@@ -81,16 +83,23 @@ function ResourceList({ rows, relationships, onSelect }: { rows: RelatedResource
     </ul>
   </div>;
 }
-function Inspector({ resourceId, panel, setPanel, application, freshness }: { resourceId: string; panel: string; setPanel: (value: string) => void; application: Application; freshness: Application['freshness'] }) {
+function Inspector({ resourceId, panel, setPanel, application, inventory, freshness }: { resourceId: string; panel: string; setPanel: (value: string) => void; application: Application; inventory: Resource[]; freshness: Application['freshness'] }) {
   const query = useQuery({ queryKey: ['resource', application.id, resourceId], queryFn: ({ signal }) => api.resource(application.id, resourceId, signal) });
+  const title = useRef<HTMLHeadingElement>(null);
+  const displayed = useRef<string | undefined>(undefined);
+  const observedId = query.data?.id;
+  useEffect(() => {
+    if (!observedId) return;
+    if (displayed.current && displayed.current !== observedId) title.current?.focus();
+    displayed.current = observedId;
+  }, [observedId]);
   if (!query.data) return query.isError ? <div className="inspector-body"><Failure error={query.error} retry={() => void query.refetch()} /></div> : <Loading text="Loading resource details…" />;
   const r = query.data;
   const tabs = ['summary', ...(r.capabilities?.conditions?.allowed ? ['conditions'] : []), ...(r.capabilities?.manifest?.allowed ? ['manifest'] : []), ...(r.capabilities?.logs?.allowed ? ['logs'] : []), ...(r.capabilities?.access?.allowed ? ['access'] : [])];
   const active = tabs.includes(panel) ? panel : 'summary';
-  return <div className="inspector-body"><h3 className="resource-title">{r.identity.name}</h3><p className="subtitle">{r.identity.kind} · {application.target.name} / {r.identity.namespace || 'Cluster scope'}</p><FreshnessNotice freshness={freshness} disconnected={query.isError} />
-    <dl className="facts identity"><dt>Target ID</dt><dd>{r.identity.target_id}</dd><dt>API / kind</dt><dd>{r.identity.api_version} / {r.identity.kind}</dd><dt>Namespace</dt><dd>{r.identity.namespace || 'Cluster scope'}</dd><dt>UID</dt><dd><code>{r.identity.uid ?? 'Not observed'}</code></dd><dt>Ownership</dt><dd>{r.ownership}</dd></dl>
+  return <div className="inspector-body resource-inspector"><div className="resource-inspector-title"><ResourceKindIcon kind={r.identity.kind} /><h3 ref={title} tabIndex={-1} className="resource-title">{r.identity.name}</h3></div><p className="subtitle">{r.identity.kind} · {application.target.name} / {r.identity.namespace || 'Cluster scope'}</p><FreshnessNotice freshness={freshness} disconnected={query.isError} />
     <nav className="tabs" aria-label="Resource panels">{tabs.map(t => <button key={t} aria-current={active === t ? 'page' : undefined} className={active === t ? 'active' : ''} onClick={() => setPanel(t)}>{t[0].toUpperCase() + t.slice(1)}</button>)}</nav>
-    {active === 'summary' && <><dl className="facts"><dt>Presence</dt><dd><Badge value={r.presence} /></dd><dt>Health</dt><dd><Badge value={r.health ?? 'unknown'} /></dd><dt>Desired / live</dt><dd><Badge value={r.relation ?? 'unknown'} /></dd><dt>Phase</dt><dd>{r.phase || 'Not reported'}</dd><dt>Resource version</dt><dd>{r.resource_version || 'Not observed'}</dd></dl><h4>Images</h4>{r.images?.length ? <ul className="image-list">{r.images.map(image => <li key={image}><code>{image}</code></li>)}</ul> : <p className="muted small">No image information reported.</p>}<h4>Owner UIDs</h4>{r.owner_uids?.length ? <ul>{r.owner_uids.map(uid => <li key={uid}><code>{uid}</code></li>)}</ul> : <p className="muted small">No ownership references reported.</p>}</>}
+    {active === 'summary' && <><dl className="resource-summary-states"><div><dt>Presence</dt><dd><Badge value={r.presence} /></dd></div><div><dt>Health</dt><dd><Badge value={r.health ?? 'unknown'} /></dd></div><div><dt>Desired / live</dt><dd><Badge value={r.relation ?? 'unknown'} /></dd></div></dl>{r.phase && <p className="resource-phase"><span>Phase</span> {r.phase}</p>}<ResourceConfiguration resource={r} /><ResourceRelationships resource={r} inventory={inventory} /><ResourceConditions resource={r} /><details className="resource-identity"><summary>Identity and observation</summary><dl className="facts identity"><dt>Target ID</dt><dd>{r.identity.target_id}</dd><dt>API / kind</dt><dd>{r.identity.api_version} / {r.identity.kind}</dd><dt>Namespace</dt><dd>{r.identity.namespace || 'Cluster scope'}</dd><dt>UID</dt><dd><code>{r.identity.uid ?? 'Not observed'}</code></dd><dt>Ownership</dt><dd>{r.ownership}</dd><dt>Resource version</dt><dd>{r.resource_version || 'Not observed'}</dd><dt>Phase</dt><dd>{r.phase || 'Not reported'}</dd></dl></details></>}
     {active === 'conditions' && (r.conditions?.length ? <pre aria-label="Resource conditions">{JSON.stringify(r.conditions, null, 2)}</pre> : <p>No conditions reported.</p>)}
     {active === 'manifest' && (r.manifest ? <><p className="small muted">Sensitive fields are redacted by the service.</p><pre aria-label="Resource manifest">{JSON.stringify(r.manifest, null, 2)}</pre></> : <Notice title="Manifest unavailable">No manifest was supplied for this observation.</Notice>)}
     {active === 'logs' && <LogPanel key={r.id} applicationId={application.id} resource={r} />}

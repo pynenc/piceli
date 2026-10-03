@@ -44,7 +44,7 @@ async function plan(page, app, { release, changed = false } = {}) {
   await expect(page.getByRole('heading', { name: release ? 'Review rollback' : 'Review deployment', exact: true })).toBeVisible({ timeout: 90000 });
   await expect(page.getByRole('heading', { name: 'Field changes', exact: true })).toBeVisible();
   if (changed) {
-    await expect(page.getByText(`Deployment / ${app}`, { exact: true })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Resource change workbench' }).getByRole('heading', { name: `Deployment / ${app}`, exact: true })).toBeVisible();
     await expect(page.getByLabel('Before /spec/replicas', { exact: true })).toBeVisible();
     await expect(page.getByLabel('After /spec/replicas', { exact: true })).toBeVisible();
   }

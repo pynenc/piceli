@@ -28,10 +28,10 @@ kubeconfig file and context. See {doc}`overview` for the architecture and
 {doc}`roadmap` for the status of each feature.
 ```
 
-## The 0.13.0 flow: GitOps, environments and the web UI
+## GitOps, environments and the web workspace
 
-```{image} _static/ui/environments.png
-:alt: The Piceli web UI listing per-branch environments with their namespace, commit and health
+```{image} _static/ui/composition-overview.png
+:alt: Infrastructure overview linking sources, components and environments beside a selected component inspector
 :width: 720px
 :align: center
 ```
@@ -45,8 +45,17 @@ piceli ui serve --pipeline deploy/app.py:pipeline  # the web UI
 
 The controller keeps one environment per branch at its head ({doc}`gitops`),
 `piceli env` and `piceli envs` operate on them ({doc}`environments`), and the
-web UI shows applications, environments, the controller and Pipeline plans
-with their approval step ({doc}`ui`).
+web workspace connects their source revisions to components, environments and
+observed workloads. Explore the topology, compare exact commits and image
+digests across environments, inspect resource ownership/configuration, and open
+saved plans, deployment journals and captured logs in **Deployment history**.
+Reviewed delivery retains its exact approval step ({doc}`ui`).
+
+From a source checkout, with `uv`, Node.js and npm installed, run `make ui` to
+build and open the current UI with disposable sample state. It normally opens
+`http://127.0.0.1:4178`, with no cluster or credentials to configure. See
+{doc}`ui` for preview access, explicit real-target launch commands and a map of
+the views.
 
 ## A first taste
 
@@ -102,9 +111,9 @@ glossary.
 :link: ui
 :link-type: doc
 
-Applications, per-branch environments, GitOps and Pipeline plans with their
-approval step: local with `piceli ui serve`, or installed in the cluster
-with OIDC.
+Infrastructure topology, compact sources, workload configuration, saved plans,
+revision comparisons and deployment logs. Try `make ui` from a checkout, or
+serve an explicit target locally or in the cluster with OIDC.
 :::
 
 :::{grid-item-card} GitOps and per-branch environments
