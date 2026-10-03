@@ -373,7 +373,11 @@ context (never the current context), forwards `127.0.0.1:8790` to the UI
 Service, and prints one line, `Piceli UI: http://127.0.0.1:8790/?token=…`.
 Open it once: the token becomes a session cookie and leaves the address bar.
 The token appears nowhere else, not in the UI's logs. Ctrl-C stops the
-forward. When port 8790 is taken, `access-port-conflict` names its owner.
+forward. When port 8790 is taken, `access-port-conflict` names its owner;
+when it is a stale `piceli access ui` for the same credentials, stderr
+prints `piceli access stop --stale --cluster infra.py:my_cluster` (or
+`--profile`), which stops only that forward. `piceli access ui` also stops
+the forwards of an earlier `piceli access ui` that crashed.
 When the UI pod restarts it writes a new token: run `piceli access ui` again.
 `--json` prints `started` (with the URL), `status` and `stopped` lines.
 

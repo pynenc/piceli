@@ -247,6 +247,53 @@ def forward_serve(
 # --------------------------------------------------------- on a laptop
 
 
+def ui_registry() -> Any:
+    """The private record of the UI forwards ``access ui`` starts, or ``None``.
+
+    The same directory as ``piceli ui serve`` (``$XDG_STATE_HOME/piceli/ui/
+    forwards``); ``None`` when it cannot be created privately.
+    """
+    from piceli.k8s.owned_processes import OwnedProcessRegistry
+    from piceli.k8s.ui_state import private_ui_state_dir
+
+    try:
+        return OwnedProcessRegistry(private_ui_state_dir() / "forwards")
+    except (OSError, ValueError):
+        return None
+
+
+def ui_holder_check(
+    kubeconfig: Path, context: str, *, registry: Any = None, port: int = PORT
+) -> Any:
+    """Recognise Piceli's own UI forward on ``port`` (see ``port_owner.recognise``).
+
+    The ``kubectl port-forward`` that ``piceli access ui`` starts for this
+    kubeconfig and context (supervised by a ``piceli access ui`` that is
+    still running, or orphaned), or a child the registry recorded for that
+    exact forward. Anything else is not Piceli's.
+    """
+    from piceli.k8s.port_owner import PortOwner, recognise
+
+    forwards = ((NAMESPACE, f"service/{NAME}", port, PORT),)
+
+    def check(found: PortOwner | None) -> Any:
+        return recognise(
+            found,
+            kubeconfig=str(kubeconfig),
+            context=context,
+            forwards=forwards,
+            registry=registry,
+        )
+
+    return check
+
+
+def stale_ui_command(cluster: str | None, profile: str | None) -> str:
+    """The ``piceli access stop --stale`` line for this UI."""
+    which = f"--cluster {cluster}" if cluster is not None else f"--profile {profile}"
+    return f"piceli access stop --stale {which}"
+
+
 def _credentials(cluster: str | None, profile: str | None) -> tuple[Path, str]:
     from piceli.profiles import ProfileError, resolve
 
@@ -332,9 +379,20 @@ def access_ui(
         local_port=PORT,
         remote_port=PORT,
     )
-    conflicts = port_conflicts([shortcut])
+    registry = ui_registry()
+    if registry is not None:
+        registry.reap_orphans()  # forwards of an `access ui` that crashed
+    conflicts = port_conflicts(
+        [shortcut],
+        recognise_owner=ui_holder_check(kubeconfig, context, registry=registry),
+    )
     if conflicts:
         say(f"piceli: {conflicts[0].describe()}")
+        if any(getattr(getattr(c, "holder", None), "piceli", False) for c in conflicts):
+            say(
+                "piceli: stop piceli's stale processes with: "
+                + stale_ui_command(cluster, profile)
+            )
         reject(
             "access-port-conflict",
             conflicts=[item.to_dict() for item in conflicts],
@@ -345,6 +403,7 @@ def access_ui(
         kubectl=executable,
         shortcuts=[shortcut],
         namespace=NAMESPACE,
+        registry=registry,
     )
     url = f"http://127.0.0.1:{PORT}/?token={token}"
     failed = False

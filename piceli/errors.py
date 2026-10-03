@@ -1778,7 +1778,9 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "`piceli-server` when it is Piceli's own process for this app, else "
         "`other`; another process's command line is never printed).",
         "When Piceli's own stale process holds it: `piceli access stop --stale "
-        "TARGET` (add `--port N` for a dashboard port). Otherwise stop the listed "
+        "TARGET` (add `--port N` for a dashboard port; for `piceli access ui`, "
+        "`piceli access stop --stale --cluster MODULE:ATTR` or `--profile NAME`). "
+        "Otherwise stop the listed "
         "pid yourself, or change `local=` in the model, then run the command again.",
         False,
         "access",
@@ -4856,7 +4858,7 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
     _E(
         "access-ui-target-required",
         "Which cluster's UI",
-        "`piceli access ui` needs exactly one of `--cluster MODULE:ATTR` (a composition's `Cluster`) or `--profile NAME` (a `piceli login` profile).",
+        "`piceli access ui` (and `piceli access stop --stale` for the UI forward, instead of TARGET) needs exactly one of `--cluster MODULE:ATTR` (a composition's `Cluster`) or `--profile NAME` (a `piceli login` profile).",
         "Run `piceli access ui --cluster infra.py:my_cluster` or `piceli access ui --profile my-cluster`.",
         False,
         "cluster-ui",
