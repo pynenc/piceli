@@ -56,6 +56,7 @@ def lab(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         )
     )
     monkeypatch.setenv("PICELI_PROFILES_DIR", str(tmp_path / "profiles"))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     save_profile("my-cluster", config, "lab")
     reads: list[tuple[Path, str]] = []
 

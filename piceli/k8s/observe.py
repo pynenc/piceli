@@ -1329,8 +1329,22 @@ class ForwardSupervisor:
             self._schedule_restart_locked(managed, type(error).__name__)
             return
         if self._registry is not None:
-            # Survives a crash of this process: the next start reaps it.
-            self._registry.record(managed.process.pid)
+            # Survives a crash of this process: the next start reaps it, and
+            # `piceli access stop --stale` recognises it by its label.
+            from piceli.k8s.owned_processes import forward_label
+
+            forward = managed.forward
+            self._registry.record(
+                managed.process.pid,
+                label=forward_label(
+                    str(self._kubeconfig),
+                    self._context or "",
+                    forward.namespace,
+                    forward.target,
+                    forward.local_port,
+                    forward.remote_port,
+                ),
+            )
         now = time.monotonic()
         managed.error = None
         managed.health = "starting"
