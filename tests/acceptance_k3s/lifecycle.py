@@ -39,6 +39,24 @@ run as written. Stages, in the order they run:
 10. Retention plan, approve, registry garbage collection: only seeded
     orphans and old controller/builder copies go; every workload still pulls.
 
+From 0.14.6 (stage numbers say what they check, not when they run):
+
+11. After 6: a check change (A) asks rc once and is approved; a failing
+    check (B) asks and is not approved; the commit reverting B brings back
+    A's plan, which rc applies without asking again.
+12. After 7: the in-cluster UI (``piceli access ui``, as a user opens it)
+    lists the branch environment's runs in its deployment history.
+13. A stale UI forward: ``piceli access ui`` killed with SIGKILL leaves its
+    ``kubectl``; a second ``access ui`` names it as Piceli's own and
+    ``piceli access stop --stale`` stops it.
+14. Last: the UI's deployment history lists every run of main and rc that a
+    stage made, newest first, with trigger, commits, plan hash, rolled
+    components and check outcomes (and, when ``ui/node_modules`` has
+    Playwright, the Deployment history page shows rows).
+
+The UI's launch token is never printed: the served command's output stays
+in memory and is redacted before any failure prints it.
+
 The cluster, the scratch directory, the local images and both scratch
 virtual environments are removed whatever the outcome. A failing stage prints
 the controller's log tail, the GitOps status and failed Job logs.
@@ -47,17 +65,21 @@ the controller's log tail, the GitOps status and failed Job logs.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import itertools
 import json
 import os
 import re
 import secrets
 import shutil
+import signal
+import subprocess
 import sys
 import tempfile
 import time
 import traceback
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -71,10 +93,19 @@ from lifecycle_support import (
     Proc,
     Repos,
     Result,
+    Served,
     StageFailed,
+    UiClient,
+    UiError,
+    alive,
     check,
+    kill_group,
     log,
     make_tls,
+    port_open,
+    processes,
+    redact,
+    run_bounded,
     wait_for,
 )
 
@@ -89,16 +120,20 @@ BUSYBOX = (
     "docker.io/library/busybox:1.37.0"
     "@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e"
 )
-#: The previous release and its public images (amd64 + arm64).
-PREVIOUS = "0.14.4"
+#: The previous release and its public images (amd64 + arm64; the index
+#: digests of ghcr.io/pynenc/piceli-{controller,builder}:0.14.5).
+PREVIOUS = "0.14.5"
 PREVIOUS_IMAGE = (
     "ghcr.io/pynenc/piceli-controller"
-    "@sha256:e130dbc2859dff2bee4f83f513323bdcb50535b955c23a33dddc118425d202ef"
+    "@sha256:bb2a693ec923ce514ba1dde507a07a9938791581fe1b7d65643c4da269a60a44"
 )
 PREVIOUS_BUILDER = (
     "ghcr.io/pynenc/piceli-builder"
-    "@sha256:fcb10502d3ff494d033870a2588a607a212aa148255d91134ee90e17f7014ba6"
+    "@sha256:7a35ab4d4d8ea3c09ce6e65a756ad4b338bbcc56f33d073aef931f8136e92e11"
 )
+#: The in-cluster UI's local port (``piceli access ui``).
+UI_PORT = 8790
+UI_URL = r"Piceli UI: (http://\S+)"
 WORKLOADS = ("web", "store", "watcher", "cache", "reporter")
 ALL_CHECKS = {
     "web-index",
@@ -108,7 +143,9 @@ ALL_CHECKS = {
     "reporter-runs",
     "site-config",
 }
-STAGE_ORDER = ("2", "3", "1", "4", "5", "6", "7", "8", "9", "10")
+STAGE_ORDER = (
+    "2", "3", "1", "4", "5", "6", "11", "7", "12", "8", "9", "10", "13", "14",
+)  # fmt: skip
 STAGE_TITLES = {
     "1": "upgrade from the previous release",
     "2": "bootstrap",
@@ -120,7 +157,19 @@ STAGE_TITLES = {
     "8": "broken build",
     "9": "delete the branch environment",
     "10": "retention and registry GC",
+    "11": "reverted check change asks once",
+    "12": "UI history of the branch environment",
+    "13": "stale access forward",
+    "14": "UI history of main and rc",
 }
+STAGE_METHODS = {
+    "1": "1_upgrade", "2": "2_bootstrap", "3": "3_first_main", "4": "4_one_source",
+    "5": "5_check_only", "6": "6_promote", "7": "7_branch", "8": "8_broken_build",
+    "9": "9_teardown", "10": "10_retention", "11": "11_reverted_check",
+    "12": "12_ui_branch", "13": "13_stale_access", "14": "14_ui_history",
+}  # fmt: skip
+#: Namespaces of the environments whose history the UI must list.
+NAMESPACES = {"main": "lc-main", "rc": "lc-rc", "wp-feature": "lc-wp-feature"}
 #: Stages whose failure stops the run (the rest depend on them).
 CRITICAL = {"2", "3"}
 
@@ -174,6 +223,8 @@ class Lifecycle:
             "HOME": os.environ.get("HOME", str(scratch)),
             "TMPDIR": str(scratch / "tmp"),
             "PICELI_PROFILES_DIR": str(scratch / "profiles"),
+            # piceli's local state (the access ui forward registry).
+            "XDG_STATE_HOME": str(scratch / "state"),
             # Nothing may fall back to an ambient kubeconfig.
             "KUBECONFIG": str(scratch / "no-such-kubeconfig"),
             "LANG": "C.UTF-8",
@@ -211,6 +262,10 @@ class Lifecycle:
         self.log_since = ""
         self.since_epoch = 0.0
         self.first_main: dict[str, Any] = {}
+        #: Per environment, the runs the stages made (oldest first), as the
+        #: UI's deployment history must list them.
+        self.expected: dict[str, list[dict[str, Any]]] = {}
+        self.served: list[Served] = []
 
     # ------------------------------------------------------------ helpers
     @property
@@ -393,6 +448,161 @@ class Lifecycle:
             f"checks {brief}, why {run['checks']['why']!r}, "
             f"skipped {[i.get('check') for i in run['checks']['skipped']]}")  # fmt: skip
         return run
+
+    def expect(
+        self,
+        stage: str,
+        env: str,
+        record: dict[str, Any],
+        *,
+        rolled: set[str] | None,
+        run: dict[str, Any] | None = None,
+        plan_hash: str = "",
+    ) -> None:
+        """A run the UI's deployment history of ``env`` must list (stage 12/14)."""
+        revision = record.get("deployed_revision") or record.get("revision") or {}
+        self.expected.setdefault(env, []).append(
+            {
+                "stage": stage,
+                "commits": {k: v for k, v in revision.items() if isinstance(v, str)},
+                "plan_hash": plan_hash,
+                "rolled": sorted(rolled) if rolled is not None else None,
+                "checks": sorted(
+                    str(r["name"])
+                    for r in (run or {}).get("checks", {}).get("results", [])
+                ),
+            }
+        )
+
+    # ------------------------------------------------------------ the UI
+    def serve(self, step: str) -> Served:
+        """Start a ``serve`` step of the commands file as written (until stopped)."""
+        argv = self.commands.argv(step, {**self.values, "piceli": self.piceli})
+        served = Served(argv, env=self.env, cwd=self.infra)
+        self.served.append(served)
+        return served
+
+    def bounded(self, step: str, timeout: float = 120) -> Result:
+        """Run a step that might start a forward instead of exiting (own session)."""
+        argv = self.commands.argv(step, {**self.values, "piceli": self.piceli})
+        return run_bounded(argv, env=self.env, cwd=self.infra, timeout=timeout)
+
+    def _ui_port_free(self) -> None:
+        check(
+            not port_open(UI_PORT),
+            f"127.0.0.1:{UI_PORT} is in use on this machine before the run opens "
+            "the UI (not by this run): free it and run again",
+        )
+
+    @contextlib.contextmanager
+    def ui_session(self) -> Iterator[tuple[UiClient, str]]:
+        """``piceli access ui`` as a user runs it; a client with the UI's session.
+
+        Yields the client and the launch URL (in memory only, never logged).
+        Stops the command (Ctrl-C, then SIGKILL) and any forward it left.
+        """
+        self._ui_port_free()
+        served = self.serve("access-ui")
+        children: list[tuple[int, str]] = []
+        try:
+            url = served.wait_line(UI_URL, timeout=180).group(1)
+            wait_for(
+                f"127.0.0.1:{UI_PORT} forwarded",
+                lambda: port_open(UI_PORT),
+                timeout=120,
+                interval=2,
+            )
+            children = served.children()
+            client = UiClient(url)
+            client.open()
+            yield client, url
+        finally:
+            children = children or served.children()
+            served.stop()
+            for pid, command in children:
+                if "port-forward" in command and alive(pid):
+                    kill_group(pid)
+
+    def check_history(
+        self, client: UiClient, envs: list[str], problems: list[str]
+    ) -> None:
+        """Each environment's runs in the UI's history, newest first, with evidence.
+
+        Through the endpoints the Deployment history page calls: the
+        applications (the environment's by name or namespace, with
+        ``capabilities.activity`` allowed) and each one's operations. When
+        the environment has no application of its own, the composition's
+        (``cluster``) history holds its runs: rows naming the environment
+        (``env``/``environment``) or its namespace.
+        """
+        apps = client.items("/api/v1/applications")
+        if isinstance(apps, UiError):
+            problems.append(f"GET /api/v1/applications: {apps.status} {apps.code}")
+            return
+        log("UI applications: " + "; ".join(
+            f"{a.get('id')} ({a.get('name')}, {(a.get('target') or {}).get('namespace')}): "
+            f"activity {json.dumps((a.get('capabilities') or {}).get('activity'))}"
+            for a in apps
+        ))  # fmt: skip
+        for env in envs:
+            expected = self.expected.get(env) or []
+            app = _application(apps, env)
+            shared = app is None
+            if shared:
+                app = next((a for a in apps if a.get("name") == "cluster"), None)
+            if app is None:
+                problems.append(f"{env}: no application in the UI")
+                continue
+            activity = (app.get("capabilities") or {}).get("activity") or {}
+            if not activity.get("allowed"):
+                problems.append(
+                    f"{env}: history not readable (activity {activity.get('reason')!r})"
+                )
+                continue
+            path = f"/api/v1/applications/{_quote(app['id'])}/operations"
+            rows = client.items(path)
+            if isinstance(rows, UiError):
+                problems.append(f"{env}: GET {path}: {rows.status} {rows.code}")
+                continue
+            if shared:
+                rows = [r for r in rows if _of_env(r, env)]
+            log(f"{env}: {len(rows)} run(s) in the UI; newest: " + " | ".join(
+                f"{_find(r, ('trigger',))} {_find(r, ('created_at', 'started_at'))} "
+                f"{_find(r, ('state',))}" for r in rows[:6]
+            ))  # fmt: skip
+            problems.extend(
+                f"{env}: {item}" for item in _history_problems(rows, expected)
+            )
+
+    def _browser_history(self, url: str, problems: list[str]) -> None:
+        """Optional: the Deployment history page shows rows (Playwright from ``ui/``)."""
+        ui = self.args.playwright_ui
+        node = shutil.which("node")
+        if not (node and (ui / "node_modules" / "@playwright" / "test").is_dir()):
+            log(f"browser check skipped: no node or no Playwright in {ui}/node_modules")
+            return
+        script = self.scratch / "history.mjs"
+        script.write_text(BROWSER_SCRIPT)
+        try:
+            done = subprocess.run(
+                [node, str(script)], capture_output=True, text=True, timeout=180,
+                env={**self.env, "PW_UI_DIR": str(ui), "PW_LAUNCH_URL": url},
+                check=False,
+            )  # fmt: skip
+        except subprocess.TimeoutExpired:
+            problems.append("browser: the Deployment history page did not load in 180s")
+            return
+        body = Result([], done.returncode, done.stdout, done.stderr).json() or {}
+        log(f"browser: {json.dumps(body)[:300]}")
+        if done.returncode != 0 or not body:
+            problems.append(
+                f"browser: exit {done.returncode}: {redact(done.stderr[-600:])}"
+            )
+        elif body.get("unavailable") or not body.get("rows"):
+            problems.append(
+                f"browser: the Deployment history page shows {body.get('rows', 0)} run(s)"
+                + (" (history unavailable)" if body.get("unavailable") else "")
+            )
 
     # ------------------------------------------------------------ set up
     def setup(self) -> None:
@@ -695,6 +905,10 @@ class Lifecycle:
             "main pods off agent-0",
         )
         self.first_main = {"record": record, "generations": self.generations("lc-main")}
+        self.expect(
+            "3", "main", record, rolled=set(states), run=run,
+            plan_hash=self.values.get("main_hash", ""),
+        )  # fmt: skip
 
     def stage_1_upgrade(self) -> None:
         self.piceli = self.cand_cli
@@ -753,7 +967,14 @@ class Lifecycle:
         verification = record.get("verification") or {}
         log(f"main after the upgrade: last_action {record.get('last_action')!r}, "
             f"health {record.get('health')!r}, verification {json.dumps(verification)[:300]}")  # fmt: skip
-        if (
+        if _version(self.args.previous) >= (0, 14, 5):
+            # The previous release recorded its check set: the upgrade has
+            # nothing new to verify ("release already verified").
+            if record.get("health") not in {None, "healthy"}:
+                problems.append(
+                    f"main health {record.get('health')!r} after the upgrade"
+                )
+        elif (
             verification.get("state") != "verified"
             or verification.get("trigger") != "unverified"
         ):
@@ -763,6 +984,7 @@ class Lifecycle:
             )
         if verification.get("rolled"):
             problems.append(f"the verification rolled {verification.get('rolled')}")
+        self.expect("1", "main", record, rolled=set())
         # Re-running the bootstrap commands with the new release is idempotent.
         done = self.run_group("bootstrap")
         for step in ("cluster-init-plan", "gitops-enable-plan"):
@@ -914,6 +1136,7 @@ class Lifecycle:
         # The store's new image passed its pre-rollout checks (configuration
         # and read-only upgrade check) and its claim got a restore point.
         run = self.checked_run("/main/", self.since_epoch)
+        self.expect("4", "main", record, rolled={"store"}, run=run)
         for stage in ("prerollout", "backup", "apply", "checks"):
             check(
                 run["stages"].get(stage) == "done",
@@ -957,6 +1180,7 @@ class Lifecycle:
             )
         try:
             run = self.checked_run("/main/", self.since_epoch)
+            self.expect("5", "main", record, rolled=set(), run=run)
             results = {r["name"]: r["passed"] for r in run["checks"]["results"]}
             if results.get("cache-answers") is not True:
                 problems.append(
@@ -1009,6 +1233,10 @@ class Lifecycle:
             what="approved deploy",
         )
         run = self.checked_run("/rc/", self.since_epoch)
+        self.expect(
+            "6", "rc", record, rolled=set(record.get("components") or {}), run=run,
+            plan_hash=self.values["rc_hash"],
+        )  # fmt: skip
         results = {r["name"]: r["passed"] for r in run["checks"]["results"]}
         check(set(results) >= ALL_CHECKS, f"checks run on rc: {sorted(results)}")
         check(all(results.values()), f"failed checks on rc: {results}")
@@ -1036,6 +1264,13 @@ class Lifecycle:
         namespace = record.get("namespace") or "lc-wp-feature"
         check(namespace == "lc-wp-feature", f"namespace {namespace}")
         run = self.checked_run("branches", self.since_epoch)
+        self.expect(
+            "7",
+            "wp-feature",
+            record,
+            rolled=set(record.get("components") or {}),
+            run=run,
+        )
         results = {r["name"]: r["passed"] for r in run["checks"]["results"]}
         skipped = {i.get("check"): i.get("why") for i in run["checks"]["skipped"]}
         check(
@@ -1322,6 +1557,235 @@ class Lifecycle:
             if done.code != 0:
                 problems.append(f"{key} did not roll out again after GC")
 
+    def stage_11_reverted_check(self) -> None:
+        """A check change asks rc once; reverting a later one asks nothing.
+
+        A: a check-only change; rc asks, it is approved and deployed. B: a
+        failing check, not approved. The revert of B brings back A's plan:
+        rc applies it again without asking (``deployed_plan_hash`` is A's).
+        """
+        check(
+            self.cluster.get("namespace", "lc-rc") is not None,
+            "rc is not deployed (stage 6 must run first)",
+        )
+        before = {ns: self.generations(ns) for ns in ("lc-main", "lc-rc")}
+        source = self.repos.read("infra", "lifecycle_app.py")
+        if "EXTRA_CHECKS: list = []" in source:
+            source = source.replace("EXTRA_CHECKS: list = []", EXTRA_CHECK)
+        check('["echo", "cache-answers"]' in source, "no cache-answers check to change")
+        change_a = source.replace(
+            '["echo", "cache-answers"]', '["echo", "cache-answers", "again"]'
+        )
+        self.log_since = self.mark()
+        since = self.since_epoch
+        sha_a = self.repos.commit(
+            "infra", "checks: the cache answers again", {"lifecycle_app.py": change_a}
+        )
+        hash_a = self._rc_settle(sha_a, "check change A", approve=True)
+        check(hash_a, "rc did not ask for approval of check change A")
+        record = self.wait_env(
+            "rc", self.deployed("rc", {"infra": sha_a}), timeout=1200, what="change A"
+        )
+        run = self.checked_run("/rc/", since)
+        self.expect("11", "rc", record, rolled=set(), run=run, plan_hash=hash_a)
+        main = self.wait_env(
+            "main",
+            self.deployed("main", {"infra": sha_a}),
+            timeout=900,
+            what="change A",
+        )
+        self.expect(
+            "11", "main", main, rolled=set(), run=self.checked_run("/main/", since)
+        )
+        # B: a failing check; rc asks, nobody approves.
+        change_b = change_a.replace(
+            'output_contains="cache-answers"', 'output_contains="never-printed"'
+        )
+        check(change_b != change_a, "no output_contains of cache-answers to break")
+        sha_b = self.repos.commit(
+            "infra", "checks: a failing check", {"lifecycle_app.py": change_b}
+        )
+        hash_b = self._rc_settle(sha_b, "check change B", approve=False)
+        log(f"rc asks for B: {hash_b[:23] or 'no'}; not approved")
+        # The revert of B: A's plan again, already approved and running.
+        self.log_since = self.mark()
+        since = self.since_epoch
+        reverted = self.repos.revert("infra")
+        problems: list[str] = []
+        again = self._rc_settle(reverted, "the revert of B", approve=True)
+        if again:
+            same = "A's plan" if again == hash_a else "not A's plan"
+            problems.append(
+                f"rc asked again after the revert (plan {again[:23]}, {same})"
+            )
+        record = self.wait_env(
+            "rc", self.deployed("rc", {"infra": reverted}), timeout=1200, what="revert"
+        )
+        log(f"rc after the revert: plan_hash {record.get('plan_hash')!r}, "
+            f"deployed_plan_hash {str(record.get('deployed_plan_hash'))[:23]!r}, "
+            f"last_action {record.get('last_action')!r}, health {record.get('health')!r}")  # fmt: skip
+        if record.get("plan_hash") is not None:
+            problems.append(
+                f"rc plan_hash {str(record.get('plan_hash'))[:23]!r}, not null"
+            )
+        if record.get("deployed_plan_hash") != hash_a:
+            problems.append(
+                f"rc deployed_plan_hash {str(record.get('deployed_plan_hash'))[:23]!r}, "
+                f"not A's {hash_a[:23]}"
+            )
+        line = f"rc: plan {hash_a} already approved and running; applying it without asking again"
+        if line not in self.controller_log(self.log_since):
+            problems.append("no 'rc: plan <A> already approved and running' log line")
+        try:
+            run = self.checked_run("/rc/", since)
+        except StageFailed as error:
+            run = None
+            problems.append(str(error))
+        self.expect("11", "rc", record, rolled=set(), run=run, plan_hash=hash_a)
+
+        def main_back(record: dict[str, Any]) -> bool:
+            revision = record.get("deployed_revision") or record.get("revision") or {}
+            return (
+                record.get("state") == "deployed" and revision.get("infra") == reverted
+            )
+
+        main = self.wait_env("main", main_back, timeout=900, what="revert")
+        try:
+            main_run = self.checked_run("/main/", since)
+        except StageFailed:
+            main_run = None
+        self.expect("11", "main", main, rolled=set(), run=main_run)
+        after = {ns: self.generations(ns) for ns in ("lc-main", "lc-rc")}
+        if after != before:
+            problems.append(f"check changes rolled workloads: {before} -> {after}")
+        check(not problems, "; ".join(problems))
+
+    def _rc_settle(self, sha: str, what: str, *, approve: bool) -> str:
+        """Wait until rc deploys ``infra@sha`` or asks; the hash asked ("" if none).
+
+        With ``approve`` the asked plan is approved (the note's approve-rc).
+        """
+
+        def settled(record: dict[str, Any]) -> bool:
+            revision = record.get("revision") or {}
+            if (
+                record.get("state") == "approval-required"
+                and record.get("plan_hash")
+                and revision.get("infra", sha) == sha
+            ):
+                return True
+            return self.deployed("rc", {"infra": sha})(record)
+
+        record = self.wait_env("rc", settled, timeout=900, what=what)
+        if record.get("state") != "approval-required":
+            return ""
+        asked = str(record["plan_hash"])
+        log(f"rc asks for approval after {what} ({record.get('reason')})")
+        if approve:
+            self.values["rc_hash"] = asked
+            self.run_group("approve-rc")
+        return asked
+
+    def stage_12_ui_branch(self) -> None:
+        check(self.expected.get("wp-feature"), "no branch run recorded (stage 7)")
+        problems: list[str] = []
+        with self.ui_session() as (client, _):
+            self.check_history(client, ["wp-feature"], problems)
+        check(not problems, "; ".join(problems))
+
+    def stage_13_stale_access(self) -> None:
+        """A forward whose piceli was killed: named as Piceli's own, then stopped."""
+        self._ui_port_free()
+        served = self.serve("access-ui")
+        kubectl: list[int] = []
+        try:
+            served.wait_line(UI_URL, timeout=180)
+            wait_for(f"127.0.0.1:{UI_PORT} forwarded", lambda: port_open(UI_PORT),
+                     timeout=120, interval=2)  # fmt: skip
+            kubectl = [pid for pid, cmd in served.children() if "port-forward" in cmd]
+            check(
+                kubectl,
+                f"no kubectl port-forward child of piceli access ui ({served.pid})",
+            )
+            os.kill(served.pid, signal.SIGKILL)
+            served.process.wait(timeout=10)
+            time.sleep(2)
+            check(
+                any(alive(pid) for pid in kubectl) and port_open(UI_PORT),
+                "kubectl exited with its piceli: nothing stale to detect",
+            )
+            log(f"piceli access ui killed; its kubectl (pid {kubectl}) holds "
+                f"127.0.0.1:{UI_PORT}")  # fmt: skip
+            problems: list[str] = []
+            again = self.bounded("access-ui", timeout=90)
+            body = again.json() or {}
+            said = redact(again.stderr.strip())[-800:]
+            log(f"access ui again: exit {again.code}, reason {body.get('reason')!r}, "
+                f"conflicts {json.dumps(body.get('conflicts'))[:400]}")  # fmt: skip
+            if again.code in {0, -9}:
+                problems.append("a second access ui did not refuse the held port")
+            else:
+                holders = [c.get("holder") for c in body.get("conflicts") or []]
+                if body.get("reason") != "access-port-conflict":
+                    problems.append(
+                        f"second access ui: {body.get('reason')!r}, not access-port-conflict"
+                    )
+                if not any(h in {"piceli-forward", "piceli-server"} for h in holders):
+                    problems.append(
+                        f"the conflict does not name Piceli's own forward (holders {holders}; "
+                        f"said: {said.splitlines()[0] if said else ''!r})"
+                    )
+                stop_line = self.commands.line(
+                    "access-stop-stale", {**self.values, "piceli": "piceli"}
+                )
+                hint = " ".join(stop_line.split()[1:4])  # access stop --stale
+                if hint not in said + json.dumps(body):
+                    problems.append(f"no '{hint}' hint in the refusal")
+                if "(not piceli)" in said:
+                    problems.append("the refusal calls Piceli's forward '(not piceli)'")
+            stopped = self.bounded("access-stop-stale", timeout=60)
+            log(f"access stop --stale: exit {stopped.code}: "
+                f"{redact(stopped.stdout.strip())[-400:]}")  # fmt: skip
+            if stopped.code != 0:
+                problems.append(
+                    f"access stop --stale: exit {stopped.code}: "
+                    f"{redact(stopped.stderr.strip())[-300:]}"
+                )
+            else:
+                gone = [
+                    (i.get("port"), i.get("holder"))
+                    for i in (stopped.json() or {}).get("stopped") or []
+                ]
+                if (UI_PORT, "piceli-forward") not in gone:
+                    problems.append(
+                        f"access stop --stale stopped {gone}, not the UI forward"
+                    )
+            try:
+                wait_for(
+                    "the stale forward stopped",
+                    lambda: not port_open(UI_PORT) and not any(alive(p) for p in kubectl),
+                    timeout=20, interval=1,
+                )  # fmt: skip
+            except StageFailed:
+                problems.append(
+                    f"the stale kubectl (pid {kubectl}) still holds {UI_PORT}"
+                )
+            check(not problems, "; ".join(problems))
+        finally:
+            served.stop()
+            for pid in kubectl:
+                if any(p == pid and "port-forward" in c for p, _, c in processes()):
+                    kill_group(pid)
+
+    def stage_14_ui_history(self) -> None:
+        envs = [env for env in ("main", "rc") if self.expected.get(env)]
+        check(envs, "no main or rc run recorded")
+        problems: list[str] = []
+        with self.ui_session() as (client, url):
+            self.check_history(client, envs, problems)
+            self._browser_history(url, problems)
+        check(not problems, "; ".join(problems))
+
     # ------------------------------------------------------------ driver
     def tail(self, stage: str) -> None:
         """The evidence of a failing stage: controller log, status, failed Jobs."""
@@ -1374,11 +1838,7 @@ class Lifecycle:
                 continue
             log(f"===== stage {title}")
             begin = time.monotonic()
-            method = getattr(self, "stage_" + {
-                "1": "1_upgrade", "2": "2_bootstrap", "3": "3_first_main", "4": "4_one_source",
-                "5": "5_check_only", "6": "6_promote", "7": "7_branch", "8": "8_broken_build",
-                "9": "9_teardown", "10": "10_retention",
-            }[stage])  # fmt: skip
+            method = getattr(self, "stage_" + STAGE_METHODS[stage])
             try:
                 method()
                 self.results.append((title, "passed", time.monotonic() - begin, ""))
@@ -1408,6 +1868,13 @@ class Lifecycle:
         return 0 if all(state in {"passed"} for _, state, _, _ in self.results) else 1
 
     def cleanup(self) -> None:
+        for served in self.served:
+            served.stop(timeout=5)
+        # Any forward of this run's kubeconfig left behind (a killed piceli).
+        mine = str(self.cluster.kubeconfig)
+        for pid, _, command in processes():
+            if "port-forward" in command and mine in command:
+                kill_group(pid)
         for server in self.servers:
             try:
                 server.stop()
@@ -1437,6 +1904,143 @@ def raise_pull(image: str, waiting: dict[str, Any]) -> None:
 def first_line(error: BaseException) -> str:
     text = str(error).strip() or type(error).__name__
     return text.splitlines()[0][:300]
+
+
+BROWSER_SCRIPT = """\
+import { createRequire } from 'node:module';
+const require = createRequire(process.env.PW_UI_DIR + '/package.json');
+const { chromium } = require('@playwright/test');
+const launch = process.env.PW_LAUNCH_URL;
+const browser = await chromium.launch();
+try {
+  const page = await browser.newPage();
+  await page.goto(launch);
+  await page.goto(new URL(launch).origin + '/delivery?deliveryView=runs');
+  await page.waitForLoadState('networkidle').catch(() => {});
+  await page.getByText(/Deployment history/).first().waitFor({ timeout: 30000 }).catch(() => {});
+  await page.locator('article.activity-run').first().waitFor({ timeout: 30000 }).catch(() => {});
+  const rows = await page.locator('article.activity-run').count();
+  const unavailable = await page.getByText(/Deployment history unavailable|No accessible deployment history/).count();
+  console.log(JSON.stringify({ rows, unavailable: unavailable > 0 }));
+} finally {
+  await browser.close();
+}
+"""
+
+
+def _version(text: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in re.findall(r"\d+", text)[:3])
+
+
+def _quote(value: str) -> str:
+    import urllib.parse
+
+    return urllib.parse.quote(str(value), safe="")
+
+
+def _application(apps: list[dict[str, Any]], env: str) -> dict[str, Any] | None:
+    """The UI application of ``env``: by name, else by its namespace."""
+    for app in apps:
+        if app.get("name") == env:
+            return app
+    namespace = NAMESPACES.get(env)
+    for app in apps:
+        if namespace and (app.get("target") or {}).get("namespace") == namespace:
+            return app
+    return None
+
+
+def _of_env(row: Any, env: str) -> bool:
+    """Whether a history row of the composition's application is ``env``'s."""
+    if _find(row, ("env", "environment")) == env:
+        return True
+    namespace = NAMESPACES.get(env)
+    return bool(namespace) and f'"{namespace}"' in json.dumps(row)
+
+
+def _find(value: Any, keys: tuple[str, ...]) -> Any:
+    """The first non-empty value under any of ``keys`` (in order), at any depth."""
+    for key in keys:
+        stack = [value]
+        while stack:
+            item = stack.pop(0)
+            if isinstance(item, dict):
+                if item.get(key) not in (None, "", [], {}):
+                    return item[key]
+                stack.extend(item.values())
+            elif isinstance(item, list):
+                stack.extend(item)
+    return None
+
+
+def _names(value: Any) -> set[str]:
+    if isinstance(value, dict):
+        return {str(k) for k in value}
+    if isinstance(value, list):
+        return {
+            str(v.get("name") or v.get("component") or v)
+            if isinstance(v, dict)
+            else str(v)
+            for v in value
+        }
+    return set()
+
+
+def _history_problems(rows: list[Any], expected: list[dict[str, Any]]) -> list[str]:
+    """What the history ``rows`` (newest first) lack of the ``expected`` runs.
+
+    A run matches the first row (newest) whose text holds every commit of
+    its revision; that row must carry a trigger, a plan hash (the one
+    approved, when the stage knows it), the rolled components and the check
+    outcomes (each check that ran, by name). Matches must be newest first.
+    """
+    problems: list[str] = []
+    texts = [json.dumps(row) for row in rows]
+    stamps = [str(_find(row, ("created_at", "started_at", "at")) or "") for row in rows]
+    if any(a and b and a < b for a, b in itertools.pairwise(stamps)):
+        problems.append("runs are not newest first")
+    matched: list[tuple[int, str]] = []
+    for run in expected:
+        label = f"stage {run['stage']}"
+        commits = [sha for sha in run["commits"].values() if sha]
+        index = next(
+            (
+                i
+                for i, text in enumerate(texts)
+                if commits and all(sha in text for sha in commits)
+            ),
+            None,
+        )
+        if index is None:
+            short = {k: v[:12] for k, v in run["commits"].items()}
+            problems.append(f"no run of {label} (commits {short})")
+            continue
+        matched.append((index, label))
+        row, text = rows[index], texts[index]
+        if not _find(row, ("trigger",)):
+            problems.append(f"{label}: no trigger")
+        if run["plan_hash"]:
+            if run["plan_hash"] not in text:
+                problems.append(f"{label}: plan hash {run['plan_hash'][:23]} not shown")
+        elif not _find(row, ("plan_hash", "approved_digest", "plan_digest")):
+            problems.append(f"{label}: no plan hash")
+        rolled = _find(row, ("rolled", "rolled_components"))
+        if rolled is None and run["rolled"]:
+            problems.append(f"{label}: no rolled components (expected {run['rolled']})")
+        elif run["rolled"] is not None and isinstance(rolled, (list, dict)):
+            if _names(rolled) != set(run["rolled"]):
+                problems.append(
+                    f"{label}: rolled {sorted(_names(rolled))}, expected {run['rolled']}"
+                )
+        if not _find(row, ("checks", "check_results", "checks_outcome")):
+            problems.append(f"{label}: no check outcomes")
+        missing = [name for name in run["checks"] if name not in text]
+        if missing:
+            problems.append(f"{label}: checks not shown: {missing}")
+    for (newer, a), (older, b) in zip(matched[1:], matched, strict=False):
+        if not newer < older:
+            problems.append(f"{a} is not listed above {b}")
+    return problems
 
 
 def free_port() -> int:
@@ -1507,8 +2111,11 @@ def main(argv: list[str] | None = None) -> int:
                         help="candidate images: previous images plus the wheel (default), "
                         "or images/Dockerfile")  # fmt: skip
     parser.add_argument(
-        "--stages", default="1-10", help="e.g. 1-10 or 1,2,3 (setup always runs)"
+        "--stages", default="1-14", help="e.g. 1-14 or 1,2,3 (setup always runs)"
     )
+    parser.add_argument("--playwright-ui", type=Path, default=None,
+                        help="ui/ directory with node_modules for the optional browser "
+                        "check (default: the candidate's ui/; skipped without Playwright)")  # fmt: skip
     args = parser.parse_args(argv)
     if args.print_commands:
         print(Commands.load(COMMANDS).render_note())
@@ -1522,6 +2129,7 @@ def main(argv: list[str] | None = None) -> int:
         args.candidate_image
     ) and not args.candidate_image.startswith(REGISTRY_HOST)
     args.stages = parse_stages(args.stages) | {"1", "2", "3"}
+    args.playwright_ui = (args.playwright_ui or args.candidate / "ui").resolve()
     for tool in ("docker", "kubectl", "git", "uv"):
         if not shutil.which(tool):
             print(f"missing tool on PATH: {tool}")

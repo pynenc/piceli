@@ -15,22 +15,32 @@ directory or in the disposable k3d cluster, both removed by the caller.
   throwaway certificate (``GIT_SSL_NO_VERIFY``). Test plumbing only: the
   controller and build Jobs are otherwise unchanged.
 - :class:`Commands`: ``lifecycle_commands.toml``, the commands a note gives.
+- :class:`Served`: a command that runs until stopped (``piceli access ui``),
+  in its own session, its output kept in memory (it holds a launch token).
+- :class:`UiClient`: the in-cluster UI's HTTP API as its browser calls it.
 """
 
 from __future__ import annotations
 
 import base64
 import datetime
+import http.cookiejar
 import ipaddress
 import json
 import os
+import re
 import shlex
 import shutil
+import signal
+import socket
 import ssl
 import subprocess
 import threading
 import time
 import tomllib
+import urllib.error
+import urllib.parse
+import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -52,6 +62,58 @@ def log(message: str) -> None:
 def check(condition: object, message: str) -> None:
     if not condition:
         raise StageFailed(message)
+
+
+_TOKEN = re.compile(r"([?&]token=)[^&\s\"']*")
+
+
+def redact(text: str) -> str:
+    """``text`` without the value of any ``token=`` query parameter."""
+    return _TOKEN.sub(r"\1[redacted]", text)
+
+
+def port_open(port: int, host: str = "127.0.0.1") -> bool:
+    """Whether something accepts connections on ``host:port``."""
+    with socket.socket() as sock:
+        sock.settimeout(1)
+        return sock.connect_ex((host, port)) == 0
+
+
+def processes() -> list[tuple[int, int, str]]:
+    """``(pid, ppid, command)`` of every process this user can see."""
+    out = subprocess.run(
+        ["ps", "-A", "-o", "pid=,ppid=,command="],
+        capture_output=True, text=True, check=False,
+    ).stdout  # fmt: skip
+    found = []
+    for line in out.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
+            found.append(
+                (int(parts[0]), int(parts[1]), parts[2] if len(parts) > 2 else "")
+            )
+    return found
+
+
+def alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def kill_group(pid: int, sig: int = signal.SIGKILL) -> None:
+    """Signal ``pid``'s process group (it leads one: started in a new session)."""
+    try:
+        os.killpg(pid, sig)
+    except (ProcessLookupError, PermissionError):
+        try:
+            os.kill(pid, sig)
+        except (ProcessLookupError, PermissionError):
+            pass
 
 
 # ----------------------------------------------------------------- processes
@@ -584,6 +646,17 @@ class Repos:
             self._git(name, "checkout", "-q", "main")
         return sha
 
+    def revert(self, name: str, *, push: bool = True) -> str:
+        """A commit reverting ``main``'s last commit (``git revert``), pushed."""
+        self._git(
+            name, "-c", "user.name=Lifecycle", "-c", "user.email=lifecycle@example.invalid",
+            "revert", "--no-edit", "HEAD",
+        )  # fmt: skip
+        sha = self._git(name, "rev-parse", "HEAD").strip()
+        if push:
+            self._git(name, "push", "-q", "origin", "main:main")
+        return sha
+
     def delete_branch(self, name: str, branch: str) -> None:
         self._git(name, "push", "-q", "origin", "--delete", branch)
 
@@ -611,6 +684,9 @@ class Commands:
     def line(self, step: str, values: Mapping[str, str]) -> str:
         text = " ".join(self.steps[step]["run"].replace("\\\n", " ").split())
         return text.format_map(dict(values))
+
+    def argv(self, step: str, values: Mapping[str, str]) -> list[str]:
+        return shlex.split(self.line(step, values))
 
     def render_note(self) -> str:
         out = []
@@ -648,6 +724,8 @@ class Commands:
         cwd: Path,
     ) -> Result:
         spec = self.steps[step]
+        if spec.get("serve"):
+            raise StageFailed(f"{step} runs until stopped: start it with Served")
         for name in spec.get("reset", []):
             values.pop(name, None)
         when = spec.get("when")
@@ -665,3 +743,191 @@ class Commands:
                 if isinstance(body, dict) and body.get(key):
                     values[name] = str(body[key])
         return result
+
+
+# ------------------------------------------------------------ served commands
+class Served:
+    """A command that runs until stopped, in its own session (process group).
+
+    Its stdout and stderr are kept in memory only: ``piceli access ui``
+    prints the launch URL with its token. :meth:`text` is redacted.
+    """
+
+    def __init__(
+        self, argv: Sequence[str], *, env: Mapping[str, str], cwd: Path
+    ) -> None:
+        log(f"$ {shlex.join(argv)} (served)")
+        self.process = subprocess.Popen(
+            list(argv), cwd=str(cwd), env=dict(env), stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            start_new_session=True,
+        )  # fmt: skip
+        self.out: list[str] = []
+        self.err: list[str] = []
+        for stream, sink in (
+            (self.process.stdout, self.out),
+            (self.process.stderr, self.err),
+        ):
+            threading.Thread(
+                target=self._pump, args=(stream, sink), daemon=True
+            ).start()
+
+    @staticmethod
+    def _pump(stream: Any, sink: list[str]) -> None:
+        for line in stream:
+            sink.append(line.rstrip("\n"))
+
+    @property
+    def pid(self) -> int:
+        return self.process.pid
+
+    def text(self) -> str:
+        return redact("\n".join([*self.out, "--- stderr", *self.err])[-3000:])
+
+    def wait_line(self, pattern: str, timeout: float) -> re.Match[str]:
+        """The first stdout line matching ``pattern`` (never logged)."""
+        expression = re.compile(pattern)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            for line in list(self.out):
+                found = expression.search(line)
+                if found:
+                    return found
+            if self.process.poll() is not None:
+                time.sleep(0.5)  # let the pumps drain
+                for line in list(self.out):
+                    found = expression.search(line)
+                    if found:
+                        return found
+                raise StageFailed(
+                    f"exited {self.process.returncode} before printing its URL:\n{self.text()}"
+                )
+            time.sleep(0.2)
+        raise StageFailed(f"no URL after {timeout:.0f}s:\n{self.text()}")
+
+    def children(self) -> list[tuple[int, str]]:
+        return [
+            (pid, command) for pid, ppid, command in processes() if ppid == self.pid
+        ]
+
+    def stop(self, timeout: float = 15) -> None:
+        """Ctrl-C (SIGINT to the group), then SIGKILL; reaps the process."""
+        if self.process.poll() is None:
+            kill_group(self.pid, signal.SIGINT)
+            try:
+                self.process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                pass
+        kill_group(self.pid, signal.SIGKILL)
+        try:
+            self.process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass
+
+
+def run_bounded(
+    argv: Sequence[str], *, env: Mapping[str, str], cwd: Path, timeout: float
+) -> Result:
+    """Run ``argv`` in its own session; on timeout kill its whole group.
+
+    For commands that may start a long-lived forward instead of exiting
+    (``subprocess.run`` would leave its grandchildren behind). Output is
+    returned unlogged; callers print it through :func:`redact`.
+    """
+    log(f"$ {shlex.join(argv)}")
+    process = subprocess.Popen(
+        list(argv), cwd=str(cwd), env=dict(env), stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        start_new_session=True,
+    )  # fmt: skip
+    try:
+        out, err = process.communicate(timeout=timeout)
+        code = process.returncode
+    except subprocess.TimeoutExpired:
+        kill_group(process.pid, signal.SIGINT)
+        time.sleep(3)
+        kill_group(process.pid, signal.SIGKILL)
+        out, err = process.communicate()
+        code = -9
+    return Result(list(argv), code, out, err)
+
+
+# ------------------------------------------------------------------- UI client
+@dataclass
+class UiError:
+    status: int
+    code: str
+
+
+class UiClient:
+    """The in-cluster UI's HTTP API, as its browser calls it.
+
+    Opening the launch URL exchanges its token for a session cookie (the
+    token is held only here, never logged); API calls then carry the cookie
+    from the same origin.
+    """
+
+    def __init__(self, launch_url: str) -> None:
+        parts = urllib.parse.urlsplit(launch_url)
+        self.origin = f"{parts.scheme}://{parts.netloc}"
+        self.opener = urllib.request.build_opener(
+            urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+        )
+        self._launch = launch_url
+
+    def open(self, timeout: float = 120) -> None:
+        def opened() -> bool:
+            try:
+                with self.opener.open(self._launch, timeout=10) as response:
+                    return response.status == 200
+            except (urllib.error.URLError, OSError):
+                return False
+
+        wait_for(
+            "the UI's launch URL to open a session", opened, timeout=timeout, interval=2
+        )
+
+    def get(self, path: str) -> Any:
+        """The JSON body of ``GET path``, or :class:`UiError` (status, code)."""
+        request = urllib.request.Request(
+            self.origin + path, headers={"Accept": "application/json"}
+        )
+        try:
+            with self.opener.open(request, timeout=30) as response:
+                return json.loads(response.read() or b"null")
+        except urllib.error.HTTPError as error:
+            try:
+                body = json.loads(error.read() or b"{}")
+            except ValueError:
+                body = {}
+            code = ""
+            if isinstance(body, dict):
+                nested = body.get("detail")
+                detail: dict[str, Any] = nested if isinstance(nested, dict) else body
+                code = str(
+                    detail.get("code")
+                    or detail.get("error")
+                    or detail.get("reason")
+                    or ""
+                )
+            return UiError(error.code, code)
+        except (urllib.error.URLError, OSError) as error:
+            return UiError(0, type(error).__name__)
+
+    def items(self, path: str, limit: int = 20) -> list[Any] | UiError:
+        """Every item of a paged listing (``items`` and ``next_page``)."""
+        found: list[Any] = []
+        url = path
+        for _ in range(limit):
+            body = self.get(url)
+            if isinstance(body, UiError):
+                return body
+            if not isinstance(body, dict):
+                return UiError(200, "not-a-page")
+            found.extend(body.get("items") or [])
+            following = body.get("next_page")
+            if not following:
+                return found
+            separator = "&" if "?" in path else "?"
+            url = f"{path}{separator}cursor={urllib.parse.quote(str(following))}"
+        return found
