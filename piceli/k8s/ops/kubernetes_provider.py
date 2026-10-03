@@ -1232,13 +1232,15 @@ class KubernetesProvider:
 
         ``propagation`` is ``Orphan`` (dependents are kept) unless a replace
         chooses ``Background`` for a workload controller (see
-        :func:`piceli.k8s.ops.plan.replace_propagation`).
+        :func:`piceli.k8s.ops.plan.replace_propagation`) or a prune chooses
+        ``Foreground`` (its pods go first; see
+        :func:`piceli.k8s.ops.plan.prune_propagation`).
         """
         if identity.kind in RETAINED_KINDS and not (
             allow_retained and identity.kind in {"Secret", "PersistentVolumeClaim"}
         ):
             raise ProviderError("retained-resource")
-        if propagation not in {"Orphan", "Background"}:
+        if propagation not in {"Orphan", "Background", "Foreground"}:
             raise ProviderError("invalid-propagation")
         text(uid, "uid")
         text(resource_version, "resource version")

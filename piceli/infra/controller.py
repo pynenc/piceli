@@ -64,6 +64,7 @@ from piceli.gitops.config import (
     backoff,
 )
 from piceli.gitops.controller import (
+    ROLLED_BACK,
     _iso,
     _seconds,
     _version,
@@ -72,7 +73,10 @@ from piceli.gitops.controller import (
     failed_verification,
     failure_detail,
     owner_approved,
+    pruned_fields,
+    pruned_line,
     replan_stale,
+    step_reason,
     verified,
 )
 from piceli.gitops.ports import EnvOutcome
@@ -101,6 +105,7 @@ COMPONENT_STATES = ("synced", "building", "rolling", "failed", "unchanged")
 #: Errors no retry fixes: the environment waits for a new revision.
 FINAL_CODES = frozenset(
     {
+        ROLLED_BACK,
         "component-need-unmet",
         "component-contract-invalid",
         "component-contract-missing",
@@ -1266,8 +1271,10 @@ class CompositionController:
                 entry["health"] = "healthy"
                 entry["updated_at"] = now
             action = outcome.action or "deployed"
+            pruned = pruned_fields(outcome)
             self._set(
                 record,
+                **pruned,
                 state="deployed",
                 last_sync=now,
                 deployed_commit=record.get("commit"),
@@ -1298,6 +1305,9 @@ class CompositionController:
                     f"{record['branch']}: deployed; rolled "
                     f"{', '.join(changed) or 'nothing'}"
                 )
+            line = pruned_line(record["branch"], pruned)
+            if line:
+                self.log(line)
         elif outcome.state == "approval-required":
             self._set(
                 record,
@@ -1510,7 +1520,7 @@ class CompositionController:
             if failed is not None and record.get("state") != "deleting":
                 self._degraded(record, failed)
             else:
-                self._fail(record, error_code(error), error)
+                self._fail(record, step_reason(error), error)
         finally:
             self.busy = False
             if deploy:

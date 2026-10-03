@@ -469,7 +469,10 @@ def test_a_changed_check_set_is_a_verification_and_a_failure_degrades(
     assert main["verification"]["state"] == "verified"
 
 
-def test_failed_checks_of_a_rollout_still_fail_and_retry(world: dict[str, Any]) -> None:
+def test_failed_checks_of_a_rollout_fail_and_stop_after_the_rollback(
+    world: dict[str, Any],
+) -> None:
+    """A rolled-back release is failed (not degraded) and not retried (0.14.7)."""
     from piceli.gitops.state import sync_request
     from piceli.pipeline.errors import PipelineError
 
@@ -487,7 +490,8 @@ def test_failed_checks_of_a_rollout_still_fail_and_retry(world: dict[str, Any]) 
     ports.env_up = env_up
     channel.add_request(*sync_request("main"))
     main = controller.poll_once()["envs"]["main"]
-    assert main["state"] == "retrying" and main["reason"] == "pipeline-checks-failed"
+    assert main["state"] == "failed" and main["reason"] == "checks-failed-rolled-back"
+    assert main["next_attempt_at"] is None
     assert "health" not in main or main["health"] != "degraded"
 
 

@@ -227,6 +227,61 @@ an environment (or every one) now at its revision; with `--component` a
 composition controller also rebuilds that component. The deploy still needs
 the environment's usual approval.
 
+### Removed objects are deleted (pruning)
+
+New in 0.14.7. Every sync, of a branch, a named environment or main, and of
+both controllers (one repository, a composition), plans the deletion of the
+objects an earlier release of the app created and the current render no
+longer declares: a removed workload, its Service, its NetworkPolicy, a
+Deployment that became a StatefulSet of the same name. They are `delete`
+actions of the same plan, so the same plan hash covers them, and they follow
+the apply's approval rules:
+
+- a branch environment with `EnvConfig(auto_approve=True)`, or an
+  environment whose plan is inside the pipeline's `auto_approve` policy,
+  deletes them without asking: a policy covers a prune (the class `prune`:
+  the delete of an object this release's owner wrote and no longer declares)
+  unless it denies `"prune"` or `"delete"`; it counts towards `max_objects`,
+  and a cluster-scoped one also needs `cluster_scoped`;
+- any other environment waits for `piceli gitops approve ENV HASH`, and the
+  plan it shows lists the deletes.
+
+Only an object whose `piceli.io/owner` annotation is this release's owner
+(or an inherited owner) in the environment's namespace is ever deleted: never
+an object another owner or a person wrote, never one without that
+annotation. The deletes run **after** every new object is applied and ready
+and **before** the checks: a removed workload is deleted `Foreground` (its
+pods first, so a Service of the same name and the checks see only the new
+pods), and the next step starts once it is gone. A renamed workload therefore
+switches in one sync: the new StatefulSet becomes ready behind the shared
+Service, then the old Deployment and its pods go.
+
+Data is never deleted automatically. Claims, Secrets, objects marked
+`piceli.io/retained`, the claims a removed StatefulSet created from its
+claim templates, and a StatefulSet whose retention policy would delete its
+claims are **kept, orphaned**: the plan, the status and the deployment
+history list them under `kept_orphaned`, each with `why` (`claim`, `secret`,
+`retained`, `deletes-claims`) and the exact command that deletes it, for
+when its data is no longer needed:
+
+```json
+{"kind": "PersistentVolumeClaim", "name": "data-db-0", "namespace": "shop-main",
+ "why": "claim", "command": "kubectl --namespace shop-main delete persistentvolumeclaim data-db-0"}
+```
+
+A claim's volume stays after that while its reclaim policy is `Retain`.
+
+When a deploy's checks fail and its release is rolled back
+(`rollback_on_failed_checks`), the rollback restores only the objects both
+releases declare: what the failed release removed is not re-created, and
+what it added is left (see {doc}`checks`). The controller then does **not**
+retry that revision: the environment is `failed` with reason
+`checks-failed-rolled-back` and no `next_attempt_at`, until a new revision
+or `piceli gitops sync ENV` (one try, no loop of restore point, apply and
+rollback on every poll).
+`Pipeline(prune=False)` turns pruning off; `piceli deploy` (outside an
+environment) prunes only with `Pipeline(prune=True)`.
+
 ### Status and requests (for tools)
 
 The controller publishes its status in the ConfigMap `piceli-gitops-status`
@@ -240,7 +295,10 @@ The controller publishes its status in the ConfigMap `piceli-gitops-status`
 `stopped`), `plan_hash`, `deployed_plan_hash` (the owner-approved plan of
 the running release), `reason` (an error code), `attempts`,
 `next_attempt_at`, `pushed_at`, `updated_at`, `namespace` and `trigger`
-(`push`, `tag v1.2.0`, `promote BRANCH@SHA`). A deployed environment has
+(`push`, `tag v1.2.0`, `promote BRANCH@SHA`). After a deploy, `deleted`
+lists the objects it pruned (`kind`, `name`) and `kept_orphaned` the ones it
+kept with the command deleting each (see above); both are empty lists when
+it pruned nothing. A deployed environment has
 `health` (`healthy`, or `degraded` after a failing verification, with
 `reason: pipeline-checks-failed`) and `last_action`: `deployed` (something
 was applied), `verified` (nothing was applied; a changed check set ran

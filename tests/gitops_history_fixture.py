@@ -52,6 +52,7 @@ def write_run(
     failed_check: str | None = None,
     policy: bool = False,
     at: tuple[str, str] | None = None,
+    kept_orphaned: Sequence[Mapping[str, Any]] = (),
 ) -> str:
     """A finished run journal under ``state_dir/runs``; its run id.
 
@@ -99,6 +100,11 @@ def write_run(
             "summary": counts,
             "changes": [dict(item) for item in changes],
             "drift": [],
+            **(
+                {"kept_orphaned": [dict(item) for item in kept_orphaned]}
+                if kept_orphaned
+                else {}
+            ),
         },
     )
     run.set_stage(

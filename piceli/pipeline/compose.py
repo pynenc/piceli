@@ -547,6 +547,7 @@ def _spec(
     rollback_on_failed_checks: bool = False,
     provenance: Mapping[str, Any] | None = None,
     auto_approve: ApprovalPolicy | None = None,
+    prune: bool = False,
 ) -> PipelineReleaseSpec:
     from pydantic import ValidationError
 
@@ -567,6 +568,7 @@ def _spec(
             "adopt": list(adopt),
             "replace": list(replace),
             "rollback_on_failed_checks": rollback_on_failed_checks,
+            **({"prune": True} if prune else {}),
             **(
                 {}
                 if auto_approve is None
@@ -699,6 +701,7 @@ def release_spec(
         rollback_on_failed_checks=bool(checks) and pipeline.rollback_on_failed_checks,
         provenance=provenance,
         auto_approve=pipeline.auto_approve,
+        prune=bool(getattr(pipeline, "prune", None)),
     )
 
 

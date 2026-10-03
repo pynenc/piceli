@@ -148,6 +148,16 @@ def _plan(run: Run) -> dict[str, Any] | None:
             for item in output.get("drift") or []
             if isinstance(item, Mapping)
         ],
+        # Objects a prune kept although the release no longer declares them
+        # (claims, Secrets, retained objects), with the command deleting each.
+        "kept_orphaned": [
+            {
+                key: item.get(key)
+                for key in ("kind", "name", "namespace", "why", "command")
+            }
+            for item in output.get("kept_orphaned") or []
+            if isinstance(item, Mapping)
+        ],
     }
 
 
@@ -463,6 +473,11 @@ def markdown(summary: Mapping[str, Any]) -> str:
         if len(changes) > MAX_MARKDOWN_CHANGES:
             lines.append(
                 f"- … and {len(changes) - MAX_MARKDOWN_CHANGES} more (see summary.json)"
+            )
+        for item in plan.get("kept_orphaned") or []:
+            lines.append(
+                f"- kept, orphaned {_code(str(item.get('kind')) + '/' + str(item.get('name')))}"
+                f" ({item.get('why')}): delete it with {_code(item.get('command'))}"
             )
         for item in plan.get("drift") or []:
             lines.append(

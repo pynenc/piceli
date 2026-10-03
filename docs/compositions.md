@@ -172,6 +172,13 @@ an output image is a component:
 - `envs.<env>.revision` holds the composition repository's commit too;
 - `controller.composition_repo`: `source`, `branch`, `entry`, `commit` (the
   imported one), `error` and `failed` (a commit that did not import).
+- `envs.<env>.deleted` and `envs.<env>.kept_orphaned`: what the last
+  deploy pruned (objects the render no longer declares) and kept (claims,
+  Secrets, retained objects, each with the command deleting it); a pending
+  plan (`envs.<env>.pending_plan`) lists its `delete` changes and
+  `kept_orphaned` too, and every run of the deployment history
+  (`piceli-gitops-history`) has `deleted` and `kept_orphaned`. See
+  {doc}`gitops` (removed objects are deleted).
 
 ## Not yet
 

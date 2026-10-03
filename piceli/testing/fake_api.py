@@ -433,7 +433,8 @@ class FakeAPI:
     - ``terminating_reads``: when above ``0``, an ``Orphan`` delete, or the
       delete of an object with finalizers (a claim's ``pvc-protection``),
       keeps the object (with a ``deletionTimestamp``, and the ``orphan``
-      finalizer for an ``Orphan`` delete) for that many more reads of it, as
+      finalizer for an ``Orphan`` delete, ``foregroundDeletion`` for a
+      ``Foreground`` one) for that many more reads of it, as
       a real API server does until its controllers remove the finalizers.
     - ``nodes``: ``{name: Node manifest}`` served at ``/api/v1/nodes/NAME``
       (read-only, not part of discovery); add one with :meth:`add_node`.
@@ -1358,14 +1359,21 @@ class FakeAPI:
             if body.get("preconditions") != {
                 "uid": current["metadata"]["uid"],
                 "resourceVersion": current["metadata"]["resourceVersion"],
-            } or body.get("propagationPolicy") not in {"Orphan", "Background"}:
+            } or body.get("propagationPolicy") not in {
+                "Orphan",
+                "Background",
+                "Foreground",
+            }:
                 return 409, {}
             # Like the API server: with a body, DeleteOptions come from the
             # body only (a dryRun query parameter alone would delete).
             if body.get("dryRun") == ["All"]:
                 return 200, {"kind": "Status", "status": "Success"}
             held = list(current["metadata"].get("finalizers") or ())
-            orphan = body["propagationPolicy"] == "Orphan"
+            policy = body["propagationPolicy"]
+            orphan = policy == "Orphan"
+            if policy == "Foreground":
+                held = [*held, "foregroundDeletion"]
             if self.terminating_reads > 0 and (orphan or held):
                 self.version += 1
                 current["metadata"].update(
