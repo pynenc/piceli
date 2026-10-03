@@ -1091,7 +1091,10 @@ class Lifecycle:
             )
         if verification.get("rolled"):
             problems.append(f"the verification rolled {verification.get('rolled')}")
-        self.expect("1", "main", record, rolled=set())
+        if _version(self.args.previous) < (0, 14, 5):
+            # A verification run; from 0.14.5 on the upgrade has nothing to
+            # verify and records no run (its revision is stage 3's).
+            self.expect("1", "main", record, rolled=set())
         # Re-running the bootstrap commands with the new release is idempotent.
         done = self.run_group("bootstrap")
         for step in ("cluster-init-plan", "gitops-enable-plan"):
