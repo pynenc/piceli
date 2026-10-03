@@ -4510,6 +4510,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "gitops",
     ),
     _E(
+        "gitops-env-stop-declared",
+        "Environment declared stopped",
+        "`piceli env start ENV` named an environment the composition declares `Environment(stopped=True)`: the declaration wins over a start request, so the controller keeps it stopped.",
+        "Remove `stopped=True` from the environment in the composition and push it; the controller starts it on its next poll.",
+        False,
+        "gitops",
+    ),
+    _E(
         "gitops-promote-unknown",
         "Promotion refused",
         "`piceli promote BRANCH@SHA` named a commit that is neither the head nor the deployed commit of a branch the controller watches, or the main branch matches no `--branches` glob.",

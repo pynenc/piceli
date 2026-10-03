@@ -1030,6 +1030,7 @@ def env_stop(
     approve: str | None = None,
     approve_if_policy: bool = False,
     reason: str = "idle",
+    named: bool = False,
     cluster: Any = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
@@ -1038,13 +1039,18 @@ def env_stop(
     The plan lists the workloads to scale; its ``env_hash`` is the approval.
     ``approve_if_policy`` runs it when the owner declared
     ``EnvConfig(idle_stop=...)`` or ``auto_approve=True`` (the GitOps
-    controller's idle stop). Never main's or a named environment's.
+    controller's idle stop). Never main's; a named environment's only with
+    ``named=True`` (the GitOps controller, for a declared
+    ``Environment(stopped=True)`` or a ``piceli env stop`` request: the
+    owner's decision, so ``approve_if_policy`` runs it), and only in a
+    namespace Piceli deployed it to (its environment record).
 
     :raises EnvError: ``env-main-protected``, ``env-namespace-not-managed``,
         ``env-plan-changed``.
     """
     config = env_config(pipeline)
-    if config.is_fixed(branch):
+    by_owner = named and config.named(branch) is not None
+    if config.is_fixed(branch) and not by_owner:
         raise EnvError(
             "env-main-protected",
             "main and named environments are never stopped by env commands",
@@ -1060,10 +1066,7 @@ def env_stop(
         }
         if live is None:
             return {**body, "state": "absent"}
-        if not _owned(live, pipeline.name, branch) or _branch_of(live) not in {
-            None,
-            branch,
-        }:
+        if not _stoppable(envs, live, namespace, pipeline.name, branch, by_owner):
             raise EnvError(
                 "env-namespace-not-managed",
                 f"namespace {namespace} is not {pipeline.name}'s environment of "
@@ -1085,7 +1088,7 @@ def env_stop(
             "stop": workloads,
         }
         body.update({"stop": workloads, "env_hash": _hash(plan)})
-        allowed = config.idle_stop is not None or config.auto_approve
+        allowed = config.idle_stop is not None or config.auto_approve or by_owner
         if approve is None and not (approve_if_policy and allowed):
             return {
                 **body,
@@ -1102,6 +1105,79 @@ def env_stop(
         record["stop_reason"] = reason
         envs.write_record(namespace, record)
         return {**body, "state": "stopped", "stopped": stopped}
+    finally:
+        if cluster is None:
+            envs.close()
+
+
+def _stoppable(
+    envs: Any,
+    live: Mapping[str, Any],
+    namespace: str,
+    app: str,
+    branch: str,
+    named: bool,
+) -> bool:
+    """Whether Piceli may scale ``namespace``'s workloads for ``branch``.
+
+    A branch environment's namespace is this app's (labels); a named one's
+    is the one Piceli deployed it to: labelled with its name, or holding its
+    environment record.
+    """
+    if not named:
+        return _owned(live, app, branch) and _branch_of(live) in {None, branch}
+    labels = (live.get("metadata") or {}).get("labels") or {}
+    if labels.get(ENV_NAME_LABEL) == branch:
+        return True
+    record = envs.record(namespace)
+    return isinstance(record, Mapping) and record.get("branch") == branch
+
+
+def env_start(
+    pipeline: Pipeline,
+    branch: str,
+    *,
+    cluster: Any = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Scale a stopped environment back to the replicas it had (``env_stop`` recorded them).
+
+    The GitOps controller's ``piceli env start`` (or a removed
+    ``Environment(stopped=True)``) of a named environment; a deploy of a new
+    revision follows separately. Claims and objects were kept, so nothing is
+    created. ``state``: ``started``, ``running`` (it was not stopped) or
+    ``absent`` (no namespace).
+
+    :raises EnvError: ``env-namespace-not-managed``.
+    """
+    config = env_config(pipeline)
+    namespace = config.namespace_for(branch, main_namespace(pipeline))
+    envs = cluster or default_cluster(pipeline)
+    try:
+        live = envs.namespace(namespace)
+        body: dict[str, Any] = {
+            "schema": RESULT_SCHEMA,
+            "branch": branch,
+            "namespace": namespace,
+        }
+        if live is None:
+            return {**body, "state": "absent", "started": []}
+        named = config.named(branch) is not None
+        if not _stoppable(envs, live, namespace, pipeline.name, branch, named):
+            raise EnvError(
+                "env-namespace-not-managed",
+                f"namespace {namespace} is not {pipeline.name}'s environment of "
+                f"branch {branch!r}; nothing is started",
+            )
+        record = dict(envs.record(namespace) or {})
+        if record.get("state") != "stopped" and not record.get("stopped"):
+            return {**body, "state": "running", "started": []}
+        started = _start_stopped(envs, namespace, record)
+        record.update({"state": "running", "stopped": [], "started_at": _now(now)})
+        record.pop("stopped_at", None)
+        record.pop("stop_reason", None)
+        envs.write_record(namespace, record)
+        return {**body, "state": "started", "started": started}
     finally:
         if cluster is None:
             envs.close()

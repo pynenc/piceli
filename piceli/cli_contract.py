@@ -1255,6 +1255,40 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "(gitops-request-invalid in gitops status); --component needs a "
             "composition controller.",
         ),
+        "env stop": _C(
+            "Ask the GitOps controller to stop a composition's named "
+            "environment: no replicas, claims kept, not planned or deployed.",
+            reads=(
+                "--cluster infra.py:CLUSTER (its credentials profile) or --state-dir",
+            ),
+            writes=("--state-dir requests (local controller)",),
+            cluster="writes",
+            safe_to_retry=True,
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="Writes a stop request to the ConfigMap piceli-gitops-requests; "
+            "the controller scales the environment's workloads to zero on its next "
+            "poll and shows it stopped (reason requested) in gitops status. The "
+            "owner's command is the decision: no plan hash. `piceli env start ENV` "
+            "ends it. An unknown environment is dropped (gitops-request-invalid in "
+            "gitops status).",
+        ),
+        "env start": _C(
+            "Ask the GitOps controller to start a named environment it stopped "
+            "on request: scale back, deploy its revision when it moved.",
+            reads=(
+                "--cluster infra.py:CLUSTER (its credentials profile) or --state-dir",
+            ),
+            writes=("--state-dir requests (local controller)",),
+            cluster="writes",
+            safe_to_retry=True,
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="Writes a start request; a deploy it needs asks for the usual "
+            "approval. Refused (gitops-env-stop-declared) for an environment the "
+            "composition declares Environment(stopped=True): the declaration "
+            "wins.",
+        ),
         "gitops disable": _C(
             "Plan and, with --approve HASH, remove the GitOps controller; never "
             "an environment.",

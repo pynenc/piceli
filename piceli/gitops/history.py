@@ -121,7 +121,7 @@ def event(
         "combined_hash": _text(getattr(outcome, "combined_hash", None), 80),
         "run_id": _text(getattr(outcome, "run_id", None), 64),
         "approved_by": {
-            "via": via if via in {"cli", "ui"} else "request",
+            "via": via if via in {"cli", "ui", "policy"} else "request",
             "at": _text(_dict(approval).get("at"), 32),
         }
         if approval
@@ -139,6 +139,11 @@ def event(
     verification = _dict(record.get("verification"))
     if verification and str(verification.get("at") or "") >= started_at:
         found["verification"] = verification
+    attempts = _attempts(record.get("failed_attempts"))
+    if attempts and state not in {"failed", "retrying"}:
+        # Failed attempts of this revision before this step (0.14.7): a retry
+        # that succeeded keeps the earlier build's log tail.
+        found["failed_attempts"] = attempts
     failure = _dict(record.get("failure"))
     if state in {"failed", "retrying"} and failure:
         found["failure"] = {
@@ -150,6 +155,32 @@ def event(
         if isinstance(tail, str) and tail:
             found["failure"]["log_tail"] = tail[-MAX_TAIL:]
     return found
+
+
+#: Failed attempts listed per run, and the characters of each log tail.
+MAX_ATTEMPTS = 3
+
+
+def _attempts(value: Any) -> list[dict[str, Any]]:
+    """A record's ``failed_attempts``, bounded (code, time, log tail, kept Job)."""
+    found = []
+    for item in value if isinstance(value, list) else []:
+        if not isinstance(item, Mapping):
+            continue
+        entry: dict[str, Any] = {
+            "attempt": item.get("attempt")
+            if isinstance(item.get("attempt"), int)
+            else None,
+            "at": _text(item.get("at"), 32),
+            "reason": _text(item.get("reason"), 64),
+        }
+        tail = item.get("log_tail")
+        if isinstance(tail, str) and tail:
+            entry["log_tail"] = tail[-MAX_TAIL:]
+        if isinstance(item.get("kept_job"), str):
+            entry["kept_job"] = _text(item["kept_job"], 253)
+        found.append(entry)
+    return found[-MAX_ATTEMPTS:]
 
 
 def remember(state: dict[str, Any], env: str, entry: Mapping[str, Any]) -> None:
@@ -409,6 +440,8 @@ def _entry(
         "checks": checks,
         "verification": verification or None,
         "failure": failure or None,
+        # Added in 0.14.7: failed attempts of the revision before this run.
+        "failed_attempts": _attempts(event_.get("failed_attempts")),
         "stages": _dict(run.get("stages")),
         "seconds": run.get("seconds"),
         "recorded_by": "controller+run"
