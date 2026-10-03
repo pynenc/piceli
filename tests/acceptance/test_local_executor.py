@@ -255,13 +255,25 @@ def test_delayed_mutation_is_bounded_and_detached_work_not_retried(local_api, tm
     provider = provider_at(original_provider.host, request_seconds=0.05)
     run = executor(provider, tmp_path)
     plan, snapshot, grant = prepare(provider, [manifest()])
-    api.inject("POST", "/configmaps", delay=0.25, dry_run=False)
+    # The server answers 2 s late; the client gives up after 0.05 s. A
+    # resume while the write is still in flight stays blocked (it never
+    # writes twice); once the server has applied it, a resume is ready. The
+    # margins are wide so a slow runner cannot reach the end of the delay
+    # before the second call.
+    api.inject("POST", "/configmaps", delay=2.0, dry_run=False)
     start = time.monotonic()
     assert run.run("slow", plan, snapshot, grant)["state"] == "blocked"
-    assert time.monotonic() - start < 0.5
+    assert time.monotonic() - start < 1.0
     assert run.run("slow", plan, snapshot, grant, resume=True)["state"] == "blocked"
-    time.sleep(0.3)
-    assert run.run("slow", plan, snapshot, grant, resume=True)["state"] == "ready"
+    assert time.monotonic() - start < 1.5, (
+        "the runner was too slow to observe the window"
+    )
+    deadline = time.monotonic() + 10
+    state = "blocked"
+    while state != "ready" and time.monotonic() < deadline:
+        time.sleep(0.2)
+        state = run.run("slow", plan, snapshot, grant, resume=True)["state"]
+    assert state == "ready"
     assert len(mutations(api)) == 1
     provider.client.close()
 
