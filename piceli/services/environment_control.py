@@ -290,7 +290,7 @@ class EnvironmentControl:
                     or entry.get("plan_hash") != plan_hash
                 ):
                     raise QueryError("ui-plan-stale", 409)
-                key, body = approve_request(branch, plan_hash)
+                key, body = approve_request(branch, plan_hash, via="ui")
                 channel.add_request(key, body)
             except GitOpsError:
                 raise QueryError("ui-operation-unavailable", 409) from None

@@ -4,6 +4,63 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.14.6
+
+- **Fix:** an environment does not ask twice for the plan it already runs.
+  When a plan's hash is exactly the owner-approved plan hash of the release
+  running now (a reverted change plans it again), the GitOps controllers
+  (single repository and composition) apply it with that hash instead of
+  waiting in `approval-required`. Only the running release's plan counts: a
+  hash the owner never approved, an older approved plan once another plan
+  runs, or any plan after a failed step, a degraded verification or an idle
+  stop still waits for approval. The status shows the hash as
+  `deployed_plan_hash` (`null` when the policy applied the release).
+- **Fix:** a stale `piceli access ui` is recognised. The port check of
+  `piceli access ui` now tells Piceli's own UI forward from other processes
+  (it reported the `kubectl` of an earlier `piceli access ui` as "not
+  piceli"), also when Piceli runs as its console script
+  (`python …/bin/piceli …`, as `uv run piceli` shows in `ps`; this applies to
+  `piceli access TARGET` too), and prints the command that frees the port:
+  `piceli access stop --stale --cluster MODULE:ATTR` (or `--profile NAME`),
+  new, which stops only that forward. `piceli access ui` records its forwards
+  in the private registry `piceli ui serve` uses, so a stale forward is
+  recognised by its record and the forwards of a crashed `piceli access ui`
+  are stopped at the next start. Another process is never signalled.
+- **Docs:** several images from one source: two contexts of the same source
+  with different `include` lists give each image a change key over its own
+  paths ({doc}`compositions`).
+- **Fix:** the in-cluster UI shows each environment's deployment history.
+  The composition controller now publishes its runs in the ConfigMap
+  `piceli-gitops-history` (`piceli.gitops-history.v1`, the newest 20 runs
+  per environment, bounded to fit one ConfigMap), built from its record of
+  every deploy step and the run journals on its volume, including runs
+  recorded before this version. Delivery → Deployment history and each
+  environment's page list them newest first: trigger, sources and commits,
+  plan hash and changed objects, approver, components with digests (built,
+  rolled or unchanged), checks with outcome and duration, failure code,
+  failing checks and build log tail, stage durations. New read-only
+  endpoints `GET /api/v1/composition/history` and
+  `/api/v1/composition/environments/{env}/history`, capability
+  `composition_history`. The UI's service account gets `get` on that one
+  ConfigMap; nothing mounts the controller's volume.
+- **Fix:** Approve shows what the pending plan changes. The controller
+  publishes `envs.<env>.pending_plan` (plan hash, deploy plan hash, object
+  counts and changed objects by kind and name) while it waits; the Approve
+  review lists it and a changed plan needs a new acknowledgement.
+- **Fix:** the approver is recorded. An approve request carries `via`
+  (`cli` from `piceli gitops approve`, `ui` from the web UI); the controller
+  keeps it with the time (`envs.<env>.approval` while it applies) and in the
+  run's history (`approved_by`, or `policy` for the owner's approval policy).
+- **Fix:** the Cluster page in the cluster shows the registry claim's use.
+  The composition controller measures `du` of the registry storage in its
+  pod at most every ten minutes (it is granted `pods/exec` in its own
+  namespace) and publishes it as `controller.registry_usage`; the UI, which
+  has neither `pods/exec` nor `nodes/proxy`, shows it as measured by the
+  controller.
+- Additive status fields: `envs.<env>.pending_plan`, `envs.<env>.approval`,
+  `controller.registry_usage`; `EnvOutcome` gains `run_id`, `combined_hash`
+  and `plan`.
+
 ## Version 0.14.5
 
 - **Fix:** one upgrade command: `gitops enable` of a composition also updates the

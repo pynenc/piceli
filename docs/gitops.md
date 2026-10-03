@@ -76,6 +76,14 @@ Approval stays the owner's:
   controller (an apply that stopped half way), it plans again: the policy
   applies the new plan when it covers it, otherwise the branch waits in
   `approval-required` with the new hash.
+- An approval is not asked for twice: when a plan's hash is exactly the
+  owner-approved plan hash of the release running now (a reverted change
+  plans it again), the controller applies it with that hash. Only the
+  running release's plan counts: a hash the owner never approved, an older
+  approved plan once another plan runs, or any plan after a failed step, a
+  degraded verification or an idle stop still waits for approval. The hash
+  is `deployed_plan_hash` in the status (`null` when the running release was
+  applied by the policy).
 
 The controller works **one step at a time**: teardowns first, then deploys,
 oldest push first. A failed step is retried with exponential backoff (30s,
@@ -229,7 +237,8 @@ The controller publishes its status in the ConfigMap `piceli-gitops-status`
 `envs.<branch>` holds `commit` (wanted), `deployed_commit`, `state`
 (`pending`, `retrying`, `approval-required`, `deployed`, `failed`,
 `deleting`,
-`stopped`), `plan_hash`, `reason` (an error code), `attempts`,
+`stopped`), `plan_hash`, `deployed_plan_hash` (the owner-approved plan of
+the running release), `reason` (an error code), `attempts`,
 `next_attempt_at`, `pushed_at`, `updated_at`, `namespace` and `trigger`
 (`push`, `tag v1.2.0`, `promote BRANCH@SHA`). A deployed environment has
 `health` (`healthy`, or `degraded` after a failing verification, with

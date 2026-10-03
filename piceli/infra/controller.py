@@ -71,6 +71,7 @@ from piceli.gitops.controller import (
     error_code,
     failed_verification,
     failure_detail,
+    owner_approved,
     replan_stale,
     verified,
 )
@@ -107,6 +108,8 @@ FINAL_CODES = frozenset(
         "composition-invalid",
     }
 )
+#: How often the controller measures the in-cluster registry's claim (seconds).
+REGISTRY_USAGE_SECONDS = 600
 _PINNED = re.compile(r"[a-z0-9][a-z0-9./:_-]*@sha256:[0-9a-f]{64}")
 _LABEL = re.compile(r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?")
 _QUANTITY = re.compile(r"[0-9]+(?:Ki|Mi|Gi|Ti)")
@@ -414,6 +417,49 @@ class DefaultCompositionPorts:
         live = getattr(self.envs, "namespace_live", None)
         return live(namespace) if callable(live) else None
 
+    def registry_usage(self, registry: Any) -> dict[str, Any] | None:
+        """The in-cluster registry claim's use: ``du`` of its storage in the
+        registry pod (``pods/exec`` in the registry's namespace), or ``None``.
+
+        Published in the status so the in-cluster UI, which is granted
+        neither ``pods/exec`` nor ``nodes/proxy``, shows it.
+        """
+        from piceli.artifacts import cluster_registry as cr
+        from piceli.artifacts.registry_storage import read_disk_usage
+        from piceli.gitops.install import connect
+
+        namespace = str(getattr(registry, "namespace", "") or "")
+        name = str(getattr(registry, "name", "") or "")
+        if not namespace or not name:
+            return None
+        with connect(self.kubeconfig, self.context, transport=self.transport) as api:
+            found = api.call(f"/api/v1/namespaces/{namespace}/pods", "GET")
+            pods = [
+                item
+                for item in (found or {}).get("items", [])
+                if isinstance(item, dict)
+                and ((item.get("metadata") or {}).get("labels") or {}).get(
+                    "app.kubernetes.io/instance"
+                )
+                == name
+                and ((item.get("metadata") or {}).get("labels") or {}).get(
+                    "app.kubernetes.io/component"
+                )
+                == "registry"
+                and (item.get("status") or {}).get("phase") == "Running"
+            ]
+            if not pods:
+                return None
+            pod = str((pods[0].get("metadata") or {}).get("name"))
+            used = read_disk_usage(api.client, namespace, pod)
+        if used is None:
+            return None
+        return {
+            "used_bytes": used,
+            "used_source": "du",
+            "claim": cr.claim_name(registry),
+        }
+
 
 # ---------------------------------------------------------------- the loop
 
@@ -475,6 +521,11 @@ class CompositionController:
         self.refs: dict[str, RemoteRefs] = {}
         self.busy = False
         self.swept = False  # stale state is swept once, at the first full poll
+        # The deploy step being recorded in the history (see _record_step).
+        self._built: list[str] = []
+        self._last_outcome: EnvOutcome | None = None
+        self._history_digest: str | None = None
+        self._runs: Any = None
 
     # ------------------------------------------------------------ helpers
     @property
@@ -547,6 +598,8 @@ class CompositionController:
         attempts = int(record.get("attempts") or 0) + 1
         deleting = record.get("state") == "deleting"
         record["failure"] = None if error is None else failure_detail(error)
+        # What runs after a failed step is uncertain: the next plan asks.
+        record["deployed_plan_hash"] = None
         if not deleting and (
             reason in FINAL_CODES or attempts >= self.config.max_attempts
         ):
@@ -824,6 +877,11 @@ class CompositionController:
             attempts=0,
             next_attempt_at=None,
             reason=None,
+            # Recorded as the run's approver in the history (additive).
+            approval={
+                "via": body.get("via") if body.get("via") in ("cli", "ui") else None,
+                "at": _iso(self.clock()),
+            },
         )
 
     def _promote(self, body: Mapping[str, Any]) -> None:
@@ -911,6 +969,7 @@ class CompositionController:
 
     def _remember(self, component: str, digest: str, image: BuiltImage) -> None:
         write_json(self._cache_path(component, digest), image.to_dict())
+        self._built.append(component)  # built (or mirrored) in this step
 
     def _contracts(
         self, instance: _Instance, revision: Mapping[str, str]
@@ -1194,6 +1253,7 @@ class CompositionController:
         return self.ports.pipeline(self.composition, env, {}, {})
 
     def _outcome(self, record: dict[str, Any], outcome: EnvOutcome) -> None:
+        self._last_outcome = outcome
         if outcome.namespace:
             record["namespace"] = outcome.namespace
         now = _iso(self.clock())
@@ -1216,6 +1276,7 @@ class CompositionController:
                 next_attempt_at=None,
                 plan_hash=None,
                 approved_hash=None,
+                deployed_plan_hash=owner_approved(record),
                 reason=None,
                 failure=None,
                 health="healthy",
@@ -1281,6 +1342,7 @@ class CompositionController:
             next_attempt_at=None,
             plan_hash=None,
             approved_hash=None,
+            deployed_plan_hash=None,
             reason="pipeline-checks-failed",
             failure=None,
             health="degraded",
@@ -1402,6 +1464,7 @@ class CompositionController:
         self._set(
             record,
             state="stopped",
+            deployed_plan_hash=None,
             reason="idle-stop",
             attempts=0,
             next_attempt_at=None,
@@ -1435,6 +1498,9 @@ class CompositionController:
         if self.busy:  # pragma: no cover - guarded by the tests
             raise RuntimeError("controller steps must not overlap")
         self.busy = True
+        deploy = work == self._deploy
+        started = (_iso(self.clock()), record.get("trigger"), record.get("approval"))
+        self._built, self._last_outcome = [], None
         try:
             work(record)
         except Exception as error:  # one bad environment never stops the loop
@@ -1447,7 +1513,44 @@ class CompositionController:
                 self._fail(record, error_code(error), error)
         finally:
             self.busy = False
+            if deploy:
+                self._record_step(record, *started)
             save_state(self.state_dir, self.state)
+
+    def _record_step(
+        self,
+        record: dict[str, Any],
+        started: str,
+        trigger: Any,
+        approval: Any,
+    ) -> None:
+        """Remember the deploy step in the history; keep its pending plan."""
+        from piceli.gitops import history
+
+        outcome = self._last_outcome
+        if record.get("state") == "approval-required" and outcome is not None:
+            record["pending_plan"] = (
+                {**dict(outcome.plan), "plan_hash": outcome.plan_hash}
+                if outcome.plan is not None
+                else {"plan_hash": outcome.plan_hash}
+            )
+        else:
+            record.pop("pending_plan", None)
+        history.remember(
+            self.state,
+            str(record["branch"]),
+            history.event(
+                record,
+                started_at=started,
+                finished_at=_iso(self.clock()),
+                trigger=trigger if isinstance(trigger, str) else None,
+                approval=approval if isinstance(approval, Mapping) else None,
+                outcome=outcome,
+                built=[item for item in self._built if item != "mirror"],
+            ),
+        )
+        if record.get("approved_hash") is None:
+            record.pop("approval", None)  # used (or replaced by a new plan)
 
     # ------------------------------------------------------------ poll
     def poll_once(self) -> dict[str, Any]:
@@ -1486,7 +1589,33 @@ class CompositionController:
                 self._step(record, self._deploy)
         for record in self._idle():
             self._step(record, self._stop)
+        self._registry_usage(now)
         return self._publish()
+
+    def _registry_usage(self, now: float) -> None:
+        """Measure the in-cluster registry's claim, at most every
+        :data:`REGISTRY_USAGE_SECONDS` (published as ``controller.registry_usage``)."""
+        measure = getattr(self.ports, "registry_usage", None)
+        registry = self.composition.registry
+        if (
+            not callable(measure)
+            or getattr(registry, "kind", None) != "cluster-registry"
+        ):
+            return
+        last = self.state.get("registry_usage")
+        last = last if isinstance(last, dict) else {}
+        if now - float(last.get("measured_epoch") or 0) < REGISTRY_USAGE_SECONDS:
+            return
+        try:
+            found = measure(registry)
+        except Exception as error:  # never fail a poll on it
+            self.log(f"registry use not measured ({type(error).__name__})")
+            found = None
+        self.state["registry_usage"] = {
+            **(found or {"used_bytes": None, "used_source": None}),
+            "measured_at": _iso(now),
+            "measured_epoch": now,
+        }
 
     def _poll_source(self, key: str, now: float) -> list[str]:
         """``git ls-remote`` one source; ``[key]`` when it failed."""
@@ -1614,6 +1743,14 @@ class CompositionController:
                 "last_poll": self.state.get("last_poll"),
                 "last_error": self.state.get("last_error"),
                 "poll_failures": int(self.state.get("poll_failures") or 0),
+                # Added in 0.14.6: the registry claim's use measured by the
+                # controller (``du`` in the registry pod), for the UI.
+                "registry_usage": {
+                    k: v
+                    for k, v in (self.state.get("registry_usage") or {}).items()
+                    if k in ("used_bytes", "used_source", "claim", "measured_at")
+                }
+                or None,
                 "environments": []
                 if loaded is None
                 else [
@@ -1653,4 +1790,37 @@ class CompositionController:
             self.channel.publish(status)
         except GitOpsError as error:
             self.log(f"status not published ({error.code})")
+        self._publish_history()
         return status
+
+    def _publish_history(self) -> None:
+        """Publish each environment's runs (``piceli-gitops-history``) when they changed."""
+        import hashlib
+
+        from piceli.gitops import history
+
+        publish = getattr(self.channel, "publish_history", None)
+        if not callable(publish):
+            return
+        try:
+            if self._runs is None:
+                self._runs = history.RunReader()
+            history.forget_gone(self.state, self._envs())
+            document = history.history(
+                self._envs(),
+                self.state.get("history") or {},
+                self.state_dir,
+                reader=self._runs,
+            )
+            digest = hashlib.sha256(
+                json.dumps(document, sort_keys=True).encode()
+            ).hexdigest()
+            if digest == self._history_digest:
+                return
+            document["generated_at"] = _iso(self.clock())
+            publish(document)
+            self._history_digest = digest
+        except GitOpsError as error:
+            self.log(f"history not published ({error.code})")
+        except (OSError, ValueError) as error:  # never fail a poll on it
+            self.log(f"history not published ({type(error).__name__})")

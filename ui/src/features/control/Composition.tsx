@@ -12,6 +12,7 @@ import { CompositionAttention } from './CompositionAttention';
 import { CompositionEnvironmentRail } from './CompositionEnvironmentRail';
 import type { CompositionSelection } from './compositionGraph';
 import { SourceInventory } from './SourceInventory';
+import { EnvironmentHistory } from './EnvironmentHistory';
 
 export type Component = {
   name: string; source?: string | null; commit?: string | null; digest?: string | null;
@@ -22,6 +23,14 @@ export type Environment = {
   revision: Record<string, string>; last_sync?: string | null; reason?: string | null;
   plan_hash?: string | null; components: Component[]; application_id?: string | null;
   last_action?: string | null; verification?: Verification | null;
+  trigger?: string | null; approval?: { via: string; at?: string | null } | null;
+  pending_plan?: PendingPlan | null;
+};
+/** The plan an environment waits on: exactly the hash an approval names. */
+export type PendingPlan = {
+  plan_hash: string; combined_hash?: string | null; release?: string | null;
+  counts: Record<string, number>; changes: { operation: string; kind: string; name: string }[]; changes_total: number;
+  create_namespace: boolean; stop: string[]; images: Record<string, string>;
 };
 /** A checks-only run against the running release: nothing applied or rolled back. */
 export type Verification = { state: string; trigger?: string | null; checks_hash?: string | null; at?: string | null; failed: { check?: string | null; code?: string | null }[] };
@@ -184,6 +193,7 @@ export function CompositionEnvironment({ canSync, actions }: { canSync: boolean;
           {canSync && <SyncButton env={item.name} component={component.name} sync={sync} label={`Sync ${component.name}`} primary={false} />}
         </li>)}</ul>}
       </section>
+      <EnvironmentHistory env={item.name} />
       <section className="panel control-card"><div className="panelhead"><h2>Workloads and logs</h2></div><div className="panelbody">{item.application_id ? <Link className="button" to={`${applicationPath(item.application_id)}/resources`}>Open workloads, pods and logs</Link> : <p className="small muted">The namespace is not created yet; workloads appear after the first sync.</p>}</div></section>
     </>}
   </div>;

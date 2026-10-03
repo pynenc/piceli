@@ -159,9 +159,11 @@ Stop Piceli's stale forwards and servers for the app; never another process.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `TARGET` | text | required |  |
+| `TARGET` | text |  |  |
 | `--stale` | boolean | `False` | Stop Piceli's own processes for this app that hold its ports (required: the only mode) |
 | `--port` | integer (repeatable) |  | Also check this loopback port (a dashboard, observe serve or operator serve port); repeatable |
+| `--cluster` | text |  | Instead of TARGET: the Cluster (MODULE:ATTR) whose `piceli access ui` forward to stop |
+| `--profile` | text |  | Instead of TARGET: the credential profile whose `piceli access ui` forward to stop |
 
 **Contract**
 

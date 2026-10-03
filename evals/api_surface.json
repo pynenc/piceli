@@ -8213,6 +8213,7 @@
   "piceli.gitops",
   "piceli.gitops.config",
   "piceli.gitops.controller",
+  "piceli.gitops.history",
   "piceli.gitops.install",
   "piceli.gitops.ports",
   "piceli.gitops.repo",
@@ -8382,6 +8383,7 @@
   "piceli.services.cluster_evaluation",
   "piceli.services.cluster_status",
   "piceli.services.composition_control",
+  "piceli.services.composition_history",
   "piceli.services.contracts",
   "piceli.services.engine",
   "piceli.services.environment_control",
@@ -8443,5 +8445,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.14.5"
+ "version": "0.14.6"
 }

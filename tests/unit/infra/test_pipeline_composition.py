@@ -594,3 +594,131 @@ def test_the_composition_build_job_prints_the_failing_commands_tail(
     # The pod log (the Job's output) holds what the command printed last.
     assert "error: expected item" in result.stderr
     assert "s3cr3t-not-printed" not in result.output + result.stderr
+
+
+#: Two contexts of the one ``api`` source, each with its own ``include``: the
+#: ``api`` image reads ``site/``, the ``worker`` image reads ``jobs/`` of the
+#: same repository (and its own ``worker`` source).
+ONE_SOURCE_SPEC = """
+revision = "piceli.host-build.v1"
+name = "example"
+
+[build]
+tools = ["true"]
+commands = [["true"]]
+
+[context.site]
+source = "api"
+include = ["site/**"]
+
+[context.api_jobs]
+source = "api"
+include = ["jobs/**"]
+
+[context.worker]
+source = "worker"
+include = ["jobs/**"]
+
+[[output.image]]
+name = "api"
+repository = "example/api"
+contexts = ["site"]
+files = { "site/site" = "/srv/site" }
+
+[[output.image]]
+name = "worker"
+repository = "example/worker"
+contexts = ["api_jobs", "worker"]
+files = { "api_jobs/jobs" = "/opt/api-jobs", "worker/jobs" = "/opt/worker" }
+"""
+
+
+def test_contexts_of_one_source_scope_each_image_to_its_own_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from piceli.artifacts.host_build import HostBuildSpec
+
+    remotes = tmp_path / "remotes"
+    files = example_files(EXAMPLE / "infra")
+    files["host-build.toml"] = ONE_SOURCE_SPEC
+    infra = Repo(remotes, "infra", files)
+    api = Repo(
+        remotes,
+        "api",
+        {**example_files(EXAMPLE / "api"), "jobs/nightly.sh": "#!/bin/sh\n"},
+    )
+    worker = Repo(remotes, "worker", example_files(EXAMPLE / "worker"))
+    api.tag("v0.1.0")
+    monkeypatch.setenv("EXAMPLE_INFRA_URL", infra.url)
+    monkeypatch.setenv("EXAMPLE_API_URL", api.url)
+    monkeypatch.setenv("EXAMPLE_WORKER_URL", worker.url)
+    # The spec is valid as a host build too: one checkout serves both contexts.
+    spec = HostBuildSpec.from_toml(infra.work / "host-build.toml")
+    assert [c.source for c in spec.contexts] == ["api", "api", "worker"]
+    ports = FakePorts()
+    controller = _controller(tmp_path, infra, ports, {"now": 1_000_000.0})
+    first = _digests(controller.poll_once(), "main")
+    assert ports.builder.built == [["api", "worker"]]
+
+    # A change under the worker image's include of `api`: only worker rebuilds.
+    api.commit({"jobs/nightly.sh": "#!/bin/sh\necho v2\n"})
+    status = controller.poll_once()
+    assert ports.builder.built[-1] == ["worker"]
+    assert _states(status, "main") == {"api": "unchanged", "worker": "synced"}
+    second = _digests(status, "main")
+    assert second["api"] == first["api"] and second["worker"] != first["worker"]
+
+    # A change under the api image's include of the same source: only api.
+    api.commit({"site/index.html": "<h1>v2</h1>\n"})
+    status = controller.poll_once()
+    assert ports.builder.built[-1] == ["api"]
+    assert _states(status, "main") == {"api": "synced", "worker": "unchanged"}
+    third = _digests(status, "main")
+    assert third["worker"] == second["worker"] and third["api"] != second["api"]
+
+    # A path neither include covers: nothing builds.
+    api.commit({"README.md": "docs\n"})
+    controller.poll_once()
+    assert len(ports.builder.built) == 3
+
+
+def test_the_job_builds_two_contexts_of_one_source_from_one_checkout(
+    tmp_path: Path,
+) -> None:
+    sources = tmp_path / "sources"
+    sources.mkdir()
+    files = {
+        "infra": {"host-build.toml": ONE_SOURCE_SPEC},
+        "api": {"site/index.html": "<h1>hi</h1>\n", "jobs/nightly.sh": "echo n\n"},
+        "worker": {"jobs/run.sh": "echo hi\n"},
+    }
+    for name, content in files.items():
+        repo = Repo(tmp_path / "remotes", name, content)
+        repo.work.rename(sources / name)
+    pushed: list[str] = []
+
+    def deliver(
+        archive: Any, target: Any, grant: Any, *, node_registry: Any
+    ) -> dict[str, Any]:
+        pushed.append(target.repository)
+        return {
+            "state": "succeeded",
+            "pull_ref": f"{node_registry}/{target.repository}@sha256:" + "8" * 64,
+        }
+
+    receipt = job_run_spec(
+        sources=sources,
+        spec="infra/host-build.toml",
+        images=[
+            {"image": name, "repository": f"example/{name}", "key": "sha256:" + k * 64}
+            for name, k in (("api", "6"), ("worker", "7"))
+        ],
+        platforms=("linux/arm64",),
+        cache=tmp_path / "cache",
+        out=tmp_path / "out",
+        registry_url="oci://registry.example:5000",
+        node_registry="registry.example:5000",
+        deliver=deliver,
+    )
+    assert sorted(pushed) == ["example/api", "example/worker"]
+    assert set(receipt["images"]) == {"api", "worker"}

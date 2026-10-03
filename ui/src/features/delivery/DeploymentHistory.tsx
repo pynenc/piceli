@@ -4,12 +4,34 @@ import { api, applicationPath } from '../../api/client';
 import { Failure, Loading, Notice } from '../../components/State';
 import { Activity } from './Delivery';
 import { PlanArchive } from './PlanArchive';
+import { CompositionHistory } from '../control/EnvironmentHistory';
 import './deployment-history.css';
 
 const scopeKeys = ['compareFrom', 'compareTo', 'planSearch', 'planFilter', 'planSort', 'activity', 'activitySearch', 'plan'];
 
-/** One visible entry point; each query still belongs to an explicitly selected application. */
-export function DeploymentHistory() {
+/**
+ * One visible entry point. With a GitOps controller (``environments``) it
+ * opens on the environments' runs unless this session can read an
+ * application's own history; ``historySource`` keeps an explicit choice.
+ */
+export function DeploymentHistory({ environments = false }: { environments?: boolean }) {
+  const [params, setParams] = useSearchParams();
+  const applications = useInfiniteQuery({ queryKey: ['applications'], initialPageParam: null as string | null, queryFn: ({ signal, pageParam }) => api.applications(pageParam, signal), getNextPageParam: page => page.next_page ?? undefined, enabled: environments });
+  const source = params.get('historySource');
+  const accessible = applications.data?.pages.some(page => page.items.some(app => app.capabilities?.activity?.allowed === true)) ?? false;
+  if (!environments) return <ApplicationHistory environments={false} />;
+  if (source === null && !params.has('application') && applications.isPending) return <Loading text="Loading deployment history…" />;
+  const showEnvironments = source === 'environments' || (source !== 'applications' && !params.has('application') && !accessible);
+  if (!showEnvironments) return <ApplicationHistory environments />;
+  const select = (env: string) => setParams(previous => { const next = new URLSearchParams(previous); next.set('environment', env); return next; });
+  return <section className="deployment-history">
+    <header className="history-heading"><div><h1>Deployment history</h1><p>Each environment’s runs, newest first, as the GitOps controller recorded them: trigger, commits, plan, approver, components, checks and failures.</p></div></header>
+    <nav className="history-tabs" aria-label="History source"><button aria-pressed="true"><strong>Environment runs</strong><span>Recorded by the GitOps controller</span></button><button aria-pressed="false" onClick={() => setParams({ historySource: 'applications' })}><strong>Application history</strong><span>Plans and runs saved by this UI</span></button></nav>
+    <CompositionHistory selected={params.get('environment')} onSelect={select} />
+  </section>;
+}
+
+function ApplicationHistory({ environments }: { environments: boolean }) {
   const [params, setParams] = useSearchParams();
   const client = useQueryClient();
   const applications = useInfiniteQuery({ queryKey: ['applications'], initialPageParam: null as string | null, queryFn: ({ signal, pageParam }) => api.applications(pageParam, signal), getNextPageParam: page => page.next_page ?? undefined });
@@ -23,11 +45,12 @@ export function DeploymentHistory() {
   function refresh() { void applications.refetch(); if (app) { void client.invalidateQueries({ queryKey: ['plans', app.id] }); void client.invalidateQueries({ queryKey: ['operations', app.id] }); } }
   return <section className="deployment-history">
     <header className="history-heading"><div><h1>Deployment history</h1><p>Saved plans, revision changes and the execution record for each deployment.</p></div><button disabled={applications.isFetching} onClick={refresh}>Refresh history</button></header>
+    {environments && <nav className="history-tabs" aria-label="History source"><button aria-pressed="false" onClick={() => setParams({ historySource: 'environments' })}><strong>Environment runs</strong><span>Recorded by the GitOps controller</span></button><button aria-pressed="true"><strong>Application history</strong><span>Plans and runs saved by this UI</span></button></nav>}
     {applications.isPending && <Loading text="Loading application histories…" />}{applications.isError && <Failure error={applications.error} retry={() => void applications.refetch()} />}
     {applications.data && <><div className="history-scope"><label><span>Application history</span><select value={app?.id ?? ''} onChange={event => selectApplication(event.target.value)}>{!app && <option value="">Select an application</option>}{accessible.map(item => <option key={item.id} value={item.id}>{item.name} · {item.target.name} / {item.target.namespace || 'Cluster scoped'}</option>)}</select></label>{app && <Link to={`${applicationPath(app.id)}/overview`}>Open application <span aria-hidden="true">↗</span></Link>}{applications.hasNextPage && <button disabled={applications.isFetchingNextPage} onClick={() => void applications.fetchNextPage()}>Load more applications</button>}</div>
       {app ? <><nav className="history-tabs" aria-label="Deployment history views">{([['plans', 'Plans', 'Ordered steps & resource changes'], ['runs', 'Runs & logs', 'Outcomes, transitions & captured output'], ['revisions', 'Compare revisions', 'Configuration between recorded versions']] as const).map(([key, title, description]) => <button key={key} aria-pressed={view === key} onClick={() => selectView(key)}><strong>{title}</strong><span>{description}</span></button>)}</nav>
         {view === 'plans' ? <PlanArchive key={app.id} application={app} /> : <Activity key={app.id} applicationId={app.id} view={view} embedded />}
-      </> : requested !== null ? <Notice title="Selected application history is unavailable">The bookmarked application is not in the loaded authorized scopes. Choose an application or load additional scopes.</Notice> : <Notice title="No accessible deployment history">This session has no application with activity access in the loaded scopes.</Notice>}
+      </> : requested !== null ? <Notice title="Selected application history is unavailable">The bookmarked application is not in the loaded authorized scopes. Choose an application or load additional scopes.</Notice> : <Notice title="No accessible deployment history">This session has no application with activity access in the loaded scopes.{environments ? ' Environment runs are under Environment runs.' : ''}</Notice>}
     </>}
   </section>;
 }

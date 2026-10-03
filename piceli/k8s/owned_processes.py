@@ -9,7 +9,14 @@ start time and command line), plus the same for the owning server. At the
 next start, :meth:`OwnedProcessRegistry.reap_orphans` stops a recorded child
 only when its owner is gone **and** the pid still names the very process that
 was recorded. A pid reused by another process, or a child whose owner is
-still running, is never signalled. Importing this module is side-effect free.
+still running, is never signalled.
+
+A record may carry a ``label``: :func:`forward_label`, a digest of the
+forward the child serves (kubeconfig, context, namespace, target, ports).
+:meth:`OwnedProcessRegistry.lookup` lets ``piceli access stop --stale``
+recognise a recorded child that holds a port as Piceli's own forward for
+exactly that target, even when its command line cannot be verified.
+Importing this module is side-effect free.
 """
 
 from __future__ import annotations
@@ -69,12 +76,38 @@ def process_identity(pid: int, *, proc: Path = Path("/proc")) -> str | None:
     return hashlib.sha256(raw).hexdigest()
 
 
+def forward_label(
+    kubeconfig: str,
+    context: str,
+    namespace: str,
+    target: str,
+    local_port: int,
+    remote_port: int,
+) -> str:
+    """A digest naming one declared forward (never the paths themselves)."""
+    raw = "\0".join(
+        [kubeconfig, context, namespace, target, str(local_port), str(remote_port)]
+    )
+    return "sha256:" + hashlib.sha256(raw.encode()).hexdigest()
+
+
 @dataclass(frozen=True)
 class _Entry:
     pid: int
     identity: str
     owner_pid: int
     owner_identity: str
+    label: str | None = None
+
+
+@dataclass(frozen=True)
+class OwnedChild:
+    """A live recorded child: its owner, whether that owner still runs, its label."""
+
+    pid: int
+    owner_pid: int
+    owner_alive: bool
+    label: str | None
 
 
 class OwnedProcessRegistry:
@@ -92,8 +125,11 @@ class OwnedProcessRegistry:
     def _path(self, pid: int) -> Path:
         return self.directory / f"{pid}.json"
 
-    def record(self, pid: int) -> None:
-        """Record a child this process just started (best effort, never raises)."""
+    def record(self, pid: int, *, label: str | None = None) -> None:
+        """Record a child this process just started (best effort, never raises).
+
+        ``label`` (:func:`forward_label`) names what the child serves.
+        """
         try:
             identity = process_identity(pid)
             if self._owner_identity is None:
@@ -101,14 +137,15 @@ class OwnedProcessRegistry:
             if identity is None or self._owner_identity is None:
                 return
             self._prepare()
-            data = json.dumps(
-                {
-                    "pid": pid,
-                    "identity": identity,
-                    "owner_pid": self._owner_pid,
-                    "owner_identity": self._owner_identity,
-                }
-            ).encode()
+            value: dict[str, object] = {
+                "pid": pid,
+                "identity": identity,
+                "owner_pid": self._owner_pid,
+                "owner_identity": self._owner_identity,
+            }
+            if label is not None:
+                value["label"] = label
+            data = json.dumps(value).encode()
             temporary = self.directory / f".{pid}.{os.getpid()}.tmp"
             descriptor = os.open(
                 temporary,
@@ -130,29 +167,45 @@ class OwnedProcessRegistry:
         except OSError:
             return
 
+    @staticmethod
+    def _read(path: Path) -> _Entry | None:
+        try:
+            if path.is_symlink() or path.stat().st_size > _MAX_ENTRY_BYTES:
+                return None
+            value = json.loads(path.read_bytes())
+            label = value.get("label")
+            entry = _Entry(
+                pid=int(value["pid"]),
+                identity=str(value["identity"]),
+                owner_pid=int(value["owner_pid"]),
+                owner_identity=str(value["owner_identity"]),
+                label=label if isinstance(label, str) else None,
+            )
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            return None
+        return entry if path.name == f"{entry.pid}.json" else None
+
     def _entries(self) -> list[tuple[Path, _Entry | None]]:
         try:
             paths = sorted(self.directory.glob("*.json"))[:_MAX_ENTRIES]
         except OSError:
             return []
-        entries: list[tuple[Path, _Entry | None]] = []
-        for path in paths:
-            entry: _Entry | None = None
-            try:
-                if not path.is_symlink() and path.stat().st_size <= _MAX_ENTRY_BYTES:
-                    value = json.loads(path.read_bytes())
-                    entry = _Entry(
-                        pid=int(value["pid"]),
-                        identity=str(value["identity"]),
-                        owner_pid=int(value["owner_pid"]),
-                        owner_identity=str(value["owner_identity"]),
-                    )
-                    if path.name != f"{entry.pid}.json":
-                        entry = None
-            except (OSError, ValueError, KeyError, TypeError):
-                entry = None
-            entries.append((path, entry))
-        return entries
+        return [(path, self._read(path)) for path in paths]
+
+    def lookup(self, pid: int) -> OwnedChild | None:
+        """The record of ``pid`` when it still names the very process recorded.
+
+        ``None`` for a pid never recorded, a record that cannot be read, or a
+        pid that exited or was reused (its fingerprint differs).
+        """
+        entry = self._read(self._path(pid)) if pid > 0 else None
+        if entry is None or process_identity(entry.pid) != entry.identity:
+            return None
+        alive = (
+            entry.owner_pid == self._owner_pid
+            or process_identity(entry.owner_pid) == entry.owner_identity
+        )
+        return OwnedChild(entry.pid, entry.owner_pid, alive, entry.label)
 
     def reap_orphans(self, *, timeout: float = 3.0) -> tuple[int, ...]:
         """Stop recorded children whose owner is gone; return the pids stopped.
