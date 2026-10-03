@@ -11,7 +11,14 @@ ConfigMap ``piceli-gitops-status``) and keeps only the documented fields:
   ``health``, ``updated_at``;
 - ``envs.<env>.last_action`` and ``verification`` (``state``, ``trigger``,
   ``checks_hash``, ``at`` and the ``check``/``code`` of each failed check;
-  never the checks' free-text detail).
+  never the checks' free-text detail);
+- ``envs.<env>.trigger``, ``approval`` (``via``, ``at``) and, while it waits
+  for approval, ``pending_plan`` (the plan hash, object counts and changed
+  objects by operation, kind and name).
+
+The run history (``piceli.gitops-history.v1``, the ConfigMap
+``piceli-gitops-history``) is projected by
+:mod:`piceli.services.composition_history`.
 
 A Sync writes the same request as ``piceli gitops sync ENV [--component
 NAME]``: a ``sync`` entry in the ConfigMap ``piceli-gitops-requests``. The
@@ -142,9 +149,59 @@ def _verification(value: Any) -> dict[str, Any] | None:
     }
 
 
+def _pending_plan(value: Any, plan_hash: str | None) -> dict[str, Any] | None:
+    """What the owner approves: the pending plan's counts and changed objects."""
+    from piceli.services.composition_history import _plan
+
+    if not isinstance(value, Mapping) or plan_hash is None:
+        return None
+    if value.get("plan_hash") != plan_hash:
+        return None  # an older plan's review never stands for the current hash
+    plan = _plan(value) or {"counts": {}, "changes": [], "changes_total": 0}
+    combined = value.get("combined_hash")
+    images = value.get("images")
+    return {
+        "plan_hash": plan_hash,
+        "combined_hash": combined
+        if isinstance(combined, str) and _DIGEST.fullmatch(combined)
+        else None,
+        "release": _text(value.get("release")),
+        **plan,
+        "create_namespace": value.get("create_namespace") is True,
+        "stop": [
+            item
+            for item in value.get("stop") or []
+            if isinstance(item, str) and _DNS.fullmatch(item)
+        ],
+        "images": {
+            key: ref
+            for key, ref in sorted(images.items())
+            if isinstance(key, str) and _NAME.fullmatch(key) and _text(ref)
+        }
+        if isinstance(images, Mapping)
+        else {},
+    }
+
+
+def _approval(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    via = value.get("via")
+    return {
+        "via": via if via in ("cli", "ui") else "request",
+        "at": _text(value.get("at")),
+    }
+
+
 def _environment(name: str, value: Mapping[str, Any]) -> dict[str, Any]:
     components = value.get("components")
     namespace = value.get("namespace")
+    plan_hash = (
+        value["plan_hash"]
+        if isinstance(value.get("plan_hash"), str)
+        and _DIGEST.fullmatch(value["plan_hash"])
+        else None
+    )
     return {
         "name": name,
         "namespace": namespace
@@ -157,9 +214,11 @@ def _environment(name: str, value: Mapping[str, Any]) -> dict[str, Any]:
         "reason": _text(value.get("reason")),
         "last_action": _text(value.get("last_action")),
         "verification": _verification(value.get("verification")),
-        "plan_hash": value.get("plan_hash")
-        if isinstance(value.get("plan_hash"), str)
-        and _DIGEST.fullmatch(value["plan_hash"])
+        "plan_hash": plan_hash,
+        "trigger": _text(value.get("trigger")),
+        "approval": _approval(value.get("approval")),
+        "pending_plan": _pending_plan(value.get("pending_plan"), plan_hash)
+        if value.get("state") == "approval-required"
         else None,
         "components": [
             _component(key, item)
@@ -336,6 +395,53 @@ class CompositionControl:
         if not document["configured"]:
             raise QueryError("ui-controller-absent", 404)
         raise QueryError("ui-sync-target-unknown", 404)
+
+    # ------------------------------------------------------------ history
+
+    def _history(self) -> dict[str, Any] | None:
+        try:
+            with self.channel_factory() as channel:
+                read = getattr(channel, "read_history", None)
+                return read() if callable(read) else None
+        except GitOpsError:
+            raise QueryError("ui-observation-unavailable", 503) from None
+
+    def history(self, env: str | None = None) -> dict[str, Any]:
+        """Each environment's deploy runs, newest first, from the controller's
+        published history (one environment with ``env``)."""
+        from piceli.services import composition_history as projection
+
+        self._authorize("inspect")
+        if env is not None and not _NAME.fullmatch(env):
+            raise QueryError("ui-invalid-request", 422)
+        status = self._status()
+        if status is None:
+            if env is not None:
+                raise QueryError("ui-controller-absent", 404)
+            return {
+                "configured": False,
+                **projection.published(None),
+                "environments": [],
+            }
+        envs = status.get("envs")
+        names = sorted(
+            name
+            for name in (envs if isinstance(envs, Mapping) else {})
+            if isinstance(name, str) and _NAME.fullmatch(name)
+        )
+        if env is not None:
+            if env not in names:
+                raise QueryError("ui-sync-target-unknown", 404)
+            names = [env]
+        document = self._history()
+        return {
+            "configured": True,
+            **projection.published(document),
+            "environments": [
+                {"name": name, "runs": projection.environment_runs(document, name)}
+                for name in names
+            ],
+        }
 
     # --------------------------------------------------------------- sync
 

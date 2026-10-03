@@ -20,12 +20,14 @@ from piceli.gitops.state import DirectoryChannel
 from piceli.k8s.ops.provider_factory import KubeconfigTarget
 from piceli.server.app import create_app
 from piceli.server.security import uvicorn_log_config
+from piceli.services.cluster_status import ClusterStatusControl
 from piceli.services.composition_control import CompositionControl
 from piceli.services.logs import LogService
 from piceli.services.query import QueryService
 from piceli.services.registration import Registration
 from piceli.testing import fake_cluster, manifest
-from tests.ui_composition_fixture import STATUS
+from tests.gitops_history_fixture import sample_history
+from tests.ui_composition_fixture import CLUSTER, controller_status
 
 
 def main() -> None:
@@ -38,7 +40,10 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="piceli-ui-composition-") as directory:
         root = Path(directory)
         channel = DirectoryChannel(root / "gitops")
-        channel.publish(STATUS)
+        # What a 0.14.6 controller publishes: status and run history (built
+        # from real run journals under a disposable controller state).
+        channel.publish(controller_status())
+        channel.publish_history(sample_history(root / "controller-state"))
         with fake_cluster() as cluster:
             cluster.api.put(manifest("Deployment", "web"), owned=True)
             cluster.api.put(manifest("Deployment", "worker"), owned=True)
@@ -60,6 +65,9 @@ def main() -> None:
                 launch_token=token,
                 logs=LogService(query),
                 composition_control=CompositionControl(query, "cluster", open_channel),
+                cluster_status_control=ClusterStatusControl(
+                    query, "cluster", reader=lambda: CLUSTER
+                ),
             )
             print(
                 f"Starting Piceli composition UI at http://127.0.0.1:{options.port}/ "

@@ -50,3 +50,67 @@ test('sources list their refs and an unknown environment is explained', async ({
   await page.goto('/composition/environments/gone');
   await expect(page.getByText(/does not list that environment or component/)).toBeVisible();
 });
+
+test('deployment history shows each environment’s runs newest first from the controller', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.goto('/');
+  await page.getByRole('link', { name: 'Deployment history' }).click();
+  await expect(page).toHaveURL(/\/delivery$/);
+  await expect(page.getByRole('heading', { name: 'Deployment history', exact: true })).toBeVisible();
+  const runs = page.getByRole('list', { name: 'Runs of main' });
+  const newest = runs.locator(':scope > li').first();
+  await expect(newest).toContainText('Checks failed; the release keeps running');
+  await expect(newest).toContainText('deliberate-failure');
+  await expect(newest).toContainText('sh exited 1, expected 0');
+  const deployed = runs.locator(':scope > li').nth(1);
+  await deployed.locator('summary').click();
+  await expect(deployed).toContainText('Deployed; rolled web');
+  await expect(deployed).toContainText('push product/main');
+  await expect(deployed).toContainText('piceli gitops approve (CLI)');
+  await expect(deployed.getByRole('region', { name: 'Run images' })).toContainText('built');
+  await expect(deployed.getByRole('region', { name: 'Run plan' })).toContainText('Deployment/web');
+  await expect(deployed.getByRole('region', { name: 'Run sources and commits' })).toContainText('3f9c2d1e8a7b');
+  await expect(runs.locator(':scope > li').nth(2)).toContainText("Deployed; rolled nothing");
+  expect(await fits(page)).toBe(true);
+  await page.getByLabel('Environment').selectOption('wp-login');
+  await expect(page).toHaveURL(/environment=wp-login/);
+  await expect(page.getByLabel('Failure log tail')).toContainText('missing script: build');
+  await page.reload();
+  await expect(page.getByLabel('Failure log tail')).toContainText('missing script: build');
+  expect(await fits(page)).toBe(true);
+  expect(errors).toEqual([]);
+});
+
+test('an environment shows its history, verification state and the pending plan before approval', async ({ page }) => {
+  await page.goto('/composition/environments/main');
+  const history = page.getByRole('region', { name: 'Deployment history' });
+  await expect(history.getByRole('list', { name: 'Runs of main' }).locator(':scope > li')).toHaveCount(3);
+  await page.goto('/composition/environments/stage');
+  await expect(page.getByText('Checks verification failed')).toBeVisible();
+  await expect(page.getByText('deliberate-failure')).toBeVisible();
+  await page.goto('/composition/environments/rc');
+  await page.getByRole('button', { name: 'Approve' }).click();
+  const review = page.getByRole('region', { name: 'approve review' });
+  await expect(review.getByText(/sha256:d{64}/).first()).toBeVisible();
+  await expect(review.getByLabel('Pending plan changes')).toContainText('Deployment/web');
+  await expect(review.getByLabel('Pending plan changes')).toContainText('1 update · 4 no-op');
+  expect(await fits(page)).toBe(true);
+  await review.getByRole('checkbox').check();
+  await review.getByRole('button', { name: 'Confirm approve' }).click();
+  await expect(page.getByText('Request recorded')).toBeVisible();
+});
+
+test('promote offers the published branch heads and sync and the cluster show the controller’s facts', async ({ page }) => {
+  await page.goto('/composition/environments/rc');
+  await page.getByRole('button', { name: 'Promote' }).click();
+  const review = page.getByRole('region', { name: 'promote review' });
+  await review.getByLabel('Published branch and commit').selectOption({ index: 1 });
+  await expect(review.getByText(/This requests/)).toBeVisible();
+  await page.goto('/cluster');
+  const registry = page.getByRole('region', { name: 'In-cluster registry' });
+  await expect(registry).toContainText('0.52 GiB');
+  await expect(registry).toContainText('by the GitOps controller');
+  await expect(page.getByRole('region', { name: 'Cluster nodes' })).toContainText('node-a');
+  expect(await fits(page)).toBe(true);
+});

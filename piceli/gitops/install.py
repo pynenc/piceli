@@ -311,6 +311,9 @@ def render_foundation(
             "resources": ["configmaps", "persistentvolumeclaims", "pods", "pods/log", "events"],
             "verbs": ["get", "list", "watch", "create", "update", "patch", "delete"],
         },
+        # The in-cluster registry's claim use (``du`` in its pod), published
+        # in the status for the UI, which has no exec grant.
+        {"apiGroups": [""], "resources": ["pods/exec"], "verbs": ["get", "create"]},
         {
             "apiGroups": ["batch"],
             "resources": ["jobs"],

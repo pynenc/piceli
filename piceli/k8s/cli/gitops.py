@@ -1005,7 +1005,7 @@ def approve_env(
     from piceli.gitops.state import approve_request
 
     with _guard():
-        key, body = approve_request(env, plan_hash)
+        key, body = approve_request(env, plan_hash, via="cli")
     with _channel(state_dir, kubeconfig, context, namespace, transport) as channel:
         with _guard():
             channel.add_request(key, body)

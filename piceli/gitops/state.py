@@ -9,6 +9,10 @@ Three documents, none of them holding a secret:
   read. In the cluster it is the ConfigMap ``piceli-gitops-status`` (key
   ``status.json``) in the controller's namespace; ``piceli gitops status``
   and ``piceli envs`` read it (:func:`read_status`).
+- **history** (``piceli.gitops-history.v1``, :mod:`piceli.gitops.history`):
+  each environment's recent deploy runs, bounded, for the in-cluster UI.
+  In the cluster it is the ConfigMap ``piceli-gitops-history`` (key
+  ``history.json``); locally ``history.json`` in the state directory.
 - **requests**: what people ask the controller to do: approve a plan hash
   (``piceli gitops approve``) or promote a commit to main (``piceli
   promote``). In the cluster it is the
@@ -43,6 +47,10 @@ REQUEST_SCHEMA = "piceli.gitops-request.v1"
 STATUS_CONFIGMAP = "piceli-gitops-status"
 REQUESTS_CONFIGMAP = "piceli-gitops-requests"
 STATUS_KEY = "status.json"
+HISTORY_CONFIGMAP = "piceli-gitops-history"
+HISTORY_KEY = "history.json"
+#: Who sent an approval (``via`` of an approve request; recorded as its approver).
+APPROVAL_VIA = ("cli", "ui")
 #: Request kinds (the prefix of their key).
 REQUEST_KINDS = ("approve", "promote", "sync")
 #: Env states a status may carry.
@@ -198,12 +206,20 @@ def request(kind: str, **fields: Any) -> tuple[str, dict[str, Any]]:
     return f"{kind}.{digest}", body
 
 
-def approve_request(env: str, plan_hash: str) -> tuple[str, dict[str, Any]]:
+def approve_request(
+    env: str, plan_hash: str, via: str | None = None
+) -> tuple[str, dict[str, Any]]:
+    """Approve ``plan_hash`` for ``env``; ``via`` (``cli`` or ``ui``) is recorded
+    by the controller as the approval's origin in the environment's history."""
     if not plan_hash.startswith("sha256:") or len(plan_hash) != 71:
         raise GitOpsError(
             "gitops-request-invalid", "the plan hash must be sha256:<64 hex>"
         )
-    return request("approve", env=env, plan_hash=plan_hash)
+    if via is None:
+        return request("approve", env=env, plan_hash=plan_hash)
+    if via not in APPROVAL_VIA:
+        raise GitOpsError("gitops-request-invalid", "unknown approval origin")
+    return request("approve", env=env, plan_hash=plan_hash, via=via)
 
 
 def promote_request(target: str, env: str | None = None) -> tuple[str, dict[str, Any]]:
@@ -312,6 +328,13 @@ class DirectoryChannel:
 
     def read_status(self) -> dict[str, Any] | None:
         value = read_json(self.directory / "status.json")
+        return dict(value) if isinstance(value, Mapping) else None
+
+    def publish_history(self, history: Mapping[str, Any]) -> None:
+        write_json(self.directory / HISTORY_KEY, history)
+
+    def read_history(self) -> dict[str, Any] | None:
+        value = read_json(self.directory / HISTORY_KEY)
         return dict(value) if isinstance(value, Mapping) else None
 
 
@@ -442,8 +465,18 @@ class ConfigMapChannel:
         self._update(STATUS_CONFIGMAP, lambda data: {STATUS_KEY: text})
 
     def read_status(self) -> dict[str, Any] | None:
-        current = self._read(STATUS_CONFIGMAP)
-        text = ((current or {}).get("data") or {}).get(STATUS_KEY)
+        return self._document(STATUS_CONFIGMAP, STATUS_KEY)
+
+    def publish_history(self, history: Mapping[str, Any]) -> None:
+        text = json.dumps(dict(history), sort_keys=True)
+        self._update(HISTORY_CONFIGMAP, lambda data: {HISTORY_KEY: text})
+
+    def read_history(self) -> dict[str, Any] | None:
+        return self._document(HISTORY_CONFIGMAP, HISTORY_KEY)
+
+    def _document(self, name: str, key: str) -> dict[str, Any] | None:
+        current = self._read(name)
+        text = ((current or {}).get("data") or {}).get(key)
         if not text:
             return None
         try:

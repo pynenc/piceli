@@ -52,6 +52,7 @@ other sessions start at Applications.
 | Operate composition environments | Workspace → Environments, `/composition` | Scope, health, revisions and reviewed lifecycle actions |
 | Inspect running objects | Workspace → Applications, `/applications` | Open an application's Overview or Resources for ownership, configuration, logs and access |
 | Inspect nodes and cluster services | Workspace → Cluster, `/cluster` | Nodes, controller, registry and UI status |
+| Read each environment's deploy runs | Delivery → Deployment history, `/delivery` (composition UI), or an environment's page | Trigger, commits, plan hash and changes, approver, built/rolled/unchanged components with digests, checks and failures |
 | Find a previous review | Delivery → Deployment history → Plans, `/delivery` | Saved plans, approval expiry, action counts and exact run links; also the application's Plans tab |
 | Read deployment output | Deployment history → Runs & logs → Open logs | Captured output, visual transitions and raw journal |
 | Compare recorded configurations | Deployment history → Compare revisions | Exact source versions, resource additions/removals and before/after fields |
@@ -356,7 +357,8 @@ to the GitOps controller:
   controller's node). It listens on its pod's loopback only;
 - a ClusterIP Service, the port-forward target. Nothing is exposed outside
   the cluster: no NodePort, no Ingress, and no OIDC in this mode;
-- a service account that reads the controller's status ConfigMap and the
+- a service account that reads the controller's status and run history
+  ConfigMaps (`piceli-gitops-status`, `piceli-gitops-history`) and the
   environments' workloads, pods and logs (never their Secrets or ConfigMaps),
   and writes exactly two objects: the controller's request inbox
   `piceli-gitops-requests` (the **Sync** button) and the Secret
@@ -403,7 +405,10 @@ The views, like Argo CD's applications, read the controller's published status
 in-cluster registry's pod and claim status, mirror state on each node, and the
 controller and UI Deployment health. A k3s mirror that needs a service restart
 is shown separately from a ready mirror. Storage use is shown when kubelet
-volume statistics are readable; otherwise it says “Not reported.” The page
+volume statistics are readable; in the cluster, where the UI may read
+neither, it shows the controller's last `du` of the registry storage
+(“measured … by the GitOps controller”, at most ten minutes old); otherwise
+it says “Not reported.” The page
 returns only a small status projection: it does not expose the declaration's
 credential reference, Git Secret, kubeconfig or service-account token.
 
@@ -421,9 +426,50 @@ The controller publishes each environment's `Promote()` policy and, for a
 source followed with `Promote()`, its branch heads, so Promote offers exactly
 those; it stays disabled with a reason when the status does not allow it. The
 UI installed in the cluster reads `piceli-cluster` and Nodes for the Cluster
-page. It is never granted the kubelet API (`nodes/proxy`), so the registry's
-storage use shows as unknown there; `piceli registry status` run with an
-owner's credentials shows it.
+page. It is never granted the kubelet API (`nodes/proxy`) or `pods/exec`:
+the registry's storage use it shows is the one the controller measured and
+published in its status; `piceli registry status` run with an owner's
+credentials measures it now.
+
+The Approve review lists what the pending plan changes (object counts and
+each created, updated or deleted object by kind and name, and the deploy
+plan's hash) next to the exact hash; a changed plan needs a new
+acknowledgement. The controller records the approval's origin (`cli`, `ui`,
+or the owner's approval policy) in the environment's history.
+
+### Deployment history of the environments
+
+**Delivery → Deployment history** (`/delivery`) and each environment's page
+list the environment's deploy runs, newest first, with no extra setup:
+
+- outcome in words (“Deployed; rolled web”, “Verified (checks changed);
+  rolled nothing”, “Checks failed; the release keeps running”, “Failed
+  (component-build-failed)”) and when it ran;
+- the trigger (a push, a new tag, a promotion, a sync, a changed check set);
+- each source's followed ref and exact commit;
+- the environment's plan hash, the deploy plan's hash, the release, and the
+  plan's object counts and changed objects;
+- who approved it: `piceli gitops approve` (CLI), the Piceli UI, or the
+  owner's approval policy;
+- every component with its image digest, marked built, rolled or unchanged;
+- each check with its outcome, duration and short detail line, and whether
+  the checks ran as a verification of an unchanged release;
+- a failure's stage, registered code (`piceli explain CODE`), failing checks
+  and the bounded log tail of a failed build;
+- each stage's duration.
+
+The controller builds this history from its own record of each deploy step
+and the deploy run journals on its volume (runs recorded before 0.14.6 are
+listed from their journals alone, without trigger or approver). It
+publishes it, bounded to the newest 20 runs per environment, in the
+ConfigMap `piceli-gitops-history` next to its status. The UI reads that one
+ConfigMap with a read-only grant; it does not mount the controller's volume.
+The history holds commit ids, hashes, digests, object kinds and names,
+registered codes, check names and their short detail and timings: never a
+field value, a Secret, a kubeconfig or process output beyond the build log
+tail the status already shows. The JSON is available at
+`GET /api/v1/composition/history` and
+`GET /api/v1/composition/environments/ENV/history`.
 
 ```{image} _static/ui/named-environment-approve.png
 :alt: Approval review of an exact pending plan hash in a named environment

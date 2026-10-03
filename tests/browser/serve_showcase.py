@@ -38,6 +38,7 @@ from piceli.testing import fake_cluster
 from tests.browser.preview_navigation import PreviewNavigationBootstrap
 from tests.browser.showcase_delivery import showcase_delivery
 from tests.browser.showcase_resources import seed_resources
+from tests.gitops_history_fixture import sample_history
 from tests.ui_composition_fixture import STATUS as COMPOSITION
 
 IMAGE = "registry.example/shop@sha256:" + "a" * 64
@@ -222,6 +223,10 @@ def main() -> None:
                 channel_factory=lambda: _channel(root / "gitops"),
             )
             given = os.environ.get("PICELI_UI_LAUNCH_TOKEN")
+            # The controller's run history, built from real run journals.
+            DirectoryChannel(root / "composition").publish_history(
+                sample_history(root / "controller-state")
+            )
             app = create_app(
                 query,
                 origin=f"http://127.0.0.1:{options.port}",

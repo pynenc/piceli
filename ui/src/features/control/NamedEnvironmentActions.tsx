@@ -2,13 +2,16 @@ import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiError, api } from '../../api/client';
 import { Failure, formatTime, Loading, Notice } from '../../components/State';
-import type { Environment } from './Composition';
+import type { Environment, PendingPlan } from './Composition';
+import './environment-history.css';
+import { countEntries } from './EnvironmentHistory';
 
 type Action = { allowed: boolean; reason: string | null };
 type Ref = { source: string; branch: string; commit: string };
 type Options = {
   env: string; promote: Action; approve: Action; wake: Action;
   refs: Ref[]; plan_hash: string | null; stopped_since: string | null;
+  pending_plan?: PendingPlan | null;
   summary: { namespace: string | null; revision: Record<string, string>; components: string[] };
 };
 type Intent = 'promote' | 'approve' | 'wake';
@@ -37,7 +40,7 @@ export function NamedEnvironmentActions({ environment, canChange }: { environmen
   const selectedRef = refs.find(item => `${item.source}/${item.branch}@${item.commit}` === selected);
   const identity = options && intent ? JSON.stringify([
     environment.name, options.env, intent, options.summary.namespace,
-    intent === 'approve' ? [options.plan_hash, Object.entries(options.summary.revision).sort(([a], [b]) => a.localeCompare(b)), [...options.summary.components].sort()] : null,
+    intent === 'approve' ? [options.plan_hash, options.pending_plan?.combined_hash ?? null, (options.pending_plan?.changes ?? []).map(item => `${item.operation} ${item.kind}/${item.name}`), Object.entries(options.summary.revision).sort(([a], [b]) => a.localeCompare(b)), [...options.summary.components].sort()] : null,
     intent === 'promote' && selectedRef ? [selectedRef.source, selectedRef.branch, selectedRef.commit] : null,
     intent === 'wake' ? [environment.state, options.stopped_since] : null,
   ]) : null;
@@ -72,7 +75,8 @@ export function NamedEnvironmentActions({ environment, canChange }: { environmen
     {intent && options && <div className="control-review named-env-review" role="region" aria-label={`${intent} review`} ref={review} tabIndex={-1}>
       <h2>{intent === 'promote' ? 'Review promotion' : intent === 'approve' ? 'Review pending plan' : 'Wake idle environment'}</h2>
       <dl className="facts"><dt>Environment</dt><dd>{environment.name}</dd><dt>Namespace</dt><dd>{options.summary.namespace ?? 'Not created yet'}</dd>
-        {intent === 'approve' && <><dt>Exact plan hash</dt><dd><code>{options.plan_hash ?? 'No current plan'}</code></dd><dt>Revision</dt><dd>{Object.entries(options.summary.revision).map(([source, sha]) => <span key={source}>{source} @ <code>{sha}</code><br /></span>)}</dd><dt>Components</dt><dd>{options.summary.components.join(', ') || 'None reported'}</dd></>}
+        {intent === 'approve' && <><dt>Exact plan hash</dt><dd><code>{options.plan_hash ?? 'No current plan'}</code></dd><dt>Revision</dt><dd>{Object.entries(options.summary.revision).map(([source, sha]) => <span key={source}>{source} @ <code>{sha}</code><br /></span>)}</dd><dt>Components</dt><dd>{options.summary.components.join(', ') || 'None reported'}</dd>
+          <dt>Changes</dt><dd>{options.pending_plan ? <PlanChanges plan={options.pending_plan} /> : 'The controller did not publish this plan’s changes (a controller older than 0.14.6). Review it with piceli gitops status.'}</dd></>}
         {intent === 'wake' && <><dt>Stopped since</dt><dd>{formatTime(options.stopped_since)}</dd><dt>Action</dt><dd>Request a sync; the controller will start this environment again.</dd></>}
       </dl>
       {intent === 'promote' && <label>Published branch and commit<select value={selected} onChange={event => { setSelected(event.target.value); setConfirmedIdentity(null); }}><option value="">Select a ref</option>{refs.map(ref => <option key={`${ref.source}/${ref.branch}@${ref.commit}`} value={`${ref.source}/${ref.branch}@${ref.commit}`}>{ref.source} · {ref.branch}@{ref.commit.slice(0, 12)}</option>)}</select></label>}
@@ -83,5 +87,18 @@ export function NamedEnvironmentActions({ environment, canChange }: { environmen
       {mutate.isError && <Notice title="Request not completed" danger>{mutate.error instanceof ApiError ? explain(mutate.error.detail.code) : 'The connection ended before the controller accepted the request. Refresh the status before retrying.'}</Notice>}
     </div>}
     {mutate.isSuccess && <Notice title="Request recorded">The controller will process it on its next poll. Refresh to see the new state.</Notice>}
+  </div>;
+}
+
+/** What the pending plan changes: counts and objects, before the exact hash is approved. */
+function PlanChanges({ plan }: { plan: PendingPlan }) {
+  const counts = countEntries(plan.counts).map(([key, count]) => `${count} ${key}`).join(' · ');
+  return <div className="pending-plan" aria-label="Pending plan changes">
+    {plan.create_namespace && <p className="small">Creates the environment’s namespace and every object of its rendered model.</p>}
+    {counts && <p className="small muted">{counts}</p>}
+    {plan.changes.length ? <ul className="pending-plan-changes">{plan.changes.map((item, index) => <li key={index}><span className="history-op">{item.operation}</span>{item.kind}/<strong>{item.name}</strong></li>)}</ul> : !plan.create_namespace && <p className="small">No object changes; only the plan’s identity (images, checks or policy) changed.</p>}
+    {plan.changes_total > plan.changes.length && <p className="small muted">{plan.changes_total - plan.changes.length} more not listed.</p>}
+    {plan.stop.length > 0 && <p className="small">Stops {plan.stop.join(', ')} to stay within the environment budget.</p>}
+    {plan.combined_hash && <p className="small muted">Deploy plan <code>{plan.combined_hash}</code></p>}
   </div>;
 }
