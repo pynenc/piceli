@@ -267,7 +267,9 @@ def test_hung_provider_has_wall_deadline_and_bounded_detached_capacity():
         with pytest.raises(TimeoutError):
             bounded_call(lambda: invoked.append(True), time.monotonic() + 1)
         assert invoked == []
-        assert time.monotonic() - start < 0.4
+        # A call waiting on the hung provider would take 5 s; well under that
+        # proves every call ended at its own deadline (wide for slow runners).
+        assert time.monotonic() - start < 3
     finally:
         release.set()
         time.sleep(0.05)

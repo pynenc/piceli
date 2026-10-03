@@ -22,6 +22,8 @@ SCHEMA = json.loads(
         / "piceli-watch-event-v1.schema.json"
     ).read_text()
 )
+VALIDATOR = jsonschema.validators.validator_for(SCHEMA)(SCHEMA)
+VALIDATOR.check_schema(SCHEMA)
 
 
 def watch(tmp_path: Path, *args: str) -> tuple[int, list[dict[str, Any]]]:
@@ -30,7 +32,7 @@ def watch(tmp_path: Path, *args: str) -> tuple[int, list[dict[str, Any]]]:
     )
     lines = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
     for line in lines:
-        jsonschema.validate(line, SCHEMA)
+        VALIDATOR.validate(line)
     return result.exit_code, lines
 
 

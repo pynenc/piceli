@@ -201,6 +201,11 @@ SCHEMA = json.loads(
         / "piceli-deploy-event-v1.schema.json"
     ).read_text()
 )
+#: One validator, its schema checked once: ``jsonschema.validate`` re-checks
+#: the schema on every call, which was most of a deploy test's time and
+#: pushed multi-deploy tests past the 30 s timeout under parallel load.
+VALIDATOR = jsonschema.validators.validator_for(SCHEMA)(SCHEMA)
+VALIDATOR.check_schema(SCHEMA)
 
 
 def deploy(tmp_path: Path, *args: str) -> tuple[int, list[dict[str, Any]], Any]:
@@ -209,7 +214,7 @@ def deploy(tmp_path: Path, *args: str) -> tuple[int, list[dict[str, Any]], Any]:
     )
     lines = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
     for line in lines:
-        jsonschema.validate(line, SCHEMA)  # every stdout line follows the schema
+        VALIDATOR.validate(line)  # every stdout line follows the schema
     return result.exit_code, lines, result
 
 

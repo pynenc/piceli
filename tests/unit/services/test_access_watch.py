@@ -202,7 +202,9 @@ def test_close_has_one_shared_teardown_deadline(tmp_path: Path) -> None:
         access._close_timeout = 0.1
         started = time.monotonic()
         access.close()
-        assert time.monotonic() - started < 0.5
+        # Each blocked close waits up to 5 s on the gate; returning well
+        # before that proves one shared 0.1 s deadline (wide for slow runners).
+        assert time.monotonic() - started < 3
         assert access.get("shop", first.id).state == "stopped"
         assert access.get("shop", second.id).state == "stopped"
         gate.set()

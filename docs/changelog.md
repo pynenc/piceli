@@ -115,6 +115,14 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 - **Testing:** the fake API (`piceli.testing`) accepts `Foreground` deletes.
 - **Tests:** the local executor's delayed-mutation test no longer depends on a
   0.25 s window that slow CI runners missed (2 s window, polled to `ready`).
+- **Tests:** the local executor's delayed-mutation test, the heavy-lock tests
+  and the saved-forward conflict test no longer depend on timing: the test
+  sets "in flight", "applied" and "lock released" itself instead of waiting
+  for wall-clock windows. `piceli.testing.FakeAPI.inject` takes `hold` and
+  `applied` events for that (`hold_timeout` bounds a held request). The
+  access-history test checks the bound at a small limit (130 real starts
+  passed the 30 s timeout under load), and deploy acceptance tests check
+  their event schema once instead of on every line (about 3x faster).
 
 ## Version 0.14.6
 

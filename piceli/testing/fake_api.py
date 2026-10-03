@@ -458,6 +458,9 @@ class FakeAPI:
       true drops the connection at that point: a ``"received"`` request is
       then never applied, a ``"committed"`` one is applied but unanswered.
       Kill tests use it to stop a client process at an exact step.
+    - ``hold_timeout``: the longest a request with a ``hold`` fault waits
+      for its event (see :meth:`inject`), so a test that fails before
+      setting it cannot hang the server.
 
     Use :meth:`put` to seed objects and :meth:`inject` to add faults.
 
@@ -482,6 +485,7 @@ class FakeAPI:
         self.objects: dict[tuple[str, str], dict[str, Any]] = {}
         self.requests: list[dict[str, Any]] = []
         self.faults: list[dict[str, Any]] = []
+        self.hold_timeout = 30.0
         self.lock = threading.RLock()
         self.ready = True
         self.wait_for_first_consumer: set[str] = set()
@@ -1129,7 +1133,14 @@ class FakeAPI:
         ``fault`` keys: ``status`` (HTTP error), ``raw`` (body bytes),
         ``delay`` / ``after_commit_delay`` (seconds), ``disconnect_before`` /
         ``disconnect_after`` (drop the connection), ``dry_run`` (match only
-        dry-run or only real requests). Each fault fires once.
+        dry-run or only real requests), ``hold`` (a :class:`threading.Event`:
+        the request waits until the test sets it, at most
+        :attr:`hold_timeout` seconds, before it is applied) and ``applied``
+        (a :class:`threading.Event` the server sets once the request has been
+        applied). Each fault fires once.
+
+        ``hold`` and ``applied`` let a test drive "still in flight" and
+        "applied" as states it sets, not as wall-clock windows.
         """
         self.faults.append({"method": method, "suffix": path_suffix, **fault})
 
@@ -1186,6 +1197,8 @@ class FakeAPI:
                         api.faults.remove(fault)
                 if fault.get("delay"):
                     time.sleep(fault["delay"])
+                if fault.get("hold") is not None:
+                    fault["hold"].wait(api.hold_timeout)
                 if "status" in fault:
                     self.respond(
                         fault["status"], {"message": "server-password-do-not-publish"}
@@ -1201,6 +1214,8 @@ class FakeAPI:
                     return
                 with api.lock:
                     status, response = api.route(request)
+                if fault.get("applied") is not None:
+                    fault["applied"].set()
                 if api.intercept is not None and api.intercept(request, "committed"):
                     self.connection.shutdown(socket.SHUT_RDWR)
                     self.connection.close()

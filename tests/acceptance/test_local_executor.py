@@ -6,6 +6,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -255,27 +256,30 @@ def test_delayed_mutation_is_bounded_and_detached_work_not_retried(local_api, tm
     provider = provider_at(original_provider.host, request_seconds=0.05)
     run = executor(provider, tmp_path)
     plan, snapshot, grant = prepare(provider, [manifest()])
-    # The server answers 2 s late; the client gives up after 0.05 s. A
-    # resume while the write is still in flight stays blocked (it never
-    # writes twice); once the server has applied it, a resume is ready. The
-    # margins are wide so a slow runner cannot reach the end of the delay
-    # before the second call.
-    api.inject("POST", "/configmaps", delay=2.0, dry_run=False)
-    start = time.monotonic()
-    assert run.run("slow", plan, snapshot, grant)["state"] == "blocked"
-    assert time.monotonic() - start < 1.0
-    assert run.run("slow", plan, snapshot, grant, resume=True)["state"] == "blocked"
-    assert time.monotonic() - start < 1.5, (
-        "the runner was too slow to observe the window"
-    )
-    deadline = time.monotonic() + 10
-    state = "blocked"
-    while state != "ready" and time.monotonic() < deadline:
-        time.sleep(0.2)
-        state = run.run("slow", plan, snapshot, grant, resume=True)["state"]
-    assert state == "ready"
-    assert len(mutations(api)) == 1
-    provider.client.close()
+    # The server holds the write until the test releases it; the client gives
+    # up after 0.05 s. "In flight" and "applied" are states the test sets,
+    # not wall-clock windows: a resume while the write is held stays blocked
+    # (it never writes twice); once the server has applied it, a resume is
+    # ready.
+    hold, applied = threading.Event(), threading.Event()
+    api.inject("POST", "/configmaps", hold=hold, applied=applied, dry_run=False)
+    try:
+        # Bounded: the run returns while the server still holds the request,
+        # so it gave up on its own timeout, not on the server's answer.
+        assert run.run("slow", plan, snapshot, grant)["state"] == "blocked"
+        assert not applied.is_set()
+        assert len(mutations(api)) == 1
+        assert run.run("slow", plan, snapshot, grant, resume=True)["state"] == (
+            "blocked"
+        )
+        assert not applied.is_set()
+        hold.set()
+        assert applied.wait(10), "the held write was never applied"
+        assert run.run("slow", plan, snapshot, grant, resume=True)["state"] == ("ready")
+        assert len(mutations(api)) == 1
+    finally:
+        hold.set()
+        provider.client.close()
 
 
 def test_process_death_after_http_before_receipt_can_resume(local_api, tmp_path):
@@ -542,26 +546,34 @@ def test_compensation_read_capture_shares_execution_deadline(local_api, tmp_path
     run.limits = ExecutionLimits(
         max_seconds=0.05, readiness_seconds=0.02, poll_seconds=0.01
     )
-    api.inject("GET", "/configmaps", delay=0.3)
-    start = time.monotonic()
-    with pytest.raises((ProviderError, ValueError, TimeoutError)):
-        run.compensate("undo-timeout", plan, snapshot, grant)
-    assert time.monotonic() - start < 0.25
-    assert len(mutations(api)) == 1
-    time.sleep(0.35)
+    # The read is held until the test releases it: compensation returning
+    # while it is still held proves the execution deadline ended it.
+    hold = threading.Event()
+    api.inject("GET", "/configmaps", hold=hold)
+    try:
+        with pytest.raises((ProviderError, ValueError, TimeoutError)):
+            run.compensate("undo-timeout", plan, snapshot, grant)
+        assert not hold.is_set()
+        assert len(mutations(api)) == 1
+    finally:
+        hold.set()
 
 
 def test_cold_api_discovery_obeys_read_deadline(local_api):
     api, provider = local_api
-    api.inject("GET", "/api/v1", delay=0.3)
-    start = time.monotonic()
-    with pytest.raises(ProviderError, match="deadline"):
-        provider.get(
-            ResourceIdentity("v1", "ConfigMap", TARGET.namespace, "settings"),
-            deadline=start + 0.04,
-        )
-    assert time.monotonic() - start < 0.2
-    time.sleep(0.35)
+    # The discovery read is held until the test releases it: the call
+    # returning while it is still held proves the read deadline ended it.
+    hold = threading.Event()
+    api.inject("GET", "/api/v1", hold=hold)
+    try:
+        with pytest.raises(ProviderError, match="deadline"):
+            provider.get(
+                ResourceIdentity("v1", "ConfigMap", TARGET.namespace, "settings"),
+                deadline=time.monotonic() + 0.04,
+            )
+        assert not hold.is_set()
+    finally:
+        hold.set()
 
 
 def test_cancellation_between_actions_survives_reopen(local_api, tmp_path):

@@ -5,6 +5,7 @@ from __future__ import annotations
 import socket
 import sys
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -43,9 +44,31 @@ class Supervisor:
         self.closed = True
 
 
-def test_live_scoped_service_forward_requires_owned_ready_probe(tmp_path: Path) -> None:
+@pytest.fixture(autouse=True)
+def fresh_supervisors() -> Iterator[None]:
+    """Each test starts with no recorded supervisors and no conflict."""
     Supervisor.instances.clear()
     Supervisor.conflict = False
+    yield
+    Supervisor.instances.clear()
+    Supervisor.conflict = False
+
+
+@pytest.fixture
+def local_port() -> Iterator[int]:
+    """A loopback port this test holds (bound, not listening) until it ends.
+
+    The fake supervisor never binds it; holding it keeps the number unique
+    to this test while other workers run.
+    """
+    with socket.socket() as held:
+        held.bind(("127.0.0.1", 0))
+        yield int(held.getsockname()[1])
+
+
+def test_live_scoped_service_forward_requires_owned_ready_probe(
+    tmp_path: Path, local_port: int
+) -> None:
     with fake_cluster() as cluster:
         service = manifest("Service", "api")
         service["spec"] = {
@@ -83,7 +106,7 @@ def test_live_scoped_service_forward_requires_owned_ready_probe(tmp_path: Path) 
             body = AccessStartRequest(
                 resource_id=selected.id,
                 resource_uid=selected.identity.uid or "",
-                local_port=18080,
+                local_port=local_port,
                 remote_port=8080,
             )
             with pytest.raises(QueryError, match="ui-invalid-request"):
@@ -93,7 +116,7 @@ def test_live_scoped_service_forward_requires_owned_ready_probe(tmp_path: Path) 
             ready = access.start("shop", body)
             assert ready.state == "ready"
             assert ready.binding_location == "server"
-            assert ready.endpoint == "127.0.0.1:18080"
+            assert ready.endpoint == f"127.0.0.1:{local_port}"
             assert Supervisor.instances[-1].started
             with pytest.raises(QueryError, match="ui-access-port-conflict"):
                 access.start("shop", body)
@@ -110,12 +133,9 @@ def test_live_scoped_service_forward_requires_owned_ready_probe(tmp_path: Path) 
             Supervisor.conflict = False
             second = access.start("shop", body)
             cluster.api.put(service, uid="replacement-uid")
-            deadline = time.monotonic() + 3
-            while (
-                access.get("shop", second.id).state != "failed"
-                and time.monotonic() < deadline
-            ):
-                time.sleep(0.05)
+            # One supervision pass (what the watcher runs every second)
+            # notices the replaced object; no wall-clock wait for the watcher.
+            access._tick()
             assert access.get("shop", second.id).state == "failed"
             assert Supervisor.instances[-1].closed
         finally:
@@ -167,10 +187,14 @@ def test_occupied_loopback_port_is_never_reported_ready(tmp_path: Path) -> None:
 
 
 def test_ended_access_history_is_bounded_and_old_supervisors_close(
-    tmp_path: Path,
+    tmp_path: Path, local_port: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    Supervisor.instances.clear()
-    Supervisor.conflict = False
+    # The bound is checked at a small limit: 130 real starts against the
+    # fake cluster took ~7 s idle and passed the 30 s test timeout under
+    # parallel load. The shipped limit is pinned separately.
+    assert AccessService._history_limit == 128
+    limit = 4
+    monkeypatch.setattr(AccessService, "_history_limit", limit)
     with fake_cluster() as cluster:
         service = manifest("Service", "api")
         service["spec"] = {"ports": [{"port": 8080, "targetPort": 8080}]}
@@ -203,18 +227,18 @@ def test_ended_access_history_is_bounded_and_old_supervisors_close(
             request = AccessStartRequest(
                 resource_id=selected.id,
                 resource_uid=selected.identity.uid or "",
-                local_port=18080,
+                local_port=local_port,
                 remote_port=8080,
             )
             first_id = ""
             last_id = ""
-            for index in range(130):
+            for index in range(limit + 2):
                 session = access.start("shop", request)
                 if index == 0:
                     first_id = session.id
                 last_id = session.id
                 assert access.stop("shop", session.id).state == "stopped"
-            assert len(access.list("shop").items) == 128
+            assert len(access.list("shop").items) == limit
             assert all(supervisor.closed for supervisor in Supervisor.instances)
             with pytest.raises(QueryError, match="ui-not-found"):
                 access.get("shop", first_id)
@@ -222,7 +246,7 @@ def test_ended_access_history_is_bounded_and_old_supervisors_close(
                 access._sessions[last_id].closed_at = (
                     time.monotonic() - access._history_seconds - 1
                 )
-            assert len(access.list("shop").items) == 127
+            assert len(access.list("shop").items) == limit - 1
             with pytest.raises(QueryError, match="ui-not-found"):
                 access.get("shop", last_id)
         finally:
