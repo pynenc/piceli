@@ -4,6 +4,11 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.14.7
+
+- **Tests:** the local executor's delayed-mutation test no longer depends on a
+  0.25 s window that slow CI runners missed (2 s window, polled to `ready`).
+
 ## Version 0.14.6
 
 - **Fix:** an environment does not ask twice for the plan it already runs.
