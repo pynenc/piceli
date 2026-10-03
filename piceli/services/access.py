@@ -438,6 +438,25 @@ class AccessService:
                 ]
             )
 
+    def sessions(self) -> tuple[AccessSession, ...]:
+        """This principal's sessions in every scope, including removed scopes."""
+        principal = self.query._principal().id
+        with self._lock:
+            self._prune_locked()
+            return tuple(
+                owned.record
+                for owned in self._sessions.values()
+                if owned.record.principal_id == principal
+            )
+
+    def stop_owned(self, id: str) -> AccessSession:
+        """Stop this principal's session ``id`` whose scope may no longer exist."""
+        with self._lock:
+            owned = self._sessions.get(id)
+            if owned is None or owned.record.principal_id != self.query._principal().id:
+                raise QueryError("ui-not-found")
+        return self._end(id, "stopped")
+
     def stop(self, application_id: str, id: str) -> AccessSession:
         self.get(application_id, id)
         return self._end(id, "stopped")

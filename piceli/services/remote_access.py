@@ -227,6 +227,18 @@ class RemoteAccessService:
                 ]
             )
 
+    def sessions(self) -> tuple[AccessSession, ...]:
+        """This principal's tickets in every scope it may still access."""
+        principal_id = self.query._principal().id
+        with self._lock:
+            self._sweep()
+            return tuple(
+                item.session
+                for item in self._tickets.values()
+                if item.session.principal_id == principal_id
+                and self.query._allowed(item.session.application_id, "access")
+            )
+
     def get(self, application_id: str, id: str) -> AccessSession:
         with self._lock:
             self._sweep()

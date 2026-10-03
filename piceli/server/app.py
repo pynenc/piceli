@@ -12,10 +12,10 @@ import uuid
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Annotated, Any
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import (
     FileResponse,
@@ -47,18 +47,21 @@ from piceli.services.contracts import (
     EvaluationPreview,
     EvaluationRequest,
     Event,
+    ForwardPage,
     GitOpsApprovalRequest,
     GitOpsPromotionRequest,
     LogBatch,
     LogSourcePage,
     NamedEnvironmentApprovalRequest,
     NamedEnvironmentPromotionRequest,
+    NavigationSummary,
     Operation,
     OperationPage,
     OperationRequest,
     PlanPage,
     PlanRecord,
     PlanRequest,
+    ProfileScopeRequest,
     ProfileSwitchRequest,
     RecoveryRequest,
     ReleasePage,
@@ -71,6 +74,10 @@ from piceli.services.contracts import (
     Resource,
     ResourcePage,
     ServiceError,
+    StaleForwardResult,
+    WorkspaceLogBatch,
+    WorkspaceLogSources,
+    WorkspaceScope,
 )
 from piceli.services.query import QueryError, QueryService
 
@@ -81,6 +88,7 @@ if TYPE_CHECKING:
     from piceli.services.cluster_status import ClusterStatusControl
     from piceli.services.composition_control import CompositionControl
     from piceli.services.environment_control import EnvironmentControl
+    from piceli.services.log_workspace import ProfileScopes
     from piceli.services.logs import LogService
     from piceli.services.named_environment_actions import NamedEnvironmentActions
     from piceli.services.operations import OperationService
@@ -154,6 +162,20 @@ def _same_origin_reload(target: str) -> HTMLResponse:
     )
 
 
+def _register_environments(
+    composition: CompositionControl | None,
+) -> Callable[[], None] | None:
+    """Reading the composition status registers its environments' log scopes."""
+    if composition is None:
+        return None
+    control = composition
+
+    def prepare() -> None:
+        control.overview()
+
+    return prepare
+
+
 def create_app(
     service: QueryService,
     *,
@@ -173,6 +195,7 @@ def create_app(
     launch_token: str | None = None,
     active_profile: str | None = None,
     profile_switch: Callable[[str], None] | None = None,
+    profile_scopes: ProfileScopes | None = None,
 ) -> FastAPI:
     """Create a local app. The caller owns the server's loopback listener.
 
@@ -265,6 +288,40 @@ def create_app(
     )
     app.state.service = service
     app.state.security = security
+    from piceli.services.forwards import ForwardWorkspace
+    from piceli.services.log_workspace import LogWorkspace
+    from piceli.services.log_workspace import ProfileScopes as _ProfileScopes
+    from piceli.services.navigation import NavigationService
+
+    if (
+        profile_scopes is None
+        and cluster_security is None
+        and composition_control is None
+        and profile_switch is not None
+    ):
+        # The local `piceli ui serve`: other saved profiles, read-only.
+        profile_scopes = _ProfileScopes(service)
+    workspace = LogWorkspace(
+        service,
+        profiles=profile_scopes,
+        active_profile=active_profile,
+        prepare=_register_environments(composition_control),
+    )
+    forward_workspace = ForwardWorkspace(
+        service,
+        access=access,
+        remote=remote_access,
+        registry=access.registry if access is not None else None,
+        scopes=workspace,
+    )
+    navigation = NavigationService(
+        service,
+        composition=composition_control,
+        environments=environment_control,
+        cluster_status=None,
+        cluster_builds=cluster_build_control,
+        forwards=forward_workspace,
+    )
     if cluster_status_control is None and service.registrations:
         from piceli.services.cluster_status import ClusterStatusControl
 
@@ -274,6 +331,7 @@ def create_app(
             else next(iter(service.registrations))
         )
         cluster_status_control = ClusterStatusControl(service, scope)
+    navigation.cluster_status = cluster_status_control
     if cluster_security is not None:
         app.add_middleware(
             SessionMiddleware,
@@ -447,6 +505,19 @@ def create_app(
     @app.get(f"{api}/capabilities", response_model=Capabilities)
     def capabilities() -> Capabilities:
         result = service.capabilities()
+        if profile_scopes is not None:
+            usable = profile_scopes.available()
+            result = result.model_copy(
+                update={
+                    "actions": {
+                        **result.actions,
+                        "profile_scopes": Capability(
+                            allowed=usable,
+                            reason=None if usable else "profile-scopes-unavailable",
+                        ),
+                    }
+                }
+            )
         if (
             environment_control is None
             and pipeline_control is None
@@ -539,6 +610,11 @@ def create_app(
             "profiles": [
                 {"name": item.name, "available": item.kubeconfig.is_file()}
                 for item in list_profiles()
+            ],
+            "scopes": [
+                workspace.scope(service.registrations[identity]).model_dump()
+                for identity in (profile_scopes.names if profile_scopes else {})
+                if identity in service.registrations
             ],
         }
 
@@ -830,6 +906,64 @@ def create_app(
             previous=previous,
             tail_lines=tail_lines,
         )
+
+    # ------------------------------------------- Logs and Forwards workspaces
+
+    def scopes_of_profiles() -> ProfileScopes:
+        if profile_scopes is None or not profile_scopes.available():
+            raise QueryError("ui-operation-unavailable", 409)
+        return profile_scopes
+
+    @app.post(f"{api}/profiles/scopes", response_model=WorkspaceScope, status_code=201)
+    def add_profile_scope(body: ProfileScopeRequest) -> WorkspaceScope:
+        registration = scopes_of_profiles().add(body.profile, body.namespace)
+        return workspace.scope(registration)
+
+    @app.delete(f"{api}/profiles/scopes/{{scope_id}}", status_code=204)
+    def remove_profile_scope(scope_id: str) -> Response:
+        scopes_of_profiles().remove(scope_id)
+        return Response(status_code=204)
+
+    def log_reads() -> LogWorkspace:
+        if logs is None:
+            raise QueryError("ui-operation-unavailable", 409)
+        return workspace
+
+    @app.get(f"{api}/logs/sources", response_model=WorkspaceLogSources)
+    def workspace_log_sources(
+        scope: Annotated[list[str] | None, Query()] = None,
+    ) -> WorkspaceLogSources:
+        return log_reads().sources(scope or [])
+
+    @app.get(f"{api}/logs/lines", response_model=WorkspaceLogBatch)
+    def workspace_log_lines(
+        stream: Annotated[list[str], Query()],
+        previous: bool = False,
+        tail_lines: int = 500,
+        since_seconds: int | None = None,
+        q: str | None = None,
+        level: Annotated[list[str] | None, Query()] = None,
+    ) -> WorkspaceLogBatch:
+        return log_reads().read(
+            stream,
+            previous=previous,
+            tail_lines=tail_lines,
+            since_seconds=since_seconds,
+            query=q or None,
+            levels=level or [],
+        )
+
+    @app.get(f"{api}/forwards", response_model=ForwardPage)
+    def forward_list() -> ForwardPage:
+        return forward_workspace.list()
+
+    @app.post(f"{api}/forwards/stale/stop", response_model=StaleForwardResult)
+    def forward_stop_stale() -> StaleForwardResult:
+        return forward_workspace.stop_stale()
+
+    @app.get(f"{api}/navigation", response_model=NavigationSummary)
+    def navigation_summary() -> NavigationSummary:
+        return navigation.summary()
 
     def delivery() -> OperationService:
         if operations is None:
