@@ -477,7 +477,8 @@ Forwards from this UI run on your machine. **Forward** on a workload (or
 example `piceli ui connect --server http://127.0.0.1:8790 --ticket ID
 --kubeconfig PATH --context NAME --local-port 8080`, with your own explicit
 kubeconfig and context. `piceli ui connect` accepts plain http only for a
-loopback server such as this forward; any other server needs https. The UI
+loopback server such as this forward; any other server needs https. It needs
+the `ui` extra on your machine (`pip install "piceli[ui]"`). The UI
 reads the selected Service, Pod or Deployment with its existing read grant and
 never binds a port, so it needs no `pods/portforward` permission. To forward
 every Service port of an environment instead, run

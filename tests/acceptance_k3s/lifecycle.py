@@ -844,7 +844,7 @@ class Lifecycle(OpsStages, PruneStages, ReachStages):
         cand = self.scratch / "venv-candidate"
         self.proc.run([uv, "venv", "-q", "--python", "3.12", str(cand)], timeout=300)
         if self.args.candidate_version:
-            spec = f"piceli=={self.args.candidate_version}"
+            spec = f"piceli[ui]=={self.args.candidate_version}"
         else:
             dist = self.scratch / "dist"
             self.proc.run(
@@ -860,7 +860,8 @@ class Lifecycle(OpsStages, PruneStages, ReachStages):
                 timeout=600,
             )
             wheel = next(dist.glob("piceli-*.whl"))
-            spec = str(wheel)
+            # As documented for `piceli ui connect`: the ui extra.
+            spec = f"piceli[ui] @ {wheel.as_uri()}"
         self.proc.run(
             [uv, "pip", "install", "-q", "--python", str(cand / "bin" / "python"), spec],
             timeout=900,
