@@ -1,0 +1,32 @@
+/* Navigation: compact rows, alert counts and collapsible sub-menus. */
+:root .shell { grid-template-columns: 228px minmax(0, 1fr); }
+@media (max-width: 1100px) { :root .shell { grid-template-columns: 206px minmax(0, 1fr); } }
+.sidebar .nav-group { margin: 6px 0 16px; }
+.sidebar .nav-label { margin-bottom: 6px; }
+.nav-row { position: relative; display: flex; align-items: center; }
+.nav-row > a { flex: 1; min-width: 0; }
+.sidebar nav .nav-row > a { min-height: 34px; margin: 1px 0; padding: 7px 10px; }
+.sidebar nav .nav-row > a > span:not(.nav-count) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nav-entry.has-children .nav-row > a { padding-right: 30px; }
+.nav-toggle { position: absolute; right: 3px; top: 50%; transform: translateY(-50%); min-height: 26px; width: 26px; padding: 0; display: grid; place-items: center; border: 0; background: transparent; color: #a69d92; font-size: 15px; line-height: 1; }
+.nav-toggle:hover:not(:disabled) { background: #302a25; color: #fff8f2; border: 0; }
+.nav-toggle:focus-visible { outline: 2px solid #f0a27d; outline-offset: -2px; }
+.nav-toggle > span { transition: transform .12s; }
+.nav-toggle[aria-expanded="true"] > span { transform: rotate(90deg); }
+.nav-entry.has-children .nav-count { margin-right: 4px; }
+.nav-count { margin-left: auto; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; display: inline-grid; place-items: center; font-size: 10px; font-weight: 700; line-height: 1; }
+.nav-count.danger { background: #6b2f2b; color: #ffd0cb; }
+.nav-count.warning { background: #5c4421; color: #ffe0a8; }
+.nav-children { list-style: none; margin: 0 0 4px 22px; padding: 0 0 0 9px; border-left: 1px solid #443a32; }
+.nav-children[hidden] { display: none; }
+.sidebar nav .nav-children a { min-height: 28px; margin: 1px 0; padding: 4px 8px; font-size: 11px; gap: 7px; }
+.sidebar nav .nav-children a > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nav-dot { width: 7px; height: 7px; border-radius: 50%; background: #75695e; flex-shrink: 0; }
+.nav-dot.good { background: #6cc79c; }
+.nav-dot.warn { background: #e8b65f; }
+.nav-dot.bad { background: #ff8a80; }
+@media (max-width: 760px) {
+  .nav-children, .nav-toggle { display: none !important; }
+  .nav-entry { flex-shrink: 0; }
+  .sidebar nav .nav-row > a { padding-right: 11px; }
+}

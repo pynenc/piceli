@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { api } from '../../api/client';
+import { Link } from 'react-router-dom';
+import { api, logsPath } from '../../api/client';
 import type { Resource } from '../../api/generated';
 import { Failure, FreshnessNotice, Loading, Notice } from '../../components/State';
 import { emptyLogBuffer, mergeLogBatch, type LogBuffer } from './buffer';
@@ -41,7 +42,7 @@ export function LogPanel({ applicationId, resource }: { applicationId: string; r
   }, [buffer.lines.length]);
 
   return <section className="log-panel">
-    <h4>Container logs</h4>
+    <div className="log-panel-head"><h4>Container logs</h4><Link to={logsPath({ scope: applicationId, ...(resource.identity.kind === 'Pod' ? { pod: resource.identity.name } : { workload: `${resource.identity.kind}/${resource.identity.name}` }) })}>Open in Logs →</Link></div>
     <p className="small muted">Pod and container choices come from this workload's observed scope. A missing pod, an unreadable log, or a missed interval remains visible. The bounded read refreshes about once a second.</p>
     {sources.isPending && <Loading text="Finding workload pods…" />}
     {sources.isError && <Failure error={sources.error} retry={() => void sources.refetch()} />}

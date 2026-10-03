@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter } from 'react-router-dom';
 import { Cluster, type ClusterStatus } from './Cluster';
 
 const base: ClusterStatus = { schema: 'piceli.ui-cluster.v1', state: 'ready', cluster: 'my-cluster', nodes: [], registry: { state: 'ready', host: 'registry.example:5000', ready: true, pods: [], storage: { claim: 'registry-data', phase: 'Bound', capacity: '20Gi', used_bytes: 2 * 1024 ** 3, used_source: 'du' } }, controller: null, ui: null };
@@ -8,7 +9,7 @@ const base: ClusterStatus = { schema: 'piceli.ui-cluster.v1', state: 'ready', cl
 function open(status: ClusterStatus) {
   vi.stubGlobal('fetch', vi.fn(async () => Response.json(status)));
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
-  render(<QueryClientProvider client={client}><Cluster /></QueryClientProvider>);
+  render(<QueryClientProvider client={client}><MemoryRouter><Cluster /></MemoryRouter></QueryClientProvider>);
 }
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 

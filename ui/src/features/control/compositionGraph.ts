@@ -4,7 +4,11 @@ export type CompositionNode = { id: string; kind: 'source' | 'component' | 'envi
 export type CompositionEdge = { id: string; from: string; to: string; path: string; relation: 'source' | 'membership' };
 export type CompositionGroup = { id: string; name: string; x: number; y: number; width: number; height: number };
 export type CompositionSelection = { kind: 'source'; name: string } | { kind: 'environment'; name: string } | { kind: 'component'; environment: string; name: string };
-export const graphCard = { width: 194, height: 108 };
+export const graphCard = { width: 192, height: 64 };
+// Compact columns: sources, components, environments; one row per component.
+const COLUMN = [12, 252, 492];
+const ROW = 78;
+const TOP = 40;
 export const compositionNodeId = (kind: string, ...names: string[]) => JSON.stringify([kind, ...names]);
 
 /** No inferred runtime dependencies: only published source identity and membership. */
@@ -19,7 +23,7 @@ export function compositionGraph(sources: Source[], environments: Environment[])
     const environmentId = compositionNodeId('environment', environment.name);
     for (const component of environment.components) {
       const id = compositionNodeId('component', environment.name, component.name);
-      nodes.push({ id, kind: 'component', name: component.name, component, environment, x: 264, y: 52 + row++ * 138 });
+      nodes.push({ id, kind: 'component', name: component.name, component, environment, x: COLUMN[1], y: TOP + row++ * ROW });
       references.push({ id: JSON.stringify([id, environmentId]), from: id, to: environmentId, relation: 'membership' });
       if (component.source) {
         sourceNames.add(component.source);
@@ -28,8 +32,8 @@ export function compositionGraph(sources: Source[], environments: Environment[])
       }
     }
     if (row === start) row++;
-    nodes.push({ id: environmentId, kind: 'environment', name: environment.name, environment, x: 514, y: 52 + (start + row - 1) / 2 * 138 });
-    groups.push({ id: environmentId, name: environment.name, x: 252, y: 40 + start * 138, width: 468, height: (row - start) * 138 - 6 });
+    nodes.push({ id: environmentId, kind: 'environment', name: environment.name, environment, x: COLUMN[2], y: TOP + (start + row - 1) / 2 * ROW });
+    groups.push({ id: environmentId, name: environment.name, x: COLUMN[1] - 9, y: TOP - 7 + start * ROW, width: COLUMN[2] + graphCard.width - COLUMN[1] + 18, height: (row - start) * ROW - 2 });
   }
   // Published but currently unused sources remain visible as disconnected nodes.
   for (const source of sources) sourceNames.add(source.name);
@@ -39,9 +43,9 @@ export function compositionGraph(sources: Source[], environments: Environment[])
     return { name, preferredY: related.length ? related.reduce((sum, node) => sum + node.y, 0) / related.length : Number.POSITIVE_INFINITY };
   }).sort((left, right) => left.preferredY - right.preferredY || left.name.localeCompare(right.name));
   for (const { name, preferredY: position } of orderedSources) {
-    const preferredY = Number.isFinite(position) ? position : previousSourceY + 138;
-    const y = Math.max(52, preferredY, previousSourceY + 138);
-    nodes.push({ id: compositionNodeId('source', name), kind: 'source', name, source: sources.find(source => source.name === name), x: 14, y });
+    const preferredY = Number.isFinite(position) ? position : previousSourceY + ROW;
+    const y = Math.max(TOP, preferredY, previousSourceY + ROW);
+    nodes.push({ id: compositionNodeId('source', name), kind: 'source', name, source: sources.find(source => source.name === name), x: COLUMN[0], y });
     previousSourceY = y;
   }
   const byId = new Map(nodes.map(node => [node.id, node]));
@@ -52,7 +56,7 @@ export function compositionGraph(sources: Source[], environments: Environment[])
     const bend = (x1 + x2) / 2;
     return { ...reference, path: `M${x1},${y1} C${bend},${y1} ${bend},${y2} ${x2},${y2}` };
   });
-  return { nodes, edges, groups, width: 734, height: Math.max(290, ...nodes.map(node => node.y + graphCard.height + 30)) };
+  return { nodes, edges, groups, width: COLUMN[2] + graphCard.width + 12, height: Math.max(TOP + ROW, ...nodes.map(node => node.y + graphCard.height + 14)) };
 }
 
 export function selectionId(selection?: CompositionSelection | null) {

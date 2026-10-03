@@ -43,6 +43,7 @@ From `ui/`, the locked Chromium installer is
 | `make test-ui-composition` | Composition observation, Sync, Promote, Approve with the pending plan, deployment history and the Cluster page, at three sizes |
 | `make test-browser-harbor` | Navigation, compact Sources, full revisions, environment/component links, application layout and appearance |
 | `make test-browser-connected` | Topology and selected inspection, environment versions, workspace search, recorded plans/revisions, archive filters and direct captured-log bookmarks |
+| `make test-browser-workspaces` | Logs workspace (environment and pod links, filters, previous container, a second profile), Forwards (start, open, stop), Overview without inner scroll and navigation counts/sub-menus, at 1440×900, 1920×1080, tablet and phone |
 | `make test-browser-preview` | Plain-address preview access, fresh browsers, bookmarks and reload |
 | `make test-browser-delivery` | Real service against the fake API: deployment, update, archived rollback, intentional failure and recovery |
 | `make test-browser-cluster-oidc` | Local issuer, browser login/cookies and scope revocation |

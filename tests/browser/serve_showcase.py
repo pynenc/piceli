@@ -28,16 +28,20 @@ from piceli.k8s.ui_state import (
 from piceli.profiles import save_profile
 from piceli.server.app import create_app
 from piceli.server.security import uvicorn_log_config
+from piceli.services.access import AccessService
 from piceli.services.cluster_status import ClusterStatusControl
 from piceli.services.composition_control import CompositionControl
 from piceli.services.environment_control import EnvironmentControl
+from piceli.services.log_workspace import ProfileScopes
+from piceli.services.logs import LogService
 from piceli.services.pipeline_control import PipelineControl
 from piceli.services.query import QueryService
 from piceli.services.registration import Registration
 from piceli.testing import fake_cluster
 from tests.browser.preview_navigation import PreviewNavigationBootstrap
 from tests.browser.showcase_delivery import showcase_delivery
-from tests.browser.showcase_resources import seed_resources
+from tests.browser.showcase_forwards import FixtureForward
+from tests.browser.showcase_resources import seed_logs, seed_resources
 from tests.gitops_history_fixture import sample_history
 from tests.ui_composition_fixture import STATUS as COMPOSITION
 
@@ -175,6 +179,7 @@ def main() -> None:
         os.environ["PICELI_PROFILES_DIR"] = str(root / "profiles")
         with fake_cluster() as cluster:
             seed_resources(cluster.api)
+            seed_logs(cluster.api)
             kubeconfig = cluster.kubeconfig(root / "kubeconfig")
             save_profile("demo-east", kubeconfig, "fake")
             save_profile("demo-west", kubeconfig, "fake")
@@ -244,6 +249,14 @@ def main() -> None:
                 ),
                 active_profile="demo-east",
                 profile_switch=lambda _name: None,
+                # Forwards are real loopback listeners standing in for kubectl.
+                access=AccessService(
+                    query,
+                    kubectl=Path(sys.executable),
+                    supervisor_factory=FixtureForward,  # type: ignore[arg-type]
+                ),
+                logs=LogService(query),
+                profile_scopes=ProfileScopes(query, transport="loopback-http"),
             )
             if options.preview:
                 app.add_middleware(

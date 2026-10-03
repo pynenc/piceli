@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter } from 'react-router-dom';
 import type { AccessSession, Resource } from '../../api/generated';
 import { AccessPanel } from './AccessPanel';
 
@@ -22,7 +23,7 @@ const secret = 'private-pairing-secret-for-a-disposable-test';
 
 function mount(selected: Resource = resource) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  render(<QueryClientProvider client={client}><AccessPanel applicationId="shop" resource={selected} /></QueryClientProvider>);
+  render(<QueryClientProvider client={client}><MemoryRouter><AccessPanel applicationId="shop" resource={selected} /></MemoryRouter></QueryClientProvider>);
   return client;
 }
 
@@ -90,4 +91,18 @@ it('keeps local-mode forwarding on the local service route', async () => {
   await userEvent.setup().click(await screen.findByRole('button', { name: 'Start local connection' }));
   expect(requests.some(value => value === 'POST /api/v1/applications/shop/access-sessions')).toBe(true);
   expect(requests.some(value => value.includes('/remote-access'))).toBe(false);
+});
+
+it('uses connection tickets in the in-cluster UI, whose local session cannot bind a port', async () => {
+  const requests: string[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (request: Request) => {
+    const path = new URL(request.url).pathname;
+    requests.push(`${request.method} ${path}`);
+    if (path.endsWith('/capabilities')) return Response.json({ mode: 'local', principal: { id: 'local', name: 'Local' }, targets: [], actions: { access: { allowed: true }, remote_access: { allowed: true } } });
+    if (path.endsWith('/remote-access')) return Response.json({ items: [] });
+    return Response.json({ items: [] });
+  }));
+  mount();
+  expect(await screen.findByRole('button', { name: 'Issue connection ticket' })).toBeTruthy();
+  expect(requests.some(item => item.includes('/access-sessions'))).toBe(false);
 });
