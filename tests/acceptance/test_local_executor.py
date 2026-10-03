@@ -546,26 +546,34 @@ def test_compensation_read_capture_shares_execution_deadline(local_api, tmp_path
     run.limits = ExecutionLimits(
         max_seconds=0.05, readiness_seconds=0.02, poll_seconds=0.01
     )
-    api.inject("GET", "/configmaps", delay=0.3)
-    start = time.monotonic()
-    with pytest.raises((ProviderError, ValueError, TimeoutError)):
-        run.compensate("undo-timeout", plan, snapshot, grant)
-    assert time.monotonic() - start < 0.25
-    assert len(mutations(api)) == 1
-    time.sleep(0.35)
+    # The read is held until the test releases it: compensation returning
+    # while it is still held proves the execution deadline ended it.
+    hold = threading.Event()
+    api.inject("GET", "/configmaps", hold=hold)
+    try:
+        with pytest.raises((ProviderError, ValueError, TimeoutError)):
+            run.compensate("undo-timeout", plan, snapshot, grant)
+        assert not hold.is_set()
+        assert len(mutations(api)) == 1
+    finally:
+        hold.set()
 
 
 def test_cold_api_discovery_obeys_read_deadline(local_api):
     api, provider = local_api
-    api.inject("GET", "/api/v1", delay=0.3)
-    start = time.monotonic()
-    with pytest.raises(ProviderError, match="deadline"):
-        provider.get(
-            ResourceIdentity("v1", "ConfigMap", TARGET.namespace, "settings"),
-            deadline=start + 0.04,
-        )
-    assert time.monotonic() - start < 0.2
-    time.sleep(0.35)
+    # The discovery read is held until the test releases it: the call
+    # returning while it is still held proves the read deadline ended it.
+    hold = threading.Event()
+    api.inject("GET", "/api/v1", hold=hold)
+    try:
+        with pytest.raises(ProviderError, match="deadline"):
+            provider.get(
+                ResourceIdentity("v1", "ConfigMap", TARGET.namespace, "settings"),
+                deadline=time.monotonic() + 0.04,
+            )
+        assert not hold.is_set()
+    finally:
+        hold.set()
 
 
 def test_cancellation_between_actions_survives_reopen(local_api, tmp_path):
