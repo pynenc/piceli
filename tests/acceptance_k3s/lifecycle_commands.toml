@@ -26,6 +26,10 @@ rc_hash = "<plan hash>"
 main_hash = "<plan hash>"
 sha = "<commit>"
 retention_digest = "<plan digest>"
+access_env = "main"
+ui_server = "http://127.0.0.1:8790/"
+ticket = "<ticket id>"
+connect_port = "18081"
 
 [groups]
 # Once per machine and cluster; re-running it is idempotent.
@@ -66,6 +70,16 @@ ui = ["access-ui"]
 # port): `access ui` names it as Piceli's own; `access stop --stale` stops it
 # (from 0.14.6).
 access-stale = ["access-ui", "access-stop-stale"]
+# An environment's declared forwards from a laptop (lifecycle_access.py names
+# main and rc with their namespaces): web on 127.0.0.1:18080 until Ctrl-C. A
+# forward left behind (its piceli killed) is stopped by `access stop --stale`
+# with the same TARGET (from 0.14.7).
+access-env = ["access-env", "access-env-stop-stale"]
+# A forward started from the UI: the workload's Access panel issues a ticket
+# and a one-time pairing secret; `ui connect` reads the secret on stdin (it
+# prompts without echo) and binds 127.0.0.1:18081 until Ctrl-C or the UI
+# stops the session (from 0.14.7).
+ui-connect = ["access-ui", "ui-connect"]
 
 [steps.login]
 run = "{piceli} login lifecycle --kubeconfig {kubeconfig} --context {context}"
@@ -161,3 +175,22 @@ serve = true
 # refusal of a second `access ui` hints at this command.
 run = "{piceli} access stop --stale --cluster infra.py:cluster"
 exit = [0]
+
+[steps.access-env]
+# JSON lines: started, status (each forward's state), stopped on Ctrl-C.
+run = "{piceli} access lifecycle_access.py:{access_env} --json"
+exit = [0]
+serve = true
+
+[steps.access-env-stop-stale]
+# Exit 0; `stopped` lists the port with holder "piceli-forward" when a
+# forward was left behind, and nothing otherwise.
+run = "{piceli} access stop --stale lifecycle_access.py:{access_env}"
+exit = [0]
+
+[steps.ui-connect]
+run = """{piceli} ui connect --server {ui_server} --ticket {ticket} \
+  --kubeconfig {kubeconfig} --context {context} --local-port {connect_port}"""
+exit = [0]
+serve = true
+stdin = "pairing_secret"
