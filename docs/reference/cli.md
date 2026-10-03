@@ -140,6 +140,7 @@ Forward the app's declared ports to 127.0.0.1 and keep them healthy.
 | `--dashboard` | integer |  | Also serve the local dashboard on this loopback port, with these forwards as its shortcuts |
 | `--ui-config` | path | env `PICELI__UI_CONFIG` | Optional dashboard TOML (badges, tiers, extra shortcuts) |
 | `--pipeline` | text | env `PICELI_PIPELINE` | With a branch name as TARGET: the pipeline declaring envs=EnvConfig(...) (MODULE:ATTR; default $PICELI_PIPELINE). A branch's forwards get free local ports |
+| `--cluster` | text |  | With an environment name as TARGET: the composition's Cluster (infra.py:ATTR). Forwards every Service port of that environment on free local ports, with the cluster's credentials profile |
 
 **Contract**
 
@@ -2708,7 +2709,7 @@ Bind a laptop port for an authenticated cluster UI ticket.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--server` | text | required | Cluster UI HTTPS origin and prefix |
+| `--server` | text | required | Cluster UI HTTPS origin and prefix, or the loopback http address of `piceli access ui` |
 | `--ticket` | text | required | Pending remote-access ticket ID |
 | `--kubeconfig` | path | required | Explicit local kubeconfig file |
 | `--context` | text | required | Explicit local kubeconfig context |
