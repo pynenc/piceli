@@ -124,12 +124,15 @@ class RestartPolicy(_Model):
 
     ``max_restarts`` counts consecutive restarts without an intervening healthy
     probe; once exceeded the forward is marked ``failed`` and left stopped
-    until it is started again explicitly.
+    until it is started again explicitly. ``forever`` never gives up: the
+    backoff stays capped at ``backoff_max`` until the forward is stopped
+    (``piceli access ui`` through an API outage).
     """
 
     backoff_initial: float = Field(default=1.0, gt=0, le=600)
     backoff_max: float = Field(default=30.0, gt=0, le=3600)
     max_restarts: int = Field(default=10, ge=0, le=10_000)
+    forever: bool = False
 
     @model_validator(mode="after")
     def _ordered(self) -> RestartPolicy:

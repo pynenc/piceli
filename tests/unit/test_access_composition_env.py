@@ -104,3 +104,60 @@ def test_cli_accepts_an_environment_with_cluster(
     result = CliRunner().invoke(app, ["access", "main", "--cluster", CLUSTER, "--json"])
     assert result.exit_code == 2
     assert '"reason": "access-none-declared"' in result.stdout
+
+
+_PIPELINE_INFRA = """from piceli import App, Pipeline, Target
+from piceli.envs import Environment
+from piceli.infra import Cluster, Controller, Source
+from piceli.pipeline.model import Registry
+
+name = "shop"
+cluster = Cluster(
+    "my-cluster",
+    api="https://127.0.0.1:6443",
+    credentials="my-cluster",
+    registry=Registry.in_cluster(on="node-a"),
+    controller=Controller(on="node-a"),
+)
+shop = Source("https://example.com/shop.git", name="shop")
+app = App("shop")
+web = app.deployment("web", image="example/web@sha256:" + "1" * 64, ports=[8080])
+app.service(web, port=80, access=app.access.forward(local=18080, path="/login", health="/"))
+cache = app.deployment("cache", image="example/cache@sha256:" + "2" * 64, ports=[6379])
+app.service(cache, port=6379)
+pipeline = Pipeline(app, Target("owner.kubeconfig", context="owner", namespace="shop"))
+environments = [
+    Environment("main", namespace="shop-main", pipeline=pipeline, cluster=cluster,
+                follow={shop: "main"}),
+]
+"""
+
+
+def test_a_pipeline_environment_forwards_what_its_app_declares(
+    profile: Path, tmp_path: Path
+) -> None:
+    """0.14.7: the declared forwards (local port, path, health) come first;
+    the other live Service ports get free ports; a declared Service that is not
+    live is left out."""
+    (tmp_path / "infra.py").write_text(_PIPELINE_INFRA)
+    free = iter(range(43000, 43010))
+    resolved = composition_env_target(
+        "infra.py:cluster",
+        "main",
+        tmp_path,
+        services=lambda _t: [service("web", 80), service("cache", 6379)],
+        port=lambda: next(free),
+    )
+    rows = [
+        (item.id, item.target, item.remote_port, item.local_port, item.path)
+        for item in resolved.shortcuts
+    ]
+    assert rows == [
+        ("web", "service/web", 80, 18080, "/login"),
+        ("cache-6379", "service/cache", 6379, 43000, "/"),
+    ]
+    assert resolved.shortcuts[0].probe.type == "http"
+    gone = composition_env_target(
+        "infra.py:cluster", "main", tmp_path, services=lambda _t: [], port=lambda: 1
+    )
+    assert gone.shortcuts == ()
