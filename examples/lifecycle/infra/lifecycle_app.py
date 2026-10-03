@@ -76,7 +76,12 @@ web = app.deployment(
     ready=Probe.http("/index.html", 8080),
     resources=SMALL,
 )
-web_service = app.service(web, port=8080)
+# `piceli access lifecycle_access.py:main` forwards it to 127.0.0.1:18080.
+web_service = app.service(
+    web,
+    port=8080,
+    access=app.access.forward(local=18080, path="/index.html", health="/index.html"),
+)
 
 store = app.stateful_set(
     "store",

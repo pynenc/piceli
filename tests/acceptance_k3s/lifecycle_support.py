@@ -17,7 +17,8 @@ directory or in the disposable k3d cluster, both removed by the caller.
 - :class:`Commands`: ``lifecycle_commands.toml``, the commands a note gives.
 - :class:`Served`: a command that runs until stopped (``piceli access ui``),
   in its own session, its output kept in memory (it holds a launch token).
-- :class:`UiClient`: the in-cluster UI's HTTP API as its browser calls it.
+- :class:`UiClient`: the in-cluster UI's HTTP API as its browser calls it
+  (reads, and writes with the page's Origin and CSRF header).
 """
 
 from __future__ import annotations
@@ -754,14 +755,28 @@ class Served:
     """
 
     def __init__(
-        self, argv: Sequence[str], *, env: Mapping[str, str], cwd: Path
+        self,
+        argv: Sequence[str],
+        *,
+        env: Mapping[str, str],
+        cwd: Path,
+        stdin: str | None = None,
     ) -> None:
-        log(f"$ {shlex.join(argv)} (served)")
+        shown = " (stdin: <secret>)" if stdin is not None else ""
+        log(f"$ {shlex.join(argv)} (served){shown}")
         self.process = subprocess.Popen(
-            list(argv), cwd=str(cwd), env=dict(env), stdin=subprocess.DEVNULL,
+            list(argv), cwd=str(cwd), env=dict(env),
+            stdin=subprocess.DEVNULL if stdin is None else subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             start_new_session=True,
         )  # fmt: skip
+        if stdin is not None and self.process.stdin is not None:
+            # A secret on stdin (a pairing secret): written once, never logged.
+            try:
+                self.process.stdin.write(stdin + "\n")
+                self.process.stdin.close()
+            except OSError:
+                pass
         self.out: list[str] = []
         self.err: list[str] = []
         for stream, sink in (
@@ -826,22 +841,31 @@ class Served:
 
 
 def run_bounded(
-    argv: Sequence[str], *, env: Mapping[str, str], cwd: Path, timeout: float
+    argv: Sequence[str],
+    *,
+    env: Mapping[str, str],
+    cwd: Path,
+    timeout: float,
+    stdin: str | None = None,
 ) -> Result:
     """Run ``argv`` in its own session; on timeout kill its whole group.
 
     For commands that may start a long-lived forward instead of exiting
     (``subprocess.run`` would leave its grandchildren behind). Output is
-    returned unlogged; callers print it through :func:`redact`.
+    returned unlogged; callers print it through :func:`redact`. ``stdin``
+    (a secret) is fed once and never logged.
     """
-    log(f"$ {shlex.join(argv)}")
+    log(f"$ {shlex.join(argv)}" + (" (stdin: <secret>)" if stdin is not None else ""))
     process = subprocess.Popen(
-        list(argv), cwd=str(cwd), env=dict(env), stdin=subprocess.DEVNULL,
+        list(argv), cwd=str(cwd), env=dict(env),
+        stdin=subprocess.DEVNULL if stdin is None else subprocess.PIPE,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         start_new_session=True,
     )  # fmt: skip
     try:
-        out, err = process.communicate(timeout=timeout)
+        out, err = process.communicate(
+            input=None if stdin is None else stdin + "\n", timeout=timeout
+        )
         code = process.returncode
     except subprocess.TimeoutExpired:
         kill_group(process.pid, signal.SIGINT)
@@ -889,8 +913,32 @@ class UiClient:
 
     def get(self, path: str) -> Any:
         """The JSON body of ``GET path``, or :class:`UiError` (status, code)."""
+        return self.request("GET", path)
+
+    def _csrf(self) -> str:
+        """The session's CSRF value (the UI's ``piceli_csrf_*`` cookie)."""
+        for handler in getattr(self.opener, "handlers", []):
+            jar = getattr(handler, "cookiejar", None)
+            for cookie in jar or []:
+                if cookie.name.startswith("piceli_csrf_") and cookie.value:
+                    return str(cookie.value)
+        return ""
+
+    def request(self, method: str, path: str, body: Any = None) -> Any:
+        """``method path`` as the UI's page sends it, or :class:`UiError`.
+
+        A state-changing call carries the page's Origin and CSRF header. The
+        response body may hold a secret (a pairing secret): callers never log it.
+        """
+        headers = {"Accept": "application/json"}
+        data = None
+        if method not in {"GET", "HEAD"}:
+            headers |= {"Origin": self.origin, "X-Piceli-CSRF": self._csrf()}
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+            data = json.dumps(body).encode()
         request = urllib.request.Request(
-            self.origin + path, headers={"Accept": "application/json"}
+            self.origin + path, data=data, headers=headers, method=method
         )
         try:
             with self.opener.open(request, timeout=30) as response:
