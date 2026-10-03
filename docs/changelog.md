@@ -6,6 +6,40 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ## Version 0.14.7
 
+- **Stop a named environment.** `Environment(..., stopped=True)` in a
+  composition, or `piceli env stop ENV --cluster infra.py:CLUSTER` (a
+  request; `piceli env start ENV` ends it, also `--state-dir` for a local
+  controller): the controller scales its workloads to zero (namespace,
+  volumes and objects kept) and neither plans nor deploys it while stopped
+  (`state: stopped`, `reason` `declared` or `requested`, `stop` in the
+  status). The declaration wins: `env start` of a declared stop is refused
+  (`gitops-env-stop-declared`). Start scales back and deploys the revision
+  when it moved (with its usual approval). The UI has Stop and Start.
+- **Status keeps the checks of every deploy.** A composition environment's
+  record has `checks` (passed N/N, each check's name and code, when, the
+  trigger, the run) after a rollout too, not only after a checks-only
+  verification; `gitops status` prints it and the UI's environment shows a
+  Last checks card.
+- **`piceli access ENV --cluster infra.py:CLUSTER`** forwards an
+  environment's declared forwards (a pipeline environment's
+  `app.access.forward`, on their declared ports) besides its other Services;
+  `--ui` also forwards the in-cluster UI and prints its launch URL.
+- **No `kubectl` outlives `piceli access`.** A watchdog process stops every
+  forward when `piceli access` or `piceli access ui` is killed (SIGKILL, a
+  crash), on Linux and macOS; Ctrl-C, SIGTERM and SIGHUP still stop them
+  directly.
+- **`piceli access ui` keeps trying through an API outage**: its forward
+  restarts with a backoff capped at 30 seconds until stopped
+  (`RestartPolicy(forever=True)`) instead of giving up.
+- **Fixes in the composition controller's records:** a branch
+  environment's run names its branch's push as trigger and `policy` as its
+  approver when the owner's policy applied it; an approval stands across an
+  unrelated push that keeps the plan hash; a component's `commit` is the
+  commit of the source that triggered its build (`sources` lists every
+  source's commit); the log says `rolled nothing` unless an image digest or
+  a workload changed; a failed attempt's log tail is kept
+  (`failed_attempts`) in the status and in the history of the run that
+  succeeds after it.
 - **UI: one Logs workspace** (`/logs`, **Operations → Logs**): container logs
   of every application, environment and profile scope the session may read,
   merged by time, with URL-backed filters (scope, workload, pod, container,

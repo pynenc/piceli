@@ -4012,11 +4012,13 @@
     "backoff_initial",
     "backoff_max",
     "delay",
+    "forever",
     "max_restarts"
    ],
    "init": [
     "backoff_initial",
     "backoff_max",
+    "forever",
     "max_restarts"
    ],
    "methods": {
@@ -5017,6 +5019,7 @@
      "--only",
      "--pipeline",
      "--poll",
+     "--ui",
      "--ui-config"
     ],
     "subcommands": []
@@ -5488,6 +5491,8 @@
      "down",
      "push",
      "seed",
+     "start",
+     "stop",
      "up"
     ]
    },
@@ -5526,6 +5531,30 @@
      "--approve-if-policy",
      "--from",
      "--pipeline"
+    ],
+    "subcommands": []
+   },
+   "env start": {
+    "arguments": [
+     "env"
+    ],
+    "flags": [
+     "--cluster",
+     "--namespace",
+     "--state-dir",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "env stop": {
+    "arguments": [
+     "env"
+    ],
+    "flags": [
+     "--cluster",
+     "--namespace",
+     "--state-dir",
+     "--transport"
     ],
     "subcommands": []
    },
@@ -6871,6 +6900,7 @@
    "gitops-config-invalid",
    "gitops-controller-locked",
    "gitops-empty",
+   "gitops-env-stop-declared",
    "gitops-git-failed",
    "gitops-image-unpinned",
    "gitops-image-unresolved",
@@ -8249,6 +8279,7 @@
   "piceli.k8s.cli.deploy_pipeline",
   "piceli.k8s.cli.env",
   "piceli.k8s.cli.env_push",
+  "piceli.k8s.cli.env_stop",
   "piceli.k8s.cli.gitops",
   "piceli.k8s.cli.heavy",
   "piceli.k8s.cli.importing",
@@ -8276,6 +8307,7 @@
   "piceli.k8s.constants.strategies",
   "piceli.k8s.constants.verbs",
   "piceli.k8s.env_access",
+  "piceli.k8s.forward_watchdog",
   "piceli.k8s.observe",
   "piceli.k8s.observe_server",
   "piceli.k8s.operator",
