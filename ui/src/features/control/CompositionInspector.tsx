@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 import { Badge, formatTime, Notice } from '../../components/State';
 import { githubCommitUrl, githubRepositoryUrl } from '../../components/sourceLinks';
-import type { Component, Environment, Source, Verification } from './Composition';
+import type { Component, Environment, EnvironmentChecksReport, Source, Verification } from './Composition';
 import type { CompositionSelection } from './compositionGraph';
 import { ApplicationDestinations, Counterparts, RefMatches, SourceDestinations, type InspectComponent } from './InspectorConnections';
 import { componentPath, sourcePath } from './versionEvidence';
@@ -42,6 +42,26 @@ export function CompositionInspector({ selection, environment, component, source
       <ApplicationDestinations environment={environment} component={component.name} />
     </div> : missingComponent ? <div className="panelbody"><Notice title="Selected component unavailable"><p><code>{requestedComponent}</code> is not in the reported environment. Select another component or clear this selection.</p><button onClick={onClear}>Clear component selection</button></Notice></div> : <p className="panelbody small muted">Select an environment with reported components to inspect its source, state and image.</p>}
   </aside>;
+}
+
+/** One line: "Checks passed 5/5 · <time>". */
+export function checksSummary(checks: EnvironmentChecksReport) {
+  const count = checks.total ? ` ${checks.passed ?? 0}/${checks.total}` : '';
+  return `Checks ${checks.state}${count}${checks.at ? ` · ${formatTime(checks.at)}` : ''}`;
+}
+
+/** The last checks a run executed: after a rollout too, not only a verification. */
+export function EnvironmentChecks({ checks }: { checks?: EnvironmentChecksReport | null }) {
+  if (!checks) return null;
+  const failed = checks.state !== 'passed';
+  return <section className="panel control-card environment-checks" aria-label="Last checks">
+    <div className="panelhead"><h2>Last checks <Badge value={checks.state} /></h2><span className="small muted">{checks.total ? `${checks.passed ?? 0}/${checks.total} passed` : ''}</span></div>
+    <div className="panelbody">
+      <p className="small muted">{checks.action === 'verified' ? 'Verification of the running release' : 'After the rollout'}{checks.trigger ? ` · ${checks.trigger}` : ''}{checks.at ? ` · ${formatTime(checks.at)}` : ''}</p>
+      <ul className="small environment-checks-list">{checks.results.map((item, index) => <li key={index}><Badge value={item.passed ? 'passed' : 'failed'} /> <strong>{item.name ?? 'check'}</strong>{!item.passed && item.code && <> · <code>{item.code}</code></>}</li>)}</ul>
+      {failed && !checks.results.some(item => !item.passed) && <p className="small">No failing check was reported.</p>}
+    </div>
+  </section>;
 }
 
 /** The controller's checks verification; failing checks never roll the release back. */

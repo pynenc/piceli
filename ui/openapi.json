@@ -4534,6 +4534,92 @@
         "summary": "Named Environment Promotion"
       }
     },
+    "/api/v1/composition/environments/{env}/start": {
+      "post": {
+        "operationId": "named_environment_start_api_v1_composition_environments__env__start_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "env",
+            "required": true,
+            "schema": {
+              "title": "Env",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Named Environment Start Api V1 Composition Environments  Env  Start Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Named Environment Start"
+      }
+    },
+    "/api/v1/composition/environments/{env}/stop": {
+      "post": {
+        "operationId": "named_environment_stop_api_v1_composition_environments__env__stop_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "env",
+            "required": true,
+            "schema": {
+              "title": "Env",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Named Environment Stop Api V1 Composition Environments  Env  Stop Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Named Environment Stop"
+      }
+    },
     "/api/v1/composition/environments/{env}/wake": {
       "post": {
         "operationId": "named_environment_wake_api_v1_composition_environments__env__wake_post",

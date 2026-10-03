@@ -469,6 +469,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/composition/environments/{env}/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Named Environment Start */
+        post: operations["named_environment_start_api_v1_composition_environments__env__start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/composition/environments/{env}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Named Environment Stop */
+        post: operations["named_environment_stop_api_v1_composition_environments__env__stop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/composition/environments/{env}/wake": {
         parameters: {
             query?: never;
@@ -3151,6 +3185,72 @@ export interface operations {
                 "application/json": components["schemas"]["NamedEnvironmentPromotionRequest"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    named_environment_start_api_v1_composition_environments__env__start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                env: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    named_environment_stop_api_v1_composition_environments__env__stop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                env: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             202: {

@@ -6,7 +6,7 @@ import { api, applicationPath, forwardsPath, logsPath } from '../../api/client';
 import { Badge, Failure, formatTime, Loading, Notice } from '../../components/State';
 import './composition-harbor.css';
 import { CompositionTopology } from './CompositionTopology';
-import { CompositionInspector, EnvironmentVerification } from './CompositionInspector';
+import { CompositionInspector, EnvironmentChecks, EnvironmentVerification, checksSummary } from './CompositionInspector';
 import { CompositionVersions } from './CompositionVersions';
 import { CompositionAttention } from './CompositionAttention';
 import { CompositionEnvironmentRail } from './CompositionEnvironmentRail';
@@ -25,6 +25,12 @@ export type Environment = {
   last_action?: string | null; verification?: Verification | null;
   trigger?: string | null; approval?: { via: string; at?: string | null } | null;
   pending_plan?: PendingPlan | null;
+  checks?: EnvironmentChecksReport | null; stop?: { by: string; via?: string | null; at?: string | null } | null;
+};
+/** The last checks a run of the environment executed (a rollout or a verification). */
+export type EnvironmentChecksReport = {
+  state: string; passed?: number | null; total?: number | null; at?: string | null; trigger?: string | null;
+  run_id?: string | null; action?: string | null; results: { name?: string | null; passed: boolean; code?: string | null }[];
 };
 /** The plan an environment waits on: exactly the hash an approval names. */
 export type PendingPlan = {
@@ -99,8 +105,9 @@ function EnvironmentInventory({ environments, canSync, sync }: { environments: E
     <div className="composition-inventory-name"><h2><Link to={environmentPath(env.name)}>{env.name}</Link></h2><p className="small muted">{env.namespace ?? 'Namespace pending'}</p></div>
     <div className="composition-inventory-state"><span className="state-label">Health / state</span><div><Badge value={env.health} /> <Badge value={env.state} /></div>{env.reason && <p className="small muted">{env.reason}</p>}</div>
     <div className="composition-inventory-revision"><span className="state-label">Revision per source</span><Revision revision={env.revision} /></div>
-    <div className="composition-inventory-components"><span className="state-label">Components</span><p className="small">{componentSummary(env.components)}</p><p className="small muted">Last sync {formatTime(env.last_sync)}</p></div>
+    <div className="composition-inventory-components"><span className="state-label">Components</span><p className="small">{componentSummary(env.components)}</p><p className="small muted">Last sync {formatTime(env.last_sync)}</p>{env.checks && <p className="small" aria-label={`Last checks of ${env.name}`}>{checksSummary(env.checks)}</p>}</div>
     <div className="composition-inventory-actions"><Link className="button" to={environmentPath(env.name)}>Open environment</Link>{canSync && <SyncButton env={env.name} sync={sync} label={`Sync ${env.name}`} />}</div>
+    {env.state === 'stopped' && env.stop && <div className="composition-inventory-notice"><Notice title="Stopped">{env.stop.by === 'declared' ? 'Declared stopped in the composition (Environment(stopped=True)); remove the declaration to start it.' : `Stopped on request; start it with piceli env start ${env.name} or Start on the environment.`}</Notice></div>}
     {env.state === 'approval-required' && <div className="composition-inventory-notice"><Notice title="Approval pending">Approve the pending plan with <code>piceli gitops approve {env.name} {env.plan_hash ?? 'HASH'}</code>.</Notice></div>}
   </section>)}</div>;
 }
@@ -183,7 +190,7 @@ export function CompositionEnvironment({ canSync, actions }: { canSync: boolean;
     {query.isError && <Failure error={query.error} retry={() => void query.refetch()} />}
     {item && <>
       <div className="heading detail-heading"><div><p className="eyebrow">Environment</p><h1>{item.name}</h1><p className="subtitle">{item.namespace ?? 'Namespace pending'}</p></div><div className="run-actions"><button onClick={() => void query.refetch()} disabled={query.isFetching}>Refresh</button>{item.application_id && <><Link className="button" to={logsPath({ scope: item.application_id })}>Logs</Link><Link className="button" to={forwardsPath({ application: item.application_id })}>Forwards</Link></>}{actions?.(item)}{canSync && <SyncButton env={item.name} sync={sync} label={`Sync ${item.name}`} />}</div></div>
-      <div className="statusbar" aria-label="Environment state"><div className="statusitem"><span className="statuslabel">Health</span><Badge value={item.health} /></div><div className="statusitem"><span className="statuslabel">State</span><Badge value={item.state} />{item.reason && <p>{item.reason}</p>}</div><div className="statusitem"><span className="statuslabel">Last sync</span><p>{formatTime(item.last_sync)}</p></div><div className="statusitem"><span className="statuslabel">Revision</span><Revision revision={item.revision} /></div></div><EnvironmentVerification verification={item.verification} />
+      <div className="statusbar" aria-label="Environment state"><div className="statusitem"><span className="statuslabel">Health</span><Badge value={item.health} /></div><div className="statusitem"><span className="statuslabel">State</span><Badge value={item.state} />{item.reason && <p>{item.reason}</p>}</div><div className="statusitem"><span className="statuslabel">Last sync</span><p>{formatTime(item.last_sync)}</p></div><div className="statusitem"><span className="statuslabel">Revision</span><Revision revision={item.revision} /></div></div><EnvironmentVerification verification={item.verification} /><EnvironmentChecks checks={item.checks} />
       <SyncError sync={sync} />
       <section className="panel control-card" aria-label="Components"><div className="panelhead"><h2>Components <span className="count">{item.components.length}</span></h2></div>
         {item.components.length === 0 ? <p className="panelbody muted">No components reported for this environment yet.</p> : <ul className="component-list">{item.components.map(component => <li key={component.name}>
