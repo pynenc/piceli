@@ -388,3 +388,116 @@ def test_pod_log_reader_returns_text_lines_not_a_bytes_repr(tmp_path: Path) -> N
         finally:
             reader.close()
     assert text.splitlines() == ["one", "two é"]
+
+
+def test_forward_mode_ui_runs_the_ticket_flow_for_ui_connect(tmp_path: Path) -> None:
+    """The in-cluster UI issues tickets; `piceli ui connect` claims them over loopback http."""
+    from piceli.k8s.cli.ui_forward import forward_app
+
+    channel = DirectoryChannel(tmp_path / "gitops")
+    channel.publish(
+        {
+            "schema": "piceli.gitops-status.v1",
+            "controller": {"state": "running"},
+            "sources": {},
+            "envs": {
+                "main": {
+                    "namespace": "piceli-test",
+                    "state": "deployed",
+                    "health": "healthy",
+                    "revision": {},
+                    "components": {},
+                }
+            },
+        }
+    )
+    with fake_cluster() as cluster:
+        seed_resources(cluster.api)
+        target = KubeconfigTarget(
+            cluster.kubeconfig(tmp_path / "config"),
+            "fake",
+            "piceli-test",
+            transport="loopback-http",
+        )
+
+        @contextmanager
+        def open_channel() -> Iterator[DirectoryChannel]:
+            yield channel
+
+        app = forward_app(
+            target,
+            "piceli-system",
+            open_channel,
+            token=TOKEN,
+            origin=ORIGIN,
+            static_dir=_static(tmp_path),
+        )
+        with TestClient(app, base_url=ORIGIN) as browser:
+            browser.get(f"/?token={TOKEN}")
+            actions = browser.get(f"{API}/capabilities").json()["actions"]
+            assert actions["access"]["allowed"] and actions["remote_access"]["allowed"]
+            env = next(
+                item
+                for item in browser.get(f"{API}/composition").json()["environments"]
+                if item["name"] == "main"
+            )
+            service = next(
+                item
+                for item in browser.get(
+                    f"{API}/applications/{env['application_id']}/resources"
+                ).json()["items"]
+                if item["identity"]["kind"] == "Service"
+            )
+            assert service["capabilities"]["access"]["allowed"]
+            issued = browser.post(
+                f"{API}/applications/{env['application_id']}/remote-access",
+                json={
+                    "resource_id": service["id"],
+                    "resource_uid": service["identity"]["uid"],
+                    "remote_port": 8080,
+                },
+                headers=_headers(browser),
+            )
+            assert issued.status_code == 201, issued.text
+            ticket = issued.json()
+            ticket_id = ticket["session"]["id"]
+            assert ticket["session"]["state"] == "pending"
+            page = browser.get(f"{API}/forwards").json()
+            assert page["mode"] == "cluster"
+            assert [item["session"]["state"] for item in page["items"]] == ["pending"]
+            # The CLI: no browser cookie, only the one-time pairing secret.
+            cli = TestClient(app, base_url=ORIGIN)
+            claimed = cli.post(
+                f"{API}/remote-access/{ticket_id}/claim",
+                json={"pairing_secret": ticket["pairing_secret"]},
+            )
+            assert claimed.status_code == 200, claimed.text
+            lease = claimed.json()
+            assert lease["target"]["cluster_uid"] and lease["target"]["namespace_uid"]
+            assert (
+                cli.post(
+                    f"{API}/remote-access/{ticket_id}/claim",
+                    json={"pairing_secret": ticket["pairing_secret"]},
+                ).status_code
+                == 404
+            )
+            ready = cli.post(
+                f"{API}/remote-access/{ticket_id}/heartbeat",
+                json={
+                    "lease_secret": lease["lease_secret"],
+                    "state": "ready",
+                    "local_port": 18090,
+                },
+            )
+            assert ready.json()["state"] == "ready"
+            (entry,) = browser.get(f"{API}/forwards").json()["items"]
+            assert entry["session"]["state"] == "ready"
+            assert entry["url"] == "http://127.0.0.1:18090"
+            # Nothing but the client paths is reachable without the session.
+            assert cli.get(f"{API}/forwards").status_code == 403
+            stopped = browser.delete(
+                f"{API}/applications/{env['application_id']}/remote-access/{ticket_id}",
+                headers=_headers(browser),
+            )
+            assert stopped.json()["state"] == "stopped"
+        assert all(request["method"] == "GET" for request in cluster.api.requests)

@@ -21,8 +21,8 @@ import secrets
 import shutil
 import tempfile
 import threading
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -170,13 +170,8 @@ def forward_serve(
 
         from piceli.gitops.install import connect
         from piceli.gitops.state import ConfigMapChannel
-        from piceli.server.app import create_app
         from piceli.server.incluster import InClusterCredential
         from piceli.server.security import uvicorn_log_config
-        from piceli.services.composition_control import CompositionControl
-        from piceli.services.logs import LogService
-        from piceli.services.query import QueryService
-        from piceli.services.registration import Registration
     except ImportError:
         say("Install piceli[ui] to serve the web application.")
         reject("ui-assets-unavailable")
@@ -191,18 +186,6 @@ def forward_serve(
                 namespace,
             )
             target = credential.write_kubeconfig(Path(private) / "config")
-            base = Registration("cluster", namespace, target)
-            registration = Registration(
-                "cluster",
-                namespace,
-                target,
-                kinds=tuple(
-                    item
-                    for item in base.kinds
-                    if item[1] not in {"Secret", "ConfigMap"}
-                ),
-            )
-            query = QueryService([registration])
 
             @contextmanager
             def channel() -> Iterator[Any]:
@@ -210,12 +193,12 @@ def forward_serve(
                     yield ConfigMapChannel(api.client, namespace)
 
             token = secrets.token_urlsafe(32)
-            server = create_app(
-                query,
+            server = forward_app(
+                target,
+                namespace,
+                channel,
+                token=token,
                 origin=f"http://127.0.0.1:{port}",
-                logs=LogService(query),
-                composition_control=CompositionControl(query, "cluster", channel),
-                launch_token=token,
             )
             with connect(target.kubeconfig, target.context) as api:
                 publish_token(api.client, token, namespace)
@@ -242,6 +225,50 @@ def forward_serve(
                     publish_token(api.client, "", namespace)
             except Exception:  # best effort on the way out
                 pass
+
+
+def forward_app(
+    target: Any,
+    namespace: str,
+    channel: Callable[[], AbstractContextManager[Any]],
+    *,
+    token: str,
+    origin: str,
+    static_dir: Path | None = None,
+) -> Any:
+    """The composition UI app ``forward-serve`` runs: views, logs, connection tickets.
+
+    Tickets let `piceli ui connect` open a forward on the user's machine with
+    the user's own kubeconfig: the UI only reads the selected Service, Pod or
+    Deployment (its existing read grant) and never binds a port, so it needs
+    no extra RBAC (no ``pods/portforward``).
+    """
+    from piceli.server.app import create_app
+    from piceli.services.composition_control import CompositionControl
+    from piceli.services.logs import LogService
+    from piceli.services.query import QueryService
+    from piceli.services.registration import Registration
+    from piceli.services.remote_access import RemoteAccessService
+
+    base = Registration("cluster", namespace, target)
+    registration = Registration(
+        "cluster",
+        namespace,
+        target,
+        kinds=tuple(
+            item for item in base.kinds if item[1] not in {"Secret", "ConfigMap"}
+        ),
+    )
+    query = QueryService([registration])
+    return create_app(
+        query,
+        origin=origin,
+        static_dir=static_dir,
+        logs=LogService(query),
+        composition_control=CompositionControl(query, "cluster", channel),
+        remote_access=RemoteAccessService(query, local_session=True),
+        launch_token=token,
+    )
 
 
 # --------------------------------------------------------- on a laptop

@@ -62,10 +62,14 @@ class RemoteAccessService:
     heartbeat_seconds = 15
     history_seconds = 600
 
-    def __init__(self, query: QueryService) -> None:
-        if query.scope_policy is None:
+    def __init__(self, query: QueryService, *, local_session: bool = False) -> None:
+        # ``local_session``: the in-cluster composition UI, reached only through
+        # `piceli access ui` with its launch session (no OIDC). Its one local
+        # principal issues tickets; the client still needs the one-time secret.
+        if query.scope_policy is None and not local_session:
             raise ValueError("remote access requires a scoped cluster service")
         self.query = query
+        self.local_session = query.scope_policy is None
         self._lock = threading.RLock()
         self._tickets: dict[str, _Ticket] = {}
         query.access_capability = self.capability
@@ -262,9 +266,12 @@ class RemoteAccessService:
         ):
             raise QueryError("ui-not-found")
         policy = self.query.scope_policy
-        assert policy is not None
-        if not policy.allows(
-            ticket.session.principal_id, ticket.session.application_id, "access"
+        if (
+            not policy.allows(
+                ticket.session.principal_id, ticket.session.application_id, "access"
+            )
+            if policy is not None
+            else ticket.session.application_id not in self.query.registrations
         ):
             self._end(ticket, "stopped", "scope-revoked")
             raise QueryError("ui-not-found")

@@ -246,7 +246,9 @@ def create_app(
         )
         security = cluster_security
     elif launch_token is not None:
-        if remote_access is not None:
+        if remote_access is not None and (
+            not remote_access.local_session or remote_access.query is not service
+        ):
             raise ValueError("remote access requires cluster security")
         security = LocalSecurity(origin, url_prefix, launch_token=launch_token)
     else:
@@ -381,7 +383,7 @@ def create_app(
     async def local_boundary(request: Request, call_next: Any) -> Response:
         path = request.url.path
         client_request = (
-            cluster_security is not None
+            (cluster_security is not None or remote_access is not None)
             and request.method == "POST"
             and client_path.fullmatch(path) is not None
         )
@@ -514,6 +516,20 @@ def create_app(
                         "profile_scopes": Capability(
                             allowed=usable,
                             reason=None if usable else "profile-scopes-unavailable",
+                        ),
+                    }
+                }
+            )
+        if remote_access is not None:
+            # Tickets for `piceli ui connect`: the browser cannot bind a port here.
+            usable = result.actions.get("access", Capability(allowed=False)).allowed
+            result = result.model_copy(
+                update={
+                    "actions": {
+                        **result.actions,
+                        "remote_access": Capability(
+                            allowed=usable,
+                            reason=None if usable else "not-authorized",
                         ),
                     }
                 }

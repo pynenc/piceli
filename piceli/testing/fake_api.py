@@ -944,7 +944,8 @@ class FakeAPI:
             if ("Pod", rest[1]) not in self.objects:
                 return 404, {}
             container = query.get("container", [""])[0]
-            previous = query.get("previous", ["false"])[0] == "true"
+            # The API parses booleans like strconv.ParseBool ("true", "True", "1").
+            previous = query.get("previous", ["false"])[0].lower() in {"true", "1"}
             text = self.pod_logs.get((rest[1], container, previous))
             if text is None:
                 return (400, {}) if previous else (200, b"")

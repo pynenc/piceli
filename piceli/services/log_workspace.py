@@ -23,7 +23,6 @@ from collections.abc import Callable, Iterable
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
-from piceli.k8s.ops.diagnosis import redact
 from piceli.k8s.ops.provider_factory import KubeconfigTarget, Transport
 from piceli.services.contracts import (
     Freshness,
@@ -36,6 +35,7 @@ from piceli.services.contracts import (
     WorkspaceLogStream,
     WorkspaceScope,
 )
+from piceli.services.logs import redact_line
 from piceli.services.query import QueryError, QueryService, _now, _resource
 from piceli.services.registration import Registration
 
@@ -106,9 +106,7 @@ def detect_level(text: str) -> Level | None:
     return _NORMAL.get(found.group(1).lower()) if found is not None else None  # type: ignore[return-value]
 
 
-def _scrub(text: str) -> str:
-    indent = text[: len(text) - len(text.lstrip(" \t"))].replace("\t", "  ")[:16]
-    return indent + redact(text, limit=2000)
+_scrub = redact_line
 
 
 def _owner_refs(raw: dict[str, Any]) -> list[dict[str, Any]]:
