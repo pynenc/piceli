@@ -77,15 +77,27 @@ branch run):
     killed) is stopped by ``piceli access stop --stale``, which otherwise
     leaves nothing to stop.
 
-From 0.14.7 too (``lifecycle_ops.py``; last, after 6):
+Also from 0.14.7 (``lifecycle_prune.py``; last, in main):
 
-20. After a rollout ``gitops status`` shows each environment's last checks
+20. A push removes a StatefulSet with a retained claim and turns a
+    Deployment into a StatefulSet of the same name behind the same Service:
+    one sync deletes the old objects (none left by the app's label), the
+    Service selects only the new pod, the checks pass, and the claim is kept
+    and listed with its delete command in the status and the history.
+21. A push removes a workload and adds a failing check: the rollback does not
+    re-create the workload, main stays ``failed``
+    (``checks-failed-rolled-back``) with no new run for several polls, and
+    the fix deploys.
+
+From 0.14.7 too (``lifecycle_ops.py``; last, after 6 and 21):
+
+22. After a rollout ``gitops status`` shows each environment's last checks
     (passed N/N, every check's name, when, the trigger), and so does the
     in-cluster UI's environment view.
-21. ``piceli env stop rc``: no replicas, volumes kept; a push to a source rc
+23. ``piceli env stop rc``: no replicas, volumes kept; a push to a source rc
     follows deploys main and is not even planned for rc; the UI offers Start;
     ``piceli env start rc`` scales it back and deploys the moved revision.
-22. ``piceli access main --cluster infra.py:cluster --ui``: main's declared
+24. ``piceli access main --cluster infra.py:cluster --ui``: main's declared
     forward and the UI in one command; piceli killed with SIGKILL leaves no
     ``kubectl`` and frees every port.
 
@@ -120,6 +132,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from lifecycle_ops import OpsStages
+from lifecycle_prune import PruneStages
 from lifecycle_reach import ReachStages
 from lifecycle_support import (
     Commands,
@@ -181,7 +194,7 @@ ALL_CHECKS = {
 }
 STAGE_ORDER = (
     "2", "3", "1", "4", "5", "6", "11", "7", "12", "16", "17", "18", "19",
-    "8", "15", "9", "10", "13", "14", "20", "21", "22",
+    "8", "15", "9", "10", "13", "14", "20", "21", "22", "23", "24",
 )  # fmt: skip
 STAGE_TITLES = {
     "1": "upgrade from the previous release",
@@ -203,9 +216,11 @@ STAGE_TITLES = {
     "17": "log redaction in the UI",
     "18": "forward from the in-cluster UI",
     "19": "forward from the CLI",
-    "20": "status and UI show the checks of a rollout",
-    "21": "stop and start a named environment",
-    "22": "access ENV --ui, piceli killed: no kubectl left",
+    "20": "removed and renamed workloads are pruned",
+    "21": "a failed check after a removal: rollback, no loop",
+    "22": "status and UI show the checks of a rollout",
+    "23": "stop and start a named environment",
+    "24": "access ENV --ui, piceli killed: no kubectl left",
 }
 STAGE_METHODS = {
     "1": "1_upgrade", "2": "2_bootstrap", "3": "3_first_main", "4": "4_one_source",
@@ -213,8 +228,9 @@ STAGE_METHODS = {
     "9": "9_teardown", "10": "10_retention", "11": "11_reverted_check",
     "12": "12_ui_branch", "13": "13_stale_access", "14": "14_ui_history",
     "15": "15_ui_broken", "16": "16_ui_logs", "17": "17_ui_log_redaction",
-    "18": "18_ui_forward", "19": "19_cli_forward", "20": "20_checks_status",
-    "21": "21_stop_start", "22": "22_access_ui_killed",
+    "18": "18_ui_forward", "19": "19_cli_forward", "20": "20_prune",
+    "21": "21_rollback_no_loop", "22": "22_checks_status", "23": "23_stop_start",
+    "24": "24_access_ui_killed",
 }  # fmt: skip
 #: Stages whose failure stops the run (the rest depend on them).
 CRITICAL = {"2", "3"}
@@ -254,7 +270,7 @@ EXTRA_CHECK = """EXTRA_CHECKS: list = [
 ]"""
 
 
-class Lifecycle(OpsStages, ReachStages):
+class Lifecycle(OpsStages, PruneStages, ReachStages):
     def __init__(self, args: argparse.Namespace, scratch: Path) -> None:
         self.args = args
         self.scratch = scratch
@@ -1935,7 +1951,7 @@ class Lifecycle(OpsStages, ReachStages):
             )
             # piceli and its forward watchdog (its process group, as a crash
             # of the whole tree): piceli alone no longer leaves its kubectl
-            # (stage 22 checks that).
+            # (stage 24 checks that).
             kill_group(first.pid)
             first.process.wait(timeout=10)
             time.sleep(2)
@@ -2400,7 +2416,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="candidate images: previous images plus the wheel (default), "
                         "or images/Dockerfile")  # fmt: skip
     parser.add_argument(
-        "--stages", default="1-22", help="e.g. 1-22 or 1,2,3 (setup always runs)"
+        "--stages", default="1-24", help="e.g. 1-24 or 1,2,3 (setup always runs)"
     )
     parser.add_argument("--playwright-ui", type=Path, default=None,
                         help="ui/ directory with node_modules for the optional browser "

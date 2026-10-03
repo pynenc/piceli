@@ -1428,6 +1428,17 @@ class Pipeline:
         branch (``piceli env up BRANCH``), isolated at render time, with a
         budget of running branch environments. Not part of the combined hash
         of ``piceli deploy``. See ``docs/environments.md``.
+    :param prune: Whether a deploy deletes the objects an earlier release
+        of this app created and the app no longer declares (a removed or
+        renamed workload, its Service, its NetworkPolicy …), as ``delete``
+        actions of the same plan, after the new objects are ready and before
+        the checks. ``None`` (default): every environment deploy prunes
+        (``piceli env up``, the GitOps controllers), ``piceli deploy`` does
+        not; ``True``: ``piceli deploy`` prunes too; ``False``: never.
+        Claims, Secrets and retained objects are never deleted: the plan
+        lists them as ``kept_orphaned`` with the command that deletes them.
+        An ``auto_approve`` policy covers a prune unless it denies
+        ``"prune"``. See ``docs/gitops.md``.
 
     Invariants: every image the app uses is a build handle or pinned by
     digest; the release never manages the node-loopback registry.
@@ -1465,6 +1476,7 @@ class Pipeline:
         auto_approve: ApprovalPolicy | Mapping[str, Any] | None = None,
         restore_points: RestorePoints | bool | None = None,
         envs: EnvConfig | None = None,
+        prune: bool | None = None,
     ) -> None:
         from piceli.app import App
 
@@ -1574,6 +1586,11 @@ class Pipeline:
             raise PipelineError("pipeline-invalid", "envs must be an EnvConfig")
         #: One namespace per Git branch (:mod:`piceli.envs`), or ``None``.
         self.envs: EnvConfig | None = envs
+        if prune is not None and not isinstance(prune, bool):
+            raise PipelineError("pipeline-invalid", "prune must be True, False or None")
+        #: Delete what earlier releases created and the app no longer
+        #: declares (``None``: only in environment deploys; see ``prune``).
+        self.prune: bool | None = prune
         #: Set on the pipeline of one environment (:func:`piceli.envs.env_pipeline`):
         #: how its app renders into the branch namespace.
         self.branch_env: BranchEnv | None = None

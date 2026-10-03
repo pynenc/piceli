@@ -191,6 +191,71 @@ def failed_verification(error: BaseException, at: str) -> dict[str, Any] | None:
     }
 
 
+#: The reason of a step whose checks failed and whose release was rolled
+#: back: final, never retried until a new revision or ``piceli gitops sync``.
+ROLLED_BACK = "checks-failed-rolled-back"
+
+
+def step_reason(error: BaseException) -> str:
+    """The reason a failed step records: :data:`ROLLED_BACK` for checks that
+    failed after an apply that was rolled back, else :func:`error_code`."""
+    code = error_code(error)
+    details = getattr(error, "details", None)
+    if (
+        code == "pipeline-checks-failed"
+        and isinstance(details, Mapping)
+        and details.get("run_state") == "rolled-back"
+    ):
+        return ROLLED_BACK
+    return code
+
+
+#: Objects a status lists per prune field (deleted, kept orphaned).
+MAX_PRUNED = 50
+
+
+def pruned_fields(outcome: EnvOutcome) -> dict[str, list[dict[str, Any]]]:
+    """A deployed record's ``deleted`` and ``kept_orphaned`` (additive).
+
+    ``deleted``: the objects this deploy removed because the app no longer
+    declares them (kind and name); ``kept_orphaned``: the ones it kept
+    (claims, Secrets, retained objects) with ``why`` and the ``kubectl``
+    command that deletes each. Both empty when the deploy pruned nothing.
+    """
+    pruned = outcome.pruned or {}
+    deleted = [
+        {"kind": str(item.get("kind")), "name": str(item.get("name"))}
+        for item in pruned.get("deleted") or ()
+        if isinstance(item, Mapping)
+    ]
+    kept = [
+        {key: item.get(key) for key in ("kind", "name", "namespace", "why", "command")}
+        for item in pruned.get("kept_orphaned") or ()
+        if isinstance(item, Mapping)
+    ]
+    return {"deleted": deleted[:MAX_PRUNED], "kept_orphaned": kept[:MAX_PRUNED]}
+
+
+def pruned_line(name: str, fields: Mapping[str, list[dict[str, Any]]]) -> str | None:
+    """A log line of what a deploy pruned and kept, or ``None``."""
+    parts = []
+    if fields["deleted"]:
+        parts.append(
+            "deleted "
+            + ", ".join(f"{item['kind']}/{item['name']}" for item in fields["deleted"])
+            + " (no longer declared)"
+        )
+    if fields["kept_orphaned"]:
+        parts.append(
+            "kept, orphaned "
+            + ", ".join(
+                f"{item['kind']}/{item['name']}" for item in fields["kept_orphaned"]
+            )
+            + " (delete with the command in status)"
+        )
+    return f"{name}: " + "; ".join(parts) if parts else None
+
+
 def replan_stale(
     record: dict[str, Any],
     env_up: Callable[[str | None], Any],
@@ -364,7 +429,9 @@ class Controller:
         record["failure"] = None if error is None else failure_detail(error)
         # What runs after a failed step is uncertain: the next plan asks.
         record["deployed_plan_hash"] = None
-        if attempts >= self.config.max_attempts and not deleting:
+        if not deleting and (
+            reason == ROLLED_BACK or attempts >= self.config.max_attempts
+        ):
             self._set(
                 record,
                 state="failed",
@@ -711,8 +778,10 @@ class Controller:
             record["namespace"] = outcome.namespace
         if outcome.state == "deployed":
             action = outcome.action or "deployed"
+            pruned = pruned_fields(outcome)
             self._set(
                 record,
+                **pruned,
                 state="deployed",
                 deployed_commit=record["commit"],
                 attempts=0,
@@ -737,6 +806,9 @@ class Controller:
                 )
             else:
                 self.log(f"{record['branch']}: deployed {record['commit'][:12]}")
+            line = pruned_line(record["branch"], pruned)
+            if line:
+                self.log(line)
         elif outcome.state == "approval-required":
             self._set(
                 record,
@@ -903,7 +975,7 @@ class Controller:
             if failed is not None and record["state"] != "deleting":
                 self._degraded(record, failed)
             else:
-                self._fail(record, error_code(error), error)
+                self._fail(record, step_reason(error), error)
         finally:
             self.busy = False
             save_state(self.state_dir, self.state)

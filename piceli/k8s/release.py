@@ -15,7 +15,7 @@ import os
 import re
 import subprocess
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
@@ -24,6 +24,7 @@ from typing import Any, TextIO
 from piceli.k8s.ops.execution_journal import ExecutionJournal
 from piceli.k8s.ops.executor import PlanExecutor
 from piceli.k8s.ops.plan import (
+    DeploymentComposition,
     ObservedSnapshot,
     PlanAuthorization,
     build_plan,
@@ -494,8 +495,15 @@ class ReleaseWorkflow:
         name: str,
         *,
         execution_id: str | None = None,
+        restrict: Callable[[DeploymentComposition], DeploymentComposition]
+        | None = None,
     ) -> dict[str, Any]:
-        """Reapply a prior archive against current evidence as a new execution."""
+        """Reapply a prior archive against current evidence as a new execution.
+
+        ``restrict`` narrows the archived composition before planning (a
+        rollback that restores only what a failed release changed; see
+        :func:`piceli.k8s.release_runner.scoped_rollback`).
+        """
         record = self.catalog.get(name)
         if record.namespace != self.namespace:
             raise ValueError("release record namespace differs from target")
@@ -523,6 +531,8 @@ class ReleaseWorkflow:
         }
         if actual != expected:
             raise ValueError("rollback composition/private input mismatch")
+        if restrict is not None:
+            composition = restrict(composition)
         plan = build_plan(
             composition,
             self.snapshot,

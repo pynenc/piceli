@@ -1,4 +1,4 @@
-"""Stages 20-22 of the k3s lifecycle acceptance: checks, stops, one access command.
+"""Stages 22-24 of the k3s lifecycle acceptance: checks, stops, one access command.
 
 Mixed into :class:`lifecycle.Lifecycle` (it uses its cluster, commands,
 ``status``/``wait_env`` and ``ui_session``). From 0.14.7, after stage 6 (rc
@@ -7,12 +7,12 @@ deployed by the candidate's controller):
 20. After a rollout the status shows the checks: each environment the
     candidate deployed has ``checks`` (passed N/N, every check's name, when,
     the trigger), and the in-cluster UI's environment view shows the same.
-21. Stop and start a named environment: ``piceli env stop rc`` scales rc's
+23. Stop and start a named environment: ``piceli env stop rc`` scales rc's
     workloads to zero and keeps its volumes; a push to a source rc follows is
     deployed to main but not even planned for rc; ``piceli env start rc``
     scales it back (and deploys the moved revision, approved if it asks);
     the UI offers Start while it is stopped.
-22. ``piceli access main --cluster infra.py:cluster --ui``: main's declared
+24. ``piceli access main --cluster infra.py:cluster --ui``: main's declared
     forward on its port, the UI's launch URL, in one command; killing piceli
     with SIGKILL (piceli only) leaves no ``kubectl`` and frees every port.
 
@@ -94,10 +94,10 @@ def _json_lines(lines: list[str]) -> list[dict[str, Any]]:
 
 
 class OpsStages:
-    """Stages 20-22 (see the module docstring); mixed into ``Lifecycle``."""
+    """Stages 22-24 (see the module docstring); mixed into ``Lifecycle``."""
 
     # ------------------------------------------------------------ 20
-    def stage_20_checks_status(self) -> None:
+    def stage_22_checks_status(self) -> None:
         problems: list[str] = []
         status = self.status()  # type: ignore[attr-defined]
         envs = status.get("envs") or {}
@@ -115,7 +115,9 @@ class OpsStages:
                 problems.append(f"{name}: checks {checks.get('state')!r}")
             if not checks.get("total") or checks.get("passed") != checks.get("total"):
                 problems.append(f"{name}: {checks.get('passed')}/{checks.get('total')}")
-            if not names >= FULL_CHECKS:
+            # rc runs the full stack; main's checks follow what earlier
+            # stages changed (the prune stages remove a workload).
+            if not names >= (FULL_CHECKS if name == "rc" else set()) or not names:
                 problems.append(f"{name}: checks {sorted(n for n in names if n)}")
             if not checks.get("at") or not checks.get("trigger"):
                 problems.append(f"{name}: no time or trigger: {checks}")
@@ -127,7 +129,8 @@ class OpsStages:
                     continue
                 seen = ((body or {}).get("environment") or {}).get("checks") or {}
                 shown = {item.get("name") for item in seen.get("results") or []}
-                if seen.get("state") != "passed" or not shown >= FULL_CHECKS:
+                wanted = FULL_CHECKS if name == "rc" else {n for n in shown if n}
+                if seen.get("state") != "passed" or not shown or not shown >= wanted:
                     problems.append(
                         f"UI {name}: checks {seen.get('state')!r} {sorted(n for n in shown if n)}"
                     )
@@ -140,7 +143,7 @@ class OpsStages:
         check(not problems, "; ".join(problems))
 
     # ------------------------------------------------------------ 21
-    def stage_21_stop_start(self) -> None:
+    def stage_23_stop_start(self) -> None:
         env, namespace = STOPPED_ENV
         cluster = self.cluster  # type: ignore[attr-defined]
         before = _replicas(cluster, namespace)
@@ -255,7 +258,7 @@ class OpsStages:
         )
 
     # ------------------------------------------------------------ 22
-    def stage_22_access_ui_killed(self) -> None:
+    def stage_24_access_ui_killed(self) -> None:
         self._ui_port_free()  # type: ignore[attr-defined]
         served = self.serve("access-env-ui", values={"access_env": "main"})  # type: ignore[attr-defined]
         kubectl: list[int] = []

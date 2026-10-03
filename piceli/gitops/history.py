@@ -9,7 +9,9 @@ The controller keeps two records of a deploy:
   the failure (a registered code and the scrubbed, bounded build log tail);
 - the deploy **run journal** of every run (``piceli.deploy-run.v1``, under
   ``<state_dir>/pipelines/…/runs/``), with its stages, plan, checks and
-  failure.
+  failure; ``deleted`` (the objects its prune removed) and
+  ``kept_orphaned`` (the claims, Secrets and retained objects it kept, each
+  with the ``kubectl`` command deleting it) come from its plan.
 
 :func:`history` joins both into ``piceli.gitops-history.v1``: per
 environment, its runs newest first. A run journal without an event (a run
@@ -293,9 +295,26 @@ def _from_summary(summary: Mapping[str, Any]) -> dict[str, Any]:
         }
         for name, stage in _dict(summary.get("stages")).items()
     }
+    applied = _dict(stages.get("apply")).get("state") == "done"
     return {
         "run_id": summary.get("run_id"),
         "run_state": summary.get("state"),
+        # What the run's prune deleted (once applied) and kept, with the
+        # command deleting each kept object.
+        "deleted": [
+            {"kind": item.get("kind"), "name": item.get("name")}
+            for item in changes
+            if item.get("operation") == "delete"
+        ][:MAX_CHANGES]
+        if applied
+        else [],
+        "kept_orphaned": [
+            {
+                key: _dict(item).get(key)
+                for key in ("kind", "name", "namespace", "why", "command")
+            }
+            for item in plan.get("kept_orphaned") or ()
+        ][:MAX_CHANGES],
         "started_at": summary.get("created_at"),
         "finished_at": summary.get("updated_at"),
         "combined_hash": summary.get("combined_hash"),
@@ -435,6 +454,8 @@ def _entry(
         "built": list(event_.get("built") or []),
         "rolled": list(event_.get("rolled") or []),
         "unchanged": list(event_.get("unchanged") or []),
+        "deleted": list(run.get("deleted") or []),
+        "kept_orphaned": list(run.get("kept_orphaned") or []),
         "images": _dict(run.get("images")),
         "plan": run.get("plan"),
         "checks": checks,

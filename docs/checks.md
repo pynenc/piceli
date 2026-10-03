@@ -266,6 +266,13 @@ exactly one automatic rollback:
   Its history entry has `"trigger": "checks-failed"`, `rolled_back_from` and
   `failed_execution_id`; the failed entry gets `rollback` with the state,
   target and execution id.
+- It restores only what the failed release changed (0.14.7): the objects
+  **both** releases declare go back to the target's version. An object the
+  failed release no longer declares (removed by its prune, or deleted by
+  hand) is not re-created, and an object only the failed release declares is
+  not deleted: an automatic rollback never creates or deletes an object the
+  failed release did not also declare. A manual `piceli release rollback`
+  restores the target release whole, as before.
 - It needs no second approval: `rollback_on_failed_checks = true` was part of
   the approved plan. It never triggers another rollback. If the rollback is
   refused, does not become ready or fails its own checks, `rollback.state` is

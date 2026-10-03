@@ -57,6 +57,7 @@ from piceli.k8s.ops.plan import (
     metadata_patch,
     overlapping_managers,
     private_comparable,
+    prune_propagation,
     removal_patch,
     replace_propagation,
     replace_refusal,
@@ -1442,12 +1443,42 @@ class PlanExecutor:
             try:
                 deferred = self._first_consumer_refs(plan)
                 deferred_rows: list[tuple[dict[str, Any], PlanAction]] = []
+
+                def settle_deferred() -> None:
+                    # A WFFC claim is allowed to remain Pending only while its
+                    # declared consumer is being submitted. Once both exist,
+                    # bind the claim first and retain normal workload
+                    # readiness checks.
+                    deferred_rows.sort(
+                        key=lambda item: (
+                            item[1].resource.ref.kind != "PersistentVolumeClaim"
+                        )
+                    )
+                    for position, (row, action) in enumerate(deferred_rows):
+                        try:
+                            self._ready(execution, row, action, authorization, deadline)
+                        except _Diagnosed as error:
+                            if error.category == "apply-crashloop":
+                                error.workloads.extend(
+                                    self._diagnose_others(
+                                        deferred_rows[position + 1 :],
+                                        time.monotonic() + _FINAL_DIAGNOSIS_SECONDS,
+                                    )
+                                )
+                            raise
+                    deferred_rows.clear()
+
                 total = len(plan.actions)
                 for index, (row, action) in enumerate(
                     zip(self.journal.actions(execution), plan.actions, strict=False),
                     start=1,
                 ):
                     self._guard(execution, authorization, deadline)
+                    if action.operation is PlanOperation.DELETE:
+                        # Deletes (a prune) run last: after every object of
+                        # the release is applied and ready, so a removed
+                        # workload keeps serving until its replacement does.
+                        settle_deferred()
                     self._note(
                         f"applying {index}/{total}: "
                         f"{action.resource.ref.kind}/{action.resource.ref.name}"
@@ -1602,6 +1633,9 @@ class PlanExecutor:
                                             "resourceVersion"
                                         ],
                                         deadline=deadline,
+                                        propagation=prune_propagation(
+                                            action.resource.ref.kind
+                                        ),
                                     )
                                     result = None
                                 elif takeover:
@@ -1696,26 +1730,7 @@ class PlanExecutor:
                         deferred_rows.append((row, action))
                     else:
                         self._ready(execution, row, action, authorization, deadline)
-                # A WFFC claim is allowed to remain Pending only while its
-                # declared consumer is being submitted. Once both exist, bind
-                # the claim first and retain normal workload readiness checks.
-                deferred_rows.sort(
-                    key=lambda item: (
-                        item[1].resource.ref.kind != "PersistentVolumeClaim"
-                    )
-                )
-                for position, (row, action) in enumerate(deferred_rows):
-                    try:
-                        self._ready(execution, row, action, authorization, deadline)
-                    except _Diagnosed as error:
-                        if error.category == "apply-crashloop":
-                            error.workloads.extend(
-                                self._diagnose_others(
-                                    deferred_rows[position + 1 :],
-                                    time.monotonic() + _FINAL_DIAGNOSIS_SECONDS,
-                                )
-                            )
-                        raise
+                settle_deferred()
                 self.journal.set_state(execution, "ready")
             except ProviderError as error:
                 if isinstance(error, _Diagnosed):

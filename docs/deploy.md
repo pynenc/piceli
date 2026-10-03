@@ -617,6 +617,11 @@ The policy can only narrow what runs unattended:
 
 - `delete`, `replace` and `adopt` are never inside a policy; `allow` naming
   one is refused (`approval-policy-invalid`), so they always need the hash.
+  The exception is a **prune** (0.14.7): the delete of an object this
+  release's owner wrote and no longer declares (`Pipeline(prune=…)`, every
+  environment deploy) is the class `prune`, inside every policy unless
+  `deny` names `prune` or `delete`. Claims, Secrets and retained objects are
+  never pruned; the plan lists them as `kept_orphaned`.
 - `cluster_scoped` objects and `drift` (a desired field another manager wrote,
   which the apply overwrites) are outside unless `allow` names them.
 - `no-op` actions change nothing and are always inside.

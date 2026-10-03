@@ -402,3 +402,136 @@ def test_default_ports_measure_du_in_the_running_registry_pod(
     }
     assert measured == ["piceli-system/piceli-registry-5d9f"]
     assert calls == [("/api/v1/namespaces/piceli-system/pods", "GET")]
+
+
+KEPT = {
+    "kind": "PersistentVolumeClaim",
+    "name": "data-db-0",
+    "namespace": "ns-main",
+    "why": "claim",
+    "command": "kubectl --namespace ns-main delete persistentvolumeclaim data-db-0",
+}
+PRUNE_CHANGES = [
+    {"operation": "create", "kind": "StatefulSet", "name": "web"},
+    {"operation": "delete", "kind": "Deployment", "name": "web", "prune": True},
+    {"operation": "delete", "kind": "StatefulSet", "name": "db", "prune": True},
+]
+
+
+class PrunePorts(JournalPorts):
+    """A deploy whose plan deletes two objects and keeps a claim."""
+
+    def env_up(self, pipeline: Any, name: str, **kwargs: Any) -> dict[str, Any]:
+        if kwargs["approve"] is None:
+            planned = super().env_up(pipeline, name, **kwargs)
+            stage = planned["deploy"]["stages"]["plan"]
+            stage["changes"] = [dict(item) for item in PRUNE_CHANGES]
+            stage["kept_orphaned"] = [dict(KEPT)]
+            return planned
+        self.clock["now"] = time.time()
+        run_id = write_run(
+            self._runs(name),
+            combined_hash=COMBINED,
+            release="shop-0123456789ab",
+            sources={"shop": {"ref": "refs/heads/main", "commit": "a" * 40}},
+            changes=PRUNE_CHANGES,
+            kept_orphaned=[KEPT],
+        )
+        return {
+            "state": "ready",
+            "namespace": f"ns-{name}",
+            "plan_hash": PLAN,
+            "result": {
+                "state": "ready",
+                "run_id": run_id,
+                "combined_hash": COMBINED,
+                "stages": {"plan": "done", "apply": "done", "checks": "done"},
+                "pruned": {
+                    "deleted": [
+                        {"kind": "Deployment", "name": "web"},
+                        {"kind": "StatefulSet", "name": "db"},
+                    ],
+                    "kept_orphaned": [dict(KEPT)],
+                },
+            },
+        }
+
+
+def test_a_prune_is_reviewed_recorded_in_status_and_in_the_history(
+    journaled: dict[str, Any],
+) -> None:
+    controller, channel = journaled["controller"], journaled["channel"]
+    controller.ports = PrunePorts(controller.state_dir, journaled["clock"])
+    _manual_main(controller)
+    main = controller.poll_once()["envs"]["main"]
+    assert main["state"] == "approval-required"
+    pending = main["pending_plan"]
+    assert {(c["operation"], c["kind"], c["name"]) for c in pending["changes"]} >= {
+        ("delete", "Deployment", "web"),
+        ("delete", "StatefulSet", "db"),
+    }
+    assert pending["kept_orphaned"] == [KEPT]
+
+    channel.add_request(*approve_request("main", PLAN, via="cli"))
+    main = controller.poll_once()["envs"]["main"]
+    assert main["state"] == "deployed"
+    assert main["deleted"] == [
+        {"kind": "Deployment", "name": "web"},
+        {"kind": "StatefulSet", "name": "db"},
+    ]
+    assert main["kept_orphaned"] == [KEPT]
+    run = _published(channel)["envs"]["main"]["runs"][0]
+    assert run["deleted"] == main["deleted"]
+    assert run["kept_orphaned"] == [KEPT]
+    assert {"operation": "delete", "kind": "StatefulSet", "name": "db"} in run["plan"][
+        "changes"
+    ]
+
+
+class RolledBackPorts(JournalPorts):
+    """A deploy whose checks fail and whose release is rolled back."""
+
+    def __init__(self, state_dir: Path, clock: dict[str, float]) -> None:
+        super().__init__(state_dir, clock)
+        self.applies = 0
+        self.rolled_back = True
+
+    def env_up(self, pipeline: Any, name: str, **kwargs: Any) -> dict[str, Any]:
+        if kwargs["approve"] is None or not self.rolled_back:
+            return super().env_up(pipeline, name, **kwargs)
+        self.applies += 1
+        raise PipelineError(
+            "pipeline-checks-failed",
+            "release shop-0123456789ab failed its checks",
+            failed=True,
+            details={
+                "run_state": "rolled-back",
+                "output": {
+                    "passed": False,
+                    "results": [],
+                    "rollback": {"state": "ready", "release": "shop-0011223344aa"},
+                },
+            },
+        )
+
+
+def test_a_rolled_back_release_is_not_retried_until_a_sync(
+    journaled: dict[str, Any],
+) -> None:
+    """A failed check whose release was rolled back stops the environment:
+    no retry every poll (apply, fail, roll back), until a new revision or a
+    ``gitops sync``."""
+    controller, channel = journaled["controller"], journaled["channel"]
+    ports = RolledBackPorts(controller.state_dir, journaled["clock"])
+    controller.ports = ports
+    main = controller.poll_once()["envs"]["main"]
+    assert main["state"] == "failed", main
+    assert main["reason"] == "checks-failed-rolled-back"
+    assert main["next_attempt_at"] is None and ports.applies == 1
+    for _ in range(3):
+        journaled["clock"]["now"] += 3600
+        assert controller.poll_once()["envs"]["main"]["state"] == "failed"
+    assert ports.applies == 1
+    ports.rolled_back = False
+    channel.add_request(*sync_request("main"))
+    assert controller.poll_once()["envs"]["main"]["state"] == "deployed"

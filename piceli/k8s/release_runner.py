@@ -27,6 +27,7 @@ snapshot, and the snapshot is part of the persisted plan.
 
 from __future__ import annotations
 
+import dataclasses
 import fcntl
 import hashlib
 import json
@@ -35,7 +36,14 @@ import re
 import tempfile
 import time
 import uuid
-from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
+from collections.abc import (
+    Callable,
+    Collection,
+    Iterable,
+    Iterator,
+    Mapping,
+    Sequence,
+)
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -744,6 +752,80 @@ def _summary(plan: Mapping[str, Any]) -> dict[str, int]:
     return dict(sorted(counts.items()))
 
 
+#: Claims: a prune discovers them to list a removed StatefulSet's claims as kept.
+CLAIM_TYPE = ResourceType("v1", "PersistentVolumeClaim")
+
+
+def _kubectl_kind(api_version: str, kind: str) -> str:
+    group = api_version.rpartition("/")[0]
+    return f"{kind.lower()}.{group}" if group else kind.lower()
+
+
+def kept_orphaned(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The objects a prune keeps although the release no longer declares them.
+
+    A plan that prunes (``[release] prune``, every environment deploy) never
+    deletes a claim, a Secret, a ``piceli.io/retained`` object, the claims a
+    removed StatefulSet created from its templates, or a StatefulSet whose
+    retention policy would delete its claims: they are listed here, each
+    with ``why`` and the exact ``kubectl`` command that deletes it (once its
+    data is no longer needed; a claim's volume stays while its reclaim
+    policy is ``Retain``). Names only, never values.
+    """
+    found = []
+    for ref in plan.get("protected_resources") or ():
+        kind, name = str(ref["kind"]), str(ref["name"])
+        namespace = ref.get("namespace") or ""
+        why = (
+            "claim"
+            if kind == "PersistentVolumeClaim"
+            else "deletes-claims"
+            if kind == "StatefulSet"
+            else "secret"
+            if kind == "Secret"
+            else "retained"
+        )
+        scope = f"--namespace {namespace} " if namespace else ""
+        found.append(
+            {
+                "kind": kind,
+                "name": name,
+                "namespace": namespace or None,
+                "why": why,
+                "command": f"kubectl {scope}delete "
+                f"{_kubectl_kind(str(ref['api_version']), kind)} {name}",
+            }
+        )
+    return found
+
+
+def scoped_rollback(
+    composition: DeploymentComposition, scope: Collection[Mapping[str, Any]] | None
+) -> DeploymentComposition:
+    """``composition`` restricted to the objects ``scope`` names, or unchanged.
+
+    A rollback after failed checks restores only what the failed release
+    changed: the objects both releases declare. An object the failed release
+    no longer declares (pruned by it, or deleted by hand) is not re-created,
+    and dependencies on it are dropped.
+    """
+    if scope is None:
+        return composition
+    keep = {ResourceRef(**dict(item)) for item in scope}
+    components = []
+    for component in composition.components:
+        resources = tuple(
+            dataclasses.replace(
+                resource,
+                dependencies=tuple(d for d in resource.dependencies if d in keep),
+            )
+            for resource in component.resources
+            if resource.ref in keep
+        )
+        components.append(dataclasses.replace(component, resources=resources))
+    return dataclasses.replace(composition, components=tuple(components))
+
+
 def _compact_actions(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
     return [
         {
@@ -760,6 +842,9 @@ def _compact_actions(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
             **({"replace": action["replace"]} if "replace" in action else {}),
             **({"removes": action["removes"]} if "removes" in action else {}),
             **({"cluster_scoped": True} if not action["resource"]["namespace"] else {}),
+            # A plan deletes only objects this release's owner wrote that it
+            # no longer declares (a prune): the approval policy's ``prune``.
+            **({"prune": True} if action["operation"] == "delete" else {}),
         }
         for action in plan["actions"]
     ]
@@ -927,6 +1012,7 @@ class PlanResult:
             "diffs": self.diffs,
             "dry_run_unavailable": self.dry_run_unavailable,
             "autoscaled": self.autoscaled,
+            "kept_orphaned": kept_orphaned(self.plan),
             **({"plan": self.plan} if full else {}),
         }
 
@@ -1218,6 +1304,19 @@ class ReleaseRunner:
             for resource in component.resources
         }
 
+    @classmethod
+    def _prune_kinds(cls, records: Iterable[Any]) -> set[ResourceType]:
+        """What a prune discovers besides the composition's kinds.
+
+        The kinds every earlier release declared (their objects may have
+        been removed since), and claims: the claims a pruned StatefulSet
+        created from its templates are listed as kept, never deleted.
+        """
+        kinds = {CLAIM_TYPE}
+        for record in records:
+            kinds |= cls._kinds(composition_from_archive(record.archive))
+        return kinds
+
     def _source(self, images: Mapping[str, ImageRef]) -> ReleaseSource:
         if len(images) == 1:
             identity = next(iter(images.values())).identity
@@ -1411,8 +1510,14 @@ class ReleaseRunner:
         adopt: Sequence[str] = (),
         replace: Sequence[str] = (),
         adopt_all_desired: bool = False,
+        rollback_of: str | None = None,
     ) -> PlanResult:
         """Capture discovery and persist an approvable plan.
+
+        ``rollback_of`` (with ``rollback_to``; the automatic rollback after
+        failed checks) restores only what that failed release changed: the
+        objects both releases declare, without a prune (see
+        :func:`scoped_rollback`).
 
         Without ``rollback_to`` the spec decides the release; with it, an
         existing catalogued release (a name or ``previous``) is re-planned.
@@ -1484,8 +1589,19 @@ class ReleaseRunner:
                         )
                     name = self.resolve_rollback_target(rollback_to, catalog)
                     intent = "rollback"
+                scope = None
+                if rollback_to is not None and rollback_of not in (None, name):
+                    failed = composition_from_archive(catalog.get(rollback_of).archive)
+                    scope = sorted(
+                        (
+                            resource.ref.__dict__
+                            for component in failed.components
+                            for resource in component.resources
+                        ),
+                        key=lambda ref: tuple(ref.values()),
+                    )
                 return self._plan_reapply(
-                    name, intent, binding, catalog, store, requested
+                    name, intent, binding, catalog, store, requested, scope=scope
                 )
             finally:
                 journal.close()
@@ -1563,8 +1679,7 @@ class ReleaseRunner:
                 composition = composition_from_archive(existing.archive)
             kinds = self._kinds(composition)
             if settings.prune:
-                for record in records.values():
-                    kinds |= self._kinds(composition_from_archive(record.archive))
+                kinds |= self._prune_kinds(records.values())
             artifact, unavailable = self._observe(binding, composition, kinds)
             snapshot = ObservedSnapshot.from_discovery(artifact)
             inherited = list(settings.inherited_owners)
@@ -1602,6 +1717,7 @@ class ReleaseRunner:
             "summary": counts,
             "changes": any(operation != "no-op" for operation in counts),
             "actions": _compact_actions(summary),
+            "kept_orphaned": kept_orphaned(summary),
             "diffs": plan_diffs(plan, snapshot),
             "dry_run_unavailable": unavailable,
             "autoscaled": _autoscaled(composition, snapshot, settings.field_manager),
@@ -1638,8 +1754,7 @@ class ReleaseRunner:
             records = sorted(record.name for record in catalog.records())
             kinds = self._kinds(composition)
             if settings.prune:
-                for record in catalog.records():
-                    kinds |= self._kinds(composition_from_archive(record.archive))
+                kinds |= self._prune_kinds(catalog.records())
             artifact = self._discover(binding, kinds, composition)
             skipped = sorted(
                 {
@@ -1680,6 +1795,7 @@ class ReleaseRunner:
         return {
             "summary": _summary(summary),
             "actions": _compact_actions(summary),
+            "kept_orphaned": kept_orphaned(summary),
             "drift": _drift(
                 composition, snapshot, settings.field_manager, resolved.adopt
             ),
@@ -1733,8 +1849,7 @@ class ReleaseRunner:
         settings = self.spec.model.release
         kinds = self._kinds(composition)
         if settings.prune:
-            for record in catalog.records():
-                kinds |= self._kinds(composition_from_archive(record.archive))
+            kinds |= self._prune_kinds(catalog.records())
         artifact, unavailable = self._observe(binding, composition, kinds)
         snapshot = ObservedSnapshot.from_discovery(artifact)
         inherited = list(settings.inherited_owners)
@@ -1906,14 +2021,20 @@ class ReleaseRunner:
         catalog: ReleaseCatalog,
         store: SecretVersionStore,
         requested: _Ownership,
+        *,
+        scope: list[dict[str, Any]] | None = None,
     ) -> PlanResult:
         settings = self.spec.model.release
         record = catalog.get(name)
-        composition = composition_from_archive(record.archive)
+        composition = scoped_rollback(composition_from_archive(record.archive), scope)
+        # A scoped rollback never deletes: it restores what both releases
+        # declare and leaves the rest as it is.
+        prune = settings.prune and scope is None
         kinds = self._kinds(composition)
         if settings.prune:
-            for other in catalog.records():
-                kinds |= self._kinds(composition_from_archive(other.archive))
+            # A scoped rollback discovers what a prune would (earlier
+            # releases' kinds), so absent objects are known absent.
+            kinds |= self._prune_kinds(catalog.records())
         artifact, unavailable = self._observe(binding, composition, kinds)
         snapshot = ObservedSnapshot.from_discovery(artifact)
         inherited = list(settings.inherited_owners)
@@ -1927,7 +2048,7 @@ class ReleaseRunner:
             snapshot,
             _plan_authorization(
                 binding.target,
-                prune=settings.prune,
+                prune=prune,
                 adopt=adopt,
                 inherited=inherited,
                 field_manager=settings.field_manager,
@@ -1960,12 +2081,13 @@ class ReleaseRunner:
         )
         self._persist_plan(
             result,
-            prune=settings.prune,
+            prune=prune,
             discovery=artifact.to_private_json(),
             adopt=adopt,
             inherited=inherited,
             replace=replace,
             previous_releases=previous_releases,
+            scope=scope,
         )
         return result
 
@@ -1979,6 +2101,7 @@ class ReleaseRunner:
         inherited: Sequence[str] = (),
         replace: Sequence[Mapping[str, str]] = (),
         previous_releases: Sequence[str] = (),
+        scope: list[dict[str, Any]] | None = None,
     ) -> None:
         _write_private(
             self._plan_path(result.plan_hash),
@@ -1995,6 +2118,7 @@ class ReleaseRunner:
                     "inherited_owners": list(inherited),
                     "replace": list(replace),
                     "previous_releases": list(previous_releases),
+                    **({"scope": scope} if scope is not None else {}),
                     # What apply checks is what was reviewed, not a later spec.
                     "checks": [check.public_dict() for check in self.spec.model.checks],
                     "rollback_on_failed_checks": (
@@ -2239,7 +2363,9 @@ class ReleaseRunner:
                         ),
                         policy=pending.get("approval_policy"),
                     )
-                    composition = composition_from_archive(record.archive)
+                    composition = scoped_rollback(
+                        composition_from_archive(record.archive), pending.get("scope")
+                    )
                     approved_plan = build_plan(
                         composition,
                         snapshot,
@@ -2284,7 +2410,12 @@ class ReleaseRunner:
 
                     def run() -> dict[str, Any]:
                         return workflow.rollback(
-                            executor, name, execution_id=execution_id
+                            executor,
+                            name,
+                            execution_id=execution_id,
+                            restrict=lambda found: scoped_rollback(
+                                found, pending.get("scope")
+                            ),
                         )
 
                 started = {
@@ -2446,7 +2577,7 @@ class ReleaseRunner:
             "failed_execution_id": execution_id,
         }
         try:
-            planned = self.plan(rollback_to=target)
+            planned = self.plan(rollback_to=target, rollback_of=failed)
             outcome = self.apply(
                 planned.plan_hash,
                 expected_intent="rollback",

@@ -717,6 +717,12 @@ def env_up(
             if config.allow_api and not main and not config.is_fixed(branch)
             else (),
         )
+        if getattr(derived, "prune", None) is None:
+            # An environment converges on its declaration: what an earlier
+            # release created and this one no longer declares is deleted in
+            # the same plan (claims, Secrets and retained objects are kept).
+            derived = copy.copy(derived)
+            derived.prune = True
         stop = [] if main else plan_budget(envs, pipeline, namespace)
         if stop and wait:
             raise EnvError(
