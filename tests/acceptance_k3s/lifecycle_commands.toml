@@ -30,6 +30,7 @@ access_env = "main"
 ui_server = "http://127.0.0.1:8790/"
 ticket = "<ticket id>"
 connect_port = "18081"
+stop_env = "rc"
 
 [groups]
 # Once per machine and cluster; re-running it is idempotent.
@@ -80,6 +81,14 @@ access-env = ["access-env", "access-env-stop-stale"]
 # prompts without echo) and binds 127.0.0.1:18081 until Ctrl-C or the UI
 # stops the session (from 0.14.7).
 ui-connect = ["access-ui", "ui-connect"]
+# Stop a named environment (no replicas, volumes kept, not planned on a push)
+# and start it again; `Environment(stopped=True)` in infra.py declares the
+# same, and wins over `env start` (from 0.14.7).
+env-stop-start = ["env-stop", "gitops-status", "env-start"]
+# An environment's forwards (declared ones on their ports, every other
+# Service on a free one) and the in-cluster UI, in one command until Ctrl-C;
+# every kubectl stops with it, also when piceli is killed (from 0.14.7).
+access-env-ui = ["access-env-ui"]
 
 [steps.login]
 run = "{piceli} login lifecycle --kubeconfig {kubeconfig} --context {context}"
@@ -194,3 +203,22 @@ run = """{piceli} ui connect --server {ui_server} --ticket {ticket} \
 exit = [0]
 serve = true
 stdin = "pairing_secret"
+
+[steps.env-stop]
+# Records a stop request; the controller scales the environment to zero on
+# its next poll (gitops status: state stopped, reason requested).
+run = "{piceli} env stop {stop_env} --cluster infra.py:cluster"
+exit = [0]
+
+[steps.env-start]
+# Scales it back; a revision that moved while it was stopped deploys (with
+# the environment's usual approval).
+run = "{piceli} env start {stop_env} --cluster infra.py:cluster"
+exit = [0]
+
+[steps.access-env-ui]
+# JSON lines: started (forwards, and "ui": the launch URL with its token),
+# status, stopped on Ctrl-C.
+run = "{piceli} access {access_env} --cluster infra.py:cluster --ui --json"
+exit = [0]
+serve = true

@@ -352,6 +352,30 @@ def _credentials(cluster: str | None, profile: str | None) -> tuple[Path, str]:
     return found.kubeconfig, found.context
 
 
+def ui_shortcut() -> Any:
+    """The UI forward: ``127.0.0.1:8790`` to the UI Service, restarted until stopped.
+
+    An API outage makes ``kubectl port-forward`` exit over and over: the
+    forward backs off (capped at 30 s) and keeps trying instead of giving up.
+    """
+    from piceli.k8s.ui_config import RestartPolicy, UiShortcut
+
+    return UiShortcut(
+        id="ui",
+        label="Piceli UI",
+        target=f"service/{NAME}",
+        namespace=NAMESPACE,
+        local_port=PORT,
+        remote_port=PORT,
+        restart=RestartPolicy(backoff_max=30.0, forever=True),
+    )
+
+
+def launch_url(token: str) -> str:
+    """The one URL that opens the UI (holds the launch token: print it once)."""
+    return f"http://127.0.0.1:{PORT}/?token={token}"
+
+
 def access_ui(
     cluster: Annotated[
         str | None,
@@ -388,7 +412,6 @@ def access_ui(
     from piceli.k8s.access import port_conflicts
     from piceli.k8s.cli.observe import interrupts_as_keyboard_interrupt
     from piceli.k8s.observe import ForwardSupervisor
-    from piceli.k8s.ui_config import UiShortcut
 
     kubeconfig, context = _credentials(cluster, profile)
     executable = shutil.which(kubectl)
@@ -398,14 +421,7 @@ def access_ui(
         token = _launch_reader(kubeconfig, context)
     except LaunchError as error:
         reject(error.code)
-    shortcut = UiShortcut(
-        id="ui",
-        label="Piceli UI",
-        target=f"service/{NAME}",
-        namespace=NAMESPACE,
-        local_port=PORT,
-        remote_port=PORT,
-    )
+    shortcut = ui_shortcut()
     registry = ui_registry()
     if registry is not None:
         registry.reap_orphans()  # forwards of an `access ui` that crashed
@@ -424,6 +440,8 @@ def access_ui(
             "access-port-conflict",
             conflicts=[item.to_dict() for item in conflicts],
         )
+    from piceli.k8s.forward_watchdog import ParentWatchdog
+
     supervisor = ForwardSupervisor(
         kubeconfig=kubeconfig,
         context=context,
@@ -431,8 +449,9 @@ def access_ui(
         shortcuts=[shortcut],
         namespace=NAMESPACE,
         registry=registry,
+        watchdog=ParentWatchdog(),
     )
-    url = f"http://127.0.0.1:{PORT}/?token={token}"
+    url = launch_url(token)
     failed = False
     seen: tuple[Any, ...] | None = None
     try:

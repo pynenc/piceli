@@ -375,6 +375,11 @@ class Environment:
     :param auto_approve: The owner allows the controller to deploy this
         environment without a hash approval when the plan is inside the
         pipeline's ``auto_approve`` policy (like ``--main-auto-approve``).
+    :param stopped: The owner declares the environment stopped: the GitOps
+        controller scales its workloads to zero (claims and namespace kept),
+        and neither plans nor deploys it until the declaration is removed.
+        A declared stop wins over ``piceli env start`` (see
+        ``docs/gitops.md``).
 
     Example::
 
@@ -391,6 +396,8 @@ class Environment:
     auto_approve: bool = False
     #: The composition's cluster (``piceli.infra.Cluster``) it deploys to.
     cluster: Any = None
+    #: Declared stopped: no replicas, not planned or deployed (claims kept).
+    stopped: bool = False
     #: Secrets the environment's namespace provides (``needs = ["secret:NAME"]``).
     secrets: Sequence[str] = ()
     #: ``{component: {key: value}}``: overrides of the components' ``settings``.
@@ -455,6 +462,8 @@ class Environment:
         )
         if not isinstance(self.auto_approve, bool):
             raise EnvError("env-config-invalid", "auto_approve is True or False")
+        if not isinstance(self.stopped, bool):
+            raise EnvError("env-config-invalid", "stopped is True or False")
 
     def _check_composition(self) -> None:
         what = f"environment {self.name!r}"
@@ -564,6 +573,8 @@ class Environment:
             **({"secrets": list(self.secrets)} if self.secrets else {}),
             **({"settings": dict(self.settings)} if self.settings else {}),
             **({"pipeline": self.pipeline.name} if self.pipeline is not None else {}),
+            # Only when declared, so the hashes of running environments stay equal.
+            **({"stopped": True} if self.stopped else {}),
         }
 
 

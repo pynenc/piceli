@@ -529,6 +529,15 @@ promotion is a request to the controller; its declared follow policy still
 decides whether to accept it. An environment stopped by the idle policy shows
 “Idle-stopped since” and **Wake**; Wake confirms a sync request, which the
 controller processes at its next poll. The next push can wake it as well.
+A named environment has **Stop** (a reviewed request, as `piceli env stop`:
+no replicas, volumes kept, not planned or deployed while stopped) and, once
+stopped on request, **Start**; an environment the composition declares
+`stopped=True` shows why Start is unavailable (see {ref}`gitops-stop-named`).
+
+Each environment shows its **Last checks**: passed N of N with every check's
+name, when, the trigger and whether they ran after a rollout or as a
+verification (the inventory row says `Checks passed 6/6 · time`); a failing
+check shows its code, never its output.
 
 The controller publishes each environment's `Promote()` policy and, for a
 source followed with `Promote()`, its branch heads, so Promote offers exactly

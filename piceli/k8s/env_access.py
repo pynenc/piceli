@@ -2,11 +2,20 @@
 
 A composition (``infra.py``) names each environment's namespace and the
 :class:`~piceli.infra.Cluster` whose ``credentials`` profile reaches it. The
-components' ports live in their contracts (in the source repositories), so
-the environment's forwards are its live Services: one forward per Service
-port, each on a free loopback port (several environments can be reached at
-once, as branch environments are). The cluster is read with the profile's
-explicit kubeconfig and context, never the current context.
+environment's forwards are:
+
+- its **declared** forwards: an environment that deploys a
+  :class:`piceli.Pipeline` (``Environment(pipeline=...)``) forwards what its
+  app declares (``app.access.forward(...)`` on a Service or Deployment),
+  with the declared local port, id, path, health probe and restart policy;
+  a declared Service forward is kept only when the Service is live;
+- every other live Service port (contract components' ports live in their
+  contracts, in the source repositories): one forward each, on a free
+  loopback port (several environments can be reached at once, as branch
+  environments are).
+
+The cluster is read with the profile's explicit kubeconfig and context,
+never the current context.
 
 :func:`forward_shortcut` is the one place a forward is described, for this
 command and for the forwards the web UI starts.
@@ -25,7 +34,12 @@ from piceli.k8s.access import AccessTarget, AccessTargetError
 from piceli.k8s.ops.provider_factory import KubeconfigTarget
 from piceli.k8s.ui_config import UiShortcut
 
-__all__ = ["composition_env_target", "forward_shortcut", "service_forwards"]
+__all__ = [
+    "composition_env_target",
+    "declared_forwards",
+    "forward_shortcut",
+    "service_forwards",
+]
 
 _ID = re.compile(r"[^a-z0-9-]+")
 
@@ -78,6 +92,31 @@ def service_forwards(
             remote_port=remote,
         )
         for name, remote in sorted(set(found))
+    )
+
+
+def declared_forwards(
+    environment: Any, services: Iterable[Mapping[str, Any]]
+) -> tuple[UiShortcut, ...]:
+    """The forwards ``environment``'s app declares, pinned to its namespace.
+
+    Only an environment that deploys a Pipeline declares forwards; a Service
+    forward whose Service is not live is left out.
+    """
+    pipeline = getattr(environment, "pipeline", None)
+    app = getattr(pipeline, "app", None)
+    if app is None or not callable(getattr(app, "shortcuts", None)):
+        return ()
+    live = {
+        (raw.get("metadata") or {}).get("name")
+        for raw in services
+        if isinstance(raw, Mapping)
+    }
+    return tuple(
+        item
+        for item in app.shortcuts(environment.namespace)
+        if not item.target.startswith("service/")
+        or item.target.split("/", 1)[1] in live
     )
 
 
@@ -160,7 +199,16 @@ def composition_env_target(
             code if isinstance(code, str) else "access-target-invalid",
             f"the services of {environment.namespace} could not be read",
         ) from None
-    shortcuts = service_forwards(environment.namespace, live, port=port or free_port)
+    declared = declared_forwards(environment, live)
+    covered = {(item.target, item.remote_port) for item in declared}
+    taken = {item.id for item in declared}
+    shortcuts = declared + tuple(
+        item
+        for item in service_forwards(
+            environment.namespace, live, port=port or free_port
+        )
+        if (item.target, item.remote_port) not in covered and item.id not in taken
+    )
     return AccessTarget(
         name=f"{composition.name} environment {env}",
         namespace=environment.namespace,
@@ -170,7 +218,11 @@ def composition_env_target(
         shortcuts=shortcuts,
         workloads=tuple(
             dict.fromkeys(
-                ("Service", item.target.split("/", 1)[1]) for item in shortcuts
+                (
+                    "Service" if item.target.startswith("service/") else "Deployment",
+                    item.target.split("/", 1)[1],
+                )
+                for item in shortcuts
             )
         ),
     )

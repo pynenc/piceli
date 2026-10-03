@@ -238,6 +238,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`gitops-config-invalid`](#error-gitops-config-invalid) | gitops | no |
 | [`gitops-controller-locked`](#error-gitops-controller-locked) | gitops | yes |
 | [`gitops-empty`](#error-gitops-empty) | gitops | no |
+| [`gitops-env-stop-declared`](#error-gitops-env-stop-declared) | gitops | no |
 | [`gitops-git-failed`](#error-gitops-git-failed) | gitops | yes |
 | [`gitops-image-unpinned`](#error-gitops-image-unpinned) | gitops | no |
 | [`gitops-image-unresolved`](#error-gitops-image-unresolved) | gitops | no |
@@ -4097,6 +4098,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Nothing to hand off.** The render has no object left to publish (for example only Secrets, left out by `--secrets external`).
 
 - **Fix:** Check the target and `--env`; `piceli render` shows what it renders.
+- **Retry-safe:** no
+
+(error-gitops-env-stop-declared)=
+### `gitops-env-stop-declared`
+
+**Environment declared stopped.** `piceli env start ENV` named an environment the composition declares `Environment(stopped=True)`: the declaration wins over a start request, so the controller keeps it stopped.
+
+- **Fix:** Remove `stopped=True` from the environment in the composition and push it; the controller starts it on its next poll.
 - **Retry-safe:** no
 
 (error-gitops-git-failed)=

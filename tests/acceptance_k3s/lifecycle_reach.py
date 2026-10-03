@@ -26,9 +26,7 @@ views. The pairing secret, like the launch token, is never printed.
 from __future__ import annotations
 
 import json
-import os
 import shutil
-import signal
 import subprocess
 import time
 import urllib.error
@@ -540,8 +538,9 @@ class ReachStages:
     def _cli_forward(self, env: str, *, left_behind: bool) -> list[str]:
         """``piceli access`` of ``env``; a GET through it; then stop it.
 
-        ``left_behind``: piceli is killed (SIGKILL), its kubectl keeps the
-        port, ``access stop --stale`` must stop it. Otherwise Ctrl-C, and
+        ``left_behind``: piceli's process group (piceli and its forward
+        watchdog) is killed (SIGKILL), its kubectl keeps the port, ``access
+        stop --stale`` must stop it. Otherwise Ctrl-C, and
         ``access stop --stale`` finds nothing. Either way nothing remains.
         """
         values = {"access_env": env}
@@ -569,7 +568,9 @@ class ReachStages:
                 )
             kubectl = [p for p, c in _descendants(served.pid) if "port-forward" in c]
             if left_behind:
-                os.kill(served.pid, signal.SIGKILL)
+                # piceli and its forward watchdog (its process group): a
+                # killed piceli alone no longer leaves its kubectl (0.14.7).
+                kill_group(served.pid)
                 served.process.wait(timeout=10)
                 time.sleep(2)
                 held = port_open(ACCESS_PORT) and any(alive(p) for p in kubectl)

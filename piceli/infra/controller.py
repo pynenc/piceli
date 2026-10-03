@@ -34,6 +34,20 @@ followed refs, last poll), ``envs.<env>.revision`` and
 ``envs.<env>.components.<name>`` (source, commit, digest, state, health; an
 output image of a pipeline environment is a component).
 
+A named environment can be **stopped** (0.14.7): declared with
+``Environment(stopped=True)`` or requested with ``piceli env stop ENV``
+(``piceli env start ENV`` ends it). While stopped its workloads run no
+replicas (claims and objects kept) and it is neither planned nor deployed:
+its record is ``state: stopped`` with ``reason`` ``declared`` or
+``requested``. **The declaration wins**: a start request of a declared stop
+is refused (``gitops-env-stop-declared``); a requested stop lasts until
+``env start``, also after a declared stop is removed. Starting scales the
+workloads back and deploys the current revision when it moved meanwhile.
+
+After every deploy step the record keeps ``checks``: the outcome of the last
+checks a run of it executed (passed or failed, each check's name and code,
+when, the trigger and the run), also after a rollout.
+
 Importing this module is side-effect free.
 """
 
@@ -115,6 +129,16 @@ FINAL_CODES = frozenset(
 )
 #: How often the controller measures the in-cluster registry's claim (seconds).
 REGISTRY_USAGE_SECONDS = 600
+#: Why a named environment is stopped (its record's ``reason``).
+STOP_REASONS = ("declared", "requested")
+#: Failed attempts of one revision a record (and its successful run) keeps.
+MAX_FAILED_ATTEMPTS = 3
+#: Characters of a failed attempt's log tail kept.
+ATTEMPT_TAIL_CHARS = 2000
+#: Workload kinds whose change in a plan rolls their pods.
+_ROLLING_KINDS = frozenset(
+    {"Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob", "ReplicaSet"}
+)
 _PINNED = re.compile(r"[a-z0-9][a-z0-9./:_-]*@sha256:[0-9a-f]{64}")
 _LABEL = re.compile(r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?")
 _QUANTITY = re.compile(r"[0-9]+(?:Ki|Mi|Gi|Ti)")
@@ -331,6 +355,10 @@ class CompositionPorts(Protocol):
 
     def env_stop(self, pipeline: Any, name: str) -> None: ...
 
+    # Optional (0.14.7): a named environment the owner stops and starts
+    # (``env_stop(pipeline, name, reason="declared"|"requested")``).
+    # def env_start(self, pipeline: Any, name: str) -> None: ...
+
 
 class DefaultCompositionPorts:
     """The real adapters: the 0.14 environment ports plus a builder.
@@ -415,8 +443,14 @@ class DefaultCompositionPorts:
                 for job in removed:
                     self.log(f"{name}: removed kept build Job {job}")
 
-    def env_stop(self, pipeline: Any, name: str) -> None:
-        self.envs.env_stop(pipeline, name)
+    def env_stop(self, pipeline: Any, name: str, reason: str = "idle") -> None:
+        if reason == "idle":
+            self.envs.env_stop(pipeline, name)
+        else:
+            self.envs.env_stop(pipeline, name, reason=reason)
+
+    def env_start(self, pipeline: Any, name: str) -> None:
+        self.envs.env_start(pipeline, name)
 
     def namespace_live(self, namespace: str) -> bool | None:
         live = getattr(self.envs, "namespace_live", None)
@@ -521,7 +555,14 @@ class CompositionController:
         self.clock = clock
         self.log = log
         self.state = load_state(state_dir)
-        for key in ("sources", "env_seen", "promoted", "forced", "composition"):
+        for key in (
+            "sources",
+            "env_seen",
+            "promoted",
+            "forced",
+            "composition",
+            "stops",
+        ):
             self.state.setdefault(key, {})
         self.refs: dict[str, RemoteRefs] = {}
         self.busy = False
@@ -529,8 +570,11 @@ class CompositionController:
         # The deploy step being recorded in the history (see _record_step).
         self._built: list[str] = []
         self._last_outcome: EnvOutcome | None = None
+        self._step_started: str | None = None
+        self._step_env: str | None = None
         self._history_digest: str | None = None
         self._runs: Any = None
+        self._step_runs: Any = None  # the current step's run (its own cache)
 
     # ------------------------------------------------------------ helpers
     @property
@@ -583,9 +627,14 @@ class CompositionController:
             "attempts": 0,
             "next_attempt_at": None,
             "plan_hash": None,
-            "approved_hash": None,
+            # An approval not applied yet stands while the plan keeps its
+            # hash (an unrelated push): env_up refuses a changed plan and the
+            # controller asks again (replan_stale).
+            "approved_hash": (record or {}).get("approved_hash"),
             "reason": None,
             "failure": None,
+            # Failed attempts of the previous revision belong to its runs.
+            "failed_attempts": [],
             "pushed_at": _iso(now),
             "updated_at": _iso(now),
         }
@@ -603,6 +652,8 @@ class CompositionController:
         attempts = int(record.get("attempts") or 0) + 1
         deleting = record.get("state") == "deleting"
         record["failure"] = None if error is None else failure_detail(error)
+        if not deleting:
+            self._remember_attempt(record, reason, attempts)
         # What runs after a failed step is uncertain: the next plan asks.
         record["deployed_plan_hash"] = None
         if not deleting and (
@@ -628,6 +679,157 @@ class CompositionController:
             next_attempt_at=self.clock() + delay,
         )
         self.log(f"{record['branch']}: {reason}; retry in {delay}s")
+
+    def _remember_attempt(
+        self, record: dict[str, Any], reason: str, attempt: int
+    ) -> None:
+        """Keep a failed attempt of this revision (its code and bounded log tail).
+
+        A retry that succeeds clears ``failure``; its run (history) and the
+        record keep the failed attempts before it (:data:`MAX_FAILED_ATTEMPTS`,
+        each tail at most :data:`ATTEMPT_TAIL_CHARS`).
+        """
+        failure = record.get("failure") or {}
+        entry: dict[str, Any] = {
+            "attempt": attempt,
+            "at": _iso(self.clock()),
+            "reason": reason,
+        }
+        tail = failure.get("log_tail") if isinstance(failure, Mapping) else None
+        if isinstance(tail, str) and tail:
+            entry["log_tail"] = tail[-ATTEMPT_TAIL_CHARS:]
+        if isinstance(failure, Mapping) and isinstance(failure.get("kept_job"), str):
+            entry["kept_job"] = failure["kept_job"]
+        kept = [
+            item
+            for item in record.get("failed_attempts") or []
+            if isinstance(item, Mapping)
+        ]
+        record["failed_attempts"] = [*kept, entry][-MAX_FAILED_ATTEMPTS:]
+
+    # ------------------------------------------------------------ stops
+    def _stop_reason(self, instance: _Instance) -> str | None:
+        """``declared``, ``requested`` or ``None``: why a named environment is stopped.
+
+        The declaration (``Environment(stopped=True)``) wins over a request.
+        """
+        if not isinstance(instance.env, Environment):
+            return None
+        if instance.env.stopped:
+            return "declared"
+        if instance.name in self.state["stops"]:
+            return "requested"
+        return None
+
+    def _stops(self) -> None:
+        """Stop the named environments the owner stopped; start the others."""
+        for instance in self._instances():
+            if not isinstance(instance.env, Environment):
+                continue
+            why = self._stop_reason(instance)
+            record = self._envs().get(instance.name)
+            stopped = (
+                record is not None
+                and record.get("state") == "stopped"
+                and record.get("reason") in STOP_REASONS
+            )
+            if why is not None and not stopped:
+                if record is None:
+                    record = self._envs().setdefault(
+                        instance.name,
+                        {"branch": instance.name, "state": "pending", "revision": {}},
+                    )
+                at = record.get("next_attempt_at")
+                if record.get("stop_failed") and at is not None and at > self.clock():
+                    continue
+                reason = why
+
+                def stop(item: dict[str, Any], reason: str = reason) -> None:
+                    self._stop_owner(item, reason)
+
+                self._step(record, stop)
+            elif why is not None and record is not None and record.get("reason") != why:
+                self._set(record, reason=why, stop=self._stop_detail(instance, why))
+            elif why is None and stopped and record is not None:
+                self._step(record, self._start_owner)
+            elif why is None and record is not None and record.pop("stop_failed", None):
+                self._set(record, next_attempt_at=None, attempts=0, reason=None)
+
+    def _stop_detail(self, instance: _Instance, why: str) -> dict[str, Any]:
+        request = self.state["stops"].get(instance.name) or {}
+        return {
+            "by": why,
+            "via": request.get("via") if why == "requested" else "declaration",
+            "at": request.get("at") if why == "requested" else None,
+        }
+
+    def _stop_owner(self, record: dict[str, Any], why: str) -> None:
+        """Scale a named environment to zero (declared or requested); keep it."""
+        name = record["branch"]
+        instance = self._instance(name)
+        assert instance is not None
+        try:
+            self.ports.env_stop(  # type: ignore[call-arg]
+                self._down_pipeline(instance.env), name, reason=why
+            )
+        except Exception as error:
+            attempts = int(record.get("attempts") or 0) + 1
+            self._set(
+                record,
+                reason=error_code(error),
+                stop_failed=True,
+                attempts=attempts,
+                next_attempt_at=self.clock() + backoff(self.config, attempts),  # type: ignore[arg-type]
+            )
+            self.log(f"{name}: stop failed ({record['reason']})")
+            return
+        record.pop("pending_plan", None)
+        record.pop("stop_failed", None)
+        self._set(
+            record,
+            state="stopped",
+            reason=why,
+            stop=self._stop_detail(instance, why),
+            health="stopped",
+            plan_hash=None,
+            approved_hash=None,
+            # Kept: scaling to zero changes no manifest, so the release the
+            # owner approved is the one that starts again (not asked twice).
+            attempts=0,
+            next_attempt_at=None,
+            stopped_at=_iso(self.clock()),
+        )
+        self.log(f"{name}: stopped ({why}); scaled to zero, claims kept")
+
+    def _start_owner(self, record: dict[str, Any]) -> None:
+        """Scale a named environment back; deploy its revision when it moved."""
+        name = record["branch"]
+        instance = self._instance(name)
+        assert instance is not None
+        start = getattr(self.ports, "env_start", None)
+        if record.get("namespace") and callable(start):
+            start(self._down_pipeline(instance.env), name)
+        record.pop("stop", None)
+        record.pop("stopped_at", None)
+        revision, used, missing = self._resolve(instance)
+        deployed = record.get("deployed_revision")
+        if not missing and deployed and dict(deployed) == revision:
+            self._set(
+                record,
+                state="deployed",
+                reason=None,
+                health="healthy",
+                attempts=0,
+                next_attempt_at=None,
+            )
+            self.log(f"{name}: started; scaled back at its deployed revision")
+            return
+        self._set(record, state="pending", reason=None, health="unknown")
+        if missing:
+            self.log(f"{name}: started; waiting for a ref of {', '.join(missing)}")
+            return
+        record["revision"] = None  # wanted again: the revision moved while stopped
+        self._want(name, revision, used, "start")
 
     # ------------------------------------------------------------ instances
     def _instances(self) -> list[_Instance]:
@@ -790,8 +992,19 @@ class CompositionController:
             forced = self.state["forced"].pop(instance.name, None)
             if forced is not None:
                 triggers.append(forced["trigger"])
+            if self._stop_reason(instance) is not None:
+                # Stopped: never planned or deployed; the start deploys the
+                # revision of that moment when it moved.
+                if triggers:
+                    self.log(f"{instance.name}: stopped; {triggers[0]} not deployed")
+                continue
             if not triggers:
                 continue
+            if instance.branch is not None:
+                # A branch environment's run is triggered by its branch's push
+                # when it is among them (not by a source it follows on main).
+                own = [t for t in triggers if t.endswith(f"/{instance.branch}")]
+                triggers = own + [t for t in triggers if t not in own]
             revision, used, missing = self._resolve(instance)
             if missing:
                 record = self._envs().setdefault(
@@ -834,7 +1047,11 @@ class CompositionController:
             self.state["last_error"] = error.code
             return
         handled: list[str] = []
-        for key, body in sorted(pending.items()):
+        # A stop and a start waiting together: the later one wins.
+        ordered = sorted(
+            pending.items(), key=lambda item: (str(item[1].get("at") or ""), item[0])
+        )
+        for key, body in ordered:
             handled.append(key)
             kind = body.get("kind")
             try:
@@ -844,6 +1061,8 @@ class CompositionController:
                     self._promote(body)
                 elif kind == "sync":
                     self._sync(body)
+                elif kind in {"stop", "start"}:
+                    self._stop_request(body, start=kind == "start")
                 else:
                     raise GitOpsError("gitops-request-invalid", "unknown request kind")
             except GitOpsError as error:
@@ -888,6 +1107,31 @@ class CompositionController:
                 "at": _iso(self.clock()),
             },
         )
+
+    def _stop_request(self, body: Mapping[str, Any], *, start: bool) -> None:
+        """``piceli env stop|start ENV``: remember (or forget) the owner's stop."""
+        name = str(body.get("env") or "")
+        instance = self._instance(name)
+        if instance is None or not isinstance(instance.env, Environment):
+            raise GitOpsError(
+                "gitops-request-invalid",
+                "stop and start name a named environment of the composition",
+            )
+        if start:
+            if instance.env.stopped:
+                raise GitOpsError(
+                    "gitops-env-stop-declared",
+                    f"{name} is declared stopped (Environment(stopped=True)); "
+                    "remove the declaration to start it",
+                )
+            self.state["stops"].pop(name, None)
+            return
+        via = body.get("via") if body.get("via") in ("cli", "ui") else None
+        at = body.get("at") if isinstance(body.get("at"), str) else None
+        self.state["stops"][name] = {
+            "via": via,
+            "at": (at or _iso(self.clock()))[:32],
+        }
 
     def _promote(self, body: Mapping[str, Any]) -> None:
         name = str(body.get("env") or "")
@@ -1053,6 +1297,7 @@ class CompositionController:
             components[component.name] = {
                 "source": source,
                 "commit": commit,
+                **({"sources": {source: commit}} if source and commit else {}),
                 "source_digest": digest,
                 "digest": None if cached is None else cached.manifest_digest,
                 "image": None if cached is None else cached.pull_ref,
@@ -1173,10 +1418,12 @@ class CompositionController:
                     }
                 else:
                     images[image.name] = cached
-                primary = next(iter(sorted(key.sources)), repo)
+                primary, built_at = self._built_from(
+                    previous.get(image.name), key, record.get("trigger"), repo, revision
+                )
                 components[image.name] = {
                     "source": primary,
-                    "commit": revision.get(primary),
+                    "commit": built_at,
                     "sources": dict(sorted(key.sources.items())),
                     "source_digest": key.key,
                     "digest": None if cached is None else cached.manifest_digest,
@@ -1251,6 +1498,47 @@ class CompositionController:
         )
         self._outcome(record, outcome)
 
+    @staticmethod
+    def _built_from(
+        previous: Any,
+        key: Any,
+        trigger: Any,
+        repo: str,
+        revision: Mapping[str, str],
+    ) -> tuple[str, str | None]:
+        """``(source, commit)`` an image was built from: the source whose change
+        triggered its build (``sources`` lists every source's commit).
+
+        An image whose key did not change keeps the source and commit it was
+        built at. A rebuilt one names the source whose commit changed (the
+        run's trigger first when several did); on a first build, the trigger's
+        source when the image reads it, else the first source it reads.
+        """
+        sources = dict(key.sources)
+        before = previous if isinstance(previous, Mapping) else {}
+        if (
+            before.get("source_digest") == key.key
+            and before.get("source") in sources
+            and isinstance(before.get("commit"), str)
+        ):
+            return str(before["source"]), str(before["commit"])
+        match = re.match(r"(?:push|tag) ([^/ ]+)/", trigger or "")
+        triggered = match.group(1) if match else None
+        found = before.get("sources")
+        old: Mapping[str, Any] = found if isinstance(found, Mapping) else {}
+        changed = [
+            name
+            for name in sorted(sources)
+            if old.get(name) not in (None, sources[name])
+        ]
+        if triggered in changed or (not changed and triggered in sources):
+            chosen = str(triggered)
+        elif changed:
+            chosen = changed[0]
+        else:
+            chosen = next(iter(sorted(sources)), repo)
+        return chosen, sources.get(chosen) or revision.get(chosen)
+
     def _down_pipeline(self, env: EnvItem) -> Any:
         """A pipeline that only knows the environment (for env_down, env_stop)."""
         if env.pipeline is not None:
@@ -1264,13 +1552,14 @@ class CompositionController:
         now = _iso(self.clock())
         components = record.get("components") or {}
         if outcome.state == "deployed":
-            for entry in components.values():
-                if entry["state"] == "rolling":
-                    entry["state"] = "synced"
+            action = outcome.action or "deployed"
+            rolled = self._rolled(components, action, self._step_run(outcome))
+            for key, entry in components.items():
+                if entry["state"] in {"rolling", "synced"}:
+                    entry["state"] = "synced" if key in rolled else "unchanged"
                 entry["deployed_image"] = entry["image"]
                 entry["health"] = "healthy"
                 entry["updated_at"] = now
-            action = outcome.action or "deployed"
             pruned = pruned_fields(outcome)
             self._set(
                 record,
@@ -1294,7 +1583,7 @@ class CompositionController:
                     else record.get("verification")
                 ),
             )
-            changed = sorted(k for k, v in components.items() if v["state"] == "synced")
+            changed = sorted(rolled)
             if action == "verified":
                 self.log(
                     f"{record['branch']}: verified (checks changed); rolled "
@@ -1327,6 +1616,127 @@ class CompositionController:
                 if entry["state"] == "rolling":
                     entry["state"] = "failed"
             self._fail(record, outcome.reason or "gitops-step-failed")
+
+    @staticmethod
+    def _rolled(
+        components: Mapping[str, Any], action: str, run: Mapping[str, Any] | None
+    ) -> set[str]:
+        """The components a deploy actually rolled (new digest or new template).
+
+        Nothing when it applied nothing (``verified``, ``unchanged``). A
+        component rolled when its image digest changed (not its pull
+        reference: the same digest under another registry name rolls
+        nothing) or, with the run's plan, when its workload changed; a plan
+        that changed no workload rolled nothing.
+        """
+        if action != "deployed":
+            return set()
+
+        def digest(reference: Any) -> str | None:
+            return reference.rpartition("@")[2] if isinstance(reference, str) else None
+
+        changed = {
+            key
+            for key, entry in components.items()
+            if entry.get("deployed_image") is None
+            or digest(entry.get("deployed_image")) != digest(entry.get("image"))
+        }
+        plan = (run or {}).get("plan")
+        if not isinstance(plan, Mapping):
+            return changed
+        changes = [
+            item for item in plan.get("changes") or [] if isinstance(item, Mapping)
+        ]
+        workloads = {
+            str(item.get("name"))
+            for item in changes
+            if item.get("kind") in _ROLLING_KINDS
+            and item.get("operation") not in {"delete", "no-op"}
+        }
+        complete = len(changes) >= int(plan.get("changes_total") or 0)
+        if complete and not workloads:
+            return set()
+        return changed | (workloads & set(components))
+
+    def _step_run(self, outcome: EnvOutcome | None) -> dict[str, Any] | None:
+        """The run journal entry of the current deploy step (``None``: none).
+
+        Its id when the deploy result named it; else the run its environment's
+        journal created during the step (one environment deploys at a time).
+        """
+        from piceli.gitops import history
+
+        record = self._envs().get(self._step_env or "")
+        if record is None or self._step_started is None:
+            return None
+        try:
+            if self._step_runs is None:
+                self._step_runs = history.RunReader()
+            runs = self._step_runs.runs(
+                history.run_dirs(
+                    self.state_dir,
+                    str(record["branch"]),
+                    record.get("namespace")
+                    if isinstance(record.get("namespace"), str)
+                    else None,
+                )
+            )
+        except (OSError, ValueError):
+            return None
+        run_id = getattr(outcome, "run_id", None)
+        if run_id:
+            return next((run for run in runs if run.get("run_id") == run_id), None)
+        start = _seconds(self._step_started)
+        for run in runs:  # newest first
+            began = history._when(run.get("started_at")).timestamp()
+            if start is not None and began >= start - 1:
+                return run
+        return None
+
+    def _checks(
+        self, record: dict[str, Any], run: Mapping[str, Any] | None, trigger: Any
+    ) -> None:
+        """Keep the last checks a run of this environment executed (status ``checks``)."""
+        checks = (run or {}).get("checks")
+        if not isinstance(checks, Mapping):
+            return
+        results = [
+            item for item in checks.get("results") or [] if isinstance(item, Mapping)
+        ]
+        if not results:
+            return  # skipped (no checks, release already verified): the last stand
+        passed = sum(1 for item in results if item.get("passed"))
+        record["checks"] = {
+            "state": "passed"
+            if checks.get("passed") and passed == len(results)
+            else "failed",
+            "passed": passed,
+            "total": len(results),
+            "results": [
+                {
+                    "name": str(item.get("name") or "check")[:128],
+                    "passed": bool(item.get("passed")),
+                    **({"code": str(item["code"])[:64]} if item.get("code") else {}),
+                }
+                for item in results
+            ],
+            "failed": [
+                str(item.get("name") or "check")[:128]
+                for item in results
+                if not item.get("passed")
+            ],
+            "at": (run or {}).get("finished_at") or _iso(self.clock()),
+            "trigger": trigger if isinstance(trigger, str) else None,
+            "run_id": (run or {}).get("run_id"),
+            "action": record.get("last_action")
+            if record.get("state") == "deployed"
+            else None,
+            **(
+                {"rollback": dict(checks["rollback"])}
+                if isinstance(checks.get("rollback"), Mapping)
+                else {}
+            ),
+        }
 
     def _degraded(self, record: dict[str, Any], verification: dict[str, Any]) -> None:
         """Failing checks on an unchanged release: keep it running, mark it degraded.
@@ -1384,7 +1794,7 @@ class CompositionController:
         return self.state_dir / "pipelines" / rule.name / "branches"
 
     #: Per-environment memory besides its record (keyed by environment name).
-    _MEMORY = ("env_seen", "promoted", "forced", "rebuild")
+    _MEMORY = ("env_seen", "promoted", "forced", "rebuild", "stops")
 
     def _forget(self, name: str) -> None:
         """Drop what the controller remembers of a removed environment."""
@@ -1490,6 +1900,8 @@ class CompositionController:
                 return False
             if record.get("state") != "deleting" and not record.get("revision"):
                 return False
+            if record.get("stop_failed"):
+                return False  # to be stopped: never deployed meanwhile
             at = record.get("next_attempt_at")
             return at is None or at <= now
 
@@ -1511,6 +1923,7 @@ class CompositionController:
         deploy = work == self._deploy
         started = (_iso(self.clock()), record.get("trigger"), record.get("approval"))
         self._built, self._last_outcome = [], None
+        self._step_started, self._step_env = started[0], str(record.get("branch"))
         try:
             work(record)
         except Exception as error:  # one bad environment never stops the loop
@@ -1538,6 +1951,18 @@ class CompositionController:
         from piceli.gitops import history
 
         outcome = self._last_outcome
+        run = self._step_run(outcome)
+        self._checks(record, run, trigger)
+        if (
+            approval is None
+            and outcome is not None
+            and record.get("state") == "deployed"
+            and record.get("last_action") == "deployed"
+            and record.get("deployed_plan_hash") is None
+        ):
+            # Applied without an owner's approval: the policy covered it
+            # (the pipeline's auto_approve or the environment's).
+            approval = {"via": "policy", "at": None}
         if record.get("state") == "approval-required" and outcome is not None:
             record["pending_plan"] = (
                 {**dict(outcome.plan), "plan_hash": outcome.plan_hash}
@@ -1559,6 +1984,8 @@ class CompositionController:
                 built=[item for item in self._built if item != "mirror"],
             ),
         )
+        if record.get("state") == "deployed":
+            record["failed_attempts"] = []  # kept by this run's history event
         if record.get("approved_hash") is None:
             record.pop("approval", None)  # used (or replaced by a new plan)
 
@@ -1592,6 +2019,7 @@ class CompositionController:
                 self.log(f"stale state not swept ({type(error).__name__})")
         self.state["baseline"] = True
         save_state(self.state_dir, self.state)
+        self._stops()
         for record in self._due():
             if record.get("state") == "deleting":
                 self._step(record, self._teardown)
@@ -1771,6 +2199,8 @@ class CompositionController:
                             for _, rules in item.sources
                             for rule in rules
                         ),
+                        # Added in 0.14.7: declared Environment(stopped=True).
+                        "stopped": isinstance(item, Environment) and item.stopped,
                     }
                     for item in loaded.environments
                 ],

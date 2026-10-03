@@ -53,6 +53,8 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli env down`](#cli-env-down) | Delete BRANCH's environment: its claims, namespace and volumes (never main's). | writes | yes |
 | [`piceli env push`](#cli-env-push) | Record a laptop-built digest for a branch environment (plan, then --approve HASH). | writes | yes |
 | [`piceli env seed`](#cli-env-seed) | Restore main's latest restore point into BRANCH's claims (replaces their content). | writes | yes |
+| [`piceli env start`](#cli-env-start) | Ask the GitOps controller to start named environment ENV again. | writes | no |
+| [`piceli env stop`](#cli-env-stop) | Ask the GitOps controller to stop named environment ENV (no replicas, claims kept). | writes | no |
 | [`piceli env up`](#cli-env-up) | Deploy BRANCH into its namespace (created when absent), isolated. | writes | yes |
 | [`piceli envs`](#cli-envs) | List every environment: branch, namespace, commit, deploy state, health, age. | reads | no |
 | [`piceli explain`](#cli-explain) | Explain an error code: cause, fix and whether a retry can succeed. | none | no |
@@ -140,7 +142,8 @@ Forward the app's declared ports to 127.0.0.1 and keep them healthy.
 | `--dashboard` | integer |  | Also serve the local dashboard on this loopback port, with these forwards as its shortcuts |
 | `--ui-config` | path | env `PICELI__UI_CONFIG` | Optional dashboard TOML (badges, tiers, extra shortcuts) |
 | `--pipeline` | text | env `PICELI_PIPELINE` | With a branch name as TARGET: the pipeline declaring envs=EnvConfig(...) (MODULE:ATTR; default $PICELI_PIPELINE). A branch's forwards get free local ports |
-| `--cluster` | text |  | With an environment name as TARGET: the composition's Cluster (infra.py:ATTR). Forwards every Service port of that environment on free local ports, with the cluster's credentials profile |
+| `--cluster` | text |  | With an environment name as TARGET: the composition's Cluster (infra.py:ATTR). Forwards the environment's declared forwards and every other Service port of it on free local ports, with the cluster's credentials profile |
+| `--ui` | boolean | `False` | With --cluster: also forward the in-cluster UI (127.0.0.1:8790) and print its launch URL, as `piceli access ui` does |
 
 **Contract**
 
@@ -977,6 +980,54 @@ Restore main's latest restore point into BRANCH's claims (replaces their content
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
 - **Output contract:** conforms
 - **Notes:** Uses the restore machinery of `piceli restore`: verifies the archives, stops the branch's writers, empties and restores each claim, checks the content digest in the cluster and starts the writers again. Never reads or writes main's claims (the archives are local). Refuses the main branch (env-main-protected).
+
+(cli-env-start)=
+### `piceli env start`
+
+Ask the GitOps controller to start named environment ENV again.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `ENV` | text | required |  |
+| `--cluster` | text |  | The composition's Cluster (infra.py:CLUSTER); its credentials profile reaches the controller |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--state-dir` | path |  | A local controller's state directory instead of a cluster |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+
+**Contract**
+
+- **Reads:** --cluster infra.py:CLUSTER (its credentials profile) or --state-dir
+- **Writes:** --state-dir requests (local controller)
+- **Cluster:** writes
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Writes a start request; a deploy it needs asks for the usual approval. Refused (gitops-env-stop-declared) for an environment the composition declares Environment(stopped=True): the declaration wins.
+
+(cli-env-stop)=
+### `piceli env stop`
+
+Ask the GitOps controller to stop named environment ENV (no replicas, claims kept).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `ENV` | text | required |  |
+| `--cluster` | text |  | The composition's Cluster (infra.py:CLUSTER); its credentials profile reaches the controller |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--state-dir` | path |  | A local controller's state directory instead of a cluster |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+
+**Contract**
+
+- **Reads:** --cluster infra.py:CLUSTER (its credentials profile) or --state-dir
+- **Writes:** --state-dir requests (local controller)
+- **Cluster:** writes
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Writes a stop request to the ConfigMap piceli-gitops-requests; the controller scales the environment's workloads to zero on its next poll and shows it stopped (reason requested) in gitops status. The owner's command is the decision: no plan hash. `piceli env start ENV` ends it. An unknown environment is dropped (gitops-request-invalid in gitops status).
 
 (cli-env-up)=
 ### `piceli env up`

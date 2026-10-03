@@ -271,7 +271,11 @@ class Ports(Protocol):
         ...
 
     def env_stop(self, pipeline: Any, branch: str) -> None:
-        """Scale an idle branch environment to zero (``EnvConfig(idle_stop=...)``)."""
+        """Scale an idle branch environment to zero (``EnvConfig(idle_stop=...)``).
+
+        A composition controller also passes ``reason="declared"`` or
+        ``"requested"`` for a named environment the owner stopped.
+        """
         ...
 
     def namespace_live(self, namespace: str) -> bool | None:
@@ -523,12 +527,22 @@ class DefaultPorts:
             return None  # unknown: never delete on it
         return isinstance(found, dict)
 
-    def env_stop(self, pipeline: Any, branch: str) -> None:
+    def env_stop(self, pipeline: Any, branch: str, reason: str = "idle") -> None:
+        """Scale ``branch`` to zero: ``idle`` (a branch environment's idle stop),
+        ``declared`` or ``requested`` (a named environment the owner stopped)."""
         result = self._envs().env_stop(
-            pipeline, branch, approve_if_policy=True, reason="idle"
+            pipeline,
+            branch,
+            approve_if_policy=True,
+            reason=reason,
+            named=reason in {"declared", "requested"},
         )
         if result.get("state") == "approval-required":
             raise GitOpsError(
                 "gitops-step-failed",
                 f"stopping the environment of {branch} needs EnvConfig(idle_stop=...)",
             )
+
+    def env_start(self, pipeline: Any, branch: str) -> None:
+        """Scale a stopped environment back to its recorded replicas."""
+        self._envs().env_start(pipeline, branch)

@@ -45,6 +45,7 @@ if TYPE_CHECKING:
     from piceli.envs.ops import (
         env_down,
         env_pipeline,
+        env_start,
         env_stop,
         env_up,
         list_envs,
@@ -66,6 +67,7 @@ __all__ = [
     "Tag",
     "env_down",
     "env_pipeline",
+    "env_start",
     "env_stop",
     "env_up",
     "list_envs",
@@ -76,6 +78,7 @@ __all__ = [
 _OPS = {
     "env_down",
     "env_pipeline",
+    "env_start",
     "env_stop",
     "env_up",
     "list_envs",

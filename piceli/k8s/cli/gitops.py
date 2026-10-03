@@ -982,6 +982,14 @@ def status(
             line += "; degraded, failing checks: " + (", ".join(failing) or "?")
         elif env.get("last_action") == "verified":
             line += f"; verified ({verification.get('trigger')}), rolled nothing"
+        checks = env.get("checks") or {}
+        if checks.get("total"):
+            line += (
+                f"; checks {checks.get('state')} {checks.get('passed')}/"
+                f"{checks.get('total')} at {checks.get('at')}"
+            )
+            if checks.get("failed"):
+                line += f" (failing: {', '.join(checks['failed'])})"
         say(line)
     if as_json:
         emit_json(body)

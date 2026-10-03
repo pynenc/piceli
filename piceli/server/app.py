@@ -793,6 +793,14 @@ def create_app(
     def named_environment_wake(env: str) -> dict[str, str]:
         return named_actions().wake(env)
 
+    @app.post(f"{api}/composition/environments/{{env}}/stop", status_code=202)
+    def named_environment_stop(env: str) -> dict[str, str]:
+        return named_actions().stop(env)
+
+    @app.post(f"{api}/composition/environments/{{env}}/start", status_code=202)
+    def named_environment_start(env: str) -> dict[str, str]:
+        return named_actions().start(env)
+
     @app.get(f"{api}/applications", response_model=ApplicationPage)
     def applications(cursor: str | None = None) -> ApplicationPage:
         return service.applications(cursor)

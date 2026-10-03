@@ -14,7 +14,12 @@ ConfigMap ``piceli-gitops-status``) and keeps only the documented fields:
   never the checks' free-text detail);
 - ``envs.<env>.trigger``, ``approval`` (``via``, ``at``) and, while it waits
   for approval, ``pending_plan`` (the plan hash, object counts and changed
-  objects by operation, kind and name).
+  objects by operation, kind and name);
+- ``envs.<env>.checks`` (0.14.7): the last checks a run executed, also after
+  a rollout (``state``, ``passed``/``total``, each check's ``name``,
+  ``passed`` and ``code``, ``at``, ``trigger``, ``run_id``; never a detail
+  line) and ``stop`` (``by``: ``declared`` or ``requested``, ``via``,
+  ``at``) of a stopped named environment.
 
 The run history (``piceli.gitops-history.v1``, the ConfigMap
 ``piceli-gitops-history``) is projected by
@@ -149,6 +154,48 @@ def _verification(value: Any) -> dict[str, Any] | None:
     }
 
 
+def _checks(value: Any) -> dict[str, Any] | None:
+    """The last checks of an environment's runs, without their detail lines."""
+    if not isinstance(value, Mapping):
+        return None
+    results = value.get("results")
+    passed, total = _number(value.get("passed")), _number(value.get("total"))
+    return {
+        "state": _text(value.get("state")) or "unknown",
+        "passed": int(passed) if passed is not None else None,
+        "total": int(total) if total is not None else None,
+        "at": _text(value.get("at")),
+        "trigger": _text(value.get("trigger")),
+        "run_id": _text(value.get("run_id")),
+        "action": _text(value.get("action")),
+        "results": [
+            {
+                "name": _text(item.get("name")),
+                "passed": item.get("passed") is True,
+                "code": _text(item.get("code")),
+            }
+            for item in results
+            if isinstance(item, Mapping)
+        ]
+        if isinstance(results, list)
+        else [],
+    }
+
+
+def _stop(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping) or value.get("by") not in (
+        "declared",
+        "requested",
+    ):
+        return None
+    via = value.get("via")
+    return {
+        "by": value["by"],
+        "via": via if via in ("cli", "ui", "declaration") else None,
+        "at": _text(value.get("at")),
+    }
+
+
 def _pending_plan(value: Any, plan_hash: str | None) -> dict[str, Any] | None:
     """What the owner approves: the pending plan's counts and changed objects."""
     from piceli.services.composition_history import _plan
@@ -214,6 +261,8 @@ def _environment(name: str, value: Mapping[str, Any]) -> dict[str, Any]:
         "reason": _text(value.get("reason")),
         "last_action": _text(value.get("last_action")),
         "verification": _verification(value.get("verification")),
+        "checks": _checks(value.get("checks")),
+        "stop": _stop(value.get("stop")) if value.get("state") == "stopped" else None,
         "plan_hash": plan_hash,
         "trigger": _text(value.get("trigger")),
         "approval": _approval(value.get("approval")),

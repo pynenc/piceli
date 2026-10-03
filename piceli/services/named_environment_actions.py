@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from piceli.gitops import GitOpsError
-from piceli.gitops.state import approve_request, promote_request
+from piceli.gitops.state import approve_request, promote_request, stop_request
 from piceli.services.composition_control import (
     CompositionControl,
     _pending_plan,
@@ -100,6 +100,13 @@ class NamedEnvironmentActions:
             pending and isinstance(plan_hash, str) and bool(_HASH.fullmatch(plan_hash))
         )
         stopped = entry.get("state") == "stopped" and entry.get("reason") == "idle-stop"
+        declared = self._declared_stop(document, env)
+        owner_stopped = entry.get("state") == "stopped" and entry.get("reason") in (
+            "declared",
+            "requested",
+        )
+        can_stop = self._named(document, env) and not owner_stopped and not declared
+        can_start = owner_stopped and not declared
         revision = entry.get("revision") or {}
         summary = {
             "namespace": entry.get("namespace")
@@ -142,6 +149,23 @@ class NamedEnvironmentActions:
                 "allowed": stopped,
                 "reason": None if stopped else "ui-operation-unavailable",
             },
+            # Added in 0.14.7: stop and start a named environment.
+            "stop": {
+                "allowed": can_stop,
+                "reason": None
+                if can_stop
+                else "gitops-env-stop-declared"
+                if declared
+                else "ui-operation-unavailable",
+            },
+            "start": {
+                "allowed": can_start,
+                "reason": None
+                if can_start
+                else "gitops-env-stop-declared"
+                if declared
+                else "ui-operation-unavailable",
+            },
             "refs": refs if promotable else [],
             "plan_hash": plan_hash if approval else None,
             # Added in 0.14.6: the pending plan's changes, for this hash only.
@@ -152,6 +176,61 @@ class NamedEnvironmentActions:
             "stopped_since": entry.get("stopped_at")
             if stopped and isinstance(entry.get("stopped_at"), str)
             else None,
+        }
+
+    @staticmethod
+    def _rule(document: Mapping[str, Any], env: str) -> Mapping[str, Any] | None:
+        controller = document.get("controller") or {}
+        rules = (
+            controller.get("environments") if isinstance(controller, Mapping) else None
+        )
+        for rule in rules if isinstance(rules, list) else []:
+            if isinstance(rule, Mapping) and rule.get("name") == env:
+                return rule
+        return None
+
+    def _named(self, document: Mapping[str, Any], env: str) -> bool:
+        """Whether ``env`` is a named environment of the composition (not a branch)."""
+        return self._rule(document, env) is not None
+
+    def _declared_stop(self, document: Mapping[str, Any], env: str) -> bool:
+        rule = self._rule(document, env)
+        return rule is not None and rule.get("stopped") is True
+
+    def stop(self, env: str) -> dict[str, str]:
+        """Ask the controller to stop named environment ``env`` (``piceli env stop``)."""
+        return self._stop_or_start(env, start=False)
+
+    def start(self, env: str) -> dict[str, str]:
+        """Ask the controller to start ``env`` again (``piceli env start``)."""
+        return self._stop_or_start(env, start=True)
+
+    def _stop_or_start(self, env: str, *, start: bool) -> dict[str, str]:
+        if not _NAME.fullmatch(env):
+            raise QueryError("ui-invalid-request", 422)
+        self.composition._authorize("deploy")
+        try:
+            with self.composition.channel_factory() as channel:
+                document = channel.read_status() or {}
+                entry = (document.get("envs") or {}).get(env)
+                if not isinstance(entry, Mapping) or not self._named(document, env):
+                    raise QueryError("ui-sync-target-unknown", 404)
+                if self._declared_stop(document, env):
+                    raise QueryError("gitops-env-stop-declared", 409)
+                stopped = entry.get("state") == "stopped" and entry.get("reason") in (
+                    "declared",
+                    "requested",
+                )
+                if stopped != start:
+                    raise QueryError("ui-plan-stale", 409)
+                key, body = stop_request(env, start=start, via="ui")
+                channel.add_request(key, body)
+        except GitOpsError:
+            raise QueryError("ui-operation-unavailable", 409) from None
+        return {
+            "state": "requested",
+            "env": env,
+            "action": "start" if start else "stop",
         }
 
     def promote(self, env: str, branch: str, commit: str) -> dict[str, str]:
