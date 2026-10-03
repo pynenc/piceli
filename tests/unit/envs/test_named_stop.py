@@ -80,9 +80,7 @@ def test_a_named_stop_only_touches_the_namespace_piceli_deployed_it_to(
     _rc(cluster, labelled=False)
     cluster.records["shop-rc"] = {"branch": "other"}  # not this environment's record
     with pytest.raises(EnvError) as error:
-        env_stop(
-            pipeline, "rc", approve_if_policy=True, named=True, cluster=cluster
-        )
+        env_stop(pipeline, "rc", approve_if_policy=True, named=True, cluster=cluster)
     assert error.value.code == "env-namespace-not-managed"
     assert cluster.calls == []
     # Its environment record is enough when the namespace was not labelled.
@@ -96,6 +94,8 @@ def test_a_never_deployed_named_environment_has_nothing_to_stop(
 ) -> None:
     pipeline = _pipeline(tmp_path, environments=_named())
     cluster = Cluster()
-    result = env_stop(pipeline, "rc", approve_if_policy=True, named=True, cluster=cluster)
+    result = env_stop(
+        pipeline, "rc", approve_if_policy=True, named=True, cluster=cluster
+    )
     assert result["state"] == "absent"
     assert env_start(pipeline, "rc", cluster=cluster)["state"] == "absent"

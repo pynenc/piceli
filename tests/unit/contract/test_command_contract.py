@@ -601,6 +601,14 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["gitops", "sync", "Not_A_Label", "--state-dir", str(p)],
         "gitops-request-invalid",
     ),
+    "env stop": (
+        lambda p: ["env", "stop", "Not_A_Label", "--state-dir", str(p)],
+        "gitops-request-invalid",
+    ),
+    "env start": (
+        lambda p: ["env", "start", "rc"],
+        "gitops-target-required",
+    ),
     "gitops run": (
         lambda p: [
             "gitops",

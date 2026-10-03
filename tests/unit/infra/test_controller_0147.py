@@ -141,7 +141,9 @@ def test_the_component_names_the_source_that_triggered_its_build() -> None:
         "sources": {"assets": a1, "product": b1},
     }
     # Rebuilt after a change of assets only: assets triggered it.
-    moved = ImageKey("build", "web", "sha256:" + "2" * 64, {"assets": a2, "product": b1})
+    moved = ImageKey(
+        "build", "web", "sha256:" + "2" * 64, {"assets": a2, "product": b1}
+    )
     assert built(before, moved, "push infra/main", "infra", {}) == ("assets", a2)
     # Both moved: the run's trigger decides.
     both = ImageKey("build", "web", "sha256:" + "3" * 64, {"assets": a2, "product": b2})
@@ -250,7 +252,9 @@ def test_a_forever_forward_backs_off_capped_and_never_gives_up(attempts: int) ->
         local_port=8790,
         remote_port=8790,
     )
-    managed = _ManagedForward(forward, policy=RestartPolicy(backoff_max=30.0, forever=True))
+    managed = _ManagedForward(
+        forward, policy=RestartPolicy(backoff_max=30.0, forever=True)
+    )
     for _ in range(attempts):
         supervisor._schedule_restart_locked(managed, "port-forward exited with 1")
     assert not managed.given_up and managed.health == "restarting"

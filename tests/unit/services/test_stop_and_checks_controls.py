@@ -128,7 +128,11 @@ def test_stop_and_start_write_the_cli_requests(tmp_path: Path) -> None:
 
     channel.publish(_status(state="stopped"))
     view = control.environment("rc")["environment"]
-    assert view["stop"] == {"by": "requested", "via": "cli", "at": "2026-10-03T10:01:00Z"}
+    assert view["stop"] == {
+        "by": "requested",
+        "via": "cli",
+        "at": "2026-10-03T10:01:00Z",
+    }
     assert actions.options("rc")["start"] == {"allowed": True, "reason": None}
     assert actions.start("rc")["action"] == "start"
     kinds = sorted(body["kind"] for body in channel.requests().values())
@@ -181,8 +185,12 @@ def test_env_start_of_a_declared_stop_is_refused_before_any_request(
     )
     monkeypatch.chdir(tmp_path)
     runner = CliRunner()
-    refused = runner.invoke(app, ["env", "start", "rc", "--cluster", "infra.py:cluster"])
+    refused = runner.invoke(
+        app, ["env", "start", "rc", "--cluster", "infra.py:cluster"]
+    )
     assert refused.exit_code == 2
     assert '"reason": "gitops-env-stop-declared"' in refused.stdout
-    unknown = runner.invoke(app, ["env", "stop", "nope", "--cluster", "infra.py:cluster"])
+    unknown = runner.invoke(
+        app, ["env", "stop", "nope", "--cluster", "infra.py:cluster"]
+    )
     assert unknown.exit_code == 2 and '"reason": "env-not-found"' in unknown.stdout
