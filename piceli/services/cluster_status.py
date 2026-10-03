@@ -106,6 +106,14 @@ def _public_status(raw: Mapping[str, Any]) -> dict[str, Any]:
                 "used_source": storage.get("used_source")
                 if storage.get("used_source") in ("volume-stats", "du")
                 else None,
+                # Added in 0.14.6: who measured it (the controller measures
+                # ``du`` for the in-cluster UI) and when.
+                "measured_by": storage.get("measured_by")
+                if storage.get("measured_by") in ("ui", "controller")
+                else None,
+                "measured_at": storage.get("measured_at")
+                if isinstance(storage.get("measured_at"), str)
+                else None,
             }
             if isinstance(storage, Mapping)
             else None,
@@ -333,6 +341,22 @@ class ClusterStatusControl:
                     parsed = json.loads(text)
                     if isinstance(parsed, Mapping):
                         controller_status = dict(parsed.get("controller") or {})
+            storage = (registry or {}).get("storage")
+            measured = controller_status.get("registry_usage")
+            if isinstance(storage, dict):
+                if storage.get("used_bytes") is not None:
+                    storage["measured_by"] = "ui"
+                elif (
+                    isinstance(measured, Mapping)
+                    and type(measured.get("used_bytes")) is int
+                    and measured.get("claim") in (None, storage.get("claim"))
+                ):
+                    # The UI has neither nodes/proxy nor pods/exec: show the
+                    # controller's last du of the registry storage.
+                    storage["used_bytes"] = measured["used_bytes"]
+                    storage["used_source"] = measured.get("used_source") or "du"
+                    storage["measured_by"] = "controller"
+                    storage["measured_at"] = measured.get("measured_at")
             controller_deployment = api.call(
                 f"/apis/apps/v1/namespaces/{ns}/deployments/piceli-gitops", "GET"
             )

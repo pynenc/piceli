@@ -105,14 +105,14 @@ ui-clips: ## Record UI journeys as WebP/GIF clips and PNGs into .ui-clips/ (need
 	uv run --frozen --extra ui python tests/browser/run_clips.py
 
 test-ui: ## Run service and legacy UI acceptance checks against the fake API
-	uv run --frozen --extra ui pytest -n auto tests/unit/test_ui_contracts.py tests/unit/services/test_environment_control.py tests/unit/services/test_composition_control.py tests/unit/server/test_launch_token.py tests/unit/server/test_ui_state_archive.py tests/acceptance/test_ui_truthfulness.py tests/acceptance/test_ui_service.py tests/acceptance/test_ui_pipeline.py tests/acceptance/test_ui_composition.py
+	uv run --frozen --extra ui pytest -n auto tests/unit/test_ui_contracts.py tests/unit/services/test_environment_control.py tests/unit/services/test_composition_control.py tests/unit/server/test_launch_token.py tests/unit/server/test_ui_state_archive.py tests/acceptance/test_ui_truthfulness.py tests/acceptance/test_ui_service.py tests/acceptance/test_ui_pipeline.py tests/acceptance/test_ui_composition.py tests/acceptance/test_ui_composition_history.py
 
 test-ui-fake: ## Run fake-API UI service and browser journeys (requires Chromium)
 	$(MAKE) test-ui
 	PICELI_UI_TEST_PORT=$(PICELI_UI_FAKE_TEST_PORT) $(MAKE) test-browser
 	$(MAKE) test-ui-composition
 
-test-ui-composition: ## Run the in-cluster composition UI journeys (desktop, phone) on the fake API
+test-ui-composition: ## Run the in-cluster composition UI journeys (desktop, tablet, phone) on the fake API
 	uv run --frozen --extra ui python tests/browser/run.py --config ../tests/browser/composition.config.cjs
 
 test-ui-package: ## Verify installed wheel/sdist offline assets without Node

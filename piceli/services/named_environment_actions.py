@@ -13,7 +13,11 @@ from typing import Any
 
 from piceli.gitops import GitOpsError
 from piceli.gitops.state import approve_request, promote_request
-from piceli.services.composition_control import CompositionControl, sync_request
+from piceli.services.composition_control import (
+    CompositionControl,
+    _pending_plan,
+    sync_request,
+)
 from piceli.services.query import QueryError
 
 _NAME = re.compile(r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?")
@@ -140,6 +144,10 @@ class NamedEnvironmentActions:
             },
             "refs": refs if promotable else [],
             "plan_hash": plan_hash if approval else None,
+            # Added in 0.14.6: the pending plan's changes, for this hash only.
+            "pending_plan": _pending_plan(entry.get("pending_plan"), plan_hash)
+            if approval
+            else None,
             "summary": summary,
             "stopped_since": entry.get("stopped_at")
             if stopped and isinstance(entry.get("stopped_at"), str)
@@ -187,7 +195,7 @@ class NamedEnvironmentActions:
                     or entry.get("plan_hash") != plan_hash
                 ):
                     raise QueryError("ui-plan-stale", 409)
-                key, body = approve_request(env, plan_hash)
+                key, body = approve_request(env, plan_hash, via="ui")
                 channel.add_request(key, body)
         except GitOpsError:
             raise QueryError("ui-operation-unavailable", 409) from None
