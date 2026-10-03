@@ -13,6 +13,10 @@ The policy can only narrow what applies automatically:
 * ``delete``, ``replace`` and ``adopt`` actions are never inside a policy
   (:data:`ALWAYS_REVIEWED`); declaring them in ``allow`` is refused
   (``approval-policy-invalid``);
+* ``prune``, the delete of an object this release's owner wrote and no
+  longer declares (an environment deploy, or ``[release] prune``), is inside
+  every policy unless ``deny`` names it or ``delete`` (:data:`IMPLICIT_ALLOW`); claims,
+  Secrets and retained objects are never pruned (they are listed as kept);
 * ``cluster_scoped`` actions and ``drift`` (a desired field another manager
   wrote, which the apply overwrites) are outside unless ``allow`` names them;
 * ``deny`` removes classes from ``allow``; ``max_objects`` caps the number of
@@ -41,7 +45,10 @@ from typing import Any
 #: Action classes that always need the owner's approval of the hash.
 ALWAYS_REVIEWED = frozenset({"delete", "replace", "adopt"})
 #: Action classes an owner may allow to apply automatically.
-ELIGIBLE = frozenset({"create", "apply", "no-op", "cluster_scoped", "drift"})
+ELIGIBLE = frozenset({"create", "apply", "no-op", "cluster_scoped", "drift", "prune"})
+#: Classes inside every policy unless ``deny`` names them: ``prune`` (the
+#: release removes an object it owns and no longer declares).
+IMPLICIT_ALLOW = frozenset({"prune"})
 #: Every class a policy may name (in ``allow`` or ``deny``).
 CLASSES = ELIGIBLE | ALWAYS_REVIEWED
 #: ``allow`` when the policy does not name it.
@@ -100,8 +107,12 @@ class ApprovalPolicy:
         ``apply``, ``no-op``, ``cluster_scoped`` (a cluster-wide object such as
         a ClusterRole) and ``drift`` (overwrite fields another manager
         wrote). Default ``{"create", "apply", "no-op"}``. ``delete``,
-        ``replace`` and ``adopt`` are never allowed.
-    :param deny: Classes removed from ``allow`` (any class, for clarity).
+        ``replace`` and ``adopt`` are never allowed. ``prune`` (deleting an
+        object this release owns and no longer declares) is always allowed
+        unless denied.
+    :param deny: Classes removed from ``allow`` (any class, for clarity);
+        ``deny={"prune"}`` (or ``{"delete"}``) makes every prune wait for
+        the owner's approval.
     :param max_objects: At most this many changed (not ``no-op``) objects.
     :raises ApprovalPolicyError: an unknown class, an always-reviewed class
         in ``allow``, or an invalid ``max_objects``.
@@ -162,8 +173,11 @@ class ApprovalPolicy:
 
     @property
     def effective(self) -> frozenset[str]:
-        """The classes that apply automatically: ``allow`` minus ``deny``."""
-        return self.allow - self.deny
+        """The classes that apply automatically: ``allow`` (and
+        :data:`IMPLICIT_ALLOW`) minus ``deny``. Denying ``delete`` denies
+        ``prune`` too (a prune is a delete)."""
+        denied = self.deny | ({"prune"} if "delete" in self.deny else set())
+        return (self.allow | IMPLICIT_ALLOW) - denied
 
     def identity(self) -> dict[str, Any]:
         """The canonical form bound into plan hashes."""
@@ -181,9 +195,10 @@ class ApprovalPolicy:
         drift: Iterable[Mapping[str, Any]] = (),
     ) -> PolicyDecision:
         """Check a plan's actions (``operation``, ``kind``, ``name``,
-        ``cluster_scoped``) and its drift (``kind``, ``name``, or a
+        ``cluster_scoped``, ``prune``) and its drift (``kind``, ``name``, or a
         ``resource`` with them). ``no-op`` actions change nothing and are
-        always inside; an unknown operation is always outside.
+        always inside; an unknown operation is always outside. A ``delete``
+        marked ``prune`` is the class ``prune``.
         """
         effective = self.effective
         violations: list[str] = []
@@ -194,11 +209,16 @@ class ApprovalPolicy:
                 continue  # changes nothing
             where = f"{action.get('kind')}/{action.get('name')}"
             changes += 1
-            classes = [operation]
+            classes = [
+                "prune" if operation == "delete" and action.get("prune") else operation
+            ]
             if action.get("cluster_scoped"):
                 classes.append("cluster_scoped")
             violations.extend(
-                f"{name} {where}" for name in classes if name not in effective
+                # A refused prune reads as the delete it is.
+                f"{'delete' if name == 'prune' else name} {where}"
+                for name in classes
+                if name not in effective
             )
         if "drift" not in effective:
             for item in drift:
@@ -218,6 +238,7 @@ __all__ = [
     "CLASSES",
     "DEFAULT_ALLOW",
     "ELIGIBLE",
+    "IMPLICIT_ALLOW",
     "ApprovalPolicy",
     "ApprovalPolicyError",
     "PolicyDecision",

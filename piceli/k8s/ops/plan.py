@@ -1509,6 +1509,84 @@ def replace_propagation(kind: str) -> str:
     return "Background" if kind in _BACKGROUND_REPLACE_KINDS else "Orphan"
 
 
+# Kinds whose pods a prune removes with them, before the delete completes:
+# a removed workload must not leave pods behind that a Service of the same
+# name (a Deployment renamed to a StatefulSet) or the app's checks still see.
+_FOREGROUND_PRUNE_KINDS = frozenset(
+    {"Deployment", "ReplicaSet", "StatefulSet", "DaemonSet", "Job", "CronJob"}
+)
+
+
+def prune_propagation(kind: str) -> str:
+    """Deletion propagation a prune (a plan ``delete``) uses for ``kind``.
+
+    ``Foreground`` for a workload controller: the API server deletes its
+    pods first and removes the object last, so the executor, which waits
+    until the object is gone, waits for its pods too. A StatefulSet's claims
+    are kept (its retention policy is ``Retain``; one that would delete them
+    is never pruned, see :func:`deletes_claims`). Every other kind is
+    deleted as before (``Orphan``).
+    """
+    return "Foreground" if kind in _FOREGROUND_PRUNE_KINDS else "Orphan"
+
+
+def deletes_claims(manifest: Mapping[str, Any]) -> bool:
+    """Whether deleting this object would delete claims (a StatefulSet whose
+    ``persistentVolumeClaimRetentionPolicy.whenDeleted`` is ``Delete``)."""
+    if manifest.get("kind") != "StatefulSet":
+        return False
+    spec = manifest.get("spec")
+    policy = (
+        spec.get("persistentVolumeClaimRetentionPolicy")
+        if isinstance(spec, Mapping)
+        else None
+    )
+    return isinstance(policy, Mapping) and policy.get("whenDeleted") == "Delete"
+
+
+def template_claims(
+    removed: Iterable[ResourceIntent],
+    observed: Mapping[ResourceRef, ObservedResource],
+) -> list[ResourceRef]:
+    """The observed claims the removed StatefulSets created from their templates.
+
+    A StatefulSet ``db`` with a claim template ``data`` names its claims
+    ``data-db-0``, ``data-db-1`` …; every observed claim with such a name is
+    returned (whatever its ordinal: replicas scaled down keep their claims).
+    """
+    prefixes: set[tuple[str, str]] = set()
+    for intent in removed:
+        manifest = intent.manifest
+        if manifest.get("kind") != "StatefulSet":
+            continue
+        spec = manifest.get("spec")
+        templates = (
+            spec.get("volumeClaimTemplates") if isinstance(spec, Mapping) else None
+        )
+        for template in templates if isinstance(templates, list) else ():
+            name = (
+                (template.get("metadata") or {}).get("name")
+                if isinstance(template, Mapping)
+                else None
+            )
+            if isinstance(name, str) and name:
+                prefixes.add((intent.ref.namespace or "", f"{name}-{intent.ref.name}-"))
+    found: list[ResourceRef] = []
+    for ref in observed:
+        if ref.kind != "PersistentVolumeClaim":
+            continue
+        for namespace, prefix in prefixes:
+            ordinal = ref.name[len(prefix) :]
+            if (
+                (ref.namespace or "") == namespace
+                and ref.name.startswith(prefix)
+                and ordinal.isdigit()
+            ):
+                found.append(ref)
+                break
+    return found
+
+
 #: Kinds whose spec is immutable in parts (see :func:`immutable_changes`): a
 #: release may also replace one it already manages, when named explicitly.
 REPLACEABLE_MANAGED_KINDS = frozenset({"Job", "StatefulSet"})
@@ -2076,15 +2154,26 @@ def build_plan(
             for ref, resource in observed.items()
             if ref not in desired and resource.ownership is Ownership.MANAGED
         ]
-        deleting_uids = {
-            resource.precondition.uid
+        # Kept, never deleted by a prune: retained objects (claims, Secrets,
+        # ``piceli.io/retained``) and a StatefulSet whose retention policy
+        # would delete its claims with it.
+        kept = [
+            resource
             for resource in candidates
-            if not resource.retained
-        }
+            if resource.retained or deletes_claims(resource.intent.manifest)
+        ]
+        candidates = [resource for resource in candidates if resource not in kept]
+        protected.extend(resource.intent.ref for resource in kept)
+        # The claims a removed StatefulSet's controller created from its
+        # volume claim templates outlive it: listed as kept (by this plan
+        # and every later one, from what earlier releases declared), never
+        # deleted.
+        removed = [resource.intent for resource in candidates] + [
+            intent for intent in authorization.previous if intent.ref not in desired
+        ]
+        protected.extend(template_claims(removed, observed))
+        deleting_uids = {resource.precondition.uid for resource in candidates}
         for resource in candidates:
-            if resource.retained:
-                protected.append(resource.intent.ref)
-                continue
             unsafe_children = [
                 child.intent.ref
                 for child in snapshot.resources
@@ -2115,6 +2204,6 @@ def build_plan(
         snapshot.snapshot_hash,
         tuple(actions),
         levels,
-        tuple(sorted(protected)),
+        tuple(sorted(set(protected))),
         approval_policy=authorization.approval_policy,
     )

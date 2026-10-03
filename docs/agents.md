@@ -334,6 +334,11 @@ result).
 - `approval-policy-missing`: there is no policy. Plan and ask as usual.
 - `delete`, `replace` and `adopt` are never inside a policy, and
   cluster-scoped objects and drift are outside unless the owner allowed them.
+  A `prune` (a `delete` marked `"prune": true`: an object the release owns
+  and no longer declares) is inside unless the policy denies `prune` or
+  `delete`; claims, Secrets and retained objects are never pruned (listed
+  as `kept_orphaned`, with the command deleting each: show it to the owner,
+  never run it yourself).
 - **Never add, edit or widen `auto_approve` yourself**, never split a change
   to fit under `max_objects`, and never combine `--approve-if-policy` with
   `--adopt`, `--replace`, `--rotate` or `--adopt-all-desired` (refused). There

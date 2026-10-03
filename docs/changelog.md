@@ -50,6 +50,35 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 - **Fix:** log lines the UI and API return are redacted with the shared
   redaction (`password=`, `token:`, bearer tokens, URL credentials, JSON Web
   Tokens, private keys become `[REDACTED]`).
+- **Fix:** the GitOps controllers delete what an app no longer declares.
+  Every environment deploy (single-repository and composition controllers,
+  named, main and branch environments, `piceli env up`) plans the deletion
+  of the objects an earlier release created and the current render no longer
+  declares (a removed workload, its Service and NetworkPolicy, a Deployment
+  renamed to a StatefulSet) as `delete` actions of the same plan and hash.
+  They run after the new objects are ready and before the checks, a
+  workload `Foreground` (its pods first), so a leftover can no longer join
+  the new pods or fail the checks. Only objects with this release's
+  `piceli.io/owner` are deleted. `Pipeline(prune=None|True|False)` is new
+  (default: environments prune, plain `piceli deploy` does not).
+- **Approval:** an `auto_approve` policy covers a prune (new class `prune`,
+  marked `"prune": true` on `delete` changes) unless it denies `prune` or
+  `delete`; any other `delete`, `replace` or `adopt` still needs the hash.
+  Without a covering policy the environment asks, with the deletes in the
+  plan it shows.
+- **Data:** claims, Secrets, retained objects, the claims a removed
+  StatefulSet created from its templates, and a StatefulSet whose retention
+  policy would delete its claims are never deleted: plans, status
+  (`envs.<env>.kept_orphaned`), run summaries and the deployment history list
+  them with `why` and the `kubectl` command that deletes each. Status and
+  history runs also have `deleted` (additive JSON).
+- **Fix:** an automatic rollback after failed checks restores only what the
+  failed release changed (objects both releases declare): it no longer
+  re-creates objects the failed release removed (by its prune or by hand).
+  The controllers no longer retry a revision whose checks failed and whose
+  release was rolled back: the environment is `failed` with reason
+  `checks-failed-rolled-back` until a new revision or `piceli gitops sync`.
+- **Testing:** the fake API (`piceli.testing`) accepts `Foreground` deletes.
 - **Tests:** the local executor's delayed-mutation test no longer depends on a
   0.25 s window that slow CI runners missed (2 s window, polled to `ready`).
 

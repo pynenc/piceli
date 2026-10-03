@@ -114,7 +114,7 @@ kubeconfig.
 | Deploy | `piceli deploy … --approve <hash>` | [`helm upgrade --install webapp ./webapp -n webapp-prod -f values-prod.yaml`](https://helm.sh/docs/helm/helm_upgrade/) | [`kubectl apply -k overlays/prod`](https://kubernetes.io/docs/tasks/manage-kubernetes-objects/kustomization/) | `kubectl apply -f dist/webapp-prod.k8s.yaml` | [`pulumi up --stack prod`](https://www.pulumi.com/docs/iac/cli/commands/pulumi_up/) (previews, then asks) |
 | Change | Edit `app.py`; plan, then approve the new hash | Edit values or templates; `helm upgrade` | Edit a patch; `kubectl apply -k` | Edit `main.py`; synth and apply | Edit code or stack config; `pulumi up` |
 | Roll back | `piceli release rollback previous --spec app.py:pipeline --env prod`, then `--approve <hash>` | [`helm rollback webapp <revision>`](https://helm.sh/docs/helm/helm_rollback/) | Revert in Git and apply again ([`kubectl rollout undo`](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#rolling-back-a-deployment) for a single Deployment) | Revert in Git, synth and apply again | Revert in Git and `pulumi up` again |
-| Objects removed from the code | Left in the cluster by default; a release spec with `[release] prune = true` ({doc}`release_cli`) deletes them, never Namespaces, PersistentVolumes, claims or Secrets ({src}`test_prune_is_conditional_orphan_delete_and_retention_is_permanent <tests/acceptance/test_local_executor.py>`) | Deleted by `helm upgrade` | Left in the cluster unless you use [`kubectl apply --prune`](https://kubernetes.io/docs/tasks/manage-kubernetes-objects/declarative-config/) | Left in the cluster unless the applier prunes | Deleted by `pulumi up` |
+| Objects removed from the code | Deleted by every environment deploy (the GitOps controllers, `piceli env up`) and by a release spec with `[release] prune = true` ({doc}`release_cli`); left by a plain `piceli deploy` unless `Pipeline(prune=True)`. Never deleted: Namespaces, PersistentVolumes, claims or Secrets ({src}`test_prune_is_conditional_orphan_delete_and_retention_is_permanent <tests/acceptance/test_local_executor.py>`) | Deleted by `helm upgrade` | Left in the cluster unless you use [`kubectl apply --prune`](https://kubernetes.io/docs/tasks/manage-kubernetes-objects/declarative-config/) | Left in the cluster unless the applier prunes | Deleted by `pulumi up` |
 
 Piceli's rows are exercised by
 {src}`test_plan_changed_and_approval_required <tests/acceptance/test_deploy_pipeline.py>`,
@@ -163,7 +163,8 @@ Piceli is the youngest tool here. These are its current limits:
   (or, with `state="cluster"`, in Secrets of the release namespace) and
   relies on SOPS, Vault or AWS for encrypted sources.
 - **Removing objects.** Helm and Pulumi delete what you remove from the code
-  by default; Piceli prunes only from a release spec with `prune = true`.
+  by default; Piceli prunes in every environment deploy and from a release
+  spec with `prune = true`, never claims or Secrets.
 - **Python only.** Helm and Kustomize need no programming language; cdk8s
   and Pulumi support several. Piceli is Python only.
 

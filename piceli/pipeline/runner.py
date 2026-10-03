@@ -233,6 +233,9 @@ def _changed(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "kind": item["kind"],
             "name": item["name"],
             **({"cluster_scoped": True} if item.get("cluster_scoped") else {}),
+            # Every plan delete removes an object this release's owner wrote
+            # and no longer declares (a prune; see ApprovalPolicy).
+            **({"prune": True} if item["operation"] == "delete" else {}),
         }
         for item in actions
         if item["operation"] != "no-op"
@@ -284,6 +287,35 @@ def _ownership(changes: list[dict[str, Any]]) -> list[str]:
         for item in changes
         if item["operation"] in OWNERSHIP_OPERATIONS
     )
+
+
+def pruned_objects(
+    plan: Mapping[str, Any], apply_state: Any
+) -> dict[str, list[dict[str, Any]]] | None:
+    """What a run's prune did, from its plan stage output, or ``None``.
+
+    ``deleted``: the objects the release deleted because it no longer
+    declares them (only once the apply stage is done); ``kept_orphaned``:
+    the ones it kept (claims, Secrets, retained objects), each with its
+    ``kubectl`` command. ``None`` when the plan pruned and kept nothing.
+    """
+    deleted = (
+        [
+            {"kind": item.get("kind"), "name": item.get("name")}
+            for item in plan.get("changes") or ()
+            if isinstance(item, Mapping) and item.get("operation") == "delete"
+        ]
+        if apply_state == "done"
+        else []
+    )
+    kept = [
+        dict(item)
+        for item in plan.get("kept_orphaned") or ()
+        if isinstance(item, Mapping)
+    ]
+    if not deleted and not kept:
+        return None
+    return {"deleted": deleted, "kept_orphaned": kept}
 
 
 def unchanged(runner: ReleaseRunner, result: PlanResult) -> bool:
@@ -1302,6 +1334,7 @@ class PipelineRunner:
             )
         result = self._release_plan(work)
         drift = _drift(result)
+        kept = result.to_dict()["kept_orphaned"]
         stage = {
             "state": "planned",
             "release": result.release,
@@ -1310,13 +1343,21 @@ class PipelineRunner:
             "changes": _changes(result),
             "drift": drift,
             "images": work.release_images,
+            **({"kept_orphaned": kept} if kept else {}),
         }
-        return stage, {
+        hashed = {
             "model": fingerprint,
             "release": result.release,
             "actions": _hex(_compact(result)),
             "drift": drift,
         }
+        if kept:
+            # Only when a prune keeps something, so other plans keep their hash.
+            hashed["kept_orphaned"] = [
+                {key: item[key] for key in ("kind", "name", "namespace")}
+                for item in kept
+            ]
+        return stage, hashed
 
     def _placeholders(self, work: _Work) -> dict[str, str]:
         """``pending-build`` or ``pending-delivery`` per undelivered build image."""
@@ -1360,6 +1401,11 @@ class PipelineRunner:
             "state": "previewed",
             "summary": result["summary"],
             "changes": changes,
+            **(
+                {"kept_orphaned": result["kept_orphaned"]}
+                if result.get("kept_orphaned")
+                else {}
+            ),
             "drift": _drifted(result["drift"]),
             "authorized": result["authorized"],
             "dry_run_skipped": result["dry_run_skipped"],
@@ -1803,6 +1849,9 @@ class PipelineRunner:
         point = run.output("backup").get("restore_point")
         if isinstance(point, str):
             body["restore_point"] = point
+        pruned = pruned_objects(plan, run.stage("apply").get("state"))
+        if pruned is not None:
+            body["pruned"] = pruned
         checks = run.output("checks")
         if isinstance(checks.get("verification"), Mapping):
             # The checks re-ran against a release whose manifests did not
@@ -2350,6 +2399,7 @@ class PipelineRunner:
                 or "no actions"
             )
         )
+        kept = result.to_dict()["kept_orphaned"]
         return "done", {
             "release": result.release,
             "mode": result.mode,
@@ -2359,6 +2409,7 @@ class PipelineRunner:
             "diff": _diff_fields(result),
             "images": work.release_images,
             "source": result.source,
+            **({"kept_orphaned": kept} if kept else {}),
         }
 
     def _within_preview(self, result: PlanResult) -> None:
@@ -2599,7 +2650,10 @@ class PipelineRunner:
         self.say(f"[checks] rolling back to {target}")
         self._bind(runner, f"[checks] rollback {target}: ")
         try:
-            result = runner.plan(rollback_to="previous")
+            failed = work.release_plan.release if work.release_plan else None
+            # Restore only what the failed release changed: never re-create
+            # what it no longer declares (see scoped_rollback).
+            result = runner.plan(rollback_to="previous", rollback_of=failed)
             outcome = runner.apply(
                 result.plan_hash, expected_intent="rollback", expected_release=target
             )
