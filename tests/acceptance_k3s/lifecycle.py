@@ -469,6 +469,7 @@ class Lifecycle:
         trigger: str = "",
         via: str = "",
         log_tail: str = "",
+        legacy: bool = False,
     ) -> None:
         """A run the UI's deployment history of ``env`` must list (stages 12, 14, 15).
 
@@ -476,6 +477,8 @@ class Lifecycle:
         install); ``plan_hash``: the hash it ran (else any, unless ``plan``
         is false); ``action``/``trigger``/``via`` (``approved_by.via``) and
         ``log_tail`` (text in ``failure.log_tail``) when the stage knows them.
+        ``legacy``: run by the previous release, whose run record has no
+        sources, trigger or rolled components: only its place is checked.
         """
         revision = record.get("deployed_revision") or record.get("revision") or {}
         self.expected.setdefault(env, []).append(
@@ -493,6 +496,7 @@ class Lifecycle:
                 "trigger": trigger,
                 "via": via,
                 "log_tail": log_tail,
+                "legacy": legacy,
             }
         )
 
@@ -1010,6 +1014,7 @@ class Lifecycle:
         self.expect(
             "3", "main", record, rolled=None, run=run,
             plan_hash=self.values.get("main_hash", ""),
+            legacy=self.piceli == self.prev_cli,
         )  # fmt: skip
 
     def stage_1_upgrade(self) -> None:
@@ -2184,6 +2189,24 @@ def _history_problems(runs: list[Any], expected: list[dict[str, Any]]) -> list[s
             ),
             None,
         )
+        if index is None and want["legacy"]:
+            # The previous release's run (a run record only): the oldest
+            # deployed one; the order check places it below later stages.
+            index = next(
+                (
+                    i
+                    for i in range(len(runs) - 1, -1, -1)
+                    if runs[i].get("recorded_by") == "run"
+                    and runs[i].get("state") == "deployed"
+                ),
+                None,
+            )
+            if index is not None:
+                log(f"{label}: the previous release's run {runs[index].get('run_id')} "
+                    f"(run record only: sources {runs[index].get('sources')}, "
+                    f"trigger {runs[index].get('trigger')!r})")  # fmt: skip
+                matched.append((index, label))
+                continue
         if index is None:
             short = {k: v[:12] for k, v in commits.items()}
             problems.append(f"no run of {label} (commits {short})")
@@ -2194,9 +2217,16 @@ def _history_problems(runs: list[Any], expected: list[dict[str, Any]]) -> list[s
             problems.append(f"{label}: no trigger")
         if not run.get("started_at"):
             problems.append(f"{label}: no started_at")
-        for key in ("action", "trigger"):
-            if want[key] and run.get(key) != want[key]:
-                problems.append(f"{label}: {key} {run.get(key)!r}, not {want[key]!r}")
+        if want["action"] and run.get("action") != want["action"]:
+            problems.append(
+                f"{label}: action {run.get('action')!r}, not {want['action']!r}"
+            )
+        # The verification's trigger (checks-changed, unverified) or the run's.
+        triggers = {run.get("trigger"), (run.get("verification") or {}).get("trigger")}
+        if want["trigger"] and want["trigger"] not in triggers:
+            problems.append(
+                f"{label}: trigger {sorted(map(str, triggers))}, not {want['trigger']!r}"
+            )
         if want["plan_hash"]:
             if run.get("plan_hash") != want["plan_hash"]:
                 problems.append(
