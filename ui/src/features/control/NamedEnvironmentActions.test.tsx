@@ -128,3 +128,19 @@ it('requires reviewing a changed stopped instance and refuses wake after it resu
   await waitFor(() => expect(fixture.posts).toHaveLength(1));
   expect(fixture.posts[0]).toEqual({ path: '/api/v1/composition/environments/preview/wake', body: null });
 });
+
+it('shows the pending plan changes and requires a new acknowledgement when they change', async () => {
+  const plan = { plan_hash: original.plan_hash!, combined_hash: `sha256:${'9'.repeat(64)}`, release: 'shop-1', counts: { update: 1, 'no-op': 4 }, changes: [{ operation: 'update', kind: 'Deployment', name: 'web' }], changes_total: 1, create_namespace: false, stop: [], images: {} };
+  const fixture = open();
+  await fixture.refresh({ pending_plan: plan } as Partial<typeof original>);
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole('button', { name: 'Approve' }));
+  const changes = await screen.findByLabelText('Pending plan changes');
+  expect(changes.textContent).toContain('Deployment/web');
+  expect(changes.textContent).toContain('1 update · 4 no-op');
+  expect(changes.textContent).toContain(plan.combined_hash);
+  await user.click(screen.getByRole('checkbox'));
+  await fixture.refresh({ pending_plan: { ...plan, changes: [...plan.changes, { operation: 'create', kind: 'Service', name: 'web' }], changes_total: 2 } } as Partial<typeof original>);
+  await waitFor(() => expect((screen.getByRole('checkbox') as HTMLInputElement).checked).toBe(false));
+  expect((await screen.findByLabelText('Pending plan changes')).textContent).toContain('Service/web');
+});

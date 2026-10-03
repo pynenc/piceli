@@ -49,8 +49,8 @@ export function App() {
           <NavLink to="/applications"><Icon name="applications" /><span>Applications</span></NavLink>
           {capabilities.data?.actions.cluster_status?.allowed && <NavLink to="/cluster"><Icon name="cluster" /><span>Cluster</span></NavLink>}
         </div>
-        {(capabilities.data?.actions.activity?.allowed || capabilities.data?.actions.pipeline?.allowed || capabilities.data?.actions.cluster_build?.allowed) && <div className="nav-group"><p className="eyebrow nav-label">Delivery</p>
-          {capabilities.data?.actions.activity?.allowed && <NavLink to="/delivery"><Icon name="history" /><span>Deployment history</span></NavLink>}
+        {(capabilities.data?.actions.activity?.allowed || capabilities.data?.actions.composition_history?.allowed || capabilities.data?.actions.pipeline?.allowed || capabilities.data?.actions.cluster_build?.allowed) && <div className="nav-group"><p className="eyebrow nav-label">Delivery</p>
+          {(capabilities.data?.actions.activity?.allowed || capabilities.data?.actions.composition_history?.allowed) && <NavLink to="/delivery"><Icon name="history" /><span>Deployment history</span></NavLink>}
           {capabilities.data?.actions.pipeline?.allowed && <NavLink to="/pipeline"><Icon name="pipeline" /><span>Pipeline</span></NavLink>}
           {capabilities.data?.actions.cluster_build?.allowed && <NavLink to="/cluster-build"><Icon name="build" /><span>Cluster build</span></NavLink>}
         </div>}
@@ -68,7 +68,7 @@ export function App() {
           <Route path="/" element={capabilities.isPending ? <Loading text="Connecting…" /> : <Navigate to={compositionHome(capabilities.data) ?? '/applications'} replace />} />
           <Route path="/applications" element={<Applications capabilities={capabilities.data} />} />
           {compositionRoutes(capabilities.data)}
-          <Route path="/delivery" element={capabilities.isPending ? <Loading text="Loading history capabilities…" /> : capabilities.data?.actions.activity?.allowed ? <DeploymentHistory /> : <Notice title="Deployment history unavailable">This session cannot read deployment history.</Notice>} />
+          <Route path="/delivery" element={capabilities.isPending ? <Loading text="Loading history capabilities…" /> : capabilities.data?.actions.composition_history?.allowed ? <DeploymentHistory environments /> : capabilities.data?.actions.activity?.allowed ? <DeploymentHistory /> : <Notice title="Deployment history unavailable">This session cannot read deployment history.</Notice>} />
           <Route path="/cluster" element={capabilities.data?.actions.cluster_status?.allowed ? <Cluster /> : <Notice title="Cluster unavailable">This session cannot read cluster status.</Notice>} />
           <Route path="/pipeline" element={capabilities.data?.actions.pipeline?.allowed ? <Pipeline /> : <Notice title="Pipeline unavailable">Start the local UI with a trusted Pipeline definition.</Notice>} />
           <Route path="/cluster-build" element={capabilities.data?.actions.cluster_build?.allowed ? <ClusterBuild /> : <Notice title="Cluster build unavailable">This installed UI has no configured cluster build for this session.</Notice>} />

@@ -3882,6 +3882,47 @@
         "summary": "Named Environment Approval"
       }
     },
+    "/api/v1/composition/environments/{env}/history": {
+      "get": {
+        "operationId": "composition_environment_history_api_v1_composition_environments__env__history_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "env",
+            "required": true,
+            "schema": {
+              "title": "Env",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Composition Environment History Api V1 Composition Environments  Env  History Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Composition Environment History"
+      }
+    },
     "/api/v1/composition/environments/{env}/promotions": {
       "post": {
         "operationId": "named_environment_promotion_api_v1_composition_environments__env__promotions_post",
@@ -3976,6 +4017,26 @@
           }
         },
         "summary": "Named Environment Wake"
+      }
+    },
+    "/api/v1/composition/history": {
+      "get": {
+        "operationId": "composition_history_api_v1_composition_history_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Composition History Api V1 Composition History Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Composition History"
       }
     },
     "/api/v1/composition/sync": {

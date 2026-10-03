@@ -40,7 +40,7 @@ From `ui/`, the locked Chromium installer is
 | Target | Coverage |
 | --- | --- |
 | `make test-browser` | First use, inventory, inspection, logs/access and transport failure |
-| `make test-ui-composition` | Composition observation and existing Sync flows |
+| `make test-ui-composition` | Composition observation, Sync, Promote, Approve with the pending plan, deployment history and the Cluster page, at three sizes |
 | `make test-browser-harbor` | Navigation, compact Sources, full revisions, environment/component links, application layout and appearance |
 | `make test-browser-connected` | Topology and selected inspection, environment versions, workspace search, recorded plans/revisions, archive filters and direct captured-log bookmarks |
 | `make test-browser-preview` | Plain-address preview access, fresh browsers, bookmarks and reload |

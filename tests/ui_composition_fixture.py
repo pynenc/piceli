@@ -80,3 +80,129 @@ STATUS: dict[str, Any] = {
         },
     },
 }
+
+
+PLAN_HASH = "sha256:" + "d" * 64
+
+
+def controller_status() -> dict[str, Any]:
+    """:data:`STATUS` with what a 0.14.6 controller adds: ``rc`` waiting for the
+    approval of a plan whose changes it publishes, main's trigger and last
+    action, and the registry use the controller measured."""
+    import copy
+
+    status = copy.deepcopy(STATUS)
+    status["controller"]["environments"] = [
+        {"name": "main", "promote": False},
+        {"name": "rc", "promote": True},
+    ]
+    status["controller"]["registry_usage"] = {
+        "used_bytes": 553_889_792,
+        "used_source": "du",
+        "claim": "piceli-registry-storage",
+        "measured_at": "2026-10-01T09:25:00Z",
+    }
+    status["envs"]["main"].update(
+        {"trigger": "push product/main", "last_action": "deployed"}
+    )
+    status["envs"]["rc"] = {
+        "namespace": "piceli-test",
+        "state": "approval-required",
+        "health": "healthy",
+        "trigger": "tag product/v1.4.0",
+        "plan_hash": PLAN_HASH,
+        "revision": {"product": PRODUCT, "assets": ASSETS},
+        "pending_plan": {
+            "plan_hash": PLAN_HASH,
+            "combined_hash": "sha256:" + "9" * 64,
+            "release": "shop-0123456789ab",
+            "counts": {"update": 1, "no-op": 4},
+            "changes": [{"operation": "update", "kind": "Deployment", "name": "web"}],
+            "changes_total": 1,
+            "create_namespace": False,
+            "stop": [],
+            "images": {},
+        },
+        "components": {
+            "web": {
+                "source": "product",
+                "commit": PRODUCT,
+                "digest": DIGEST,
+                "state": "rolling",
+                "health": "healthy",
+            }
+        },
+    }
+    status["envs"]["stage"] = {
+        "namespace": "piceli-test",
+        "state": "deployed",
+        "health": "degraded",
+        "reason": "pipeline-checks-failed",
+        "trigger": "checks-changed",
+        "last_action": "verified",
+        "revision": {"product": PRODUCT, "assets": ASSETS},
+        "verification": {
+            "state": "failed",
+            "trigger": "checks-changed",
+            "checks_hash": "sha256:" + "f" * 64,
+            "at": "2026-10-01T09:27:00Z",
+            "failed": [{"check": "deliberate-failure", "code": "check-failed"}],
+        },
+        "components": {
+            "web": {
+                "source": "product",
+                "commit": PRODUCT,
+                "digest": DIGEST,
+                "state": "unchanged",
+                "health": "healthy",
+            }
+        },
+    }
+    return status
+
+
+#: What ``piceli ui forward-serve``'s Cluster page reads in the cluster, where
+#: the UI cannot measure the registry claim and shows the controller's ``du``.
+CLUSTER: dict[str, Any] = {
+    "state": "ready",
+    "cluster": "my-cluster",
+    "nodes": [
+        {
+            "name": "node-a",
+            "arch": "arm64",
+            "roles": ["controller", "registry"],
+            "ready": True,
+            "mirror": {"kind": "k3s", "state": "ready"},
+        }
+    ],
+    "registry": {
+        "state": "ready",
+        "host": "piceli-registry.piceli-system.svc:5000",
+        "registry": {
+            "ready": True,
+            "pods": [
+                {
+                    "name": "piceli-registry-5d9f",
+                    "node": "node-a",
+                    "phase": "Running",
+                    "ready": True,
+                }
+            ],
+        },
+        "storage": {
+            "claim": "piceli-registry-storage",
+            "phase": "Bound",
+            "capacity": "50Gi",
+            "used_bytes": 553_889_792,
+            "used_source": "du",
+            "measured_by": "controller",
+            "measured_at": "2026-10-01T09:25:00Z",
+        },
+    },
+    "controller": {
+        "health": "healthy",
+        "last_poll": "2026-10-01T09:30:00Z",
+        "poll_failures": 0,
+    },
+    "ui": {"health": "healthy"},
+}
