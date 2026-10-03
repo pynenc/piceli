@@ -6,7 +6,9 @@
 # Fields: `run` (one command line, split like a shell would; no pipes),
 # `exit` (accepted exit codes), `capture` (JSON key of stdout -> variable),
 # `when` (run only when that variable is set), `stdin` (a secret variable fed
-# on stdin, never printed), `note` (false: harness plumbing, not in the note).
+# on stdin, never printed), `note` (false: harness plumbing, not in the note),
+# `serve` (runs until Ctrl-C; the harness starts it in its own session and
+# stops it; its output holds a launch token and is never printed).
 # Commands run from a clone of the composition repository (infra.py there).
 
 [note]
@@ -56,6 +58,14 @@ retention = [
   "registry-gc",
   "registry-status",
 ]
+# The in-cluster UI: prints one URL (with its launch token) and forwards
+# 127.0.0.1:8790 until Ctrl-C. Deployment history lists every environment's
+# runs (from 0.14.6).
+ui = ["access-ui"]
+# A forward left behind (its piceli killed, its kubectl still holding the
+# port): `access ui` names it as Piceli's own; `access stop --stale` stops it
+# (from 0.14.6).
+access-stale = ["access-ui", "access-stop-stale"]
 
 [steps.login]
 run = "{piceli} login lifecycle --kubeconfig {kubeconfig} --context {context}"
@@ -139,4 +149,15 @@ exit = [0]
 [steps.registry-gc]
 run = """{kubectl} --kubeconfig {kubeconfig} --context {context} -n piceli-system \
   exec deploy/piceli-registry -- registry garbage-collect /etc/distribution/config.yml"""
+exit = [0]
+
+[steps.access-ui]
+run = "{piceli} access ui --cluster infra.py:cluster"
+exit = [0]
+serve = true
+
+[steps.access-stop-stale]
+# Exit 0, `stopped` lists the port with holder "piceli-forward"; the
+# refusal of a second `access ui` hints at this command.
+run = "{piceli} access stop --stale --cluster infra.py:cluster"
 exit = [0]
