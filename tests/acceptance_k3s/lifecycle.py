@@ -52,8 +52,12 @@ From 0.14.6 (stage numbers say what they check, not when they run):
     --stale`` stops it.
 14. Last: the UI's deployment history lists every run of main and rc that a
     stage made, newest first, with trigger, commits, plan hash, rolled
-    components and check outcomes (and, when ``ui/node_modules`` has
-    Playwright, the Deployment history page shows rows).
+    components, approver and check outcomes (and, when ``ui/node_modules``
+    has Playwright, the Deployment history page shows their runs); the
+    registry's usage is measured by the controller (``du``); the history's
+    ConfigMap has its schema. Stage 11 also reads rc's pending plan in the UI.
+15. After 8: the broken build's run in the UI (``failure.log_tail``), then
+    the branch is deleted with its kept Job.
 
 The UI's launch token is never printed: the served command's output stays
 in memory and is redacted before any failure prints it.
@@ -145,7 +149,7 @@ ALL_CHECKS = {
     "site-config",
 }
 STAGE_ORDER = (
-    "2", "3", "1", "4", "5", "6", "11", "7", "12", "8", "9", "10", "13", "14",
+    "2", "3", "1", "4", "5", "6", "11", "7", "12", "8", "15", "9", "10", "13", "14",
 )  # fmt: skip
 STAGE_TITLES = {
     "1": "upgrade from the previous release",
@@ -162,15 +166,15 @@ STAGE_TITLES = {
     "12": "UI history of the branch environment",
     "13": "stale access forward",
     "14": "UI history of main and rc",
+    "15": "UI history of the broken build",
 }
 STAGE_METHODS = {
     "1": "1_upgrade", "2": "2_bootstrap", "3": "3_first_main", "4": "4_one_source",
     "5": "5_check_only", "6": "6_promote", "7": "7_branch", "8": "8_broken_build",
     "9": "9_teardown", "10": "10_retention", "11": "11_reverted_check",
     "12": "12_ui_branch", "13": "13_stale_access", "14": "14_ui_history",
+    "15": "15_ui_broken",
 }  # fmt: skip
-#: Namespaces of the environments whose history the UI must list.
-NAMESPACES = {"main": "lc-main", "rc": "lc-rc", "wp-feature": "lc-wp-feature"}
 #: Stages whose failure stops the run (the rest depend on them).
 CRITICAL = {"2", "3"}
 
@@ -267,6 +271,7 @@ class Lifecycle:
         #: UI's deployment history must list them.
         self.expected: dict[str, list[dict[str, Any]]] = {}
         self.served: list[Served] = []
+        self.broken_job = ""
 
     # ------------------------------------------------------------ helpers
     @property
@@ -459,19 +464,35 @@ class Lifecycle:
         rolled: set[str] | None,
         run: dict[str, Any] | None = None,
         plan_hash: str = "",
+        plan: bool = True,
+        action: str = "",
+        trigger: str = "",
+        via: str = "",
+        log_tail: str = "",
     ) -> None:
-        """A run the UI's deployment history of ``env`` must list (stage 12/14)."""
+        """A run the UI's deployment history of ``env`` must list (stages 12, 14, 15).
+
+        ``rolled``: the components it rolled (``None``: some, a first
+        install); ``plan_hash``: the hash it ran (else any, unless ``plan``
+        is false); ``action``/``trigger``/``via`` (``approved_by.via``) and
+        ``log_tail`` (text in ``failure.log_tail``) when the stage knows them.
+        """
         revision = record.get("deployed_revision") or record.get("revision") or {}
         self.expected.setdefault(env, []).append(
             {
                 "stage": stage,
                 "commits": {k: v for k, v in revision.items() if isinstance(v, str)},
                 "plan_hash": plan_hash,
+                "plan": plan,
                 "rolled": sorted(rolled) if rolled is not None else None,
                 "checks": sorted(
                     str(r["name"])
                     for r in (run or {}).get("checks", {}).get("results", [])
                 ),
+                "action": action,
+                "trigger": trigger,
+                "via": via,
+                "log_tail": log_tail,
             }
         )
 
@@ -527,56 +548,129 @@ class Lifecycle:
     def check_history(
         self, client: UiClient, envs: list[str], problems: list[str]
     ) -> None:
-        """Each environment's runs in the UI's history, newest first, with evidence.
+        """Each environment's runs in the UI's deployment history, newest first.
 
         Through the endpoints the Deployment history page calls: the
-        applications (the environment's by name or namespace, with
-        ``capabilities.activity`` allowed) and each one's operations. When
-        the environment has no application of its own, the composition's
-        (``cluster``) history holds its runs: rows naming the environment
-        (``env``/``environment``) or its namespace.
+        ``composition_history`` capability, ``/composition/history`` (every
+        environment) and ``/composition/environments/<env>/history``.
         """
-        apps = client.items("/api/v1/applications")
-        if isinstance(apps, UiError):
-            problems.append(f"GET /api/v1/applications: {apps.status} {apps.code}")
+        caps = client.get("/api/v1/capabilities")
+        if isinstance(caps, UiError):
+            problems.append(f"GET /api/v1/capabilities: {caps.status} {caps.code}")
             return
-        log("UI applications: " + "; ".join(
-            f"{a.get('id')} ({a.get('name')}, {(a.get('target') or {}).get('namespace')}): "
-            f"activity {json.dumps((a.get('capabilities') or {}).get('activity'))}"
-            for a in apps
-        ))  # fmt: skip
+        capability = ((caps or {}).get("actions") or {}).get(
+            "composition_history"
+        ) or {}
+        if not capability.get("allowed"):
+            problems.append(
+                f"composition_history not allowed ({capability.get('reason')!r})"
+            )
+            return
+        whole = client.get("/api/v1/composition/history")
+        if isinstance(whole, UiError):
+            problems.append(
+                f"GET /api/v1/composition/history: {whole.status} {whole.code}"
+            )
+            return
+        listed = {
+            str(e.get("name")): len(e.get("runs") or [])
+            for e in whole.get("environments") or []
+        }
+        log(f"composition history: configured {whole.get('configured')}, available "
+            f"{whole.get('available')}, truncated {whole.get('truncated')}, runs {listed}")  # fmt: skip
+        if not (whole.get("configured") and whole.get("available")):
+            problems.append(
+                f"history configured {whole.get('configured')!r}, "
+                f"available {whole.get('available')!r}"
+            )
         for env in envs:
-            expected = self.expected.get(env) or []
-            app = _application(apps, env)
-            shared = app is None
-            if shared:
-                app = next(
-                    (a for a in apps if "cluster" in {a.get("id"), a.get("name")}),
-                    None,
-                )
-            if app is None:
-                problems.append(f"{env}: no application in the UI")
+            if env not in listed:
+                problems.append(f"{env}: not in /composition/history")
+            path = f"/api/v1/composition/environments/{env}/history"
+            body = client.get(path)
+            if isinstance(body, UiError):
+                problems.append(f"{env}: GET {path}: {body.status} {body.code}")
                 continue
-            activity = (app.get("capabilities") or {}).get("activity") or {}
-            if not activity.get("allowed"):
-                problems.append(
-                    f"{env}: history not readable (activity {activity.get('reason')!r})"
-                )
+            runs = next(
+                (
+                    e.get("runs") or []
+                    for e in body.get("environments") or []
+                    if e.get("name") == env
+                ),
+                None,
+            )
+            if runs is None:
+                problems.append(f"{env}: {path} has no runs list")
                 continue
-            path = f"/api/v1/applications/{_quote(app['id'])}/operations"
-            rows = client.items(path)
-            if isinstance(rows, UiError):
-                problems.append(f"{env}: GET {path}: {rows.status} {rows.code}")
-                continue
-            if shared:
-                rows = [r for r in rows if _of_env(r, env)]
-            log(f"{env}: {len(rows)} run(s) in the UI; newest: " + " | ".join(
-                f"{_find(r, ('trigger',))} {_find(r, ('created_at', 'started_at'))} "
-                f"{_find(r, ('state',))}" for r in rows[:6]
+            log(f"{env}: {len(runs)} run(s); newest: " + " | ".join(
+                f"{r.get('action')}/{r.get('state')} {r.get('trigger')} {r.get('started_at')} "
+                f"rolled {r.get('rolled')}" for r in runs[:8]
             ))  # fmt: skip
             problems.extend(
-                f"{env}: {item}" for item in _history_problems(rows, expected)
+                f"{env}: {item}"
+                for item in _history_problems(runs, self.expected.get(env) or [])
             )
+
+    def _pending_plan(self, client: UiClient, env: str, plan_hash: str) -> list[str]:
+        """The UI shows the plan waiting for approval before it is approved."""
+        path = f"/api/v1/composition/environments/{env}/actions"
+        body = client.get(path)
+        if isinstance(body, UiError):
+            return [f"GET {path}: {body.status} {body.code}"]
+        pending = (body or {}).get("pending_plan") or {}
+        log(f"{env} pending plan in the UI: {str(pending.get('plan_hash'))[:23]}, "
+            f"changes_total {pending.get('changes_total')}, counts {pending.get('counts')}")  # fmt: skip
+        problems = []
+        if pending.get("plan_hash") != plan_hash:
+            problems.append(
+                f"{env} pending_plan.plan_hash {str(pending.get('plan_hash'))[:23]!r}, "
+                f"not {plan_hash[:23]}"
+            )
+        for key in ("combined_hash", "counts", "changes"):
+            if key not in pending:
+                problems.append(f"{env} pending_plan has no {key}")
+        if not isinstance(pending.get("changes_total"), int):
+            problems.append(f"{env} pending_plan.changes_total is not a number")
+        return problems
+
+    def _registry_usage(self, client: UiClient) -> list[str]:
+        """The registry's claim usage in the UI, as measured by the controller."""
+        last: dict[str, Any] = {}
+
+        def measured() -> bool:
+            nonlocal last
+            body = client.get("/api/v1/cluster/status")
+            if isinstance(body, UiError):
+                last = {"error": f"{body.status} {body.code}"}
+                return False
+            last = ((body or {}).get("registry") or {}).get("storage") or {}
+            return (
+                isinstance(last.get("used_bytes"), int)
+                and last.get("used_source") == "du"
+                and last.get("measured_by") == "controller"
+            )
+
+        try:
+            wait_for(
+                "the registry's usage in the UI", measured, timeout=600, interval=15
+            )
+        except StageFailed:
+            return [f"cluster status registry.storage {json.dumps(last)[:300]}"]
+        log(f"registry in the UI: {json.dumps(last)[:300]}")
+        return []
+
+    def _history_configmap(self) -> list[str]:
+        found = self.cluster.get("configmap", "piceli-gitops-history", "-n", SYSTEM)
+        if not found:
+            return ["no ConfigMap piceli-system/piceli-gitops-history"]
+        try:
+            document = json.loads((found.get("data") or {}).get("history.json") or "")
+        except ValueError:
+            return ["piceli-gitops-history history.json is not JSON"]
+        schema = document.get("schema") if isinstance(document, dict) else None
+        if schema != "piceli.gitops-history.v1":
+            return [f"piceli-gitops-history schema {schema!r}"]
+        return []
 
     def _browser_history(self, url: str, problems: list[str]) -> None:
         """Optional: the Deployment history page shows rows (Playwright from ``ui/``)."""
@@ -585,12 +679,13 @@ class Lifecycle:
         if not (node and (ui / "node_modules" / "@playwright" / "test").is_dir()):
             log(f"browser check skipped: no node or no Playwright in {ui}/node_modules")
             return
+        envs = ",".join(env for env in ("main", "rc") if self.expected.get(env))
         script = self.scratch / "history.mjs"
         script.write_text(BROWSER_SCRIPT)
         try:
             done = subprocess.run(
                 [node, str(script)], capture_output=True, text=True, timeout=180,
-                env={**self.env, "PW_UI_DIR": str(ui), "PW_LAUNCH_URL": url},
+                env={**self.env, "PW_UI_DIR": str(ui), "PW_LAUNCH_URL": url, "PW_ENVS": envs},
                 check=False,
             )  # fmt: skip
         except subprocess.TimeoutExpired:
@@ -602,11 +697,14 @@ class Lifecycle:
             problems.append(
                 f"browser: exit {done.returncode}: {redact(done.stderr[-600:])}"
             )
-        elif body.get("unavailable") or not body.get("rows"):
-            problems.append(
-                f"browser: the Deployment history page shows {body.get('rows', 0)} run(s)"
-                + (" (history unavailable)" if body.get("unavailable") else "")
-            )
+        else:
+            for env, rows in (body.get("rows") or {}).items():
+                if not rows:
+                    problems.append(
+                        f"browser: Deployment history shows no run of {env}"
+                    )
+            if body.get("unavailable"):
+                problems.append("browser: Deployment history unavailable")
 
     # ------------------------------------------------------------ set up
     def setup(self) -> None:
@@ -910,7 +1008,7 @@ class Lifecycle:
         )
         self.first_main = {"record": record, "generations": self.generations("lc-main")}
         self.expect(
-            "3", "main", record, rolled=set(states), run=run,
+            "3", "main", record, rolled=None, run=run,
             plan_hash=self.values.get("main_hash", ""),
         )  # fmt: skip
 
@@ -1184,7 +1282,10 @@ class Lifecycle:
             )
         try:
             run = self.checked_run("/main/", self.since_epoch)
-            self.expect("5", "main", record, rolled=set(), run=run)
+            self.expect(
+                "5", "main", record, rolled=set(), run=run,
+                action="verified", trigger="checks-changed",
+            )  # fmt: skip
             results = {r["name"]: r["passed"] for r in run["checks"]["results"]}
             if results.get("cache-answers") is not True:
                 problems.append(
@@ -1238,8 +1339,8 @@ class Lifecycle:
         )
         run = self.checked_run("/rc/", self.since_epoch)
         self.expect(
-            "6", "rc", record, rolled=set(record.get("components") or {}), run=run,
-            plan_hash=self.values["rc_hash"],
+            "6", "rc", record, rolled=None, run=run,
+            plan_hash=self.values["rc_hash"], via="cli",
         )  # fmt: skip
         results = {r["name"]: r["passed"] for r in run["checks"]["results"]}
         check(set(results) >= ALL_CHECKS, f"checks run on rc: {sorted(results)}")
@@ -1272,7 +1373,7 @@ class Lifecycle:
             "7",
             "wp-feature",
             record,
-            rolled=set(record.get("components") or {}),
+            rolled=None,
             run=run,
         )
         results = {r["name"]: r["passed"] for r in run["checks"]["results"]}
@@ -1331,6 +1432,9 @@ class Lifecycle:
         )  # fmt: skip
         failure = record["failure"]
         tail = failure["log_tail"]
+        self.expect(
+            "8", "wp-broken", record, rolled=set(), plan=False, log_tail="version.c"
+        )
         log(
             f"failure: reason {record.get('reason')}, kept_job {failure.get('kept_job')}"
         )
@@ -1353,6 +1457,15 @@ class Lifecycle:
         if builder:
             check(builder[0]["image_id"].endswith(self.candidate_builder.split("@", 1)[1]),
                   f"the build ran {builder[0]['image_id']}")  # fmt: skip
+        self.broken_job = str(job)
+        if "15" in self.args.stages:
+            return  # stage 15 reads its history first, then deletes it
+        self._delete_broken()
+
+    def _delete_broken(self) -> None:
+        """Delete the broken branch: its kept build Job goes with it."""
+        job = self.broken_job
+        self.broken_job = ""
         self.repos.delete_branch("web", "wp-broken")
         wait_for(
             "the kept build Job removed with its branch",
@@ -1362,6 +1475,20 @@ class Lifecycle:
             ),
             timeout=600,
         )
+
+    def stage_15_ui_broken(self) -> None:
+        """The failed build's run in the UI (failure.log_tail), then delete it."""
+        check(self.broken_job, "no broken build kept (stage 8)")
+        problems: list[str] = []
+        try:
+            with self.ui_session() as (client, _):
+                self.check_history(client, ["wp-broken"], problems)
+        finally:
+            try:
+                self._delete_broken()
+            except StageFailed as error:
+                problems.append(str(error))
+        check(not problems, "; ".join(problems))
 
     def stage_9_teardown(self) -> None:
         namespace = "lc-wp-feature"
@@ -1611,11 +1738,16 @@ class Lifecycle:
         )
         hash_b = self._rc_settle(sha_b, "check change B", approve=False)
         log(f"rc asks for B: {hash_b[:23] or 'no'}; not approved")
+        ui_problems: list[str] = []
+        if hash_b and {"12", "14", "15"} & self.args.stages:
+            # The UI shows the plan before anyone approves it.
+            with self.ui_session() as (client, _):
+                ui_problems = self._pending_plan(client, "rc", hash_b)
         # The revert of B: A's plan again, already approved and running.
         self.log_since = self.mark()
         since = self.since_epoch
         reverted = self.repos.revert("infra")
-        problems: list[str] = []
+        problems: list[str] = [f"UI: {p}" for p in ui_problems]
         again = self._rc_settle(reverted, "the revert of B", approve=True)
         if again:
             same = "A's plan" if again == hash_a else "not A's plan"
@@ -1830,6 +1962,8 @@ class Lifecycle:
         with self.ui_session() as (client, url):
             self.check_history(client, envs, problems)
             self._browser_history(url, problems)
+            problems.extend(self._registry_usage(client))
+        problems.extend(self._history_configmap())
         check(not problems, "; ".join(problems))
 
     # ------------------------------------------------------------ driver
@@ -1957,16 +2091,21 @@ import { createRequire } from 'node:module';
 const require = createRequire(process.env.PW_UI_DIR + '/package.json');
 const { chromium } = require('@playwright/test');
 const launch = process.env.PW_LAUNCH_URL;
+const origin = new URL(launch).origin;
 const browser = await chromium.launch();
 try {
   const page = await browser.newPage();
   await page.goto(launch);
-  await page.goto(new URL(launch).origin + '/delivery?deliveryView=runs');
-  await page.waitForLoadState('networkidle').catch(() => {});
-  await page.getByText(/Deployment history/).first().waitFor({ timeout: 30000 }).catch(() => {});
-  await page.locator('article.activity-run').first().waitFor({ timeout: 30000 }).catch(() => {});
-  const rows = await page.locator('article.activity-run').count();
-  const unavailable = await page.getByText(/Deployment history unavailable|No accessible deployment history/).count();
+  const rows = {};
+  let unavailable = 0;
+  for (const env of (process.env.PW_ENVS || '').split(',').filter(Boolean)) {
+    await page.goto(`${origin}/delivery?historySource=environments&environment=${env}`);
+    await page.waitForLoadState('networkidle').catch(() => {});
+    const runs = page.locator('ol.history-runs details.history-run');
+    await runs.first().waitFor({ timeout: 30000 }).catch(() => {});
+    rows[env] = await runs.count();
+    unavailable += await page.getByText(/Deployment history unavailable/).count();
+  }
   console.log(JSON.stringify({ rows, unavailable: unavailable > 0 }));
 } finally {
   await browser.close();
@@ -1981,32 +2120,6 @@ def _started(served: Served) -> bool:
 
 def _version(text: str) -> tuple[int, ...]:
     return tuple(int(part) for part in re.findall(r"\d+", text)[:3])
-
-
-def _quote(value: str) -> str:
-    import urllib.parse
-
-    return urllib.parse.quote(str(value), safe="")
-
-
-def _application(apps: list[dict[str, Any]], env: str) -> dict[str, Any] | None:
-    """The UI application of ``env``: by name, else by its namespace."""
-    for app in apps:
-        if app.get("name") == env:
-            return app
-    namespace = NAMESPACES.get(env)
-    for app in apps:
-        if namespace and (app.get("target") or {}).get("namespace") == namespace:
-            return app
-    return None
-
-
-def _of_env(row: Any, env: str) -> bool:
-    """Whether a history row of the composition's application is ``env``'s."""
-    if _find(row, ("env", "environment")) == env:
-        return True
-    namespace = NAMESPACES.get(env)
-    return bool(namespace) and f'"{namespace}"' in json.dumps(row)
 
 
 def _find(value: Any, keys: tuple[str, ...]) -> Any:
@@ -2037,60 +2150,90 @@ def _names(value: Any) -> set[str]:
     return set()
 
 
-def _history_problems(rows: list[Any], expected: list[dict[str, Any]]) -> list[str]:
-    """What the history ``rows`` (newest first) lack of the ``expected`` runs.
+def _sources(run: dict[str, Any]) -> dict[str, str]:
+    return {
+        str(s.get("name")): str(s.get("commit"))
+        for s in run.get("sources") or []
+        if isinstance(s, dict)
+    }
 
-    A run matches the first row (newest) whose text holds every commit of
-    its revision; that row must carry a trigger, a plan hash (the one
-    approved, when the stage knows it), the rolled components and the check
-    outcomes (each check that ran, by name). Matches must be newest first.
+
+def _history_problems(runs: list[Any], expected: list[dict[str, Any]]) -> list[str]:
+    """What the history ``runs`` (newest first) lack of the ``expected`` runs.
+
+    A stage's run is the newest whose ``sources[].commit`` are its revision;
+    it must carry a trigger, ``started_at``, the plan hash (the one it ran,
+    when the stage knows it), the rolled components, the checks that ran
+    (by name) and what the stage knows of action, trigger, approver and
+    failure. Stages appear newest first.
     """
     problems: list[str] = []
-    texts = [json.dumps(row) for row in rows]
-    stamps = [str(_find(row, ("created_at", "started_at", "at")) or "") for row in rows]
+    stamps = [str(r.get("started_at") or "") for r in runs]
     if any(a and b and a < b for a, b in itertools.pairwise(stamps)):
         problems.append("runs are not newest first")
     matched: list[tuple[int, str]] = []
-    for run in expected:
-        label = f"stage {run['stage']}"
-        commits = [sha for sha in run["commits"].values() if sha]
+    for want in expected:
+        label = f"stage {want['stage']}"
+        commits = {k: v for k, v in want["commits"].items() if v}
         index = next(
             (
                 i
-                for i, text in enumerate(texts)
-                if commits and all(sha in text for sha in commits)
+                for i, run in enumerate(runs)
+                if commits
+                and all(_sources(run).get(k) == v for k, v in commits.items())
             ),
             None,
         )
         if index is None:
-            short = {k: v[:12] for k, v in run["commits"].items()}
+            short = {k: v[:12] for k, v in commits.items()}
             problems.append(f"no run of {label} (commits {short})")
             continue
         matched.append((index, label))
-        row, text = rows[index], texts[index]
-        if not _find(row, ("trigger",)):
+        run = runs[index]
+        if not run.get("trigger"):
             problems.append(f"{label}: no trigger")
-        if run["plan_hash"]:
-            if run["plan_hash"] not in text:
-                problems.append(f"{label}: plan hash {run['plan_hash'][:23]} not shown")
-        elif not _find(row, ("plan_hash", "approved_digest", "plan_digest")):
-            problems.append(f"{label}: no plan hash")
-        rolled = _find(row, ("rolled", "rolled_components"))
-        if rolled is None and run["rolled"]:
-            problems.append(f"{label}: no rolled components (expected {run['rolled']})")
-        elif run["rolled"] is not None and isinstance(rolled, (list, dict)):
-            if _names(rolled) != set(run["rolled"]):
+        if not run.get("started_at"):
+            problems.append(f"{label}: no started_at")
+        for key in ("action", "trigger"):
+            if want[key] and run.get(key) != want[key]:
+                problems.append(f"{label}: {key} {run.get(key)!r}, not {want[key]!r}")
+        if want["plan_hash"]:
+            if run.get("plan_hash") != want["plan_hash"]:
                 problems.append(
-                    f"{label}: rolled {sorted(_names(rolled))}, expected {run['rolled']}"
+                    f"{label}: plan_hash {str(run.get('plan_hash'))[:23]!r}, "
+                    f"not {want['plan_hash'][:23]}"
                 )
-        if not _find(row, ("checks", "check_results", "checks_outcome")):
-            problems.append(f"{label}: no check outcomes")
-        missing = [name for name in run["checks"] if name not in text]
+        elif want["plan"] and not run.get("plan_hash"):
+            problems.append(f"{label}: no plan_hash")
+        rolled = set(_names(run.get("rolled") or []))
+        if want["rolled"] is None:
+            if want["plan"] and not rolled:
+                problems.append(f"{label}: rolled nothing (a first install)")
+        elif rolled != set(want["rolled"]):
+            problems.append(f"{label}: rolled {sorted(rolled)}, not {want['rolled']}")
+        results = {
+            str(r.get("name"))
+            for r in ((run.get("checks") or {}).get("results") or [])
+            if isinstance(r, dict)
+        }
+        missing = sorted(set(want["checks"]) - results)
         if missing:
-            problems.append(f"{label}: checks not shown: {missing}")
-    for (newer, a), (older, b) in zip(matched[1:], matched, strict=False):
-        if not newer < older:
-            problems.append(f"{a} is not listed above {b}")
+            problems.append(f"{label}: checks not listed: {missing}")
+        via = (
+            ((run.get("approved_by") or {}).get("via"))
+            if isinstance(run.get("approved_by"), dict)
+            else None
+        )
+        if want["via"] and via != want["via"]:
+            problems.append(f"{label}: approved_by.via {via!r}, not {want['via']!r}")
+        tail = str((run.get("failure") or {}).get("log_tail") or "")
+        if want["log_tail"] and want["log_tail"] not in tail:
+            problems.append(f"{label}: failure.log_tail lacks {want['log_tail']!r}")
+    # ``matched`` is in stage order (oldest first): each later stage's run
+    # must sit above (at a smaller index than) the earlier one's.
+    for (earlier_at, earlier), (later_at, later) in itertools.pairwise(matched):
+        if not later_at < earlier_at:
+            problems.append(f"{later} is not listed above {earlier}")
     return problems
 
 
@@ -2162,7 +2305,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="candidate images: previous images plus the wheel (default), "
                         "or images/Dockerfile")  # fmt: skip
     parser.add_argument(
-        "--stages", default="1-14", help="e.g. 1-14 or 1,2,3 (setup always runs)"
+        "--stages", default="1-15", help="e.g. 1-15 or 1,2,3 (setup always runs)"
     )
     parser.add_argument("--playwright-ui", type=Path, default=None,
                         help="ui/ directory with node_modules for the optional browser "
