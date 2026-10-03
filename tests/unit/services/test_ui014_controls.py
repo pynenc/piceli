@@ -195,8 +195,9 @@ def test_cluster_projection_whitelists_status_and_shows_k3s_restart(
     assert "never-expose" not in str(view)
 
 
+@pytest.mark.parametrize("measured", [False, True], ids=["unmeasured", "controller-du"])
 def test_live_cluster_status_projects_declaration_and_k3s_report(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, measured: bool
 ) -> None:
     from piceli.gitops import GitOpsError
 
@@ -230,7 +231,14 @@ def test_live_cluster_status_projects_declaration_and_k3s_report(
         "/api/v1/namespaces/piceli-system/pods": {"items": [pod]},
         "/api/v1/namespaces/piceli-system/configmaps/piceli-gitops-status": {
             "data": {
-                "status.json": '{"controller":{"last_poll":"2026-10-01T09:00:00Z","poll_failures":0}}'
+                "status.json": '{"controller":{"last_poll":"2026-10-01T09:00:00Z","poll_failures":0'
+                + (
+                    ',"registry_usage":{"used_bytes":553889792,"used_source":"du",'
+                    '"claim":"piceli-registry-storage","measured_at":"2026-10-01T08:55:00Z"}'
+                    if measured
+                    else ""
+                )
+                + "}}"
             }
         },
     }
@@ -269,8 +277,17 @@ def test_live_cluster_status_projects_declaration_and_k3s_report(
         "ready": True,
         "mirror": {"kind": "k3s", "state": "needs-restart"},
     }
-    assert result["registry"]["storage"]["used_bytes"] is None
-    assert result["registry"]["storage"]["used_source"] is None
+    storage = result["registry"]["storage"]
+    if measured:
+        # The UI cannot measure (no kubelet stats, no exec): the controller's du.
+        assert storage["used_bytes"] == 553889792
+        assert storage["used_source"] == "du"
+        assert storage["measured_by"] == "controller"
+        assert storage["measured_at"] == "2026-10-01T08:55:00Z"
+    else:
+        assert storage["used_bytes"] is None
+        assert storage["used_source"] is None
+        assert storage["measured_by"] is None
     assert "private-profile" not in str(result)
 
 

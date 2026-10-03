@@ -12,8 +12,9 @@ init`` installs, with the namespace, first):
 - a ClusterIP Service (the port-forward target). No NodePort, no Ingress and
   no OIDC: the launch token, which the UI writes into the Secret
   ``piceli-ui-launch`` when it starts, is the only way in;
-- a ServiceAccount with read-only access to the controller's status
-  ConfigMap and to the environments' workloads, pods and logs (never
+- a ServiceAccount with read-only access to the controller's status and
+  run history ConfigMaps (``piceli-gitops-status``, ``piceli-gitops-history``)
+  and to the environments' workloads, pods and logs (never
   Secrets or ConfigMaps of the environments), plus write access to exactly
   two objects: the GitOps request inbox ``piceli-gitops-requests`` (the
   **Sync** button) and its own launch Secret.
@@ -47,6 +48,8 @@ LAUNCH_SECRET = "piceli-ui-launch"
 LAUNCH_KEY = "token"
 STATUS_CONFIGMAP = "piceli-gitops-status"
 REQUESTS_CONFIGMAP = "piceli-gitops-requests"
+#: Each environment's recent runs, published by the controller (read-only).
+HISTORY_CONFIGMAP = "piceli-gitops-history"
 #: The declaration ``piceli cluster init`` stores (``cluster_init.CLUSTER_CONFIG``).
 CLUSTER_CONFIG = "piceli-cluster"
 READER = "piceli-ui-read"
@@ -173,9 +176,15 @@ def render_ui(cluster: Cluster) -> list[dict[str, Any]]:
         {
             "apiGroups": [""],
             "resources": ["configmaps"],
-            # The controller's status, the requests it reads, and the
-            # cluster declaration `piceli cluster init` stores (Cluster page).
-            "resourceNames": [STATUS_CONFIGMAP, REQUESTS_CONFIGMAP, CLUSTER_CONFIG],
+            # The controller's status and run history, the requests it reads,
+            # and the cluster declaration `piceli cluster init` stores
+            # (Cluster page).
+            "resourceNames": [
+                STATUS_CONFIGMAP,
+                HISTORY_CONFIGMAP,
+                REQUESTS_CONFIGMAP,
+                CLUSTER_CONFIG,
+            ],
             "verbs": ["get"],
         },
         {

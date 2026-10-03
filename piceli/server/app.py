@@ -471,6 +471,10 @@ def create_app(
                 allowed=visible and can_sync,
                 reason=None if visible and can_sync else "not-authorized",
             )
+            # Each environment's runs, read from the controller's history.
+            actions["composition_history"] = Capability(
+                allowed=visible, reason=None if visible else "not-authorized"
+            )
         if cluster_build_control is not None:
             allowed = service._allowed(cluster_build_control.application_id, "deploy")
             actions["cluster_build"] = Capability(
@@ -659,6 +663,14 @@ def create_app(
     @app.get(f"{api}/composition/environments/{{env}}")
     def composition_environment(env: str) -> dict[str, Any]:
         return composition().environment(env)
+
+    @app.get(f"{api}/composition/history")
+    def composition_history() -> dict[str, Any]:
+        return composition().history()
+
+    @app.get(f"{api}/composition/environments/{{env}}/history")
+    def composition_environment_history(env: str) -> dict[str, Any]:
+        return composition().history(env)
 
     @app.post(f"{api}/composition/sync", status_code=202)
     def composition_sync(body: CompositionSyncRequest) -> dict[str, Any]:

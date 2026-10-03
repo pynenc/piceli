@@ -51,6 +51,12 @@ class EnvOutcome:
         ``None`` when the result does not say.
     :param verification: The deploy result's ``verification`` (trigger,
         ``checks_hash``, passed) when the checks ran as a verification.
+    :param run_id: The deploy run's journal id, when the result names it.
+    :param combined_hash: The deploy run's combined plan hash (the
+        environment's ``plan_hash`` covers it), when the result names it.
+    :param plan: For ``approval-required``, the compact plan the owner
+        approves (:func:`compact_plan`): object counts and changed objects
+        (operation, kind, name), never values.
     """
 
     state: str
@@ -59,6 +65,9 @@ class EnvOutcome:
     reason: str | None = None
     action: str | None = None
     verification: Mapping[str, Any] | None = None
+    run_id: str | None = None
+    combined_hash: str | None = None
+    plan: Mapping[str, Any] | None = None
 
     @classmethod
     def from_result(cls, value: Any) -> EnvOutcome:
@@ -99,6 +108,10 @@ class EnvOutcome:
                 action = "verified" if verification is not None else "unchanged"
         elif state == "deployed" and verification is not None:
             action = "verified"
+        run_id = result.get("run_id") if isinstance(result, Mapping) else None
+        combined = (
+            result.get("combined_hash") if isinstance(result, Mapping) else None
+        ) or get("combined_hash")
         return cls(
             state=state,
             plan_hash=get("plan_hash", "combined_hash"),
@@ -106,7 +119,74 @@ class EnvOutcome:
             reason=get("reason"),
             action=action,
             verification=None if verification is None else dict(verification),
+            run_id=run_id if isinstance(run_id, str) else None,
+            combined_hash=combined if isinstance(combined, str) else None,
+            plan=compact_plan(value) if state == "approval-required" else None,
         )
+
+
+#: Changed objects a compact plan lists (``changes_total`` is always complete).
+MAX_PLAN_CHANGES = 100
+
+
+def compact_plan(value: Any) -> dict[str, Any] | None:
+    """What an approver reviews of an ``env_up`` result, or ``None``.
+
+    ``{combined_hash, release, counts, changes: [{operation, kind, name}],
+    changes_total, create_namespace, stop, images}`` from the result's
+    ``deploy`` (the combined plan) and environment plan: names, counts and
+    image references only, never field values or secrets. A new namespace
+    has no release plan yet (``changes`` is empty, ``create_namespace``
+    true).
+    """
+    if not isinstance(value, Mapping):
+        return None
+    deploy = value.get("deploy")
+    deploy = deploy if isinstance(deploy, Mapping) else {}
+    stages = deploy.get("stages")
+    stage = stages.get("plan") if isinstance(stages, Mapping) else None
+    stage = stage if isinstance(stage, Mapping) else {}
+    source = stage.get("changes")
+    if not isinstance(source, list):
+        preview = stage.get("preview")
+        source = preview.get("changes") if isinstance(preview, Mapping) else None
+    changes = [
+        {
+            "operation": str(item.get("operation")),
+            "kind": str(item.get("kind")),
+            "name": str(item.get("name")),
+        }
+        for item in source or ()
+        if isinstance(item, Mapping) and item.get("operation") != "no-op"
+    ]
+    counts = stage.get("summary")
+    images = value.get("images")
+    stop = value.get("stop")
+    return {
+        "combined_hash": deploy.get("combined_hash")
+        if isinstance(deploy.get("combined_hash"), str)
+        else None,
+        "release": stage.get("release")
+        if isinstance(stage.get("release"), str)
+        else None,
+        "state": stage.get("state") if isinstance(stage.get("state"), str) else None,
+        "counts": {
+            str(key): count for key, count in counts.items() if type(count) is int
+        }
+        if isinstance(counts, Mapping)
+        else {},
+        "changes": changes[:MAX_PLAN_CHANGES],
+        "changes_total": len(changes),
+        "create_namespace": value.get("create_namespace") is True,
+        "stop": [str(item) for item in stop] if isinstance(stop, list) else [],
+        "images": {
+            str(key): str(ref)
+            for key, ref in sorted(images.items())
+            if isinstance(ref, str)
+        }
+        if isinstance(images, Mapping)
+        else {},
+    }
 
 
 class Ports(Protocol):
