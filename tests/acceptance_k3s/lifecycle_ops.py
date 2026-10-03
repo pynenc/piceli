@@ -239,11 +239,18 @@ class OpsStages:
             timeout=900,
             what="deployed after the start",
         )
-        wait_for(
-            f"{env}: replicas back",
-            lambda: _replicas(cluster, namespace) == before,
-            timeout=300, interval=5,
-        )  # fmt: skip
+
+        def restored() -> bool:
+            # The moved revision may change the app (the prune stages remove
+            # and rename workloads): what both declare runs as before, and
+            # nothing runs at zero.
+            now = _replicas(cluster, namespace)
+            return bool(now) and all(
+                count == before.get(name, count) and count > 0
+                for name, count in now.items()
+            )
+
+        wait_for(f"{env}: replicas back", restored, timeout=300, interval=5)
         pods = self.pod_images(namespace)  # type: ignore[attr-defined]
         wait_for(
             f"{env}: pods ready",
