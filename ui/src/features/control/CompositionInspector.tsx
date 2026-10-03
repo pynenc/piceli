@@ -39,7 +39,7 @@ export function CompositionInspector({ selection, environment, component, source
         <li><span aria-hidden="true">03</span><div><strong>{environment.name}</strong><p className="inspector-context">{environment.namespace ?? 'Namespace pending'}</p><Link className="inspector-text-link" to={environmentPath}>Open {environment.name}</Link></div></li>
       </ol></section>
       <Counterparts component={component} environment={environment} environments={environments} onInspect={onInspect} />
-      <ApplicationDestinations environment={environment} />
+      <ApplicationDestinations environment={environment} component={component.name} />
     </div> : missingComponent ? <div className="panelbody"><Notice title="Selected component unavailable"><p><code>{requestedComponent}</code> is not in the reported environment. Select another component or clear this selection.</p><button onClick={onClear}>Clear component selection</button></Notice></div> : <p className="panelbody small muted">Select an environment with reported components to inspect its source, state and image.</p>}
   </aside>;
 }

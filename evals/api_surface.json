@@ -5010,6 +5010,7 @@
      "target"
     ],
     "flags": [
+     "--cluster",
      "--dashboard",
      "--json",
      "--kubectl",
@@ -8274,6 +8275,7 @@
   "piceli.k8s.constants.secret_type",
   "piceli.k8s.constants.strategies",
   "piceli.k8s.constants.verbs",
+  "piceli.k8s.env_access",
   "piceli.k8s.observe",
   "piceli.k8s.observe_server",
   "piceli.k8s.operator",
@@ -8389,8 +8391,11 @@
   "piceli.services.environment_control",
   "piceli.services.evaluation",
   "piceli.services.execution_evidence",
+  "piceli.services.forwards",
+  "piceli.services.log_workspace",
   "piceli.services.logs",
   "piceli.services.named_environment_actions",
+  "piceli.services.navigation",
   "piceli.services.observation",
   "piceli.services.operations",
   "piceli.services.pipeline_control",

@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { api, applicationPath } from '../../api/client';
+import { api, applicationPath, logsPath, forwardsPath } from '../../api/client';
 import { Badge, Failure } from '../../components/State';
 import type { Component, Environment, Source } from './Composition';
 import { compareComponentVersions, comparisonPath, componentPath, fullCommit, matchingRefs } from './versionEvidence';
@@ -29,11 +29,11 @@ export function RefMatches({ source, commit }: { source?: Source; commit?: strin
   return refs.length ? <div className="inspector-ref-matches"><span>Published refs at this commit</span><ul aria-label="Published refs at this commit">{refs.map(ref => <li key={ref}>{ref}</li>)}</ul></div> : <p className="inspector-missing">This exact commit does not match a currently reported ref. Its ancestry is not known.</p>;
 }
 
-export function ApplicationDestinations({ environment }: { environment: Environment }) {
+export function ApplicationDestinations({ environment, component }: { environment: Environment; component?: string }) {
   const id = environment.application_id;
   const query = useQuery({ queryKey: ['application', id], queryFn: ({ signal }) => api.application(id!, signal), enabled: Boolean(id) });
   const application = query.data?.id === id ? query.data : undefined;
   return <section className="inspector-section inspector-application" aria-label="Observed application links"><div className="inspector-section-title"><span className="eyebrow">Live application</span><h3>Explore {environment.name}</h3></div>
-    {!id ? <p className="inspector-missing">No application scope is reported for this environment.</p> : <>{query.isPending && <p className="inspector-missing" role="status">Checking available application views…</p>}{query.isError && <Failure error={query.error} retry={() => void query.refetch()} />}{application && <><p className="inspector-context">{application.target.name} / {application.target.namespace}</p><div className="inspector-application-links">{application.capabilities?.inspect?.allowed && <Link to={`${applicationPath(id)}/resources`}>Inspect workloads and logs →</Link>}{application.capabilities?.activity?.allowed && <Link to={`${applicationPath(id)}/activity`}>Open deployment activity →</Link>}{application.capabilities?.evaluate?.allowed && <Link to={`${applicationPath(id)}/changes`}>Review application changes →</Link>}</div>{!application.capabilities?.inspect?.allowed && !application.capabilities?.activity?.allowed && !application.capabilities?.evaluate?.allowed && <p className="inspector-missing">No application views are available in this session.</p>}</>}</>}
+    {!id ? <p className="inspector-missing">No application scope is reported for this environment.</p> : <>{query.isPending && <p className="inspector-missing" role="status">Checking available application views…</p>}{query.isError && <Failure error={query.error} retry={() => void query.refetch()} />}{application && <><p className="inspector-context">{application.target.name} / {application.target.namespace}</p><div className="inspector-application-links">{application.capabilities?.inspect?.allowed && <Link to={`${applicationPath(id)}/resources`}>Inspect workloads and logs →</Link>}<Link to={logsPath({ scope: id, workload: component })}>{component ? `Logs of ${component}` : `Logs of ${environment.name}`} →</Link><Link to={forwardsPath({ application: id })}>Forward a port →</Link>{application.capabilities?.activity?.allowed && <Link to={`${applicationPath(id)}/activity`}>Open deployment activity →</Link>}{application.capabilities?.evaluate?.allowed && <Link to={`${applicationPath(id)}/changes`}>Review application changes →</Link>}</div>{!application.capabilities?.inspect?.allowed && !application.capabilities?.activity?.allowed && !application.capabilities?.evaluate?.allowed && <p className="inspector-missing">No application views are available in this session.</p>}</>}</>}
   </section>;
 }

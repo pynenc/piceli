@@ -89,7 +89,7 @@ ui-check: ## Check the browser contract and TypeScript application
 ui-build: ## Bundle offline browser assets into the Python package
 	cd ui && npm run build
 
-.PHONY: ui ui-serve test-browser-harbor test-browser-connected test-browser-preview
+.PHONY: ui ui-serve test-browser-harbor test-browser-connected test-browser-preview test-browser-workspaces
 PICELI_UI_PREVIEW_ARGS ?=
 ui: ## Install, build and open the current app with disposable example data (no cluster needed)
 	uv run --frozen --extra ui python scripts/ui_preview.py $(PICELI_UI_PREVIEW_ARGS)
@@ -126,6 +126,9 @@ test-browser-harbor: ## Check Harbor navigation, topology, themes and URL contin
 
 test-browser-connected: ## Check topology, versions, attention, search and fleet filters at three sizes
 	uv run --frozen --extra ui python tests/browser/run.py --config ../tests/browser/connected.config.cjs
+
+test-browser-workspaces: ## Check Logs, Forwards, the compact Overview and navigation badges at four sizes
+	uv run --frozen --extra ui python tests/browser/run.py --config ../tests/browser/workspaces.config.cjs
 
 test-browser-preview: ## Check plain preview URLs and fixture-only browser bootstrap
 	uv run --frozen --extra ui python tests/browser/run.py --config ../tests/browser/preview.config.cjs

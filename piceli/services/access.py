@@ -14,9 +14,9 @@ from typing import Any
 
 from piceli.artifacts.process import ToolPin
 from piceli.k8s.access import KubernetesWorkloadReader, LivePodResolver
+from piceli.k8s.env_access import forward_shortcut
 from piceli.k8s.observe import ForwardSupervisor
 from piceli.k8s.owned_processes import OwnedProcessRegistry
-from piceli.k8s.ui_config import UiShortcut
 from piceli.services.contracts import (
     AccessPage,
     AccessSession,
@@ -175,13 +175,15 @@ class AccessService:
                 raise QueryError("ui-access-port-conflict", 409)
             identity = uuid.uuid4().hex
             self._starting[identity] = request.local_port
-        shortcut = UiShortcut(
-            id="ui-" + identity,
-            label="Local access",
-            target=f"{resource.identity.kind.lower()}/{resource.identity.name}",
+        # Described as `piceli access ENV --cluster` describes its forwards.
+        shortcut = forward_shortcut(
+            "ui-" + identity,
+            kind=resource.identity.kind,
+            name=resource.identity.name,
             namespace=resource.identity.namespace,
             local_port=request.local_port,
             remote_port=request.remote_port,
+            label="Local access",
         )
         deadline = time.monotonic() + request.duration_seconds
         record = AccessSession(
@@ -437,6 +439,25 @@ class AccessService:
                     and owned.record.principal_id == self.query._principal().id
                 ]
             )
+
+    def sessions(self) -> tuple[AccessSession, ...]:
+        """This principal's sessions in every scope, including removed scopes."""
+        principal = self.query._principal().id
+        with self._lock:
+            self._prune_locked()
+            return tuple(
+                owned.record
+                for owned in self._sessions.values()
+                if owned.record.principal_id == principal
+            )
+
+    def stop_owned(self, id: str) -> AccessSession:
+        """Stop this principal's session ``id`` whose scope may no longer exist."""
+        with self._lock:
+            owned = self._sessions.get(id)
+            if owned is None or owned.record.principal_id != self.query._principal().id:
+                raise QueryError("ui-not-found")
+        return self._end(id, "stopped")
 
     def stop(self, application_id: str, id: str) -> AccessSession:
         self.get(application_id, id)

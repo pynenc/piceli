@@ -172,12 +172,13 @@ def secret_needles(values: Iterable[Any]) -> tuple[str, ...]:
     return tuple(sorted(found, key=lambda item: (-len(item), item)))
 
 
-def redact(text: str, known: Sequence[str] = ()) -> str:
+def redact(text: str, known: Sequence[str] = (), *, limit: int = LINE_CHARS) -> str:
     """``text`` without known secret values or anything that looks like one.
 
     Known values become ``[REDACTED]``; so do ``password=…``/``token: …``
     style assignments, bearer tokens, URL credentials, JSON Web Tokens and
-    PEM private key markers. The result is cut to :data:`LINE_CHARS`.
+    PEM private key markers. The result is cut to ``limit`` characters
+    (:data:`LINE_CHARS` by default).
     """
     cleaned = text
     for value in known:
@@ -187,8 +188,8 @@ def redact(text: str, known: Sequence[str] = ()) -> str:
         cleaned = pattern.sub(r"\g<1>[REDACTED]", cleaned)
     cleaned = "".join(char if char.isprintable() else " " for char in cleaned)
     cleaned = cleaned.strip()
-    if len(cleaned) > LINE_CHARS:
-        cleaned = cleaned[: LINE_CHARS - 1] + "…"
+    if len(cleaned) > limit:
+        cleaned = cleaned[: limit - 1] + "…"
     return cleaned
 
 

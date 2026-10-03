@@ -6,6 +6,50 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ## Version 0.14.7
 
+- **UI: one Logs workspace** (`/logs`, **Operations → Logs**): container logs
+  of every application, environment and profile scope the session may read,
+  merged by time, with URL-backed filters (scope, workload, pod, container,
+  previous instance, time range, level detected from the line, text search,
+  lines per container) and a live tail you can pause. A local `piceli ui
+  serve` can add read-only namespaces of other saved profiles, each read with
+  its own kubeconfig and context. Every application, environment, component,
+  workload and pod links into it with its filters set; the per-pod Logs tab
+  stays and links there too. New read APIs: `GET /api/v1/logs/sources`,
+  `GET /api/v1/logs/lines` (at most 12 containers and 5,000 lines per read,
+  the same `logs` grant as before), `POST|DELETE /api/v1/profiles/scopes`.
+- **UI: one Port forwards workspace** (`/forwards`): every forward or
+  connection ticket of the session across scopes, with its state, local
+  address and expiry; start one (target and ports, preselected by each
+  workload's **Forward** link) and stop it through the existing per-application
+  paths. Stale forwards (a removed scope, a forward reconnecting, or one left
+  running by a previous UI process, from the same registry `piceli ui serve`
+  reaps at start) are shown and can be stopped without touching anything
+  else. APIs: `GET /api/v1/forwards`, `POST /api/v1/forwards/stale/stop`.
+- **UI: the in-cluster composition UI issues connection tickets.** Forwards
+  from the UI that `piceli access ui` opens run on your machine through
+  `piceli ui connect --server http://127.0.0.1:8790 …` (pending → ready →
+  stopped, listed in the Forwards workspace). The UI only reads the selected
+  object; it needs no new RBAC. `piceli ui connect` accepts plain http only
+  for a loopback server; any other server still needs https.
+- **`piceli access ENV --cluster infra.py:CLUSTER`**: forwards every Service
+  port of a composition environment on free local ports, with the cluster's
+  credentials profile (named environments; refusals `env-not-found`,
+  `access-target-invalid`).
+- **UI: Overview without nested scroll.** The system schematic is sized to its
+  content and fits the width (pan and zoom only after you zoom in, or in the
+  expanded explorer); smaller cards, a tighter header, a compact environment
+  strip that wraps instead of scrolling, and the inspector beside the canvas.
+- **UI: navigation** with alert counts (approvals waiting, degraded
+  environments, failed builds, stale forwards, registry warnings, from
+  `GET /api/v1/navigation`) and collapsible, keyboard-accessible sub-menus
+  (each environment, history and approvals, cluster nodes and registry) whose
+  open state is remembered in the browser.
+- **Fix:** pod logs read by the UI were one line holding a Python bytes
+  literal (`b'…\n…'`); they are decoded (UTF-8, invalid bytes replaced) and
+  split into lines.
+- **Fix:** log lines the UI and API return are redacted with the shared
+  redaction (`password=`, `token:`, bearer tokens, URL credentials, JSON Web
+  Tokens, private keys become `[REDACTED]`).
 - **Tests:** the local executor's delayed-mutation test no longer depends on a
   0.25 s window that slow CI runners missed (2 s window, polled to `ready`).
 

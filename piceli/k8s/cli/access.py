@@ -51,6 +51,7 @@ from piceli.k8s.access import (
     stop_stale,
 )
 from piceli.k8s.cli.ui_forward import access_ui
+from piceli.k8s.env_access import composition_env_target
 from piceli.k8s.ui_config import UI_CONFIG_ENV, load_ui_config
 
 TARGET_HELP = (
@@ -85,7 +86,16 @@ def _is_env(target: str) -> bool:
     return ":" not in target and not target.endswith((".toml", ".py"))
 
 
-def _resolve(target: str, pipeline: str | None = None) -> AccessTarget:
+def _resolve(
+    target: str, pipeline: str | None = None, cluster: str | None = None
+) -> AccessTarget:
+    if cluster is not None:
+        if not _is_env(target):
+            reject("access-target-invalid", "with --cluster, TARGET is an environment")
+        try:
+            return composition_env_target(cluster, target, Path.cwd())
+        except AccessTargetError as error:
+            reject(error.code, str(error))
     if pipeline and _is_env(target):
         return _resolve_env(target, pipeline)
     try:
@@ -404,6 +414,16 @@ def access(
             show_default=False,
         ),
     ] = None,
+    cluster: Annotated[
+        str | None,
+        typer.Option(
+            "--cluster",
+            help="With an environment name as TARGET: the composition's Cluster "
+            "(infra.py:ATTR). Forwards every Service port of that environment on "
+            "free local ports, with the cluster's credentials profile",
+            show_default=False,
+        ),
+    ] = None,
 ) -> None:
     """Forward the app's declared ports to 127.0.0.1 and keep them healthy.
 
@@ -416,7 +436,7 @@ def access(
     from piceli.k8s.cli.observe import interrupts_as_keyboard_interrupt
     from piceli.k8s.observe import ForwardSupervisor
 
-    resolved = _resolve(target, pipeline)
+    resolved = _resolve(target, pipeline, cluster)
     selected, unknown = select_shortcuts(resolved.shortcuts, only)
     if unknown:
         say(f"piceli: unknown forward id(s): {', '.join(unknown)}")

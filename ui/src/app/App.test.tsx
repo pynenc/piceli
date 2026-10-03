@@ -87,6 +87,7 @@ describe('observed application state', () => {
       const path = new URL(request.url).pathname;
       if (path.endsWith('/capabilities')) return Response.json(capabilities);
       if (path.endsWith('/profiles')) return Response.json({ active: null, profiles: [] });
+      if (path.endsWith('/navigation')) return Response.json({});
       if (path.endsWith('/resources')) { observed = true; return Response.json(resourcePage); }
       applicationReads++;
       return Response.json({ ...application, freshness: observed ? application.freshness : { state: 'unavailable', observed_at: null } });

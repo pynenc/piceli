@@ -4,7 +4,8 @@ import { Link, NavLink, Navigate, Route, Routes, useLocation, useParams, useSear
 import { applicationPath, api } from '../api/client';
 import type { Capabilities } from '../api/generated';
 import { Badge, Failure, Loading, Notice } from '../components/State';
-import { compositionHome, compositionNav, compositionRoutes } from '../features/control/compositionRoutes';
+import { compositionHome, compositionRoutes } from '../features/control/compositionRoutes';
+import { Navigation } from './Navigation';
 import { useUrlText } from './useUrlText';
 import { Icon } from '../components/Icon';
 import { Appearance } from '../components/Appearance';
@@ -27,6 +28,8 @@ const GitOps = lazy(async () => ({ default: (await import('../features/control/C
 const Pipeline = lazy(async () => ({ default: (await import('../features/control/Pipeline')).Pipeline }));
 const ClusterBuild = lazy(async () => ({ default: (await import('../features/control/ClusterBuild')).ClusterBuild }));
 const Cluster = lazy(async () => ({ default: (await import('../features/cluster/Cluster')).Cluster }));
+const LogWorkspace = lazy(async () => ({ default: (await import('../features/logs/LogWorkspace')).LogWorkspace }));
+const ForwardsWorkspace = lazy(async () => ({ default: (await import('../features/access/ForwardsWorkspace')).ForwardsWorkspace }));
 const ProfilePicker = lazy(async () => ({ default: (await import('../features/cluster/ProfilePicker')).ProfilePicker }));
 
 export function App() {
@@ -43,22 +46,7 @@ export function App() {
     <aside className="sidebar">
       <Link to={compositionHome(capabilities.data) ?? '/applications'} className="brand"><img src={piceliLogo} width="36" height="36" alt="" /><span>piceli<small>Infrastructure, connected</small></span></Link>
       <CommandPalette capabilities={capabilities.data} />
-      <nav aria-label="Main navigation">
-        <div className="nav-group"><p className="eyebrow nav-label">Workspace</p>
-          {compositionNav(capabilities.data)}
-          <NavLink to="/applications"><Icon name="applications" /><span>Applications</span></NavLink>
-          {capabilities.data?.actions.cluster_status?.allowed && <NavLink to="/cluster"><Icon name="cluster" /><span>Cluster</span></NavLink>}
-        </div>
-        {(capabilities.data?.actions.activity?.allowed || capabilities.data?.actions.composition_history?.allowed || capabilities.data?.actions.pipeline?.allowed || capabilities.data?.actions.cluster_build?.allowed) && <div className="nav-group"><p className="eyebrow nav-label">Delivery</p>
-          {(capabilities.data?.actions.activity?.allowed || capabilities.data?.actions.composition_history?.allowed) && <NavLink to="/delivery"><Icon name="history" /><span>Deployment history</span></NavLink>}
-          {capabilities.data?.actions.pipeline?.allowed && <NavLink to="/pipeline"><Icon name="pipeline" /><span>Pipeline</span></NavLink>}
-          {capabilities.data?.actions.cluster_build?.allowed && <NavLink to="/cluster-build"><Icon name="build" /><span>Cluster build</span></NavLink>}
-        </div>}
-        {(capabilities.data?.actions.environments?.allowed || capabilities.data?.actions.gitops?.allowed) && <div className="nav-group"><p className="eyebrow nav-label">Operations</p>
-          {capabilities.data?.actions.environments?.allowed && <NavLink to="/environments"><Icon name="environments" /><span>{capabilities.data.actions.composition?.allowed ? 'Branch environments' : 'Environments'}</span></NavLink>}
-          {capabilities.data?.actions.gitops?.allowed && <NavLink to="/gitops"><Icon name="gitops" /><span>GitOps</span></NavLink>}
-        </div>}
-      </nav>
+      <Navigation capabilities={capabilities.data} />
       <div className="session"><span className="avatar" aria-hidden="true">{capabilities.data?.principal.name.slice(0, 2).toUpperCase() ?? '…'}</span><div>{capabilities.data?.principal.name ?? 'Connecting'}<small>{capabilities.data?.mode === 'cluster' ? 'Scoped session' : 'Local session'}</small></div></div>
     </aside>
     <div className="workspace"><header className="topbar"><Breadcrumb /><div className="workspace-tools">{capabilities.data?.mode === 'cluster' ? <span className="hosting">Authenticated UI</span> : <Suspense fallback={<span className="hosting">Local UI</span>}><ProfilePicker /></Suspense>}<Appearance /></div></header>
@@ -74,6 +62,8 @@ export function App() {
           <Route path="/cluster-build" element={capabilities.data?.actions.cluster_build?.allowed ? <ClusterBuild /> : <Notice title="Cluster build unavailable">This installed UI has no configured cluster build for this session.</Notice>} />
           <Route path="/environments" element={capabilities.data?.actions.environments?.allowed ? <Environments canChange={capabilities.data.actions.environment_change?.allowed === true} /> : <Notice title="Environments unavailable">This service has no configured environment pipeline for this session.</Notice>} />
           <Route path="/gitops" element={capabilities.data?.actions.gitops?.allowed ? <GitOps canChange={capabilities.data.actions.gitops_change?.allowed === true} canReadEnvironments={capabilities.data.actions.environments?.allowed === true} /> : <Notice title="GitOps unavailable">This service has no controller access for this session.</Notice>} />
+          <Route path="/logs" element={capabilities.isPending ? <Loading text="Loading log capabilities…" /> : capabilities.data?.actions.logs?.allowed ? <LogWorkspace capabilities={capabilities.data} /> : <Notice title="Logs unavailable">This session cannot read container logs.</Notice>} />
+          <Route path="/forwards" element={capabilities.isPending ? <Loading text="Loading forward capabilities…" /> : <ForwardsWorkspace capabilities={capabilities.data} />} />
           <Route path="/applications/:applicationId" element={<Navigate to="overview" replace />} />
           <Route path="/runs/:operationId" element={<Run key={location.pathname} />} />
           <Route path="/applications/:applicationId/:tab" element={<ApplicationDetail canReadComposition={capabilities.data?.actions.composition?.allowed === true} />} />

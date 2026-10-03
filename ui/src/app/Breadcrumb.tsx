@@ -2,7 +2,7 @@ import { Link, useLocation, useMatch } from 'react-router-dom';
 import { compositionTitle } from '../features/control/compositionRoutes';
 
 const applicationViews: Record<string, string> = { overview: 'Overview', resources: 'Resources', changes: 'Changes', plans: 'Plans', activity: 'Activity' };
-const pages: Record<string, string> = { '/delivery': 'Deployment history', '/applications': 'Applications', '/cluster': 'Cluster', '/pipeline': 'Pipeline', '/cluster-build': 'Cluster build', '/environments': 'Environments', '/gitops': 'GitOps' };
+const pages: Record<string, string> = { '/delivery': 'Deployment history', '/applications': 'Applications', '/cluster': 'Cluster', '/pipeline': 'Pipeline', '/cluster-build': 'Cluster build', '/environments': 'Environments', '/gitops': 'GitOps', '/logs': 'Logs', '/forwards': 'Port forwards' };
 
 /** The route names the view; the existing page heading supplies its live identity. */
 export function Breadcrumb() {

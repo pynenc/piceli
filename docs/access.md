@@ -151,6 +151,22 @@ New to Piceli? Start with {doc}`getting_started/index`.
   `release.toml`) adds the release state, and `.last_checks()` adds the
   latest checks result.
 
+A **composition environment** is the third form: its name as `TARGET` and
+the composition's cluster with `--cluster`:
+
+```sh
+piceli access main --cluster infra.py:my_cluster
+```
+
+The composition module names the environment's namespace, and the cluster's
+`credentials` profile reaches it (its explicit kubeconfig and context, never
+the current context). Component ports live in their contracts, in the source
+repositories, so the forwards are the environment's live Services: one per
+Service port, each on a free loopback port, so several environments are
+reachable at once. Only named environments are supported (`env-not-found`
+otherwise; a branch environment uses `--pipeline`). The web UI describes its
+forwards the same way (see {doc}`ui`).
+
 ## If it fails
 
 | You see | Meaning | Next step |

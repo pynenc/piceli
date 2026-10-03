@@ -269,3 +269,44 @@
   .composition-inventory-disclosure>summary>span:last-child { font-size:10px; }
 }
 @media(prefers-reduced-motion:reduce) { .composition-inventory-disclosure>summary::before { transition:none; } }
+
+/* 0.14.7 overview: one scroll (the page); the schematic sizes to its content. */
+.composition-explorer-heading { margin-bottom: 10px; }
+.composition-explorer-heading h1 { font-size: 21px; letter-spacing: -.5px; }
+.composition-statusline { margin-top: 4px; }
+.composition-viewbar { margin-bottom: 8px; }
+.composition-view-tabs button { min-height: 34px; padding: 4px 2px 8px; }
+.composition-environment-stop { flex: 1 0 150px; max-width: 260px; padding: 8px 12px 8px; }
+.composition-environment-stop-meta { margin-top: 3px; gap: 9px; }
+.composition-environment-stop-versions { margin-top: 3px; min-height: 0; gap: 8px; }
+.composition-map-heading { min-height: 0; padding: 7px 12px; }
+.composition-explorer .composition-canvas-toolbar { min-height: 34px; padding: 3px 10px; }
+.composition-graph-node { padding: 6px 10px; gap: 1px; justify-content: space-between; }
+.composition-graph-node.node-component { padding-left: 9px; }
+.composition-graph-node>strong { font-size: 13px; line-height: 1.35; }
+.composition-node-kind { font-size: 8.5px; }
+.composition-node-kind>.icon { width: 13px; height: 13px; }
+.composition-node-meta { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; }
+.composition-node-meta .composition-node-detail { flex: 1; min-width: 0; }
+.composition-node-state .badge { font-size: 9.5px; padding: 1px 5px; white-space: nowrap; }
+.composition-overview .composition-explorer .composition-landscape { height: auto; align-items: start; }
+.composition-overview .composition-explorer .composition-map { height: auto; align-self: start; }
+.composition-overview .composition-explorer .composition-topology { flex: none; }
+.composition-overview .composition-graph-viewport { flex: none; min-height: 0; max-height: none; overflow-x: hidden; overflow-y: hidden; cursor: default; }
+.composition-overview .composition-graph-viewport[data-pannable=true] { overflow-x: auto; cursor: grab; }
+.composition-overview .composition-explorer .composition-inspector { max-height: none; overflow: visible; align-self: stretch; }
+.composition-overview .composition-explorer .composition-inspector>.panelhead { position: static; padding: 12px 14px; }
+.composition-overview .composition-explorer .composition-inspector>.panelhead h2 { font-size: 17px; }
+@media (max-width: 850px) {
+  .composition-overview .composition-explorer .composition-map { height: auto; }
+}
+.composition-overview .composition-graph-scaled { min-height: 0; }
+.composition-overview .composition-environment-rail { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); overflow: visible; }
+.composition-overview .composition-environment-stop { max-width: none; border-bottom: 1px solid var(--line); margin-bottom: -1px; }
+.composition-environment-stop-heading strong { min-width: 4ch; flex: 1 1 auto; }
+.composition-environment-stop-heading .badge { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 560px) { .composition-overview .composition-environment-rail { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.composition-graph-lanes { grid-template-columns: repeat(3, 192px); gap: 48px; padding: 14px 12px 0; overflow: hidden; }
+.composition-overview .composition-environment-stop { padding: 7px 11px; }
+.composition-overview .composition-environment-stop-meta, .composition-overview .composition-environment-stop-versions { line-height: 1.3; }
+.composition-overview .composition-environment-stop-versions { flex-wrap: nowrap; overflow: hidden; white-space: nowrap; }

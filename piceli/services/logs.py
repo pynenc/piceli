@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
+from piceli.k8s.ops.diagnosis import redact
 from piceli.services.contracts import (
     Capability,
     Freshness,
@@ -16,6 +17,18 @@ from piceli.services.contracts import (
 )
 from piceli.services.query import QueryError, QueryService, _now, _resource
 from piceli.services.registration import Registration
+
+
+def redact_line(text: str) -> str:
+    """One log line without secret-looking values; indentation is kept.
+
+    The shared redaction of build and failure tails
+    (:func:`piceli.k8s.ops.diagnosis.redact`): ``password=``/``token:``
+    assignments, bearer tokens, URL credentials, JSON Web Tokens and private
+    keys become ``[REDACTED]``; a line is cut at 2,000 characters.
+    """
+    indent = text[: len(text) - len(text.lstrip(" \t"))].replace("\t", "  ")[:16]
+    return indent + redact(text, limit=2000)
 
 
 class LogService:
@@ -194,7 +207,7 @@ class LogService:
             if reader is not None:
                 reader.close()
         bounded = raw[-1_048_576:]
-        lines = bounded.splitlines()[-tail_lines:]
+        lines = [redact_line(line) for line in bounded.splitlines()[-tail_lines:]]
         cursor = hashlib.sha256(
             "\0".join((pod_uid, container, str(previous), bounded)).encode()
         ).hexdigest()[:24]

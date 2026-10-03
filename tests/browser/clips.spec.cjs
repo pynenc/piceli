@@ -272,3 +272,49 @@ test('pipeline-plan-approval', async ({ page }) => {
   await expect(page.getByRole('button', { name: /^Approve/ })).toBeEnabled();
   await pause(page, 1000);
 });
+
+test('logs-workspace', async ({ page }) => {
+  await page.goto('/composition/environments/main');
+  await page.getByRole('main').getByRole('link', { name: 'Logs', exact: true }).first().click();
+  const lines = page.getByRole('region', { name: 'Container log lines' });
+  await expect(lines.getByText('INFO starting api v1.4.0').first()).toBeVisible();
+  await pause(page, 1500);
+  await shot(page, 'logs-workspace');
+  await page.getByRole('checkbox', { name: /^Error/ }).click();
+  await page.getByRole('checkbox', { name: /^Warning/ }).click();
+  await expect(lines.getByText('INFO starting api v1.4.0')).toHaveCount(0);
+  await pause(page, 1200);
+  await lines.getByText(/ERROR request failed/).first().click();
+  await expect(page.getByRole('region', { name: 'Selected log line' })).toBeVisible();
+  await pause(page, 1600);
+});
+
+test('forwards-workspace', async ({ page }) => {
+  await page.goto('/applications/shop/resources?view=table');
+  await page.getByRole('button', { name: 'Inspect Service api in piceli-test', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Resource details' }).getByRole('link', { name: 'Forward', exact: true }).click();
+  const start = page.getByRole('region', { name: 'Start a forward' });
+  await start.getByRole('spinbutton').fill('18491');
+  await pause(page, 900);
+  await start.getByRole('button', { name: 'Start forward' }).click();
+  const active = page.getByRole('region', { name: 'Active forwards' });
+  await expect(active.getByRole('link', { name: 'http://127.0.0.1:18491' })).toBeVisible();
+  await pause(page, 1500);
+  await shot(page, 'forwards-workspace');
+  await active.getByRole('button', { name: 'Stop forward api 18491' }).click();
+  await expect(active.getByRole('link', { name: 'http://127.0.0.1:18491' })).toHaveCount(0);
+  await pause(page, 1000);
+});
+
+test('navigation-badges', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/composition/overview?environment=main');
+  const nav = page.getByRole('navigation', { name: 'Main navigation' });
+  await expect(nav.getByTitle(/approvals waiting$/)).toBeVisible();
+  await pause(page, 1200);
+  await shot(page, 'overview-compact');
+  await nav.getByRole('button', { name: 'Expand Environments' }).click();
+  await nav.getByRole('link', { name: 'preview', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'preview', exact: true })).toBeVisible();
+  await pause(page, 1500);
+});

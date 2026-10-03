@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, ApiError, basePath } from '../../api/client';
+import { Link } from 'react-router-dom';
+import { api, ApiError, basePath, forwardsPath } from '../../api/client';
 import type { AccessSession, Resource } from '../../api/generated';
 import { Badge, formatTime, Loading, Notice } from '../../components/State';
 
@@ -19,7 +20,8 @@ export function AccessPanel(props: Props) {
   const capabilities = useQuery({ queryKey: ['capabilities'], queryFn: ({ signal }) => api.capabilities(signal) });
   if (capabilities.isPending) return <Loading text="Checking connection mode…" />;
   if (capabilities.isError) return <Notice title="Connection mode unavailable">Refresh the resource to retry.</Notice>;
-  return capabilities.data?.mode === 'cluster' ? <RemoteAccessPanel {...props} /> : <LocalAccessPanel {...props} />;
+  // Tickets wherever the browser cannot bind a port: the OIDC service and the in-cluster UI.
+  return capabilities.data?.mode === 'cluster' || capabilities.data?.actions.remote_access?.allowed ? <RemoteAccessPanel {...props} /> : <LocalAccessPanel {...props} />;
 }
 
 function LocalAccessPanel({ applicationId, resource }: Props) {
@@ -30,7 +32,7 @@ function LocalAccessPanel({ applicationId, resource }: Props) {
   const start = useMutation({ mutationFn: () => api.startAccess(applicationId, { resource_id: resource.id, resource_uid: resource.identity.uid ?? '', local_port: localPort, remote_port: remotePort }), retry: false, onSuccess: () => void client.invalidateQueries({ queryKey: ['access-sessions', applicationId] }) });
   const stop = useMutation({ mutationFn: (id: string) => api.stopAccess(applicationId, id), retry: false, onSuccess: () => void client.invalidateQueries({ queryKey: ['access-sessions', applicationId] }) });
   const valid = Boolean(resource.identity.uid && resource.ports?.includes(remotePort) && Number.isInteger(localPort) && localPort >= 1 && localPort <= 65535);
-  return <section className="access-panel"><h4>Local connection</h4><p className="small muted">Piceli supervises a loopback forward on the host running this local UI. Ready means that owned listener passed a TCP probe. A port on a remote Piceli server is never presented as a port on your laptop.</p>
+  return <section className="access-panel"><div className="log-panel-head"><h4>Local connection</h4><Link to={forwardsPath()}>All forwards →</Link></div><p className="small muted">Piceli supervises a loopback forward on the host running this local UI. Ready means that owned listener passed a TCP probe. A port on a remote Piceli server is never presented as a port on your laptop.</p>
     {!resource.capabilities?.access?.allowed ? <Notice title="Access unavailable">{resource.capabilities?.access?.reason ?? 'No forwardable port was observed.'}</Notice> : <div className="access-form"><label>Target port<select value={remotePort} onChange={event => setRemotePort(Number(event.target.value))}>{resource.ports?.map(port => <option key={port} value={port}>{port}</option>)}</select></label><label>Local port<input type="number" min={1} max={65535} value={localPort} onChange={event => setLocalPort(Number(event.target.value))} /></label><button className="primary" disabled={!valid || start.isPending} onClick={() => start.mutate()}>{start.isPending ? 'Checking connection…' : 'Start local connection'}</button></div>}
     {start.isError && <ErrorNotice title="Connection did not start" error={start.error} />}{stop.isError && <ErrorNotice title="Connection did not stop" error={stop.error} />}
     {sessions.isPending && <Loading text="Loading connection sessions…" />}{sessions.isError && <Notice title="Connection status unavailable">Refresh the resource to retry.</Notice>}
@@ -50,7 +52,7 @@ function RemoteAccessPanel({ applicationId, resource }: Props) {
   const ticket = issue.data;
   const currentTicket = sessions.data?.items.find(item => item.id === ticket?.session.id);
   const claimable = ticket && (!currentTicket || currentTicket.state === 'pending');
-  return <section className="access-panel"><h4>Connect from your machine</h4><p className="small muted">This Piceli service runs remotely. Issue a short-lived ticket here, then start the connection on your own machine with an explicit kubeconfig. Pending means no local port is open yet; ready is reported by your client after it probes its own loopback port.</p>
+  return <section className="access-panel"><div className="log-panel-head"><h4>Connect from your machine</h4><Link to={forwardsPath()}>All tickets →</Link></div><p className="small muted">This Piceli service runs remotely. Issue a short-lived ticket here, then start the connection on your own machine with an explicit kubeconfig. Pending means no local port is open yet; ready is reported by your client after it probes its own loopback port.</p>
     {!resource.capabilities?.access?.allowed ? <Notice title="Access unavailable">{resource.capabilities?.access?.reason ?? 'No forwardable port was observed.'}</Notice> : <div className="access-form"><label>Target port<select value={remotePort} onChange={event => setRemotePort(Number(event.target.value))}>{resource.ports?.map(port => <option key={port} value={port}>{port}</option>)}</select></label><label>Port on your machine<input type="number" min={1} max={65535} value={localPort} onChange={event => setLocalPort(Number(event.target.value))} /></label><button className="primary" disabled={!valid || issue.isPending} onClick={() => issue.mutate()}>{issue.isPending ? 'Issuing ticket…' : 'Issue connection ticket'}</button></div>}
     {issue.isError && <ErrorNotice title="Ticket was not issued" error={issue.error} />}{stop.isError && <ErrorNotice title="Connection did not stop" error={stop.error} />}
     {claimable && <div className="access-session" role="status"><div><p><strong>One-time pairing secret</strong></p><p className="small muted">Keep this private and claim it within two minutes. It is shown only now; if you leave this page, issue a new ticket.</p><p><code>{ticket.pairing_secret}</code></p><p><strong>Ticket ID</strong> <code>{ticket.session.id}</code></p><p className="small">On your machine, run the command below. It prompts for the pairing secret without echo.</p><pre>{`piceli ui connect --server ${server} --ticket ${ticket.session.id} --kubeconfig /path/to/kubeconfig --context YOUR_CONTEXT --local-port ${localPort}`}</pre></div></div>}

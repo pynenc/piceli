@@ -800,6 +800,104 @@
         "title": "FieldChange",
         "type": "object"
       },
+      "ForwardEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "application_name": {
+            "title": "Application Name",
+            "type": "string"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WorkspaceScope"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session": {
+            "$ref": "#/components/schemas/AccessSession"
+          },
+          "stale": {
+            "default": false,
+            "title": "Stale",
+            "type": "boolean"
+          },
+          "stale_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stale Reason"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "required": [
+          "session",
+          "application_name"
+        ],
+        "title": "ForwardEntry",
+        "type": "object"
+      },
+      "ForwardPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ForwardEntry"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "mode": {
+            "enum": [
+              "local",
+              "cluster",
+              "unavailable"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "orphans": {
+            "default": 0,
+            "title": "Orphans",
+            "type": "integer"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "mode",
+          "items"
+        ],
+        "title": "ForwardPage",
+        "type": "object"
+      },
       "Freshness": {
         "additionalProperties": false,
         "properties": {
@@ -1142,6 +1240,110 @@
           "commit"
         ],
         "title": "NamedEnvironmentPromotionRequest",
+        "type": "object"
+      },
+      "NavigationEnvironment": {
+        "additionalProperties": false,
+        "properties": {
+          "application_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Application Id"
+          },
+          "health": {
+            "title": "Health",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "state",
+          "health"
+        ],
+        "title": "NavigationEnvironment",
+        "type": "object"
+      },
+      "NavigationSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "approvals": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approvals"
+          },
+          "degraded_environments": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Degraded Environments"
+          },
+          "environments": {
+            "items": {
+              "$ref": "#/components/schemas/NavigationEnvironment"
+            },
+            "title": "Environments",
+            "type": "array"
+          },
+          "failed_builds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failed Builds"
+          },
+          "registry_warnings": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Registry Warnings"
+          },
+          "stale_forwards": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stale Forwards"
+          }
+        },
+        "title": "NavigationSummary",
         "type": "object"
       },
       "Operation": {
@@ -1803,6 +2005,27 @@
         "title": "Principal",
         "type": "object"
       },
+      "ProfileScopeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "namespace": {
+            "pattern": "^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$",
+            "title": "Namespace",
+            "type": "string"
+          },
+          "profile": {
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+            "title": "Profile",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile",
+          "namespace"
+        ],
+        "title": "ProfileScopeRequest",
+        "type": "object"
+      },
       "ProfileSwitchRequest": {
         "additionalProperties": false,
         "properties": {
@@ -2418,6 +2641,25 @@
         "title": "Stage",
         "type": "object"
       },
+      "StaleForwardResult": {
+        "additionalProperties": false,
+        "properties": {
+          "orphans": {
+            "title": "Orphans",
+            "type": "integer"
+          },
+          "stopped": {
+            "title": "Stopped",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "stopped",
+          "orphans"
+        ],
+        "title": "StaleForwardResult",
+        "type": "object"
+      },
       "Target": {
         "additionalProperties": false,
         "properties": {
@@ -2502,6 +2744,322 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "WorkloadRef": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "name"
+        ],
+        "title": "WorkloadRef",
+        "type": "object"
+      },
+      "WorkspaceLogBatch": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "title": "Cursor",
+            "type": "string"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceLogLine"
+            },
+            "title": "Lines",
+            "type": "array"
+          },
+          "streams": {
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceLogStream"
+            },
+            "title": "Streams",
+            "type": "array"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "streams",
+          "lines",
+          "cursor"
+        ],
+        "title": "WorkspaceLogBatch",
+        "type": "object"
+      },
+      "WorkspaceLogLine": {
+        "additionalProperties": false,
+        "properties": {
+          "at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At"
+          },
+          "level": {
+            "anyOf": [
+              {
+                "enum": [
+                  "error",
+                  "warn",
+                  "info",
+                  "debug"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Level"
+          },
+          "stream": {
+            "title": "Stream",
+            "type": "integer"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stream",
+          "text"
+        ],
+        "title": "WorkspaceLogLine",
+        "type": "object"
+      },
+      "WorkspaceLogSource": {
+        "additionalProperties": false,
+        "properties": {
+          "containers": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Containers",
+            "type": "array"
+          },
+          "phase": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phase"
+          },
+          "pod": {
+            "$ref": "#/components/schemas/ResourceIdentity"
+          },
+          "restarts": {
+            "default": 0,
+            "title": "Restarts",
+            "type": "integer"
+          },
+          "scope_id": {
+            "title": "Scope Id",
+            "type": "string"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "workload": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WorkloadRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "scope_id",
+          "pod",
+          "containers"
+        ],
+        "title": "WorkspaceLogSource",
+        "type": "object"
+      },
+      "WorkspaceLogSources": {
+        "additionalProperties": false,
+        "properties": {
+          "freshness": {
+            "$ref": "#/components/schemas/Freshness"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceLogSource"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "partial": {
+            "items": {
+              "$ref": "#/components/schemas/PartialError"
+            },
+            "title": "Partial",
+            "type": "array"
+          },
+          "scopes": {
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceScope"
+            },
+            "title": "Scopes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "scopes",
+          "items",
+          "freshness"
+        ],
+        "title": "WorkspaceLogSources",
+        "type": "object"
+      },
+      "WorkspaceLogStream": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
+          "container": {
+            "title": "Container",
+            "type": "string"
+          },
+          "gap": {
+            "default": false,
+            "title": "Gap",
+            "type": "boolean"
+          },
+          "lines": {
+            "default": 0,
+            "title": "Lines",
+            "type": "integer"
+          },
+          "pod_name": {
+            "title": "Pod Name",
+            "type": "string"
+          },
+          "pod_uid": {
+            "title": "Pod Uid",
+            "type": "string"
+          },
+          "previous": {
+            "default": false,
+            "title": "Previous",
+            "type": "boolean"
+          },
+          "scope_id": {
+            "title": "Scope Id",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "ok",
+              "unavailable",
+              "not-found"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope_id",
+          "pod_name",
+          "pod_uid",
+          "container",
+          "state"
+        ],
+        "title": "WorkspaceLogStream",
+        "type": "object"
+      },
+      "WorkspaceScope": {
+        "additionalProperties": false,
+        "description": "One readable namespace: an application, environment or profile scope.",
+        "properties": {
+          "cluster": {
+            "title": "Cluster",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "application",
+              "environment",
+              "profile"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "namespace": {
+            "title": "Namespace",
+            "type": "string"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profile"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "cluster",
+          "namespace"
+        ],
+        "title": "WorkspaceScope",
         "type": "object"
       }
     }
@@ -4232,6 +4790,42 @@
         "summary": "Events"
       }
     },
+    "/api/v1/forwards": {
+      "get": {
+        "operationId": "forward_list_api_v1_forwards_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForwardPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Forward List"
+      }
+    },
+    "/api/v1/forwards/stale/stop": {
+      "post": {
+        "operationId": "forward_stop_stale_api_v1_forwards_stale_stop_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StaleForwardResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Forward Stop Stale"
+      }
+    },
     "/api/v1/gitops": {
       "get": {
         "operationId": "gitops_api_v1_gitops_get",
@@ -4334,6 +4928,186 @@
           }
         },
         "summary": "Gitops Promotion"
+      }
+    },
+    "/api/v1/logs/lines": {
+      "get": {
+        "operationId": "workspace_log_lines_api_v1_logs_lines_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "stream",
+            "required": true,
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Stream",
+              "type": "array"
+            }
+          },
+          {
+            "in": "query",
+            "name": "previous",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Previous",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tail_lines",
+            "required": false,
+            "schema": {
+              "default": 500,
+              "title": "Tail Lines",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since_seconds",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since Seconds"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "in": "query",
+            "name": "level",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Level"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceLogBatch"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Workspace Log Lines"
+      }
+    },
+    "/api/v1/logs/sources": {
+      "get": {
+        "operationId": "workspace_log_sources_api_v1_logs_sources_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scope"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceLogSources"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Workspace Log Sources"
+      }
+    },
+    "/api/v1/navigation": {
+      "get": {
+        "operationId": "navigation_summary_api_v1_navigation_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NavigationSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Navigation Summary"
       }
     },
     "/api/v1/observation-events": {
@@ -4815,6 +5589,76 @@
           }
         },
         "summary": "Profiles"
+      }
+    },
+    "/api/v1/profiles/scopes": {
+      "post": {
+        "operationId": "add_profile_scope_api_v1_profiles_scopes_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileScopeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceScope"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add Profile Scope"
+      }
+    },
+    "/api/v1/profiles/scopes/{scope_id}": {
+      "delete": {
+        "operationId": "remove_profile_scope_api_v1_profiles_scopes__scope_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scope_id",
+            "required": true,
+            "schema": {
+              "title": "Scope Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove Profile Scope"
       }
     },
     "/api/v1/profiles/switch": {

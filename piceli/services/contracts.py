@@ -512,3 +512,107 @@ class RemoteAccessHeartbeatRequest(Record):
 
 class RemoteAccessReleaseRequest(Record):
     lease_secret: str = Field(min_length=40, max_length=128)
+
+
+# ------------------------------------------------- Logs and Forwards workspaces
+
+
+class WorkspaceScope(Record):
+    """One readable namespace: an application, environment or profile scope."""
+
+    id: str
+    name: str
+    kind: Literal["application", "environment", "profile"]
+    cluster: str
+    namespace: str
+    profile: str | None = None
+
+
+class WorkloadRef(Record):
+    kind: str
+    name: str
+
+
+class WorkspaceLogSource(Record):
+    scope_id: str
+    pod: ResourceIdentity
+    workload: WorkloadRef | None = None
+    containers: list[str]
+    phase: str | None = None
+    started_at: str | None = None
+    restarts: int = 0
+
+
+class WorkspaceLogSources(Record):
+    scopes: list[WorkspaceScope]
+    items: list[WorkspaceLogSource]
+    freshness: Freshness
+    partial: list[PartialError] = Field(default_factory=list)
+
+
+class WorkspaceLogStream(Record):
+    scope_id: str
+    pod_name: str
+    pod_uid: str
+    container: str
+    previous: bool = False
+    state: Literal["ok", "unavailable", "not-found"]
+    code: str | None = None
+    lines: int = 0
+    gap: bool = False
+
+
+class WorkspaceLogLine(Record):
+    at: str | None = None
+    stream: int
+    level: Literal["error", "warn", "info", "debug"] | None = None
+    text: str
+
+
+class WorkspaceLogBatch(Record):
+    streams: list[WorkspaceLogStream]
+    lines: list[WorkspaceLogLine]
+    truncated: bool = False
+    cursor: str
+
+
+class ProfileScopeRequest(Record):
+    profile: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]{0,62}$")
+    namespace: str = Field(pattern=r"^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$")
+
+
+class ForwardEntry(Record):
+    session: AccessSession
+    application_name: str
+    scope: WorkspaceScope | None = None
+    url: str | None = None
+    stale: bool = False
+    stale_reason: str | None = None
+
+
+class ForwardPage(Record):
+    mode: Literal["local", "cluster", "unavailable"]
+    reason: str | None = None
+    items: list[ForwardEntry]
+    orphans: int = 0
+
+
+class StaleForwardResult(Record):
+    stopped: int
+    orphans: int
+
+
+class NavigationEnvironment(Record):
+    name: str
+    state: str
+    health: str
+    application_id: str | None = None
+
+
+class NavigationSummary(Record):
+    environments: list[NavigationEnvironment] = Field(default_factory=list)
+    approvals: int | None = None
+    degraded_environments: int | None = None
+    failed_builds: int | None = None
+    stale_forwards: int | None = None
+    registry_warnings: int | None = None
