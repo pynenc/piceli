@@ -10,7 +10,7 @@ from typer.testing import CliRunner
 
 from piceli.gitops import GitOpsError
 from piceli.gitops.config import ControllerConfig, EnvRule
-from piceli.gitops.ports import APPROVE_POLICY
+from piceli.gitops.ports import APPROVE_POLICY, EnvOutcome
 from piceli.gitops.state import approve_request, promote_request
 from piceli.k8s.cli import app
 from piceli.k8s.cli.gitops import environment_rules
@@ -185,3 +185,83 @@ def test_promote_cli_takes_an_environment(tmp_path: Path) -> None:
         app, ["promote", "wp-1@abcdef1", "--state-dir", str(state)]
     )
     assert result.exit_code == 0 and '"env"' not in result.stdout
+
+
+class ContentPorts(FakePorts):
+    """The plan hash follows the checked-out content, not the commit id."""
+
+    def __init__(self) -> None:
+        super().__init__(policy=False)
+
+    def env_up(
+        self,
+        pipeline: Any,
+        branch: str,
+        *,
+        commit: str,
+        receipt: Any,
+        digests: Any,
+        approve: str | None,
+    ) -> EnvOutcome:
+        self.calls.append(("up", branch, commit, approve, digests))
+        expected = plan_hash(branch, pipeline.version)
+        if approve == expected:
+            return EnvOutcome("deployed", namespace="app-" + branch)
+        return EnvOutcome("approval-required", plan_hash=expected)
+
+
+def test_a_reverted_change_does_not_ask_again_for_the_running_plan(
+    tmp_path: Path, repo: Repo
+) -> None:
+    """A plan identical to the owner-approved plan of the running release.
+
+    rc approved and ran plan A; a later change (plan B) was never approved;
+    its revert plans A again: rc applies it without a second approval. A plan
+    the owner never approved (C), or an older approved one that is no longer
+    the running release's plan, still asks.
+    """
+    ports = ContentPorts()
+    follow = EnvRule("rc", branches=("main",))
+    controller, channel, _ = make(tmp_path, repo, ports, environments=(follow,))
+    lines: list[str] = []
+    controller.log = lines.append
+    first = repo.push_main("checks-a")
+    status = controller.poll_once()
+    plan_a = plan_hash("rc", "checks-a")
+    assert status["envs"]["rc"]["plan_hash"] == plan_a
+    channel.add_request(*approve_request("rc", plan_a))
+    status = controller.poll_once()
+    assert status["envs"]["rc"]["state"] == "deployed"
+    assert status["envs"]["rc"]["deployed_commit"] == first
+
+    repo.push_main("checks-b")  # never approved
+    status = controller.poll_once()
+    assert status["envs"]["rc"]["state"] == "approval-required"
+    assert status["envs"]["rc"]["plan_hash"] == plan_hash("rc", "checks-b")
+
+    revert = repo.push_main("checks-a")
+    status = controller.poll_once()
+    rc = status["envs"]["rc"]
+    assert rc["state"] == "deployed", rc
+    assert rc["deployed_commit"] == revert
+    assert ports.kinds("up")[-2:] == [
+        ("up", "rc", revert, None, None),
+        ("up", "rc", revert, plan_a, None),
+    ]
+    assert any("already approved" in line for line in lines)
+    assert "approved_hash" not in rc
+
+    # A plan the owner never approved still waits for its approval.
+    repo.push_main("checks-c")
+    status = controller.poll_once()
+    assert status["envs"]["rc"]["state"] == "approval-required"
+    assert ports.kinds("up")[-1][3] is None
+    plan_c = plan_hash("rc", "checks-c")
+    channel.add_request(*approve_request("rc", plan_c))
+    assert controller.poll_once()["envs"]["rc"]["state"] == "deployed"
+    # Plan A was approved once, but the running release is now plan C.
+    repo.push_main("checks-a")
+    status = controller.poll_once()
+    assert status["envs"]["rc"]["state"] == "approval-required"
+    assert status["envs"]["rc"]["plan_hash"] == plan_a
+    assert ports.kinds("up")[-1][3] is None

@@ -71,6 +71,7 @@ from piceli.gitops.controller import (
     error_code,
     failed_verification,
     failure_detail,
+    owner_approved,
     replan_stale,
     verified,
 )
@@ -547,6 +548,8 @@ class CompositionController:
         attempts = int(record.get("attempts") or 0) + 1
         deleting = record.get("state") == "deleting"
         record["failure"] = None if error is None else failure_detail(error)
+        # What runs after a failed step is uncertain: the next plan asks.
+        record["deployed_plan_hash"] = None
         if not deleting and (
             reason in FINAL_CODES or attempts >= self.config.max_attempts
         ):
@@ -1216,6 +1219,7 @@ class CompositionController:
                 next_attempt_at=None,
                 plan_hash=None,
                 approved_hash=None,
+                deployed_plan_hash=owner_approved(record),
                 reason=None,
                 failure=None,
                 health="healthy",
@@ -1281,6 +1285,7 @@ class CompositionController:
             next_attempt_at=None,
             plan_hash=None,
             approved_hash=None,
+            deployed_plan_hash=None,
             reason="pipeline-checks-failed",
             failure=None,
             health="degraded",
@@ -1402,6 +1407,7 @@ class CompositionController:
         self._set(
             record,
             state="stopped",
+            deployed_plan_hash=None,
             reason="idle-stop",
             attempts=0,
             next_attempt_at=None,

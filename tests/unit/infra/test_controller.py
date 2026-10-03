@@ -555,3 +555,66 @@ def test_teardown_and_a_restart_remove_the_state_of_gone_branch_envs(
     (branches / "ns-wp-later").mkdir()
     restarted.poll_once()
     assert (branches / "ns-wp-later").is_dir()  # swept once per start
+
+
+def test_a_reverted_change_does_not_ask_again_for_the_running_plan(
+    world: dict[str, Any],
+) -> None:
+    """rc ran the owner-approved plan A; B was never approved; A again applies.
+
+    Only the plan of the running release counts: a plan never approved (C),
+    or A once C runs, waits for the owner.
+    """
+    from piceli.envs import Environment
+    from piceli.gitops.state import approve_request, sync_request
+
+    controller, channel, ports = world["controller"], world["channel"], world["ports"]
+    composition = controller.composition
+    main = composition.environment("main")
+    manual = Environment(
+        "main",
+        namespace=main.namespace,
+        stack=main.stack,
+        follow={source: list(items) for source, items in main.sources},
+    )
+    object.__setattr__(
+        composition, "environments", (manual, *composition.environments[1:])
+    )
+    plan_a, plan_b, plan_c = ("sha256:" + c * 64 for c in "abc")
+    current = {"plan": plan_a}
+    calls: list[str | None] = []
+
+    def env_up(pipeline: Any, name: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append(kwargs["approve"])
+        if kwargs["approve"] != current["plan"]:
+            return {"state": "approval-required", "plan_hash": current["plan"]}
+        return {"state": "ready", "namespace": f"ns-{name}"}
+
+    ports.env_up = env_up
+    lines: list[str] = []
+    controller.log = lines.append
+
+    def redeploy(plan: str) -> dict[str, Any]:
+        current["plan"] = plan
+        channel.add_request(*sync_request("main"))
+        env: dict[str, Any] = controller.poll_once()["envs"]["main"]
+        return env
+
+    assert controller.poll_once()["envs"]["main"]["plan_hash"] == plan_a
+    channel.add_request(*approve_request("main", plan_a))
+    assert controller.poll_once()["envs"]["main"]["state"] == "deployed"
+    assert redeploy(plan_b)["state"] == "approval-required"  # never approved
+    calls.clear()
+    env = redeploy(plan_a)  # the revert
+    assert env["state"] == "deployed", env
+    assert calls == [None, plan_a]
+    assert any("already approved" in line for line in lines)
+    assert "approved_hash" not in env
+    calls.clear()
+    env = redeploy(plan_c)
+    assert env["state"] == "approval-required" and calls == [None]
+    channel.add_request(*approve_request("main", plan_c))
+    assert controller.poll_once()["envs"]["main"]["state"] == "deployed"
+    calls.clear()
+    env = redeploy(plan_a)  # approved once, but C is the running release
+    assert env["state"] == "approval-required" and calls == [None]
