@@ -6,6 +6,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -255,27 +256,30 @@ def test_delayed_mutation_is_bounded_and_detached_work_not_retried(local_api, tm
     provider = provider_at(original_provider.host, request_seconds=0.05)
     run = executor(provider, tmp_path)
     plan, snapshot, grant = prepare(provider, [manifest()])
-    # The server answers 2 s late; the client gives up after 0.05 s. A
-    # resume while the write is still in flight stays blocked (it never
-    # writes twice); once the server has applied it, a resume is ready. The
-    # margins are wide so a slow runner cannot reach the end of the delay
-    # before the second call.
-    api.inject("POST", "/configmaps", delay=2.0, dry_run=False)
-    start = time.monotonic()
-    assert run.run("slow", plan, snapshot, grant)["state"] == "blocked"
-    assert time.monotonic() - start < 1.0
-    assert run.run("slow", plan, snapshot, grant, resume=True)["state"] == "blocked"
-    assert time.monotonic() - start < 1.5, (
-        "the runner was too slow to observe the window"
-    )
-    deadline = time.monotonic() + 10
-    state = "blocked"
-    while state != "ready" and time.monotonic() < deadline:
-        time.sleep(0.2)
-        state = run.run("slow", plan, snapshot, grant, resume=True)["state"]
-    assert state == "ready"
-    assert len(mutations(api)) == 1
-    provider.client.close()
+    # The server holds the write until the test releases it; the client gives
+    # up after 0.05 s. "In flight" and "applied" are states the test sets,
+    # not wall-clock windows: a resume while the write is held stays blocked
+    # (it never writes twice); once the server has applied it, a resume is
+    # ready.
+    hold, applied = threading.Event(), threading.Event()
+    api.inject("POST", "/configmaps", hold=hold, applied=applied, dry_run=False)
+    try:
+        # Bounded: the run returns while the server still holds the request,
+        # so it gave up on its own timeout, not on the server's answer.
+        assert run.run("slow", plan, snapshot, grant)["state"] == "blocked"
+        assert not applied.is_set()
+        assert len(mutations(api)) == 1
+        assert run.run("slow", plan, snapshot, grant, resume=True)["state"] == (
+            "blocked"
+        )
+        assert not applied.is_set()
+        hold.set()
+        assert applied.wait(10), "the held write was never applied"
+        assert run.run("slow", plan, snapshot, grant, resume=True)["state"] == ("ready")
+        assert len(mutations(api)) == 1
+    finally:
+        hold.set()
+        provider.client.close()
 
 
 def test_process_death_after_http_before_receipt_can_resume(local_api, tmp_path):

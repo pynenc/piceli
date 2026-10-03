@@ -50,8 +50,11 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 - **Fix:** log lines the UI and API return are redacted with the shared
   redaction (`password=`, `token:`, bearer tokens, URL credentials, JSON Web
   Tokens, private keys become `[REDACTED]`).
-- **Tests:** the local executor's delayed-mutation test no longer depends on a
-  0.25 s window that slow CI runners missed (2 s window, polled to `ready`).
+- **Tests:** the local executor's delayed-mutation test, the heavy-lock tests
+  and the saved-forward conflict test no longer depend on timing: the test
+  sets "in flight", "applied" and "lock released" itself instead of waiting
+  for wall-clock windows. `piceli.testing.FakeAPI.inject` takes `hold` and
+  `applied` events for that (`hold_timeout` bounds a held request).
 
 ## Version 0.14.6
 

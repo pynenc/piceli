@@ -7,6 +7,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -23,26 +24,53 @@ def piceli(
 ) -> subprocess.Popen[str]:  # pragma: no cover - helper
     env = {**os.environ, heavy.DIR_ENV: str(state)}
     env.pop(heavy.HELD_ENV, None)
-    return subprocess.Popen(
-        [PY, "-m", "piceli", *args],
-        env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+    options: dict[str, Any] = {
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
         **kwargs,
-    )
+    }
+    return subprocess.Popen([PY, "-m", "piceli", *args], env=env, text=True, **options)
 
 
-def stamp_script(out: Path, seconds: float) -> list[str]:
+#: The longest a gated child waits for its release file: a test that fails
+#: before releasing it cannot leave the child running for long.
+GATE_SECONDS = 120
+
+
+def gated(started: Path, release: Path) -> list[str]:
+    """A child that writes ``started`` (a start stamp), then runs until the
+    test creates ``release``, then appends an end stamp.
+
+    The test, not a sleep, decides how long the child holds the lock.
+    """
     code = (
-        "import time,sys;"
-        f"f=open({str(out)!r},'w');f.write(str(time.time())+'\\n');f.flush();"
-        f"time.sleep({seconds});f.write(str(time.time())+'\\n');f.close()"
+        "import os,time\n"
+        f"f=open({str(started)!r},'w');f.write(str(time.time())+'\\n');f.flush()\n"
+        f"end=time.monotonic()+{GATE_SECONDS}\n"
+        f"while not os.path.exists({str(release)!r}) and time.monotonic()<end:\n"
+        "    time.sleep(0.01)\n"
+        "f.write(str(time.time())+'\\n');f.close()\n"
     )
     return [PY, "-c", code]
 
 
-def wait_for(path: Path, timeout: float = 15.0) -> None:
+def stamp_script(out: Path) -> list[str]:
+    code = (
+        "import time;"
+        f"f=open({str(out)!r},'w');f.write(str(time.time())+'\\n');"
+        "f.write(str(time.time())+'\\n');f.close()"
+    )
+    return [PY, "-c", code]
+
+
+def wait_for_text(path: Path, text: str, timeout: float = 60.0) -> None:
+    end = time.monotonic() + timeout
+    while not path.exists() or text not in path.read_text():
+        assert time.monotonic() < end, f"{text!r} never written to {path}"
+        time.sleep(0.02)
+
+
+def wait_for(path: Path, timeout: float = 60.0) -> None:
     end = time.monotonic() + timeout
     while not path.exists() or not path.read_text().strip():
         assert time.monotonic() < end, f"{path} never written"
@@ -54,13 +82,32 @@ def last_json(stdout: str) -> dict[str, Any]:
 
 
 def test_second_process_waits_for_the_first(tmp_path: Path) -> None:
+    # The first holder runs until the test releases it, and is released only
+    # once the second process reports that it is waiting: the second process
+    # cannot start late enough to find the lock free.
     state = tmp_path / "state"
     a_out, b_out = tmp_path / "a", tmp_path / "b"
-    first = piceli(state, "heavy", "run", "--", *stamp_script(a_out, 1.5))
-    wait_for(a_out)
-    second = piceli(state, "heavy", "run", "--", *stamp_script(b_out, 0.1))
-    out_a, _ = first.communicate(timeout=60)
-    out_b, err_b = second.communicate(timeout=60)
+    release, b_err = tmp_path / "release", tmp_path / "b.err"
+    first = piceli(state, "heavy", "run", "--", *gated(a_out, release))
+    second = None
+    try:
+        wait_for(a_out)
+        with b_err.open("w") as err:
+            second = piceli(
+                state, "heavy", "run", "--", *stamp_script(b_out), stderr=err
+            )
+        wait_for_text(b_err, "waiting for the heavy-work lock held by")
+        time.sleep(0.6)  # a lower bound only: the second keeps waiting
+        release.touch()
+        out_a, _ = first.communicate(timeout=60)
+        out_b, _ = second.communicate(timeout=60)
+    finally:
+        release.touch()
+        for process in (first, second):
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.communicate(timeout=30)
+    err_b = b_err.read_text()
     assert first.returncode == 0 and second.returncode == 0
     a_start, a_end = map(float, a_out.read_text().split())
     b_start, b_end = map(float, b_out.read_text().split())
@@ -165,49 +212,36 @@ def test_receipt_has_duration_peak_memory_and_no_environment(
 
 def test_wait_timeout_is_a_registered_rejection(tmp_path: Path) -> None:
     state = tmp_path / "state"
-    marker = tmp_path / "started"
-    holder = piceli(
-        state,
-        "heavy",
-        "run",
-        "--",
-        PY,
-        "-c",
-        f"import time;open({str(marker)!r},'w').write('x');time.sleep(5)",
-    )
+    marker, release = tmp_path / "started", tmp_path / "release"
+    holder = piceli(state, "heavy", "run", "--", *gated(marker, release))
     try:
         wait_for(marker)
         late = piceli(state, "heavy", "run", "--wait", "0.5", "--", PY, "-c", "pass")
-        out, _ = late.communicate(timeout=30)
+        out, _ = late.communicate(timeout=60)
         assert late.returncode == 2
         assert last_json(out)["reason"] == "heavy-lock-timeout"
     finally:
-        holder.terminate()  # forwarded to the child
-        holder.communicate(timeout=30)
+        release.touch()
+        holder.communicate(timeout=60)
 
 
 def test_status_shows_the_holder_and_receipts(tmp_path: Path) -> None:
     state = tmp_path / "state"
-    marker = tmp_path / "started"
+    marker, release = tmp_path / "started", tmp_path / "release"
     holder = piceli(
-        state,
-        "heavy",
-        "run",
-        "--name",
-        "gate",
-        "--",
-        PY,
-        "-c",
-        f"import time;open({str(marker)!r},'w').write('x');time.sleep(3)",
+        state, "heavy", "run", "--name", "gate", "--", *gated(marker, release)
     )
-    wait_for(marker)
-    during = piceli(state, "heavy", "status", "--json")
-    out, _ = during.communicate(timeout=30)
+    try:
+        wait_for(marker)
+        during = piceli(state, "heavy", "status", "--json")
+        out, _ = during.communicate(timeout=60)
+    finally:
+        release.touch()
+        holder.communicate(timeout=60)
     document = last_json(out)
     assert document["state"] == "held"
     assert document["holder"]["pid"] == holder.pid
     assert document["holder"]["name"] == "gate"
-    holder.communicate(timeout=30)
     after = piceli(state, "heavy", "status", "--json")
     document = last_json(after.communicate(timeout=30)[0])
     assert document["state"] == "free" and document["holder"] is None
@@ -258,21 +292,21 @@ def test_section_serializes_with_heavy_run(
     monkeypatch.setenv(heavy.DIR_ENV, str(tmp_path / "state"))
     monkeypatch.setenv(heavy.ENABLE_ENV, "1")
     monkeypatch.delenv(heavy.HELD_ENV, raising=False)
-    marker = tmp_path / "started"
-    holder = piceli(
-        tmp_path / "state",
-        "heavy",
-        "run",
-        "--",
-        PY,
-        "-c",
-        f"import time;open({str(marker)!r},'w').write('x');time.sleep(1.5)",
-    )
-    wait_for(marker)
-    began = time.monotonic()
-    with heavy.section("build y"):
-        waited = time.monotonic() - began
-    holder.communicate(timeout=30)
+    marker, release = tmp_path / "started", tmp_path / "release"
+    holder = piceli(tmp_path / "state", "heavy", "run", "--", *gated(marker, release))
+    # The holder runs until released; the release comes no sooner than 0.6 s
+    # after the section starts waiting (a lower bound, never a race).
+    releaser = threading.Timer(0.6, release.touch)
+    try:
+        wait_for(marker)
+        began = time.monotonic()
+        releaser.start()
+        with heavy.section("build y"):
+            waited = time.monotonic() - began
+    finally:
+        releaser.cancel()
+        release.touch()
+        holder.communicate(timeout=60)
     assert waited > 0.5
 
 
