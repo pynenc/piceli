@@ -27,6 +27,7 @@ Minimal workflow: `piceli render app.py:pipeline` (no cluster; the target's name
 
 ## Start here
 
+- [Machines with OpenTofu](https://docs.pynenc.org/projects/piceli/en/latest/infrastructure.html): `Server`, `PrimaryIp`, `Firewall`/`Rule`, `DnsRecord`, `Hook`, `Infrastructure` in `piceli.infra` (Hetzner first, pinned `hcloud` provider); `piceli infra plan MODULE:ATTR` (read-only for resources; exit 3 with changes, estimate and plan hash), `apply|destroy --approve <plan_hash>` (owner only; never touches what Piceli did not create, `infra-foreign-resource`), `install SERVER` and `register SERVER` (`--approve <digest>`, owner only), `status --json` (read-only, offline); state encrypted by OpenTofu, locked, never in Git; tokens only through `piceli secrets provider NAME --prompt` (owner types them), never arguments or `HCLOUD_TOKEN`
 - [Using Piceli from an agent](https://docs.pynenc.org/projects/piceli/en/stable/agents.html): commands safe to run without asking, commands that need approval, the output contract, errors, resume, secrets and cluster access
 - [Command reference](https://docs.pynenc.org/projects/piceli/en/stable/reference/cli.html): every command with options and its output contract, which every command follows (generated from `piceli help-json`)
 - [Error codes](https://docs.pynenc.org/projects/piceli/en/stable/reference/errors.html): every refusal code with cause, fix and whether a retry can succeed (same as `piceli explain`)
