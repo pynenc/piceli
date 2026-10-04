@@ -46,7 +46,9 @@ def test_an_intact_tree_verifies_and_one_altered_byte_does_not(tmp_path: Path) -
     pyc.write_bytes(bytes(data))
     assert integrity.verify(manifest) == [str(pyc)]
     (site / "pkg" / "mod.py").unlink()
-    assert sorted(integrity.verify(manifest)) == sorted([str(pyc), str(site / "pkg" / "mod.py")])
+    assert sorted(integrity.verify(manifest)) == sorted(
+        [str(pyc), str(site / "pkg" / "mod.py")]
+    )
 
 
 def test_the_self_check_stops_with_one_clear_message(
@@ -77,7 +79,9 @@ def test_no_variable_checks_nothing_and_a_missing_manifest_is_skipped(
     assert "self-check skipped" in capsys.readouterr().err
 
 
-def test_the_piceli_command_checks_before_importing_anything_else(tmp_path: Path) -> None:
+def test_the_piceli_command_checks_before_importing_anything_else(
+    tmp_path: Path,
+) -> None:
     """The real entry point: corrupted files never get imported first."""
     site, manifest = _tree(tmp_path)
     (site / "pkg" / "mod.py").write_text("tampered\n")
@@ -116,9 +120,13 @@ def test_the_manifest_of_this_installation_covers_the_controller_imports(
 
 def test_the_controller_deployment_runs_the_self_check_and_keeps_crash_lines() -> None:
     config = ControllerConfig(
-        pipeline="deploy/app.py:pipeline", repo="https://example.com/app.git", branches=("main",)
+        pipeline="deploy/app.py:pipeline",
+        repo="https://example.com/app.git",
+        branches=("main",),
     )
-    deployment = render_controller(config, InstallSettings(image="registry.example/c@sha256:" + "1" * 64))[-1]
+    deployment = render_controller(
+        config, InstallSettings(image="registry.example/c@sha256:" + "1" * 64)
+    )[-1]
     container = deployment["spec"]["template"]["spec"]["containers"][0]
     assert {"name": integrity.ENV, "value": integrity.MANIFEST} in container["env"]
     assert container["terminationMessagePolicy"] == "FallbackToLogsOnError"
@@ -129,9 +137,15 @@ def test_the_controller_deployment_runs_the_self_check_and_keeps_crash_lines() -
 
 def _pod(**container: Any) -> dict[str, Any]:
     return {
-        "metadata": {"name": "piceli-gitops-7d9", "creationTimestamp": "2027-01-15T07:00:00Z"},
+        "metadata": {
+            "name": "piceli-gitops-7d9",
+            "creationTimestamp": "2027-01-15T07:00:00Z",
+        },
         "spec": {"nodeName": "node-a"},
-        "status": {"phase": "Running", "containerStatuses": [{"name": "controller", **container}]},
+        "status": {
+            "phase": "Running",
+            "containerStatuses": [{"name": "controller", **container}],
+        },
     }
 
 
@@ -148,7 +162,11 @@ def test_a_crash_loop_on_corrupted_files_reads_down_with_the_message() -> None:
         )
     ])  # fmt: skip
     assert pod is not None and pod["self_check"] == "files-corrupted"
-    assert (pod["restarts"], pod["waiting"], pod["node"]) == (37, "CrashLoopBackOff", "node-a")
+    assert (pod["restarts"], pod["waiting"], pod["node"]) == (
+        37,
+        "CrashLoopBackOff",
+        "node-a",
+    )
     live = liveness.liveness(DOCUMENT, pod, NOW)
     assert live["state"] == "down"
     assert live["message"] == integrity.MESSAGE
@@ -157,7 +175,7 @@ def test_a_crash_loop_on_corrupted_files_reads_down_with_the_message() -> None:
 
 
 def test_any_other_crash_shows_its_reason_restarts_and_last_error_line() -> None:
-    traceback = "Traceback (most recent call last):\n  File \"x\"\nValueError: code: co_varnames is too small\n"
+    traceback = 'Traceback (most recent call last):\n  File "x"\nValueError: code: co_varnames is too small\n'
     pod = liveness.pod_summary([
         _pod(ready=False, restartCount=5, state={"waiting": {"reason": "CrashLoopBackOff"}},
              lastState={"terminated": {"exitCode": 1, "reason": "Error", "message": traceback}}),
@@ -170,18 +188,30 @@ def test_any_other_crash_shows_its_reason_restarts_and_last_error_line() -> None
 
 
 def test_running_stale_and_starting() -> None:
-    ready = liveness.pod_summary([_pod(ready=True, restartCount=0, state={"running": {}})])
+    ready = liveness.pod_summary(
+        [_pod(ready=True, restartCount=0, state={"running": {}})]
+    )
     fresh = {"controller": {**DOCUMENT["controller"], "last_poll": RECENT}}
     assert liveness.liveness(fresh, ready, NOW)["state"] == "running"
     assert liveness.liveness(fresh, ready, NOW)["status_is_stale"] is False
     # Ready but no poll for a long time: the document is old.
     stale = liveness.liveness(DOCUMENT, ready, NOW)
     assert stale["state"] == "stale" and stale["status_is_stale"] is True
-    first = liveness.pod_summary([_pod(ready=False, restartCount=0, state={"waiting": {"reason": "ContainerCreating"}})])
+    first = liveness.pod_summary(
+        [
+            _pod(
+                ready=False,
+                restartCount=0,
+                state={"waiting": {"reason": "ContainerCreating"}},
+            )
+        ]
+    )
     assert liveness.liveness(None, first, NOW)["state"] == "down"
     # Pods not readable (RBAC): only the age of the last poll decides.
     assert liveness.liveness(fresh, None, NOW, pod_readable=False)["state"] == "running"
-    assert liveness.liveness(DOCUMENT, None, NOW, pod_readable=False)["state"] == "stale"
+    assert (
+        liveness.liveness(DOCUMENT, None, NOW, pod_readable=False)["state"] == "stale"
+    )
 
 
 def test_check_reads_the_controller_pods_through_the_api() -> None:
@@ -190,14 +220,26 @@ def test_check_reads_the_controller_pods_through_the_api() -> None:
     class Api:
         def call(self, path: str, method: str) -> Any:
             asked.append(path)
-            return {"items": [_pod(ready=False, restartCount=3, state={"waiting": {"reason": "CrashLoopBackOff"}})]}
+            return {
+                "items": [
+                    _pod(
+                        ready=False,
+                        restartCount=3,
+                        state={"waiting": {"reason": "CrashLoopBackOff"}},
+                    )
+                ]
+            }
 
     live = liveness.check(Api(), "piceli-system", DOCUMENT, NOW)
     assert live["state"] == "down" and live["pod"]["restarts"] == 3
-    assert asked == ["/api/v1/namespaces/piceli-system/pods?labelSelector=app.kubernetes.io/name%3Dpiceli-gitops"]
+    assert asked == [
+        "/api/v1/namespaces/piceli-system/pods?labelSelector=app.kubernetes.io/name%3Dpiceli-gitops"
+    ]
 
     class Forbidden:
         def call(self, path: str, method: str) -> Any:
             raise RuntimeError("403")
 
-    assert liveness.check(Forbidden(), "piceli-system", DOCUMENT, NOW)["state"] == "stale"
+    assert (
+        liveness.check(Forbidden(), "piceli-system", DOCUMENT, NOW)["state"] == "stale"
+    )

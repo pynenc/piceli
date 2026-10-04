@@ -232,7 +232,9 @@ def test_a_controller_that_is_down_wins_over_its_last_document(
     controller = control.overview()["controller"]
     assert seen == ["piceli-system"]
     assert controller["state"] == "down"
-    assert controller["message"].startswith("controller image files corrupted on this node")
+    assert controller["message"].startswith(
+        "controller image files corrupted on this node"
+    )
     assert controller["restarts"] == 37
     assert controller["status_is_stale"] is True
     assert controller["last_poll"] == "2026-10-04T14:25:00Z"
