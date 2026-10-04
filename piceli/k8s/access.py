@@ -115,15 +115,15 @@ def _workloads_of(composition: Any) -> tuple[tuple[str, str], ...]:
 
 
 def _app_workloads(app: Any, namespace: str) -> tuple[tuple[str, str], ...]:
-    from piceli.app.model import Deployment
-
     try:
         return _workloads_of(app.render(namespace, nodes=_AnyNode()))
     except ValueError:
+        # Not renderable without the cluster (B16): every declared workload
+        # kind is still listed, StatefulSets and DaemonSets included.
         return tuple(
-            ("Deployment", item.name)
+            (kind, item.name)
             for item in app.objects
-            if isinstance(item, Deployment)
+            if (kind := getattr(type(item), "kind", "")) in WORKLOAD_KINDS
         )
 
 

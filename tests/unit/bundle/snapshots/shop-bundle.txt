@@ -1,0 +1,493 @@
+==> INSTALL.md <==
+# Install shop 1.2.3
+
+Everything installs into one namespace of your cluster; nothing of it is reachable from outside the cluster and nothing calls back to us. `kubectl` uses your current context: check it with `kubectl config current-context` first.
+
+Needs: `kubectl` 1.27 or later (kustomize 5), `openssl` and a POSIX `sh` (for `prepare.sh`). Run every block from this directory, in order, in one shell.
+
+## 1. Check the files
+
+```sh
+if command -v sha256sum >/dev/null 2>&1; then sha256sum -c SHA256SUMS; else shasum -a 256 -c SHA256SUMS; fi
+```
+
+## 2. Choose the namespace
+
+The namespace must not exist yet.
+
+```sh
+NAMESPACE="${NAMESPACE:-shop}"
+```
+
+## 3. Point the overlay at your namespace
+
+`overlays/dev/` holds what you may change: `namespace.yaml`, `resources.yaml` (requests and limits) and `storage.yaml` (storage class and sizes). These commands set the namespace:
+
+```sh
+sed -i.orig "s#^  namespace: .*#  namespace: $NAMESPACE#" overlays/dev/namespace.yaml
+rm overlays/dev/namespace.yaml.orig
+```
+
+## 4. Install
+
+`prepare.sh` creates the Secrets in your cluster (random tokens, a private CA and its certificates); their values never leave it. It is safe to run twice.
+
+```sh
+kubectl create namespace "$NAMESPACE"
+./prepare.sh "$NAMESPACE"
+kubectl apply -k overlays/dev
+kubectl -n "$NAMESPACE" rollout status statefulset/cache --timeout=300s
+kubectl -n "$NAMESPACE" rollout status deployment/web --timeout=300s
+```
+
+## What this bundle puts in your cluster
+
+- 7 object(s) in the namespace, each labelled `app.kubernetes.io/part-of=shop`: StatefulSet/cache, Service/cache, ServiceAccount/reader, Deployment/web, NetworkPolicy/web-egress, Service/web, NetworkPolicy/shop-default-deny.
+- Cluster-scoped: ClusterRole/shop:shop:reader, ClusterRoleBinding/shop:shop:reader (read-only; removed by UNINSTALL.md).
+- Secrets made by `prepare.sh`: shop-private (ca.crt, tls.crt, tls.key, token, url).
+- NetworkPolicy `shop-default-deny`: ingress only from this namespace; egress only to it and to the cluster DNS.
+- Egress the app declares (policy `web-egress`): to [{"podSelector": {"matchLabels": {"app.kubernetes.io/name": "cache"}}}] on any port.
+- Egress the app declares (policy `web-egress`): to [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "kube-system"}}, "podSelector": {"matchLabels": {"k8s-app": "kube-dns"}}}] on [{"port": 53, "protocol": "UDP"}, {"port": 53, "protocol": "TCP"}].
+- Every container runs as a non-root user with a read-only root filesystem, no privilege escalation, and cpu and memory requests and limits; no Service opens a node port.
+- Image pulled as is (not in `images/`): `registry.example/shop/cache@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc`; copy it into your registry and change the reference in the overlay if your nodes cannot pull it.
+
+==> UNINSTALL.md <==
+# Uninstall shop 1.2.3
+
+Deleting the namespace removes every namespaced object, the Secrets `prepare.sh` made and the volumes' claims; the second command removes the cluster-scoped objects by their label. Volumes of a storage class that retains them (`reclaimPolicy: Retain`) outlive their claims: `kubectl get pv` lists them.
+
+## 1. Remove
+
+```sh
+NAMESPACE="${NAMESPACE:-shop}"
+kubectl delete namespace "$NAMESPACE" --wait=true
+kubectl delete clusterrole,clusterrolebinding -l app.kubernetes.io/part-of=shop --ignore-not-found
+```
+
+## 2. Check that nothing is left
+
+The first command prints nothing; the second `No resources found`.
+
+```sh
+kubectl get namespace "$NAMESPACE" --ignore-not-found
+kubectl get clusterrole,clusterrolebinding -l app.kubernetes.io/part-of=shop
+```
+
+==> base/cache_service.core_shop_cache.yaml <==
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    piceli.io/bundle: shop@1.2.3
+  labels:
+    app.kubernetes.io/part-of: shop
+  name: cache
+spec:
+  clusterIP: None
+  ports:
+  - port: 6379
+    protocol: TCP
+    targetPort: 6379
+  selector:
+    app.kubernetes.io/name: cache
+
+==> base/cache_statefulset.apps_shop_cache.yaml <==
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  annotations:
+    piceli.io/bundle: shop@1.2.3
+  labels:
+    app.kubernetes.io/name: cache
+    app.kubernetes.io/part-of: shop
+  name: cache
+spec:
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cache
+  serviceName: cache
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cache
+        app.kubernetes.io/part-of: shop
+    spec:
+      containers:
+      - image: registry.example/shop/cache@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+        name: cache
+        ports:
+        - containerPort: 6379
+        resources:
+          limits:
+            cpu: 100m
+            memory: 32Mi
+          requests:
+            cpu: 10m
+            memory: 16Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        volumeMounts:
+        - mountPath: /data
+          name: data
+        - mountPath: /run/private
+          name: shop-private
+      securityContext:
+        runAsGroup: 10001
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+      - name: shop-private
+        secret:
+          defaultMode: 288
+          secretName: shop-private
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: 1Gi
+
+==> base/kustomization.yaml <==
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+- cache_service.core_shop_cache.yaml
+- cache_statefulset.apps_shop_cache.yaml
+- reader_clusterrole.rbac.authorization.k8s.io_cluster_shop-shop-reader.yaml
+- reader_clusterrolebinding.rbac.authorization.k8s.io_cluster_shop-shop-reader.yaml
+- reader_serviceaccount.core_shop_reader.yaml
+- shop-default-deny.yaml
+- web_deployment.apps_shop_web.yaml
+- web_networkpolicy.networking.k8s.io_shop_web-egress.yaml
+- web_service.core_shop_web.yaml
+
+==> base/reader_clusterrole.rbac.authorization.k8s.io_cluster_shop-shop-reader.yaml <==
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  annotations:
+    piceli.io/bundle: shop@1.2.3
+    piceli.io/namespace: shop
+  labels:
+    app.kubernetes.io/part-of: shop
+  name: shop:shop:reader
+rules:
+- apiGroups:
+  - ''
+  resources:
+  - nodes
+  verbs:
+  - get
+  - list
+
+==> base/reader_clusterrolebinding.rbac.authorization.k8s.io_cluster_shop-shop-reader.yaml <==
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  annotations:
+    piceli.io/bundle: shop@1.2.3
+    piceli.io/namespace: shop
+  labels:
+    app.kubernetes.io/part-of: shop
+  name: shop:shop:reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: shop:shop:reader
+subjects:
+- kind: ServiceAccount
+  name: reader
+  namespace: shop
+
+==> base/reader_serviceaccount.core_shop_reader.yaml <==
+apiVersion: v1
+automountServiceAccountToken: false
+kind: ServiceAccount
+metadata:
+  annotations:
+    piceli.io/bundle: shop@1.2.3
+  labels:
+    app.kubernetes.io/part-of: shop
+  name: reader
+
+==> base/shop-default-deny.yaml <==
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  annotations:
+    piceli.io/bundle: shop@1.2.3
+  labels:
+    app.kubernetes.io/part-of: shop
+  name: shop-default-deny
+spec:
+  egress:
+  - to:
+    - podSelector: {}
+  - ports:
+    - port: 53
+      protocol: UDP
+    - port: 53
+      protocol: TCP
+    to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+  ingress:
+  - from:
+    - podSelector: {}
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+
+==> base/web_deployment.apps_shop_web.yaml <==
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    piceli.io/bundle: shop@1.2.3
+  labels:
+    app.kubernetes.io/name: web
+    app.kubernetes.io/part-of: shop
+  name: web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: web
+        app.kubernetes.io/part-of: shop
+    spec:
+      containers:
+      - image: registry.example/shop/cache@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+        name: web
+        ports:
+        - containerPort: 8080
+        resources:
+          limits:
+            cpu: 100m
+            memory: 32Mi
+          requests:
+            cpu: 10m
+            memory: 16Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        volumeMounts:
+        - mountPath: /tmp
+          name: tmp
+      securityContext:
+        runAsGroup: 10001
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+      - emptyDir:
+          medium: Memory
+          sizeLimit: 8Mi
+        name: tmp
+
+==> base/web_networkpolicy.networking.k8s.io_shop_web-egress.yaml <==
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  annotations:
+    piceli.io/bundle: shop@1.2.3
+  labels:
+    app.kubernetes.io/part-of: shop
+  name: web-egress
+spec:
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: cache
+  - ports:
+    - port: 53
+      protocol: UDP
+    - port: 53
+      protocol: TCP
+    to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: web
+  policyTypes:
+  - Egress
+
+==> base/web_service.core_shop_web.yaml <==
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    piceli.io/bundle: shop@1.2.3
+  labels:
+    app.kubernetes.io/part-of: shop
+  name: web
+spec:
+  ports:
+  - port: 8080
+    protocol: TCP
+    targetPort: 8080
+  selector:
+    app.kubernetes.io/name: web
+
+==> overlays/dev/kustomization.yaml <==
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+patches:
+- path: resources.yaml
+- path: storage.yaml
+resources:
+- ../../base
+transformers:
+- namespace.yaml
+
+==> overlays/dev/namespace.yaml <==
+apiVersion: builtin
+kind: NamespaceTransformer
+metadata:
+  name: namespace
+  namespace: shop
+setRoleBindingSubjects: allServiceAccounts
+unsetOnly: false
+
+==> overlays/dev/resources.yaml <==
+# Requests and limits of every container; change them here.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: cache
+spec:
+  template:
+    spec:
+      containers:
+      - name: cache
+        resources:
+          limits:
+            cpu: 100m
+            memory: 32Mi
+          requests:
+            cpu: 10m
+            memory: 16Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+spec:
+  template:
+    spec:
+      containers:
+      - name: web
+        resources:
+          limits:
+            cpu: 100m
+            memory: 32Mi
+          requests:
+            cpu: 10m
+            memory: 16Mi
+
+==> overlays/dev/storage.yaml <==
+# Storage of every claim: set storageClassName (and the size) here.
+# Without storageClassName the cluster's default class is used.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: cache
+spec:
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: 1Gi
+      storageClassName: fast
+
+==> prepare.sh <==
+#!/bin/sh
+# prepare.sh: create the generated Secrets of shop (written by piceli bundle).
+# Usage: ./prepare.sh NAMESPACE   (KUBECTL="kubectl --context NAME" to pick a context)
+# Idempotent: does nothing when every Secret exists. Never prints a value.
+# shellcheck disable=SC2086
+set -eu
+umask 077
+
+fail() { printf 'prepare.sh: %s\n' "$1" >&2; exit 1; }
+[ "$#" -eq 1 ] || fail "usage: $0 NAMESPACE"
+NAMESPACE="$1"
+KUBECTL="${KUBECTL:-kubectl}"
+command -v "${KUBECTL%% *}" >/dev/null 2>&1 || fail "kubectl not found"
+command -v openssl >/dev/null 2>&1 || fail "openssl not found"
+$KUBECTL get namespace "$NAMESPACE" -o name >/dev/null 2>&1 || fail "namespace $NAMESPACE not found: create it first"
+
+secrets='shop-private'
+present=''
+missing=''
+for name in $secrets; do
+  if $KUBECTL -n "$NAMESPACE" get secret "$name" -o name >/dev/null 2>&1; then
+    present="$present $name"
+  else
+    missing="$missing $name"
+  fi
+done
+if [ -z "$missing" ]; then
+  echo "prepare.sh: every Secret exists in $NAMESPACE; nothing to do"
+  exit 0
+fi
+if [ -n "$present" ]; then
+  fail "only some Secrets exist (present:$present; missing:$missing); delete the present ones and run again"
+fi
+
+work="$(mktemp -d "${TMPDIR:-/tmp}/prepare.XXXXXX")"
+trap 'rm -rf "$work"' EXIT
+trap 'exit 1' HUP INT TERM
+
+# tls (tls-ca)
+printf '%s\n' '[req]' 'distinguished_name = dn' 'x509_extensions = v3' 'prompt = no' '[dn]' 'CN = shop test CA' '[v3]' 'basicConstraints = critical,CA:TRUE,pathlen:0' 'keyUsage = critical,keyCertSign,cRLSign' 'subjectKeyIdentifier = hash' > "$work/tls.ca.cnf"
+openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 3650 -config "$work/tls.ca.cnf" -keyout "$work/v1" -out "$work/v0" >/dev/null 2>&1 || fail 'openssl failed for tls CA'
+printf '%s\n' '[req]' 'distinguished_name = dn' 'prompt = no' '[dn]' 'CN = cache' '[v3]' 'basicConstraints = critical,CA:FALSE' 'subjectAltName = DNS:cache' 'keyUsage = critical,digitalSignature,keyEncipherment' 'extendedKeyUsage = serverAuth,clientAuth' 'authorityKeyIdentifier = keyid' > "$work/tls.cache.cnf"
+openssl req -new -newkey rsa:2048 -nodes -sha256 -config "$work/tls.cache.cnf" -keyout "$work/v3" -out "$work/tls.cache.csr" >/dev/null 2>&1 || fail 'openssl failed for tls leaf cache'
+openssl x509 -req -in "$work/tls.cache.csr" -CA "$work/v0" -CAkey "$work/v1" -set_serial "0x$(openssl rand -hex 16)" -days 30 -sha256 -extfile "$work/tls.cache.cnf" -extensions v3 -out "$work/v2" >/dev/null 2>&1 || fail 'openssl failed for tls leaf cache'
+# token (random)
+openssl rand 32 | openssl base64 -A | tr '+/' '-_' | tr -d '=\n' > "$work/v4"
+# user (static)
+printf '%s' 'shop' > "$work/v5"
+# url (template)
+{ printf '%s' 'redis://'; cat "$work/v5"; printf '%s' ':'; cat "$work/v4"; printf '%s' '@cache:6379/0'; } > "$work/v6"
+
+$KUBECTL -n "$NAMESPACE" create secret generic 'shop-private' --type='Opaque' --from-file='ca.crt'="$work/v0" --from-file='tls.crt'="$work/v2" --from-file='tls.key'="$work/v3" --from-file='token'="$work/v4" --from-file='url'="$work/v6" >/dev/null
+$KUBECTL -n "$NAMESPACE" label secret 'shop-private' 'app.kubernetes.io/part-of=shop' --overwrite >/dev/null
+echo 'prepare.sh: created Secret shop-private'
+echo "prepare.sh: 1 Secret(s) ready in $NAMESPACE"

@@ -73,6 +73,13 @@ Approvals; Nodes and Registry). The current page's sub-menu is open; the
 chevron opens or closes one with the mouse or Enter/Space, and the browser
 remembers that choice. Phones keep a single scrolling row without sub-menus.
 
+`piceli ui serve … --infra machines.py:infra` adds **Machines** to the
+Workspace group (from 0.15.0): the servers of a declared `Infrastructure`
+with their state, addresses, OS install, cluster registration and monthly
+cost, and the DNS records. It reads what the last `piceli infra` commands
+recorded; it never runs OpenTofu or reads a credential. Plans and applies
+stay on the command line (see {doc}`infrastructure`).
+
 ```{image} _static/ui/navigation-badges.webp
 :alt: Navigation with approval, environment and registry counts and an Environments sub-menu listing each environment
 :width: 720px
@@ -477,8 +484,9 @@ Forwards from this UI run on your machine. **Forward** on a workload (or
 example `piceli ui connect --server http://127.0.0.1:8790 --ticket ID
 --kubeconfig PATH --context NAME --local-port 8080`, with your own explicit
 kubeconfig and context. `piceli ui connect` accepts plain http only for a
-loopback server such as this forward; any other server needs https. It needs
-the `ui` extra on your machine (`pip install "piceli[ui]"`). The UI
+loopback server such as this forward; any other server needs https. It
+needs only the base package (since 0.15.0; it used the `ui` extra before),
+and SIGTERM or SIGHUP stop it like Ctrl-C, with its `kubectl`. The UI
 reads the selected Service, Pod or Deployment with its existing read grant and
 never binds a port, so it needs no `pods/portforward` permission. To forward
 every Service port of an environment instead, run

@@ -962,6 +962,12 @@ class Controller:
         if self.busy:  # pragma: no cover - guarded by the tests
             raise RuntimeError("controller steps must not overlap")
         self.busy = True
+        # Added in 0.15.0: the step shows in the status while it runs.
+        record["in_progress"] = {
+            "action": "teardown" if record["state"] == "deleting" else "deploy",
+            "since": _iso(self.clock()),
+        }
+        self._publish()
         try:
             if record["state"] == "deleting":
                 self._teardown(record, refs)
@@ -978,7 +984,9 @@ class Controller:
                 self._fail(record, step_reason(error), error)
         finally:
             self.busy = False
+            record.pop("in_progress", None)
             save_state(self.state_dir, self.state)
+            self._publish()
 
     # ------------------------------------------------------------ poll
     def poll_once(self) -> dict[str, Any]:

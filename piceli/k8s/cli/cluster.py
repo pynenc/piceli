@@ -1,4 +1,4 @@
-"""``piceli cluster init|status`` and ``piceli secrets git``.
+"""``piceli cluster init|status`` and ``piceli secrets git|cluster``.
 
 - ``cluster init MODULE:ATTR`` plans everything a declared
   :class:`~piceli.infra.Cluster` needs (node role labels, the in-cluster
@@ -11,6 +11,10 @@
   (no echo), never from an argument or the environment, and writes the
   Secret ``piceli-build-git`` (``username``, ``password``) the controller and
   cluster build Jobs use. It prints names only.
+- ``secrets cluster --cluster MODULE:ATTR`` (0.15) stores another cluster's
+  credentials for the GitOps controller (Secret ``piceli-cluster-<name>``,
+  key ``kubeconfig``) on the cluster that runs it: from ``--kubeconfig FILE
+  --context NAME`` or a token on stdin (``--prompt``). It prints names only.
 
 The cluster is reached with the declaration's credential profile
 (``Cluster(credentials=)``, or ``--profile NAME``), whose API server must be
@@ -530,13 +534,13 @@ def _ui_health(api: Api, ns: str) -> str:
     return "healthy" if rollout.get("readyReplicas") else "starting"
 
 
-def _read_token() -> str:
+def _read_token(what: str = "Git token") -> str:
     """The token from stdin: typed without echo on a terminal, else one line."""
     import getpass
 
     if sys.stdin is not None and sys.stdin.isatty():
         try:
-            return getpass.getpass("Git token (not echoed): ", stream=sys.stderr)
+            return getpass.getpass(f"{what} (not echoed): ", stream=sys.stderr)
         except (EOFError, KeyboardInterrupt):
             return ""
     line = sys.stdin.readline() if sys.stdin is not None else ""
@@ -669,6 +673,185 @@ def git(
                 "keys": ["password", "username"],
             },
             "cluster": cluster.name,
+        }
+    )
+
+
+def _home_cluster(cluster_ref: str, home_ref: str | None) -> Cluster:
+    """``--home``, else the composition's home cluster (the one with Controller)."""
+    if home_ref is not None:
+        return load_cluster(home_ref)
+    from piceli.infra import CompositionError
+    from piceli.infra.composition import load_composition
+
+    module = cluster_ref.rsplit(":", 1)[0]
+    try:
+        composition = load_composition(module, Path.cwd())
+    except CompositionError:
+        composition = None
+    if composition is None or composition.cluster is None:
+        reject(
+            "secrets-invalid",
+            "pass --home MODULE:ATTR: the cluster that runs the GitOps controller",
+        )
+    return composition.cluster
+
+
+@secrets_app.command(
+    "cluster",
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+)
+def cluster_credentials(
+    context: typer.Context,
+    cluster_ref: Annotated[
+        str,
+        typer.Option(
+            "--cluster",
+            help="MODULE:ATTR of the piceli.infra.Cluster the controller deploys to",
+        ),
+    ],
+    kubeconfig: Annotated[
+        Path | None,
+        typer.Option("--kubeconfig", help="A kubeconfig file holding its credentials"),
+    ] = None,
+    kube_context: Annotated[
+        str | None,
+        typer.Option("--context", help="The context of --kubeconfig to store"),
+    ] = None,
+    prompt: Annotated[
+        bool,
+        typer.Option(
+            "--prompt",
+            help="Read a bearer token from stdin instead (typed without echo, or "
+            "piped); the CA comes from the cluster's credential profile",
+        ),
+    ] = False,
+    server: Annotated[
+        str | None,
+        typer.Option(
+            "--server",
+            help="The API address the controller uses (default: Cluster(api=))",
+        ),
+    ] = None,
+    home_ref: Annotated[
+        str | None,
+        typer.Option(
+            "--home",
+            help="MODULE:ATTR of the cluster running the controller (default: the "
+            "composition's cluster with Controller(...))",
+        ),
+    ] = None,
+    allow_exec: AllowExecOption = False,
+    exec_sha256: ExecSha256Option = None,
+    transport: TransportOption = "https",
+) -> None:
+    """Store another cluster's credentials for the GitOps controller (never printed)."""
+    from piceli.infra import CompositionError
+    from piceli.infra import cluster_init as ci
+    from piceli.infra import multicluster as mc
+    from piceli.infra.cluster import (
+        _API,
+        ClusterError,
+        api_matches,
+        kubeconfig_server,
+    )
+    from piceli.k8s.ops.provider_factory import _read_kubeconfig
+
+    if context.args:
+        reject(
+            "secrets-token-refused",
+            "credentials are never arguments; pass --kubeconfig FILE --context NAME "
+            "or --prompt",
+        )
+    if (kubeconfig is None) == (not prompt) or (
+        kubeconfig is not None and not kube_context
+    ):
+        reject(
+            "secrets-prompt-required",
+            "pass --kubeconfig FILE --context NAME, or --prompt (a token on stdin)",
+        )
+    if server is not None and not _API.fullmatch(server):
+        reject(
+            "secrets-invalid", "--server must be an API URL like https://10.0.0.1:6443"
+        )
+    cluster = load_cluster(cluster_ref)
+    home = _home_cluster(cluster_ref, home_ref)
+    if home.name == cluster.name:
+        reject(
+            "cluster-invalid",
+            f"{cluster.name} runs the controller: it uses its own service account",
+        )
+    address = server or cluster.api
+    with _guard():
+        try:
+            if kubeconfig is not None:
+                try:
+                    document = _read_kubeconfig(kubeconfig.absolute())
+                except Exception:
+                    raise ClusterError(
+                        "cluster-api-failed", "the kubeconfig is unreadable"
+                    ) from None
+                found = kubeconfig_server(document, str(kube_context))
+                if found is None or not api_matches(cluster.api, found):
+                    raise ClusterError(
+                        "cluster-api-mismatch",
+                        f"the context does not point at Cluster(api={cluster.api!r})",
+                    )
+                secret = mc.credential_kubeconfig(
+                    document,
+                    str(kube_context),
+                    server=address,
+                    base_dir=kubeconfig.absolute().parent,
+                )
+            else:
+                from piceli.profiles import resolve
+
+                profile = resolve(cluster.credentials)
+                document = _read_kubeconfig(profile.kubeconfig)
+                found = kubeconfig_server(document, profile.context)
+                if found is None or not api_matches(cluster.api, found):
+                    raise ClusterError(
+                        "cluster-api-mismatch",
+                        f"profile {cluster.credentials!r} does not point at "
+                        f"Cluster(api={cluster.api!r})",
+                    )
+                token = _read_token("Cluster token")
+                if not token or any(c in token for c in "\r\n\0"):
+                    reject("secrets-token-empty", "no token was read from stdin")
+                secret = mc.token_kubeconfig(
+                    address,
+                    token,
+                    mc.profile_ca(
+                        document, profile.context, profile.kubeconfig.absolute().parent
+                    ),
+                )
+                del token
+        except CompositionError as error:
+            reject(error.code, str(error))
+    ns = ci.NAMESPACE
+    with connect(home, transport, allow_exec, exec_sha256) as api, _guard():
+        initialized = api.call(
+            f"/api/v1/namespaces/{ns}/configmaps/{ci.CLUSTER_CONFIG}", "GET"
+        )
+        if initialized is None:
+            reject(
+                "cluster-not-initialized",
+                f"run piceli cluster init on {home.name} first (it creates {ns})",
+            )
+        state = mc.write_cluster_secret(api, cluster.name, secret, namespace=ns)
+    del secret
+    name = mc.secret_name(cluster.name)
+    say(
+        f"{state} Secret {ns}/{name} on {home.name} (key: {mc.SECRET_KEY}); the "
+        "credentials were not printed"
+    )
+    emit_json(
+        {
+            "state": state,
+            "secret": {"namespace": ns, "name": name, "keys": [mc.SECRET_KEY]},
+            "cluster": cluster.name,
+            "home": home.name,
+            "server": address,
         }
     )
 

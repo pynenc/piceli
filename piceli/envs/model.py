@@ -320,6 +320,21 @@ def _nodes(value: Any, what: str) -> tuple[str, ...] | dict[str, str] | None:
     return names
 
 
+def _replicas(value: Any, what: str) -> dict[str, int] | None:
+    """``replicas``: ``{workload: count}`` (a Deployment or StatefulSet, count >= 0)."""
+    if value is None:
+        return None
+    if not isinstance(value, Mapping) or not all(
+        _is_label(name) and type(count) is int and count >= 0
+        for name, count in value.items()
+    ):
+        raise EnvError(
+            "env-config-invalid",
+            f"{what} maps workload names to replica counts (integers >= 0)",
+        )
+    return dict(sorted(value.items()))
+
+
 def _quota(value: Any, what: str) -> dict[str, str] | None:
     if value is None:
         return None
@@ -406,6 +421,15 @@ class Environment:
     #: app (its workloads, checks, rollback and approval policy) instead of
     #: contract components; its images are built from the composition's sources.
     pipeline: Any = field(default=None, compare=False)
+    #: 0.15: ``{workload: count}``: the replicas of these Deployments and
+    #: StatefulSets in this environment (an autoscaled workload is refused).
+    replicas: Mapping[str, int] | None = None
+    #: 0.15: several clusters (:class:`~piceli.envs.placement.Placement` or
+    #: ``Cluster`` items), instead of ``cluster=``.
+    clusters: Sequence[Any] = ()
+    #: 0.15: the order the ``clusters`` deploy a revision in
+    #: (:class:`~piceli.envs.placement.Rollout`).
+    rollout: Any = None
     #: ``follow={Source: rule}`` normalised: ``((source, rules), ...)``.
     sources: tuple[tuple[Any, tuple[Any, ...]], ...] = field(
         init=False, default=(), compare=False, repr=False
@@ -460,10 +484,16 @@ class Environment:
         object.__setattr__(
             self, "quota", _quota(self.quota, f"environment {self.name!r} quota")
         )
+        object.__setattr__(
+            self,
+            "replicas",
+            _replicas(self.replicas, f"environment {self.name!r} replicas"),
+        )
         if not isinstance(self.auto_approve, bool):
             raise EnvError("env-config-invalid", "auto_approve is True or False")
         if not isinstance(self.stopped, bool):
             raise EnvError("env-config-invalid", "stopped is True or False")
+        _check_clusters(self, f"environment {self.name!r}")
 
     def _check_composition(self) -> None:
         what = f"environment {self.name!r}"
@@ -499,6 +529,9 @@ class Environment:
         allow_api: bool = False,
         name: str = "branches",
         pipeline: Any = None,
+        clusters: Sequence[Any] = (),
+        rollout: Any = None,
+        replicas: Mapping[str, int] | None = None,
     ) -> BranchEnvironments:
         """One environment per Git branch of the sources (a composition's branch rule).
 
@@ -535,6 +568,9 @@ class Environment:
             allow_egress=tuple(allow_egress),
             allow_api=allow_api,
             pipeline=pipeline,
+            clusters=tuple(clusters),
+            rollout=rollout,
+            replicas=replicas,
         )
 
     @property
@@ -575,7 +611,34 @@ class Environment:
             **({"pipeline": self.pipeline.name} if self.pipeline is not None else {}),
             # Only when declared, so the hashes of running environments stay equal.
             **({"stopped": True} if self.stopped else {}),
+            **({"replicas": dict(self.replicas)} if self.replicas else {}),
+            **_describe_clusters(self),
         }
+
+
+def _check_clusters(env: Any, what: str) -> None:
+    """``clusters=`` and ``rollout=`` (0.15): normalised and checked."""
+    from piceli.envs.placement import check_rollout, placed, placements
+
+    found = placements(env.clusters, what)
+    object.__setattr__(env, "clusters", found)
+    if found and env.cluster is not None:
+        raise EnvError(
+            "env-config-invalid", f"{what}: give cluster= or clusters=, not both"
+        )
+    check_rollout(env.rollout, found, what)
+    for item in found:
+        placed(env, item)  # each cluster's environment is valid
+
+
+def _describe_clusters(env: Any) -> dict[str, Any]:
+    """Only when declared: the hashes of single-cluster environments stay equal."""
+    if not env.clusters:
+        return {}
+    return {
+        "clusters": [item.describe() for item in env.clusters],
+        **({"rollout": env.rollout.describe()} if env.rollout is not None else {}),
+    }
 
 
 def _check_pipeline(env: Any, what: str) -> None:
@@ -625,6 +688,9 @@ class BranchEnvironments:
     allow_egress: Sequence[str] = ()
     allow_api: bool = False
     pipeline: Any = field(default=None, compare=False)
+    replicas: Mapping[str, int] | None = None
+    clusters: Sequence[Any] = ()
+    rollout: Any = None
     sources: tuple[tuple[Any, tuple[Any, ...]], ...] = field(
         init=False, default=(), compare=False, repr=False
     )
@@ -663,8 +729,12 @@ class BranchEnvironments:
             if not isinstance(self.cluster, Cluster):
                 raise EnvError("env-config-invalid", f"{what}: cluster is a Cluster")
         _check_pipeline(self, what)
+        object.__setattr__(
+            self, "replicas", _replicas(self.replicas, f"{what} replicas")
+        )
         # The EnvConfig checks every remaining field (quota, sizes, idle stop).
         self.env_config()
+        _check_clusters(self, what)
 
     @property
     def prefix(self) -> str:
@@ -684,6 +754,7 @@ class BranchEnvironments:
             allow_api=self.allow_api,
             branch_nodes=self.on_nodes,
             idle_stop=self.idle_stop,
+            branch_replicas=self.replicas,
         )
 
     def describe(self) -> dict[str, Any]:
@@ -702,6 +773,7 @@ class BranchEnvironments:
             "secrets": list(self.secrets),
             "settings": dict(self.settings),
             **({"pipeline": self.pipeline.name} if self.pipeline is not None else {}),
+            **_describe_clusters(self),
         }
 
 
@@ -774,6 +846,8 @@ class EnvConfig:
     branch_stack: Stack | None = None
     branch_nodes: Any = None
     idle_stop: str | int | None = None
+    #: 0.15: ``{workload: count}`` of branch environments.
+    branch_replicas: Mapping[str, int] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.prefix, str) or not _PREFIX.fullmatch(self.prefix):
@@ -823,6 +897,9 @@ class EnvConfig:
             raise EnvError("env-config-invalid", "branch_stack must be a Stack")
         object.__setattr__(
             self, "branch_nodes", _nodes(self.branch_nodes, "branch_nodes")
+        )
+        object.__setattr__(
+            self, "branch_replicas", _replicas(self.branch_replicas, "branch_replicas")
         )
         if self.idle_stop is not None:
             parse_idle(self.idle_stop)
@@ -952,6 +1029,11 @@ class EnvConfig:
                 else {}
             ),
             **(
+                {"branch_replicas": dict(self.branch_replicas)}
+                if self.branch_replicas
+                else {}
+            ),
+            **(
                 {"branch_nodes": _describe_nodes(self.branch_nodes)}
                 if self.branch_nodes is not None
                 else {}
@@ -999,6 +1081,8 @@ class BranchEnv:
     stack: Stack | None = None
     #: Node names or a label selector for every workload.
     on_nodes: Any = None
+    #: ``{workload: count}`` replicas of Deployments and StatefulSets (0.15).
+    replicas: Mapping[str, int] | None = None
     #: A ResourceQuota of a named environment (branch envs use ``config.quota``).
     quota: Mapping[str, str] | None = None
     #: Images are given (``False``: a named environment that builds itself).

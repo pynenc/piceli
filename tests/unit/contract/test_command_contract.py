@@ -593,6 +593,10 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["secrets", "git", "--cluster", "infra.py:c", "a-token-value"],
         "secrets-token-refused",
     ),
+    "secrets cluster": (
+        lambda p: ["secrets", "cluster", "--cluster", "infra.py:c", "a-token-value"],
+        "secrets-token-refused",
+    ),
     "gitops approve": (
         lambda p: ["gitops", "approve", "wp-1", "not-a-hash", "--state-dir", str(p)],
         "gitops-request-invalid",
@@ -625,6 +629,56 @@ CASES: dict[str, tuple[Argv, str]] = {
         "gitops-request-invalid",
     ),
     "codegen crd": (lambda p: ["codegen", "crd", str(p / "junk")], "crd-invalid"),
+    "bundle": (
+        lambda p: ["bundle", f"{p}/missing.py:app", "--out", str(p / "bundle")],
+        "render-target-invalid",
+    ),
+    "support-bundle": (
+        lambda p: [
+            "support-bundle",
+            "--namespace",
+            "shop",
+            "--out",
+            str(p / "s.tar.gz"),
+            "--kubeconfig",
+            str(p / "missing-kubeconfig"),
+            "--context",
+            "ctx",
+        ],
+        "target-refused",
+    ),
+    "infra plan": (
+        lambda p: ["infra", "plan", "no_such_machines:infra"],
+        "infra-not-found",
+    ),
+    "infra apply": (
+        lambda p: ["infra", "apply", "no_such_machines:infra", "--approve", "sha256:0"],
+        "infra-not-found",
+    ),
+    "infra destroy": (
+        lambda p: ["infra", "destroy", "no_such_machines:infra"],
+        "infra-not-found",
+    ),
+    "infra status": (
+        lambda p: ["infra", "status", "no_such_machines:infra"],
+        "infra-not-found",
+    ),
+    "infra install": (
+        lambda p: ["infra", "install", "no_such_machines:infra", "edge-1"],
+        "infra-not-found",
+    ),
+    "infra register": (
+        lambda p: ["infra", "register", "no_such_machines:infra", "edge-1"],
+        "infra-not-found",
+    ),
+    "secrets provider": (
+        lambda p: ["secrets", "provider", "hcloud", "a-token-value"],
+        "infra-credential-refused",
+    ),
+    "secrets state-key": (
+        lambda p: ["secrets", "state-key", "edge-state"],
+        "infra-prompt-required",
+    ),
 }
 
 

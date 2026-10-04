@@ -65,6 +65,7 @@
     "added_components",
     "autoscaler",
     "claim_growth",
+    "cluster_identity",
     "composition",
     "config",
     "cron_job",
@@ -96,6 +97,7 @@
     "resource",
     "restore_verifies",
     "restore_verify",
+    "safety_exception",
     "secret",
     "selected_environment",
     "service",
@@ -124,6 +126,13 @@
      "workload"
     ],
     "claim_growth": [],
+    "cluster_identity": [
+     "command",
+     "directory",
+     "image",
+     "name",
+     "resources"
+    ],
     "composition": [
      "ctx"
     ],
@@ -359,6 +368,11 @@
      "verify",
      "workload"
     ],
+    "safety_exception": [
+     "item",
+     "reason",
+     "rule"
+    ],
     "secret": [
      "component",
      "data",
@@ -421,6 +435,7 @@
    "pydantic": true,
    "returns": {
     "autoscaler": "Autoscaler",
+    "cluster_identity": "ClusterIdentity",
     "composition": "DeploymentComposition",
     "config": "Config",
     "cron_job": "CronJob",
@@ -924,6 +939,35 @@
     ]
    },
    "pydantic": true
+  },
+  "ClusterIdentity": {
+   "attr_types": {
+    "egress": "NetworkRule",
+    "init": "Container",
+    "service_account": "ServiceAccount",
+    "volumes": "MemoryVolume"
+   },
+   "attrs": [
+    "egress",
+    "file",
+    "init",
+    "rule",
+    "service_account",
+    "volumes"
+   ],
+   "init": [
+    "egress",
+    "file",
+    "init",
+    "service_account",
+    "volumes"
+   ],
+   "methods": {
+    "rule": []
+   },
+   "returns": {
+    "rule": "Rule"
+   }
   },
   "ClusterRegistry": {
    "attrs": [
@@ -1687,6 +1731,7 @@
     "allows",
     "auto_approve",
     "branch_nodes",
+    "branch_replicas",
     "branch_stack",
     "branches",
     "claim_sizes",
@@ -1710,6 +1755,7 @@
     "allow_egress",
     "auto_approve",
     "branch_nodes",
+    "branch_replicas",
     "branch_stack",
     "branches",
     "claim_sizes",
@@ -1910,9 +1956,11 @@
     "job_result",
     "managers",
     "proxy",
+    "proxy_upstream",
     "put",
     "route",
-    "scale"
+    "scale",
+    "upstream_for"
    ],
    "init": [
     "namespace",
@@ -1959,6 +2007,11 @@
      "status",
      "target"
     ],
+    "proxy_upstream": [
+     "base_url",
+     "port",
+     "target"
+    ],
     "put": [
      "managers",
      "owned",
@@ -1973,6 +2026,9 @@
      "manager",
      "name",
      "replicas"
+    ],
+    "upstream_for": [
+     "path"
     ]
    }
   },
@@ -4973,6 +5029,7 @@
      "access",
      "artifacts",
      "build",
+     "bundle",
      "cache",
      "chart",
      "cluster",
@@ -4986,6 +5043,7 @@
      "heavy",
      "help-json",
      "import",
+     "infra",
      "inputs",
      "login",
      "logout",
@@ -5004,6 +5062,7 @@
      "secrets",
      "state",
      "status",
+     "support-bundle",
      "ui",
      "watch"
     ]
@@ -5282,6 +5341,23 @@
      "--sources",
      "--spec",
      "--timeout"
+    ],
+    "subcommands": []
+   },
+   "bundle": {
+    "arguments": [
+     "target"
+    ],
+    "flags": [
+     "--all-platforms",
+     "--env",
+     "--name",
+     "--out",
+     "--output-dir",
+     "--platform",
+     "--receipt",
+     "--storage-class",
+     "--version"
     ],
     "subcommands": []
    },
@@ -5779,6 +5855,80 @@
      "--namespace",
      "--out",
      "--select"
+    ],
+    "subcommands": []
+   },
+   "infra": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "apply",
+     "destroy",
+     "install",
+     "plan",
+     "register",
+     "status"
+    ]
+   },
+   "infra apply": {
+    "arguments": [
+     "ref"
+    ],
+    "flags": [
+     "--approve",
+     "--tofu"
+    ],
+    "subcommands": []
+   },
+   "infra destroy": {
+    "arguments": [
+     "ref"
+    ],
+    "flags": [
+     "--approve",
+     "--tofu"
+    ],
+    "subcommands": []
+   },
+   "infra install": {
+    "arguments": [
+     "ref",
+     "server"
+    ],
+    "flags": [
+     "--approve"
+    ],
+    "subcommands": []
+   },
+   "infra plan": {
+    "arguments": [
+     "ref"
+    ],
+    "flags": [
+     "--tofu"
+    ],
+    "subcommands": []
+   },
+   "infra register": {
+    "arguments": [
+     "ref",
+     "server"
+    ],
+    "flags": [
+     "--approve",
+     "--context",
+     "--kubeconfig",
+     "--transport",
+     "--wait"
+    ],
+    "subcommands": []
+   },
+   "infra status": {
+    "arguments": [
+     "ref"
+    ],
+    "flags": [
+     "--json"
     ],
     "subcommands": []
    },
@@ -6432,8 +6582,26 @@
     "arguments": [],
     "flags": [],
     "subcommands": [
-     "git"
+     "cluster",
+     "git",
+     "provider",
+     "state-key"
     ]
+   },
+   "secrets cluster": {
+    "arguments": [],
+    "flags": [
+     "--allow-exec",
+     "--cluster",
+     "--context",
+     "--exec-sha256",
+     "--home",
+     "--kubeconfig",
+     "--prompt",
+     "--server",
+     "--transport"
+    ],
+    "subcommands": []
    },
    "secrets git": {
     "arguments": [],
@@ -6444,6 +6612,26 @@
      "--prompt",
      "--transport",
      "--username"
+    ],
+    "subcommands": []
+   },
+   "secrets provider": {
+    "arguments": [
+     "name"
+    ],
+    "flags": [
+     "--prompt"
+    ],
+    "subcommands": []
+   },
+   "secrets state-key": {
+    "arguments": [
+     "name"
+    ],
+    "flags": [
+     "--generate",
+     "--prompt",
+     "--replace"
     ],
     "subcommands": []
    },
@@ -6500,6 +6688,20 @@
     "flags": [
      "--json",
      "--timeout"
+    ],
+    "subcommands": []
+   },
+   "support-bundle": {
+    "arguments": [],
+    "flags": [
+     "--allow-exec",
+     "--context",
+     "--exec-sha256",
+     "--kubeconfig",
+     "--log-lines",
+     "--namespace",
+     "--out",
+     "--transport"
     ],
     "subcommands": []
    },
@@ -6646,6 +6848,7 @@
      "--exec-sha256",
      "--gitops-namespace",
      "--host",
+     "--infra",
      "--kubeconfig",
      "--name",
      "--namespace",
@@ -6724,6 +6927,24 @@
    "build-platforms-invalid",
    "build-timed-out",
    "builder-not-approved",
+   "bundle-empty",
+   "bundle-image-archive-missing",
+   "bundle-image-mismatch",
+   "bundle-image-platform-missing",
+   "bundle-image-unpinned",
+   "bundle-image-unresolved",
+   "bundle-invalid",
+   "bundle-out-refused",
+   "bundle-receipt-invalid",
+   "bundle-secret-unsupported",
+   "bundle-secret-value",
+   "bundle-unsafe-network",
+   "bundle-unsafe-no-privilege",
+   "bundle-unsafe-node-port",
+   "bundle-unsafe-non-root",
+   "bundle-unsafe-rbac",
+   "bundle-unsafe-read-only-root",
+   "bundle-unsafe-resources",
    "cache-arguments-conflict",
    "cache-budget-invalid",
    "cache-over-budget",
@@ -6763,6 +6984,9 @@
    "cluster-api-mismatch",
    "cluster-build-failed",
    "cluster-build-invalid",
+   "cluster-credentials-missing",
+   "cluster-credentials-refused",
+   "cluster-credentials-unsupported",
    "cluster-identity-changed",
    "cluster-identity-unreadable",
    "cluster-invalid",
@@ -6773,11 +6997,13 @@
    "cluster-not-initialized",
    "cluster-plan-changed",
    "cluster-registry-cluster-failed",
+   "cluster-registry-copy-failed",
    "cluster-registry-invalid",
    "cluster-registry-not-installed",
    "cluster-registry-not-ready",
    "cluster-registry-plan-changed",
    "cluster-registry-target-required",
+   "cluster-unreachable",
    "codegen-cluster-read-failed",
    "codegen-flags-conflict",
    "codegen-output-refused",
@@ -6948,6 +7174,36 @@
    "import-select-invalid",
    "import-target-invalid",
    "import-timed-out",
+   "infra-apply-failed",
+   "infra-backend-changed",
+   "infra-credential-exists",
+   "infra-credential-invalid",
+   "infra-credential-missing",
+   "infra-credential-refused",
+   "infra-credential-unsafe",
+   "infra-foreign-resource",
+   "infra-install-changed",
+   "infra-install-failed",
+   "infra-install-unavailable",
+   "infra-invalid",
+   "infra-k3s-not-ready",
+   "infra-kubeconfig-invalid",
+   "infra-load-failed",
+   "infra-no-cluster",
+   "infra-not-applied",
+   "infra-not-found",
+   "infra-plan-changed",
+   "infra-prompt-required",
+   "infra-register-changed",
+   "infra-server-unknown",
+   "infra-ssh-missing",
+   "infra-ssh-unreachable",
+   "infra-state-in-git",
+   "infra-state-locked",
+   "infra-state-unexpected",
+   "infra-tofu-failed",
+   "infra-tofu-missing",
+   "infra-tofu-unsupported",
    "inputs-io-error",
    "inputs-lock-invalid",
    "invalid-access-profile",
@@ -7158,6 +7414,8 @@
    "retention-invalid",
    "retention-live-unknown",
    "retention-not-approved",
+   "rollout-stopped",
+   "rollout-waiting",
    "rotate-not-valid-for-rollback",
    "runner-disk-low",
    "runner-memory-low",
@@ -7224,6 +7482,10 @@
    "stored-discovery-missing",
    "stored-evidence-mismatch",
    "stored-release-mismatch",
+   "support-bundle-namespace-missing",
+   "support-bundle-out-refused",
+   "support-bundle-unreachable",
+   "support-bundle-write-refused",
    "takeover-conflict",
    "target-mismatch",
    "target-refused",
@@ -7312,6 +7574,9 @@
    },
    "ClaimTemplate": {
     "class": "ClaimTemplate"
+   },
+   "ClusterIdentity": {
+    "class": "ClusterIdentity"
    },
    "Config": {
     "class": "Config"
@@ -7545,6 +7810,7 @@
    "approval_policy": {},
    "artifacts": {},
    "bounds": {},
+   "bundle": {},
    "checks": {},
    "cli_contract": {},
    "codegen": {},
@@ -7583,6 +7849,9 @@
    },
    "ClaimTemplate": {
     "class": "ClaimTemplate"
+   },
+   "ClusterIdentity": {
+    "class": "ClusterIdentity"
    },
    "Config": {
     "class": "Config"
@@ -8184,6 +8453,7 @@
   "piceli.app.access",
   "piceli.app.app",
   "piceli.app.environment",
+  "piceli.app.identity",
   "piceli.app.kinds",
   "piceli.app.model",
   "piceli.app.prerollout",
@@ -8225,6 +8495,14 @@
   "piceli.artifacts.signing",
   "piceli.artifacts.source_identity",
   "piceli.bounds",
+  "piceli.bundle",
+  "piceli.bundle.build",
+  "piceli.bundle.guides",
+  "piceli.bundle.images",
+  "piceli.bundle.prepare",
+  "piceli.bundle.rules",
+  "piceli.bundle.safety",
+  "piceli.bundle.support",
   "piceli.chart",
   "piceli.checks",
   "piceli.checks.context",
@@ -8239,6 +8517,7 @@
   "piceli.envs.isolation",
   "piceli.envs.model",
   "piceli.envs.ops",
+  "piceli.envs.placement",
   "piceli.errors",
   "piceli.gcp",
   "piceli.gcp.credentials",
@@ -8263,6 +8542,19 @@
   "piceli.infra.composition",
   "piceli.infra.contract",
   "piceli.infra.controller",
+  "piceli.infra.machines",
+  "piceli.infra.machines.credentials",
+  "piceli.infra.machines.hetzner",
+  "piceli.infra.machines.install",
+  "piceli.infra.machines.model",
+  "piceli.infra.machines.plan",
+  "piceli.infra.machines.provider",
+  "piceli.infra.machines.register",
+  "piceli.infra.machines.render",
+  "piceli.infra.machines.state",
+  "piceli.infra.machines.status",
+  "piceli.infra.machines.tofu",
+  "piceli.infra.multicluster",
   "piceli.infra.pipelines",
   "piceli.infra.render",
   "piceli.infra.sources",
@@ -8273,6 +8565,7 @@
   "piceli.k8s.cli",
   "piceli.k8s.cli.access",
   "piceli.k8s.cli.build",
+  "piceli.k8s.cli.bundle",
   "piceli.k8s.cli.chart",
   "piceli.k8s.cli.cluster",
   "piceli.k8s.cli.cluster_access",
@@ -8285,6 +8578,7 @@
   "piceli.k8s.cli.gitops",
   "piceli.k8s.cli.heavy",
   "piceli.k8s.cli.importing",
+  "piceli.k8s.cli.infra",
   "piceli.k8s.cli.inputs",
   "piceli.k8s.cli.maintenance",
   "piceli.k8s.cli.observe",
@@ -8428,6 +8722,7 @@
   "piceli.services.forwards",
   "piceli.services.log_workspace",
   "piceli.services.logs",
+  "piceli.services.machines",
   "piceli.services.named_environment_actions",
   "piceli.services.navigation",
   "piceli.services.observation",
@@ -8451,6 +8746,7 @@
   "piceli.tempfiles",
   "piceli.testing",
   "piceli.testing.fake_api",
+  "piceli.testing.infra",
   "piceli.testing.pytest_plugin",
   "piceli.utils"
  ],
@@ -8484,5 +8780,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.14.7"
+ "version": "0.15.0"
 }

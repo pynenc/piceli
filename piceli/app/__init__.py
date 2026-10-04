@@ -17,6 +17,7 @@ See ``docs/typed_apps.md`` and ``docs/access.md``.
 from piceli.app.access import Access, Forward
 from piceli.app.app import App
 from piceli.app.environment import Environment, Scaling
+from piceli.app.identity import ClusterIdentity
 from piceli.app.kinds import (
     Autoscaler,
     CronJob,
@@ -67,6 +68,7 @@ __all__ = [
     "App",
     "Autoscaler",
     "ClaimTemplate",
+    "ClusterIdentity",
     "Config",
     "ConfigKey",
     "ConfigVolume",

@@ -53,8 +53,13 @@ FIRST_ARGUMENT = {
     "PublishError",
     "HeavyError",
     "ClusterError",
+    "InfraError",
     "RegistryRefError",
     "StorageReadError",
+    "BundleError",
+    "PrepareError",
+    "ImageExportError",
+    "SupportError",
 }
 # ``_Failure(result, reason)`` in the delivery modules; ``reject_error(error, default)``;
 # ``DryRunUnavailable(resource, reason)`` in ``k8s/ops/dry_run.py``.
@@ -127,6 +132,14 @@ DYNAMIC = {
     "gitops-push-failed",
     # k8s/cli/chart.py: a RegistryError reason that is not registered
     "chart-push-failed",
+    # bundle/rules.py: CODES = f"bundle-unsafe-{rule}" for each safety rule
+    "bundle-unsafe-non-root",
+    "bundle-unsafe-read-only-root",
+    "bundle-unsafe-no-privilege",
+    "bundle-unsafe-resources",
+    "bundle-unsafe-network",
+    "bundle-unsafe-rbac",
+    "bundle-unsafe-node-port",
 }
 # Registered for the CLI contract itself (piceli/cli_contract.py users).
 CONTRACT = {"unknown-error-code"}

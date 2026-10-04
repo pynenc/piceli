@@ -83,6 +83,7 @@ export const api = {
   compositionEnvironmentHistory: (env: string, signal?: AbortSignal) => service().GET('/api/v1/composition/environments/{env}/history', { params: { path: { env } }, signal }).then(data),
   compositionSync: (body: CompositionSyncRequest) => service().POST('/api/v1/composition/sync', { body }).then(data),
   clusterStatus: (signal?: AbortSignal) => service().GET('/api/v1/cluster/status', { signal }).then(data),
+  machines: (signal?: AbortSignal) => service().GET('/api/v1/machines', { signal }).then(data),
   profiles: (signal?: AbortSignal) => service().GET('/api/v1/profiles', { signal }).then(data),
   switchProfile: (body: ProfileSwitchRequest) => service().POST('/api/v1/profiles/switch', { body }).then(data),
   namedEnvironmentActions: (env: string, signal?: AbortSignal) => service().GET('/api/v1/composition/environments/{env}/actions', { params: { path: { env } }, signal }).then(data),

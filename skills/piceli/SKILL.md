@@ -3,7 +3,7 @@ name: piceli
 description: Deploy and operate Kubernetes apps described as typed Python with Piceli, safely, from an agent. Covers installing piceli, describing an App and a Pipeline, rendering without a cluster, planning and showing the plan to the owner, deploying only with the hash the owner approved (or inside the owner's declared auto_approve policy), checking status and access, diagnosing failures with `piceli explain` and the JSON output contract, resuming interrupted runs and rolling back. Use when a project imports piceli or has a Pipeline or release.toml, or when asked to deploy, plan, roll back or debug a Piceli release.
 license: MIT
 metadata:
-  piceli-version: "0.14"
+  piceli-version: "0.15"
 ---
 
 # Piceli
@@ -240,7 +240,8 @@ objects), never data or external side effects. A pipeline with
 `piceli doctor`, `python scripts/check_install.py`,
 `python scripts/plan.py …`, `python scripts/status.py …`,
 `python scripts/diagnose.py …`, `python scripts/rollback.py …` without
-`--approve` (it only plans).
+`--approve` (it only plans), `piceli infra status|plan` (plan never changes a
+resource), `piceli bundle … --out DIR` (local files only, no secret value).
 
 ## Never do without the owner's approval
 
@@ -248,6 +249,9 @@ objects), never data or external side effects. A pipeline with
 `piceli release apply|rollback … --approve`, `piceli release check` on a spec
 you did not write, `piceli access`, `piceli access stop --stale`,
 `piceli publish … --approve` (pushes manifests for Flux or Argo CD),
-`piceli cache prune`, `piceli state import`, and every
+`piceli cache prune`, `piceli state import`, `piceli infra
+apply|destroy|install|register` (servers cost money; install can wipe a
+machine), `piceli support-bundle` (reads the owner's cluster), every
+`piceli secrets …` (the owner types the value), and every
 `artifacts deliver|build-spec run|execute-command|import-local`. Full rules:
 <https://docs.pynenc.org/projects/piceli/en/stable/agents.html>.

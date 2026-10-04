@@ -44,6 +44,17 @@ is refused (``gitops-env-stop-declared``); a requested stop lasts until
 ``env start``, also after a declared stop is removed. Starting scales the
 workloads back and deploys the current revision when it moved meanwhile.
 
+**Several clusters** (0.15, :mod:`piceli.infra.multicluster`): an
+environment with ``clusters=[Placement(...)]`` has one record per cluster
+(``<env>@<cluster>``), deployed through that cluster's ports
+(``ports.for_cluster``), its images copied into its own registry
+(``ports.fill_registry``). Each poll probes the other clusters
+(``ports.probe_cluster``): an unreachable one is retried when it answers,
+never failed. A ``Rollout`` holds a later wave until the earlier ones run
+the revision healthy (``rollout-waiting``), or for good when one failed it
+(``held``, ``rollout-stopped``). The status keeps one entry per environment
+with ``clusters.<cluster>``; a placement removed is torn down there.
+
 After every deploy step the record keeps ``checks``: the outcome of the last
 checks a run of it executed (passed or failed, each check's name and code,
 when, the trigger and the run), also after a rollout.
@@ -378,6 +389,8 @@ class DefaultCompositionPorts:
         context: str,
         state_dir: Path,
         transport: str = "https",
+        remote: Any = None,
+        home: bool = True,
     ) -> None:
         self.envs = envs
         self.builder = builder
@@ -385,7 +398,109 @@ class DefaultCompositionPorts:
         self.context = context
         self.state_dir = state_dir
         self.transport = transport
+        #: :class:`~piceli.infra.multicluster.RemoteClusters` (several clusters).
+        self.remote = remote
+        #: ``False`` for the ports of another cluster than the controller's.
+        self.home = home
         self.log: Callable[[str], None] = getattr(envs, "log", None) or (lambda _: None)
+
+    # ------------------------------------------------------------ clusters (0.15)
+    def for_cluster(self, name: str, *, home: bool) -> DefaultCompositionPorts:
+        """The ports deploying to cluster ``name`` (its own state directory).
+
+        The home cluster is reached as the controller is; another cluster
+        through the kubeconfig of its credential Secret (read again each
+        time, so a rotated Secret is used at once).
+        """
+        from piceli.gitops.ports import DefaultPorts
+
+        state = self.state_dir / "clusters" / name
+        if home:
+            kubeconfig, context, envs = self.kubeconfig, self.context, self.envs
+        else:
+            if self.remote is None:
+                raise CompositionError(
+                    "cluster-credentials-missing",
+                    f"no credentials for cluster {name!r} in this controller",
+                )
+            kubeconfig, context = self.remote.kubeconfig(name)
+            envs = RemoteEnvPorts(
+                DefaultPorts(
+                    kubeconfig,
+                    context,
+                    state,
+                    namespace=self.envs.namespace,
+                    config=self.envs.config,
+                    transport=self.transport,
+                    log=self.log,
+                )
+            )
+        return DefaultCompositionPorts(
+            envs,
+            self.builder,
+            kubeconfig=kubeconfig,
+            context=context,
+            state_dir=state,
+            transport=self.transport,
+            remote=self.remote,
+            home=home,
+        )
+
+    def probe_cluster(self, name: str) -> dict[str, Any]:
+        """``{reachable, reason}`` of another cluster's API (``GET /version``)."""
+        if self.remote is None:
+            return {"reachable": False, "reason": "cluster-credentials-missing"}
+        contact = self.remote.probe(name)
+        return {"reachable": contact.reachable, "reason": contact.reason}
+
+    def fill_registry(
+        self,
+        refs: Mapping[str, str],
+        *,
+        home: Any,
+        registry: Any,
+        repositories: Mapping[str, str] | None = None,
+    ) -> dict[str, str]:
+        """Copy ``refs`` from the home registry into this cluster's, by digest."""
+        from piceli.artifacts.registry import (
+            RegistryEndpoint,
+            StreamedOciRegistryClient,
+        )
+        from piceli.infra.multicluster import ProxiedRegistryClient, copy_images
+        from piceli.k8s.ops.provider_factory import api_client_from_kubeconfig
+
+        source = StreamedOciRegistryClient(
+            RegistryEndpoint(
+                host=f"{home.name}.{home.namespace}.svc",
+                port=int(home.port),
+                use_tls=False,
+            ),
+            actions="pull",
+        )
+        client = api_client_from_kubeconfig(
+            self.kubeconfig,
+            self.context,
+            transport=self.transport,  # type: ignore[arg-type]
+        )
+        try:
+            return copy_images(
+                refs,
+                home_host=home.host,
+                target_host=registry.host,
+                source=source,
+                target=ProxiedRegistryClient(client, registry),
+                repositories=repositories,
+            )
+        finally:
+            client.close()
+
+    def remove_placement(self, *, namespace: str, app: str, env: str) -> dict[str, Any]:
+        """Delete what Piceli created for ``env`` in this cluster (kept: claims, Secrets)."""
+        from piceli.gitops.install import connect
+        from piceli.infra.multicluster import remove_placement
+
+        with connect(self.kubeconfig, self.context, transport=self.transport) as api:
+            return remove_placement(api, namespace=namespace, app=app, env=env)
 
     def pipeline(
         self,
@@ -420,6 +535,7 @@ class DefaultCompositionPorts:
             context=self.context,
             state_dir=self.state_dir / "pipelines",
             transport=self.transport,
+            **({} if self.home else {"home": False}),
         )
 
     def prepare_env(self, pipeline: Any, name: str) -> str | None:
@@ -500,20 +616,65 @@ class DefaultCompositionPorts:
         }
 
 
+class RemoteEnvPorts:
+    """The environment ports of another cluster: as the home cluster's, but
+    nothing is granted to the controller's service account there (the
+    cluster's credentials deploy; the controller has no identity in it)."""
+
+    def __init__(self, envs: Any) -> None:
+        self._envs = envs
+        self.namespace = envs.namespace
+        self.config = envs.config
+        self.log = envs.log
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._envs, name)
+
+    def prepare_env(self, pipeline: Any, name: str) -> str | None:
+        return str(self._envs._envs().namespace_for(pipeline, name))
+
+
 # ---------------------------------------------------------------- the loop
 
 
 @dataclass
 class _Instance:
-    """One deployable environment: a named one, or one branch of the rule."""
+    """One deployable environment: a named one, or one branch of the rule.
+
+    With several clusters (0.15) there is one instance per environment and
+    cluster: ``name`` is ``<env>@<cluster>`` (its record's key), ``parent``
+    the environment (or branch) name, ``env`` the environment that cluster
+    runs (:func:`piceli.envs.placement.placed`).
+    """
 
     name: str
     env: EnvItem
     branch: str | None = None
+    cluster: str | None = None
+    parent: str | None = None
 
     @property
     def rules(self) -> tuple[tuple[Any, tuple[Any, ...]], ...]:
         return self.env.sources
+
+    @property
+    def group(self) -> str:
+        """The environment (or branch) name every cluster of it shares."""
+        return self.parent or self.name
+
+    @property
+    def deploys_as(self) -> str:
+        """The name the environment ports know it by (the branch, or the env)."""
+        return self.branch if self.branch is not None else self.env.name
+
+
+def _running_images(record: Mapping[str, Any]) -> dict[str, Any]:
+    """The images the environment runs, by component (the release's identity)."""
+    return {
+        key: entry.get("deployed_image")
+        for key, entry in sorted((record.get("components") or {}).items())
+        if isinstance(entry, Mapping)
+    }
 
 
 class CompositionController:
@@ -575,6 +736,9 @@ class CompositionController:
         self._history_digest: str | None = None
         self._runs: Any = None
         self._step_runs: Any = None  # the current step's run (its own cache)
+        #: Each other cluster's contact this poll; whether it answered last time.
+        self._polled: dict[str, dict[str, Any]] = {}
+        self._reach_memory: dict[str, bool] = {}
 
     # ------------------------------------------------------------ helpers
     @property
@@ -649,6 +813,16 @@ class CompositionController:
         reason: str,
         error: BaseException | None = None,
     ) -> None:
+        cluster = record.get("cluster")
+        if (
+            isinstance(cluster, str)
+            and cluster != self._home
+            and reason not in FINAL_CODES
+        ):
+            contact = self._contact(cluster, fresh=True)
+            if not contact.get("reachable"):
+                self._unreachable(record, contact)
+                return
         attempts = int(record.get("attempts") or 0) + 1
         deleting = record.get("state") == "deleting"
         record["failure"] = None if error is None else failure_detail(error)
@@ -717,7 +891,7 @@ class CompositionController:
             return None
         if instance.env.stopped:
             return "declared"
-        if instance.name in self.state["stops"]:
+        if instance.group in self.state["stops"]:
             return "requested"
         return None
 
@@ -756,7 +930,7 @@ class CompositionController:
                 self._set(record, next_attempt_at=None, attempts=0, reason=None)
 
     def _stop_detail(self, instance: _Instance, why: str) -> dict[str, Any]:
-        request = self.state["stops"].get(instance.name) or {}
+        request = self.state["stops"].get(instance.group) or {}
         return {
             "by": why,
             "via": request.get("via") if why == "requested" else "declaration",
@@ -769,8 +943,11 @@ class CompositionController:
         instance = self._instance(name)
         assert instance is not None
         try:
-            self.ports.env_stop(  # type: ignore[call-arg]
-                self._down_pipeline(instance.env), name, reason=why
+            ports = self._ports_of(instance)
+            ports.env_stop(  # type: ignore[call-arg]
+                self._down_pipeline(instance.env, ports),
+                instance.deploys_as,
+                reason=why,
             )
         except Exception as error:
             attempts = int(record.get("attempts") or 0) + 1
@@ -806,9 +983,10 @@ class CompositionController:
         name = record["branch"]
         instance = self._instance(name)
         assert instance is not None
-        start = getattr(self.ports, "env_start", None)
+        ports = self._ports_of(instance)
+        start = getattr(ports, "env_start", None)
         if record.get("namespace") and callable(start):
-            start(self._down_pipeline(instance.env), name)
+            start(self._down_pipeline(instance.env, ports), instance.deploys_as)
         record.pop("stop", None)
         record.pop("stopped_at", None)
         revision, used, missing = self._resolve(instance)
@@ -833,18 +1011,37 @@ class CompositionController:
 
     # ------------------------------------------------------------ instances
     def _instances(self) -> list[_Instance]:
-        found = [
-            _Instance(item.name, item)
-            for item in self.composition.environments
-            if isinstance(item, Environment)
-        ]
+        found: list[_Instance] = []
+        for item in self.composition.environments:
+            if isinstance(item, Environment):
+                found += self._placed(item.name, item, None)
         rule = self.composition.branch_rule
         if rule is not None:
             for branch in self._rule_branches(rule):
-                found.append(
-                    _Instance(self._branch_env_name(rule, branch), rule, branch)
-                )
+                found += self._placed(self._branch_env_name(rule, branch), rule, branch)
         return found
+
+    def _placed(self, name: str, env: EnvItem, branch: str | None) -> list[_Instance]:
+        """One instance, or one per cluster of the environment (0.15)."""
+        from piceli.envs.placement import placed
+
+        placements = self.composition.placements_of(env)
+        if not placements:
+            return [_Instance(name, env, branch)]
+        return [
+            _Instance(
+                f"{name}@{item.name}",
+                placed(env, item),
+                branch,
+                cluster=item.name,
+                parent=name,
+            )
+            for item in placements
+        ]
+
+    def _group(self, name: str) -> list[_Instance]:
+        """The instances of environment (or branch) ``name``: itself or its clusters."""
+        return [item for item in self._instances() if item.group == name]
 
     def _rule_branches(self, rule: BranchEnvironments) -> list[str]:
         names: set[str] = set()
@@ -894,7 +1091,7 @@ class CompositionController:
         revision: dict[str, str] = {}
         used: dict[str, str] = {}
         missing: list[str] = []
-        promoted = self.state["promoted"].get(instance.name) or {}
+        promoted = self.state["promoted"].get(instance.group) or {}
         for source, items in instance.rules:
             refs = self.refs.get(source.key)
             found: tuple[str, str] | None = None
@@ -972,6 +1169,17 @@ class CompositionController:
     def _desired(self) -> None:
         instances = self._instances()
         known = self.state["env_seen"]
+        consumed: set[str] = set()
+        try:
+            self._desired_of(instances, known, consumed)
+        finally:
+            for group in consumed:
+                self.state["forced"].pop(group, None)
+        self._removed_placements(instances)
+
+    def _desired_of(
+        self, instances: list[_Instance], known: dict[str, Any], consumed: set[str]
+    ) -> None:
         for instance in instances:
             current = self._seen(instance)
             before = known.get(instance.name)
@@ -989,8 +1197,9 @@ class CompositionController:
                         latest = sorted(new, key=_version_key)[-1]
                         triggers.append(f"tag {key}/{latest}")
             known[instance.name] = {**(before or {}), **current}
-            forced = self.state["forced"].pop(instance.name, None)
+            forced = self.state["forced"].get(instance.group)
             if forced is not None:
+                consumed.add(instance.group)
                 triggers.append(forced["trigger"])
             if self._stop_reason(instance) is not None:
                 # Stopped: never planned or deployed; the start deploys the
@@ -1014,9 +1223,11 @@ class CompositionController:
                     "composition-ref-unresolved", "a followed ref is missing"
                 )
                 self._set(record, reason=unresolved.code, missing_sources=missing)
+                self._tag(instance)
                 self.log(f"{instance.name}: waiting for a ref of {', '.join(missing)}")
                 continue
             self._want(instance.name, revision, used, triggers[0])
+            self._tag(instance)
         rule = self.composition.branch_rule
         if rule is None:
             return
@@ -1031,6 +1242,8 @@ class CompositionController:
         for name, record in self._envs().items():
             if name in fixed or name in alive or record.get("state") == "deleting":
                 continue
+            if record.get("kind") == "environment":
+                continue  # a named environment's cluster: _removed_placements
             if not complete:
                 continue
             known.pop(name, None)
@@ -1038,6 +1251,56 @@ class CompositionController:
                 record, state="deleting", attempts=0, next_attempt_at=None, reason=None
             )
             self.log(f"{name}: branch gone; tearing its environment down")
+
+    def _tag(self, instance: _Instance) -> None:
+        """A cluster's record names its cluster and environment (0.15)."""
+        record = self._envs().get(instance.name)
+        if record is None or instance.cluster is None:
+            return
+        record.update(
+            cluster=instance.cluster,
+            group=instance.group,
+            deploys_as=instance.deploys_as,
+            kind="environment" if isinstance(instance.env, Environment) else "branches",
+        )
+
+    def _removed_placements(self, instances: list[_Instance]) -> None:
+        """Tear down a named environment's cluster that it no longer runs on.
+
+        The record of ``<env>@<cluster>`` is no instance any more (the
+        placement, or the cluster, left the composition): it is torn down
+        there (:func:`piceli.infra.multicluster.remove_placement`). On the
+        home cluster, never while another instance deploys to that namespace.
+        """
+        alive = {item.name for item in instances}
+        home = self.composition.cluster.name if self.composition.cluster else None
+        used = {
+            (item.cluster or home, item.env.namespace)
+            for item in instances
+            if isinstance(item.env, Environment)
+        }
+        for name, record in list(self._envs().items()):
+            if (
+                name in alive
+                or record.get("kind") != "environment"
+                or not record.get("cluster")
+                or record.get("state") == "deleting"
+            ):
+                continue
+            if (record["cluster"], record.get("namespace")) in used:
+                self._forget(name)
+                del self._envs()[name]
+                self.log(f"{name}: placement removed; its namespace is still deployed")
+                continue
+            self._set(
+                record,
+                state="deleting",
+                removal=True,
+                attempts=0,
+                next_attempt_at=None,
+                reason=None,
+            )
+            self.log(f"{name}: no longer placed there; removing what Piceli created")
 
     # ------------------------------------------------------------ requests
     def _requests(self) -> None:
@@ -1084,16 +1347,23 @@ class CompositionController:
                 self.state["last_error"] = error.code
 
     def _approve(self, body: Mapping[str, Any]) -> None:
-        record = self._envs().get(str(body.get("env")))
-        if (
-            record is None
-            or record.get("state") != "approval-required"
-            or record.get("plan_hash") != body.get("plan_hash")
-        ):
+        name = str(body.get("env"))
+        waiting = [
+            record
+            for key, record in self._envs().items()
+            if (key == name or record.get("group") == name)
+            and record.get("state") == "approval-required"
+            and record.get("plan_hash") == body.get("plan_hash")
+        ]
+        if not waiting:
             raise GitOpsError(
                 "gitops-approval-stale",
                 "the environment is not waiting for that plan hash",
             )
+        for record in waiting:  # every cluster of it waiting for that plan
+            self._approved(record, body)
+
+    def _approved(self, record: dict[str, Any], body: Mapping[str, Any]) -> None:
         self._set(
             record,
             state="pending",
@@ -1111,7 +1381,8 @@ class CompositionController:
     def _stop_request(self, body: Mapping[str, Any], *, start: bool) -> None:
         """``piceli env stop|start ENV``: remember (or forget) the owner's stop."""
         name = str(body.get("env") or "")
-        instance = self._instance(name)
+        group = self._group(name)
+        instance = group[0] if group else None
         if instance is None or not isinstance(instance.env, Environment):
             raise GitOpsError(
                 "gitops-request-invalid",
@@ -1135,7 +1406,8 @@ class CompositionController:
 
     def _promote(self, body: Mapping[str, Any]) -> None:
         name = str(body.get("env") or "")
-        instance = self._instance(name)
+        group = self._group(name)
+        instance = group[0] if group else None
         branch, commit = str(body.get("branch")), str(body.get("commit"))
         if instance is None or not isinstance(instance.env, Environment):
             raise GitOpsError(
@@ -1173,7 +1445,8 @@ class CompositionController:
     def _sync(self, body: Mapping[str, Any]) -> None:
         env = body.get("env")
         component = body.get("component")
-        names = [item.name for item in self._instances()]
+        instances = self._instances()
+        names = list(dict.fromkeys(item.group for item in instances))
         targets = names if not env else [str(env)]
         if env and str(env) not in names:
             raise GitOpsError("gitops-request-invalid", "sync names no environment")
@@ -1239,16 +1512,19 @@ class CompositionController:
         return contracts
 
     def _deploy(self, record: dict[str, Any]) -> None:
-        name = record["branch"]
+        instance = self._instance(record["branch"])
+        if instance is None:
+            raise CompositionError(
+                "composition-invalid", f"no environment {record['branch']!r}"
+            )
+        name = instance.group
         if hasattr(self.ports.builder, "environment"):
             # Its build Jobs are labelled with it (removed at its teardown).
             self.ports.builder.environment = name
-        instance = self._instance(name)
-        if instance is None:
-            raise CompositionError("composition-invalid", f"no environment {name!r}")
         if instance.env.pipeline is not None:
             self._deploy_pipeline(record, instance)
             return
+        ports = self._ports_of(instance)
         revision: dict[str, str] = dict(record["revision"])
         contracts = self._contracts(instance, revision)
         from piceli.infra.render import check_needs
@@ -1334,21 +1610,24 @@ class CompositionController:
             deployed = (previous.get(key) or {}).get("deployed_image")
             entry["deployed_image"] = deployed
             entry["state"] = "unchanged" if deployed == image.pull_ref else "rolling"
-        pipeline = self.ports.pipeline(
-            self.composition,
-            instance.env,
-            contracts,
-            {key: image.pull_ref for key, image in images.items()},
+        refs = self._fill(
+            instance, ports, {key: image.pull_ref for key, image in images.items()}
         )
-        namespace = self.ports.prepare_env(pipeline, name)
+        for key, entry in components.items():
+            entry["image"] = refs.get(key, entry["image"])
+            entry["state"] = (
+                "unchanged" if entry["deployed_image"] == entry["image"] else "rolling"
+            )
+        pipeline = ports.pipeline(self.composition, instance.env, contracts, refs)
+        namespace = ports.prepare_env(pipeline, instance.deploys_as)
         if namespace:
             record["namespace"] = namespace
         outcome = EnvOutcome.from_result(
             replan_stale(
                 record,
-                lambda approve: self.ports.env_up(
+                lambda approve: ports.env_up(
                     pipeline,
-                    name,
+                    instance.deploys_as,
                     commit=str(record.get("commit") or ""),
                     receipt=None,
                     digests=None,
@@ -1378,9 +1657,10 @@ class CompositionController:
                 "a pipeline environment needs the composition's repository "
                 "(gitops enable records it)",
             )
-        name = record["branch"]
+        name = instance.group
         env = instance.env
         pipeline = env.pipeline
+        ports = self._ports_of(instance)
         repo = self.repo.settings.name
         revision: dict[str, str] = dict(record["revision"])
         rebuild = set((self.state.get("rebuild") or {}).get(name) or ())
@@ -1476,17 +1756,27 @@ class CompositionController:
             deployed = (previous.get(key) or {}).get("deployed_image")
             entry["deployed_image"] = deployed
             entry["state"] = "unchanged" if deployed == image.pull_ref else "rolling"
-        refs = {key: image.pull_ref for key, image in images.items()}
-        target = self.ports.pipeline_env(self.composition, env, refs)
-        namespace = self.ports.prepare_env(target, name)
+        refs = self._fill(
+            instance,
+            ports,
+            {key: image.pull_ref for key, image in images.items()},
+            mirrors=mirror_list(self.composition, pipeline),
+        )
+        for key, entry in components.items():
+            entry["image"] = refs.get(key, entry["image"])
+            entry["state"] = (
+                "unchanged" if entry["deployed_image"] == entry["image"] else "rolling"
+            )
+        target = ports.pipeline_env(self.composition, env, refs)
+        namespace = ports.prepare_env(target, instance.deploys_as)
         if namespace:
             record["namespace"] = namespace
         outcome = EnvOutcome.from_result(
             replan_stale(
                 record,
-                lambda approve: self.ports.env_up(
+                lambda approve: ports.env_up(
                     target,
-                    name,
+                    instance.deploys_as,
                     commit=str(record.get("commit") or ""),
                     receipt=None,
                     digests=refs,
@@ -1539,11 +1829,78 @@ class CompositionController:
             chosen = next(iter(sorted(sources)), repo)
         return chosen, sources.get(chosen) or revision.get(chosen)
 
-    def _down_pipeline(self, env: EnvItem) -> Any:
+    def _down_pipeline(self, env: EnvItem, ports: Any = None) -> Any:
         """A pipeline that only knows the environment (for env_down, env_stop)."""
+        ports = ports or self.ports
         if env.pipeline is not None:
-            return self.ports.pipeline_env(self.composition, env, {})
-        return self.ports.pipeline(self.composition, env, {}, {})
+            return ports.pipeline_env(self.composition, env, {})
+        return ports.pipeline(self.composition, env, {}, {})
+
+    # ------------------------------------------------------------ clusters
+    @property
+    def _home(self) -> str | None:
+        cluster = self.composition.cluster
+        return None if cluster is None else cluster.name
+
+    def _ports_for(self, cluster: str | None) -> Any:
+        """The ports deploying to ``cluster`` (``None``: the 0.14 single cluster)."""
+        if cluster is None:
+            return self.ports
+        get = getattr(self.ports, "for_cluster", None)
+        if not callable(get):
+            raise CompositionError(
+                "composition-invalid",
+                "this controller deploys to its own cluster only (several clusters "
+                "need piceli gitops run with credentials of each)",
+            )
+        return get(cluster, home=cluster == self._home)
+
+    def _ports_of(self, instance: _Instance) -> Any:
+        return self._ports_for(instance.cluster)
+
+    def _fill(
+        self,
+        instance: _Instance,
+        ports: Any,
+        refs: Mapping[str, str],
+        mirrors: tuple[str, ...] = (),
+    ) -> dict[str, str]:
+        """The image references ``instance``'s cluster pulls (0.15).
+
+        Another cluster than the home one pulls from its own registry: the
+        images are copied there by digest (``ports.fill_registry``) and its
+        references name that registry. ``mirrors`` are the environment's
+        third-party images (their home copies are copied too).
+        """
+        if instance.cluster is None or instance.cluster == self._home:
+            return dict(refs)
+        cluster = self.composition.cluster_named(instance.cluster)
+        registry = getattr(cluster, "registry", None)
+        home = self.composition.registry
+        if registry is None or home is None:
+            raise CompositionError(
+                "composition-invalid",
+                f"cluster {instance.cluster!r} needs registry=Registry.in_cluster(...)",
+            )
+        wanted = dict(refs)
+        repositories: dict[str, str] = {}
+        if mirrors and instance.env.pipeline is not None:
+            from piceli.infra.pipelines import mirror_target
+
+            for ref in mirrors:
+                digest = ref.rpartition("@")[2]
+                source = mirror_target(self.composition, instance.env.pipeline, ref)
+                key = f"mirror:{ref}"
+                wanted[key] = f"{home.host}/{source}@{digest}"
+                repositories[key] = mirror_target(
+                    self.composition, instance.env.pipeline, ref, registry=registry
+                )
+        copied = dict(
+            ports.fill_registry(
+                wanted, home=home, registry=registry, repositories=repositories
+            )
+        )
+        return {key: copied[key] for key in refs}
 
     def _outcome(self, record: dict[str, Any], outcome: EnvOutcome) -> None:
         self._last_outcome = outcome
@@ -1583,6 +1940,8 @@ class CompositionController:
                     else record.get("verification")
                 ),
             )
+            if action == "unchanged":
+                self._settle_checks(record)
             changed = sorted(rolled)
             if action == "verified":
                 self.log(
@@ -1672,15 +2031,7 @@ class CompositionController:
         try:
             if self._step_runs is None:
                 self._step_runs = history.RunReader()
-            runs = self._step_runs.runs(
-                history.run_dirs(
-                    self.state_dir,
-                    str(record["branch"]),
-                    record.get("namespace")
-                    if isinstance(record.get("namespace"), str)
-                    else None,
-                )
-            )
+            runs = self._step_runs.runs(self._run_dirs(record))
         except (OSError, ValueError):
             return None
         run_id = getattr(outcome, "run_id", None)
@@ -1693,10 +2044,29 @@ class CompositionController:
                 return run
         return None
 
+    def _run_dirs(self, record: Mapping[str, Any]) -> list[Path]:
+        """The run journal directories of one record (its cluster's state)."""
+        from piceli.gitops import history
+
+        cluster = record.get("cluster")
+        namespace = record.get("namespace")
+        return history.run_dirs(
+            self._state_of(cluster if isinstance(cluster, str) else None),
+            str(record.get("deploys_as") or record["branch"]),
+            namespace if isinstance(namespace, str) else None,
+        )
+
     def _checks(
         self, record: dict[str, Any], run: Mapping[str, Any] | None, trigger: Any
     ) -> None:
         """Keep the last checks a run of this environment executed (status ``checks``)."""
+        outcome = self._last_outcome
+        if (
+            outcome is not None
+            and getattr(outcome, "action", None) == "unchanged"
+            and not getattr(outcome, "run_id", None)
+        ):
+            return  # a no-op runs no checks: never another run's (0.15.0)
         checks = (run or {}).get("checks")
         if not isinstance(checks, Mapping):
             return
@@ -1737,6 +2107,28 @@ class CompositionController:
                 else {}
             ),
         }
+        if record["checks"]["state"] == "passed" and record.get("state") == "deployed":
+            record["release_checks"] = {
+                "images": _running_images(record),
+                "checks": record["checks"],
+            }
+
+    @staticmethod
+    def _settle_checks(record: dict[str, Any]) -> None:
+        """A no-op deploy settles on the running release: show its checks.
+
+        After a failed release was rolled back, a revert deploys nothing; the
+        checks of the failed run are not the running release's (0.15.0). The
+        last passing checks of the same images come back, else none.
+        """
+        checks = record.get("checks")
+        if not isinstance(checks, Mapping) or checks.get("state") == "passed":
+            return
+        kept = record.get("release_checks")
+        if isinstance(kept, Mapping) and kept.get("images") == _running_images(record):
+            record["checks"] = dict(kept["checks"])
+        else:
+            record["checks"] = None
 
     def _degraded(self, record: dict[str, Any], verification: dict[str, Any]) -> None:
         """Failing checks on an unchanged release: keep it running, mark it degraded.
@@ -1777,21 +2169,80 @@ class CompositionController:
 
     def _teardown(self, record: dict[str, Any]) -> None:
         name = record["branch"]
+        if record.get("removal"):
+            self._remove_placement(record)
+            return
         rule = self.composition.branch_rule
         if rule is None:
             self._forget(name)
             del self._envs()[name]
             return
+        cluster = record.get("cluster")
+        ports = self._ports_for(cluster)
+        env: EnvItem = rule
+        if cluster is not None:
+            from piceli.envs.placement import placed
+
+            found = next(
+                (p for p in self.composition.placements_of(rule) if p.name == cluster),
+                None,
+            )
+            env = rule if found is None else placed(rule, found)
         # No contracts: a pipeline that only knows the environment's settings.
-        self.ports.env_down(self._down_pipeline(rule), name)
-        remove_env_dir(self._branch_dirs(rule), record.get("namespace"))
+        ports.env_down(
+            self._down_pipeline(env, ports), record.get("deploys_as") or name
+        )
+        remove_env_dir(self._branch_dirs(rule, cluster), record.get("namespace"))
         self._forget(name)
         del self._envs()[name]
         self.log(f"{name}: environment removed")
 
-    def _branch_dirs(self, rule: BranchEnvironments) -> Path:
+    def _branch_dirs(
+        self, rule: BranchEnvironments, cluster: str | None = None
+    ) -> Path:
         """Where the rule's branch environments keep their pipeline state."""
-        return self.state_dir / "pipelines" / rule.name / "branches"
+        return self._state_of(cluster) / "pipelines" / rule.name / "branches"
+
+    def _state_of(self, cluster: str | None) -> Path:
+        """The state directory of one cluster's pipelines (0.15: ``clusters/<name>``)."""
+        return (
+            self.state_dir if cluster is None else self.state_dir / "clusters" / cluster
+        )
+
+    def _remove_placement(self, record: dict[str, Any]) -> None:
+        """Remove what Piceli created for an environment in a cluster it left."""
+        name = record["branch"]
+        cluster = str(record.get("cluster"))
+        namespace = record.get("namespace")
+        removed: dict[str, Any] = {"deleted": [], "kept": [], "namespace": "absent"}
+        if isinstance(namespace, str) and namespace:
+            ports = self._ports_for(cluster)
+            removed = dict(
+                ports.remove_placement(
+                    namespace=namespace,
+                    app=self.composition.name,
+                    env=str(record.get("deploys_as") or record.get("group") or name),
+                )
+            )
+        removals = self.state.setdefault("removals", [])
+        removals.append(
+            {
+                "env": record.get("group") or name,
+                "cluster": cluster,
+                "namespace": namespace,
+                "at": _iso(self.clock()),
+                "deleted": len(removed.get("deleted") or ()),
+                "kept": list(removed.get("kept") or ())[:50],
+                "namespace_state": removed.get("namespace"),
+            }
+        )
+        del removals[:-10]
+        self._forget(name)
+        del self._envs()[name]
+        self.log(
+            f"{name}: removed from cluster {cluster} ({len(removed.get('deleted') or ())} "
+            f"object(s) deleted, {len(removed.get('kept') or ())} kept)"
+        )
 
     #: Per-environment memory besides its record (keyed by environment name).
     _MEMORY = ("env_seen", "promoted", "forced", "rebuild", "stops")
@@ -1870,8 +2321,14 @@ class CompositionController:
     def _stop(self, record: dict[str, Any]) -> None:
         rule = self.composition.branch_rule
         assert rule is not None
+        instance = self._instance(record["branch"])
+        env: EnvItem = rule if instance is None else instance.env
         try:
-            self.ports.env_stop(self._down_pipeline(rule), record["branch"])
+            ports = self._ports_for(None if instance is None else instance.cluster)
+            ports.env_stop(
+                self._down_pipeline(env, ports),
+                record["branch"] if instance is None else instance.deploys_as,
+            )
         except Exception as error:
             attempts = int(record.get("attempts") or 0) + 1
             self._set(
@@ -1910,6 +2367,8 @@ class CompositionController:
             key=lambda r: (
                 r["state"] != "deleting",
                 r.get("pushed_at") or "",
+                r.get("group") or r["branch"],
+                self._wave(r),
                 r["branch"],
             ),
         )
@@ -1924,6 +2383,13 @@ class CompositionController:
         started = (_iso(self.clock()), record.get("trigger"), record.get("approval"))
         self._built, self._last_outcome = [], None
         self._step_started, self._step_env = started[0], str(record.get("branch"))
+        # Added in 0.15.0: the step shows in the status while it runs, not
+        # only when the whole poll ends (a long rollout left it minutes stale).
+        record["in_progress"] = {
+            "action": work.__name__.lstrip("_"),
+            "since": started[0],
+        }
+        self._publish()
         try:
             work(record)
         except Exception as error:  # one bad environment never stops the loop
@@ -1936,9 +2402,11 @@ class CompositionController:
                 self._fail(record, step_reason(error), error)
         finally:
             self.busy = False
+            record.pop("in_progress", None)
             if deploy:
                 self._record_step(record, *started)
             save_state(self.state_dir, self.state)
+            self._publish()
 
     def _record_step(
         self,
@@ -2020,15 +2488,194 @@ class CompositionController:
         self.state["baseline"] = True
         save_state(self.state_dir, self.state)
         self._stops()
+        self._polled = {}
         for record in self._due():
+            if not self._reachable(record):
+                continue
             if record.get("state") == "deleting":
                 self._step(record, self._teardown)
-            else:
-                self._step(record, self._deploy)
+                continue
+            gate = self._gate(record)
+            if gate is not None:
+                self._hold(record, gate)
+                continue
+            self._step(record, self._deploy)
         for record in self._idle():
             self._step(record, self._stop)
+        self._probe_clusters()
         self._registry_usage(now)
         return self._publish()
+
+    # ------------------------------------------------------------ reach, rollout
+    def _contact(self, cluster: str, *, fresh: bool = False) -> dict[str, Any]:
+        """Whether ``cluster``'s API answers (probed once per poll, or ``fresh``)."""
+        polled = self._polled
+        if not fresh and cluster in polled:
+            return dict(polled[cluster])
+        probe = getattr(self.ports, "probe_cluster", None)
+        found: Mapping[str, Any] = {"reachable": True, "reason": None}
+        if callable(probe):
+            try:
+                found = probe(cluster)
+            except Exception:  # never fail a poll on it
+                found = {"reachable": False, "reason": "cluster-unreachable"}
+        now = _iso(self.clock())
+        memory = self.state.setdefault("clusters", {})
+        entry = dict(memory.get(cluster) or {})
+        reachable = bool(found.get("reachable"))
+        entry.update(
+            reachable=reachable,
+            reason=None
+            if reachable
+            else str(found.get("reason") or "cluster-unreachable"),
+            checked_at=now,
+        )
+        if reachable:
+            entry["last_contact"] = now
+        memory[cluster] = entry
+        polled[cluster] = entry
+        if not reachable and self._last_reach.get(cluster) is not False:
+            self.log(f"cluster {cluster}: unreachable ({entry['reason']})")
+        elif reachable and self._last_reach.get(cluster) is False:
+            self.log(f"cluster {cluster}: reachable again")
+        self._last_reach[cluster] = reachable
+        return dict(entry)
+
+    @property
+    def _last_reach(self) -> dict[str, bool]:
+        return self._reach_memory
+
+    def _remote(self, record: Mapping[str, Any]) -> str | None:
+        cluster = record.get("cluster")
+        if isinstance(cluster, str) and cluster != self._home:
+            return cluster
+        return None
+
+    def _reachable(self, record: dict[str, Any]) -> bool:
+        """Probe the record's cluster; an unreachable one is put off (not failed)."""
+        cluster = self._remote(record)
+        if cluster is None:
+            return True
+        contact = self._contact(cluster)
+        if contact.get("reachable"):
+            record.pop("unreachable_attempts", None)
+            return True
+        self._unreachable(record, contact)
+        save_state(self.state_dir, self.state)
+        return False
+
+    def _unreachable(self, record: dict[str, Any], contact: Mapping[str, Any]) -> None:
+        """Retry at the next poll that reaches it, without counting an attempt:
+        the environment's other clusters go on, and it converges when back.
+
+        No backoff: every poll probes the cluster anyway (one short request),
+        and the record is only stepped once the probe answers.
+        """
+        tries = int(record.get("unreachable_attempts") or 0) + 1
+        record["unreachable_attempts"] = tries
+        self._set(
+            record,
+            state="deleting" if record.get("state") == "deleting" else "retrying",
+            reason=str(contact.get("reason") or "cluster-unreachable"),
+            next_attempt_at=None,
+        )
+        if tries == 1:
+            self.log(
+                f"{record['branch']}: cluster {record.get('cluster')} unreachable "
+                f"({record['reason']}); retried when it answers"
+            )
+
+    def _probe_clusters(self) -> None:
+        """Probe every other cluster this poll did not reach (``last_contact``)."""
+        names = {
+            cluster
+            for record in self._envs().values()
+            if (cluster := self._remote(record)) is not None
+        }
+        names |= {item.name for item in self.composition.remote_clusters}
+        for name in sorted(names):
+            if name not in self._polled:
+                self._contact(name)
+
+    def _wave(self, record: Mapping[str, Any]) -> int:
+        """The rollout wave of a cluster's record (0 without a rollout)."""
+        group, cluster = record.get("group"), record.get("cluster")
+        env = self._declared(group)
+        if env is None or env.rollout is None or not isinstance(cluster, str):
+            return 0
+        from piceli.envs.placement import waves
+
+        names = [p.name for p in self.composition.placements_of(env)]
+        for index, wave in enumerate(waves(names, env.rollout)):
+            if cluster in wave:
+                return index
+        return 0
+
+    def _declared(self, group: Any) -> EnvItem | None:
+        """The declared environment (or branch rule) of a group of records."""
+        if not isinstance(group, str):
+            return None
+        item = self.composition.environment(group)
+        if item is not None:
+            return item
+        rule = self.composition.branch_rule
+        return rule
+
+    def _gate(self, record: Mapping[str, Any]) -> str | None:
+        """``None`` (deploy), ``"wait"`` or ``"stop"``: the rollout order.
+
+        A cluster of a later wave deploys a revision only when every cluster
+        of the earlier waves runs that revision, healthy (its checks passed);
+        a failure there (failed, rolled back, degraded or held) stops it.
+        """
+        index = self._wave(record)
+        if index == 0:
+            return None
+        from piceli.envs.placement import waves
+
+        group = str(record.get("group"))
+        env = self._declared(group)
+        assert env is not None
+        names = [p.name for p in self.composition.placements_of(env)]
+        revision = record.get("revision")
+        for wave in waves(names, env.rollout)[:index]:
+            for cluster in wave:
+                peer = self._envs().get(f"{group}@{cluster}")
+                if peer is None or peer.get("revision") != revision:
+                    return "wait"
+                if peer.get("state") in {"failed", "held"} or (
+                    peer.get("state") == "deployed"
+                    and peer.get("health") not in {None, "healthy"}
+                ):
+                    return f"stop:{cluster}"
+                if not (
+                    peer.get("state") == "deployed"
+                    and peer.get("deployed_revision") == revision
+                ):
+                    return "wait"
+        return None
+
+    def _hold(self, record: dict[str, Any], gate: str) -> None:
+        if gate == "wait":
+            waiting = CompositionError(
+                "rollout-waiting", "an earlier wave has not passed this revision"
+            )
+            if record.get("reason") != waiting.code:
+                self._set(record, reason=waiting.code)
+            return
+        peer = gate.partition(":")[2]
+        stopped = CompositionError("rollout-stopped", f"{peer} failed this revision")
+        self._set(
+            record,
+            state="held",
+            reason=stopped.code,
+            held_by=peer,
+            next_attempt_at=None,
+        )
+        self.log(
+            f"{record['branch']}: held; {peer} did not pass this revision "
+            "(the rollout stops until a new revision)"
+        )
 
     def _registry_usage(self, now: float) -> None:
         """Measure the in-cluster registry's claim, at most every
@@ -2155,7 +2802,11 @@ class CompositionController:
     def status(self) -> dict[str, Any]:
         """The published status (``piceli.gitops-status.v1`` with composition keys)."""
         envs = {
-            name: {k: v for k, v in record.items() if k != "approved_hash"}
+            name: {
+                k: v
+                for k, v in record.items()
+                if k not in ("approved_hash", "release_checks")
+            }
             for name, record in sorted(self._envs().items())
         }
         for record in envs.values():
@@ -2163,6 +2814,8 @@ class CompositionController:
                 key: {k: v for k, v in entry.items() if k != "deployed_image"}
                 for key, entry in (record.get("components") or {}).items()
             }
+        envs = self._grouped(envs)
+        clusters = self._clusters_status()
         loaded = self._composition
         repo = (
             {"composition_repo": dict(self.state.get("composition") or {})}
@@ -2221,7 +2874,157 @@ class CompositionController:
             },
             "envs": envs,
             "rejected_requests": list(self.state.get("rejected") or []),
+            # Added in 0.15, only with several clusters: each cluster's reach
+            # and the placements removed from them.
+            **({"clusters": clusters} if clusters else {}),
+            **(
+                {"removals": list(self.state["removals"])}
+                if self.state.get("removals")
+                else {}
+            ),
         }
+
+    #: Record keys of a cluster's record that only the controller uses.
+    _INTERNAL = (
+        "group",
+        "deploys_as",
+        "kind",
+        "removal",
+        "unreachable_attempts",
+        "approval",
+    )
+    #: Aggregate state priority of an environment's clusters (first wins).
+    _PRIORITY = (
+        "failed",
+        "approval-required",
+        "deleting",
+        "retrying",
+        "pending",
+        "held",
+        "stopped",
+        "deployed",
+    )
+
+    def _grouped(self, envs: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        """One status entry per environment; a multi-cluster one gains ``clusters``.
+
+        Its entry is the record of its first cluster (by rollout wave) with
+        the state, health and reason of the whole environment, and
+        ``clusters.<name>``: ``state`` (``unreachable`` while its API does not
+        answer), ``health``, ``checks``, ``revision``, ``reason``,
+        ``last_contact``, ``namespace``, ``api`` and more.
+        """
+        groups: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+        result: dict[str, dict[str, Any]] = {}
+        for name, record in envs.items():
+            group = record.get("group")
+            if isinstance(group, str) and record.get("cluster"):
+                groups.setdefault(group, []).append((name, record))
+            else:
+                result[name] = record
+        for group, members in groups.items():
+            members.sort(key=lambda item: (self._wave(item[1]), item[0]))
+            views = {
+                str(record["cluster"]): self._cluster_view(record)
+                for _, record in members
+            }
+            first = members[0][1]
+            chosen = first
+            for state in self._PRIORITY:
+                found = [
+                    record for _, record in members if record.get("state") == state
+                ]
+                if found:
+                    chosen = found[0]
+                    break
+            health = "healthy"
+            for view in views.values():
+                if view.get("state") == "unreachable" or view.get("health") in {
+                    "degraded",
+                    "unknown",
+                    None,
+                }:
+                    health = (
+                        "degraded" if view.get("health") == "degraded" else "unknown"
+                    )
+                    break
+            entry = {k: v for k, v in first.items() if k not in self._INTERNAL}
+            entry.update(
+                branch=group,
+                cluster=None,
+                state=chosen.get("state"),
+                reason=chosen.get("reason"),
+                plan_hash=chosen.get("plan_hash"),
+                health=health
+                if chosen.get("state") == "deployed"
+                else chosen.get("health"),
+                clusters=views,
+            )
+            entry.pop("in_progress", None)  # the cluster at work, not the first
+            busy = [
+                {**view["in_progress"], "cluster": name}
+                for name, view in views.items()
+                if view.get("in_progress")
+            ]
+            if busy:
+                entry["in_progress"] = busy[0]
+            if chosen.get("state") == "approval-required" and chosen.get(
+                "pending_plan"
+            ):
+                entry["pending_plan"] = chosen["pending_plan"]
+            result[group] = entry
+        return dict(sorted(result.items()))
+
+    def _cluster_view(self, record: Mapping[str, Any]) -> dict[str, Any]:
+        cluster = str(record.get("cluster"))
+        contact = (self.state.get("clusters") or {}).get(cluster) or {}
+        declared = (
+            self.composition.cluster_named(cluster) if self._composition else None
+        )
+        remote = cluster != self._home
+        unreachable = remote and contact.get("reachable") is False
+        state = record.get("state")
+        return {
+            "state": "unreachable" if unreachable and state != "stopped" else state,
+            "health": record.get("health"),
+            "checks": record.get("checks"),
+            "revision": record.get("revision"),
+            "deployed_revision": record.get("deployed_revision"),
+            "reason": contact.get("reason") if unreachable else record.get("reason"),
+            "last_contact": contact.get("last_contact") if remote else None,
+            "namespace": record.get("namespace"),
+            "api": None if declared is None else declared.api,
+            "home": not remote,
+            "plan_hash": record.get("plan_hash"),
+            "last_sync": record.get("last_sync"),
+            "components": record.get("components") or {},
+            **({"held_by": record["held_by"]} if record.get("held_by") else {}),
+            **({"wave": self._wave(record)} if record.get("group") else {}),
+            **(
+                {"in_progress": record["in_progress"]}
+                if record.get("in_progress")
+                else {}
+            ),
+        }
+
+    def _clusters_status(self) -> dict[str, Any]:
+        """``clusters.<name>``: api, home, reachable, reason, last contact (0.15)."""
+        if self._composition is None or len(self.composition.clusters) < 2:
+            return {}
+        memory = self.state.get("clusters") or {}
+        found: dict[str, Any] = {}
+        for cluster in self.composition.clusters:
+            entry = memory.get(cluster.name) or {}
+            home = cluster.name == self._home
+            found[cluster.name] = {
+                "api": cluster.api,
+                "home": home,
+                "reachable": True if home else entry.get("reachable"),
+                "reason": None if home else entry.get("reason"),
+                "last_contact": None if home else entry.get("last_contact"),
+                "checked_at": None if home else entry.get("checked_at"),
+            }
+        return found
 
     def _publish(self) -> dict[str, Any]:
         save_state(self.state_dir, self.state)
@@ -2232,6 +3035,31 @@ class CompositionController:
             self.log(f"status not published ({error.code})")
         self._publish_history()
         return status
+
+    def _history_document(self) -> dict[str, Any]:
+        """``piceli.gitops-history.v1``: an environment on several clusters
+        lists the runs of all of them, each with its ``cluster`` (0.15)."""
+        from piceli.gitops import history
+
+        records = self._envs()
+        events = self.state.get("history") or {}
+        plain = {k: v for k, v in records.items() if not v.get("cluster")}
+        document = history.history(plain, events, self.state_dir, reader=self._runs)
+        merged: dict[str, list[dict[str, Any]]] = {}
+        for name, record in sorted(records.items()):
+            if not record.get("cluster"):
+                continue
+            runs = self._runs.runs(self._run_dirs(record))
+            own = [item for item in events.get(name) or () if isinstance(item, Mapping)]
+            for entry in history.environment_runs(name, own, runs):
+                entry["cluster"] = record["cluster"]
+                merged.setdefault(str(record.get("group") or name), []).append(entry)
+        for group, entries in merged.items():
+            entries.sort(
+                key=lambda item: str(item.get("started_at") or ""), reverse=True
+            )
+            document["envs"][group] = {"runs": entries[: history.MAX_RUNS]}
+        return history.bounded(document) if merged else document
 
     def _publish_history(self) -> None:
         """Publish each environment's runs (``piceli-gitops-history``) when they changed."""
@@ -2246,12 +3074,7 @@ class CompositionController:
             if self._runs is None:
                 self._runs = history.RunReader()
             history.forget_gone(self.state, self._envs())
-            document = history.history(
-                self._envs(),
-                self.state.get("history") or {},
-                self.state_dir,
-                reader=self._runs,
-            )
+            document = self._history_document()
             digest = hashlib.sha256(
                 json.dumps(document, sort_keys=True).encode()
             ).hexdigest()

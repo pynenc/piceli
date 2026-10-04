@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from kind_support import kubectl
+from kind_support import kubectl, wait_registry_removed
 from typer.testing import CliRunner
 
 from piceli import App, Pipeline, Registry, Target
@@ -103,6 +103,7 @@ my_cluster = Cluster(
         yield node
     finally:
         _approved("uninstall", "--delete-storage")
+        wait_registry_removed()
 
 
 def _registry(command: str, *extra: str) -> Any:

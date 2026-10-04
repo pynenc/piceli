@@ -4,6 +4,7 @@ import typer
 
 from piceli.k8s.cli.access import register as register_access_commands
 from piceli.k8s.cli.build import app as build_app
+from piceli.k8s.cli.bundle import register as register_bundle_commands
 from piceli.k8s.cli.chart import app as chart_app
 from piceli.k8s.cli.cluster import register as register_cluster_commands
 from piceli.k8s.cli.codegen import app as codegen_app
@@ -13,6 +14,7 @@ from piceli.k8s.cli.env import register as register_env_commands
 from piceli.k8s.cli.gitops import register as register_gitops_commands
 from piceli.k8s.cli.heavy import register as register_heavy_commands
 from piceli.k8s.cli.importing import app as import_app
+from piceli.k8s.cli.infra import register as register_infra_commands
 from piceli.k8s.cli.inputs import app as inputs_app
 from piceli.k8s.cli.maintenance import register as register_maintenance_commands
 from piceli.k8s.cli.observe import app as observe_app
@@ -51,7 +53,9 @@ register_env_commands(app)
 register_gitops_commands(app)
 register_registry_commands(app)
 register_cluster_commands(app)
+register_infra_commands(app)
 register_profile_commands(app)
+register_bundle_commands(app)
 
 
 def _version(value: bool) -> None:

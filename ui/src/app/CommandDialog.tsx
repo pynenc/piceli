@@ -24,7 +24,7 @@ export function CommandDialog({ capabilities, onClose, restoreFocus }: { capabil
     { label: 'Environments', detail: 'Composition inventory', path: '/composition', kind: 'Workspace' },
     { label: 'Sources', detail: 'Repositories and published revisions', path: '/composition/sources', kind: 'Workspace' },
   );
-  for (const [capability, label, path] of [['activity', 'Deployment history', '/delivery'], ['pipeline', 'Pipeline', '/pipeline'], ['cluster_build', 'Cluster build', '/cluster-build'], ['gitops', 'GitOps', '/gitops'], ['cluster_status', 'Cluster', '/cluster'], ['environments', 'Branch environments', '/environments'], ['logs', 'Logs', '/logs'], ['access', 'Port forwards', '/forwards']]) {
+  for (const [capability, label, path] of [['activity', 'Deployment history', '/delivery'], ['pipeline', 'Pipeline', '/pipeline'], ['cluster_build', 'Cluster build', '/cluster-build'], ['gitops', 'GitOps', '/gitops'], ['cluster_status', 'Cluster', '/cluster'], ['machines', 'Machines', '/machines'], ['environments', 'Branch environments', '/environments'], ['logs', 'Logs', '/logs'], ['access', 'Port forwards', '/forwards']]) {
     if (capabilities?.actions[capability]?.allowed) destinations.push({ label, detail: 'Open workspace page', path, kind: 'Workspace' });
   }
   const apps = applications.data?.pages.flatMap(page => page.items) ?? [];

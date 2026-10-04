@@ -135,6 +135,8 @@ socket and reads no kubeconfig. The names are loaded on first use.
 | `manifest(kind, name, value=...)` | A minimal valid object for seeding |
 | `field_paths`, `fields_v1`, `paths_of`, `value_at` | Helpers for `managedFields` (FieldsV1) paths |
 | `piceli.testing.pytest_plugin` | The `piceli_fake_cluster` fixture |
+| `piceli.testing.infra.FakeProvider(addresses=, addresses6=, monthly=)` | 0.15.0: a provider for `piceli.infra.Server` that renders OpenTofu's built-in `terraform_data`: a real `tofu plan`/`apply` and encrypted state, nothing created anywhere, no download; servers get the declared addresses (see {doc}`infrastructure`) |
+| `piceli.testing.infra.mock_hetzner_api(token)` | 0.15.0: a loopback HTTP server answering Hetzner's `GET /v1/pricing` for the given bearer token (`Hetzner(endpoint=api.url)`); records each request without the token |
 
 ## What it does not do
 

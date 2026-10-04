@@ -221,6 +221,7 @@ gitops
 ui
 ui_cluster_install
 helm_charts
+client_delivery
 state
 maintenance
 heavy_work
@@ -229,6 +230,7 @@ typed_apps
 crds
 environments
 compositions
+multicluster
 components
 reference_app
 release_cli
@@ -237,6 +239,7 @@ plans_and_diffs
 compatibility
 secrets
 managed_clusters
+infrastructure
 access
 migrate_from_kubectl
 testing

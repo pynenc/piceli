@@ -200,3 +200,36 @@ def node_platform() -> str:
         if result.returncode == 0 and result.stdout.strip():
             machine = result.stdout.strip().lower()
     return f"linux/{_ARCH.get(machine, machine)}"
+
+
+#: What ``piceli registry install`` creates in ``piceli-system``.
+REGISTRY_OBJECTS = (
+    "deployment/piceli-registry",
+    "daemonset/piceli-registry-mirror",
+    "daemonset/piceli-registry-mirror-k3s",
+    "service/piceli-registry",
+    "configmap/piceli-registry-config",
+    "persistentvolumeclaim/piceli-registry-storage",
+)
+
+
+def wait_registry_removed(seconds: float = 180) -> None:
+    """Wait until ``registry uninstall`` has finished deleting (it returns first).
+
+    The kind tests share one cluster: the next test's install plan must not
+    see the previous registry half deleted (its approval would then meet a
+    changed plan, ``cluster-registry-plan-changed``).
+    """
+    wait_for(
+        lambda: not kubectl(
+            "get", *REGISTRY_OBJECTS, "--ignore-not-found", "-o", "name",
+            namespace="piceli-system", check=False,
+        ).strip()
+        and not kubectl(
+            "get", "pods", "-l", "app.kubernetes.io/name=piceli-cluster-registry",
+            "--ignore-not-found", "-o", "name",
+            namespace="piceli-system", check=False,
+        ).strip(),
+        seconds=seconds,
+        message="the in-cluster registry to be deleted",
+    )  # fmt: skip

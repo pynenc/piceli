@@ -4,6 +4,120 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.15.0
+
+- **Several clusters from one GitOps controller.** A composition declares
+  several `Cluster`s; the one with `Controller(...)` runs the controller and
+  builds. `Environment(..., clusters=[Placement(cluster, namespace=,
+  on_nodes=, values=, replicas=, pipeline=)], rollout=Rollout(order=[...]))`
+  (and `Environment.per_branch`) deploys to each cluster through its API
+  server, one record per cluster. See the Several clusters page.
+- **Canary rollouts.** `Rollout(order=["edge-canary", "edge-*"])`: a later
+  wave deploys a revision only when the earlier ones run it with their
+  checks passed; a failure there (rolled back once, as in 0.14.7) holds the
+  rest (`held`, `rollout-stopped`) until a new revision.
+- **An unreachable cluster blocks nobody.** It is probed every poll, retried
+  with backoff without failing (`cluster-unreachable`), shown with its
+  `last_contact`, and converges when it answers again.
+- **Each cluster pulls from its own registry**: the controller copies the
+  images by digest into that cluster's `Registry.in_cluster` through its API
+  server; builds stay on the home cluster.
+- **`piceli secrets cluster --cluster MODULE:ATTR --kubeconfig FILE --context
+  NAME [--server URL]`** (or `--prompt` for a token) stores another cluster's
+  credentials as the Secret `piceli-cluster-<name>`; never printed.
+  `piceli.infra.multicluster.register_cluster(...)` does the same from Python
+  (with the local profile).
+- **Per-cluster status, history and UI.** `gitops status` adds
+  `envs.<env>.clusters.<cluster>{state, health, checks, revision, reason,
+  last_contact, …}`, `clusters` and `removals` (JSON additive); the
+  deployment history lists every cluster's runs with their `cluster`; the
+  web UI's environment page and inventory show each cluster.
+- **Removing a cluster** (or a placement) deletes there only the app's
+  objects in its namespace; claims and Secrets are kept with their delete
+  command; the namespace goes only when Piceli created it and nothing is
+  kept.
+- **Replicas per environment.** `Environment(..., replicas={"web": 3})` and
+  `Environment.per_branch(..., replicas={"db": 1})` set Deployment and
+  StatefulSet replica counts per environment (an autoscaled workload is
+  refused). Compositions that declare neither keep their config and hashes.
+- New error codes: `cluster-unreachable`, `cluster-credentials-missing`,
+  `cluster-credentials-unsupported`, `cluster-credentials-refused`,
+  `cluster-registry-copy-failed`, `rollout-stopped`, `rollout-waiting`.
+- **Status while a step runs.** The GitOps controllers publish the status
+  when an environment's deploy, teardown or stop starts (`in_progress:
+  {action, since}`) and when it ends, not only at the end of the poll, which
+  left it minutes stale during a long rollout.
+- **No failed checks next to `healthy`.** After a rolled-back release, a
+  no-op deploy (a revert) shows the last passing checks of the running
+  images, or none; a no-op never takes another run's checks.
+- **`piceli status` lists StatefulSets and DaemonSets** also when the app
+  cannot be rendered without the cluster (the fallback listed Deployments
+  only).
+- **`piceli ui connect`** needs only the base package (the standard
+  library posts to the UI when the `ui` extra is not installed), and SIGTERM
+  or SIGHUP stop it like Ctrl-C, closing its `kubectl port-forward`.
+- A `*TOKEN*` variable holding a file path applies unredacted through a
+  whole `piceli deploy` (end-to-end test; fixed in 0.13.0).
+- **Deliver to a cluster you never access: `piceli bundle TARGET --env ENV
+  --out DIR`.** The same typed `App` as one directory a client installs
+  with `kubectl` alone: a kustomize base and `overlays/dev` (namespace,
+  image registry and digests, requests and limits, storage class), every
+  object labelled `app.kubernetes.io/part-of=<name>`; `prepare.sh
+  NAMESPACE`, a POSIX script that makes the app's generated Secrets
+  (random tokens, templates, a private CA and its certificates) in the
+  client's cluster with `kubectl` and `openssl` (idempotent, never prints a
+  value; no Secret is shipped); OCI image-layout archives of the build
+  receipt's images (`--receipt`; amd64 by default, `--platform` or
+  `--all-platforms`) with their SBOM and provenance, whose digest survives
+  `skopeo copy --preserve-digests`; `INSTALL.md` and `UNINSTALL.md` with
+  the exact commands; `bundle.json` and `SHA256SUMS`. A generated
+  default-deny NetworkPolicy admits nothing from outside the namespace.
+  Never contacts a cluster or registry. See {doc}`client_delivery`.
+- **A safety gate for foreign clusters.** `piceli bundle` refuses
+  (`bundle-unsafe-<rule>`, with every violation) containers that may run as
+  root, write their root filesystem, escalate privileges or use the host,
+  lack cpu/memory requests and limits, NetworkPolicies admitting ingress
+  from outside the namespace, RBAC beyond least privilege, and node ports.
+  `app.safety_exception(item, rule, reason=...)` waives one rule for one
+  object; the reason is an annotation in the client's cluster and is listed
+  in the bundle.
+- **The cluster's identity, read from the cluster:
+  `app.cluster_identity(image=...)`** declares a ServiceAccount allowed only
+  to `get` the `kube-system` namespace and returns a `ClusterIdentity`: an
+  init container writing its UID to `/run/cluster-identity/uid`, the volume,
+  the account and the egress rule to the API server. No per-cluster
+  constant in the model.
+- **`piceli support-bundle --kubeconfig F --context C --namespace NS --out
+  FILE`**: a read-only (GET only, any other method refused before it is
+  sent), redacted `.tar.gz` of a namespace: versions, pod status, workloads,
+  declared health, events, Services, ConfigMap keys, log tails, with a
+  manifest. Secrets are never requested; env and ConfigMap values are never
+  collected.
+- **Machines in typed Python, provisioned with OpenTofu.** `Server`,
+  `PrimaryIp`, `Firewall`/`Rule`, `DnsRecord`, `Hook`, `Ssh` and
+  `Infrastructure` (in `piceli.infra`) declare servers, fixed IPs, firewalls
+  and DNS record sets; `Hetzner(...)` renders them for the `hcloud` OpenTofu
+  provider, pinned (1.69.0) with every platform's lock-file hashes, behind a
+  small provider contract (`piceli.infra.Provider`). `piceli infra plan`
+  prints the changes, the monthly estimate (Hetzner's prices) and a plan
+  hash; `piceli infra apply|destroy --approve HASH` re-plans and applies
+  only that plan (`infra-plan-changed`), and never changes or deletes a
+  resource Piceli did not create (ownership ledger and labels,
+  `infra-foreign-resource`). Piceli owns the state: a `0700` directory
+  outside Git, one command at a time, encrypted by OpenTofu's state
+  encryption with a passphrase from `piceli secrets state-key`; optional
+  `HttpState` remote backend (ciphertext only). Provider tokens come from
+  `piceli secrets provider NAME --prompt` and reach OpenTofu in its
+  environment only, redacted from its output. `piceli infra install` runs
+  the server's OS install hook after approval of its rendered command;
+  `piceli infra register` pins the server's SSH host keys, reads its k3s
+  kubeconfig (or `--kubeconfig FILE`), waits for a Ready node and makes it
+  the server's `Cluster` profile. `piceli infra status` and a read-only
+  Machines page (`piceli ui serve --infra MODULE:ATTR`) show servers,
+  addresses, installs, clusters and cost. `piceli.testing.infra.FakeProvider`
+  runs all of it with a real OpenTofu and nothing created. Error area
+  `infra`. See {doc}`infrastructure`.
+
 ## Version 0.14.7
 
 - **Stop a named environment.** `Environment(..., stopped=True)` in a

@@ -388,6 +388,38 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "DIGEST pushes by digest, then the tag, and reads both back. "
             "Credentials only from --credentials FILE, never printed.",
         ),
+        # ------------------------------------------------------- bundle
+        "bundle": _C(
+            "Package the app for a cluster Piceli never accesses (kustomize, prepare.sh, images).",
+            reads=(
+                "module/app file",
+                "build receipt and its image archives (--receipt)",
+            ),
+            writes=("--out bundle directory",),
+            contract="conforms",
+            notes="Never contacts a cluster or registry and writes no secret "
+            "value. Renders like `piceli render --env`; refuses objects that "
+            "break a foreign-cluster safety rule (bundle-unsafe-<rule>, with "
+            "every violation) unless the App waives it per object "
+            "(app.safety_exception). Writes a kustomize base and overlays/dev, "
+            "prepare.sh (the generated Secrets, made in the client's cluster "
+            "with kubectl and openssl), OCI image archives with SBOMs, "
+            "INSTALL.md, UNINSTALL.md, bundle.json and SHA256SUMS. --out must "
+            "be absent or empty; nothing is left behind on failure.",
+        ),
+        "support-bundle": _C(
+            "Collect a read-only, redacted snapshot of a namespace (no Secrets, no env values).",
+            reads=("kubeconfig",),
+            writes=("--out .tar.gz (mode 0600, never overwritten)",),
+            cluster="reads",
+            contract="conforms",
+            notes=_EXPLICIT_CONTEXT
+            + " GET requests only (any other method is refused before it is "
+            "sent); Secrets are never requested; env and ConfigMap values are "
+            "never collected; logs, events and conditions are redacted. The "
+            "archive's manifest.json lists every file, its sha256 and the "
+            "request methods.",
+        ),
         # ------------------------------------------------------ codegen
         "codegen crd": _C(
             "Generate pydantic models from a CustomResourceDefinition's schema.",
@@ -1410,6 +1442,162 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "(secrets-token-refused) without echoing it. Creates or updates the "
             "Secret without a plan; prints its name and key names, never a "
             "value. Needs piceli cluster init first (cluster-not-initialized).",
+        ),
+        "secrets cluster": _C(
+            "Store another cluster's credentials for the GitOps controller "
+            "(Secret piceli-cluster-<name>: kubeconfig) on the home cluster.",
+            reads=(
+                "--kubeconfig FILE --context NAME, or stdin (--prompt: a token)",
+                "MODULE:ATTR (piceli.infra.Cluster)",
+                "credential profiles",
+            ),
+            cluster="writes",
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="One context, certificates and token inlined, no exec plugin "
+            "(cluster-credentials-unsupported); the kubeconfig's server must be "
+            "Cluster(api=) (cluster-api-mismatch); --server sets the address the "
+            "controller uses. Writes the Secret on the cluster with "
+            "Controller(...) (or --home) without a plan; prints names only, "
+            "never a value. A token argument is refused (secrets-token-refused).",
+        ),
+        # -------------------------------------------------------- infra
+        "infra plan": _C(
+            "Render the OpenTofu configuration of a declared Infrastructure, "
+            "plan it and print the changes, the monthly estimate and the plan hash.",
+            reads=(
+                "MODULE:ATTR (piceli.infra.Infrastructure)",
+                "tofu binary",
+                "credentials (provider token, state passphrase)",
+                "provider API (plan refresh, prices)",
+            ),
+            writes=("state directory (configuration, lock file, providers)",),
+            contract="conforms",
+            exit_codes=(0, 2, 3),
+            notes="Never changes a resource. Exit 3 with the plan and approve_command "
+            "(piceli infra apply ... --approve HASH); 0 and state unchanged when "
+            "nothing changes. Refuses a plan that would change or delete a resource "
+            "Piceli did not create (infra-foreign-resource). Tokens and the state "
+            "passphrase reach tofu through its environment only; its output is redacted.",
+        ),
+        "infra apply": _C(
+            "Apply a declared Infrastructure: plan again and apply that plan only "
+            "when its hash is --approve.",
+            reads=(
+                "MODULE:ATTR (piceli.infra.Infrastructure)",
+                "tofu binary",
+                "credentials (provider token, state passphrase)",
+            ),
+            writes=(
+                "resources at the provider (servers, IPs, firewalls, DNS records)",
+                "encrypted OpenTofu state",
+                "state directory records (inventory.json)",
+            ),
+            approval_required=True,
+            safe_to_retry=True,
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2, 3),
+            notes="Without --approve it plans (exit 3). A hash that is not the fresh "
+            "plan's is refused (infra-plan-changed). A failed tofu apply exits 1 "
+            "(infra-apply-failed); plan again to continue. One command at a time "
+            "per state (infra-state-locked).",
+        ),
+        "infra destroy": _C(
+            "Destroy what Piceli created for a declared Infrastructure, with "
+            "approval of the destroy plan's hash.",
+            reads=(
+                "MODULE:ATTR (piceli.infra.Infrastructure)",
+                "tofu binary",
+                "credentials (provider token, state passphrase)",
+            ),
+            writes=("resources at the provider (deleted)", "encrypted OpenTofu state"),
+            approval_required=True,
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2, 3),
+            notes="Without --approve prints the destroy plan and its hash (exit 3). "
+            "Only resources in Piceli's ownership ledger that carry "
+            "piceli.io/managed-by=piceli and piceli.io/infra=<name> may be deleted; "
+            "anything else refuses the whole plan (infra-foreign-resource). DNS zones "
+            "are never deleted (Piceli manages record sets only). Credential "
+            "profiles of registered clusters are left in place.",
+        ),
+        "infra status": _C(
+            "Show a declared Infrastructure's servers (state, addresses, install, "
+            "cluster registration, monthly cost), records and estimate.",
+            reads=(
+                "MODULE:ATTR (piceli.infra.Infrastructure)",
+                "state directory records",
+            ),
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="Read-only and offline: no tofu run, no credential, no network; it "
+            "reads what the last apply, install and register recorded. --json prints "
+            "piceli.infra.status.v1.",
+        ),
+        "infra install": _C(
+            "Run a server's install hook (Server(install=Hook([...]))) with its "
+            "addresses, after approval of the rendered command's digest.",
+            reads=(
+                "MODULE:ATTR (piceli.infra.Infrastructure)",
+                "state directory records",
+            ),
+            writes=("the server (whatever the owner's command does)", "installs.json"),
+            approval_required=True,
+            safe_to_retry=False,
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2, 3),
+            notes="Without --approve prints the rendered argv and its digest (exit 3). "
+            "Runs it without a shell, in the current directory, with the caller's "
+            "environment minus provider tokens and the state passphrase; its output "
+            "goes to stderr. Piceli does not own the OS: the command is the owner's.",
+        ),
+        "infra register": _C(
+            "Wait for a server's k3s and make it the server's declared Cluster "
+            "(kubeconfig over SSH or --kubeconfig; a credential profile).",
+            reads=(
+                "MODULE:ATTR (piceli.infra.Infrastructure)",
+                "the server over SSH (host keys, k3s kubeconfig) or --kubeconfig",
+                "the cluster's API",
+            ),
+            writes=(
+                "$PICELI_CREDENTIALS_DIR/kubeconfigs/CLUSTER.yaml (mode 0600)",
+                "credential profile Cluster(credentials=)",
+                "known_hosts and registrations.json in the state directory",
+            ),
+            cluster="reads",
+            approval_required=True,
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2, 3),
+            notes="Without --approve prints the cluster, profile and the SSH host-key "
+            "fingerprints with a digest (exit 3); approving pins those keys "
+            "(StrictHostKeyChecking against them only). The kubeconfig's server is "
+            "set to Cluster(api=); it is never printed or put in Git. Exit 1 "
+            "(infra-k3s-not-ready) when k3s does not answer with a Ready node within --wait.",
+        ),
+        "secrets provider": _C(
+            "Store a provider API token (or a state backend password) as a local credential.",
+            reads=("stdin (--prompt)",),
+            writes=("$PICELI_CREDENTIALS_DIR/NAME.json (mode 0600)",),
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="The token is read from stdin only (typed without echo, or piped); "
+            "an argument or HCLOUD_TOKEN in the environment is refused "
+            "(infra-credential-refused) without echoing it. Prints the name, never the value.",
+        ),
+        "secrets state-key": _C(
+            "Store the passphrase that encrypts an Infrastructure's OpenTofu state "
+            "(--generate, or --prompt).",
+            reads=("stdin (--prompt)",),
+            writes=("$PICELI_CREDENTIALS_DIR/NAME.json (mode 0600)",),
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="Never printed; back the file up, the state cannot be read without "
+            "it. Refuses to replace an existing key without --replace "
+            "(infra-credential-exists).",
         ),
         "gitops status": _C(
             "Show the GitOps controller's health, repository, last poll and "
