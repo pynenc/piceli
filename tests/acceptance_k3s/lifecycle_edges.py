@@ -364,5 +364,11 @@ class EdgeStages:
             any(pod.startswith("web-") for pod in self._edge_pods_ready("ea")),
             "edge-a lost its web pod",
         )
-        main = self.env_record("main")  # type: ignore[attr-defined]
+        # The same infra push re-plans main (pending for a poll or two).
+        main = self.wait_env(  # type: ignore[attr-defined]
+            "main",
+            lambda r: r.get("state") == "deployed",
+            timeout=600,
+            what="main deployed",
+        )
         check(main.get("state") == "deployed", f"main {main.get('state')}")
