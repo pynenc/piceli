@@ -173,6 +173,10 @@ test-ui-access-retention: ## Run the 30-minute local forward/process retention g
 clean: ## Remove build, coverage and docs output
 	rm -rf dist htmlcov .coverage .coverage.* docs/_build docs/apidocs
 
+.PHONY: acceptance-bundle
+acceptance-bundle: ## client-bundle delivery to a clean k3d cluster with a private registry (needs PICELI_K3S_BUNDLE=1; deletes both)
+	$(if $(and $(shell command -v k3d),$(shell command -v skopeo)),,nix shell nixpkgs#k3d nixpkgs#skopeo -c) uv run --frozen python tests/acceptance_k3s/bundle.py
+
 .PHONY: acceptance-k3s
 acceptance-k3s: ## k3s 3-node lifecycle acceptance (needs PICELI_K3S_LIFECYCLE=1; creates and deletes a k3d cluster)
 	$(if $(shell command -v k3d),,nix shell nixpkgs#k3d -c) uv run --frozen python tests/acceptance_k3s/lifecycle.py $(ARGS)
