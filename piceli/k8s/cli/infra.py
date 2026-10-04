@@ -180,14 +180,37 @@ def _plan_or_apply(
             say(
                 f"  server {name}: {server.get('ipv4') or '-'} {server.get('ipv6') or ''}".rstrip()
             )
+        left = _profiles_left(infra) if destroy else []
+        if left:
+            say(
+                "the credential profiles of their clusters are kept (piceli logout NAME): "
+                + ", ".join(left)
+            )
         emit_json(
             {
                 **done.to_dict(),
                 "state": state,
                 "servers": inventory.get("servers") or {},
                 "resources": len(inventory.get("resources") or ()),
+                **({"profiles_left": left} if destroy else {}),
             }
         )
+
+
+def _profiles_left(infra: Infrastructure) -> list[str]:
+    """Profiles of the destroyed servers' clusters that still exist."""
+    from piceli.profiles import ProfileError, load_profile
+
+    left: list[str] = []
+    for server in infra.servers:
+        if server.cluster is None:
+            continue
+        try:
+            load_profile(server.cluster.credentials)
+        except ProfileError:
+            continue
+        left.append(server.cluster.credentials)
+    return sorted(set(left))
 
 
 @app.command("plan")

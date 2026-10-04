@@ -28,6 +28,7 @@ const GitOps = lazy(async () => ({ default: (await import('../features/control/C
 const Pipeline = lazy(async () => ({ default: (await import('../features/control/Pipeline')).Pipeline }));
 const ClusterBuild = lazy(async () => ({ default: (await import('../features/control/ClusterBuild')).ClusterBuild }));
 const Cluster = lazy(async () => ({ default: (await import('../features/cluster/Cluster')).Cluster }));
+const Machines = lazy(async () => ({ default: (await import('../features/machines/Machines')).Machines }));
 const LogWorkspace = lazy(async () => ({ default: (await import('../features/logs/LogWorkspace')).LogWorkspace }));
 const ForwardsWorkspace = lazy(async () => ({ default: (await import('../features/access/ForwardsWorkspace')).ForwardsWorkspace }));
 const ProfilePicker = lazy(async () => ({ default: (await import('../features/cluster/ProfilePicker')).ProfilePicker }));
@@ -58,6 +59,7 @@ export function App() {
           {compositionRoutes(capabilities.data)}
           <Route path="/delivery" element={capabilities.isPending ? <Loading text="Loading history capabilities…" /> : capabilities.data?.actions.composition_history?.allowed ? <DeploymentHistory environments /> : capabilities.data?.actions.activity?.allowed ? <DeploymentHistory /> : <Notice title="Deployment history unavailable">This session cannot read deployment history.</Notice>} />
           <Route path="/cluster" element={capabilities.data?.actions.cluster_status?.allowed ? <Cluster /> : <Notice title="Cluster unavailable">This session cannot read cluster status.</Notice>} />
+          <Route path="/machines" element={capabilities.data?.actions.machines?.allowed ? <Machines /> : <Notice title="Machines unavailable">Start the local UI with --infra MODULE:ATTR to show a declared infrastructure.</Notice>} />
           <Route path="/pipeline" element={capabilities.data?.actions.pipeline?.allowed ? <Pipeline /> : <Notice title="Pipeline unavailable">Start the local UI with a trusted Pipeline definition.</Notice>} />
           <Route path="/cluster-build" element={capabilities.data?.actions.cluster_build?.allowed ? <ClusterBuild /> : <Notice title="Cluster build unavailable">This installed UI has no configured cluster build for this session.</Notice>} />
           <Route path="/environments" element={capabilities.data?.actions.environments?.allowed ? <Environments canChange={capabilities.data.actions.environment_change?.allowed === true} /> : <Notice title="Environments unavailable">This service has no configured environment pipeline for this session.</Notice>} />

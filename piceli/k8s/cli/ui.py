@@ -120,11 +120,24 @@ def serve(
             help="Private UI state directory (default: $XDG_STATE_HOME/piceli/ui)"
         ),
     ] = None,
+    infra: Annotated[
+        str | None,
+        typer.Option(
+            "--infra",
+            help="Also show the machines of a piceli.infra.Infrastructure MODULE:ATTR (read-only)",
+        ),
+    ] = None,
 ) -> None:
     """Register an existing definition or inventory scope and serve the bundled UI.
 
     Release definitions and configured Pipelines can include pre-rollout checks.
     """
+    machines_control = None
+    if infra is not None:
+        from piceli.k8s.cli.infra import load_infra
+        from piceli.services.machines import MachinesControl
+
+        machines_control = MachinesControl(load_infra(infra), infra)
     if profile is not None:
         if kubeconfig is not None or context is not None:
             reject("profile-conflict")
@@ -365,6 +378,7 @@ def serve(
             logs=logs,
             active_profile=profile,
             profile_switch=switch_session,
+            machines_control=machines_control,
         )
         from piceli.k8s.ui_state import remove_launch_token, write_launch_token
         from piceli.server.security import uvicorn_log_config

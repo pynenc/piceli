@@ -16,10 +16,10 @@ waits until the API answers with a Ready node, and stores it ``0600``
 under ``$PICELI_CREDENTIALS_DIR/kubeconfigs/`` (never in Git, never
 printed). Then :func:`register_cluster` makes it the cluster's credentials.
 
-Integration note (0.15): :func:`register_cluster` is the adapter for the
-multi-cluster work package. Today a cluster's credentials are a local
-profile (``Cluster(credentials=)``, ``piceli login``); the integrator swaps
-the body for the multi-cluster registration call and keeps the signature.
+Integration note (0.15): :func:`register_cluster` calls the multi-cluster
+registration (``piceli.infra.multicluster.register_cluster``: local profile
+plus the home controller's Secret) when it exists and the infrastructure
+names its ``home`` cluster; otherwise it stores the local profile only.
 
 Importing this module is side-effect free.
 """
@@ -397,21 +397,48 @@ def kubeconfig_path(cluster: Cluster) -> Path:
 
 
 def register_cluster(
-    cluster: Cluster, kubeconfig: Path, context: str
+    cluster: Cluster,
+    kubeconfig: Path,
+    context: str,
+    *,
+    home: Cluster | None = None,
+    transport: str = "https",
 ) -> dict[str, Any]:
     """Make ``kubeconfig``/``context`` the credentials of ``cluster``.
 
-    Adapter for the multi-cluster registration (0.15): stores the local
-    profile ``Cluster(credentials=)`` the way ``piceli login`` does, so
-    ``piceli cluster init|status`` and deploys reach the new cluster.
+    With the multi-cluster registration (``piceli.infra.multicluster``, 0.15)
+    and a ``home`` cluster (``Infrastructure(home=)``, the cluster whose
+    controller deploys onto this one), that call stores the local profile and
+    the controller's Secret. Without them it stores the local profile
+    ``Cluster(credentials=)`` the way ``piceli login`` does, so ``piceli
+    cluster init|status`` and deploys from this machine reach the cluster.
     """
+    import importlib
+
     from piceli.profiles import save_profile
 
+    try:
+        multicluster: Any = importlib.import_module("piceli.infra.multicluster")
+    except ImportError:
+        multicluster = None
+    if home is not None and multicluster is not None:
+        result = multicluster.register_cluster(
+            cluster,
+            kubeconfig=kubeconfig,
+            context=context,
+            home=home,
+            server=None,
+            transport=transport,
+        )
+        return {"cluster": cluster.name, "context": context, **dict(result)}
     profile = save_profile(cluster.credentials, kubeconfig, context)
     return {
         "cluster": cluster.name,
+        "state": "profile",
         "profile": profile.name,
         "context": profile.context,
+        "secret": None,
+        "home": home.name if home is not None else None,
     }
 
 
@@ -465,7 +492,9 @@ def run_register(
     os.replace(staged, path)
     say(f"waiting for the k3s API at {cluster.api}")
     nodes = wait_ready(path, cluster.name, deadline, transport)
-    registered = register_cluster(cluster, path, cluster.name)
+    registered = register_cluster(
+        cluster, path, cluster.name, home=infra.home, transport=transport
+    )
     outcome = {
         **registered,
         "api": cluster.api,

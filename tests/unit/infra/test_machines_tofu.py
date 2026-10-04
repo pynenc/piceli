@@ -8,6 +8,7 @@ encrypted. Skipped without OpenTofu (``PICELI_TOFU`` or ``tofu`` on PATH).
 from __future__ import annotations
 
 import base64
+import os
 import json
 import threading
 from collections.abc import Iterator
@@ -348,3 +349,59 @@ def test_a_changed_backend_is_refused(homes: Path, module: str) -> None:
     other.write_text(text)
     result, body = piceli("infra", "plan", f"{other}:infra")
     assert result.exit_code == 2 and body["reason"] == "infra-backend-changed"
+
+
+# ------------------------------------------------------------ hcloud provider
+
+needs_network = pytest.mark.skipif(
+    os.environ.get("PICELI_TOFU_NETWORK") != "1",
+    reason="downloads the pinned hcloud provider (set PICELI_TOFU_NETWORK=1)",
+)
+
+
+@needs_network
+def test_hetzner_rendering_plans_with_the_pinned_provider(homes: Path) -> None:
+    """The real hcloud provider (pinned, hashes verified) accepts what Piceli renders.
+
+    The API is a loopback mock: ``tofu plan`` of new resources needs no
+    call, and the prices come from the mock's ``/pricing``.
+    """
+    from piceli.infra import DnsRecord, Hetzner, Infrastructure, PrimaryIp, Rule, Server
+    from piceli.infra.machines.plan import plan, workspace
+    from piceli.testing.infra import mock_hetzner_api
+
+    from .machines_support import TOKEN
+
+    credentials.save_credential("edge-state", "state-key", PASSPHRASE)
+    credentials.save_credential("hcloud", "provider-token", TOKEN)
+    with mock_hetzner_api(TOKEN) as api:
+        hcloud = Hetzner(credentials="hcloud", location="fsn1", endpoint=api.url)
+        server = Server(
+            "edge-1", provider=hcloud, type="cax11", image="debian-12",
+            ipv4=PrimaryIp("edge-1-v4"), firewall=[Rule.tcp(443), Rule.udp((3478, 3479)), Rule.icmp()],
+            ssh_keys=["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForTests owner@example"],
+        )  # fmt: skip
+        infra = Infrastructure(
+            "edge",
+            servers=[server],
+            records=[
+                DnsRecord("example.com", "www", "A", server=server),
+                DnsRecord("example.com", "@", "TXT", value="v=spf1 -all", provider=hcloud),
+            ],
+            state_dir=homes / "state",
+        )
+        with workspace(infra) as ws:
+            result = plan(ws)
+            validated = ws.run("validate", "-json")
+    assert validated.code == 0, validated.stdout
+    assert json.loads(validated.stdout)["warning_count"] == 0
+    assert {c.address for c in result.changes} == {
+        "hcloud_firewall.firewall-edge-1",
+        "hcloud_primary_ip.ip-edge-1-v4",
+        "hcloud_server.server-edge-1",
+        "hcloud_ssh_key.key-" + next(c.name for c in result.changes if c.kind == "key"),
+        "hcloud_zone_rrset.record-example-com-www-a",
+        "hcloud_zone_rrset.record-example-com-apex-txt",
+    }
+    assert result.estimate is not None and result.estimate["monthly_net"] == pytest.approx(4.29)
+    assert ("GET", "/v1/pricing", True) in api.requests

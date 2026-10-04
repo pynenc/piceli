@@ -11,6 +11,8 @@ import base64
 import json
 import os
 import stat
+import sys
+import types
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -21,7 +23,8 @@ from typer.testing import CliRunner, Result
 
 from piceli import profiles
 from piceli.infra.machines.plan import INVENTORY
-from piceli.infra.machines.register import fingerprint
+from piceli.infra import Cluster
+from piceli.infra.machines.register import fingerprint, register_cluster
 from piceli.infra.machines.state import read_record, write_record
 from piceli.k8s.cli import app as cli
 from piceli.testing import fake_cluster
@@ -294,3 +297,34 @@ def test_register_needs_a_declared_cluster(homes: Path) -> None:
     _applied(homes)
     result, body = piceli("infra", "register", f"{path}:infra", "edge-1")
     assert result.exit_code == 2 and body["reason"] == "infra-no-cluster"
+
+
+def test_registration_goes_through_the_multicluster_call_when_there(
+    homes: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With a home cluster and ``piceli.infra.multicluster`` (0.15 WP1): that call."""
+    calls: list[dict[str, Any]] = []
+
+    def multicluster_register(cluster: Cluster, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"cluster": cluster.name, **kwargs})
+        return {"state": "created", "profile": cluster.credentials, "secret": {"name": "piceli-cluster-edge-1"}}
+
+    module = types.ModuleType("piceli.infra.multicluster")
+    module.register_cluster = multicluster_register  # type: ignore[attr-defined]
+    edge = Cluster("edge-1", api="https://127.0.0.1:6443", credentials="edge-1")
+    home = Cluster("home", api="https://10.0.0.1:6443", credentials="home")
+    kubeconfig = _owner_kubeconfig(homes / "k.yaml", "https://127.0.0.1:6443")
+    # Without the multi-cluster module: the local profile only.
+    alone = register_cluster(edge, kubeconfig, "default", home=home)
+    assert alone["state"] == "profile" and alone["secret"] is None
+    assert profiles.load_profile("edge-1").context == "default"
+    monkeypatch.setitem(sys.modules, "piceli.infra.multicluster", module)
+    result = register_cluster(edge, kubeconfig, "default", home=home)
+    assert result["secret"] == {"name": "piceli-cluster-edge-1"}
+    assert calls == [
+        {"cluster": "edge-1", "kubeconfig": kubeconfig, "context": "default", "home": home,
+         "server": None, "transport": "https"}
+    ]  # fmt: skip
+    # No home declared: the profile only, even with the module.
+    assert register_cluster(edge, kubeconfig, "default")["state"] == "profile"
+    assert len(calls) == 1

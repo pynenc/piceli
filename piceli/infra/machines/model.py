@@ -596,6 +596,9 @@ class Infrastructure:
         (``piceli secrets state-key NAME``; default ``<name>-state``).
     :param backend: Where the encrypted state is stored: ``LocalState()``
         (default, the state directory) or ``HttpState(...)``.
+    :param home: The cluster whose GitOps controller deploys onto these
+        machines; ``piceli infra register`` then also gives that controller
+        the new cluster's credentials (multi-cluster registration).
     """
 
     name: str
@@ -604,8 +607,10 @@ class Infrastructure:
     state_dir: Path | None = None
     state_key: str | None = None
     backend: StateBackend | None = None
+    home: Cluster | None = None
 
     def __post_init__(self) -> None:
+        from piceli.infra import Cluster
         from piceli.infra.machines.state import LocalState, StateBackend
         from piceli.profiles import ProfileError, check_name
 
@@ -665,6 +670,8 @@ class Infrastructure:
         if not isinstance(backend, StateBackend):
             raise _invalid("Infrastructure(backend=) is LocalState() or HttpState(...)")
         object.__setattr__(self, "backend", backend)
+        if self.home is not None and not isinstance(self.home, Cluster):
+            raise _invalid("Infrastructure(home=) is a piceli.infra.Cluster")
 
     def server(self, name: str) -> Server | None:
         """The declared server ``name``, if any."""
