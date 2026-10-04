@@ -62,3 +62,19 @@ export function compositionGraph(sources: Source[], environments: Environment[])
 export function selectionId(selection?: CompositionSelection | null) {
   return selection ? selection.kind === 'component' ? compositionNodeId('component', selection.environment, selection.name) : compositionNodeId(selection.kind, selection.name) : null;
 }
+
+/** ``component:<environment>:<name>``, ``source:<name>``, ``environment:<name>``: one URL ``pin``. */
+export function encodeSelection(selection: CompositionSelection) {
+  return selection.kind === 'component' ? `component:${selection.environment}:${selection.name}` : `${selection.kind}:${selection.name}`;
+}
+
+export function decodeSelection(value: string): CompositionSelection | null {
+  const [kind, first, ...rest] = value.split(':');
+  if (kind === 'component' && first && rest.length) return { kind, environment: first, name: rest.join(':') };
+  if ((kind === 'source' || kind === 'environment') && first) return { kind, name: [first, ...rest].join(':') };
+  return null;
+}
+
+export function sameSelection(a?: CompositionSelection | null, b?: CompositionSelection | null) {
+  return !!a && !!b && selectionId(a) === selectionId(b);
+}

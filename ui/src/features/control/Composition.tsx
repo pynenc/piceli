@@ -10,7 +10,7 @@ import { CompositionInspector, EnvironmentChecks, EnvironmentVerification, check
 import { CompositionVersions } from './CompositionVersions';
 import { CompositionAttention } from './CompositionAttention';
 import { CompositionEnvironmentRail } from './CompositionEnvironmentRail';
-import type { CompositionSelection } from './compositionGraph';
+import { decodeSelection, encodeSelection, sameSelection, type CompositionSelection } from './compositionGraph';
 import { SourceInventory } from './SourceInventory';
 import { EnvironmentHistory } from './EnvironmentHistory';
 
@@ -150,20 +150,55 @@ export function CompositionOverview({ canSync }: { canSync: boolean }) {
   const view = params.get('view') === 'versions' ? 'versions' : params.get('view') === 'attention' ? 'attention' : 'topology';
   const selection: CompositionSelection | null = params.get('node') === 'source' && params.has('source') ? { kind: 'source', name: params.get('source')! } : environment && params.get('node') === 'environment' ? { kind: 'environment', name: environment.name } : component && environment ? { kind: 'component', name: component.name, environment: environment.name } : null;
   const selectedSource = data?.sources.find(item => item.name === (selection?.kind === 'source' ? selection.name : component?.source));
+  // Pinned nodes (``pin`` in the URL): compared side by side below the topology.
+  const pins = params.getAll('pin').map(decodeSelection).filter((item): item is CompositionSelection => item !== null && !sameSelection(item, selection));
   const setView = (value: string) => { const next = new URLSearchParams(params); if (value === 'topology') next.delete('view'); else next.set('view', value); setParams(next, { replace: true }); };
   const selectEnvironment = (name: string) => { const next = new URLSearchParams(params); next.set('environment', name); next.delete('component'); next.delete('node'); next.delete('source'); setParams(next); };
-  const selectNode = (node: CompositionSelection) => { const next = new URLSearchParams(params); next.delete('view'); next.delete('node'); next.delete('source'); if (node.kind === 'component') { next.set('environment', node.environment); next.set('component', node.name); } else if (node.kind === 'source') { next.set('node', 'source'); next.set('source', node.name); } else { next.set('node', 'environment'); next.set('environment', node.name); next.delete('component'); } setParams(next, { replace: true }); };
+  const primary = (next: URLSearchParams, node: CompositionSelection) => { next.delete('view'); next.delete('node'); next.delete('source'); if (node.kind === 'component') { next.set('environment', node.environment); next.set('component', node.name); } else if (node.kind === 'source') { next.set('node', 'source'); next.set('source', node.name); } else { next.set('node', 'environment'); next.set('environment', node.name); next.delete('component'); } };
+  const setPins = (next: URLSearchParams, items: CompositionSelection[]) => { next.delete('pin'); for (const item of items) next.append('pin', encodeSelection(item)); };
+  // A plain click replaces the details; ⌘/Ctrl/Shift-click adds (or removes) a card.
+  const selectNode = (node: CompositionSelection, options?: { additive: boolean }) => {
+    const next = new URLSearchParams(params);
+    if (options?.additive && selection) {
+      if (sameSelection(node, selection)) return;
+      setPins(next, pins.some(item => sameSelection(item, node)) ? pins.filter(item => !sameSelection(item, node)) : [...pins, node]);
+    } else { primary(next, node); next.delete('pin'); }
+    setParams(next, { replace: true });
+  };
+  const closeCard = (node: CompositionSelection) => {
+    const next = new URLSearchParams(params);
+    if (sameSelection(node, selection) && pins.length) { primary(next, pins[0]); setPins(next, pins.slice(1)); }
+    else setPins(next, pins.filter(item => !sameSelection(item, node)));
+    setParams(next, { replace: true });
+  };
+  const cardLabel = (node: CompositionSelection) => node.kind === 'component' ? `Pinned component ${node.name} in ${node.environment}` : `Pinned ${node.kind} ${node.name}`;
+  const pinnedCards = data ? pins.flatMap(node => {
+    const env = node.kind === 'source' ? environment : environments.find(item => item.name === (node.kind === 'component' ? node.environment : node.name));
+    if (!env) return [];
+    const comp = node.kind === 'component' ? env.components.find(item => item.name === node.name) : undefined;
+    if (node.kind === 'component' && !comp) return [];
+    const src = data.sources.find(item => item.name === (node.kind === 'source' ? node.name : comp?.source));
+    return [{ node, env, comp, src }];
+  }) : [];
+  const cardCount = (selection ? 1 : 0) + pinnedCards.length;
+  const inspectorProps = { environments, sources: data?.sources ?? [], onInspect: (name: string, componentName: string) => selectNode({ kind: 'component', environment: name, name: componentName }), onInspectSource: (name: string) => selectNode({ kind: 'source', name }) };
   const clearSelection = (scope: 'environment' | 'component') => { const next = new URLSearchParams(params); if (scope === 'environment') next.delete('environment'); next.delete('component'); next.delete('node'); next.delete('source'); setParams(next, { replace: true }); };
   const scopeEnvironment = (name: string) => { const next = new URLSearchParams(params); next.set('environment', name); for (const key of ['scope', 'component', 'node', 'source']) next.delete(key); setParams(next); };
   const explorer = (mode: 'fit' | 'explore') => data && environment ? <div className="composition-explorer">
     <CompositionEnvironmentRail environments={environments} selected={environment.name} allEnvironments={allEnvironments} onSelect={scopeEnvironment} />
-    <div className="composition-landscape">
+    <div className={`composition-landscape${mode === 'fit' ? ' composition-landscape-stacked' : ''}`}>
       <section className="composition-map" aria-label="Component dependencies">
         <div className="composition-map-heading"><div><h2>System schematic</h2><p>{allEnvironments ? 'All environments' : environment.namespace ?? 'Namespace pending'}</p></div><div className="composition-scope-controls"><label className="composition-environment-picker"><span className="sr-only">Environment</span><select value={environment.name} onChange={event => selectEnvironment(event.target.value)}>{environments.map(item => <option key={item.name} value={item.name}>{item.name}</option>)}</select></label><label className="composition-all-scope"><input type="checkbox" checked={allEnvironments} onChange={event => { const next = new URLSearchParams(params); if (event.target.checked) next.set('scope', 'all'); else next.delete('scope'); setParams(next, { replace: true }); }} /> All environments</label></div></div>
-        <CompositionTopology mode={mode} sources={data.sources} environments={allEnvironments ? environments : [environment]} selected={selection} onSelect={selectNode} />
+        <CompositionTopology mode={mode} sources={data.sources} environments={allEnvironments ? environments : [environment]} selected={selection} pinned={mode === 'fit' ? pinnedCards.map(item => item.node) : []} onSelect={selectNode} />
         {!environment.components.length && !allEnvironments && <div className="composition-empty-map"><h3>No components reported</h3><p>Component relationships appear after the controller publishes them.</p></div>}
       </section>
-      <CompositionInspector selection={selection} environment={environment} component={component} source={selectedSource} requestedComponent={requestedComponent} onClear={() => clearSelection('component')} environments={environments} sources={data.sources} onInspect={(name, componentName) => selectNode({ kind: 'component', environment: name, name: componentName })} onInspectSource={name => selectNode({ kind: 'source', name })} />
+      {mode === 'fit' ? <section className="composition-details" aria-label="Selected details" data-cards={cardCount}>
+        <div className="composition-details-heading"><h2>Details</h2><p className="small muted">⌘/Ctrl- or Shift-click more nodes in the topology to compare them side by side.</p>{pinnedCards.length > 0 && <button className="composition-details-reset" onClick={() => { const next = new URLSearchParams(params); next.delete('pin'); setParams(next, { replace: true }); }}>Keep one</button>}</div>
+        <div className="composition-detail-cards">
+          <CompositionInspector selection={selection} environment={environment} component={component} source={selectedSource} requestedComponent={requestedComponent} onClear={() => clearSelection('component')} compact={cardCount > 1} onClose={selection && pinnedCards.length ? () => closeCard(selection) : undefined} {...inspectorProps} />
+          {pinnedCards.map(({ node, env, comp, src }) => <CompositionInspector key={encodeSelection(node)} selection={node} environment={env} component={comp} source={src} requestedComponent={null} onClear={() => closeCard(node)} label={cardLabel(node)} compact onClose={() => closeCard(node)} {...inspectorProps} />)}
+        </div>
+      </section> : <CompositionInspector selection={selection} environment={environment} component={component} source={selectedSource} requestedComponent={requestedComponent} onClear={() => clearSelection('component')} {...inspectorProps} />}
     </div>
   </div> : null;
   return <div className="composition-overview">

@@ -4,6 +4,16 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.15.1
+
+- **Overview: topology across the width, details below.** The topology
+  uses the whole width; the selected node's details are a wide card under
+  it (its sections side by side, source → image → environment left to
+  right) instead of a narrow side column. ⌘/Ctrl- or Shift-click (or
+  Shift+Enter) pins more nodes: their cards sit side by side, denser, with
+  connections folded under More, each with a close button (`pin` in the
+  URL keeps the comparison). The expanded explorer keeps its side panel.
+
 ## Version 0.15.0
 
 - **Several clusters from one GitOps controller.** A composition declares
