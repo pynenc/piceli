@@ -54,6 +54,8 @@ from piceli.app.prerollout import (
     retained_mounts,
 )
 from piceli.app.resource import Resource, Scope
+from piceli.bundle.rules import RULES as SAFETY_RULES
+from piceli.bundle.rules import SAFETY_ANNOTATION_PREFIX
 from piceli.k8s.ops.discovery import RELEASE_NAMESPACE_ANNOTATION, ResourceScope
 from piceli.k8s.ops.plan import (
     DeploymentComponent,
@@ -62,6 +64,7 @@ from piceli.k8s.ops.plan import (
 )
 
 if TYPE_CHECKING:
+    from piceli.app.identity import ClusterIdentity
     from piceli.k8s.ops.secret_versions import SecretVersionRef
     from piceli.k8s.ui_config import UiShortcut
 
@@ -183,6 +186,9 @@ class App(BaseModel):
     _pre_rollouts: list[PreRollout] = PrivateAttr(default_factory=list)
     _quiesce: dict[str, tuple[Any, ...]] = PrivateAttr(default_factory=dict)
     _restore_verify: dict[str, Any] = PrivateAttr(default_factory=dict)
+    _safety_exceptions: list[tuple[str, str, str, str]] = PrivateAttr(
+        default_factory=list
+    )
 
     def __init__(self, name: str, /, **data: Any) -> None:
         super().__init__(name=name, **data)
@@ -1304,6 +1310,87 @@ class App(BaseModel):
             )
         )
 
+    def safety_exception(self, item: Declared, rule: str, *, reason: str) -> None:
+        """Waive one rule of the client-bundle safety gate for one object.
+
+        ``piceli bundle`` refuses objects that break a rule for foreign
+        clusters (see ``docs/client_delivery.md``): ``non-root``,
+        ``read-only-root``, ``no-privilege``, ``resources``, ``network``,
+        ``rbac`` and ``node-port``. An exception renders as the annotation
+        ``safety.piceli.io/allow-<rule>: <reason>`` on every object ``item``
+        renders (a ServiceAccount's Roles and bindings too), so the client
+        sees it in their cluster; the bundle lists it in ``bundle.json`` and
+        ``INSTALL.md``.
+
+        :param item: A declared object of this app.
+        :param rule: The rule to waive.
+        :param reason: Why, one line (at most 200 characters), shown to the client.
+        :raises ValueError: an undeclared object, an unknown rule or no reason.
+        """
+        if not any(item is other for other in self._objects):
+            raise ValueError(
+                f"{kind_of(item)} {item.name!r} is not declared on this app"
+            )
+        if rule not in SAFETY_RULES:
+            raise ValueError(
+                f"unknown safety rule {rule!r}; rules: {sorted(SAFETY_RULES)}"
+            )
+        if (
+            not isinstance(reason, str)
+            or not reason.strip()
+            or len(reason) > 200
+            or not reason.isprintable()
+        ):
+            raise ValueError("reason must be one printable line of 1-200 characters")
+        key = (kind_of(item), item.name, rule)
+        self._safety_exceptions = [
+            entry for entry in self._safety_exceptions if entry[:3] != key
+        ]
+        self._safety_exceptions.append((*key, reason.strip()))
+
+    def cluster_identity(
+        self,
+        *,
+        image: str,
+        name: str = "cluster-identity",
+        directory: str = "/run/cluster-identity",
+        command: Sequence[str] | None = None,
+        resources: Resources | None = None,
+    ) -> ClusterIdentity:
+        """Read the cluster's identity (the ``kube-system`` namespace UID) at runtime.
+
+        Declares a ServiceAccount ``name`` whose only permission is ``get`` on
+        the namespace ``kube-system``, and returns a
+        :class:`~piceli.app.identity.ClusterIdentity`: the init container
+        that writes the UID to ``<directory>/uid``, the memory volume to mount,
+        the service account and the egress rule to the API server. Wire them
+        into the workload that needs the identity (see the class example).
+        Nothing is a constant of one cluster, so the same bundle works in
+        every cluster.
+
+        :param image: Image of the init container: one with ``sh`` and
+            ``curl`` (or BusyBox ``wget``), usually the workload's own.
+        :param command: Your own program instead of the shell script; it
+            must write the UID to ``$IDENTITY_FILE``.
+        """
+        from piceli.app.identity import ClusterIdentity, identity_rule, init_container
+        from piceli.app.identity import identity_volume as volume
+
+        account = self.service_account(name, cluster_rules=[identity_rule()])
+        shared = volume()
+        return ClusterIdentity(
+            service_account=account,
+            init=init_container(
+                image=image,
+                directory=directory,
+                command=command,
+                resources=resources,
+                volume=shared,
+            ),
+            volumes={directory: shared},
+            file=f"{directory.rstrip('/')}/uid",
+        )
+
     def resource(
         self,
         api_version: str,
@@ -1443,6 +1530,9 @@ class App(BaseModel):
         derived._environment = env
         derived._quiesce = dict(self._quiesce)
         derived._restore_verify = dict(self._restore_verify)
+        derived._safety_exceptions = [
+            item for item in self._safety_exceptions if (item[0], item[1]) in kept
+        ]
         for item in objects:
             derived._declare(item)
         return derived
@@ -1881,6 +1971,16 @@ class App(BaseModel):
         for target_kind, name, patch in self._overrides:
             if (target_kind, name) == (kind, item.name):
                 manifest = merge_override(manifest, patch)
+        exceptions = {
+            f"{SAFETY_ANNOTATION_PREFIX}{rule}": reason
+            for target_kind, name, rule, reason in self._safety_exceptions
+            if (target_kind, name) == (kind, item.name)
+        }
+        if exceptions:
+            manifest, *extra = (
+                merge_override(value, {"metadata": {"annotations": exceptions}})
+                for value in (manifest, *extra)
+            )
         intent = ResourceIntent.from_manifest(
             manifest,
             scope=ResourceScope.CLUSTER

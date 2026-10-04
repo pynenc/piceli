@@ -60,6 +60,24 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`build-platforms-invalid`](#error-build-platforms-invalid) | host-build | no |
 | [`build-timed-out`](#error-build-timed-out) | build-spec | yes |
 | [`builder-not-approved`](#error-builder-not-approved) | build-spec | no |
+| [`bundle-empty`](#error-bundle-empty) | bundle | no |
+| [`bundle-image-archive-missing`](#error-bundle-image-archive-missing) | bundle | no |
+| [`bundle-image-mismatch`](#error-bundle-image-mismatch) | bundle | no |
+| [`bundle-image-platform-missing`](#error-bundle-image-platform-missing) | bundle | no |
+| [`bundle-image-unpinned`](#error-bundle-image-unpinned) | bundle | no |
+| [`bundle-image-unresolved`](#error-bundle-image-unresolved) | bundle | no |
+| [`bundle-invalid`](#error-bundle-invalid) | bundle | no |
+| [`bundle-out-refused`](#error-bundle-out-refused) | bundle | no |
+| [`bundle-receipt-invalid`](#error-bundle-receipt-invalid) | bundle | no |
+| [`bundle-secret-unsupported`](#error-bundle-secret-unsupported) | bundle | no |
+| [`bundle-secret-value`](#error-bundle-secret-value) | bundle | no |
+| [`bundle-unsafe-network`](#error-bundle-unsafe-network) | bundle | no |
+| [`bundle-unsafe-no-privilege`](#error-bundle-unsafe-no-privilege) | bundle | no |
+| [`bundle-unsafe-node-port`](#error-bundle-unsafe-node-port) | bundle | no |
+| [`bundle-unsafe-non-root`](#error-bundle-unsafe-non-root) | bundle | no |
+| [`bundle-unsafe-rbac`](#error-bundle-unsafe-rbac) | bundle | no |
+| [`bundle-unsafe-read-only-root`](#error-bundle-unsafe-read-only-root) | bundle | no |
+| [`bundle-unsafe-resources`](#error-bundle-unsafe-resources) | bundle | no |
 | [`cache-arguments-conflict`](#error-cache-arguments-conflict) | maintenance | no |
 | [`cache-budget-invalid`](#error-cache-budget-invalid) | maintenance | no |
 | [`cache-over-budget`](#error-cache-over-budget) | maintenance | no |
@@ -567,6 +585,10 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`stored-discovery-missing`](#error-stored-discovery-missing) | release | no |
 | [`stored-evidence-mismatch`](#error-stored-evidence-mismatch) | release | no |
 | [`stored-release-mismatch`](#error-stored-release-mismatch) | release | no |
+| [`support-bundle-namespace-missing`](#error-support-bundle-namespace-missing) | bundle | no |
+| [`support-bundle-out-refused`](#error-support-bundle-out-refused) | bundle | no |
+| [`support-bundle-unreachable`](#error-support-bundle-unreachable) | bundle | yes |
+| [`support-bundle-write-refused`](#error-support-bundle-write-refused) | bundle | no |
 | [`takeover-conflict`](#error-takeover-conflict) | kubernetes | no |
 | [`target-mismatch`](#error-target-mismatch) | kubernetes | no |
 | [`target-refused`](#error-target-refused) | target | no |
@@ -5480,3 +5502,182 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Run `piceli cluster init` again (it recreates the inbox and the UI's role), then retry; `piceli gitops sync ENV` writes the same request.
 - **Retry-safe:** yes
+
+
+## Client bundles and support bundles (`piceli bundle`, `piceli support-bundle`)
+
+(error-bundle-empty)=
+### `bundle-empty`
+
+**Nothing to bundle.** The render has no object for a bundle (Secrets are made by `prepare.sh`, never shipped).
+
+- **Fix:** Check the target and `--env`; `piceli render` shows what it renders.
+- **Retry-safe:** no
+
+(error-bundle-image-archive-missing)=
+### `bundle-image-archive-missing`
+
+**Image has no archive.** The receipt records an image left in the local Docker engine, not an archive the bundle can copy.
+
+- **Fix:** Build it with the host builder (`builder="host"`), whose receipt holds OCI archives, then bundle again.
+- **Retry-safe:** no
+
+(error-bundle-image-mismatch)=
+### `bundle-image-mismatch`
+
+**Image archive differs from the receipt.** An image archive, SBOM or provenance file is not what the build receipt records (digest, layers or sha256).
+
+- **Fix:** Build again (`piceli artifacts build-spec run`) and bundle with the new receipt.
+- **Retry-safe:** no
+
+(error-bundle-image-platform-missing)=
+### `bundle-image-platform-missing`
+
+**Platform not built.** The receipt holds no build of an image for a platform `--platform` asks for (default `linux/amd64`).
+
+- **Fix:** Build that platform, or pass the built ones with `--platform` (or `--all-platforms`).
+- **Retry-safe:** no
+
+(error-bundle-image-unpinned)=
+### `bundle-image-unpinned`
+
+**Image without a digest.** A workload names an image by tag only; a bundle pins every image.
+
+- **Fix:** Name the image `repository@sha256:...` (or use a build image).
+- **Retry-safe:** no
+
+(error-bundle-image-unresolved)=
+### `bundle-image-unresolved`
+
+**Build image not in the receipt.** A workload uses a build image that `--receipt` does not hold (or no receipt was given).
+
+- **Fix:** Build the images (`piceli artifacts build-spec run`) and pass the receipt with `--receipt`.
+- **Retry-safe:** no
+
+(error-bundle-invalid)=
+### `bundle-invalid`
+
+**Invalid bundle request.** The bundle name, version or flags are invalid, the render declares a Namespace, or its objects carry two different `app.kubernetes.io/part-of` labels.
+
+- **Fix:** Pass a lowercase `--name` and an `X.Y.Z` `--version`, choose `--platform` or `--all-platforms`, and keep one part-of label per app.
+- **Retry-safe:** no
+
+(error-bundle-out-refused)=
+### `bundle-out-refused`
+
+**Bundle directory refused.** `--out` exists and is not an empty directory, or the bundle could not be written there (nothing is left behind).
+
+- **Fix:** Name an absent or empty directory with `--out`.
+- **Retry-safe:** no
+
+(error-bundle-receipt-invalid)=
+### `bundle-receipt-invalid`
+
+**Unreadable build receipt.** `--receipt` is not a readable build receipt, or a path in it leaves its directory or cannot be read.
+
+- **Fix:** Pass the receipt `piceli artifacts build-spec run` wrote (and `--output-dir` when it moved).
+- **Retry-safe:** no
+
+(error-bundle-secret-unsupported)=
+### `bundle-secret-unsupported`
+
+**Secret prepare.sh cannot make.** A Secret key is not bound to a generator output, or names an output no generator of the pipeline declares.
+
+- **Fix:** Bind every key to an output of the pipeline's `Secrets(...)` (`Static` for public values); bundle a Pipeline, not a bare App, when the app has Secrets.
+- **Retry-safe:** no
+
+(error-bundle-secret-value)=
+### `bundle-secret-value`
+
+**Secret value outside a Secret.** An object other than a Secret holds a value Piceli redacts or injects at apply time; a bundle never carries secret values.
+
+- **Fix:** Move the value into a Secret bound to a generator output (`app.secret(name, {key: secrets.ref(...)})`).
+- **Retry-safe:** no
+
+(error-bundle-unsafe-network)=
+### `bundle-unsafe-network`
+
+**Ingress from outside the namespace.** A NetworkPolicy of the app admits ingress from any source, another namespace or an IP range; a bundle admits nothing from outside its namespace.
+
+- **Fix:** Allow only pods of the namespace (`allow_from=`, `allow_from_selector=`), or waive the rule for that object with `app.safety_exception(policy, "network", reason=...)`.
+- **Retry-safe:** no
+
+(error-bundle-unsafe-no-privilege)=
+### `bundle-unsafe-no-privilege`
+
+**Privileged pod.** A pod of the bundle is privileged, allows privilege escalation, adds capabilities, uses the node's network, PID or IPC namespace, or mounts a node directory.
+
+- **Fix:** Set `allow_privilege_escalation=False` and drop the host settings and added capabilities, or waive the rule for that object with `app.safety_exception(item, "no-privilege", reason=...)`.
+- **Retry-safe:** no
+
+(error-bundle-unsafe-node-port)=
+### `bundle-unsafe-node-port`
+
+**Port open on the nodes.** A Service of the bundle is NodePort or LoadBalancer, or a container binds a host port.
+
+- **Fix:** Use a ClusterIP Service (the client reaches it with `kubectl port-forward`), or waive the rule for that object with `app.safety_exception(item, "node-port", reason=...)`.
+- **Retry-safe:** no
+
+(error-bundle-unsafe-non-root)=
+### `bundle-unsafe-non-root`
+
+**Container may run as root.** A container of the bundle may run as UID 0: it sets neither `runAsNonRoot: true` nor a non-zero `runAsUser` (pod or container).
+
+- **Fix:** Run it as a non-root user (`Security.restricted(user=10001)` in `pod_defaults` or the workload's `security=`), or waive the rule for that object with `app.safety_exception(item, "non-root", reason=...)`.
+- **Retry-safe:** no
+
+(error-bundle-unsafe-rbac)=
+### `bundle-unsafe-rbac`
+
+**RBAC beyond least privilege.** A role or binding of the bundle uses a wildcard, escalate, bind or impersonate, writes or reads Secrets cluster-wide, or binds a role the bundle does not declare.
+
+- **Fix:** List only the verbs and resources the workload needs (`Rule(...)`; cluster rules read-only), or waive the rule for that object with `app.safety_exception(account, "rbac", reason=...)`.
+- **Retry-safe:** no
+
+(error-bundle-unsafe-read-only-root)=
+### `bundle-unsafe-read-only-root`
+
+**Writable root filesystem.** A container of the bundle does not set `readOnlyRootFilesystem: true`.
+
+- **Fix:** Set `Security(read_only_root_filesystem=True)` and mount a `MemoryVolume` where the process writes, or waive the rule for that object with `app.safety_exception(item, "read-only-root", reason=...)`.
+- **Retry-safe:** no
+
+(error-bundle-unsafe-resources)=
+### `bundle-unsafe-resources`
+
+**Missing requests or limits.** A container of the bundle does not request and limit both cpu and memory.
+
+- **Fix:** Give every container (init containers and sidecars too) `Resources(cpu=, memory=, cpu_limit=, memory_limit=)`, or waive the rule for that object with `app.safety_exception(item, "resources", reason=...)`.
+- **Retry-safe:** no
+
+(error-support-bundle-namespace-missing)=
+### `support-bundle-namespace-missing`
+
+**Namespace not found.** The namespace does not exist, or the context may not read it.
+
+- **Fix:** Check `--namespace` and that the context may read it (`kubectl auth can-i get pods -n NS`).
+- **Retry-safe:** no
+
+(error-support-bundle-out-refused)=
+### `support-bundle-out-refused`
+
+**Support bundle file refused.** `--out` already exists or cannot be created; a support bundle never overwrites a file.
+
+- **Fix:** Name a new file with `--out`.
+- **Retry-safe:** no
+
+(error-support-bundle-unreachable)=
+### `support-bundle-unreachable`
+
+**Cluster API unreachable.** The API server did not answer, or answered with an error, while the support bundle was read.
+
+- **Fix:** Check the network, `--kubeconfig` and `--context`, then run `piceli support-bundle` again.
+- **Retry-safe:** yes
+
+(error-support-bundle-write-refused)=
+### `support-bundle-write-refused`
+
+**Write refused.** The support bundle only reads; a request with another method than GET was refused before it was sent.
+
+- **Fix:** Report it: the collector never writes, and nothing was changed.
+- **Retry-safe:** no

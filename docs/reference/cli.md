@@ -39,6 +39,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli artifacts retention`](#cli-artifacts-retention) | Report which registry manifests the last releases, pins and live workloads keep, and delete the rest. | reads | yes |
 | [`piceli build job`](#cli-build-job) | Build at a commit as a Job on a builder node (plan, then --approve HASH). | writes | yes |
 | [`piceli build job-run`](#cli-build-job-run) | Inside the build Job: build and push; print the receipt line. | none | no |
+| [`piceli bundle`](#cli-bundle) | Package the app for a cluster Piceli never accesses (kustomize, prepare.sh, images). | none | no |
 | [`piceli cache prune`](#cli-cache-prune) | Remove what no release, rollback or resume needs: stale temporary directories and partial files, runs beyond --keep-last, unused delivery receipts, and (over --budget) build outputs and logs. | none | no |
 | [`piceli cache status`](#cli-cache-status) | Show the disk used per state directory and category, and Piceli's temporary directories. Read-only. | none | no |
 | [`piceli chart manifests`](#cli-chart-manifests) | Print (or write) plain manifests with a values file applied; no Helm needed. | none | no |
@@ -119,6 +120,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli state pull`](#cli-state-pull) | Refresh the local working copy from the shared state (reads the cluster). | reads | no |
 | [`piceli state show`](#cli-state-show) | Show where the state lives, its generation and who holds the release lock. | reads | no |
 | [`piceli status`](#cli-status) | Say whether the app is up and how to reach it. Read-only. | reads | no |
+| [`piceli support-bundle`](#cli-support-bundle) | Collect a read-only, redacted snapshot of a namespace (no Secrets, no env values). | reads | no |
 | [`piceli ui backup`](#cli-ui-backup) | Back up an offline UI control store and its release journal. | none | no |
 | [`piceli ui cluster-observe`](#cli-ui-cluster-observe) | Serve OIDC-scoped cluster observation and configured delivery. | writes | yes |
 | [`piceli ui cluster-serve`](#cli-ui-cluster-serve) | Serve OIDC-scoped cluster observation and configured delivery. | writes | yes |
@@ -609,6 +611,35 @@ Inside the build Job: build and push; print the receipt line.
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** The command the Job runs; it prints one receipt line on stdout. The approval was the plan hash of `build job`. With --sources and --component it builds a composition's components from their piceli.toml (the Job the composition controller runs).
+
+(cli-bundle)=
+### `piceli bundle`
+
+Package the app for a cluster Piceli never accesses (kustomize, prepare.sh, images).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `TARGET` | text | required |  |
+| `--out` | path | required | Bundle directory to write (absent or empty) |
+| `--env` | text |  | Render this environment (e.g. client) |
+| `--receipt` | path |  | Build receipt (piceli artifacts build-spec run) holding the app's build images; their archives go into images/ |
+| `--output-dir` | path |  | Directory the receipt's paths are relative to (default: its directory) |
+| `--platform` | text (repeatable) |  | Platform to put in the archives (repeatable; default linux/amd64) |
+| `--all-platforms` | boolean | `False` | Every platform the receipt holds (multi-arch) |
+| `--name` | text |  | Bundle name and part-of label (default: the render's part-of label) |
+| `--version` | text | `0.1.0` | Bundle version (X.Y.Z) |
+| `--storage-class` | text |  | storageClassName of every claim, in the overlay |
+
+**Contract**
+
+- **Reads:** module/app file, build receipt and its image archives (--receipt)
+- **Writes:** --out bundle directory
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Never contacts a cluster or registry and writes no secret value. Renders like `piceli render --env`; refuses objects that break a foreign-cluster safety rule (bundle-unsafe-<rule>, with every violation) unless the App waives it per object (app.safety_exception). Writes a kustomize base and overlays/dev, prepare.sh (the generated Secrets, made in the client's cluster with kubectl and openssl), OCI image archives with SBOMs, INSTALL.md, UNINSTALL.md, bundle.json and SHA256SUMS. --out must be absent or empty; nothing is left behind on failure.
 
 (cli-cache-prune)=
 ### `piceli cache prune`
@@ -2658,6 +2689,33 @@ Say whether the app is up and how to reach it. Read-only.
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** Read-only. Exit 0 when every workload is ready, 1 otherwise (including an unreadable cluster). Probes forwards on 127.0.0.1 only. JSON schema: docs/schemas/piceli-status-v1.schema.json.
+
+(cli-support-bundle)=
+### `piceli support-bundle`
+
+Collect a read-only, redacted snapshot of a namespace (no Secrets, no env values).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--namespace` | text | required | Namespace to collect |
+| `--out` | path | required | The .tar.gz to write (must not exist) |
+| `--kubeconfig` | path | required | Kubeconfig file (never the default one) |
+| `--context` | text | required | Kubeconfig context to use (required; current-context is never used) |
+| `--log-lines` | integer | `200` | Lines per container log |
+| `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
+| `--exec-sha256` | text |  | Expected sha256:<hex> of the resolved exec plugin file |
+| `--transport` | text | `https` | https, or loopback-http for a local test API server only |
+
+**Contract**
+
+- **Reads:** kubeconfig
+- **Writes:** --out .tar.gz (mode 0600, never overwritten)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** `--context` is required (current-context is never used, also not by the kubectl processes it starts); exec credential plugins need `--allow-exec` (optionally `--exec-sha256`). GET requests only (any other method is refused before it is sent); Secrets are never requested; env and ConfigMap values are never collected; logs, events and conditions are redacted. The archive's manifest.json lists every file, its sha256 and the request methods.
 
 (cli-ui-backup)=
 ### `piceli ui backup`

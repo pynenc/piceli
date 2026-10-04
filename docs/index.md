@@ -221,6 +221,7 @@ gitops
 ui
 ui_cluster_install
 helm_charts
+client_delivery
 state
 maintenance
 heavy_work

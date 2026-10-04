@@ -388,6 +388,38 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "DIGEST pushes by digest, then the tag, and reads both back. "
             "Credentials only from --credentials FILE, never printed.",
         ),
+        # ------------------------------------------------------- bundle
+        "bundle": _C(
+            "Package the app for a cluster Piceli never accesses (kustomize, prepare.sh, images).",
+            reads=(
+                "module/app file",
+                "build receipt and its image archives (--receipt)",
+            ),
+            writes=("--out bundle directory",),
+            contract="conforms",
+            notes="Never contacts a cluster or registry and writes no secret "
+            "value. Renders like `piceli render --env`; refuses objects that "
+            "break a foreign-cluster safety rule (bundle-unsafe-<rule>, with "
+            "every violation) unless the App waives it per object "
+            "(app.safety_exception). Writes a kustomize base and overlays/dev, "
+            "prepare.sh (the generated Secrets, made in the client's cluster "
+            "with kubectl and openssl), OCI image archives with SBOMs, "
+            "INSTALL.md, UNINSTALL.md, bundle.json and SHA256SUMS. --out must "
+            "be absent or empty; nothing is left behind on failure.",
+        ),
+        "support-bundle": _C(
+            "Collect a read-only, redacted snapshot of a namespace (no Secrets, no env values).",
+            reads=("kubeconfig",),
+            writes=("--out .tar.gz (mode 0600, never overwritten)",),
+            cluster="reads",
+            contract="conforms",
+            notes=_EXPLICIT_CONTEXT
+            + " GET requests only (any other method is refused before it is "
+            "sent); Secrets are never requested; env and ConfigMap values are "
+            "never collected; logs, events and conditions are redacted. The "
+            "archive's manifest.json lists every file, its sha256 and the "
+            "request methods.",
+        ),
         # ------------------------------------------------------ codegen
         "codegen crd": _C(
             "Generate pydantic models from a CustomResourceDefinition's schema.",
