@@ -593,6 +593,10 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["secrets", "git", "--cluster", "infra.py:c", "a-token-value"],
         "secrets-token-refused",
     ),
+    "secrets cluster": (
+        lambda p: ["secrets", "cluster", "--cluster", "infra.py:c", "a-token-value"],
+        "secrets-token-refused",
+    ),
     "gitops approve": (
         lambda p: ["gitops", "approve", "wp-1", "not-a-hash", "--state-dir", str(p)],
         "gitops-request-invalid",

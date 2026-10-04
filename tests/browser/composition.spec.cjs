@@ -89,6 +89,10 @@ test('an environment shows its history, verification state and the pending plan 
   await page.goto('/composition/environments/stage');
   await expect(page.getByText('Checks verification failed')).toBeVisible();
   await expect(page.getByText('deliberate-failure')).toBeVisible();
+  const clusters = page.getByRole('list', { name: 'Clusters of stage' });
+  await expect(clusters.locator(':scope > li')).toHaveCount(2);
+  await expect(clusters).toContainText('cluster-unreachable');
+  await expect(clusters).toContainText('last contact');
   await page.goto('/composition/environments/rc');
   await page.getByRole('button', { name: 'Approve' }).click();
   const review = page.getByRole('region', { name: 'approve review' });

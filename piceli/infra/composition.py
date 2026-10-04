@@ -73,15 +73,21 @@ class Composition:
     :param name: The app name of everything it deploys (a DNS label).
     :param environments: Named environments and at most one branch rule.
     :param components: Every component the environments use.
-    :param cluster: The cluster (its registry receives the images).
+    :param cluster: The cluster (its registry receives the images); with
+        several clusters, the one that runs the controller (the *home*
+        cluster).
+    :param clusters: Every declared cluster, the home one included (0.15;
+        default: ``cluster`` alone).
     """
 
     name: str
     environments: tuple[EnvItem, ...]
     components: tuple[Component, ...]
     cluster: Cluster | None = None
+    clusters: tuple[Cluster, ...] = ()
 
     def __post_init__(self) -> None:
+        self._check_clusters()
         if not _LABEL.fullmatch(self.name or ""):
             raise _invalid(f"composition name {self.name!r} is not a DNS label")
         if not self.environments:
@@ -128,15 +134,69 @@ class Composition:
                         f"environment {item.name!r} runs {component.name!r} but does "
                         f"not follow its source {component.source.key!r}"
                     )
-            if self.cluster is not None and item.cluster not in (None, self.cluster):
+            if item.cluster is not None and item.cluster not in self.clusters:
                 raise _invalid(f"environment {item.name!r} names another cluster")
+            for placement in self.placements_of(item):
+                if placement.cluster not in self.clusters:
+                    raise _invalid(
+                        f"environment {item.name!r} places a cluster the composition "
+                        f"does not declare ({placement.name!r})"
+                    )
+                if (
+                    item.pipeline is not None
+                    and placement.cluster != self.cluster
+                    and not _in_cluster(placement.cluster)
+                ):
+                    raise _invalid(
+                        f"environment {item.name!r} deploys a pipeline to "
+                        f"{placement.name!r}: that Cluster needs "
+                        "registry=Registry.in_cluster(...) (its nodes pull from it)"
+                    )
             for name in item.settings:
                 if name not in components:
                     raise _invalid(
                         f"environment {item.name!r}: settings name no component {name!r}"
                     )
 
+    def _check_clusters(self) -> None:
+        clusters = tuple(self.clusters) or (
+            (self.cluster,) if self.cluster is not None else ()
+        )
+        if self.cluster is not None and self.cluster not in clusters:
+            clusters = (self.cluster, *clusters)
+        names = [item.name for item in clusters]
+        if len(set(names)) != len(names):
+            raise _invalid("two clusters share a name")
+        if len(clusters) > 1 and self.cluster is None:
+            raise _invalid(
+                "several clusters: one runs the controller (Controller(...) on it)"
+            )
+        object.__setattr__(self, "clusters", clusters)
+
     # ------------------------------------------------------------ queries
+    @property
+    def remote_clusters(self) -> tuple[Cluster, ...]:
+        """The declared clusters other than the home one (0.15)."""
+        return tuple(item for item in self.clusters if item != self.cluster)
+
+    def cluster_named(self, name: str) -> Cluster | None:
+        return next((item for item in self.clusters if item.name == name), None)
+
+    def placements_of(self, env: EnvItem) -> tuple[Any, ...]:
+        """Where ``env`` runs when that is not just the home cluster.
+
+        Its ``clusters=`` placements; an environment whose ``cluster=`` is
+        another than the home cluster is placed there alone. ``()``: the
+        home cluster, as in 0.14.
+        """
+        from piceli.envs.placement import Placement
+
+        if env.clusters:
+            return tuple(env.clusters)
+        if env.cluster is not None and env.cluster != self.cluster:
+            return (Placement(env.cluster),)
+        return ()
+
     @property
     def sources(self) -> tuple[Source, ...]:
         found: dict[str, Source] = {}
@@ -196,7 +256,20 @@ class Composition:
                 {"name": source.key, "url": source.url} for source in self.sources
             ],
             "components": [_component_dict(item) for item in self.components],
-            "environments": [_env_dict(item) for item in self.environments],
+            "environments": [
+                _env_dict(item, self.cluster) for item in self.environments
+            ],
+            # Only with several clusters: other configs (and hashes) unchanged.
+            **(
+                {
+                    "clusters": [
+                        _cluster_dict(item, remote=True)
+                        for item in self.remote_clusters
+                    ]
+                }
+                if self.remote_clusters
+                else {}
+            ),
         }
 
     @classmethod
@@ -222,8 +295,16 @@ class Composition:
                 for item in value.get("components") or ()
             }
             cluster = _cluster_from(value.get("cluster"))
+            others = tuple(
+                found
+                for found in (
+                    _cluster_from(item) for item in value.get("clusters") or ()
+                )
+                if found is not None
+            )
+            named = {item.name: item for item in (cluster, *others) if item is not None}
             environments = tuple(
-                _env_from(item, sources, components, cluster)
+                _env_from(item, sources, components, cluster, named)
                 for item in value.get("environments") or ()
             )
             return cls(
@@ -231,6 +312,7 @@ class Composition:
                 environments=environments,
                 components=tuple(components.values()),
                 cluster=cluster,
+                clusters=tuple(named.values()),
             )
         except (KeyError, TypeError, ValueError, EnvError) as error:
             if isinstance(error, CompositionError):
@@ -269,7 +351,7 @@ def _stack_dict(stack: Stack | None) -> Any:
     )
 
 
-def _env_dict(item: EnvItem) -> dict[str, Any]:
+def _env_dict(item: EnvItem, home: Cluster | None = None) -> dict[str, Any]:
     follow = {
         source.key: [_follow_dict(rule) for rule in rules]
         for source, rules in item.sources
@@ -288,6 +370,17 @@ def _env_dict(item: EnvItem) -> dict[str, Any]:
     if item.pipeline is not None:
         # A summary (the plan hash covers it); the controller imports the module.
         common["pipeline"] = pipeline_summary(item.pipeline)
+    if item.replicas:
+        # Only when declared (0.15): other configs keep their hash.
+        common["replicas"] = dict(item.replicas)
+    if item.clusters:
+        # Only when declared (0.15): single-cluster configs keep their hash.
+        common["clusters"] = [_placement_dict(p) for p in item.clusters]
+        if item.rollout is not None:
+            common["rollout"] = item.rollout.describe()
+    elif item.cluster is not None and home is not None and item.cluster != home:
+        # Another cluster than the home one, named alone (cluster=edge).
+        common["clusters"] = [{"cluster": item.cluster.name}]
     if isinstance(item, Environment):
         # Only when declared: compositions without it keep their summary hash.
         return {
@@ -306,6 +399,25 @@ def _env_dict(item: EnvItem) -> dict[str, Any]:
         "allow_egress": list(item.allow_egress),
         **({"allow_api": True} if item.allow_api else {}),
     }
+
+
+def _placement_dict(placement: Any) -> dict[str, Any]:
+    body = placement.describe()
+    if placement.pipeline is not None:
+        body["pipeline"] = pipeline_summary(placement.pipeline)
+    return body
+
+
+def _placement_from(item: Mapping[str, Any], clusters: Mapping[str, Cluster]) -> Any:
+    from piceli.envs.placement import Placement
+
+    return Placement(
+        clusters[item["cluster"]],
+        namespace=item.get("namespace"),
+        on_nodes=item.get("on_nodes"),
+        values=item.get("values") or {},
+        replicas=item.get("replicas") or None,
+    )
 
 
 def pipeline_summary(pipeline: Any) -> dict[str, Any]:
@@ -332,6 +444,7 @@ def _env_from(
     sources: Mapping[str, Source],
     components: Mapping[str, Component],
     cluster: Cluster | None,
+    clusters: Mapping[str, Cluster] | None = None,
 ) -> EnvItem:
     follow = {
         sources[key]: [_follow_from(rule) for rule in rules]
@@ -353,7 +466,17 @@ def _env_from(
         "auto_approve": bool(item.get("auto_approve")),
         "secrets": tuple(item.get("secrets") or ()),
         "settings": dict(item.get("settings") or {}),
+        "replicas": item.get("replicas") or None,
     }
+    if item.get("clusters"):
+        from piceli.envs.placement import Rollout
+
+        common["cluster"] = None
+        common["clusters"] = tuple(
+            _placement_from(entry, clusters or {}) for entry in item["clusters"]
+        )
+        if item.get("rollout"):
+            common["rollout"] = Rollout(tuple(item["rollout"]["order"]))
     if item.get("kind") == "branches":
         return Environment.per_branch(
             Branches(tuple(item["branches"]), fallback=item.get("fallback") or "main"),
@@ -399,8 +522,10 @@ def _component_from(
     )
 
 
-def _cluster_dict(cluster: Cluster) -> dict[str, Any]:
+def _cluster_dict(cluster: Cluster, *, remote: bool = False) -> dict[str, Any]:
     registry = cluster.registry
+    if remote and registry is None:
+        return {"name": cluster.name, "api": cluster.api, "registry": None}
     described = None
     if registry is not None:
         from piceli.pipeline.model import ClusterRegistry
@@ -571,8 +696,9 @@ def composition_from(module: Any, *, default_name: str = "composition") -> Compo
     for item in items:
         if item.cluster is not None:
             clusters.setdefault(id(item.cluster), item.cluster)
-    if len(clusters) > 1:
-        raise _invalid("a composition deploys to one Cluster")
+        for placement in item.clusters:
+            clusters.setdefault(id(placement.cluster), placement.cluster)
+    home = _home(list(clusters.values()), items)
     components: list[Component] = [
         value for value in values.values() if isinstance(value, Component)
     ]
@@ -601,5 +727,24 @@ def composition_from(module: Any, *, default_name: str = "composition") -> Compo
         name=name,
         environments=items,
         components=tuple(components),
-        cluster=next(iter(clusters.values()), None),
+        cluster=home,
+        clusters=tuple(clusters.values()),
+    )
+
+
+def _home(clusters: list[Cluster], items: Sequence[EnvItem]) -> Cluster | None:
+    """The cluster that runs the controller: the one with ``Controller(...)``;
+    one cluster alone is home; else the one environments name with ``cluster=``."""
+    if len(clusters) <= 1:
+        return next(iter(clusters), None)
+    with_controller = [item for item in clusters if item.controller is not None]
+    if len(with_controller) > 1:
+        raise _invalid("two clusters declare a Controller: one GitOps controller")
+    if with_controller:
+        return with_controller[0]
+    named = {id(item.cluster): item.cluster for item in items if item.cluster}
+    if len(named) == 1:
+        return next(iter(named.values()))
+    raise _invalid(
+        "several clusters: declare Controller(...) on the one that runs the controller"
     )

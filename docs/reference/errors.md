@@ -99,6 +99,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`cluster-api-mismatch`](#error-cluster-api-mismatch) | cluster | no |
 | [`cluster-build-failed`](#error-cluster-build-failed) | host-build | yes |
 | [`cluster-build-invalid`](#error-cluster-build-invalid) | host-build | no |
+| [`cluster-credentials-missing`](#error-cluster-credentials-missing) | cluster | yes |
+| [`cluster-credentials-refused`](#error-cluster-credentials-refused) | cluster | yes |
+| [`cluster-credentials-unsupported`](#error-cluster-credentials-unsupported) | cluster | no |
 | [`cluster-identity-changed`](#error-cluster-identity-changed) | release | no |
 | [`cluster-identity-unreadable`](#error-cluster-identity-unreadable) | kubernetes | yes |
 | [`cluster-invalid`](#error-cluster-invalid) | cluster | no |
@@ -109,11 +112,13 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`cluster-not-initialized`](#error-cluster-not-initialized) | cluster | no |
 | [`cluster-plan-changed`](#error-cluster-plan-changed) | cluster | yes |
 | [`cluster-registry-cluster-failed`](#error-cluster-registry-cluster-failed) | cluster-registry | yes |
+| [`cluster-registry-copy-failed`](#error-cluster-registry-copy-failed) | cluster | yes |
 | [`cluster-registry-invalid`](#error-cluster-registry-invalid) | cluster-registry | no |
 | [`cluster-registry-not-installed`](#error-cluster-registry-not-installed) | cluster-registry | no |
 | [`cluster-registry-not-ready`](#error-cluster-registry-not-ready) | cluster-registry | yes |
 | [`cluster-registry-plan-changed`](#error-cluster-registry-plan-changed) | cluster-registry | yes |
 | [`cluster-registry-target-required`](#error-cluster-registry-target-required) | cluster-registry | no |
+| [`cluster-unreachable`](#error-cluster-unreachable) | cluster | yes |
 | [`codegen-cluster-read-failed`](#error-codegen-cluster-read-failed) | codegen | yes |
 | [`codegen-flags-conflict`](#error-codegen-flags-conflict) | codegen | no |
 | [`codegen-output-refused`](#error-codegen-output-refused) | codegen | no |
@@ -494,6 +499,8 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`retention-invalid`](#error-retention-invalid) | retention | no |
 | [`retention-live-unknown`](#error-retention-live-unknown) | retention | yes |
 | [`retention-not-approved`](#error-retention-not-approved) | retention | yes |
+| [`rollout-stopped`](#error-rollout-stopped) | gitops | no |
+| [`rollout-waiting`](#error-rollout-waiting) | gitops | yes |
 | [`rotate-not-valid-for-rollback`](#error-rotate-not-valid-for-rollback) | release | no |
 | [`runner-disk-low`](#error-runner-disk-low) | maintenance | yes |
 | [`runner-memory-low`](#error-runner-memory-low) | maintenance | yes |
@@ -4252,6 +4259,22 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Pass exactly one: `--kubeconfig` with `--context`, or `--state-dir`.
 - **Retry-safe:** no
 
+(error-rollout-stopped)=
+### `rollout-stopped`
+
+**Rollout stopped.** A cluster of an earlier `Rollout(order=...)` wave failed this revision (failed, rolled back, degraded or held): the later clusters are held at their running release and do not deploy it.
+
+- **Fix:** Fix the cause (the earlier cluster's `checks` and `reason` in `piceli gitops status`) and push a new revision, or `piceli gitops sync ENV`.
+- **Retry-safe:** no
+
+(error-rollout-waiting)=
+### `rollout-waiting`
+
+**Rollout waiting.** A cluster of a later `Rollout(order=...)` wave waits until every cluster of the earlier waves runs this revision with its checks passed.
+
+- **Fix:** Nothing to do: it deploys after them. If an earlier cluster waits for an approval or is unreachable, resolve that first.
+- **Retry-safe:** yes
+
 
 ## Builds without a container VM (`Build.spec(builder="host")`) and target node facts
 
@@ -5164,6 +5187,30 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Point the profile at the right context (`piceli login NAME --kubeconfig FILE --context CTX`), or correct `api=` in the declaration.
 - **Retry-safe:** no
 
+(error-cluster-credentials-missing)=
+### `cluster-credentials-missing`
+
+**Cluster credentials missing.** The controller found no readable credential Secret `piceli-cluster-<name>` (key `kubeconfig`) for another cluster of its composition, or the Secret holds no kubeconfig.
+
+- **Fix:** Run `piceli secrets cluster --cluster MODULE:ATTR --kubeconfig FILE --context NAME` (or `--prompt` for a token), then `piceli gitops enable` if the cluster is new.
+- **Retry-safe:** yes
+
+(error-cluster-credentials-refused)=
+### `cluster-credentials-refused`
+
+**Cluster credentials refused.** Another cluster's API server answered 401 or 403 to the controller's credentials (an expired or revoked token or certificate).
+
+- **Fix:** Store fresh credentials with `piceli secrets cluster --cluster MODULE:ATTR ...`; the next poll uses them.
+- **Retry-safe:** yes
+
+(error-cluster-credentials-unsupported)=
+### `cluster-credentials-unsupported`
+
+**Cluster credentials unsupported.** The kubeconfig given for another cluster uses an exec plugin, an auth provider, a token file, a user name and password or skips TLS verification, or has no token and no client certificate; the controller runs no plugin and holds no file of its own.
+
+- **Fix:** Give a kubeconfig context with a client certificate or a token (for example a service account token with `--prompt`).
+- **Retry-safe:** no
+
 (error-cluster-invalid)=
 ### `cluster-invalid`
 
@@ -5218,6 +5265,22 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Cluster init plan changed.** The `--approve` hash is not the current plan's: the declaration or the cluster changed since the plan (or the hash is wrong), or a node or object changed while the plan ran.
 
 - **Fix:** Run `piceli cluster init MODULE:ATTR` again, review the new plan and approve its hash.
+- **Retry-safe:** yes
+
+(error-cluster-registry-copy-failed)=
+### `cluster-registry-copy-failed`
+
+**Copy into a cluster's registry failed.** The controller could not copy an image by digest from the home cluster's registry into another cluster's in-cluster registry through that cluster's API server (the registry is not installed or not ready there, or the transfer failed).
+
+- **Fix:** Run `piceli cluster init` against that cluster (it installs `Registry.in_cluster`), check `piceli cluster status`, then `piceli gitops sync ENV`.
+- **Retry-safe:** yes
+
+(error-cluster-unreachable)=
+### `cluster-unreachable`
+
+**Cluster unreachable.** The GitOps controller could not reach another cluster of its composition (its API server did not answer `GET /version` in time, or a deploy step lost it). That cluster's record is put off and retried with backoff; the environment's other clusters go on; `gitops status` shows `state: unreachable` and its `last_contact`.
+
+- **Fix:** Check the network path from the controller to the cluster's API (`Cluster(api=)`, or the `--server` of `piceli secrets cluster`); the controller converges when it answers again.
 - **Retry-safe:** yes
 
 (error-secrets-invalid)=

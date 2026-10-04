@@ -260,12 +260,17 @@ def env_pipeline(
         placement = {
             "stack": fixed.stack,
             "on_nodes": fixed.on_nodes,
+            "replicas": fixed.replicas,
             "quota": fixed.quota,
             "environment": fixed.name,
             "prebuilt": bool(images),
         }
     elif not main:
-        placement = {"stack": config.branch_stack, "on_nodes": config.branch_nodes}
+        placement = {
+            "stack": config.branch_stack,
+            "on_nodes": config.branch_nodes,
+            "replicas": config.branch_replicas,
+        }
     env = BranchEnv(
         branch=branch,
         namespace=namespace,

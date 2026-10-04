@@ -4,6 +4,46 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.15.0
+
+- **Several clusters from one GitOps controller.** A composition declares
+  several `Cluster`s; the one with `Controller(...)` runs the controller and
+  builds. `Environment(..., clusters=[Placement(cluster, namespace=,
+  on_nodes=, values=, replicas=, pipeline=)], rollout=Rollout(order=[...]))`
+  (and `Environment.per_branch`) deploys to each cluster through its API
+  server, one record per cluster. See the Several clusters page.
+- **Canary rollouts.** `Rollout(order=["edge-canary", "edge-*"])`: a later
+  wave deploys a revision only when the earlier ones run it with their
+  checks passed; a failure there (rolled back once, as in 0.14.7) holds the
+  rest (`held`, `rollout-stopped`) until a new revision.
+- **An unreachable cluster blocks nobody.** It is probed every poll, retried
+  with backoff without failing (`cluster-unreachable`), shown with its
+  `last_contact`, and converges when it answers again.
+- **Each cluster pulls from its own registry**: the controller copies the
+  images by digest into that cluster's `Registry.in_cluster` through its API
+  server; builds stay on the home cluster.
+- **`piceli secrets cluster --cluster MODULE:ATTR --kubeconfig FILE --context
+  NAME [--server URL]`** (or `--prompt` for a token) stores another cluster's
+  credentials as the Secret `piceli-cluster-<name>`; never printed.
+  `piceli.infra.multicluster.register_cluster(...)` does the same from Python
+  (with the local profile).
+- **Per-cluster status, history and UI.** `gitops status` adds
+  `envs.<env>.clusters.<cluster>{state, health, checks, revision, reason,
+  last_contact, …}`, `clusters` and `removals` (JSON additive); the
+  deployment history lists every cluster's runs with their `cluster`; the
+  web UI's environment page and inventory show each cluster.
+- **Removing a cluster** (or a placement) deletes there only the app's
+  objects in its namespace; claims and Secrets are kept with their delete
+  command; the namespace goes only when Piceli created it and nothing is
+  kept.
+- **Replicas per environment.** `Environment(..., replicas={"web": 3})` and
+  `Environment.per_branch(..., replicas={"db": 1})` set Deployment and
+  StatefulSet replica counts per environment (an autoscaled workload is
+  refused). Compositions that declare neither keep their config and hashes.
+- New error codes: `cluster-unreachable`, `cluster-credentials-missing`,
+  `cluster-credentials-unsupported`, `cluster-credentials-refused`,
+  `cluster-registry-copy-failed`, `rollout-stopped`, `rollout-waiting`.
+
 ## Version 0.14.7
 
 - **Stop a named environment.** `Environment(..., stopped=True)` in a

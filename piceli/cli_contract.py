@@ -1411,6 +1411,24 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "Secret without a plan; prints its name and key names, never a "
             "value. Needs piceli cluster init first (cluster-not-initialized).",
         ),
+        "secrets cluster": _C(
+            "Store another cluster's credentials for the GitOps controller "
+            "(Secret piceli-cluster-<name>: kubeconfig) on the home cluster.",
+            reads=(
+                "--kubeconfig FILE --context NAME, or stdin (--prompt: a token)",
+                "MODULE:ATTR (piceli.infra.Cluster)",
+                "credential profiles",
+            ),
+            cluster="writes",
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="One context, certificates and token inlined, no exec plugin "
+            "(cluster-credentials-unsupported); the kubeconfig's server must be "
+            "Cluster(api=) (cluster-api-mismatch); --server sets the address the "
+            "controller uses. Writes the Secret on the cluster with "
+            "Controller(...) (or --home) without a plan; prints names only, "
+            "never a value. A token argument is refused (secrets-token-refused).",
+        ),
         "gitops status": _C(
             "Show the GitOps controller's health, repository, last poll and "
             "each branch's commit, state and pending approval.",

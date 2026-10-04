@@ -40,6 +40,7 @@ from piceli.envs.model import (
     Stack,
     Tag,
 )
+from piceli.envs.placement import Placement, Rollout
 
 if TYPE_CHECKING:
     from piceli.envs.ops import (
@@ -62,7 +63,9 @@ __all__ = [
     "EnvError",
     "EnvStatus",
     "Environment",
+    "Placement",
     "Promote",
+    "Rollout",
     "Stack",
     "Tag",
     "env_down",

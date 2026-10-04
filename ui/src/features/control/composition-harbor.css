@@ -39,6 +39,10 @@
 .composition-inventory-state>div{display:flex;flex-wrap:wrap;gap:4px}
 .composition-inventory-revision .revision-chips{justify-content:flex-start}
 .composition-inventory-components>p+p{margin-top:4px}
+.composition-inventory-clusters{grid-column:1/-1}
+.cluster-states{list-style:none;margin:4px 0 0;padding:0;display:flex;flex-direction:column;gap:6px}
+.cluster-states li{overflow-wrap:anywhere}
+.cluster-states p{margin:2px 0 0}
 .composition-inventory-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;max-width:250px}
 .composition-inventory-actions .button,.composition-inventory-actions button{font-size:12px;padding:8px 11px;white-space:nowrap}
 .composition-inventory-actions .sync-action{justify-content:flex-end}

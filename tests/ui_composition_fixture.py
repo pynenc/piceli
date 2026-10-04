@@ -157,6 +157,29 @@ def controller_status() -> dict[str, Any]:
                 "health": "healthy",
             }
         },
+        # 0.15: an environment on two clusters, one of them unreachable.
+        "clusters": {
+            "edge-canary": {
+                "state": "deployed",
+                "health": "healthy",
+                "revision": {"product": PRODUCT, "assets": ASSETS},
+                "namespace": "shop-edge",
+                "api": "https://100.64.0.10:6443",
+                "home": False,
+                "last_contact": "2026-10-01T09:27:00Z",
+                "checks": {"state": "passed", "passed": 2, "total": 2, "results": []},
+            },
+            "edge-b": {
+                "state": "unreachable",
+                "health": "healthy",
+                "reason": "cluster-unreachable",
+                "revision": {"product": PRODUCT, "assets": ASSETS},
+                "namespace": "shop-edge",
+                "api": "https://100.64.0.11:6443",
+                "home": False,
+                "last_contact": "2026-10-01T08:00:00Z",
+            },
+        },
     }
     return status
 

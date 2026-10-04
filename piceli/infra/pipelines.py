@@ -512,12 +512,16 @@ def mirror_list(composition: Composition, pipeline: Any) -> tuple[str, ...]:
     return tuple(dict.fromkeys(found))
 
 
-def delivery(composition: Composition, pipeline: Any) -> Any:
-    """The in-cluster registry as the pipeline's delivery (its repository, every mirror)."""
-    registry = composition.registry
+def delivery(composition: Composition, pipeline: Any, registry: Any = None) -> Any:
+    """The in-cluster registry as the pipeline's delivery (its repository, every mirror).
+
+    ``registry``: another cluster's registry (0.15), else the composition's.
+    """
+    registry = registry or composition.registry
     return dataclasses.replace(
         registry,
         repository=registry.repository or composition.name,
+        # The home registry's mirrors: they are the copies the controller has.
         mirror=mirror_list(composition, pipeline),
     )
 
@@ -533,6 +537,7 @@ def env_config_of(composition: Composition, env: EnvItem) -> Any:
         namespace=env.namespace,
         stack=env.stack,
         on_nodes=env.on_nodes,
+        replicas=env.replicas,
         quota=env.quota,
         auto_approve=env.auto_approve,
     )
@@ -555,8 +560,14 @@ def environment_pipeline(
     context: str,
     state_dir: Path,
     transport: str = "https",
+    home: bool = True,
 ) -> Any:
     """The pipeline that deploys ``env``: the declared one, in the controller's hands.
+
+    ``home=False`` (0.15): ``env`` runs on another cluster than the
+    controller's; the declared cluster UID and node aliases (the home
+    cluster's) are not pinned there, and the delivery is that cluster's
+    registry.
 
     The app, checks, rollback, restore points and approval policy are the
     pipeline's; the target is the controller's kubeconfig and the
@@ -584,25 +595,31 @@ def environment_pipeline(
         kubeconfig,
         context=context,
         namespace=namespace,
-        cluster_uid=declared.cluster_uid,
-        nodes=declared.nodes,
+        cluster_uid=declared.cluster_uid if home else None,
+        nodes=declared.nodes if home else None,
         transport=transport,
         request_seconds=declared.request_seconds,
     )
     derived.state_dir = state_dir / env.name
-    derived.deliver = delivery(composition, pipeline)
+    derived.deliver = delivery(
+        composition,
+        pipeline,
+        None if home else getattr(env.cluster, "registry", None),
+    )
     derived.envs = env_config_of(composition, env)
     if derived.auto_approve is None and env.auto_approve:
         derived.auto_approve = ApprovalPolicy()
     return derived
 
 
-def mirror_target(composition: Composition, pipeline: Any, reference: str) -> str:
+def mirror_target(
+    composition: Composition, pipeline: Any, reference: str, registry: Any = None
+) -> str:
     """The in-cluster repository a third-party image is copied to."""
     from piceli.pipeline.compose import mirror_repository
 
     holder = copy.copy(pipeline)
-    holder.deliver = delivery(composition, pipeline)
+    holder.deliver = delivery(composition, pipeline, registry)
     return mirror_repository(holder, reference)
 
 

@@ -240,6 +240,38 @@ def _approval(value: Any) -> dict[str, Any] | None:
     }
 
 
+def _cluster(name: str, value: Mapping[str, Any]) -> dict[str, Any]:
+    """One cluster of an environment on several (0.15), no credential, no path."""
+    namespace = value.get("namespace")
+    return {
+        "name": name,
+        "state": _text(value.get("state")) or "unknown",
+        "health": _text(value.get("health")) or "unknown",
+        "reason": _text(value.get("reason")),
+        "revision": _revision(value.get("revision")),
+        "checks": _checks(value.get("checks")),
+        "last_contact": _text(value.get("last_contact")),
+        "last_sync": _text(value.get("last_sync")),
+        "namespace": namespace
+        if isinstance(namespace, str) and _DNS.fullmatch(namespace)
+        else None,
+        "api": _url(value.get("api")),
+        "home": value.get("home") is True,
+        "held_by": _text(value.get("held_by")),
+    }
+
+
+def _clusters(value: Any) -> list[dict[str, Any]] | None:
+    """``None`` for an environment on one cluster (the 0.14 payload)."""
+    if not isinstance(value, Mapping):
+        return None
+    return [
+        _cluster(key, item)
+        for key, item in value.items()
+        if isinstance(key, str) and _DNS.fullmatch(key) and isinstance(item, Mapping)
+    ]
+
+
 def _environment(name: str, value: Mapping[str, Any]) -> dict[str, Any]:
     components = value.get("components")
     namespace = value.get("namespace")
@@ -278,6 +310,12 @@ def _environment(name: str, value: Mapping[str, Any]) -> dict[str, Any]:
         ]
         if isinstance(components, Mapping)
         else [],
+        # Added in 0.15: each cluster of an environment on several (else absent).
+        **(
+            {"clusters": clusters}
+            if (clusters := _clusters(value.get("clusters"))) is not None
+            else {}
+        ),
     }
 
 
