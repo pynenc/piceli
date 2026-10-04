@@ -549,3 +549,28 @@ def test_removing_a_cluster_tears_down_only_there(multi: dict[str, Any]) -> None
 
 
 GOLDEN_SINGLE = "20e5b5cfaec65f83bd121279506ad8f425f35cb18f5cbf0263d14c15b55d913f"
+
+
+def test_the_status_names_the_cluster_at_work(multi: dict[str, Any]) -> None:
+    """0.15.0: ``in_progress`` per cluster and on the environment, while it runs."""
+    import json
+
+    controller, ports = multi["controller"], multi["ports"]
+    seen: list[dict[str, Any]] = []
+    canary = ports.cluster("edge-canary")
+    real = canary.env_up
+
+    def watching(pipeline: Any, name: str, **kwargs: Any) -> Any:
+        status = json.loads((controller.state_dir / "status.json").read_text())
+        seen.append(status["envs"].get("edge") or {})
+        return real(pipeline, name, **kwargs)
+
+    canary.env_up = watching  # type: ignore[method-assign]
+    status = controller.poll_once()
+    busy = [env for env in seen if env.get("in_progress")]
+    assert busy, "no status was published while the canary deployed"
+    assert busy[0]["in_progress"]["cluster"] == "edge-canary"
+    assert busy[0]["in_progress"]["action"] == "deploy"
+    assert busy[0]["clusters"]["edge-canary"]["in_progress"]["action"] == "deploy"
+    assert "in_progress" not in status["envs"]["edge"]
+    assert all("in_progress" not in view for view in _clusters(status).values())

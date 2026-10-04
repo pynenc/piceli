@@ -2960,6 +2960,14 @@ class CompositionController:
                 else chosen.get("health"),
                 clusters=views,
             )
+            entry.pop("in_progress", None)  # the cluster at work, not the first
+            busy = [
+                {**view["in_progress"], "cluster": name}
+                for name, view in views.items()
+                if view.get("in_progress")
+            ]
+            if busy:
+                entry["in_progress"] = busy[0]
             if chosen.get("state") == "approval-required" and chosen.get(
                 "pending_plan"
             ):
@@ -2992,6 +3000,11 @@ class CompositionController:
             "components": record.get("components") or {},
             **({"held_by": record["held_by"]} if record.get("held_by") else {}),
             **({"wave": self._wave(record)} if record.get("group") else {}),
+            **(
+                {"in_progress": record["in_progress"]}
+                if record.get("in_progress")
+                else {}
+            ),
         }
 
     def _clusters_status(self) -> dict[str, Any]:
