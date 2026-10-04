@@ -62,6 +62,7 @@ Every feature page starts with its maturity, and this table lists them all:
 | Deploy from CI with an approval step (GitHub Actions recipe) | {doc}`ci` | preview |
 | Manifest export (`piceli publish`, `piceli render --out`) | {doc}`gitops` | preview |
 | GitOps controller and per-branch environments (`piceli gitops`, `piceli env`, `piceli envs`, `piceli promote`) | {doc}`gitops`, {doc}`environments` | experimental |
+| The controller's OpenTelemetry: traces, events and metrics (`Controller(telemetry=Otlp(...))`) | {doc}`opentelemetry` | experimental |
 | Shared deployment state, release lock, plan files, `piceli state` | {doc}`state` | preview |
 | Runner hygiene: temporary-file cleanup, `piceli cache status/prune`, `cache_budget=`, `piceli doctor`, run summaries and `piceli runs` | {doc}`maintenance` | preview |
 | Releases from a spec (`piceli release`) | {doc}`release_cli` | preview |

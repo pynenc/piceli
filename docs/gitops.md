@@ -341,6 +341,17 @@ rollback on every poll).
 `Pipeline(prune=False)` turns pruning off; `piceli deploy` (outside an
 environment) prunes only with `Pipeline(prune=True)`.
 
+### Traces, events and metrics (OpenTelemetry)
+
+From 0.16 the controller sends OpenTelemetry when the composition's
+`Controller(telemetry=Otlp("https://collector:4317", headers_secret=...))`
+says where (or the standard `OTEL_EXPORTER_OTLP_*` variables): one trace per
+deploy with a span per stage (builds, plan, approval wait, restore point,
+pre-rollout, apply, checks, rollback), events for approvals, rollouts,
+failed checks, rollbacks, failed builds, stops and starts, and CI/CD
+metrics with a heartbeat that ticks during long builds. It never blocks or
+fails a deploy. See {doc}`opentelemetry` for every name.
+
 ### Status and requests (for tools)
 
 The controller publishes its status in the ConfigMap `piceli-gitops-status`
