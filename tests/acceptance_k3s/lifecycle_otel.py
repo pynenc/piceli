@@ -69,6 +69,9 @@ FAILING_CHECK = """EXTRA_CHECKS: list = [
     ),
 ]"""
 REPORTER_COMMAND = '"while true; do sleep 3600; done"'
+#: A manifest change for the failed-check run: watcher gains an env variable.
+WATCHER_MARK = "    service_account=watcher_account,\n"
+WATCHER_CHANGE = '    env={"OTEL_ACCEPTANCE": "rolled-back"},\n'
 EVENT_ID = re.compile(r"lifecycle:[a-z0-9-]+/\d{8}T\d{9}Z:[a-z0-9:-]+")
 
 
@@ -446,13 +449,20 @@ class OtelStages:
 
         # --- a failed check with rollback (a manifest change and a failing check)
         app = self.repos.read("infra", "lifecycle_app.py")  # type: ignore[attr-defined]
+        # Earlier stages fill EXTRA_CHECKS (stage 11) and remove reporter
+        # (stage 21): add the failing check to whatever list is there, and
+        # change watcher (no stage touches it) so the push rolls something.
         check(
-            "EXTRA_CHECKS: list = []" in app and REPORTER_COMMAND in app,
+            "EXTRA_CHECKS: list = [" in app and WATCHER_MARK in app,
             "lifecycle_app.py markers",
         )
-        broken = app.replace("EXTRA_CHECKS: list = []", FAILING_CHECK, 1).replace(
-            REPORTER_COMMAND, '"while true; do sleep 3599; done"', 1
-        )
+        if "EXTRA_CHECKS: list = []" in app:
+            broken = app.replace("EXTRA_CHECKS: list = []", FAILING_CHECK, 1)
+        else:
+            broken = app.replace(
+                "EXTRA_CHECKS: list = [\n", FAILING_CHECK.removesuffix("]"), 1
+            )
+        broken = broken.replace(WATCHER_MARK, WATCHER_MARK + WATCHER_CHANGE, 1)
         bad = self.repos.commit(
             "infra", "a check that fails", {"lifecycle_app.py": broken}
         )  # type: ignore[attr-defined]
