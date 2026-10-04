@@ -8531,6 +8531,7 @@
   "piceli.gitops.history",
   "piceli.gitops.install",
   "piceli.gitops.liveness",
+  "piceli.gitops.otel",
   "piceli.gitops.ports",
   "piceli.gitops.recovery",
   "piceli.gitops.repo",

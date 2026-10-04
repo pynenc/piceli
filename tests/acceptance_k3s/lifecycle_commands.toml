@@ -40,6 +40,7 @@ infra_hash = "<plan hash>"
 install_digest = "<install digest>"
 register_digest = "<register digest>"
 destroy_hash = "<destroy plan hash>"
+otlp_header_file = "~/otlp-authorization.txt"
 
 [groups]
 # Once per machine and cluster; re-running it is idempotent.
@@ -129,6 +130,17 @@ infra = [
 ]
 # Destroy what Piceli created (never anything else), with its own approval.
 infra-destroy = ["infra-destroy-plan", "infra-destroy-approve", "infra-status"]
+# The controller's OpenTelemetry (from 0.16): put the collector's auth header
+# in a Secret (the file holds e.g. `Bearer <token>`; never on the command
+# line), declare `Controller(telemetry=Otlp("https://collector:4317",
+# headers_secret="otlp-auth"))` in infra.py, push, then `gitops enable`.
+telemetry = ["otel-headers-secret", "gitops-enable-plan", "gitops-enable-approve"]
+
+[steps.otel-headers-secret]
+# The Secret's key is the header name; its value is never printed.
+run = """{kubectl} --kubeconfig {kubeconfig} --context {context} -n piceli-system \
+  create secret generic otlp-auth --from-file=authorization={otlp_header_file}"""
+exit = [0]
 
 [steps.login]
 run = "{piceli} login lifecycle --kubeconfig {kubeconfig} --context {context}"

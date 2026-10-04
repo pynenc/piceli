@@ -178,6 +178,9 @@ class CompositionConfig:
         "branch", "entry"}``, :class:`~piceli.infra.pipelines.RepoSettings`):
         the controller follows it and imports the module at its commit;
         ``composition`` is then the summary recorded at ``gitops enable``.
+    :param telemetry: ``Otlp(...).to_dict()`` of ``Controller(telemetry=)``
+        (0.16): where the controller sends OpenTelemetry
+        (:mod:`piceli.gitops.otel`).
     """
 
     composition: Mapping[str, Any]
@@ -191,8 +194,16 @@ class CompositionConfig:
     builder_selector: tuple[tuple[str, str], ...] = ()
     build_storage: str = "20Gi"
     repo: Mapping[str, Any] | None = None
+    telemetry: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
+        if self.telemetry is not None:
+            from piceli.infra import Otlp
+
+            try:
+                Otlp.from_dict(self.telemetry)
+            except ValueError as error:
+                raise GitOpsError("gitops-config-invalid", str(error)) from None
         if self.repo is None:
             Composition.from_dict(self.composition)  # validates it
         else:
@@ -285,6 +296,12 @@ class CompositionConfig:
             # Only for a composition followed in its repository: other
             # configs (and their install plan hashes) are unchanged.
             **({"repo": dict(self.repo)} if self.repo is not None else {}),
+            # 0.16, only when set: other configs and their hashes are unchanged.
+            **(
+                {"telemetry": dict(self.telemetry)}
+                if self.telemetry is not None
+                else {}
+            ),
         }
 
     @classmethod
@@ -307,6 +324,7 @@ class CompositionConfig:
                 builder_selector=tuple(sorted((build.get("selector") or {}).items())),
                 build_storage=build.get("storage") or "20Gi",
                 repo=value.get("repo"),
+                telemetry=value.get("telemetry"),
             )
         except (KeyError, TypeError, ValueError) as error:
             if isinstance(error, GitOpsError):
@@ -700,6 +718,7 @@ class CompositionController:
         channel: Channel,
         clock: Callable[[], float] = time.time,
         log: Callable[[str], None] = lambda _: None,
+        telemetry: Any = None,
     ) -> None:
         self.config = config
         self.repo: Any = None
@@ -749,6 +768,11 @@ class CompositionController:
         self.heartbeat_at: str | None = None
         self._builds: dict[str, dict[str, Any]] = {}
         self.recovered = False  # interrupted steps and runs marked once, at start
+        # 0.16: OpenTelemetry (piceli.gitops.otel); a no-op unless configured.
+        from piceli.gitops.otel import ControllerTelemetry
+
+        self.telemetry = telemetry or ControllerTelemetry.disabled(state_dir)
+        self.telemetry.attach(self)  # closes runs a crash interrupted
 
     # ------------------------------------------------------------ helpers
     @property
@@ -1408,6 +1432,7 @@ class CompositionController:
             },
         )
         record.pop("approval_required_since", None)
+        self.telemetry.approved(record, body.get("via"))
 
     def _stop_request(self, body: Mapping[str, Any], *, start: bool) -> None:
         """``piceli env stop|start ENV``: remember (or forget) the owner's stop."""
@@ -1531,6 +1556,7 @@ class CompositionController:
     def _remember(self, component: str, digest: str, image: BuiltImage) -> None:
         write_json(self._cache_path(component, digest), image.to_dict())
         self._built.append(component)  # built (or mirrored) in this step
+        self.telemetry.built(component, image.manifest_digest)
 
     def _contracts(
         self, instance: _Instance, revision: Mapping[str, str]
@@ -1623,6 +1649,10 @@ class CompositionController:
         record["components"] = components
         if to_build or to_mirror:
             self._publish()  # show "building" while it runs
+            self.telemetry.build_started(
+                [item.component for item in to_mirror]
+                + [item.component for item in to_build]
+            )
         try:
             if to_mirror:
                 mirrored = self._timed(
@@ -1775,6 +1805,9 @@ class CompositionController:
         record["components"] = components
         if requests or to_mirror:
             self._publish()  # show "building" while it runs
+            self.telemetry.build_started(
+                [name for request in requests for name in request.images]
+            )
         try:
             if to_mirror:
                 for ref, image in self.ports.builder.mirror(to_mirror).items():
@@ -2473,6 +2506,7 @@ class CompositionController:
             "since": started[0],
         }
         self._publish()
+        self.telemetry.step_started(record, work.__name__.lstrip("_"))
         try:
             work(record)
         except Exception as error:  # one bad environment never stops the loop
@@ -2488,6 +2522,9 @@ class CompositionController:
             record.pop("in_progress", None)
             if deploy:
                 self._record_step(record, *started)
+            self.telemetry.step_finished(
+                record, work.__name__.lstrip("_"), self._last_outcome
+            )
             save_state(self.state_dir, self.state)
             self._publish()
 

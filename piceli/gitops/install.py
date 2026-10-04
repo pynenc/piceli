@@ -465,6 +465,21 @@ def _render_workload(
             {"name": "git-credentials", "mountPath": CREDENTIALS_DIR, "readOnly": True}
         )
         args += ["--credentials-dir", CREDENTIALS_DIR]
+    # 0.16 Controller(telemetry=Otlp(...)): the headers and CA Secrets are
+    # mounted as files (piceli.gitops.otel reads them); never their values.
+    from piceli.gitops.otel import CA_DIR, HEADERS_DIR
+
+    telemetry = getattr(config, "telemetry", None) or {}
+    for key, volume, path in (
+        ("headers_secret", "otlp-headers", HEADERS_DIR),
+        ("ca_secret", "otlp-ca", CA_DIR),
+    ):
+        secret = telemetry.get(key)
+        if secret:
+            volumes.append(
+                {"name": volume, "secret": {"secretName": secret, "defaultMode": 0o440}}
+            )
+            mounts.append({"name": volume, "mountPath": path, "readOnly": True})
     selector = {"app.kubernetes.io/name": NAME}
     config_json = json.dumps(config.to_dict(), sort_keys=True, indent=2)
     config_hash = "sha256:" + hashlib.sha256(config_json.encode()).hexdigest()

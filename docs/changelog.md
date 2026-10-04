@@ -43,6 +43,33 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 - **Compatibility promise:** `piceli.gitops-status.v1` and
   `piceli.gitops-history.v1` change only additively within v1 (documented in
   {doc}`gitops`); a test fails when a field disappears.
+- **The controller's OpenTelemetry.** `Controller(telemetry=Otlp(endpoint,
+  protocol="grpc"|"http/protobuf", headers_secret=, ca_secret=,
+  insecure=))` makes the GitOps controller send, with the OpenTelemetry SDK
+  (the `telemetry` extra, now in the controller image), one trace per
+  environment deploy (`SYNC <composition>/<env>`, CI/CD semantic
+  conventions v1.43.0) with a span per stage: each image's build, plan,
+  approval wait, restore point, pre-rollout, apply with prune, checks with
+  one span per check, rollback; times from the run journal and the
+  controller's own hooks. Events (log records with an event name and a
+  stable `piceli.event.id`) for approvals, rollouts, failed checks,
+  rollbacks, prunes, failed builds (the last 20 redacted log lines), stops,
+  starts and the controller's start; CI/CD metrics (`cicd.pipeline.run.*`,
+  `cicd.worker.count`) and Piceli's (build durations, check results,
+  approval and queue waits, time since the last successful deploy, a
+  heartbeat from a background thread that keeps ticking during long
+  builds). A run the controller was in when it died is closed as
+  `interrupted` in the same trace at its next start. Telemetry never blocks
+  or fails a deploy (bounded queues, background export, bounded timeouts);
+  header and CA Secrets are mounted, never printed. Without the setting the
+  standard `OTEL_EXPORTER_OTLP_*` variables are honoured; the controller's
+  configuration (and its hash) is unchanged when it is not set. See
+  {doc}`opentelemetry`.
+- **k3s lifecycle stage 31**: a pinned OpenTelemetry Collector in the
+  cluster checks the traces, events and metrics of a deploy, a rolled-back
+  check failure, an approval, a stop and start, a broken build and a
+  controller killed mid-build, and that deploys go on with the Collector
+  down.
 
 ## Version 0.15.1
 

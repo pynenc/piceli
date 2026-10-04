@@ -45,6 +45,7 @@ __all__ = [
     "Infrastructure",
     "LocalState",
     "Node",
+    "Otlp",
     "PrimaryIp",
     "Rule",
     "Server",
@@ -77,6 +78,71 @@ class Node:
 
 
 @dataclass(frozen=True)
+class Otlp:
+    """Where the GitOps controller sends its OpenTelemetry (traces, events, metrics).
+
+    :param endpoint: The OTLP endpoint (``https://collector:4317`` for gRPC,
+        ``https://collector:4318`` for HTTP; Piceli appends ``/v1/<signal>``
+        to an HTTP endpoint). Plain ``http://`` needs ``insecure=True``
+        (loopback excepted).
+    :param protocol: ``"grpc"`` or ``"http/protobuf"``.
+    :param headers_secret: A Secret in the controller's namespace whose keys
+        are header names and values header values (``authorization``); the
+        Deployment mounts it, nothing prints it.
+    :param ca_secret: A Secret with ``ca.crt``: the CA that signs the
+        endpoint's certificate.
+    :param insecure: Send without TLS (an ``http://`` endpoint).
+
+    See ``docs/opentelemetry.md`` for every span, event and metric.
+    """
+
+    endpoint: str
+    protocol: Literal["grpc", "http/protobuf"] = "grpc"
+    headers_secret: str | None = None
+    ca_secret: str | None = None
+    insecure: bool = False
+
+    def __post_init__(self) -> None:
+        from piceli.gitops.otel import OtlpConfigError, check_otlp
+        from piceli.infra.cluster import ClusterError
+
+        try:
+            check_otlp(
+                self.endpoint,
+                self.protocol,
+                self.headers_secret,
+                self.ca_secret,
+                self.insecure,
+            )
+        except OtlpConfigError as error:
+            raise ClusterError("cluster-invalid", str(error)) from None
+
+    def to_dict(self) -> dict[str, Any]:
+        """The setting as data (Secret names, never their values)."""
+        return {
+            "endpoint": self.endpoint,
+            "protocol": self.protocol,
+            "headers_secret": self.headers_secret,
+            "ca_secret": self.ca_secret,
+            "insecure": self.insecure,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> Otlp:
+        if not isinstance(value, Mapping):
+            from piceli.infra.cluster import ClusterError
+
+            raise ClusterError("cluster-invalid", "telemetry is Otlp(...)")
+        return cls(
+            endpoint=value.get("endpoint"),  # type: ignore[arg-type]
+            protocol=value.get("protocol", "grpc"),
+            headers_secret=value.get("headers_secret"),
+            ca_secret=value.get("ca_secret"),
+            insecure=value.get("insecure", False),
+        )
+
+
+@dataclass(frozen=True)
 class Controller:
     """Where the GitOps controller runs and how often it polls its sources.
 
@@ -84,6 +150,9 @@ class Controller:
     bound to the environment's claims (a ``Retain`` storage class keeps them
     otherwise); it grants the controller delete on PersistentVolumes
     cluster-wide, so it is off by default and teardown reports them instead.
+
+    ``telemetry=Otlp(...)`` makes the controller send OpenTelemetry traces,
+    events and metrics of every deploy (off when not set).
     """
 
     on: str
@@ -91,6 +160,7 @@ class Controller:
     sync: Literal["on change"] = "on change"
     image: str | None = None
     delete_volumes: bool = False
+    telemetry: Otlp | None = None
 
     def __post_init__(self) -> None:
         from piceli.infra.cluster import check_controller
