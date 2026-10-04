@@ -15,28 +15,43 @@ from piceli.envs import Environment, Placement, Rollout
 from piceli.infra import Cluster, Controller, Node
 
 home = Cluster(
-    "home", api="https://10.0.0.1:6443", credentials="home",
+    "home",
+    api="https://10.0.0.1:6443",
+    credentials="home",
     nodes=[Node("server", arch="amd64", roles=["builder", "controller", "registry"])],
     registry=Registry.in_cluster(on="server"),
-    controller=Controller(on="server"),              # this one runs the controller
+    controller=Controller(on="server"),  # this one runs the controller
 )
 edge_canary = Cluster(
-    "edge-canary", api="https://100.64.0.10:6443", credentials="edge-canary",
+    "edge-canary",
+    api="https://100.64.0.10:6443",
+    credentials="edge-canary",
     nodes=[Node("edge-1", arch="amd64", roles=["workloads", "registry"])],
-    registry=Registry.in_cluster(on="edge-1"),       # its own registry
+    registry=Registry.in_cluster(on="edge-1"),  # its own registry
 )
 edge_b = Cluster(
-    "edge-b", api="https://100.64.0.11:6443", credentials="edge-b",
+    "edge-b",
+    api="https://100.64.0.11:6443",
+    credentials="edge-b",
     nodes=[Node("edge-2", arch="amd64", roles=["workloads", "registry"])],
     registry=Registry.in_cluster(on="edge-2"),
 )
 
 environments = [
-    Environment("main", namespace="shop-main", pipeline=pipeline, cluster=home,
-                follow={infra: "main", web: "main"}, auto_approve=True),
     Environment(
-        "edge", namespace="shop-edge", pipeline=pipeline,
-        follow={infra: "main", web: "main"}, auto_approve=True,
+        "main",
+        namespace="shop-main",
+        pipeline=pipeline,
+        cluster=home,
+        follow={infra: "main", web: "main"},
+        auto_approve=True,
+    ),
+    Environment(
+        "edge",
+        namespace="shop-edge",
+        pipeline=pipeline,
+        follow={infra: "main", web: "main"},
+        auto_approve=True,
         clusters=[
             Placement(edge_canary, on_nodes=["edge-1"]),
             Placement(edge_b, namespace="shop", replicas={"web": 2}),

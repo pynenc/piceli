@@ -1687,6 +1687,7 @@
     "allows",
     "auto_approve",
     "branch_nodes",
+    "branch_replicas",
     "branch_stack",
     "branches",
     "claim_sizes",
@@ -1710,6 +1711,7 @@
     "allow_egress",
     "auto_approve",
     "branch_nodes",
+    "branch_replicas",
     "branch_stack",
     "branches",
     "claim_sizes",
@@ -1910,9 +1912,11 @@
     "job_result",
     "managers",
     "proxy",
+    "proxy_upstream",
     "put",
     "route",
-    "scale"
+    "scale",
+    "upstream_for"
    ],
    "init": [
     "namespace",
@@ -1959,6 +1963,11 @@
      "status",
      "target"
     ],
+    "proxy_upstream": [
+     "base_url",
+     "port",
+     "target"
+    ],
     "put": [
      "managers",
      "owned",
@@ -1973,6 +1982,9 @@
      "manager",
      "name",
      "replicas"
+    ],
+    "upstream_for": [
+     "path"
     ]
    }
   },
@@ -6432,8 +6444,24 @@
     "arguments": [],
     "flags": [],
     "subcommands": [
+     "cluster",
      "git"
     ]
+   },
+   "secrets cluster": {
+    "arguments": [],
+    "flags": [
+     "--allow-exec",
+     "--cluster",
+     "--context",
+     "--exec-sha256",
+     "--home",
+     "--kubeconfig",
+     "--prompt",
+     "--server",
+     "--transport"
+    ],
+    "subcommands": []
    },
    "secrets git": {
     "arguments": [],
@@ -6763,6 +6791,9 @@
    "cluster-api-mismatch",
    "cluster-build-failed",
    "cluster-build-invalid",
+   "cluster-credentials-missing",
+   "cluster-credentials-refused",
+   "cluster-credentials-unsupported",
    "cluster-identity-changed",
    "cluster-identity-unreadable",
    "cluster-invalid",
@@ -6773,11 +6804,13 @@
    "cluster-not-initialized",
    "cluster-plan-changed",
    "cluster-registry-cluster-failed",
+   "cluster-registry-copy-failed",
    "cluster-registry-invalid",
    "cluster-registry-not-installed",
    "cluster-registry-not-ready",
    "cluster-registry-plan-changed",
    "cluster-registry-target-required",
+   "cluster-unreachable",
    "codegen-cluster-read-failed",
    "codegen-flags-conflict",
    "codegen-output-refused",
@@ -7158,6 +7191,8 @@
    "retention-invalid",
    "retention-live-unknown",
    "retention-not-approved",
+   "rollout-stopped",
+   "rollout-waiting",
    "rotate-not-valid-for-rollback",
    "runner-disk-low",
    "runner-memory-low",
@@ -8239,6 +8274,7 @@
   "piceli.envs.isolation",
   "piceli.envs.model",
   "piceli.envs.ops",
+  "piceli.envs.placement",
   "piceli.errors",
   "piceli.gcp",
   "piceli.gcp.credentials",
@@ -8263,6 +8299,7 @@
   "piceli.infra.composition",
   "piceli.infra.contract",
   "piceli.infra.controller",
+  "piceli.infra.multicluster",
   "piceli.infra.pipelines",
   "piceli.infra.render",
   "piceli.infra.sources",
