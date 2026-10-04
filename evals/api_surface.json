@@ -65,6 +65,7 @@
     "added_components",
     "autoscaler",
     "claim_growth",
+    "cluster_identity",
     "composition",
     "config",
     "cron_job",
@@ -96,6 +97,7 @@
     "resource",
     "restore_verifies",
     "restore_verify",
+    "safety_exception",
     "secret",
     "selected_environment",
     "service",
@@ -124,6 +126,13 @@
      "workload"
     ],
     "claim_growth": [],
+    "cluster_identity": [
+     "command",
+     "directory",
+     "image",
+     "name",
+     "resources"
+    ],
     "composition": [
      "ctx"
     ],
@@ -359,6 +368,11 @@
      "verify",
      "workload"
     ],
+    "safety_exception": [
+     "item",
+     "reason",
+     "rule"
+    ],
     "secret": [
      "component",
      "data",
@@ -421,6 +435,7 @@
    "pydantic": true,
    "returns": {
     "autoscaler": "Autoscaler",
+    "cluster_identity": "ClusterIdentity",
     "composition": "DeploymentComposition",
     "config": "Config",
     "cron_job": "CronJob",
@@ -924,6 +939,35 @@
     ]
    },
    "pydantic": true
+  },
+  "ClusterIdentity": {
+   "attr_types": {
+    "egress": "NetworkRule",
+    "init": "Container",
+    "service_account": "ServiceAccount",
+    "volumes": "MemoryVolume"
+   },
+   "attrs": [
+    "egress",
+    "file",
+    "init",
+    "rule",
+    "service_account",
+    "volumes"
+   ],
+   "init": [
+    "egress",
+    "file",
+    "init",
+    "service_account",
+    "volumes"
+   ],
+   "methods": {
+    "rule": []
+   },
+   "returns": {
+    "rule": "Rule"
+   }
   },
   "ClusterRegistry": {
    "attrs": [
@@ -4973,6 +5017,7 @@
      "access",
      "artifacts",
      "build",
+     "bundle",
      "cache",
      "chart",
      "cluster",
@@ -5004,6 +5049,7 @@
      "secrets",
      "state",
      "status",
+     "support-bundle",
      "ui",
      "watch"
     ]
@@ -5282,6 +5328,23 @@
      "--sources",
      "--spec",
      "--timeout"
+    ],
+    "subcommands": []
+   },
+   "bundle": {
+    "arguments": [
+     "target"
+    ],
+    "flags": [
+     "--all-platforms",
+     "--env",
+     "--name",
+     "--out",
+     "--output-dir",
+     "--platform",
+     "--receipt",
+     "--storage-class",
+     "--version"
     ],
     "subcommands": []
    },
@@ -6503,6 +6566,20 @@
     ],
     "subcommands": []
    },
+   "support-bundle": {
+    "arguments": [],
+    "flags": [
+     "--allow-exec",
+     "--context",
+     "--exec-sha256",
+     "--kubeconfig",
+     "--log-lines",
+     "--namespace",
+     "--out",
+     "--transport"
+    ],
+    "subcommands": []
+   },
    "ui": {
     "arguments": [],
     "flags": [],
@@ -6724,6 +6801,24 @@
    "build-platforms-invalid",
    "build-timed-out",
    "builder-not-approved",
+   "bundle-empty",
+   "bundle-image-archive-missing",
+   "bundle-image-mismatch",
+   "bundle-image-platform-missing",
+   "bundle-image-unpinned",
+   "bundle-image-unresolved",
+   "bundle-invalid",
+   "bundle-out-refused",
+   "bundle-receipt-invalid",
+   "bundle-secret-unsupported",
+   "bundle-secret-value",
+   "bundle-unsafe-network",
+   "bundle-unsafe-no-privilege",
+   "bundle-unsafe-node-port",
+   "bundle-unsafe-non-root",
+   "bundle-unsafe-rbac",
+   "bundle-unsafe-read-only-root",
+   "bundle-unsafe-resources",
    "cache-arguments-conflict",
    "cache-budget-invalid",
    "cache-over-budget",
@@ -7224,6 +7319,10 @@
    "stored-discovery-missing",
    "stored-evidence-mismatch",
    "stored-release-mismatch",
+   "support-bundle-namespace-missing",
+   "support-bundle-out-refused",
+   "support-bundle-unreachable",
+   "support-bundle-write-refused",
    "takeover-conflict",
    "target-mismatch",
    "target-refused",
@@ -7312,6 +7411,9 @@
    },
    "ClaimTemplate": {
     "class": "ClaimTemplate"
+   },
+   "ClusterIdentity": {
+    "class": "ClusterIdentity"
    },
    "Config": {
     "class": "Config"
@@ -7545,6 +7647,7 @@
    "approval_policy": {},
    "artifacts": {},
    "bounds": {},
+   "bundle": {},
    "checks": {},
    "cli_contract": {},
    "codegen": {},
@@ -7583,6 +7686,9 @@
    },
    "ClaimTemplate": {
     "class": "ClaimTemplate"
+   },
+   "ClusterIdentity": {
+    "class": "ClusterIdentity"
    },
    "Config": {
     "class": "Config"
@@ -8184,6 +8290,7 @@
   "piceli.app.access",
   "piceli.app.app",
   "piceli.app.environment",
+  "piceli.app.identity",
   "piceli.app.kinds",
   "piceli.app.model",
   "piceli.app.prerollout",
@@ -8225,6 +8332,14 @@
   "piceli.artifacts.signing",
   "piceli.artifacts.source_identity",
   "piceli.bounds",
+  "piceli.bundle",
+  "piceli.bundle.build",
+  "piceli.bundle.guides",
+  "piceli.bundle.images",
+  "piceli.bundle.prepare",
+  "piceli.bundle.rules",
+  "piceli.bundle.safety",
+  "piceli.bundle.support",
   "piceli.chart",
   "piceli.checks",
   "piceli.checks.context",
@@ -8273,6 +8388,7 @@
   "piceli.k8s.cli",
   "piceli.k8s.cli.access",
   "piceli.k8s.cli.build",
+  "piceli.k8s.cli.bundle",
   "piceli.k8s.cli.chart",
   "piceli.k8s.cli.cluster",
   "piceli.k8s.cli.cluster_access",

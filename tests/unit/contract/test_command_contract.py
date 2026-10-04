@@ -625,6 +625,24 @@ CASES: dict[str, tuple[Argv, str]] = {
         "gitops-request-invalid",
     ),
     "codegen crd": (lambda p: ["codegen", "crd", str(p / "junk")], "crd-invalid"),
+    "bundle": (
+        lambda p: ["bundle", f"{p}/missing.py:app", "--out", str(p / "bundle")],
+        "render-target-invalid",
+    ),
+    "support-bundle": (
+        lambda p: [
+            "support-bundle",
+            "--namespace",
+            "shop",
+            "--out",
+            str(p / "s.tar.gz"),
+            "--kubeconfig",
+            str(p / "missing-kubeconfig"),
+            "--context",
+            "ctx",
+        ],
+        "target-refused",
+    ),
 }
 
 
