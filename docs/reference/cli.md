@@ -69,6 +69,12 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli help-json`](#cli-help-json) | Print the whole CLI tree (commands, options, contracts) as JSON. | none | no |
 | [`piceli import live`](#cli-import-live) | Generate a typed module from the objects of a live namespace (read-only). | reads | no |
 | [`piceli import yaml`](#cli-import-yaml) | Generate a typed module from a directory of manifests (no cluster). | none | no |
+| [`piceli infra apply`](#cli-infra-apply) | Apply the plan whose hash is --approve (without it: plan, exit 3). | none | yes |
+| [`piceli infra destroy`](#cli-infra-destroy) | Destroy what Piceli created for it, with approval of the destroy plan's hash. | none | yes |
+| [`piceli infra install`](#cli-infra-install) | Run the server's install hook (its rendered command, approved by digest). | none | yes |
+| [`piceli infra plan`](#cli-infra-plan) | Plan the declared machines with OpenTofu; print the changes, estimate and plan hash. | none | no |
+| [`piceli infra register`](#cli-infra-register) | Wait for the server's k3s and register it as its Cluster (approved by digest). | reads | yes |
+| [`piceli infra status`](#cli-infra-status) | Servers, addresses, installs, cluster registrations and cost (read-only). | none | no |
 | [`piceli inputs record`](#cli-inputs-record) | Capture each declared source (or the ``--only`` ones) and write a lock. | none | no |
 | [`piceli inputs verify`](#cli-inputs-verify) | Recapture the sources and compare them with the lock (exit 1 on drift). | none | no |
 | [`piceli login`](#cli-login) | Store a credential profile outside the repository (mode 0600). | none | no |
@@ -113,6 +119,8 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli restore-points`](#cli-restore-points) | List a pipeline's restore points, newest first (read-only, offline). | none | no |
 | [`piceli runs`](#cli-runs) | List the deploy runs of a pipeline, newest first, with their state, release, duration and summary files. Read-only (with shared state it reads the local working copy: run `piceli state pull` first). | none | no |
 | [`piceli secrets git`](#cli-secrets-git) | Store the Git token the controller and cluster builds use (read from stdin, never printed). | writes | no |
+| [`piceli secrets provider`](#cli-secrets-provider) | Store a provider API token (read from stdin, never printed). | none | no |
+| [`piceli secrets state-key`](#cli-secrets-state-key) | Store the passphrase that encrypts an infrastructure's OpenTofu state. | none | no |
 | [`piceli state export`](#cli-state-export) | Write the release's state to one file (secret material excluded unless asked). | reads | no |
 | [`piceli state import`](#cli-state-import) | Replace the release's state with an export (needs --approve DIGEST). | writes | yes |
 | [`piceli state pull`](#cli-state-pull) | Refresh the local working copy from the shared state (reads the cluster). | reads | no |
@@ -1398,6 +1406,140 @@ Generate a typed module from a directory of manifests (no cluster).
 - **Output contract:** conforms
 - **Notes:** Never contacts a cluster. Secret values are never written; --out refuses to overwrite without --force.
 
+(cli-infra-apply)=
+### `piceli infra apply`
+
+Apply the plan whose hash is --approve (without it: plan, exit 3).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `REF` | text | required |  |
+| `--approve` | text |  | The plan hash (or digest) to execute |
+| `--tofu` | text |  | The tofu binary (default: $PICELI_TOFU, else tofu on PATH) |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.Infrastructure), tofu binary, credentials (provider token, state passphrase)
+- **Writes:** resources at the provider (servers, IPs, firewalls, DNS records), encrypted OpenTofu state, state directory records (inventory.json)
+- **Cluster:** none
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** Without --approve it plans (exit 3). A hash that is not the fresh plan's is refused (infra-plan-changed). A failed tofu apply exits 1 (infra-apply-failed); plan again to continue. One command at a time per state (infra-state-locked).
+
+(cli-infra-destroy)=
+### `piceli infra destroy`
+
+Destroy what Piceli created for it, with approval of the destroy plan's hash.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `REF` | text | required |  |
+| `--approve` | text |  | The plan hash (or digest) to execute |
+| `--tofu` | text |  | The tofu binary (default: $PICELI_TOFU, else tofu on PATH) |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.Infrastructure), tofu binary, credentials (provider token, state passphrase)
+- **Writes:** resources at the provider (deleted), encrypted OpenTofu state
+- **Cluster:** none
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** Without --approve prints the destroy plan and its hash (exit 3). Only resources in Piceli's ownership ledger that carry piceli.io/managed-by=piceli and piceli.io/infra=<name> may be deleted; anything else refuses the whole plan (infra-foreign-resource). DNS zones are never deleted (Piceli manages record sets only). Credential profiles of registered clusters are left in place.
+
+(cli-infra-install)=
+### `piceli infra install`
+
+Run the server's install hook (its rendered command, approved by digest).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `REF` | text | required |  |
+| `SERVER` | text | required |  |
+| `--approve` | text |  | The plan hash (or digest) to execute |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.Infrastructure), state directory records
+- **Writes:** the server (whatever the owner's command does), installs.json
+- **Cluster:** none
+- **Approval required:** yes
+- **Safe to retry:** no
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** Without --approve prints the rendered argv and its digest (exit 3). Runs it without a shell, in the current directory, with the caller's environment minus provider tokens and the state passphrase; its output goes to stderr. Piceli does not own the OS: the command is the owner's.
+
+(cli-infra-plan)=
+### `piceli infra plan`
+
+Plan the declared machines with OpenTofu; print the changes, estimate and plan hash.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `REF` | text | required |  |
+| `--tofu` | text |  | The tofu binary (default: $PICELI_TOFU, else tofu on PATH) |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.Infrastructure), tofu binary, credentials (provider token, state passphrase), provider API (plan refresh, prices)
+- **Writes:** state directory (configuration, lock file, providers)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** Never changes a resource. Exit 3 with the plan and approve_command (piceli infra apply ... --approve HASH); 0 and state unchanged when nothing changes. Refuses a plan that would change or delete a resource Piceli did not create (infra-foreign-resource). Tokens and the state passphrase reach tofu through its environment only; its output is redacted.
+
+(cli-infra-register)=
+### `piceli infra register`
+
+Wait for the server's k3s and register it as its Cluster (approved by digest).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `REF` | text | required |  |
+| `SERVER` | text | required |  |
+| `--kubeconfig` | path |  | The server's k3s kubeconfig, given by the owner (default: read over SSH) |
+| `--context` | text |  | Its context (when it has several) |
+| `--wait` | integer | `600` | Seconds to wait for k3s to answer with a Ready node |
+| `--approve` | text |  | The plan hash (or digest) to execute |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.Infrastructure), the server over SSH (host keys, k3s kubeconfig) or --kubeconfig, the cluster's API
+- **Writes:** $PICELI_CREDENTIALS_DIR/kubeconfigs/CLUSTER.yaml (mode 0600), credential profile Cluster(credentials=), known_hosts and registrations.json in the state directory
+- **Cluster:** reads
+- **Approval required:** yes
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** Without --approve prints the cluster, profile and the SSH host-key fingerprints with a digest (exit 3); approving pins those keys (StrictHostKeyChecking against them only). The kubeconfig's server is set to Cluster(api=); it is never printed or put in Git. Exit 1 (infra-k3s-not-ready) when k3s does not answer with a Ready node within --wait.
+
+(cli-infra-status)=
+### `piceli infra status`
+
+Servers, addresses, installs, cluster registrations and cost (read-only).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `REF` | text | required |  |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.Infrastructure), state directory records
+- **Writes:** nothing (read-only)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Read-only and offline: no tofu run, no credential, no network; it reads what the last apply, install and register recorded. --json prints piceli.infra.status.v1.
+
 (cli-inputs-record)=
 ### `piceli inputs record`
 
@@ -2519,6 +2661,50 @@ Store the Git token the controller and cluster builds use (read from stdin, neve
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** The token is read from stdin only (typed without echo, or piped); a token argument or PICELI_GIT_TOKEN is refused (secrets-token-refused) without echoing it. Creates or updates the Secret without a plan; prints its name and key names, never a value. Needs piceli cluster init first (cluster-not-initialized).
+
+(cli-secrets-provider)=
+### `piceli secrets provider`
+
+Store a provider API token (read from stdin, never printed).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `NAME` | text | required |  |
+| `--prompt` | boolean | `False` | Read the value from stdin (typed without echo, or piped) |
+
+**Contract**
+
+- **Reads:** stdin (--prompt)
+- **Writes:** $PICELI_CREDENTIALS_DIR/NAME.json (mode 0600)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** The token is read from stdin only (typed without echo, or piped); an argument or HCLOUD_TOKEN in the environment is refused (infra-credential-refused) without echoing it. Prints the name, never the value.
+
+(cli-secrets-state-key)=
+### `piceli secrets state-key`
+
+Store the passphrase that encrypts an infrastructure's OpenTofu state.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `NAME` | text | required |  |
+| `--prompt` | boolean | `False` | Read the value from stdin (typed without echo, or piped) |
+| `--generate` | boolean | `False` | Generate a random passphrase (never printed) |
+| `--replace` | boolean | `False` | Replace an existing key (the state it encrypts becomes unreadable) |
+
+**Contract**
+
+- **Reads:** stdin (--prompt)
+- **Writes:** $PICELI_CREDENTIALS_DIR/NAME.json (mode 0600)
+- **Cluster:** none
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Never printed; back the file up, the state cannot be read without it. Refuses to replace an existing key without --replace (infra-credential-exists).
 
 (cli-state-export)=
 ### `piceli state export`

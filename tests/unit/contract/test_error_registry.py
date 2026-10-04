@@ -53,6 +53,7 @@ FIRST_ARGUMENT = {
     "PublishError",
     "HeavyError",
     "ClusterError",
+    "InfraError",
     "RegistryRefError",
     "StorageReadError",
 }
