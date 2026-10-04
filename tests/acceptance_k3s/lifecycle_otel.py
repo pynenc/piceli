@@ -331,10 +331,24 @@ class OtelStages:
     def stage_31_otel(self) -> None:
         self.otel_token = secrets.token_urlsafe(24)  # throwaway, never printed
         problems: list[str] = []
+        # After the edge stages, `edge` steps before `main` (environments
+        # step by name) and would build main's images in its own run: stop it
+        # here, so main's runs are the ones that build, as in a short run.
+        edge = "edge" in (self.status().get("envs") or {})  # type: ignore[attr-defined]
+        if edge:
+            self.run_step("env-stop", stop_env="edge")  # type: ignore[attr-defined]
+            self.wait_env(  # type: ignore[attr-defined]
+                "edge",
+                lambda r: r.get("state") == "stopped",
+                timeout=300,
+                what="edge stopped",
+            )
         try:
             self._stage_31(problems)
         finally:
             self._ok("delete", "namespace", NAMESPACE, "--wait=false", check_exit=None)
+            if edge:
+                self.run_step("env-start", stop_env="edge")  # type: ignore[attr-defined]
         check(not problems, "; ".join(problems))
 
     def _stage_31(self, problems: list[str]) -> None:
