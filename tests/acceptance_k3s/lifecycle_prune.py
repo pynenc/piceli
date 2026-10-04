@@ -1,4 +1,4 @@
-"""Stages 20-21 of the k3s lifecycle acceptance: removed objects (0.14.7).
+"""Stages 20-21 of the k3s lifecycle acceptance: removed objects (0.14.7), and 30.
 
 Mixed into :class:`lifecycle.Lifecycle` (its cluster, repositories, status
 and run readers). Both run last, in ``main`` (auto-approved), because they
@@ -14,10 +14,19 @@ change the app the other stages check:
     command) in the status and the deployment history; the listed command
     deletes it.
 21. A failed check right after a removal: a push removes ``reporter`` and
-    adds a check that fails. The release is rolled back without
-    re-creating ``reporter``; the environment is ``failed`` with
+    adds a check that fails. The rollback restores the previous release
+    whole (0.16.0; from 0.14.7 to 0.15.1 it did not re-create ``reporter``):
+    ``reporter`` runs again; the environment is ``failed`` with
     ``checks-failed-rolled-back`` and nothing runs again for several polls
-    (no new run, restore point or rollout); a fix (a new revision) deploys.
+    (no new run, restore point or rollout); a fix (a new revision) deploys
+    and prunes ``reporter``.
+30. Times and heartbeat (0.16.0, last): main's history runs have each
+    stage's ``started_at`` and ``finished_at`` (and stage 21's rolled-back
+    run its ``rollback`` stage); a build made slow on purpose (``sleep`` in
+    the host build) leaves ``last_poll`` standing while ``heartbeat_at``
+    advances and the controller never reads as stale; the build's times are
+    in the history; ``piceli env stop main`` and ``env start main`` are
+    history entries (``kind`` ``stop`` and ``start``) next to the runs.
 """
 
 from __future__ import annotations
@@ -74,6 +83,9 @@ FAILING_CHECK = """    Checks.exec(
 FULL_STACK = 'full = Stack("full", workloads=[*minimal.workloads, "reporter"])'
 #: Polls (10 s each) a stopped environment is watched for a re-attempt.
 QUIET_SECONDS = 45
+#: How long stage 30's build sleeps: longer than ``stale`` from the last
+#: poll alone (three 10 s polls and a minute).
+SLOW_BUILD_SECONDS = 120
 
 
 class PruneStages:
@@ -235,8 +247,9 @@ class PruneStages:
             problems.append(f"reason {record.get('reason')!r}")
         if record.get("next_attempt_at") is not None:
             problems.append(f"next_attempt_at {record.get('next_attempt_at')!r}")
-        if "reporter" in self._names("deployments"):
-            problems.append("the rollback re-created the Deployment reporter")
+        # 0.16.0: the rollback restores the previous release whole, reporter too.
+        if "reporter" not in self._names("deployments"):
+            problems.append("the rollback did not re-create the Deployment reporter")
         runs = self.runs("/main/", self.since_epoch)  # type: ignore[attr-defined]
         generations = self.generations(LC_MAIN)  # type: ignore[attr-defined]
         log(f"main stopped after {len(runs)} run(s); watching {QUIET_SECONDS}s")
@@ -254,11 +267,11 @@ class PruneStages:
             )
         if self.generations(LC_MAIN) != generations:  # type: ignore[attr-defined]
             problems.append("workloads rolled while stopped")
-        if "reporter" in self._names("deployments"):
-            problems.append("the Deployment reporter came back")
+        if "reporter" not in self._names("deployments"):
+            problems.append("the Deployment reporter went away while stopped")
         check(not problems, "; ".join(problems))
 
-        # A fix (a new revision) deploys again, without reporter.
+        # A fix (a new revision) deploys again, without reporter (pruned).
         fixed = broken.replace(FAILING_CHECK, "", 1)
         sha = self.repos.commit(
             "infra", "the failing check removed", {"lifecycle_app.py": fixed}
@@ -267,4 +280,117 @@ class PruneStages:
             self._main_at(sha, "the fix")
         except StageFailed as error:
             raise StageFailed(f"after the fix: {error}") from None
-        check("reporter" not in self._names("deployments"), "reporter came back")
+        check(
+            "reporter" not in self._names("deployments"),
+            "the fix did not prune reporter",
+        )
+
+    # ------------------------------------------------------------ stage 30
+    def _history_runs(self, env: str = "main") -> list[dict[str, Any]]:
+        found = self.cluster.get(
+            "configmap", "piceli-gitops-history", "-n", "piceli-system"
+        )
+        document = json.loads(
+            ((found or {}).get("data") or {}).get("history.json") or "{}"
+        )
+        return list(((document.get("envs") or {}).get(env) or {}).get("runs") or [])
+
+    def stage_30_times_and_heartbeat(self) -> None:
+        problems: list[str] = []
+        runs = [r for r in self._history_runs() if r.get("kind", "run") == "run"]
+        check(runs, "the deployment history lists no run of main")
+        for run in runs[:3]:
+            for name in ("plan", "apply", "checks"):
+                stage = (run.get("stages") or {}).get(name) or {}
+                if stage.get("state") in {"done", "failed"} and not (
+                    stage.get("started_at") and stage.get("finished_at")
+                ):
+                    problems.append(f"run {run.get('run_id')} {name}: {stage}")
+        if "21" in self.args.stages:  # type: ignore[attr-defined]
+            rolled = [r for r in runs if "rollback" in (r.get("stages") or {})]
+            if not rolled:
+                problems.append("no run of main has a rollback stage")
+            else:
+                log(f"rollback stage: {rolled[0]['stages']['rollback']}")
+        check(not problems, "; ".join(problems))
+
+        # A slow build: the heartbeat moves while last_poll stands.
+        spec = self.repos.read("infra", "host-build.toml")
+        tools = 'tools = ["sh", "cc"]'
+        commands = "commands = [\n"
+        check(tools in spec and commands in spec, "host-build.toml: no tools/commands")
+        slow = spec.replace(tools, 'tools = ["sh", "cc", "sleep"]', 1).replace(
+            commands, f'{commands}  ["sleep", "{SLOW_BUILD_SECONDS}"],\n', 1
+        )
+        store = self.repos.read("store", "bin/run.sh").replace(
+            "# The store", "# The store (slow build)", 1
+        )
+        self.repos.commit("infra", "a slow host build", {"host-build.toml": slow})
+        sha = self.repos.commit("store", "store: slow build", {"bin/run.sh": store})
+        samples: list[tuple[Any, Any, str]] = []
+        deadline = time.monotonic() + 1500
+        while time.monotonic() < deadline:
+            status = self.status()  # type: ignore[attr-defined]
+            controller = status.get("controller") or {}
+            record = (status.get("envs") or {}).get("main") or {}
+            if record.get("in_progress"):
+                samples.append(
+                    (
+                        controller.get("last_poll"),
+                        controller.get("heartbeat_at"),
+                        str(status.get("health")),
+                    )
+                )
+            if self.deployed("main", {"store": sha})(record):  # type: ignore[attr-defined]
+                break
+            time.sleep(5)
+        else:
+            raise StageFailed("main did not deploy the slow build")
+        by_poll: dict[Any, set[Any]] = {}
+        for poll, beat, _health in samples:
+            by_poll.setdefault(poll, set()).add(beat)
+        moving = max((len(beats) for beats in by_poll.values()), default=0)
+        healths = sorted({health for *_, health in samples})
+        log(f"slow build: {len(samples)} samples, heartbeats per poll {moving}, "
+            f"health {healths}")  # fmt: skip
+        if moving < 3:
+            problems.append(f"heartbeat_at did not advance during the build: {samples}")
+        if "stale" in healths:
+            problems.append("the controller read as stale during the build")
+        run = next(
+            (r for r in self._history_runs() if r.get("kind", "run") == "run"), {}
+        )
+        build = (run.get("builds") or {}).get("store") or {}
+        log(f"history build of store: {build}")
+        if not (build.get("started_at") and build.get("finished_at")):
+            problems.append(
+                f"no build times of store in the history: {run.get('builds')}"
+            )
+        check(not problems, "; ".join(problems))
+
+        # Stop and start main: two history entries next to its runs.
+        self.run_step("env-stop", stop_env="main")  # type: ignore[attr-defined]
+        self.wait_env(  # type: ignore[attr-defined]
+            "main", lambda r: r.get("state") == "stopped", timeout=300, what="stopped"
+        )
+        self.run_step("env-start", stop_env="main")  # type: ignore[attr-defined]
+        self.wait_env(  # type: ignore[attr-defined]
+            "main",
+            self.deployed("main"),
+            timeout=900,
+            what="started",  # type: ignore[attr-defined]
+        )
+        entries = self._history_runs()
+        kinds = [e.get("kind") for e in entries[:3]]
+        log(f"main history head: {kinds}")
+        stop = next((e for e in entries if e.get("kind") == "stop"), None)
+        start = next((e for e in entries if e.get("kind") == "start"), None)
+        check(stop is not None and start is not None, f"no stop/start entries: {kinds}")
+        assert stop is not None and start is not None
+        check(
+            (stop.get("stop") or {}).get("by") == "requested"
+            and bool((stop.get("stop") or {}).get("at"))
+            and stop.get("via") == "cli",
+            f"stop entry: {stop}",
+        )
+        check(start.get("state") == "started", f"start entry: {start}")

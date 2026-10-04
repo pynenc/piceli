@@ -717,3 +717,53 @@ def test_a_failed_build_and_a_denied_teardown_show_their_detail(
     assert env["state"] == "deleting" and env["reason"] == "env-cluster-unavailable"
     assert env["failure"] == {"denied": denied}
     assert any("list persistentvolumes" in line for line in lines)
+
+
+def test_a_restart_marks_the_step_it_died_in_and_publishes_a_heartbeat(
+    tmp_path: Path, repo: Repo
+) -> None:
+    """0.16.0: a deploy the controller died in does not stay ``in_progress``,
+    its run journal does not stay ``running``; the status has a heartbeat."""
+    from piceli.gitops.state import save_state
+    from piceli.pipeline.journal import Journal
+
+    ports = FakePorts()
+    controller, channel, clock = make(tmp_path, repo, ports)
+    repo.push_branch("wp-1", "one")
+    status = controller.poll_once()
+    assert status["controller"]["heartbeat_at"] == status["controller"]["last_poll"]
+    record = controller.state["envs"]["wp-1"]
+    record["in_progress"] = {"action": "deploy", "since": "2027-01-15T08:00:00Z"}
+    save_state(controller.state_dir, controller.state)
+    journal = Journal(controller.state_dir / "pipelines" / "branches" / "app-wp-1")
+    run = journal.create(
+        pipeline={"app": "app"},
+        combined_hash="sha256:" + "4" * 64,
+        until="checks",
+        approval="sha256:" + "4" * 64,
+        plan={},
+    )
+    run.set_stage("build", state="running")
+
+    clock.now += 120
+    restarted, channel, _ = make(tmp_path, repo, ports)
+    restarted.clock = clock
+    status = restarted.poll_once()
+    entry = status["envs"]["wp-1"]
+    assert "in_progress" not in entry
+    assert entry["interrupted"] == {
+        "action": "deploy",
+        "since": "2027-01-15T08:00:00Z",
+        "at": status["controller"]["last_poll"],
+    }
+    data = json.loads(run.path.read_text())
+    assert data["state"] == "interrupted"
+    assert data["reason"] == "gitops-run-interrupted"
+    assert data["stages"]["build"]["state"] == "interrupted"
+
+    clock.now += 45
+    restarted.beat()
+    published = channel.read_status()
+    assert published is not None
+    assert published["controller"]["heartbeat_at"] > status["controller"]["last_poll"]
+    assert published["envs"] == status["envs"]

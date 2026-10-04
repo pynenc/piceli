@@ -84,10 +84,10 @@ Also from 0.14.7 (``lifecycle_prune.py``; last, in main):
     one sync deletes the old objects (none left by the app's label), the
     Service selects only the new pod, the checks pass, and the claim is kept
     and listed with its delete command in the status and the history.
-21. A push removes a workload and adds a failing check: the rollback does not
-    re-create the workload, main stays ``failed``
-    (``checks-failed-rolled-back``) with no new run for several polls, and
-    the fix deploys.
+21. A push removes a workload and adds a failing check: the rollback
+    restores the previous release whole, the workload too (0.16.0), main
+    stays ``failed`` (``checks-failed-rolled-back``) with no new run for
+    several polls, and the fix deploys (and prunes the workload).
 
 From 0.15.0 (``lifecycle_infra.py``; last, or alone with ``--stages 28``):
 
@@ -125,6 +125,14 @@ clusters, deleted with the home one whatever the outcome):
     converges.
 27. ``edge-b`` leaves the environment: its objects there are deleted,
     ``edge-a`` and main keep running.
+
+From 0.16.0 (``lifecycle_prune.py``; last):
+
+30. main's history runs have each stage's times (and stage 21's run its
+    ``rollback`` stage); a deliberately slow build leaves ``last_poll``
+    standing while ``heartbeat_at`` advances (never ``stale``) and has its
+    times in the history; ``env stop main`` and ``env start main`` are
+    history entries next to the runs.
 
 The UI's launch token is never printed: the served command's output stays
 in memory and is redacted before any failure prints it.
@@ -223,7 +231,7 @@ ALL_CHECKS = {
 STAGE_ORDER = (
     "2", "3", "1", "4", "5", "6", "11", "7", "12", "16", "17", "18", "19",
     "8", "15", "9", "10", "13", "14", "20", "21", "22", "23", "24",
-    "25", "26", "27", "28", "29",
+    "25", "26", "27", "28", "29", "30",
 )  # fmt: skip
 STAGE_TITLES = {
     "1": "upgrade from the previous release",
@@ -255,6 +263,7 @@ STAGE_TITLES = {
     "27": "an edge cluster leaves the environment",
     "28": "machines: plan, apply, install, register, destroy (OpenTofu)",
     "29": "a corrupted controller image: reported down with its message",
+    "30": "stage and build times, heartbeat, stop and start in the history",
 }
 STAGE_METHODS = {
     "1": "1_upgrade", "2": "2_bootstrap", "3": "3_first_main", "4": "4_one_source",
@@ -266,7 +275,7 @@ STAGE_METHODS = {
     "21": "21_rollback_no_loop", "22": "22_checks_status", "23": "23_stop_start",
     "24": "24_access_ui_killed", "25": "25_edge_add",
     "26": "26_edge_unreachable", "27": "27_edge_remove", "28": "28_infra",
-    "29": "29_corrupt_controller_image",
+    "29": "29_corrupt_controller_image", "30": "30_times_and_heartbeat",
 }  # fmt: skip
 #: Stages whose failure stops the run (the rest depend on them).
 CRITICAL = {"2", "3"}
@@ -2471,8 +2480,8 @@ def main(argv: list[str] | None = None) -> int:
                         "or images/Dockerfile")  # fmt: skip
     parser.add_argument(
         "--stages",
-        default="1-29",
-        help="e.g. 1-29 or 1,2,3 (setup always runs; 28 alone runs without the bootstrap)",
+        default="1-30",
+        help="e.g. 1-30 or 1,2,3 (setup always runs; 28 alone runs without the bootstrap)",
     )
     parser.add_argument("--playwright-ui", type=Path, default=None,
                         help="ui/ directory with node_modules for the optional browser "

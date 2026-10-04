@@ -14,7 +14,11 @@ The controller keeps two records of a deploy:
   with the ``kubectl`` command deleting it) come from its plan.
 
 :func:`history` joins both into ``piceli.gitops-history.v1``: per
-environment, its runs newest first. A run journal without an event (a run
+environment, its runs newest first, with each stage's and build's
+``started_at`` and ``finished_at`` (0.16.0), and its stops, starts and
+teardown as entries of their own ``kind`` (``stop``, ``start``,
+``teardown``; a run's ``kind`` is ``run``). The schema changes only
+additively within v1: fields are added, never removed or renamed. A run journal without an event (a run
 recorded before 0.14.6) is still listed; an event without a run (a build
 that failed before the deploy) is listed too. The document holds commit ids,
 hashes, digests, object kinds and names, registered codes, check names with
@@ -74,6 +78,40 @@ def _when(value: Any) -> datetime:
     return found if found.tzinfo else found.replace(tzinfo=UTC)
 
 
+def _span(started: Any, finished: Any) -> dict[str, Any]:
+    """``{started_at, finished_at, seconds}`` of two ISO timestamps."""
+    begin, end = _when(started), _when(finished)
+    seconds = (
+        round(max(0.0, (end - begin).total_seconds()), 3)
+        if begin != _EPOCH and end != _EPOCH
+        else None
+    )
+    return {
+        "started_at": _text(started, 40),
+        "finished_at": _text(finished, 40),
+        "seconds": seconds,
+    }
+
+
+_BUILD_STATES = {"done", "failed", "cached", "running"}
+
+
+def _builds(value: Any) -> dict[str, dict[str, Any]]:
+    """Per-build ``started_at``, ``finished_at`` and ``state`` (0.16.0)."""
+    found: dict[str, dict[str, Any]] = {}
+    for name, item in _dict(value).items():
+        entry = _dict(item)
+        if not isinstance(name, str) or not _text(entry.get("started_at"), 40):
+            continue
+        state = entry.get("state")
+        found[name] = {
+            "started_at": _text(entry.get("started_at"), 40),
+            "finished_at": _text(entry.get("finished_at"), 40),
+            "state": state if state in _BUILD_STATES else None,
+        }
+    return found
+
+
 # ------------------------------------------------------------------ events
 
 
@@ -86,10 +124,13 @@ def event(
     approval: Mapping[str, Any] | None,
     outcome: Any,
     built: Iterable[str],
+    builds: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """The controller's event of one deploy step of ``record`` (its env record
     after the step). ``outcome`` is the step's
     :class:`~piceli.gitops.ports.EnvOutcome` (``None`` when the step raised).
+    ``builds`` (0.16.0): each image or component the step built or mirrored,
+    with its ``started_at``, ``finished_at`` and ``state``.
     """
     components = _dict(record.get("components"))
     built_set = set(built)
@@ -108,6 +149,7 @@ def event(
         state = "degraded"
     via = _dict(approval).get("via") if approval else None
     found: dict[str, Any] = {
+        "kind": "run",
         "started_at": started_at,
         "finished_at": finished_at,
         "trigger": _text(trigger),
@@ -137,7 +179,12 @@ def event(
         else [],
         "unchanged": sorted(k for k, v in entries.items() if v["state"] == "unchanged"),
         "failed": sorted(k for k, v in entries.items() if v["state"] == "failed"),
+        "builds": _builds(builds),
     }
+    waited = _dict(approval).get("requested_at") if approval else None
+    if isinstance(waited, str) and _dict(approval).get("at"):
+        # 0.16.0: from the plan waiting for approval to the owner's approval.
+        found["approval_wait"] = _span(waited, str(_dict(approval)["at"]))
     verification = _dict(record.get("verification"))
     if verification and str(verification.get("at") or "") >= started_at:
         found["verification"] = verification
@@ -185,6 +232,46 @@ def _attempts(value: Any) -> list[dict[str, Any]]:
     return found[-MAX_ATTEMPTS:]
 
 
+#: Kinds of lifecycle entries (0.16.0), listed next to the runs.
+LIFECYCLE = ("stop", "start", "teardown")
+#: Torn-down environments whose entries the history keeps.
+MAX_REMOVED = 20
+
+
+def lifecycle(
+    kind: str,
+    *,
+    at: str,
+    started_at: str | None = None,
+    state: str,
+    by: str | None = None,
+    via: str | None = None,
+    reason: str | None = None,
+    namespace: Any = None,
+    cluster: Any = None,
+) -> dict[str, Any]:
+    """The controller's event of a stop, start or teardown of an environment.
+
+    ``state``: ``stopped``, ``started``, ``removed`` or ``failed``; ``by``
+    (``declared``, ``requested``, ``idle``, ``removed``) and ``via``
+    (``cli``, ``ui``, ``declaration``, ``controller``) say who asked.
+    """
+    if kind not in LIFECYCLE:
+        raise ValueError(f"unknown lifecycle kind {kind!r}")
+    return {
+        "kind": kind,
+        "at": at,
+        "started_at": started_at or at,
+        "finished_at": at,
+        "state": state,
+        "by": _text(by, 32),
+        "via": _text(via, 32),
+        "reason": _text(reason, 64),
+        "namespace": _text(namespace, 63),
+        **({"cluster": _text(cluster, 63)} if cluster else {}),
+    }
+
+
 def remember(state: dict[str, Any], env: str, entry: Mapping[str, Any]) -> None:
     """Append ``entry`` to ``env``'s events in the controller state (bounded)."""
     events = state.setdefault("history", {})
@@ -194,13 +281,41 @@ def remember(state: dict[str, Any], env: str, entry: Mapping[str, Any]) -> None:
 
 
 def forget_gone(state: dict[str, Any], envs: Iterable[str]) -> None:
-    """Drop the events of environments that are gone from the state."""
+    """Drop the events of environments that are gone from the state.
+
+    An environment whose last event is its teardown keeps its events (0.16.0;
+    the newest :data:`MAX_REMOVED` of them), so the history shows it removed.
+    """
     events = state.get("history")
     if not isinstance(events, dict):
         return
     keep = set(envs)
+    removed = []
     for name in [name for name in events if name not in keep]:
+        last = (events[name] or [{}])[-1]
+        if isinstance(last, Mapping) and last.get("kind") == "teardown":
+            removed.append((str(last.get("at") or ""), name))
+        else:
+            del events[name]
+    for _, name in sorted(removed, reverse=True)[MAX_REMOVED:]:
         del events[name]
+
+
+def removed_envs(state: Mapping[str, Any], envs: Iterable[str]) -> list[str]:
+    """Environments not in ``envs`` whose events end with their teardown."""
+    events = state.get("history")
+    if not isinstance(events, Mapping):
+        return []
+    keep = set(envs)
+    return sorted(
+        name
+        for name, items in events.items()
+        if name not in keep
+        and isinstance(items, list)
+        and items
+        and isinstance(items[-1], Mapping)
+        and items[-1].get("kind") == "teardown"
+    )
 
 
 # -------------------------------------------------------------------- runs
@@ -291,11 +406,27 @@ def _from_summary(summary: Mapping[str, Any]) -> dict[str, Any]:
         str(name): {
             key: value
             for key, value in _dict(stage).items()
-            if key in {"state", "seconds", "reason"}
+            if key in {"state", "seconds", "reason", "started_at", "finished_at"}
         }
         for name, stage in _dict(summary.get("stages")).items()
     }
     applied = _dict(stages.get("apply")).get("state") == "done"
+    # 0.16.0: the apply's deletes and the automatic rollback as stages.
+    prune = _dict(summary.get("prune"))
+    if prune.get("started_at"):
+        stages["prune"] = {
+            "state": "done" if applied else "failed",
+            **_span(prune.get("started_at"), prune.get("finished_at")),
+        }
+    rolled = _dict(checks.get("rollback"))
+    if rolled.get("started_at"):
+        stages["rollback"] = {
+            "state": "done"
+            if rolled.get("state") == "ready"
+            else str(rolled.get("state") or "failed"),
+            **_span(rolled.get("started_at"), rolled.get("finished_at")),
+            **({"reason": rolled["reason"]} if rolled.get("reason") else {}),
+        }
     return {
         "run_id": summary.get("run_id"),
         "run_state": summary.get("state"),
@@ -316,7 +447,7 @@ def _from_summary(summary: Mapping[str, Any]) -> dict[str, Any]:
             for item in plan.get("kept_orphaned") or ()
         ][:MAX_CHANGES],
         "started_at": summary.get("created_at"),
-        "finished_at": summary.get("updated_at"),
+        "finished_at": summary.get("finished_at") or summary.get("updated_at"),
         "combined_hash": summary.get("combined_hash"),
         "release": summary.get("release"),
         "sources": {
@@ -387,6 +518,16 @@ def _from_summary(summary: Mapping[str, Any]) -> dict[str, Any]:
         "stages": stages,
         "seconds": summary.get("seconds"),
         "policy": summary.get("approved_by") == "policy",
+        "approved_at": summary.get("approved_at") or summary.get("created_at"),
+        "builds": {
+            str(name): {
+                "started_at": _dict(item).get("started_at"),
+                "finished_at": _dict(item).get("finished_at"),
+                "state": "cached" if _dict(item).get("cached") else "done",
+            }
+            for name, item in _dict(summary.get("builds")).items()
+        },
+        "reason": summary.get("reason"),
     }
 
 
@@ -417,11 +558,17 @@ def _entry(
             if run_state in _SUCCEEDED
             else "running"
             if run_state == "running"
+            else "interrupted"
+            if run_state == "interrupted"
             else "failed"
         )
     approved = event_.get("approved_by")
-    if not approved and run.get("policy"):
-        approved = {"via": "policy", "at": None}
+    if run.get("policy") and (
+        not approved
+        or (_dict(approved).get("via") == "policy" and not _dict(approved).get("at"))
+    ):
+        # 0.16.0: when the policy approved (the run's creation).
+        approved = {"via": "policy", "at": _text(run.get("approved_at"), 32)}
     failure = dict(_dict(run.get("failure")))
     failure.update(_dict(event_.get("failure")))
     if state in {"failed", "retrying"} and event_.get("reason"):
@@ -431,8 +578,14 @@ def _entry(
     if isinstance(checks, Mapping):
         checks = {**checks, "verification": bool(verification)}
     started = event_.get("started_at") or run.get("started_at")
+    builds = {**_dict(run.get("builds")), **_builds(event_.get("builds"))}
+    reason = event_.get("reason")
+    if reason is None and state == "interrupted":
+        reason = run.get("reason")
     return {
         "id": run.get("run_id") or f"{env}@{started}",
+        # Added in 0.16.0: ``run``, or a lifecycle entry (stop, start, teardown).
+        "kind": "run",
         "env": env,
         "run_id": run.get("run_id"),
         "started_at": started,
@@ -440,7 +593,7 @@ def _entry(
         "state": state,
         "run_state": run_state,
         "action": event_.get("action"),
-        "reason": event_.get("reason"),
+        "reason": reason,
         "trigger": event_.get("trigger"),
         "sources": sources,
         "namespace": event_.get("namespace"),
@@ -465,11 +618,61 @@ def _entry(
         "failed_attempts": _attempts(event_.get("failed_attempts")),
         "stages": _dict(run.get("stages")),
         "seconds": run.get("seconds"),
+        # Added in 0.16.0: each build's times and the wait for approval.
+        "builds": builds,
+        "approval_wait": event_.get("approval_wait"),
         "recorded_by": "controller+run"
         if event_ and run
         else "controller"
         if event_
         else "run",
+    }
+
+
+def _lifecycle_entry(env: str, item: Mapping[str, Any]) -> dict[str, Any]:
+    """A stop, start or teardown as a history entry (0.16.0)."""
+    kind = str(item.get("kind"))
+    at = item.get("at")
+    return {
+        "id": f"{env}@{at}-{kind}",
+        "kind": kind,
+        "env": env,
+        "action": kind,
+        "at": at,
+        "by": item.get("by"),
+        "via": item.get("via"),
+        "run_id": None,
+        "started_at": item.get("started_at") or at,
+        "finished_at": item.get("finished_at") or at,
+        "state": item.get("state"),
+        "run_state": None,
+        "reason": item.get("reason"),
+        "trigger": kind if not item.get("by") else f"{kind} ({item['by']})",
+        "namespace": item.get("namespace"),
+        **({"cluster": item["cluster"]} if item.get("cluster") else {}),
+        "requested_at": item.get("requested_at"),
+        **(
+            {
+                "stop": {
+                    "by": item.get("by"),
+                    "via": item.get("via"),
+                    "at": item.get("requested_at") or at,
+                }
+            }
+            if kind == "stop"
+            else {}
+        ),
+        "sources": {},
+        "components": [],
+        "built": [],
+        "rolled": [],
+        "unchanged": [],
+        "deleted": [],
+        "kept_orphaned": [],
+        "failed_attempts": [],
+        "stages": {},
+        "builds": {},
+        "recorded_by": "controller",
     }
 
 
@@ -494,6 +697,9 @@ def environment_runs(
     events = list(events)
     named = {str(item.get("run_id")) for item in events if item.get("run_id")}
     for item in events:
+        if item.get("kind") in LIFECYCLE:
+            entries.append(_lifecycle_entry(env, item))
+            continue
         run = None
         run_id = item.get("run_id")
         if isinstance(run_id, str) and run_id in by_id:
@@ -545,6 +751,8 @@ def history(
     """
     reader = reader or RunReader()
     result: dict[str, Any] = {}
+    gone = {"history": events}
+    envs = {**{name: {} for name in removed_envs(gone, envs)}, **envs}
     for name, record in sorted(envs.items()):
         namespace = record.get("namespace") if isinstance(record, Mapping) else None
         runs = reader.runs(

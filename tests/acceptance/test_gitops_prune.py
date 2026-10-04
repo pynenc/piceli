@@ -298,6 +298,18 @@ def test_a_branch_sync_prunes_what_the_app_no_longer_declares(
         assert entry["state"] == "deployed", json.dumps(entry)
         assert entry["deployed_commit"] == second
         _check_pruned(api, entry, BRANCH_NS)
+        # 0.16.0: the run journal and its history entry time the prune.
+        from piceli.gitops import history
+
+        [*_, journal] = sorted((tmp_path / "state" / "pipelines").rglob("runs/*.json"))
+        prune = json.loads(journal.read_text())["stages"]["apply"]["output"][
+            "execution"
+        ]["prune"]
+        assert prune["started_at"] <= prune["finished_at"]
+        staged = (history.run_entry(journal) or {})["stages"]
+        assert staged["prune"]["state"] == "done"
+        assert staged["apply"]["started_at"] <= prune["started_at"]
+        assert prune["finished_at"] <= staged["apply"]["finished_at"]
         order = log.read_text().splitlines()
         created = order.index(f"POST /apis/apps/v1/namespaces/{BRANCH_NS}/statefulsets")
         ready = max(
@@ -392,14 +404,17 @@ def _plan_only(controller: Controller, url: str, tmp_path: Path) -> dict[str, An
         )
 
 
-def test_a_failed_check_after_a_removal_rolls_back_without_recreating_it(
+def test_a_failed_check_after_a_removal_restores_the_previous_release(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The rollback restores only what both releases declare, then stops.
+    """The rollback restores the previous release whole, then stops (0.16.0).
 
-    Nothing the failed release removed comes back (by its prune or by hand),
-    nothing it added is deleted, and the controller does not try the
+    What the failed release removed (by its prune or by hand) and the
+    previous release declares comes back, what only the failed release
+    declares is pruned (its claims kept), and the controller does not try the
     revision again (``checks-failed-rolled-back``) until ``gitops sync``.
+    From 0.14.7 to 0.15.1 the rollback restored only what both releases
+    declare, which left removed objects out.
     """
     log = tmp_path / "order.log"
     monkeypatch.setenv("PRUNE_LOG", str(log))
@@ -425,10 +440,10 @@ def test_a_failed_check_after_a_removal_rolls_back_without_recreating_it(
             ("StatefulSet", "db"),
             ("Service", "worker"),
             ("NetworkPolicy", "worker-ingress"),
+            ("Service", "api"),
         ):
-            assert (kind, name) not in api.objects, (kind, name)  # not re-created
-        assert ("StatefulSet", "api") in api.objects  # what it added stays
-        assert ("Service", "api") in api.objects
+            assert (kind, name) in api.objects, (kind, name)  # restored
+        assert ("StatefulSet", "api") not in api.objects  # only the failed one had it
         checks = log.read_text().count("check")
 
         # No loop: later polls apply, check and roll back nothing.
@@ -446,3 +461,68 @@ def test_a_failed_check_after_a_removal_rolls_back_without_recreating_it(
         channel.add_request(*sync_request(BRANCH))
         entry = controller.poll_once()["envs"][BRANCH]
         assert entry["state"] == "deployed", json.dumps(entry)
+
+
+ROLE_FIRST = """
+from piceli import Rule
+
+reader = app.service_account(
+    "reader", rules=[Rule(resources=["pods"], verbs=["get", "list"])]
+)
+api = app.deployment("api", image=images["api"], ports=[8080], service_account=reader)
+app.service(api, port=8080)
+"""
+
+# The Role (and its RoleBinding) go; the workload still runs as ``reader``.
+ROLE_SECOND = """
+reader = app.service_account("reader")
+api = app.deployment("api", image=images["api"], ports=[8080], service_account=reader)
+app.service(api, port=8080)
+"""
+
+
+def test_a_rollback_re_creates_the_role_the_failed_release_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reproduces the 0.15.1 bug: a release removed a Role its workload uses,
+    failed its checks and was rolled back, and the workload of the restored
+    release ran without the Role (the rollback restored only the objects
+    both releases declare). The rollback re-creates it; the environment
+    stops at ``checks-failed-rolled-back`` without a retry."""
+    log = tmp_path / "order.log"
+    monkeypatch.setenv("PRUNE_LOG", str(log))
+    repo = Repo(tmp_path)
+    api = _api(BRANCH_NS)
+    del api.objects[("Namespace", BRANCH_NS)]
+    _push(repo, api, BRANCH, ROLE_FIRST, "")
+    with serve(api) as (api, url):
+        controller, _channel = _controller(tmp_path, repo, url)
+        assert controller.poll_once()["envs"][BRANCH]["state"] == "deployed"
+        assert ("Role", "reader") in api.objects
+        assert ("RoleBinding", "reader") in api.objects
+        monkeypatch.setenv("PRUNE_FAIL", "1")
+        _push(repo, api, BRANCH, ROLE_SECOND, "")
+        api.requests.clear()
+        entry = controller.poll_once()["envs"][BRANCH]
+        assert entry["state"] == "failed", json.dumps(entry)
+        assert entry["reason"] == "checks-failed-rolled-back"
+        # The failed release pruned them; the rollback created them again.
+        created = {
+            (parts[-1])
+            for request in api.requests
+            if request["method"] == "POST"
+            and not (request.get("body") or {}).get("dryRun")
+            for parts in [str(request["path"]).split("?")[0].rstrip("/").split("/")]
+        }
+        assert ("roles", "reader") in _deleted(api), _deleted(api)
+        assert {"roles", "rolebindings"} <= created, created
+        assert ("Role", "reader") in api.objects
+        assert ("RoleBinding", "reader") in api.objects
+        assert ("Deployment", "api") in api.objects
+        checks = log.read_text().count("check")
+        api.requests.clear()
+        for _ in range(3):
+            controller.clock = lambda: 4_000_000_000.0  # far past any backoff
+            assert controller.poll_once()["envs"][BRANCH]["state"] == "failed"
+        writes = [r for r in api.requests if r["method"] in {"POST", "PATCH", "DELETE"}]
+        assert writes == [] and log.read_text().count("check") == checks

@@ -274,6 +274,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`gitops-push-failed`](#error-gitops-push-failed) | gitops | yes |
 | [`gitops-repo-invalid`](#error-gitops-repo-invalid) | gitops | no |
 | [`gitops-request-invalid`](#error-gitops-request-invalid) | gitops | no |
+| [`gitops-run-interrupted`](#error-gitops-run-interrupted) | gitops | yes |
 | [`gitops-secret-value`](#error-gitops-secret-value) | gitops | no |
 | [`gitops-secrets-present`](#error-gitops-secrets-present) | gitops | no |
 | [`gitops-state-invalid`](#error-gitops-state-invalid) | gitops | no |
@@ -4262,6 +4263,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Fix the arguments (`piceli gitops approve ENV sha256:…`, `piceli promote BRANCH@SHA`) and send it again.
 - **Retry-safe:** no
+
+(error-gitops-run-interrupted)=
+### `gitops-run-interrupted`
+
+**Deploy interrupted by a controller restart.** The GitOps controller stopped (a crash, an out-of-memory kill, a node drain) while a deploy step or run was in progress; it marked the run `interrupted` when it started again.
+
+- **Fix:** Nothing to do: the controller retries the environment. Read `piceli gitops status` and the controller's last exit (`controller_live`) for why it stopped.
+- **Retry-safe:** yes
 
 (error-gitops-secret-value)=
 ### `gitops-secret-value`

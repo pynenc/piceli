@@ -31,7 +31,12 @@ _STATES = {
     "running",
     "deleting",
     "stopped",
+    # 0.16.0: a run the controller died under, and lifecycle entries.
+    "interrupted",
+    "started",
+    "removed",
 }
+_KINDS = {"run", "stop", "start", "teardown"}
 _VIA = {"cli", "ui", "policy", "request"}
 _TEXT = 256
 _TAIL = 2000
@@ -191,6 +196,8 @@ def _stages(value: Any) -> list[dict[str, Any]]:
             "name": name,
             "state": _text(_dict(item).get("state"), 32) or "unknown",
             "seconds": _number(_dict(item).get("seconds")),
+            "started_at": _text(_dict(item).get("started_at"), 40),
+            "finished_at": _text(_dict(item).get("finished_at"), 40),
         }
         for name, item in _dict(value).items()
         if isinstance(name, str) and _NAME.fullmatch(name)
@@ -207,6 +214,7 @@ def run(value: Mapping[str, Any]) -> dict[str, Any] | None:
     verification = _dict(value.get("verification"))
     return {
         "id": identity,
+        "kind": value.get("kind") if value.get("kind") in _KINDS else "run",
         "run_id": run_id
         if isinstance(run_id, str) and _RUN.fullmatch(run_id)
         else None,
