@@ -43,7 +43,10 @@ aws = [
 ]
 telemetry = [
     "opentelemetry-api>=1.41.1",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.44.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.44.0",
     "opentelemetry-proto>=1.27.0",
+    "opentelemetry-sdk>=1.44.0",
 ]
 # Encrypted secret material in `piceli state export --include-secrets`.
 crypto = [
