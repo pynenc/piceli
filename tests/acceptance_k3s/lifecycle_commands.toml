@@ -36,6 +36,10 @@ edge_attr = "edge_b"
 edge_kubeconfig = "~/edge-b.yaml"
 edge_context = "default"
 edge_server = "https://100.64.0.11:6443"
+infra_hash = "<plan hash>"
+install_digest = "<install digest>"
+register_digest = "<register digest>"
+destroy_hash = "<destroy plan hash>"
 
 [groups]
 # Once per machine and cluster; re-running it is idempotent.
@@ -106,6 +110,25 @@ edge-add = [
   "edge-cluster-init-approve",
   "edge-secrets",
 ]
+# Machines in typed Python, provisioned with OpenTofu (from 0.15.0;
+# machines.py holds the Infrastructure). Once per state: a passphrase that
+# encrypts the OpenTofu state (back the file up), and the provider token
+# (`secrets provider NAME --prompt`; the acceptance's fake provider needs none).
+# Then plan, approve, install the OS with the declared hook, register the
+# server's k3s as its Cluster. Re-running is idempotent (plans: unchanged).
+infra = [
+  "infra-state-key",
+  "infra-plan",
+  "infra-apply",
+  "infra-install-plan",
+  "infra-install-approve",
+  "infra-register-plan",
+  "infra-register-approve",
+  "infra-cluster-status",
+  "infra-status",
+]
+# Destroy what Piceli created (never anything else), with its own approval.
+infra-destroy = ["infra-destroy-plan", "infra-destroy-approve", "infra-status"]
 
 [steps.login]
 run = "{piceli} login lifecycle --kubeconfig {kubeconfig} --context {context}"
@@ -260,3 +283,65 @@ when = "plan_hash"
 run = """{piceli} secrets cluster --cluster infra.py:{edge_attr} \
   --kubeconfig {edge_kubeconfig} --context {edge_context} --server {edge_server}"""
 exit = [0]
+[steps.infra-state-key]
+# Exit 2 (infra-credential-exists) when the key is already stored: keep it.
+run = "{piceli} secrets state-key machines-state --generate"
+exit = [0, 2]
+
+[steps.infra-plan]
+# Exit 3 with the plan (changes, monthly estimate, plan_hash); 0: unchanged.
+run = "{piceli} infra plan machines.py:infra"
+exit = [0, 3]
+capture = { infra_hash = "plan_hash" }
+reset = ["infra_hash"]
+
+[steps.infra-apply]
+run = "{piceli} infra apply machines.py:infra --approve {infra_hash}"
+exit = [0]
+when = "infra_hash"
+
+[steps.infra-status]
+run = "{piceli} infra status machines.py:infra --json"
+exit = [0]
+
+[steps.infra-install-plan]
+# Exit 3 with the rendered install command and its digest.
+run = "{piceli} infra install machines.py:infra edge-1"
+exit = [3]
+capture = { install_digest = "digest" }
+reset = ["install_digest"]
+
+[steps.infra-install-approve]
+run = "{piceli} infra install machines.py:infra edge-1 --approve {install_digest}"
+exit = [0]
+when = "install_digest"
+
+[steps.infra-register-plan]
+# Without --kubeconfig it reads k3s's over SSH and shows the host keys to pin.
+run = """{piceli} infra register machines.py:infra edge-1 \
+  --kubeconfig {kubeconfig} --context {context}"""
+exit = [3]
+capture = { register_digest = "digest" }
+reset = ["register_digest"]
+
+[steps.infra-register-approve]
+run = """{piceli} infra register machines.py:infra edge-1 \
+  --kubeconfig {kubeconfig} --context {context} --approve {register_digest}"""
+exit = [0]
+when = "register_digest"
+
+[steps.infra-cluster-status]
+# The registered cluster through its new profile (Cluster(credentials=)).
+run = "{piceli} cluster status machines.py:edge --json"
+exit = [0]
+
+[steps.infra-destroy-plan]
+run = "{piceli} infra destroy machines.py:infra"
+exit = [0, 3]
+capture = { destroy_hash = "plan_hash" }
+reset = ["destroy_hash"]
+
+[steps.infra-destroy-approve]
+run = "{piceli} infra destroy machines.py:infra --approve {destroy_hash}"
+exit = [0]
+when = "destroy_hash"

@@ -5178,6 +5178,26 @@
         "summary": "Workspace Log Sources"
       }
     },
+    "/api/v1/machines": {
+      "get": {
+        "operationId": "machines_api_v1_machines_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Machines Api V1 Machines Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Machines"
+      }
+    },
     "/api/v1/navigation": {
       "get": {
         "operationId": "navigation_summary_api_v1_navigation_get",

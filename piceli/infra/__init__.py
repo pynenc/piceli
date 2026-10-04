@@ -37,8 +37,19 @@ __all__ = [
     "Component",
     "CompositionError",
     "Controller",
+    "DnsRecord",
+    "Firewall",
+    "Hetzner",
+    "Hook",
+    "HttpState",
+    "Infrastructure",
+    "LocalState",
     "Node",
+    "PrimaryIp",
+    "Rule",
+    "Server",
     "Source",
+    "Ssh",
     "Ui",
 ]
 
@@ -249,3 +260,20 @@ class Component:
         if self.image_ref is None:
             return None
         return f"{self.image_ref}@{self.pin}"
+
+
+# Machines provisioned with OpenTofu (``piceli infra``); after Cluster, which
+# a Server may name.
+from piceli.infra.machines import (  # noqa: E402
+    DnsRecord,
+    Firewall,
+    Hetzner,
+    Hook,
+    HttpState,
+    Infrastructure,
+    LocalState,
+    PrimaryIp,
+    Rule,
+    Server,
+    Ssh,
+)

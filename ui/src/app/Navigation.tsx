@@ -66,6 +66,7 @@ export function Navigation({ capabilities }: { capabilities?: Capabilities }) {
     ] : []),
     { to: '/applications', label: 'Applications', icon: 'applications' },
     ...(allowed('cluster_status') ? [{ to: '/cluster', label: 'Cluster', icon: 'cluster' as const, badge: <Count value={summary.registry_warnings} tone="warning" label="registry warnings" />, children: [{ to: '/cluster#nodes', label: 'Nodes' }, { to: '/cluster#registry', label: 'Registry' }] }] : []),
+    ...(allowed('machines') ? [{ to: '/machines', label: 'Machines', icon: 'cluster' as const }] : []),
   ];
   const history = allowed('activity') || allowed('composition_history');
   const delivery: Item[] = [

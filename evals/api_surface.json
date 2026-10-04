@@ -5043,6 +5043,7 @@
      "heavy",
      "help-json",
      "import",
+     "infra",
      "inputs",
      "login",
      "logout",
@@ -5857,6 +5858,80 @@
     ],
     "subcommands": []
    },
+   "infra": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "apply",
+     "destroy",
+     "install",
+     "plan",
+     "register",
+     "status"
+    ]
+   },
+   "infra apply": {
+    "arguments": [
+     "ref"
+    ],
+    "flags": [
+     "--approve",
+     "--tofu"
+    ],
+    "subcommands": []
+   },
+   "infra destroy": {
+    "arguments": [
+     "ref"
+    ],
+    "flags": [
+     "--approve",
+     "--tofu"
+    ],
+    "subcommands": []
+   },
+   "infra install": {
+    "arguments": [
+     "ref",
+     "server"
+    ],
+    "flags": [
+     "--approve"
+    ],
+    "subcommands": []
+   },
+   "infra plan": {
+    "arguments": [
+     "ref"
+    ],
+    "flags": [
+     "--tofu"
+    ],
+    "subcommands": []
+   },
+   "infra register": {
+    "arguments": [
+     "ref",
+     "server"
+    ],
+    "flags": [
+     "--approve",
+     "--context",
+     "--kubeconfig",
+     "--transport",
+     "--wait"
+    ],
+    "subcommands": []
+   },
+   "infra status": {
+    "arguments": [
+     "ref"
+    ],
+    "flags": [
+     "--json"
+    ],
+    "subcommands": []
+   },
    "inputs": {
     "arguments": [],
     "flags": [],
@@ -6508,7 +6583,9 @@
     "flags": [],
     "subcommands": [
      "cluster",
-     "git"
+     "git",
+     "provider",
+     "state-key"
     ]
    },
    "secrets cluster": {
@@ -6535,6 +6612,26 @@
      "--prompt",
      "--transport",
      "--username"
+    ],
+    "subcommands": []
+   },
+   "secrets provider": {
+    "arguments": [
+     "name"
+    ],
+    "flags": [
+     "--prompt"
+    ],
+    "subcommands": []
+   },
+   "secrets state-key": {
+    "arguments": [
+     "name"
+    ],
+    "flags": [
+     "--generate",
+     "--prompt",
+     "--replace"
     ],
     "subcommands": []
    },
@@ -6751,6 +6848,7 @@
      "--exec-sha256",
      "--gitops-namespace",
      "--host",
+     "--infra",
      "--kubeconfig",
      "--name",
      "--namespace",
@@ -7076,6 +7174,36 @@
    "import-select-invalid",
    "import-target-invalid",
    "import-timed-out",
+   "infra-apply-failed",
+   "infra-backend-changed",
+   "infra-credential-exists",
+   "infra-credential-invalid",
+   "infra-credential-missing",
+   "infra-credential-refused",
+   "infra-credential-unsafe",
+   "infra-foreign-resource",
+   "infra-install-changed",
+   "infra-install-failed",
+   "infra-install-unavailable",
+   "infra-invalid",
+   "infra-k3s-not-ready",
+   "infra-kubeconfig-invalid",
+   "infra-load-failed",
+   "infra-no-cluster",
+   "infra-not-applied",
+   "infra-not-found",
+   "infra-plan-changed",
+   "infra-prompt-required",
+   "infra-register-changed",
+   "infra-server-unknown",
+   "infra-ssh-missing",
+   "infra-ssh-unreachable",
+   "infra-state-in-git",
+   "infra-state-locked",
+   "infra-state-unexpected",
+   "infra-tofu-failed",
+   "infra-tofu-missing",
+   "infra-tofu-unsupported",
    "inputs-io-error",
    "inputs-lock-invalid",
    "invalid-access-profile",
@@ -8414,6 +8542,18 @@
   "piceli.infra.composition",
   "piceli.infra.contract",
   "piceli.infra.controller",
+  "piceli.infra.machines",
+  "piceli.infra.machines.credentials",
+  "piceli.infra.machines.hetzner",
+  "piceli.infra.machines.install",
+  "piceli.infra.machines.model",
+  "piceli.infra.machines.plan",
+  "piceli.infra.machines.provider",
+  "piceli.infra.machines.register",
+  "piceli.infra.machines.render",
+  "piceli.infra.machines.state",
+  "piceli.infra.machines.status",
+  "piceli.infra.machines.tofu",
   "piceli.infra.multicluster",
   "piceli.infra.pipelines",
   "piceli.infra.render",
@@ -8438,6 +8578,7 @@
   "piceli.k8s.cli.gitops",
   "piceli.k8s.cli.heavy",
   "piceli.k8s.cli.importing",
+  "piceli.k8s.cli.infra",
   "piceli.k8s.cli.inputs",
   "piceli.k8s.cli.maintenance",
   "piceli.k8s.cli.observe",
@@ -8581,6 +8722,7 @@
   "piceli.services.forwards",
   "piceli.services.log_workspace",
   "piceli.services.logs",
+  "piceli.services.machines",
   "piceli.services.named_environment_actions",
   "piceli.services.navigation",
   "piceli.services.observation",
@@ -8604,6 +8746,7 @@
   "piceli.tempfiles",
   "piceli.testing",
   "piceli.testing.fake_api",
+  "piceli.testing.infra",
   "piceli.testing.pytest_plugin",
   "piceli.utils"
  ],

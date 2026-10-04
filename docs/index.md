@@ -239,6 +239,7 @@ plans_and_diffs
 compatibility
 secrets
 managed_clusters
+infrastructure
 access
 migrate_from_kubectl
 testing

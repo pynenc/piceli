@@ -73,6 +73,13 @@ Approvals; Nodes and Registry). The current page's sub-menu is open; the
 chevron opens or closes one with the mouse or Enter/Space, and the browser
 remembers that choice. Phones keep a single scrolling row without sub-menus.
 
+`piceli ui serve … --infra machines.py:infra` adds **Machines** to the
+Workspace group (from 0.15.0): the servers of a declared `Infrastructure`
+with their state, addresses, OS install, cluster registration and monthly
+cost, and the DNS records. It reads what the last `piceli infra` commands
+recorded; it never runs OpenTofu or reads a credential. Plans and applies
+stay on the command line (see {doc}`infrastructure`).
+
 ```{image} _static/ui/navigation-badges.webp
 :alt: Navigation with approval, environment and registry counts and an Environments sub-menu listing each environment
 :width: 720px

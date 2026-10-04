@@ -307,6 +307,36 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`import-select-invalid`](#error-import-select-invalid) | import | no |
 | [`import-target-invalid`](#error-import-target-invalid) | import | no |
 | [`import-timed-out`](#error-import-timed-out) | artifacts-delivery | yes |
+| [`infra-apply-failed`](#error-infra-apply-failed) | infra | no |
+| [`infra-backend-changed`](#error-infra-backend-changed) | infra | no |
+| [`infra-credential-exists`](#error-infra-credential-exists) | infra | no |
+| [`infra-credential-invalid`](#error-infra-credential-invalid) | infra | no |
+| [`infra-credential-missing`](#error-infra-credential-missing) | infra | no |
+| [`infra-credential-refused`](#error-infra-credential-refused) | infra | no |
+| [`infra-credential-unsafe`](#error-infra-credential-unsafe) | infra | no |
+| [`infra-foreign-resource`](#error-infra-foreign-resource) | infra | no |
+| [`infra-install-changed`](#error-infra-install-changed) | infra | yes |
+| [`infra-install-failed`](#error-infra-install-failed) | infra | no |
+| [`infra-install-unavailable`](#error-infra-install-unavailable) | infra | no |
+| [`infra-invalid`](#error-infra-invalid) | infra | no |
+| [`infra-k3s-not-ready`](#error-infra-k3s-not-ready) | infra | yes |
+| [`infra-kubeconfig-invalid`](#error-infra-kubeconfig-invalid) | infra | no |
+| [`infra-load-failed`](#error-infra-load-failed) | infra | no |
+| [`infra-no-cluster`](#error-infra-no-cluster) | infra | no |
+| [`infra-not-applied`](#error-infra-not-applied) | infra | no |
+| [`infra-not-found`](#error-infra-not-found) | infra | no |
+| [`infra-plan-changed`](#error-infra-plan-changed) | infra | yes |
+| [`infra-prompt-required`](#error-infra-prompt-required) | infra | no |
+| [`infra-register-changed`](#error-infra-register-changed) | infra | yes |
+| [`infra-server-unknown`](#error-infra-server-unknown) | infra | no |
+| [`infra-ssh-missing`](#error-infra-ssh-missing) | infra | no |
+| [`infra-ssh-unreachable`](#error-infra-ssh-unreachable) | infra | yes |
+| [`infra-state-in-git`](#error-infra-state-in-git) | infra | no |
+| [`infra-state-locked`](#error-infra-state-locked) | infra | yes |
+| [`infra-state-unexpected`](#error-infra-state-unexpected) | infra | no |
+| [`infra-tofu-failed`](#error-infra-tofu-failed) | infra | yes |
+| [`infra-tofu-missing`](#error-infra-tofu-missing) | infra | no |
+| [`infra-tofu-unsupported`](#error-infra-tofu-unsupported) | infra | no |
 | [`inputs-io-error`](#error-inputs-io-error) | inputs | yes |
 | [`inputs-lock-invalid`](#error-inputs-lock-invalid) | inputs | no |
 | [`invalid-access-profile`](#error-invalid-access-profile) | observe | no |
@@ -5680,4 +5710,247 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Write refused.** The support bundle only reads; a request with another method than GET was refused before it was sent.
 
 - **Fix:** Report it: the collector never writes, and nothing was changed.
+- **Retry-safe:** no
+
+
+## Machines provisioned with OpenTofu (`piceli.infra.Infrastructure`, `piceli infra …`, `piceli secrets provider|state-key`)
+
+(error-infra-apply-failed)=
+### `infra-apply-failed`
+
+**OpenTofu apply failed.** `tofu apply` of the approved plan exited with an error; part of the plan may have been applied. The state and `piceli infra status` show what exists.
+
+- **Fix:** Read the `tofu:` lines on stderr, fix the cause, then plan again (`piceli infra plan MODULE:ATTR`) and approve the new hash.
+- **Retry-safe:** no
+
+(error-infra-backend-changed)=
+### `infra-backend-changed`
+
+**State backend changed.** `Infrastructure(backend=)` differs from the backend the state was created with; running would start an empty state and create everything again.
+
+- **Fix:** Restore the previous backend, or move the state yourself (`tofu init -migrate-state` in the state directory) and update `backend.json` there.
+- **Retry-safe:** no
+
+(error-infra-credential-exists)=
+### `infra-credential-exists`
+
+**State key already stored.** A state passphrase with that name exists; replacing it makes the state it encrypts unreadable.
+
+- **Fix:** Keep the existing key, or pass `--replace` if the state it protected is gone.
+- **Retry-safe:** no
+
+(error-infra-credential-invalid)=
+### `infra-credential-invalid`
+
+**Invalid credential.** A credential name is not a valid name, its file is damaged or of another kind, or the value read is empty, has control characters, or is a state passphrase shorter than 16 characters.
+
+- **Fix:** Store the credential again with `piceli secrets provider|state-key NAME --prompt`.
+- **Retry-safe:** no
+
+(error-infra-credential-missing)=
+### `infra-credential-missing`
+
+**Credential not stored.** The provider token or state passphrase the declaration names is not in the credentials directory (`$PICELI_CREDENTIALS_DIR`, default `~/.config/piceli/credentials`).
+
+- **Fix:** Store it: `piceli secrets provider NAME --prompt` for a token, `piceli secrets state-key NAME --generate` (or `--prompt`) for a state passphrase.
+- **Retry-safe:** no
+
+(error-infra-credential-refused)=
+### `infra-credential-refused`
+
+**Secret passed the unsafe way.** A secret was given as a command-line argument or in the environment (`HCLOUD_TOKEN`, `PICELI_PROVIDER_TOKEN`, `PICELI_STATE_KEY`), where it leaks into process listings and logs. It was not stored or echoed.
+
+- **Fix:** Unset the variable and run `piceli secrets provider|state-key NAME --prompt`, then type the value (or pipe it on stdin).
+- **Retry-safe:** no
+
+(error-infra-credential-unsafe)=
+### `infra-credential-unsafe`
+
+**Credential readable by others.** A credential file is readable or writable by other users.
+
+- **Fix:** Run `chmod 600` on the file named in the message (and `chmod 700` on its directory), then run the command again.
+- **Retry-safe:** no
+
+(error-infra-foreign-resource)=
+### `infra-foreign-resource`
+
+**Plan touches a resource Piceli did not create.** The plan would update, replace or delete a resource that is not in Piceli's ownership ledger or does not carry `piceli.io/managed-by=piceli` and `piceli.io/infra=<name>` (for example one imported into the state by hand). Nothing ran.
+
+- **Fix:** Remove the resource from the state with `tofu state rm` in the state directory (it is then left alone), or delete it at the provider yourself; then plan again.
+- **Retry-safe:** no
+
+(error-infra-install-changed)=
+### `infra-install-changed`
+
+**Install command changed.** The rendered install command (or its server's addresses) is not the one approved, or the digest is wrong.
+
+- **Fix:** Run `piceli infra install MODULE:ATTR SERVER` again, review the command and approve its digest.
+- **Retry-safe:** yes
+
+(error-infra-install-failed)=
+### `infra-install-failed`
+
+**Install hook failed.** The approved install command could not start, exited with an error, or ran longer than `Hook(timeout=)` and was stopped. Its output went to stderr.
+
+- **Fix:** Fix the cause shown by the command's output, then run `piceli infra install` again (plan, then approve).
+- **Retry-safe:** no
+
+(error-infra-install-unavailable)=
+### `infra-install-unavailable`
+
+**No install hook to run.** The server declares no `install=Hook(...)`, or its hook uses a placeholder the server has no value for (for example `{ipv4}` without IPv4).
+
+- **Fix:** Declare `Server(..., install=Hook([...]))` with placeholders the server has, or install the OS by hand.
+- **Retry-safe:** no
+
+(error-infra-invalid)=
+### `infra-invalid`
+
+**Invalid machine declaration.** A `Server`, `PrimaryIp`, `Firewall`, `Rule`, `DnsRecord`, `Hook`, `Ssh`, provider or `Infrastructure` has a value Piceli refuses (a name that is not a DNS label, a port out of range, a CIDR with host bits, a server type the provider does not accept, an option of `piceli infra` out of range).
+
+- **Fix:** Fix the declaration as the message says, then run the command again.
+- **Retry-safe:** no
+
+(error-infra-k3s-not-ready)=
+### `infra-k3s-not-ready`
+
+**k3s did not become ready.** Before `--wait` seconds passed, the kubeconfig could not be read over SSH, or the API at `Cluster(api=)` did not answer with a Ready node (k3s still installing, the API address not reachable, or not in k3s's TLS SANs).
+
+- **Fix:** Check k3s on the server and that `Cluster(api=)` is reachable and listed in k3s's `--tls-san`, then run `piceli infra register` again (a longer `--wait` if it is still starting).
+- **Retry-safe:** yes
+
+(error-infra-kubeconfig-invalid)=
+### `infra-kubeconfig-invalid`
+
+**Kubeconfig unusable.** The kubeconfig (given or read over SSH) is not YAML, is larger than 1 MB, or does not define exactly one usable context (or the `--context` given).
+
+- **Fix:** Give a kubeconfig with one context (or `--context NAME`), as k3s writes it to `/etc/rancher/k3s/k3s.yaml`.
+- **Retry-safe:** no
+
+(error-infra-load-failed)=
+### `infra-load-failed`
+
+**Infrastructure module failed to import.** Importing the module named by `MODULE:ATTR` raised an exception.
+
+- **Fix:** Fix the module (run it with `python` to see the error, or set `PICELI_DEBUG=1` for the traceback) and run the command again.
+- **Retry-safe:** no
+
+(error-infra-no-cluster)=
+### `infra-no-cluster`
+
+**Server declares no cluster.** `piceli infra register` needs `Server(cluster=Cluster(...))`: the cluster the server's k3s becomes.
+
+- **Fix:** Add `cluster=Cluster(name, api=..., credentials=...)` to the server and run the command again.
+- **Retry-safe:** no
+
+(error-infra-not-applied)=
+### `infra-not-applied`
+
+**Server not created yet.** The server has no id or address in the state directory's inventory: it was never applied, or was destroyed.
+
+- **Fix:** Run `piceli infra apply MODULE:ATTR` (plan, then `--approve HASH`) first.
+- **Retry-safe:** no
+
+(error-infra-not-found)=
+### `infra-not-found`
+
+**Not an Infrastructure.** `MODULE:ATTR` does not import, or does not name a `piceli.infra.Infrastructure`.
+
+- **Fix:** Point the command at the module attribute that holds the `Infrastructure(...)`, for example `machines.py:infra`.
+- **Retry-safe:** no
+
+(error-infra-plan-changed)=
+### `infra-plan-changed`
+
+**Infrastructure plan changed.** The fresh plan's hash is not the approved one: the declaration, the pinned providers, the state or the resources at the provider changed since the plan (or the hash is wrong).
+
+- **Fix:** Run `piceli infra plan MODULE:ATTR` (or `destroy` without `--approve`) again, review the new plan and approve its hash.
+- **Retry-safe:** yes
+
+(error-infra-prompt-required)=
+### `infra-prompt-required`
+
+**Secret source not chosen.** `piceli secrets provider` needs `--prompt`; `piceli secrets state-key` needs exactly one of `--prompt` or `--generate`.
+
+- **Fix:** Add `--prompt` (and type the value, or pipe it on stdin) or `--generate`.
+- **Retry-safe:** no
+
+(error-infra-register-changed)=
+### `infra-register-changed`
+
+**Registration changed since approval.** The host keys, the kubeconfig or the profile that `register` would write are not those approved, or the digest is wrong. A changed host key can mean another machine answers at that address.
+
+- **Fix:** Run `piceli infra register MODULE:ATTR SERVER` again, check the fingerprints, and approve the new digest.
+- **Retry-safe:** yes
+
+(error-infra-server-unknown)=
+### `infra-server-unknown`
+
+**Server not declared.** No server of the `Infrastructure` has that name.
+
+- **Fix:** Use a name from `piceli infra status MODULE:ATTR`.
+- **Retry-safe:** no
+
+(error-infra-ssh-missing)=
+### `infra-ssh-missing`
+
+**SSH tools not found.** `ssh` or `ssh-keyscan` is not on `PATH`.
+
+- **Fix:** Install OpenSSH's client, or give the kubeconfig yourself with `--kubeconfig FILE`.
+- **Retry-safe:** no
+
+(error-infra-ssh-unreachable)=
+### `infra-ssh-unreachable`
+
+**Server's SSH not reachable.** No host key could be read from the server's SSH address (it is down, the OS install has not finished, or the firewall does not allow SSH from here).
+
+- **Fix:** Check that the server runs and that `Ssh(address=)` is reachable from this machine, then run the command again.
+- **Retry-safe:** yes
+
+(error-infra-state-in-git)=
+### `infra-state-in-git`
+
+**State directory inside a Git work tree.** The OpenTofu state directory (`Infrastructure(state_dir=)` or the default) is inside a Git work tree, where it could be committed.
+
+- **Fix:** Set `Infrastructure(state_dir=...)` to a directory outside any repository, or keep the default `~/.local/state/piceli/infra/<name>`.
+- **Retry-safe:** no
+
+(error-infra-state-locked)=
+### `infra-state-locked`
+
+**Infrastructure state in use.** Another `piceli infra` command holds the state directory's lock: one operator at a time.
+
+- **Fix:** Wait for the other command to end, then run this one again.
+- **Retry-safe:** yes
+
+(error-infra-state-unexpected)=
+### `infra-state-unexpected`
+
+**Unexpected files in the state directory.** The state directory holds OpenTofu configuration or variable files (`*.tf`, `*.tf.json`, `*.tofu`, `*.tfvars`) besides Piceli's `main.tf.json`; OpenTofu would load them together with the declaration.
+
+- **Fix:** Move the files named in the message out of the state directory (Piceli writes only `main.tf.json` there), then run the command again.
+- **Retry-safe:** no
+
+(error-infra-tofu-failed)=
+### `infra-tofu-failed`
+
+**OpenTofu command failed.** `tofu init`, `plan` or `show` exited with an error (a provider download, a provider API refusal, a wrong state passphrase, an unreachable state backend). Nothing was applied. Its diagnostics are on stderr, with secrets redacted.
+
+- **Fix:** Read the `tofu:` lines on stderr, fix the cause, and run the command again.
+- **Retry-safe:** yes
+
+(error-infra-tofu-missing)=
+### `infra-tofu-missing`
+
+**OpenTofu not found.** No `tofu` binary: not given with `--tofu`, not in `$PICELI_TOFU`, not on `PATH`, or not executable.
+
+- **Fix:** Install OpenTofu 1.8 or later (for example `nix shell nixpkgs#opentofu`) or pass `--tofu PATH`.
+- **Retry-safe:** no
+
+(error-infra-tofu-unsupported)=
+### `infra-tofu-unsupported`
+
+**Not a supported OpenTofu.** The binary did not report `OpenTofu vX.Y.Z`, or its version is older than 1.8. Piceli needs OpenTofu's state encryption; another tool would write the state in the clear.
+
+- **Fix:** Install OpenTofu 1.8 or later and pass it with `--tofu PATH`.
 - **Retry-safe:** no

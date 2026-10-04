@@ -93,6 +93,30 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   declared health, events, Services, ConfigMap keys, log tails, with a
   manifest. Secrets are never requested; env and ConfigMap values are never
   collected.
+- **Machines in typed Python, provisioned with OpenTofu.** `Server`,
+  `PrimaryIp`, `Firewall`/`Rule`, `DnsRecord`, `Hook`, `Ssh` and
+  `Infrastructure` (in `piceli.infra`) declare servers, fixed IPs, firewalls
+  and DNS record sets; `Hetzner(...)` renders them for the `hcloud` OpenTofu
+  provider, pinned (1.69.0) with every platform's lock-file hashes, behind a
+  small provider contract (`piceli.infra.Provider`). `piceli infra plan`
+  prints the changes, the monthly estimate (Hetzner's prices) and a plan
+  hash; `piceli infra apply|destroy --approve HASH` re-plans and applies
+  only that plan (`infra-plan-changed`), and never changes or deletes a
+  resource Piceli did not create (ownership ledger and labels,
+  `infra-foreign-resource`). Piceli owns the state: a `0700` directory
+  outside Git, one command at a time, encrypted by OpenTofu's state
+  encryption with a passphrase from `piceli secrets state-key`; optional
+  `HttpState` remote backend (ciphertext only). Provider tokens come from
+  `piceli secrets provider NAME --prompt` and reach OpenTofu in its
+  environment only, redacted from its output. `piceli infra install` runs
+  the server's OS install hook after approval of its rendered command;
+  `piceli infra register` pins the server's SSH host keys, reads its k3s
+  kubeconfig (or `--kubeconfig FILE`), waits for a Ready node and makes it
+  the server's `Cluster` profile. `piceli infra status` and a read-only
+  Machines page (`piceli ui serve --infra MODULE:ATTR`) show servers,
+  addresses, installs, clusters and cost. `piceli.testing.infra.FakeProvider`
+  runs all of it with a real OpenTofu and nothing created. Error area
+  `infra`. See {doc}`infrastructure`.
 
 ## Version 0.14.7
 

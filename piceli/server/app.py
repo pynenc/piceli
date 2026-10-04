@@ -90,6 +90,7 @@ if TYPE_CHECKING:
     from piceli.services.environment_control import EnvironmentControl
     from piceli.services.log_workspace import ProfileScopes
     from piceli.services.logs import LogService
+    from piceli.services.machines import MachinesControl
     from piceli.services.named_environment_actions import NamedEnvironmentActions
     from piceli.services.operations import OperationService
     from piceli.services.pipeline_control import PipelineControl
@@ -196,6 +197,7 @@ def create_app(
     active_profile: str | None = None,
     profile_switch: Callable[[str], None] | None = None,
     profile_scopes: ProfileScopes | None = None,
+    machines_control: MachinesControl | None = None,
 ) -> FastAPI:
     """Create a local app. The caller owns the server's loopback listener.
 
@@ -205,6 +207,9 @@ def create_app(
     cookie; all routes reject foreign Host, Origin and Fetch Metadata.
     State-changing routes additionally require Origin and X-Piceli-CSRF.
     """
+    if cluster_security is not None and machines_control is not None:
+        # Machines are the UI owner's local view (state directory, laptop).
+        raise ValueError("the machines view requires the local launch session")
     if cluster_security is not None:
         from piceli.services.cluster_evaluation import KubernetesJobEvaluator
 
@@ -534,6 +539,15 @@ def create_app(
                     }
                 }
             )
+        if machines_control is not None:
+            result = result.model_copy(
+                update={
+                    "actions": {
+                        **result.actions,
+                        "machines": Capability(allowed=True, reason=None),
+                    }
+                }
+            )
         if (
             environment_control is None
             and pipeline_control is None
@@ -751,6 +765,15 @@ def create_app(
         if cluster_status_control is None:
             raise QueryError("ui-operation-unavailable", 409)
         return cluster_status_control.status()
+
+    @app.get(f"{api}/machines")
+    def machines() -> dict[str, Any]:
+        if machines_control is None:
+            raise QueryError("ui-operation-unavailable", 409)
+        try:
+            return machines_control.status()
+        except (OSError, ValueError):
+            raise QueryError("ui-observation-unavailable", 503) from None
 
     @app.get(f"{api}/composition/environments/{{env}}")
     def composition_environment(env: str) -> dict[str, Any]:

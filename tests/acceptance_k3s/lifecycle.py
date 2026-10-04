@@ -89,6 +89,12 @@ Also from 0.14.7 (``lifecycle_prune.py``; last, in main):
     (``checks-failed-rolled-back``) with no new run for several polls, and
     the fix deploys.
 
+From 0.15.0 (``lifecycle_infra.py``; last, or alone with ``--stages 28``):
+
+28. Machines in typed Python with OpenTofu (fake provider): plan, approve,
+    install hook, register the k3d cluster as the server's cluster, destroy
+    exactly what apply created.
+
 From 0.14.7 too (``lifecycle_ops.py``; last, after 6 and 21):
 
 22. After a rollout ``gitops status`` shows each environment's last checks
@@ -145,6 +151,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from lifecycle_edges import EdgeStages
+from lifecycle_infra import InfraStages
 from lifecycle_ops import OpsStages
 from lifecycle_prune import PruneStages
 from lifecycle_reach import ReachStages
@@ -209,7 +216,7 @@ ALL_CHECKS = {
 STAGE_ORDER = (
     "2", "3", "1", "4", "5", "6", "11", "7", "12", "16", "17", "18", "19",
     "8", "15", "9", "10", "13", "14", "20", "21", "22", "23", "24",
-    "25", "26", "27",
+    "25", "26", "27", "28",
 )  # fmt: skip
 STAGE_TITLES = {
     "1": "upgrade from the previous release",
@@ -239,6 +246,7 @@ STAGE_TITLES = {
     "25": "two edge clusters: init, credentials, canary first",
     "26": "an edge cluster unreachable mid-rollout, then back",
     "27": "an edge cluster leaves the environment",
+    "28": "machines: plan, apply, install, register, destroy (OpenTofu)",
 }
 STAGE_METHODS = {
     "1": "1_upgrade", "2": "2_bootstrap", "3": "3_first_main", "4": "4_one_source",
@@ -249,10 +257,13 @@ STAGE_METHODS = {
     "18": "18_ui_forward", "19": "19_cli_forward", "20": "20_prune",
     "21": "21_rollback_no_loop", "22": "22_checks_status", "23": "23_stop_start",
     "24": "24_access_ui_killed", "25": "25_edge_add",
-    "26": "26_edge_unreachable", "27": "27_edge_remove",
+    "26": "26_edge_unreachable", "27": "27_edge_remove", "28": "28_infra",
 }  # fmt: skip
 #: Stages whose failure stops the run (the rest depend on them).
 CRITICAL = {"2", "3"}
+#: Stages that need neither the bootstrap nor the Git repositories:
+#: ``--stages 28`` runs them alone after a light setup.
+STANDALONE = {"28"}
 
 CANDIDATE_DOCKERFILE = """\
 ARG BASE
@@ -289,7 +300,7 @@ EXTRA_CHECK = """EXTRA_CHECKS: list = [
 ]"""
 
 
-class Lifecycle(OpsStages, PruneStages, ReachStages, EdgeStages):
+class Lifecycle(OpsStages, PruneStages, ReachStages, EdgeStages, InfraStages):
     def __init__(self, args: argparse.Namespace, scratch: Path) -> None:
         self.args = args
         self.scratch = scratch
@@ -807,6 +818,12 @@ class Lifecycle(OpsStages, PruneStages, ReachStages, EdgeStages):
     # ------------------------------------------------------------ set up
     def setup(self) -> None:
         log(f"scratch directory {self.scratch}")
+        if self.args.stages <= STANDALONE:
+            # Only the candidate's CLI and the cluster (no Git, no bootstrap).
+            self._candidate_venv()
+            self.piceli = self.cand_cli
+            self.cluster.create()
+            return
         self._venvs()
         self.cluster.create()
         nodes = self.cluster.get("nodes")["items"]
@@ -860,6 +877,10 @@ class Lifecycle(OpsStages, PruneStages, ReachStages, EdgeStages):
             timeout=900,
         )  # fmt: skip
         self.prev_cli = str(prev / "bin" / "piceli")
+        self._candidate_venv()
+
+    def _candidate_venv(self) -> None:
+        uv = shutil.which("uv") or "uv"
         cand = self.scratch / "venv-candidate"
         self.proc.run([uv, "venv", "-q", "--python", "3.12", str(cand)], timeout=300)
         if self.args.candidate_version:
@@ -2437,7 +2458,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="candidate images: previous images plus the wheel (default), "
                         "or images/Dockerfile")  # fmt: skip
     parser.add_argument(
-        "--stages", default="1-27", help="e.g. 1-27 or 1,2,3 (setup always runs)"
+        "--stages",
+        default="1-28",
+        help="e.g. 1-28 or 1,2,3 (setup always runs; 28 alone runs without the bootstrap)",
     )
     parser.add_argument("--playwright-ui", type=Path, default=None,
                         help="ui/ directory with node_modules for the optional browser "
@@ -2454,7 +2477,9 @@ def main(argv: list[str] | None = None) -> int:
     args.candidate_public = bool(
         args.candidate_image
     ) and not args.candidate_image.startswith(REGISTRY_HOST)
-    args.stages = parse_stages(args.stages) | {"1", "2", "3"}
+    args.stages = parse_stages(args.stages)
+    if not args.stages <= STANDALONE:
+        args.stages |= {"1", "2", "3"}
     args.playwright_ui = (args.playwright_ui or args.candidate / "ui").resolve()
     for tool in ("docker", "kubectl", "git", "uv"):
         if not shutil.which(tool):

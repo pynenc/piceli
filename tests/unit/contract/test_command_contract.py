@@ -647,6 +647,38 @@ CASES: dict[str, tuple[Argv, str]] = {
         ],
         "target-refused",
     ),
+    "infra plan": (
+        lambda p: ["infra", "plan", "no_such_machines:infra"],
+        "infra-not-found",
+    ),
+    "infra apply": (
+        lambda p: ["infra", "apply", "no_such_machines:infra", "--approve", "sha256:0"],
+        "infra-not-found",
+    ),
+    "infra destroy": (
+        lambda p: ["infra", "destroy", "no_such_machines:infra"],
+        "infra-not-found",
+    ),
+    "infra status": (
+        lambda p: ["infra", "status", "no_such_machines:infra"],
+        "infra-not-found",
+    ),
+    "infra install": (
+        lambda p: ["infra", "install", "no_such_machines:infra", "edge-1"],
+        "infra-not-found",
+    ),
+    "infra register": (
+        lambda p: ["infra", "register", "no_such_machines:infra", "edge-1"],
+        "infra-not-found",
+    ),
+    "secrets provider": (
+        lambda p: ["secrets", "provider", "hcloud", "a-token-value"],
+        "infra-credential-refused",
+    ),
+    "secrets state-key": (
+        lambda p: ["secrets", "state-key", "edge-state"],
+        "infra-prompt-required",
+    ),
 }
 
 
