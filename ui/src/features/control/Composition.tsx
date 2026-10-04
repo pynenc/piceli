@@ -26,6 +26,14 @@ export type Environment = {
   trigger?: string | null; approval?: { via: string; at?: string | null } | null;
   pending_plan?: PendingPlan | null;
   checks?: EnvironmentChecksReport | null; stop?: { by: string; via?: string | null; at?: string | null } | null;
+  /** Each cluster of an environment placed on several (absent for one cluster). */
+  clusters?: EnvironmentCluster[];
+};
+/** One cluster of an environment on several: its own state, checks and reach. */
+export type EnvironmentCluster = {
+  name: string; state: string; health: string; reason?: string | null; revision: Record<string, string>;
+  checks?: EnvironmentChecksReport | null; last_contact?: string | null; last_sync?: string | null;
+  namespace?: string | null; api?: string | null; home?: boolean; held_by?: string | null;
 };
 /** The last checks a run of the environment executed (a rollout or a verification). */
 export type EnvironmentChecksReport = {
@@ -92,6 +100,18 @@ function SyncError({ sync }: { sync: ReturnType<typeof useSync> }) {
   return sync.mutation.isError ? <Failure error={sync.mutation.error} /> : null;
 }
 
+/** Per-cluster state of an environment on several clusters (rollout order). */
+export function ClusterStates({ env, detailed = false }: { env: Environment; detailed?: boolean }) {
+  const clusters = env.clusters ?? [];
+  if (!clusters.length) return null;
+  return <ul className="cluster-states" aria-label={`Clusters of ${env.name}`}>{clusters.map(cluster => <li key={cluster.name}>
+    <strong>{cluster.name}</strong>{cluster.home && <span className="small muted"> (controller)</span>} <Badge value={cluster.state} />{detailed && <> <Badge value={cluster.health} /></>}
+    {cluster.reason && <span className="small muted"> {cluster.reason}{cluster.held_by ? ` (${cluster.held_by})` : ''}</span>}
+    {cluster.state === 'unreachable' && <span className="small"> · last contact {formatTime(cluster.last_contact)}</span>}
+    {detailed && <p className="small muted">{cluster.namespace ?? 'Namespace pending'}{cluster.checks ? ` · ${checksSummary(cluster.checks)}` : ''} · last sync {formatTime(cluster.last_sync)}</p>}
+  </li>)}</ul>;
+}
+
 function ControllerLine({ controller }: { controller: Controller }) {
   return <p className="small muted controller-line">Controller <Badge value={controller?.state ?? 'unknown'} /> · last poll {formatTime(controller?.last_poll)}</p>;
 }
@@ -106,6 +126,7 @@ function EnvironmentInventory({ environments, canSync, sync }: { environments: E
     <div className="composition-inventory-state"><span className="state-label">Health / state</span><div><Badge value={env.health} /> <Badge value={env.state} /></div>{env.reason && <p className="small muted">{env.reason}</p>}</div>
     <div className="composition-inventory-revision"><span className="state-label">Revision per source</span><Revision revision={env.revision} /></div>
     <div className="composition-inventory-components"><span className="state-label">Components</span><p className="small">{componentSummary(env.components)}</p><p className="small muted">Last sync {formatTime(env.last_sync)}</p>{env.checks && <p className="small" aria-label={`Last checks of ${env.name}`}>{checksSummary(env.checks)}</p>}</div>
+    {env.clusters && env.clusters.length > 0 && <div className="composition-inventory-clusters"><span className="state-label">Clusters</span><ClusterStates env={env} /></div>}
     <div className="composition-inventory-actions"><Link className="button" to={environmentPath(env.name)}>Open environment</Link>{canSync && <SyncButton env={env.name} sync={sync} label={`Sync ${env.name}`} />}</div>
     {env.state === 'stopped' && env.stop && <div className="composition-inventory-notice"><Notice title="Stopped">{env.stop.by === 'declared' ? 'Declared stopped in the composition (Environment(stopped=True)); remove the declaration to start it.' : `Stopped on request; start it with piceli env start ${env.name} or Start on the environment.`}</Notice></div>}
     {env.state === 'approval-required' && <div className="composition-inventory-notice"><Notice title="Approval pending">Approve the pending plan with <code>piceli gitops approve {env.name} {env.plan_hash ?? 'HASH'}</code>.</Notice></div>}
@@ -191,6 +212,7 @@ export function CompositionEnvironment({ canSync, actions }: { canSync: boolean;
     {item && <>
       <div className="heading detail-heading"><div><p className="eyebrow">Environment</p><h1>{item.name}</h1><p className="subtitle">{item.namespace ?? 'Namespace pending'}</p></div><div className="run-actions"><button onClick={() => void query.refetch()} disabled={query.isFetching}>Refresh</button>{item.application_id && <><Link className="button" to={logsPath({ scope: item.application_id })}>Logs</Link><Link className="button" to={forwardsPath({ application: item.application_id })}>Forwards</Link></>}{actions?.(item)}{canSync && <SyncButton env={item.name} sync={sync} label={`Sync ${item.name}`} />}</div></div>
       <div className="statusbar" aria-label="Environment state"><div className="statusitem"><span className="statuslabel">Health</span><Badge value={item.health} /></div><div className="statusitem"><span className="statuslabel">State</span><Badge value={item.state} />{item.reason && <p>{item.reason}</p>}</div><div className="statusitem"><span className="statuslabel">Last sync</span><p>{formatTime(item.last_sync)}</p></div><div className="statusitem"><span className="statuslabel">Revision</span><Revision revision={item.revision} /></div></div><EnvironmentVerification verification={item.verification} /><EnvironmentChecks checks={item.checks} />
+      {item.clusters && item.clusters.length > 0 && <section className="panel control-card" aria-label="Clusters"><div className="panelhead"><h2>Clusters <span className="count">{item.clusters.length}</span></h2></div><div className="panelbody"><ClusterStates env={item} detailed /></div></section>}
       <SyncError sync={sync} />
       <section className="panel control-card" aria-label="Components"><div className="panelhead"><h2>Components <span className="count">{item.components.length}</span></h2></div>
         {item.components.length === 0 ? <p className="panelbody muted">No components reported for this environment yet.</p> : <ul className="component-list">{item.components.map(component => <li key={component.name}>

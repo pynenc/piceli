@@ -203,6 +203,7 @@ def env_config(composition: Composition, env: EnvItem) -> EnvConfig:
         env.name,
         namespace=env.namespace,
         on_nodes=env.on_nodes,
+        replicas=env.replicas,
         quota=env.quota,
         auto_approve=env.auto_approve,
     )

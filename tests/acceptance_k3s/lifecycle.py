@@ -101,6 +101,19 @@ From 0.14.7 too (``lifecycle_ops.py``; last, after 6 and 21):
     forward and the UI in one command; piceli killed with SIGKILL leaves no
     ``kubectl`` and frees every port.
 
+From 0.15 (``lifecycle_edges.py``; last; two more single-node k3d
+clusters, deleted with the home one whatever the outcome):
+
+25. Two edge clusters added as the note says (login, cluster init with its
+    own registry, secrets cluster, gitops enable); the ``edge`` environment
+    deploys to the canary ``edge-a`` first, then ``edge-b``, each from its
+    own registry.
+26. ``edge-b``'s API stopped mid-rollout: main and ``edge-a`` deploy a
+    push, ``edge-b`` is ``unreachable`` with its last contact; back, it
+    converges.
+27. ``edge-b`` leaves the environment: its objects there are deleted,
+    ``edge-a`` and main keep running.
+
 The UI's launch token is never printed: the served command's output stays
 in memory and is redacted before any failure prints it.
 
@@ -131,6 +144,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from lifecycle_edges import EdgeStages
 from lifecycle_ops import OpsStages
 from lifecycle_prune import PruneStages
 from lifecycle_reach import ReachStages
@@ -195,6 +209,7 @@ ALL_CHECKS = {
 STAGE_ORDER = (
     "2", "3", "1", "4", "5", "6", "11", "7", "12", "16", "17", "18", "19",
     "8", "15", "9", "10", "13", "14", "20", "21", "22", "23", "24",
+    "25", "26", "27",
 )  # fmt: skip
 STAGE_TITLES = {
     "1": "upgrade from the previous release",
@@ -221,6 +236,9 @@ STAGE_TITLES = {
     "22": "status and UI show the checks of a rollout",
     "23": "stop and start a named environment",
     "24": "access ENV --ui, piceli killed: no kubectl left",
+    "25": "two edge clusters: init, credentials, canary first",
+    "26": "an edge cluster unreachable mid-rollout, then back",
+    "27": "an edge cluster leaves the environment",
 }
 STAGE_METHODS = {
     "1": "1_upgrade", "2": "2_bootstrap", "3": "3_first_main", "4": "4_one_source",
@@ -230,7 +248,8 @@ STAGE_METHODS = {
     "15": "15_ui_broken", "16": "16_ui_logs", "17": "17_ui_log_redaction",
     "18": "18_ui_forward", "19": "19_cli_forward", "20": "20_prune",
     "21": "21_rollback_no_loop", "22": "22_checks_status", "23": "23_stop_start",
-    "24": "24_access_ui_killed",
+    "24": "24_access_ui_killed", "25": "25_edge_add",
+    "26": "26_edge_unreachable", "27": "27_edge_remove",
 }  # fmt: skip
 #: Stages whose failure stops the run (the rest depend on them).
 CRITICAL = {"2", "3"}
@@ -270,7 +289,7 @@ EXTRA_CHECK = """EXTRA_CHECKS: list = [
 ]"""
 
 
-class Lifecycle(OpsStages, PruneStages, ReachStages):
+class Lifecycle(OpsStages, PruneStages, ReachStages, EdgeStages):
     def __init__(self, args: argparse.Namespace, scratch: Path) -> None:
         self.args = args
         self.scratch = scratch
@@ -2148,6 +2167,7 @@ class Lifecycle(OpsStages, PruneStages, ReachStages):
             except Exception:
                 pass
         self.cluster.delete()
+        self.edge_cleanup()
         for tag in self.images_to_remove:
             self.proc.run(
                 ["docker", "image", "rm", "-f", tag], check_exit=None, quiet=True
@@ -2417,7 +2437,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="candidate images: previous images plus the wheel (default), "
                         "or images/Dockerfile")  # fmt: skip
     parser.add_argument(
-        "--stages", default="1-24", help="e.g. 1-24 or 1,2,3 (setup always runs)"
+        "--stages", default="1-27", help="e.g. 1-27 or 1,2,3 (setup always runs)"
     )
     parser.add_argument("--playwright-ui", type=Path, default=None,
                         help="ui/ directory with node_modules for the optional browser "

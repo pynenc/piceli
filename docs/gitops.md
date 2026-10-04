@@ -379,6 +379,13 @@ and HTTP `status` of the request the Kubernetes API refused, as Piceli asked
 for it; never the server's answer). Dropped requests are listed in
 `rejected_requests` with their code.
 
+With several clusters (0.15, {doc}`multicluster`) each environment placed on
+several has `clusters.<cluster>` (`state`, with `unreachable` while its API
+does not answer, `health`, `checks`, `revision`, `reason`, `last_contact`,
+`namespace`, `api`, `held_by` when a rollout holds it), and the status has
+`clusters.<name>` (reach of every cluster) and `removals` (placements
+removed and what was kept).
+
 `piceli gitops approve`, `piceli gitops sync`, `piceli promote` and `piceli
 env stop|start` add one key each to the ConfigMap `piceli-gitops-requests`
 (kinds `approve`, `sync`, `promote`, `stop`, `start`); the controller

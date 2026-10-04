@@ -498,6 +498,7 @@ class FakeAPI:
         self.pod_logs: dict[tuple[str, str, bool], str] = {}
         self.job_results: dict[str, dict[str, Any]] = {}
         self.proxied: dict[tuple[str, str, int, str], tuple[int, bytes]] = {}
+        self.upstreams: dict[str, str] = {}
         self.forbid_proxy = False
         self.events: list[dict[str, Any]] = []
         self.put(manifest("Namespace", "kube-system"), uid="cluster-uid")
@@ -698,6 +699,26 @@ class FakeAPI:
         kind, _, name = target.partition("/")
         with self.lock:
             self.proxied[(kind, name, int(port), path)] = (status, body)
+
+    def proxy_upstream(self, target: str, port: int, base_url: str) -> None:
+        """Forward every request to ``target``'s proxy to ``base_url`` (0.15).
+
+        ``target`` is ``service/NAME`` or ``pod/NAME``; any method, the raw
+        body and the headers pass through both ways (an in-process registry
+        behind ``services/NAME:PORT/proxy``, as a real API server proxies it).
+        """
+        kind, _, name = target.partition("/")
+        prefix = f"/api/v1/namespaces/{self.namespace}/{kind}s/{name}:{int(port)}/proxy"
+        with self.lock:
+            self.upstreams[prefix] = base_url.rstrip("/")
+
+    def upstream_for(self, path: str) -> tuple[str, str] | None:
+        """``(base_url, rest)`` of a path behind :meth:`proxy_upstream`, or ``None``."""
+        with self.lock:
+            for prefix, base in self.upstreams.items():
+                if path == prefix or path.startswith(prefix + "/"):
+                    return base, path[len(prefix) :] or "/"
+        return None
 
     def _serve_proxy(self, path: str, method: str) -> tuple[int, Any] | None:
         """``services|pods/NAME:PORT/proxy/PATH`` of the namespace, or ``None``."""
@@ -1163,8 +1184,64 @@ class FakeAPI:
             def do_DELETE(self) -> None:
                 self.handle_request()
 
+            def do_PUT(self) -> None:
+                self.handle_request()
+
+            def do_HEAD(self) -> None:
+                self.handle_request()
+
+            def forward(self, base: str, rest: str, query: str) -> None:
+                import http.client
+
+                length = int(self.headers.get("Content-Length", "0") or 0)
+                data = self.rfile.read(length) if length else b""
+                with api.lock:
+                    api.requests.append(
+                        {"method": self.command, "path": urlsplit(self.path).path,
+                         "query": {}, "body": None, "proxied": True,
+                         "authorization": self.headers.get("Authorization")}
+                    )  # fmt: skip
+                target = urlsplit(base)
+                connection = http.client.HTTPConnection(
+                    target.hostname or "127.0.0.1", target.port, timeout=30
+                )
+                headers = {
+                    key: value
+                    for key, value in self.headers.items()
+                    if key.lower()
+                    in {"content-type", "accept", "range", "content-range"}
+                }
+                headers["Content-Length"] = str(len(data))
+                connection.request(
+                    self.command,
+                    rest + (f"?{query}" if query else ""),
+                    body=data,
+                    headers=headers,
+                )
+                response = connection.getresponse()
+                payload = response.read()
+                connection.close()
+                self.send_response(response.status)
+                for key, value in response.getheaders():
+                    if key.lower() not in {
+                        "content-length",
+                        "transfer-encoding",
+                        "connection",
+                        "date",
+                        "server",
+                    }:
+                        self.send_header(key, value)
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                if self.command != "HEAD":
+                    self.wfile.write(payload)
+
             def handle_request(self) -> None:
                 parsed = urlsplit(self.path)
+                upstream = api.upstream_for(parsed.path)
+                if upstream is not None:
+                    self.forward(upstream[0], upstream[1], parsed.query)
+                    return
                 query = parse_qs(parsed.query)
                 body = json.loads(
                     self.rfile.read(int(self.headers.get("Content-Length", "0")))

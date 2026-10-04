@@ -621,6 +621,47 @@ def isolation_objects(env: BranchEnv) -> tuple[dict[str, Any], dict[str, Any]]:
     return policy, quota_object(env, env.config.quota or {})
 
 
+# ------------------------------------------------------------------- replicas
+
+_SCALED_KINDS = ("Deployment", "StatefulSet")
+
+
+def scale(manifests: Mapping[ResourceRef, dict[str, Any]], env: BranchEnv) -> None:
+    """Set ``spec.replicas`` of the workloads ``env.replicas`` names (0.15).
+
+    Each name is a Deployment or StatefulSet the environment renders; one
+    a HorizontalPodAutoscaler scales is refused (the autoscaler owns its
+    count), as is a name that renders nothing (``env-config-invalid``).
+    """
+    if not env.replicas:
+        return
+    autoscaled = {
+        str(((manifest.get("spec") or {}).get("scaleTargetRef") or {}).get("name"))
+        for ref, manifest in manifests.items()
+        if ref.kind == "HorizontalPodAutoscaler"
+    }
+    for name, count in env.replicas.items():
+        found = [
+            manifest
+            for ref, manifest in manifests.items()
+            if ref.kind in _SCALED_KINDS and ref.name == name
+        ]
+        if not found:
+            raise EnvError(
+                "env-config-invalid",
+                f"replicas names {name!r}, which is no Deployment or StatefulSet "
+                "this environment renders",
+            )
+        if name in autoscaled:
+            raise EnvError(
+                "env-config-invalid",
+                f"replicas names {name!r}, which a HorizontalPodAutoscaler scales; "
+                "set its minReplicas/maxReplicas instead",
+            )
+        for manifest in found:
+            manifest.setdefault("spec", {})["replicas"] = int(count)
+
+
 # ------------------------------------------------------------------- entry
 
 
@@ -663,6 +704,7 @@ def isolate(
                 labels[ENV_NAMESPACE_LABEL] = env.namespace
     for ref, manifest in manifests.items():
         place(manifest, env, ref)
+    scale(manifests, env)
     changed.update(
         ref for ref, manifest in manifests.items() if repr(manifest) != before[ref]
     )

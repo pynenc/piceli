@@ -180,6 +180,21 @@ an output image is a component:
   (`piceli-gitops-history`) has `deleted` and `kept_orphaned`. See
   {doc}`gitops` (removed objects are deleted).
 
+### Several clusters and replicas per environment
+
+A composition may declare several clusters: environments then name where
+they run (`clusters=[Placement(...)]`) and in which order
+(`Rollout(order=[...])`); see {doc}`multicluster`.
+
+`Environment(..., replicas={"web": 3})` and `Environment.per_branch(...,
+replicas={"db": 1})` set the replica count of Deployments and StatefulSets
+in that environment (0.15): a branch environment can run one member of a
+replicated StatefulSet while main runs three. Each name must be a
+Deployment or StatefulSet the environment renders; a workload a
+HorizontalPodAutoscaler scales is refused (set its `min_replicas` and
+`max_replicas` instead). Undeclared, nothing changes (the same config and
+plan hashes as before).
+
 ## Not yet
 
 - A pipeline's `secrets=` generators run in the controller's pod (their

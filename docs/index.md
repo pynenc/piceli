@@ -229,6 +229,7 @@ typed_apps
 crds
 environments
 compositions
+multicluster
 components
 reference_app
 release_cli

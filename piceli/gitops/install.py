@@ -244,13 +244,64 @@ def render_controller(
     :class:`piceli.infra.controller.CompositionConfig` (its ``namespace`` and
     ``to_dict()`` are used).
     """
-    return render_foundation(
-        config.namespace,
-        storage=settings.storage,
-        storage_class=settings.storage_class,
-        cluster_rbac=settings.cluster_rbac,
-        delete_volumes=settings.delete_volumes,
-    ) + _render_workload(config, settings)
+    return (
+        render_foundation(
+            config.namespace,
+            storage=settings.storage,
+            storage_class=settings.storage_class,
+            cluster_rbac=settings.cluster_rbac,
+            delete_volumes=settings.delete_volumes,
+        )
+        + _cluster_secrets_access(config)
+        + _render_workload(config, settings)
+    )
+
+
+#: The Role (and binding) letting the controller read the credential Secrets
+#: of the other clusters of its composition (0.15).
+CLUSTERS_ROLE = f"{NAME}-clusters"
+
+
+def _cluster_secrets_access(config: Any) -> list[dict[str, Any]]:
+    """``get`` on exactly the other clusters' credential Secrets (none: nothing).
+
+    Only for a composition with several clusters, so other installs (and
+    their plan hashes) are unchanged.
+    """
+    composition = getattr(config, "composition", None)
+    others = (
+        (composition or {}).get("clusters")
+        if isinstance(composition, Mapping)
+        else None
+    )
+    if not others:
+        return []
+    from piceli.infra.multicluster import cluster_secret_names
+
+    ns = config.namespace
+    names = cluster_secret_names([str(item["name"]) for item in others])
+    return [
+        {
+            "apiVersion": f"{_RBAC}/v1",
+            "kind": "Role",
+            "metadata": _meta(CLUSTERS_ROLE, ns),
+            "rules": [
+                {
+                    "apiGroups": [""],
+                    "resources": ["secrets"],
+                    "resourceNames": names,
+                    "verbs": ["get"],
+                }
+            ],
+        },
+        {
+            "apiVersion": f"{_RBAC}/v1",
+            "kind": "RoleBinding",
+            "metadata": _meta(CLUSTERS_ROLE, ns),
+            "roleRef": {"apiGroup": _RBAC, "kind": "Role", "name": CLUSTERS_ROLE},
+            "subjects": [{"kind": "ServiceAccount", "name": NAME, "namespace": ns}],
+        },
+    ]
 
 
 def render_foundation(

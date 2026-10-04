@@ -112,6 +112,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli restore`](#cli-restore) | Put a restore point back into its claims (plan, then --approve HASH). | writes | yes |
 | [`piceli restore-points`](#cli-restore-points) | List a pipeline's restore points, newest first (read-only, offline). | none | no |
 | [`piceli runs`](#cli-runs) | List the deploy runs of a pipeline, newest first, with their state, release, duration and summary files. Read-only (with shared state it reads the local working copy: run `piceli state pull` first). | none | no |
+| [`piceli secrets cluster`](#cli-secrets-cluster) | Store another cluster's credentials for the GitOps controller (never printed). | writes | no |
 | [`piceli secrets git`](#cli-secrets-git) | Store the Git token the controller and cluster builds use (read from stdin, never printed). | writes | no |
 | [`piceli state export`](#cli-state-export) | Write the release's state to one file (secret material excluded unless asked). | reads | no |
 | [`piceli state import`](#cli-state-import) | Replace the release's state with an export (needs --approve DIGEST). | writes | yes |
@@ -2494,6 +2495,34 @@ List the deploy runs of a pipeline, newest first, with their state, release, dur
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** Read-only; newest first. With shared state it reads the local working copy (piceli state pull first). summary.json follows docs/schemas/piceli-run-summary-v1.schema.json.
+
+(cli-secrets-cluster)=
+### `piceli secrets cluster`
+
+Store another cluster's credentials for the GitOps controller (never printed).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--cluster` | text | required | MODULE:ATTR of the piceli.infra.Cluster the controller deploys to |
+| `--kubeconfig` | path |  | A kubeconfig file holding its credentials |
+| `--context` | text |  | The context of --kubeconfig to store |
+| `--prompt` | boolean | `False` | Read a bearer token from stdin instead (typed without echo, or piped); the CA comes from the cluster's credential profile |
+| `--server` | text |  | The API address the controller uses (default: Cluster(api=)) |
+| `--home` | text |  | MODULE:ATTR of the cluster running the controller (default: the composition's cluster with Controller(...)) |
+| `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
+| `--exec-sha256` | text |  | Expected sha256:<hex> of the resolved exec plugin file |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+
+**Contract**
+
+- **Reads:** --kubeconfig FILE --context NAME, or stdin (--prompt: a token), MODULE:ATTR (piceli.infra.Cluster), credential profiles
+- **Writes:** nothing (read-only)
+- **Cluster:** writes
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** One context, certificates and token inlined, no exec plugin (cluster-credentials-unsupported); the kubeconfig's server must be Cluster(api=) (cluster-api-mismatch); --server sets the address the controller uses. Writes the Secret on the cluster with Controller(...) (or --home) without a plan; prints names only, never a value. A token argument is refused (secrets-token-refused).
 
 (cli-secrets-git)=
 ### `piceli secrets git`

@@ -826,13 +826,21 @@ def _command_line(
 
 def controller_refs(namespace: str) -> list[dict[str, Any]]:
     """The controller's objects by name (what ``disable`` looks for)."""
-    from piceli.gitops.install import CONFIG_MAP, DEPLOYER, NAME, STATE_CLAIM
+    from piceli.gitops.install import (
+        CLUSTERS_ROLE,
+        CONFIG_MAP,
+        DEPLOYER,
+        NAME,
+        STATE_CLAIM,
+    )
 
     rbac = "rbac.authorization.k8s.io/v1"
     named = [
         ("v1", "ServiceAccount", NAME, namespace),
         (rbac, "Role", NAME, namespace),
         (rbac, "RoleBinding", NAME, namespace),
+        (rbac, "Role", CLUSTERS_ROLE, namespace),
+        (rbac, "RoleBinding", CLUSTERS_ROLE, namespace),
         (rbac, "ClusterRole", NAME, None),
         (rbac, "ClusterRoleBinding", NAME, None),
         (rbac, "ClusterRole", DEPLOYER, None),
@@ -991,6 +999,20 @@ def status(
             if checks.get("failed"):
                 line += f" (failing: {', '.join(checks['failed'])})"
         say(line)
+        for cluster, entry in (env.get("clusters") or {}).items():
+            # 0.15: one line per cluster of an environment on several.
+            part = f"    {cluster}: {entry.get('state')}"
+            if entry.get("reason"):
+                part += f" ({entry['reason']})"
+            if entry.get("state") == "unreachable":
+                part += f"; last contact {entry.get('last_contact') or 'never'}"
+            cluster_checks = entry.get("checks") or {}
+            if cluster_checks.get("total"):
+                part += (
+                    f"; checks {cluster_checks.get('state')} "
+                    f"{cluster_checks.get('passed')}/{cluster_checks.get('total')}"
+                )
+            say(part)
     if as_json:
         emit_json(body)
 
@@ -1264,7 +1286,12 @@ def _run_composition(
         channel, closer = _run_channel(target, namespace, state_dir, transport)
         try:
             ports = _composition_ports(
-                target, state_dir, config, transport, local_build=local_build
+                target,
+                state_dir,
+                config,
+                transport,
+                local_build=local_build,
+                private=Path(private),
             )
             controller = CompositionController(
                 config,
@@ -1315,6 +1342,7 @@ def _composition_ports(
     transport: str,
     *,
     local_build: bool,
+    private: Path | None = None,
 ) -> Any:
     from piceli.gitops.ports import DefaultPorts
     from piceli.infra import CompositionError
@@ -1393,6 +1421,20 @@ def _composition_ports(
                 mirror_route=route,
                 say=say,
             )
+    remote = None
+    if private is not None:
+        # Several clusters (0.15): the others' credentials are Secrets the
+        # controller reads; their kubeconfigs live in its private directory.
+        from piceli.gitops.install import Api
+        from piceli.infra.multicluster import RemoteClusters
+        from piceli.k8s.ops.provider_factory import api_client_from_kubeconfig
+
+        remote = RemoteClusters(
+            Api(api_client_from_kubeconfig(target[0], target[1], transport=transport)),  # type: ignore[arg-type]
+            namespace=config.namespace,
+            private_dir=private,
+            transport=transport,
+        )
     return DefaultCompositionPorts(
         envs,
         builder,
@@ -1400,6 +1442,7 @@ def _composition_ports(
         context=target[1],
         state_dir=state_dir,
         transport=transport,
+        remote=remote,
     )
 
 

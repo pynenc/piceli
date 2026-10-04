@@ -318,3 +318,33 @@ def test_environment_reports_last_action_and_verification_without_check_detail(
     assert "never-expose" not in repr(service.environment("main"))
     assert environments["wp-login"]["last_action"] is None
     assert environments["wp-login"]["verification"] is None
+
+
+def test_environment_on_several_clusters_lists_each_without_credentials(
+    tmp_path: Path,
+) -> None:
+    """0.15: ``clusters`` per environment; absent for one cluster."""
+    document = status()
+    document["envs"]["main"]["clusters"] = {
+        "edge-a": {
+            "state": "unreachable",
+            "health": "healthy",
+            "reason": "cluster-unreachable",
+            "revision": {"product": SHA_A},
+            "last_contact": "2026-10-01T08:00:00Z",
+            "namespace": "shop-edge",
+            "api": "https://user:never-expose@100.64.0.10:6443",
+            "home": False,
+            "kubeconfig": "never-expose",
+        },
+        "Bad Name": {"state": "deployed"},
+    }
+    service, _ = _service(tmp_path, Channel(document))
+    environments = {item["name"]: item for item in service.overview()["environments"]}
+    clusters = environments["main"]["clusters"]
+    assert [item["name"] for item in clusters] == ["edge-a"]
+    assert clusters[0]["state"] == "unreachable"
+    assert clusters[0]["last_contact"] == "2026-10-01T08:00:00Z"
+    assert clusters[0]["api"] == "https://100.64.0.10:6443"
+    assert "never-expose" not in repr(service.environment("main"))
+    assert "clusters" not in environments["wp-login"]
