@@ -3,6 +3,8 @@
 const { test, expect } = require('./session.cjs');
 
 const fits = page => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
+// Opt-in: PICELI_UI_SHOTS=DIR keeps the overview screenshots for review (default: the run's temporary output).
+const shot = (testInfo, name) => process.env.PICELI_UI_SHOTS ? `${process.env.PICELI_UI_SHOTS}/${testInfo.project.name}-${name}` : testInfo.outputPath(name);
 
 test('launch opens the topology overview with accessible environment revisions and health', async ({ page }) => {
   const errors = [];
@@ -117,4 +119,27 @@ test('promote offers the published branch heads and sync and the cluster show th
   await expect(registry).toContainText('by the GitOps controller');
   await expect(page.getByRole('region', { name: 'Cluster nodes' })).toContainText('node-a');
   expect(await fits(page)).toBe(true);
+});
+
+test('overview: the topology spans the width, details sit below it, pinned cards side by side', async ({ page }, testInfo) => {
+  await page.goto('/');
+  const map = page.getByRole('region', { name: 'Component dependencies', exact: true });
+  const details = page.getByRole('region', { name: 'Selected details', exact: true });
+  await expect(details).toBeVisible();
+  const mapBox = await map.boundingBox();
+  const detailsBox = await details.boundingBox();
+  expect(detailsBox.y).toBeGreaterThanOrEqual(mapBox.y + mapBox.height - 1);
+  expect(Math.abs(detailsBox.width - mapBox.width)).toBeLessThan(2);
+  await page.screenshot({ path: shot(testInfo, 'overview-one-card.png'), fullPage: true });
+
+  const source = page.getByRole('button', { name: /^Select source / }).first();
+  await source.click({ modifiers: ['Shift'] });
+  await expect(details).toHaveAttribute('data-cards', '2');
+  const cards = details.getByRole('complementary');
+  await expect(cards).toHaveCount(2);
+  const [first, second] = [await cards.nth(0).boundingBox(), await cards.nth(1).boundingBox()];
+  if (testInfo.project.name === 'phone') expect(second.y).toBeGreaterThan(first.y);
+  else if (testInfo.project.name === 'desktop') { expect(Math.abs(second.y - first.y)).toBeLessThan(2); expect(second.x).toBeGreaterThan(first.x + first.width - 1); }
+  expect(await fits(page)).toBe(true);
+  await page.screenshot({ path: shot(testInfo, 'overview-two-cards.png'), fullPage: true });
 });

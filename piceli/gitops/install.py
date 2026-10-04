@@ -48,6 +48,8 @@ from typing import Any
 
 from piceli.gitops import GitOpsError
 from piceli.gitops.config import ControllerConfig
+from piceli.integrity import ENV as SELF_CHECK_ENV
+from piceli.integrity import MANIFEST as SELF_CHECK_MANIFEST
 
 PLAN_SCHEMA = "piceli.gitops-install-plan.v1"
 NAME = "piceli-gitops"
@@ -499,7 +501,12 @@ def _render_workload(
                             "env": [
                                 {"name": "HOME", "value": "/tmp"},
                                 {"name": "TMPDIR", "value": "/tmp"},
+                                # 0.15.1: verify the image's files at start.
+                                {"name": SELF_CHECK_ENV, "value": SELF_CHECK_MANIFEST},
                             ],
+                            # A crash's last log lines become the container's
+                            # last message: `cluster status` shows them.
+                            "terminationMessagePolicy": "FallbackToLogsOnError",
                             "resources": {
                                 "requests": {"cpu": "100m", "memory": "256Mi"},
                                 "limits": {"memory": "1Gi"},

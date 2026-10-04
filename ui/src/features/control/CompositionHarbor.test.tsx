@@ -217,3 +217,68 @@ it('opens version and attention views through their URL controls without writes'
   expect(screen.getByLabelText('Current location').textContent).toBe('');
   expect(requests.every(request => request.startsWith('GET '))).toBe(true);
 });
+
+it('shows the selected details below the topology and compares pinned nodes side by side', async () => {
+  open({ path: '/composition/overview?environment=production&component=api' });
+  const details = await screen.findByRole('region', { name: 'Selected details' });
+  expect(details.getAttribute('data-cards')).toBe('1');
+  expect(within(details).getByRole('complementary', { name: 'Selected component' }).textContent).toContain('api');
+  // The one card offers no close: there is nothing to fall back to.
+  expect(within(details).queryByRole('button', { name: /^Close/ })).toBeNull();
+
+  const user = userEvent.setup();
+  await user.keyboard('{Meta>}');
+  await user.click(screen.getByRole('button', { name: 'Select source product' }));
+  await user.keyboard('{/Meta}');
+  expect(details.getAttribute('data-cards')).toBe('2');
+  const pinned = within(details).getByRole('complementary', { name: 'Pinned source product' });
+  expect(pinned.className).toContain('compact');
+  expect(within(details).getByRole('complementary', { name: 'Selected component' }).className).toContain('compact');
+  expect(screen.getByLabelText('Current location').textContent).toBe('?environment=production&component=api&pin=source%3Aproduct');
+  expect(screen.getByRole('button', { name: 'Select source product' }).getAttribute('aria-pressed')).toBe('true');
+
+  // ⌘-click on the pinned node again removes it.
+  await user.keyboard('{Meta>}');
+  await user.click(screen.getByRole('button', { name: 'Select source product' }));
+  await user.keyboard('{/Meta}');
+  expect(details.getAttribute('data-cards')).toBe('1');
+
+  // Pin again, close it from its card.
+  await user.keyboard('{Shift>}');
+  await user.click(screen.getByRole('button', { name: 'Select environment production' }));
+  await user.keyboard('{/Shift}');
+  expect(details.getAttribute('data-cards')).toBe('2');
+  await user.click(within(details).getByRole('button', { name: 'Close Pinned environment production' }));
+  expect(details.getAttribute('data-cards')).toBe('1');
+  expect(screen.getByLabelText('Current location').textContent).toBe('?environment=production&component=api');
+});
+
+it('closing the primary card promotes the first pinned one, and a plain click keeps one card', async () => {
+  open({ path: '/composition/overview?environment=production&component=api&pin=component%3Aproduction%3Acache&pin=source%3Aproduct' });
+  const details = await screen.findByRole('region', { name: 'Selected details' });
+  expect(details.getAttribute('data-cards')).toBe('3');
+  const user = userEvent.setup();
+  await user.click(within(details).getByRole('button', { name: 'Close selected component' }));
+  expect(details.getAttribute('data-cards')).toBe('2');
+  expect(within(details).getByRole('complementary', { name: 'Selected component' }).textContent).toContain('cache');
+  await user.click(screen.getByRole('button', { name: 'Inspect api in production' }));
+  expect(details.getAttribute('data-cards')).toBe('1');
+  expect(screen.getByLabelText('Current location').textContent).toBe('?environment=production&component=api');
+});
+
+it('says the controller is down, why, and that the states shown are as of its last poll', async () => {
+  const down = { ...overview, controller: { state: 'down', last_poll: '2026-10-04T14:25:00Z', message: "controller image files corrupted on this node; remove the image from the node's containerd and restart", restarts: 37, status_is_stale: true } };
+  open({ snapshot: down as typeof overview });
+  const notice = await screen.findByText('GitOps controller is down');
+  const box = notice.closest('.notice') as HTMLElement;
+  expect(box.className).toContain('danger');
+  expect(within(box).getByText(/controller image files corrupted on this node/)).toBeTruthy();
+  expect(within(box).getByText(/may be out of date/)).toBeTruthy();
+  expect(within(screen.getByLabelText('Composition summary')).getByText('Down')).toBeTruthy();
+});
+
+it('shows no controller notice while it runs', async () => {
+  open();
+  await screen.findByRole('region', { name: 'Selected details' });
+  expect(screen.queryByText('GitOps controller is down')).toBeNull();
+});

@@ -46,7 +46,7 @@ it('supports native keyboard selection and zoom without changing reported topolo
   const source = screen.getByRole('button', { name: 'Select source product' });
   source.focus();
   await userEvent.setup().keyboard('{ArrowRight}{Enter}');
-  expect(onSelect).toHaveBeenCalledWith({ kind: 'component', environment: 'production', name: 'api' });
+  expect(onSelect).toHaveBeenCalledWith({ kind: 'component', environment: 'production', name: 'api' }, { additive: false });
   expect(screen.getByLabelText('Topology zoom level').textContent).toBe('100%');
   await userEvent.setup().click(screen.getByRole('button', { name: 'Zoom in topology' }));
   expect(screen.getByLabelText('Topology zoom level').textContent).toBe('115%');

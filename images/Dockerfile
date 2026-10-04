@@ -33,6 +33,10 @@ RUN apt-get update \
 RUN --mount=type=bind,source=dist,target=/tmp/dist \
     set -eu; wheel="$(ls /tmp/dist/piceli-*.whl)"; \
     pip install --no-cache-dir "piceli[ui] @ file://${wheel}"
+# Last step of the Python files: their digests, verified when the controller
+# and UI start (PICELI_SELF_CHECK, set by their Deployments). -B: writing
+# the manifest compiles nothing new.
+RUN python -B -m piceli.integrity write --out /usr/local/share/piceli/files.sha256
 USER 65532:65532
 WORKDIR /tmp
 CMD ["piceli", "--help"]
@@ -57,5 +61,6 @@ RUN rustup target add aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu wasm32-
     && pip install --no-cache-dir ziglang==0.16.0 cargo-zigbuild==0.23.4 uv==0.12.22 \
     && printf '#!/bin/sh\nexec python3 -m ziglang "$@"\n' > /usr/local/bin/zig \
     && chmod 0755 /usr/local/bin/zig \
-    && chmod -R a+rX /usr/local/rustup /usr/local/cargo
+    && chmod -R a+rX /usr/local/rustup /usr/local/cargo \
+    && python -B -m piceli.integrity write --out /usr/local/share/piceli/files.sha256
 USER 65532:65532

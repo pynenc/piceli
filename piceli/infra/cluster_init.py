@@ -485,6 +485,8 @@ def summarize(
             "on": cluster.controller.on,
             "health": (controller_health or {}).get("health", "not-enabled"),
             "last_poll": (controller_health or {}).get("last_poll"),
+            # 0.15.1: running, down, stale or starting, and why (the pod).
+            "live": (controller_health or {}).get("live"),
             "foundation": dict(foundation),
             "deployment": controller,
         }

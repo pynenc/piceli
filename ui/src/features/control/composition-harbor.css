@@ -314,3 +314,41 @@
 .composition-overview .composition-environment-stop { padding: 7px 11px; }
 .composition-overview .composition-environment-stop-meta, .composition-overview .composition-environment-stop-versions { line-height: 1.3; }
 .composition-overview .composition-environment-stop-versions { flex-wrap: nowrap; overflow: hidden; white-space: nowrap; }
+
+/* Overview: the topology across the whole width, the selected details below it as wide cards. */
+.composition-explorer .composition-landscape.composition-landscape-stacked { display:block; height:auto; }
+.composition-landscape-stacked .composition-map { border-bottom:1px solid var(--line); }
+.composition-details { padding:14px 16px 18px; }
+.composition-details-heading { display:flex; align-items:baseline; gap:14px; margin-bottom:12px; }
+.composition-details-heading h2 { margin:0; font-size:11px; font-weight:650; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); }
+.composition-details-heading p { flex:1; margin:0; }
+.composition-details-reset { font-size:11px; min-height:28px; padding:4px 10px; }
+.composition-detail-cards { display:grid; gap:14px; grid-template-columns:repeat(auto-fit,minmax(min(100%,440px),1fr)); align-items:start; }
+.composition-details[data-cards="1"] .composition-detail-cards { grid-template-columns:minmax(0,1fr); }
+.composition-details .composition-inspector { border:1px solid var(--line); border-top:3px solid var(--accent); border-radius:10px; max-height:none; overflow:visible; }
+.composition-details .composition-inspector>.panelhead { position:static; display:flex; justify-content:space-between; align-items:flex-start; gap:12px; padding:14px 18px; }
+.composition-details .composition-inspector .button { width:auto; }
+/* One card: its sections side by side instead of one long column. */
+.composition-details[data-cards="1"] .composition-inspector .inspector-content { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr)); gap:18px 30px; align-items:start; }
+/* Several cards: a little denser; connections fold into More. */
+.composition-details .composition-inspector.compact>.panelhead h2 { font-size:17px; }
+.composition-details .composition-inspector.compact .inspector-content { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,210px),1fr)); gap:12px 22px; align-items:start; }
+.composition-details .composition-inspector.compact .inspector-version-chain { gap:8px; }
+.composition-details .inspector-more { grid-column:1/-1; border-top:1px solid var(--line); padding:8px 18px 12px; }
+.composition-details .inspector-more>summary { cursor:pointer; font-size:11px; color:var(--muted); }
+.inspector-close { flex-shrink:0; min-height:26px; width:26px; padding:0; font-size:16px; line-height:1; background:transparent; }
+.composition-graph-node.pinned { outline:2px dashed var(--accent); outline-offset:2px; }
+/* Inside detail cards the sections are columns, not stacked rows: no dividers. */
+.composition-details .version-story .inspector-section { border-bottom:0; padding:14px 18px 6px; }
+/* The wide card: source → image → environment reads left to right across two columns. */
+.composition-details[data-cards="1"] .inspector-section[aria-label="Selected version evidence"] { grid-column:span 2; }
+.composition-details[data-cards="1"] .inspector-version-chain { grid-template-columns:repeat(3,minmax(0,1fr)); gap:18px; }
+.composition-details[data-cards="1"] .inspector-version-chain>li { padding-bottom:0; }
+.composition-details[data-cards="1"] .inspector-version-chain>li:not(:last-child)::before { left:31px; right:-12px; top:11px; bottom:auto; border-left:0; border-top:1px solid var(--line); }
+@media(max-width:900px){
+  .composition-details[data-cards="1"] .inspector-section[aria-label="Selected version evidence"] { grid-column:auto; }
+  .composition-details[data-cards="1"] .inspector-version-chain { grid-template-columns:minmax(0,1fr); }
+  .composition-details[data-cards="1"] .inspector-version-chain>li { padding-bottom:20px; }
+  .composition-details[data-cards="1"] .inspector-version-chain>li:not(:last-child)::before { left:11px; right:auto; top:26px; bottom:3px; border-top:0; border-left:1px solid var(--line); }
+}
+.controller-down { margin:0 0 14px; }

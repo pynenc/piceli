@@ -95,6 +95,12 @@ From 0.15.0 (``lifecycle_infra.py``; last, or alone with ``--stages 28``):
     install hook, register the k3d cluster as the server's cluster, destroy
     exactly what apply created.
 
+From 0.15.1 (``lifecycle_integrity.py``):
+
+29. One file of the controller's unpacked image altered on its node: the
+    controller refuses to start (self-check), and cluster status, gitops
+    status and the UI report it down with the message; restored after.
+
 From 0.14.7 too (``lifecycle_ops.py``; last, after 6 and 21):
 
 22. After a rollout ``gitops status`` shows each environment's last checks
@@ -152,6 +158,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from lifecycle_edges import EdgeStages
 from lifecycle_infra import InfraStages
+from lifecycle_integrity import IntegrityStages
 from lifecycle_ops import OpsStages
 from lifecycle_prune import PruneStages
 from lifecycle_reach import ReachStages
@@ -191,15 +198,15 @@ BUSYBOX = (
     "@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e"
 )
 #: The previous release and its public images (amd64 + arm64; the index
-#: digests of ghcr.io/pynenc/piceli-{controller,builder}:0.14.6).
-PREVIOUS = "0.14.7"
+#: digests of ghcr.io/pynenc/piceli-{controller,builder}:0.15.0).
+PREVIOUS = "0.15.0"
 PREVIOUS_IMAGE = (
     "ghcr.io/pynenc/piceli-controller"
-    "@sha256:69de6733fc5a49b747d223b69a70497a79c48028ccca350fc20896affed74d52"
+    "@sha256:870e425162235897a89e56db42080478113d37711a6d42e8faebb98c2a28c4da"
 )
 PREVIOUS_BUILDER = (
     "ghcr.io/pynenc/piceli-builder"
-    "@sha256:2e40e463f8c549109f3e6bd8fb1e840a868c0eeda04ce216ceb1aee181f4b661"
+    "@sha256:6f7ab25472c6c818cfa6bb016166e300351a0e276b4c5d87d49674eb1d4198a0"
 )
 #: The in-cluster UI's local port (``piceli access ui``).
 UI_PORT = 8790
@@ -216,7 +223,7 @@ ALL_CHECKS = {
 STAGE_ORDER = (
     "2", "3", "1", "4", "5", "6", "11", "7", "12", "16", "17", "18", "19",
     "8", "15", "9", "10", "13", "14", "20", "21", "22", "23", "24",
-    "25", "26", "27", "28",
+    "25", "26", "27", "28", "29",
 )  # fmt: skip
 STAGE_TITLES = {
     "1": "upgrade from the previous release",
@@ -247,6 +254,7 @@ STAGE_TITLES = {
     "26": "an edge cluster unreachable mid-rollout, then back",
     "27": "an edge cluster leaves the environment",
     "28": "machines: plan, apply, install, register, destroy (OpenTofu)",
+    "29": "a corrupted controller image: reported down with its message",
 }
 STAGE_METHODS = {
     "1": "1_upgrade", "2": "2_bootstrap", "3": "3_first_main", "4": "4_one_source",
@@ -258,6 +266,7 @@ STAGE_METHODS = {
     "21": "21_rollback_no_loop", "22": "22_checks_status", "23": "23_stop_start",
     "24": "24_access_ui_killed", "25": "25_edge_add",
     "26": "26_edge_unreachable", "27": "27_edge_remove", "28": "28_infra",
+    "29": "29_corrupt_controller_image",
 }  # fmt: skip
 #: Stages whose failure stops the run (the rest depend on them).
 CRITICAL = {"2", "3"}
@@ -272,7 +281,8 @@ USER root
 RUN --mount=type=bind,source=dist,target=/tmp/dist \\
     set -eu; wheel="$(ls /tmp/dist/piceli-*.whl)"; \\
     pip install --no-cache-dir --force-reinstall --no-deps "$wheel"; \\
-    pip install --no-cache-dir "piceli[ui] @ file://${wheel}"
+    pip install --no-cache-dir "piceli[ui] @ file://${wheel}"; \\
+    python -B -m piceli.integrity write --out /usr/local/share/piceli/files.sha256
 USER 65532:65532
 
 # The candidate's build Job image: the controller plus a C compiler (what
@@ -300,7 +310,9 @@ EXTRA_CHECK = """EXTRA_CHECKS: list = [
 ]"""
 
 
-class Lifecycle(OpsStages, PruneStages, ReachStages, EdgeStages, InfraStages):
+class Lifecycle(
+    OpsStages, PruneStages, ReachStages, EdgeStages, InfraStages, IntegrityStages
+):
     def __init__(self, args: argparse.Namespace, scratch: Path) -> None:
         self.args = args
         self.scratch = scratch
@@ -2459,8 +2471,8 @@ def main(argv: list[str] | None = None) -> int:
                         "or images/Dockerfile")  # fmt: skip
     parser.add_argument(
         "--stages",
-        default="1-28",
-        help="e.g. 1-28 or 1,2,3 (setup always runs; 28 alone runs without the bootstrap)",
+        default="1-29",
+        help="e.g. 1-29 or 1,2,3 (setup always runs; 28 alone runs without the bootstrap)",
     )
     parser.add_argument("--playwright-ui", type=Path, default=None,
                         help="ui/ directory with node_modules for the optional browser "

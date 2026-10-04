@@ -4,6 +4,30 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.15.1
+
+- **A dead controller is visible.** `piceli gitops status` (JSON
+  `controller_live`), `piceli cluster status` (`controller.live`) and the UI
+  read the controller's pod: `down` with its reason, restarts and last error
+  line (the containers keep their last log lines as the termination
+  message), or `stale` when it has not polled for three intervals. When the
+  controller is not running, the status says its environments' states were
+  written before it stopped, instead of showing them as current.
+- **Self-check at start.** The controller and UI images ship the digests of
+  their Python files; `piceli` verifies them before importing anything else
+  (`PICELI_SELF_CHECK`, under a second) and stops, exit 70, with "controller
+  image files corrupted on this node; remove the image from the node's
+  containerd and restart" and the files that differ. Found on a cluster
+  whose node altered one `.pyc` of the unpacked image: the controller had
+  crash-looped for hours with an unrelated import error.
+- **Overview: topology across the width, details below.** The topology
+  uses the whole width; the selected node's details are a wide card under
+  it (its sections side by side, source → image → environment left to
+  right) instead of a narrow side column. ⌘/Ctrl- or Shift-click (or
+  Shift+Enter) pins more nodes: their cards sit side by side, denser, with
+  connections folded under More, each with a close button (`pin` in the
+  URL keeps the comparison). The expanded explorer keeps its side panel.
+
 ## Version 0.15.0
 
 - **Several clusters from one GitOps controller.** A composition declares

@@ -461,6 +461,7 @@ def status(
     if body["controller"] is not None:
         found = all(body["controller"]["foundation"].values())
         deployed = body["controller"]["deployment"]
+        live = body["controller"].get("live") or {}
         say(
             f"  controller on {body['controller']['on']}: foundation "
             + ("installed" if found else "missing")
@@ -469,9 +470,11 @@ def status(
                 if deployed and deployed["ready"]
                 else ", not enabled (piceli gitops enable)"
                 if not deployed
-                else ", starting"
+                else f", {live.get('state') or 'starting'}"
             )
         )
+        if deployed and live.get("message"):
+            say(f"    {live['message']}")
     say(
         f"  ui: {body['ui']['state']}"
         + (
@@ -514,12 +517,16 @@ def _controller_health(api: Api, ns: str, deployment: Any) -> dict[str, Any]:
         except ValueError:
             value = None
         document = value if isinstance(value, dict) else None
+    from piceli.gitops import liveness
+
     rollout = deployment.get("status") or {}
     ready = bool(rollout.get("availableReplicas") or rollout.get("readyReplicas"))
     controller = (document or {}).get("controller") or {}
     return {
         "health": _health(document, ready, time.time()),
         "last_poll": controller.get("last_poll"),
+        # 0.15.1: the pod's state (a crash loop, its last error line).
+        "live": liveness.check(api, ns, document, time.time()),
     }
 
 

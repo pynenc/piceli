@@ -28,6 +28,8 @@ import re
 from typing import Any
 
 from piceli.infra import Cluster
+from piceli.integrity import ENV as SELF_CHECK_ENV
+from piceli.integrity import MANIFEST as SELF_CHECK_MANIFEST
 
 __all__ = [
     "LAUNCH_SECRET",
@@ -154,7 +156,10 @@ def render_ui(cluster: Cluster) -> list[dict[str, Any]]:
                     {"name": "HOME", "value": "/tmp"},
                     {"name": "TMPDIR", "value": "/tmp"},
                     {"name": "PICELI_IN_CLUSTER", "value": "1"},
+                    # 0.15.1: verify the image's files at start.
+                    {"name": SELF_CHECK_ENV, "value": SELF_CHECK_MANIFEST},
                 ],
+                "terminationMessagePolicy": "FallbackToLogsOnError",
                 "resources": {
                     "requests": {"cpu": "50m", "memory": "192Mi"},
                     "limits": {"memory": "512Mi"},
