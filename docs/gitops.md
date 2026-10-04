@@ -351,8 +351,14 @@ against the running release) or `unchanged`. A composition controller adds
 
 (`failed` names the failing checks, each result has its `code` when it
 failed; `rollback` is there when the failing checks rolled the release back;
-a run whose checks were skipped keeps the previous `checks`.) `gitops
-status` prints it as `checks passed 6/6 at …`. `verification` describes the
+a run whose checks were skipped keeps the previous `checks`. Since 0.15.0
+an `unchanged` deploy after a rolled-back release, a revert for example,
+shows the last passing checks of the images that run, or no `checks` when
+there are none: never the failed run's.) While the controller works on an
+environment, its record has `in_progress` (`{"action": "deploy", "since":
+…}`; also `teardown`, `stop`), published when the step starts and removed
+when it ends (0.15.0; the status no longer waits for the whole poll).
+`gitops status` prints it as `checks passed 6/6 at …`. `verification` describes the
 last verification (`null` after a deploy that applied):
 
 ```json

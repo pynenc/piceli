@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import contextlib
 import getpass
 import ipaddress
+import json
 import shutil
+import signal
 import socket
+import ssl
 import threading
-from collections.abc import Callable
+import urllib.error
+import urllib.request
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
@@ -16,7 +22,7 @@ from urllib.parse import urlsplit
 import typer
 
 from piceli.artifacts.process import ToolPin
-from piceli.cli_contract import emit_json, reject, say
+from piceli.cli_contract import emit_json, reject
 from piceli.k8s.observe import ForwardSupervisor
 from piceli.k8s.ops.provider_factory import KubeconfigTarget
 from piceli.k8s.owned_processes import OwnedProcessRegistry
@@ -69,6 +75,75 @@ def _server_url(value: str, *, allow_insecure_loopback_test: bool) -> str:
     return value.rstrip("/") + "/"
 
 
+class _Response:
+    def __init__(self, status_code: int, body: bytes) -> None:
+        self.status_code = status_code
+        self._body = body
+
+    def json(self) -> Any:
+        return json.loads(self._body)
+
+
+class _StdlibHttp:
+    """JSON POSTs with the standard library: ``ui connect`` without ``piceli[ui]``.
+
+    Like the ``httpx2`` client it replaces: no proxies from the environment,
+    certificates verified (against ``ca_file`` when given), a 10 s timeout.
+    """
+
+    def __init__(self, base_url: str, ca_file: Path | None) -> None:
+        self.base_url = base_url
+        handlers: list[Any] = [urllib.request.ProxyHandler({})]
+        if base_url.startswith("https:"):
+            context = ssl.create_default_context(
+                cafile=str(ca_file) if ca_file else None
+            )
+            handlers.append(urllib.request.HTTPSHandler(context=context))
+        self._opener = urllib.request.build_opener(*handlers)
+
+    def post(self, path: str, **kwargs: Any) -> _Response:
+        request = urllib.request.Request(
+            self.base_url + path.lstrip("/"),
+            data=json.dumps(kwargs["json"]).encode(),
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            method="POST",
+        )
+        try:
+            with self._opener.open(request, timeout=10) as response:
+                return _Response(response.status, response.read(1 << 20))
+        except urllib.error.HTTPError as error:
+            error.close()
+            return _Response(error.code, b"")
+
+    def close(self) -> None:
+        pass
+
+
+@contextlib.contextmanager
+def _terminate_as_interrupt() -> Iterator[None]:
+    """SIGTERM/SIGHUP stop like Ctrl-C, so the owned kubectl forward is closed.
+
+    Python's default SIGTERM ends the process without ``finally`` blocks, which
+    left ``kubectl port-forward`` running after a service manager stopped
+    ``ui connect``.
+    """
+
+    def interrupt(signum: int, frame: Any) -> None:
+        raise KeyboardInterrupt
+
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    previous = {
+        sig: signal.signal(sig, interrupt) for sig in (signal.SIGTERM, signal.SIGHUP)
+    }
+    try:
+        yield
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
 class RemoteAccessClient:
     """Claim one ticket, own one supervised forward, and stop on lost lease."""
 
@@ -115,17 +190,19 @@ class RemoteAccessClient:
         self.poll_seconds = poll_seconds
         self.registry = registry
         self._owns_http = http_client is None
+        self.http: Any
         if http_client is None:
             try:
                 import httpx2
-            except ImportError:
-                raise RemoteClientError("ui-assets-unavailable") from None
-            self.http = httpx2.Client(
-                base_url=self.server,
-                timeout=10,
-                trust_env=False,
-                verify=str(ca_file) if ca_file else True,
-            )
+            except ImportError:  # the ui extra is not needed to bind a port
+                self.http = _StdlibHttp(self.server, ca_file)
+            else:
+                self.http = httpx2.Client(
+                    base_url=self.server,
+                    timeout=10,
+                    trust_env=False,
+                    verify=str(ca_file) if ca_file else True,
+                )
         else:
             self.http = http_client
 
@@ -320,43 +397,56 @@ def connect(
     if executable is None:
         reject("ui-operation-unavailable")
     try:
-        forwards = OwnedProcessRegistry(private_ui_state_dir() / "forwards")
-        forwards.reap_orphans()
-        client = RemoteAccessClient(
-            server=server,
-            kubeconfig=kubeconfig.resolve(strict=True),
-            context=context,
-            local_port=local_port,
-            kubectl=executable.resolve(strict=True),
-            ca_file=ca_file.resolve(strict=True) if ca_file else None,
-            registry=forwards,
-        )
-        secret = getpass.getpass("One-time pairing secret: ")
-        try:
-            previous: str | None = None
-
-            def report(session: AccessSession) -> None:
-                nonlocal previous
-                if session.state != previous:
-                    emit_json(
-                        {
-                            "state": session.state,
-                            "binding_location": "local_client",
-                            "endpoint": session.endpoint,
-                            "ticket": session.id,
-                        }
-                    )
-                    previous = session.state
-
-            client.run(ticket, secret, on_state=report)
-        finally:
-            client.close()
-        emit_json({"state": "stopped", "ticket": ticket})
+        with _terminate_as_interrupt():
+            _connect(
+                server, ticket, kubeconfig, context, local_port, ca_file, executable
+            )
     except KeyboardInterrupt:
         emit_json({"state": "stopped", "ticket": ticket})
     except RemoteClientError as error:
-        if error.code == "ui-assets-unavailable":
-            say("Install piceli[ui] to connect to a remote Piceli UI.")
         reject(error.code)
     except (OSError, ValueError):
         reject("ui-invalid-request")
+
+
+def _connect(
+    server: str,
+    ticket: str,
+    kubeconfig: Path,
+    context: str,
+    local_port: int,
+    ca_file: Path | None,
+    executable: Path,
+) -> None:
+    forwards = OwnedProcessRegistry(private_ui_state_dir() / "forwards")
+    forwards.reap_orphans()
+    client = RemoteAccessClient(
+        server=server,
+        kubeconfig=kubeconfig.resolve(strict=True),
+        context=context,
+        local_port=local_port,
+        kubectl=executable.resolve(strict=True),
+        ca_file=ca_file.resolve(strict=True) if ca_file else None,
+        registry=forwards,
+    )
+    secret = getpass.getpass("One-time pairing secret: ")
+    try:
+        previous: str | None = None
+
+        def report(session: AccessSession) -> None:
+            nonlocal previous
+            if session.state != previous:
+                emit_json(
+                    {
+                        "state": session.state,
+                        "binding_location": "local_client",
+                        "endpoint": session.endpoint,
+                        "ticket": session.id,
+                    }
+                )
+                previous = session.state
+
+        client.run(ticket, secret, on_state=report)
+    finally:
+        client.close()
+    emit_json({"state": "stopped", "ticket": ticket})

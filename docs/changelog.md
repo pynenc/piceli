@@ -4,6 +4,24 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.15.0
+
+- **Status while a step runs.** The GitOps controllers publish the status
+  when an environment's deploy, teardown or stop starts (`in_progress:
+  {action, since}`) and when it ends, not only at the end of the poll, which
+  left it minutes stale during a long rollout.
+- **No failed checks next to `healthy`.** After a rolled-back release, a
+  no-op deploy (a revert) shows the last passing checks of the running
+  images, or none; a no-op never takes another run's checks.
+- **`piceli status` lists StatefulSets and DaemonSets** also when the app
+  cannot be rendered without the cluster (the fallback listed Deployments
+  only).
+- **`piceli ui connect`** needs only the base package (the standard
+  library posts to the UI when the `ui` extra is not installed), and SIGTERM
+  or SIGHUP stop it like Ctrl-C, closing its `kubectl port-forward`.
+- A `*TOKEN*` variable holding a file path applies unredacted through a
+  whole `piceli deploy` (end-to-end test; fixed in 0.13.0).
+
 ## Version 0.14.7
 
 - **Stop a named environment.** `Environment(..., stopped=True)` in a
