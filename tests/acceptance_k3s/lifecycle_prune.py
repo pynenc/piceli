@@ -295,6 +295,15 @@ class PruneStages:
         )
         return list(((document.get("envs") or {}).get(env) or {}).get("runs") or [])
 
+    def _history_envs(self) -> list[str]:
+        found = self.cluster.get(
+            "configmap", "piceli-gitops-history", "-n", "piceli-system"
+        )
+        document = json.loads(
+            ((found or {}).get("data") or {}).get("history.json") or "{}"
+        )
+        return sorted(document.get("envs") or {})
+
     def stage_30_times_and_heartbeat(self) -> None:
         problems: list[str] = []
         runs = [r for r in self._history_runs() if r.get("kind", "run") == "run"]
@@ -357,15 +366,25 @@ class PruneStages:
             problems.append(f"heartbeat_at did not advance during the build: {samples}")
         if "stale" in healths:
             problems.append("the controller read as stale during the build")
-        run = next(
-            (r for r in self._history_runs() if r.get("kind", "run") == "run"), {}
-        )
-        build = (run.get("builds") or {}).get("store") or {}
-        log(f"history build of store: {build}")
-        if not (build.get("started_at") and build.get("finished_at")):
-            problems.append(
-                f"no build times of store in the history: {run.get('builds')}"
+        # The build runs in the step of the first environment that needs it
+        # (environments step by name: with the edge stages, `edge` builds
+        # what main then deploys), so look in every environment's newest run.
+        newest = {
+            env: next(
+                (r for r in self._history_runs(env) if r.get("kind", "run") == "run"),
+                {},
             )
+            for env in self._history_envs()
+        }
+        builds = {
+            env: (run.get("builds") or {}).get("store") or {}
+            for env, run in newest.items()
+        }
+        log(f"history build of store: {builds}")
+        if not any(
+            b.get("started_at") and b.get("finished_at") for b in builds.values()
+        ):
+            problems.append(f"no build times of store in the history: {builds}")
         check(not problems, "; ".join(problems))
 
         # Stop and start main: two history entries next to its runs.

@@ -342,10 +342,14 @@ class OtelStages:
         header.write_text(f"Bearer {token}")
         header.chmod(0o600)
         self.values["otlp_header_file"] = str(header)  # type: ignore[attr-defined]
-        site = self._site(  # type: ignore[attr-defined]
-            self.candidate_image,  # type: ignore[attr-defined]
-            telemetry=f"Otlp({ENDPOINT!r}, insecure=True, headers_secret={HEADERS_SECRET!r})",
-        )
+        # Appended to the current site: earlier stages (the edge clusters)
+        # add names infra.py imports, so the file is never regenerated here.
+        site = self.repos.read("infra", "lifecycle_site.py")  # type: ignore[attr-defined]
+        if "TELEMETRY = " not in site:
+            site += (
+                "\nfrom piceli.infra import Otlp  # noqa: E402\n\n"
+                f"TELEMETRY = Otlp({ENDPOINT!r}, insecure=True, headers_secret={HEADERS_SECRET!r})\n"
+            )
         infra_sha = self.repos.commit(  # type: ignore[attr-defined]
             "infra", "send the controller's telemetry", {"lifecycle_site.py": site}
         )
