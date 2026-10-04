@@ -185,10 +185,26 @@ def _checks(run: Run) -> dict[str, Any] | None:
     if rollback:
         value["rollback"] = {
             key: rollback.get(key)
-            for key in ("state", "release", "reason")
+            for key in ("state", "release", "reason", "started_at", "finished_at")
             if rollback.get(key) is not None
         }
     return value
+
+
+def _builds(run: Run) -> dict[str, Any]:
+    """Each build of the run with its times (0.16.0)."""
+    stage = _dict((run.data.get("stages") or {}).get("build"))
+    found: dict[str, Any] = {}
+    for name, value in _dict(stage.get("output")).items():
+        item = _dict(value)
+        if not isinstance(item.get("started_at"), str):
+            continue
+        found[str(name)] = {
+            "started_at": item["started_at"],
+            "finished_at": item.get("finished_at"),
+            "cached": bool(item.get("cached")),
+        }
+    return found
 
 
 def _failure(run: Run) -> dict[str, Any] | None:
@@ -237,6 +253,10 @@ def build(run: Run, state_dir: Path) -> dict[str, Any]:
             total += float(seconds)
         if isinstance(stage.get("reason"), str):
             entry["reason"] = stage["reason"]
+        for key in ("started_at", "finished_at"):
+            # Added in 0.16.0: when the stage started and ended.
+            if isinstance(stage.get(key), str):
+                entry[key] = stage[key]
         stages[name] = entry
     inputs = _dict(data.get("plan")).get("stages", {}).get("inputs", {})
     sources = {}
@@ -289,6 +309,18 @@ def build(run: Run, state_dir: Path) -> dict[str, Any]:
     }
     if isinstance(data.get("reason"), str):
         summary["reason"] = data["reason"]
+    # Added in 0.16.0: when the run ended, each build's and the prune's times.
+    if isinstance(data.get("finished_at"), str):
+        summary["finished_at"] = data["finished_at"]
+    builds = _builds(run)
+    if builds:
+        summary["builds"] = builds
+    prune = _dict(_dict(apply.get("execution")).get("prune"))
+    if isinstance(prune.get("started_at"), str):
+        summary["prune"] = {
+            "started_at": prune["started_at"],
+            "finished_at": prune.get("finished_at"),
+        }
     backup = _dict(_dict(stages_data.get("backup")).get("output"))
     if isinstance(backup.get("restore_point"), str):
         # Added in 0.9.0 for pipelines with restore_points: the restore point
@@ -317,6 +349,7 @@ def build(run: Run, state_dir: Path) -> dict[str, Any]:
     if data.get("approved_by") == "policy":
         # Executed under the owner's auto_approve policy, not a human hash.
         summary["approved_by"] = "policy"
+        summary["approved_at"] = data.get("approved_at") or data.get("created_at")
     return summary
 
 

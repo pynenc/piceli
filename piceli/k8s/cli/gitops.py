@@ -913,20 +913,17 @@ def disable(
 
 
 def _health(status: dict[str, Any] | None, ready: bool | None, now: float) -> str:
-    from datetime import datetime
+    from piceli.gitops.liveness import silence
 
     if status is None:
         return "starting" if ready else "down"
     controller = status.get("controller") or {}
     if ready is False:
         return "down"
-    last = controller.get("last_poll")
-    if last:
-        seconds = (
-            now - datetime.fromisoformat(str(last).replace("Z", "+00:00")).timestamp()
-        )
-        if seconds > 3 * int(controller.get("poll_seconds") or 60) + 60:
-            return "stale"
+    # 0.16.0: the heartbeat when the controller publishes one, else the last poll.
+    quiet = silence(controller, now)
+    if quiet["age"] is not None and quiet["age"] > quiet["limit"]:
+        return "stale"
     return "degraded" if controller.get("last_error") else "healthy"
 
 
@@ -974,7 +971,13 @@ def status(
     controller = body.get("controller") or {}
     say(
         f"gitops controller: {health}"
-        + (f" (last poll {controller.get('last_poll')})" if controller else "")
+        + (f" (last poll {controller.get('last_poll')}" if controller else "")
+        + (
+            f", heartbeat {controller['heartbeat_at']}"
+            if controller.get("heartbeat_at")
+            else ""
+        )
+        + (")" if controller else "")
     )
     if live is not None and live.get("message"):
         say(f"  controller {live['state']}: {live['message']}")
@@ -1552,10 +1555,14 @@ def _forever(
     A failed poll (an API timeout, a dropped connection) never ends the
     process, which would crash-loop the pod: it is logged by type and
     retried after 5 s, doubling per consecutive failure up to 5 minutes; a
-    successful poll restores the normal cadence.
+    successful poll restores the normal cadence. A heartbeat thread
+    (0.16.0, :mod:`piceli.gitops.heartbeat`) publishes
+    ``controller.heartbeat_at`` meanwhile, also during a long step.
     """
     import signal
     import time
+
+    from piceli.gitops.heartbeat import Heartbeat
 
     sleep = sleep or time.sleep
     clock = clock or time.time
@@ -1570,11 +1577,35 @@ def _forever(
             stopping["now"] = True
 
         signal.signal(signal.SIGTERM, on_term)
+    beat = getattr(controller, "beat", None)
+    heartbeat = Heartbeat(beat, log=say) if callable(beat) else None
+    if heartbeat is not None:
+        heartbeat.start()
+    try:
+        _loop(controller, refresh, stopped, sleep, clock, handle_signals)
+    finally:
+        if heartbeat is not None:
+            heartbeat.stop()
+
+
+def _loop(
+    controller: Any,
+    refresh: Callable[[], None],
+    stopped: Callable[[], bool],
+    sleep: Callable[[float], None],
+    clock: Callable[[], float],
+    handle_signals: bool,
+) -> None:
+    import contextlib
+
+    # The heartbeat thread never publishes through a client being replaced.
+    lock = getattr(controller, "publish_lock", None) or contextlib.nullcontext()
     failures = 0
     while not stopped():
         started = clock()
         try:
-            refresh()
+            with lock:
+                refresh()
         except Exception as error:  # never crash-loop on a refresh
             say(f"service account refresh failed ({type(error).__name__})")
         try:

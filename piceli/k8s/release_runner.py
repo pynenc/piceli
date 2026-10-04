@@ -804,10 +804,12 @@ def scoped_rollback(
 ) -> DeploymentComposition:
     """``composition`` restricted to the objects ``scope`` names, or unchanged.
 
-    A rollback after failed checks restores only what the failed release
-    changed: the objects both releases declare. An object the failed release
-    no longer declares (pruned by it, or deleted by hand) is not re-created,
-    and dependencies on it are dropped.
+    A rollback scoped to a failed release (``plan(rollback_of=...)``)
+    restores only what that release changed: the objects both releases
+    declare. An object the failed release no longer declares (pruned by it,
+    or deleted by hand) is not re-created, and dependencies on it are
+    dropped. The automatic rollback after failed checks is not scoped since
+    0.16.0 (a workload lost the Role the failed release had deleted).
     """
     if scope is None:
         return composition
@@ -862,6 +864,9 @@ def _execution_summary(result: Mapping[str, Any]) -> dict[str, Any]:
     }
     if "failure_category" in result:
         summary["failure_category"] = result["failure_category"]
+    if isinstance(result.get("prune"), Mapping):
+        # 0.16.0: when the deletes of a prune started and ended.
+        summary["prune"] = dict(result["prune"])
     causes = compact(result.get("diagnosis"))
     if causes:
         # Public: names, reasons and exit codes only (logs stay in the
@@ -1514,10 +1519,11 @@ class ReleaseRunner:
     ) -> PlanResult:
         """Capture discovery and persist an approvable plan.
 
-        ``rollback_of`` (with ``rollback_to``; the automatic rollback after
-        failed checks) restores only what that failed release changed: the
-        objects both releases declare, without a prune (see
-        :func:`scoped_rollback`).
+        ``rollback_of`` (with ``rollback_to``) restores only what that
+        failed release changed: the objects both releases declare, without a
+        prune (see :func:`scoped_rollback`). The automatic rollback after
+        failed checks no longer uses it (0.16.0): it restores the whole
+        target release, re-creating what the failed release removed.
 
         Without ``rollback_to`` the spec decides the release; with it, an
         existing catalogued release (a name or ``previous``) is re-planned.
@@ -2577,7 +2583,9 @@ class ReleaseRunner:
             "failed_execution_id": execution_id,
         }
         try:
-            planned = self.plan(rollback_to=target, rollback_of=failed)
+            # The whole target release (0.16.0): what the failed release
+            # removed and the target declares is created again.
+            planned = self.plan(rollback_to=target)
             outcome = self.apply(
                 planned.plan_hash,
                 expected_intent="rollback",

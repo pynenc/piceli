@@ -72,6 +72,8 @@ RULES = {"rejecting"}
 DYNAMIC = {
     # gitops.controller.step_reason: the ROLLED_BACK reason of a failed step
     "checks-failed-rolled-back",
+    # gitops.recovery.INTERRUPTED: the reason of a run the controller died under
+    "gitops-run-interrupted",
     # delivery_inputs.discover_tool: f"{name}-tool-required"
     "docker-tool-required",
     "ssh-tool-required",

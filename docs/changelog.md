@@ -4,6 +4,46 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.16.0
+
+- **Stage and build times.** Run journals, run summaries and the deployment
+  history (`piceli.gitops-history.v1`) give each stage `started_at` and
+  `finished_at` (inputs, build, deliver, prerollout, backup, plan, apply,
+  checks), each build its own (`builds.<name>`: `started_at`,
+  `finished_at`, `state`), the apply's deletes (`prune`) and the automatic
+  rollback (`rollback`) theirs, and an owner-approved run its
+  `approval_wait`. Runs and summaries also have `finished_at`.
+- **Interrupted runs.** A controller that restarts after dying during a
+  step marks that step and every run journal still `running` as
+  `interrupted` (reason `gitops-run-interrupted`, `finished_at` when
+  detected): they no longer show as running forever in the history and the
+  status (`envs.<env>.interrupted` until the next step).
+- **Approval and stop times.** `approved_by.at` is set for policy approvals
+  (when the run was created) and `stop.at` for declared stops (when the
+  controller first saw the declaration); both were `null`.
+- **Stops, starts and teardowns in the history**: entries of their own
+  `kind` (`stop`, `start`, `teardown`; runs are `kind: "run"`) with `at`,
+  `by`, `via`, `state` and the environment; a torn-down branch environment
+  keeps its entries.
+- **Controller heartbeat.** The status has `controller.heartbeat_at`,
+  refreshed every 30 s (`controller.heartbeat_seconds`) by a thread of the
+  controller, also during a long build or deploy; it writes only that field,
+  never at the same time as the step's own publish. `gitops status`,
+  `cluster status` and the UI report `stale` from the heartbeat when there
+  is one (from `last_poll` for older controllers): a long build no longer
+  reads as a stopped controller.
+- **Fix:** an automatic rollback after failed checks restores the previous
+  release whole again: what the failed release removed and the previous one
+  declares is created again (a workload kept running without the Role the
+  failed release had deleted), and what only the failed release declares is
+  pruned. The environment still stops at `failed`
+  (`checks-failed-rolled-back`) with no retry until a new revision or
+  `piceli gitops sync`. Same for `release apply` with
+  `rollback_on_failed_checks`.
+- **Compatibility promise:** `piceli.gitops-status.v1` and
+  `piceli.gitops-history.v1` change only additively within v1 (documented in
+  {doc}`gitops`); a test fails when a field disappears.
+
 ## Version 0.15.1
 
 - **A dead controller is visible.** `piceli gitops status` (JSON

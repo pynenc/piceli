@@ -3,8 +3,9 @@
 The status ConfigMap is written by the controller itself, so a controller
 that crash-loops leaves its last document behind, looking current. These
 helpers read the controller's pod (waiting reason, restarts, the last exit
-message Kubernetes keeps) and the age of the last poll, and give one verdict
-that ``gitops status``, ``cluster status`` and the UI all show.
+message Kubernetes keeps) and the age of the controller's heartbeat (0.16.0;
+the last poll for older controllers), and give one verdict that ``gitops
+status``, ``cluster status`` and the UI all show.
 """
 
 from __future__ import annotations
@@ -36,6 +37,34 @@ def _seconds_since(value: Any, now: float) -> float | None:
         )
     except ValueError:
         return None
+
+
+def silence(controller: Mapping[str, Any], now: float) -> dict[str, Any]:
+    """How long the controller has been silent, and how long is too long.
+
+    With ``heartbeat_at`` (0.16.0; refreshed every ``heartbeat_seconds``,
+    also during a long build or deploy) it decides: silent for three
+    heartbeats and a minute is ``stale``. Without it (a controller before
+    0.16.0) the last poll decides: three poll intervals and a minute.
+    """
+    heartbeat = controller.get("heartbeat_at")
+    if heartbeat:
+        every = int(controller.get("heartbeat_seconds") or 30)
+        return {
+            "field": "heartbeat_at",
+            "at": heartbeat,
+            "age": _seconds_since(heartbeat, now),
+            "limit": 3 * every + 60,
+            "every": every,
+        }
+    every = int(controller.get("poll_seconds") or 60)
+    return {
+        "field": "last_poll",
+        "at": controller.get("last_poll"),
+        "age": _seconds_since(controller.get("last_poll"), now),
+        "limit": 3 * every + 60,
+        "every": every,
+    }
 
 
 def pod_summary(pods: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
@@ -91,14 +120,15 @@ def liveness(
     """``running``, ``down``, ``stale`` or ``starting``, with why and what to do.
 
     ``down``: the pod is not ready (a crash loop, an image pull, a failed
-    self-check). ``stale``: no poll for three poll intervals and a minute,
-    whatever the pod says. Without a readable pod (no RBAC) only the age of
-    the last poll decides.
+    self-check). ``stale``: no heartbeat for three heartbeats and a minute
+    (0.16.0), or, from a controller without ``heartbeat_at``, no poll for
+    three poll intervals and a minute, whatever the pod says (see
+    :func:`silence`). Without a readable pod (no RBAC) only that age decides.
     """
     controller = (document or {}).get("controller") or {}
     last_poll = controller.get("last_poll")
-    age = _seconds_since(last_poll, now)
-    limit = 3 * int(controller.get("poll_seconds") or 60) + 60
+    quiet = silence(controller, now)
+    age, limit = quiet["age"], quiet["limit"]
     state = "running"
     message = None
     if pod is not None and not pod.get("ready"):
@@ -116,15 +146,18 @@ def liveness(
     elif pod is None and pod_readable and document is not None:
         state, message = "down", "no controller pod"
     if state == "running" and age is not None and age > limit:
+        what = "heartbeat" if quiet["field"] == "heartbeat_at" else "poll"
         state, message = (
             "stale",
-            f"no poll for {int(age)} s (expected every {controller.get('poll_seconds') or 60} s)",
+            f"no {what} for {int(age)} s (expected every {quiet['every']} s)",
         )
     stale_data = state in {"down", "stale"} and document is not None
     return {
         "state": state,
         "message": message,
         "last_poll": last_poll,
+        # Added in 0.16.0: the controller's last heartbeat (when it has one).
+        "heartbeat_at": controller.get("heartbeat_at"),
         "pod": dict(pod) if pod is not None else None,
         # The document below was written before the controller stopped.
         "status_is_stale": stale_data,

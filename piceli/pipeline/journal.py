@@ -101,7 +101,13 @@ class Run:
         entry.update(values)
         if values.get("state") == "running":
             entry["started_at"] = now()
-        elif values.get("state") in {"done", "skipped", "failed", "rejected"}:
+        elif values.get("state") in {
+            "done",
+            "skipped",
+            "failed",
+            "rejected",
+            "interrupted",
+        }:
             entry["finished_at"] = now()
         self.save()
         return dict(entry)
@@ -118,6 +124,11 @@ class Run:
         self.data["state"] = state
         if state in {"running", "ready", "stopped"} and "reason" not in values:
             self.data.pop("reason", None)
+        if state == "running":
+            self.data.pop("finished_at", None)
+        elif "finished_at" not in values:
+            # Added in 0.16.0: when the run ended (any end state).
+            self.data["finished_at"] = now()
         self.data.update(values)
         self.save()
 
@@ -178,8 +189,10 @@ class Journal:
             "stages": {name: {"state": "pending"} for name in stages},
         }
         if approved_by is not None:
-            # "policy": the owner's auto_approve policy approved the run.
+            # "policy": the owner's auto_approve policy approved the run
+            # (``approved_at``, added in 0.16.0: when it did).
             data["approved_by"] = approved_by
+            data["approved_at"] = data["created_at"]
         if refs:
             # ``--ref``: source → {ref, commit}; --resume re-opens these commits.
             data["refs"] = {name: dict(value) for name, value in refs.items()}
@@ -233,3 +246,54 @@ class Journal:
         if found is None or not found["passed"]:
             return False
         return checks_hash is None or found["checks_hash"] == checks_hash
+
+
+def _elapsed(started: Any, ended: str) -> float | None:
+    try:
+        begin = datetime.fromisoformat(str(started).replace("Z", "+00:00"))
+        end = datetime.fromisoformat(ended.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return round(max(0.0, (end - begin).total_seconds()), 3)
+
+
+def mark_interrupted(state_dir: Path, reason: str) -> list[str]:
+    """Mark the runs of ``state_dir`` still ``running`` as ``interrupted``.
+
+    For a process that starts after another one died during a run (the GitOps
+    controller after a restart): the run's running stages and the run become
+    ``interrupted`` with ``reason`` (a registered code) and ``finished_at``
+    (now). Nothing is marked while another process holds the state
+    directory's run lock (that run is alive). An interrupted run can still be
+    resumed. Returns the marked run ids. Added in 0.16.0.
+    """
+    if not (state_dir / "runs").is_dir():
+        return []
+    journal = Journal(state_dir)
+    marked: list[str] = []
+    try:
+        with journal.locked():
+            for run in journal.runs():
+                if run.state != "running":
+                    continue
+                at = now()
+                for name, stage in (run.data.get("stages") or {}).items():
+                    if isinstance(stage, dict) and stage.get("state") == "running":
+                        seconds = _elapsed(stage.get("started_at"), at)
+                        run.set_stage(
+                            name,
+                            state="interrupted",
+                            reason=reason,
+                            **({"seconds": seconds} if seconds is not None else {}),
+                        )
+                run.set_state("interrupted", reason=reason, finished_at=at)
+                try:
+                    from piceli.pipeline import summary
+
+                    summary.write(run, state_dir)
+                except Exception:  # a summary never changes the outcome
+                    pass
+                marked.append(run.run_id)
+    except PipelineError:  # another process holds the lock: its run is alive
+        return []
+    return marked

@@ -15,6 +15,10 @@
     "reason": {"type": "string", "description": "Error code of a run that did not become ready (piceli explain <code>)."},
     "created_at": {"type": ["string", "null"]},
     "updated_at": {"type": ["string", "null"]},
+    "finished_at": {"type": "string", "description": "Added in 0.16.0. When the run ended (any end state)."},
+    "approved_at": {"type": ["string", "null"], "description": "Added in 0.16.0, with approved_by: when the owner's policy approved the run (its creation)."},
+    "builds": {"type": "object", "description": "Added in 0.16.0. Each build of the run: started_at, finished_at, cached.", "additionalProperties": {"type": "object", "properties": {"started_at": {"type": "string"}, "finished_at": {"type": ["string", "null"]}, "cached": {"type": "boolean"}}}},
+    "prune": {"type": "object", "description": "Added in 0.16.0. When the apply's deletes (a prune) started and ended.", "properties": {"started_at": {"type": "string"}, "finished_at": {"type": ["string", "null"]}}},
     "until": {"$ref": "#/$defs/stageName"},
     "combined_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "restore_point": {
@@ -189,7 +193,9 @@
         "properties": {
           "state": {"type": "string"},
           "seconds": {"type": "number"},
-          "reason": {"type": "string"}
+          "reason": {"type": "string"},
+          "started_at": {"type": "string", "description": "Added in 0.16.0. When the stage started (ISO 8601 UTC)."},
+          "finished_at": {"type": "string", "description": "Added in 0.16.0. When the stage ended, also when interrupted."}
         }
       }
     },

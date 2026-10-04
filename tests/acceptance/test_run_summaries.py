@@ -75,6 +75,13 @@ def test_a_ready_run_writes_its_summary_and_runs_lists_it(shop) -> None:
         "checks",
     }
     assert all("seconds" in stage for stage in document["stages"].values())
+    # 0.16.0: each stage's and build's times, and when the run ended.
+    for name, stage in document["stages"].items():
+        assert stage["started_at"] <= stage["finished_at"], name
+    assert document["finished_at"] >= document["stages"]["checks"]["finished_at"]
+    assert set(document["builds"]) == {"shop"}  # by build spec name
+    build = document["builds"]["shop"]
+    assert build["started_at"] <= build["finished_at"] and build["cached"] is False
     assert markdown.startswith("### piceli deploy `shop`: ready")
     assert "#### Images" in markdown and "#### Plan" in markdown
     assert "create `Deployment/web`" in markdown
@@ -153,6 +160,11 @@ def test_failed_checks_are_in_the_summary(shop) -> None:
     assert document["failure"]["reason"] == "pipeline-checks-failed"
     assert document["checks"]["passed"] is False
     assert document["checks"]["rollback"]["state"] == "ready"
+    # 0.16.0: the rollback's own times, inside the checks stage's.
+    rollback = document["checks"]["rollback"]
+    checks = document["stages"]["checks"]
+    assert checks["started_at"] <= rollback["started_at"] <= rollback["finished_at"]
+    assert rollback["finished_at"] <= checks["finished_at"]
     assert "#### Checks" in markdown and "FAILED" in markdown
 
 

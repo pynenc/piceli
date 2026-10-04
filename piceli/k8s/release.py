@@ -501,7 +501,7 @@ class ReleaseWorkflow:
         """Reapply a prior archive against current evidence as a new execution.
 
         ``restrict`` narrows the archived composition before planning (a
-        rollback that restores only what a failed release changed; see
+        rollback scoped to what a failed release changed; see
         :func:`piceli.k8s.release_runner.scoped_rollback`).
         """
         record = self.catalog.get(name)

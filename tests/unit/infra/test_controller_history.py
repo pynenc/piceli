@@ -181,7 +181,8 @@ def test_every_deploy_is_published_with_its_run(journaled: dict[str, Any]) -> No
         "web": True,
     }
     assert all(item["digest"].startswith("sha256:") for item in run["components"])
-    assert run["approved_by"] == {"via": "policy", "at": None}
+    # 0.16.0: a policy approval has its time too (it was null before).
+    assert run["approved_by"]["via"] == "policy" and run["approved_by"]["at"]
     assert run["checks"]["passed"] is True
     assert [item["name"] for item in run["checks"]["results"]] == [
         "web-home",

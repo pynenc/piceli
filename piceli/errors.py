@@ -4592,6 +4592,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         True,
         "gitops",
     ),
+    _E(
+        "gitops-run-interrupted",
+        "Deploy interrupted by a controller restart",
+        "The GitOps controller stopped (a crash, an out-of-memory kill, a node drain) while a deploy step or run was in progress; it marked the run `interrupted` when it started again.",
+        "Nothing to do: the controller retries the environment. Read `piceli gitops status` and the controller's last exit (`controller_live`) for why it stopped.",
+        True,
+        "gitops",
+    ),
     # --- 0.13.0 cluster builds ---
     _E(
         "cluster-build-invalid",
