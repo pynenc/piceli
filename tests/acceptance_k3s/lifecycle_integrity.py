@@ -19,7 +19,7 @@ from typing import Any
 
 from lifecycle_support import UiError, check, log, wait_for
 
-#: The file altered on k-lab on 2026-10-04 (a ``.pyc`` shipped in the image).
+#: A file a failing node altered on a real cluster (a ``.pyc`` shipped in the image).
 TARGET = "kubernetes/client/api/__pycache__/networking_v1beta1_api.cpython-313.pyc"
 SNAPSHOTS = "/var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots"
 MANIFEST = "/usr/local/share/piceli/files.sha256"
