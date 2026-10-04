@@ -40,9 +40,9 @@ cluster = Cluster(
         on="node-a",
         telemetry=Otlp(
             "https://collector.observability:4317",
-            protocol="grpc",               # or "http/protobuf" (port 4318)
-            headers_secret="otlp-auth",    # optional: auth headers
-            ca_secret="otlp-ca",           # optional: the endpoint's CA
+            protocol="grpc",  # or "http/protobuf" (port 4318)
+            headers_secret="otlp-auth",  # optional: auth headers
+            ca_secret="otlp-ca",  # optional: the endpoint's CA
         ),
     ),
 )
