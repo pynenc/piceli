@@ -770,7 +770,11 @@ class ControllerTelemetry:
         from opentelemetry.metrics import Observation
 
         now = time.time_ns()
-        for env, ns in sorted(dict(self._data.get("last_success") or {}).items()):
+        try:  # read from the exporter's thread while the controller writes
+            found = sorted(dict(self._data.get("last_success") or {}).items())
+        except RuntimeError:
+            return
+        for env, ns in found:
             if isinstance(ns, int):
                 yield Observation(
                     max(0.0, (now - ns) / 1e9),
