@@ -28,7 +28,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from kind_support import kubectl
+from kind_support import kubectl, wait_registry_removed
 
 from tests.integration.test_cluster_registry_kind import (
     HOST,
@@ -187,3 +187,4 @@ def test_pods_mirror_and_push_to_the_in_cluster_registry(
         )
     finally:
         _approved("uninstall", "--delete-storage")
+        wait_registry_removed()

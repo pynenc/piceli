@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from kind_support import kubectl
+from kind_support import kubectl, wait_registry_removed
 from typer.testing import CliRunner
 
 from piceli import App, Pipeline, Registry, Target
@@ -217,6 +217,7 @@ def test_every_node_pulls_from_the_in_cluster_registry(
     finally:
         removed = _approved("uninstall", "--delete-storage")
         assert removed["state"] in {"uninstalled", "unchanged"}
+        wait_registry_removed()
     deadline = time.monotonic() + 120
     while _node_file(node_b, MIRROR) is not None and time.monotonic() < deadline:
         time.sleep(2)

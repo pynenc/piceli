@@ -46,7 +46,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from kind_support import kubectl
+from kind_support import kubectl, wait_registry_removed
 from typer.testing import CliRunner
 
 from piceli.infra.composition import load_composition
@@ -265,3 +265,4 @@ def test_a_change_rolls_only_its_component_and_branches_pull_from_the_registry(
         for namespace in NAMESPACES:
             kubectl("delete", "namespace", namespace, "--wait=false", check=False)
         _registry("uninstall", "--delete-storage")
+        wait_registry_removed()
