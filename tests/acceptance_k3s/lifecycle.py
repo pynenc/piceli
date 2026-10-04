@@ -198,7 +198,7 @@ BUSYBOX = (
     "@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e"
 )
 #: The previous release and its public images (amd64 + arm64; the index
-#: digests of ghcr.io/pynenc/piceli-{controller,builder}:0.14.6).
+#: digests of ghcr.io/pynenc/piceli-{controller,builder}:0.15.0).
 PREVIOUS = "0.15.0"
 PREVIOUS_IMAGE = (
     "ghcr.io/pynenc/piceli-controller"
