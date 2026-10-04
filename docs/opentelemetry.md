@@ -129,9 +129,11 @@ Every start and end is a recorded time, never an estimate:
 - `approval wait`: when the plan asked and when the approval arrived;
 - `check <name>`: laid out from the `checks` stage's start in the order the
   checks ran, each as long as its recorded duration;
-- `rollback` runs inside the `checks` stage after the last check: from the
-  end of the last check to the end of the stage. `prune` runs inside
-  `apply` and covers it: Piceli does not time either separately;
+- `rollback` and `prune`: the journal's own `started_at` / `finished_at`
+  of the rollback (in the checks stage's output) and of the prune (in the
+  apply's execution). A journal without them (written before 0.16) gives
+  the rollback the rest of the `checks` stage after the last check, and the
+  prune the `apply` window;
 - the root: from the start of the run's first step to the end of its last.
 
 ### Root span attributes
@@ -239,7 +241,7 @@ the environment and the run (a SHA-256), so a run's ids never change.
 When the controller dies inside a run (a node lost, the pod killed), the
 next controller closes that run at start as `interrupted`
 (`cicd.pipeline.result = error`), in the same trace, ending at the last
-heartbeat; the run's events are sent again (same `piceli.event.id`) with a
+heartbeat (a run journal marked `interrupted` gives the same result); the run's events are sent again (same `piceli.event.id`) with a
 `piceli.deploy.interrupted` event, then the environment's deploy runs again
 as a new run. A run waiting for an approval is not interrupted: it continues
 after the restart.
