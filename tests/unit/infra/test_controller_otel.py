@@ -79,6 +79,7 @@ class Ports:
         self.builder = Builder(clock)
         self.checks = "pass"  # "pass", "fail" (rolled back)
         self.prune = False
+        self.timed = False  # the journal times rollback and prune (0.16)
         self.stopped: list[str] = []
         self.started: list[str] = []
         self.runs = 0
@@ -123,6 +124,10 @@ class Ports:
         if failing:
             checks["reason"] = "pipeline-checks-failed"
             checks["output"]["rollback"] = {"state": "ready", "release": "shop-r1"}
+            if self.timed:
+                checks["output"]["rollback"].update(
+                    started_at=_iso(t0 + 7.5), finished_at=_iso(t0 + 8.5)
+                )
         journal = {
             "schema": "piceli.deploy-run.v1",
             "run_id": run_id,
@@ -824,3 +829,14 @@ def test_a_failing_hook_never_fails_the_step(world: dict[str, Any]) -> None:
     assert status["envs"]["main"]["state"] == "deployed"
     assert telemetry.failures >= 1
     assert sum("telemetry: step end skipped" in line for line in world["logs"]) == 1
+
+
+def test_journal_times_of_rollback_and_prune_win(world: dict[str, Any]) -> None:
+    world["ports"].checks = "fail"
+    world["ports"].timed = True
+    world["controller"].poll_once()
+    signals: Signals = world["signals"]
+    root = _main_root(signals)
+    rollback = signals.tree(root)["rollback"]
+    assert rollback.end_time - rollback.start_time == 10**9
+    assert rollback.start_time == otel._iso_ns(_iso(1_790_000_000.0 + 30 + 7.5))

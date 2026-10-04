@@ -28,7 +28,7 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   standard `OTEL_EXPORTER_OTLP_*` variables are honoured; the controller's
   configuration (and its hash) is unchanged when it is not set. See
   {doc}`opentelemetry`.
-- **k3s lifecycle stage 30**: a pinned OpenTelemetry Collector in the
+- **k3s lifecycle stage 31**: a pinned OpenTelemetry Collector in the
   cluster checks the traces, events and metrics of a deploy, a rolled-back
   check failure, an approval, a stop and start, a broken build and a
   controller killed mid-build, and that deploys go on with the Collector

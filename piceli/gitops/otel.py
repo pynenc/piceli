@@ -1211,6 +1211,8 @@ class ControllerTelemetry:
         state = str(record.get("state") or "")
         if journal is not None and journal.get("state") == "rolled-back":
             return "rolled-back"
+        if journal is not None and journal.get("state") == "interrupted":
+            return "interrupted"
         if state == "deployed" and record.get("health") != "degraded":
             return "success"
         return "failure"
@@ -1706,14 +1708,16 @@ class ControllerTelemetry:
                     if c["operation"] == "delete"
                 ]
                 if deleted:
-                    # Prune runs inside apply; Piceli does not time it apart.
+                    # Prune runs inside apply: its own times when the journal
+                    # has them (0.16), else the apply window.
+                    timed = _dict(_dict(entry.get("output")).get("prune"))
                     self._task(
                         run,
                         f"s{step}/prune",
                         "prune",
                         "deploy",
-                        begin,
-                        finish,
+                        _iso_ns(timed.get("started_at")) or begin,
+                        _iso_ns(timed.get("finished_at")) or finish,
                         "success",
                         {"piceli.pruned": deleted, "piceli.pruned.count": len(deleted)},
                         parent=path,
@@ -1779,15 +1783,16 @@ class ControllerTelemetry:
             cursor = stop
         rollback = _dict(output.get("rollback"))
         if rollback:
-            # The rollback runs after the last check, inside the checks stage.
+            # The rollback runs after the last check, inside the checks stage:
+            # its own times when the journal has them (0.16).
             ready = rollback.get("state") == "ready"
             self._task(
                 run,
                 f"s{step}/rollback",
                 "rollback",
                 "deploy",
-                cursor,
-                finish,
+                _iso_ns(rollback.get("started_at")) or cursor,
+                _iso_ns(rollback.get("finished_at")) or finish,
                 "success" if ready else "failure",
                 {
                     "piceli.rollback.from": _journal_release(journal),
@@ -1869,7 +1874,13 @@ def _journal_view(journal: Mapping[str, Any]) -> dict[str, Any]:
                     {
                         "rollback": {
                             key: _dict(output.get("rollback")).get(key)
-                            for key in ("state", "release", "reason")
+                            for key in (
+                                "state",
+                                "release",
+                                "reason",
+                                "started_at",
+                                "finished_at",
+                            )
                         }
                     }
                     if output.get("rollback")
@@ -1877,8 +1888,18 @@ def _journal_view(journal: Mapping[str, Any]) -> dict[str, Any]:
                 ),
             }
         elif name in {"plan", "apply"}:
+            prune = _dict(_dict(output.get("execution")).get("prune"))
             kept["output"] = {
                 "release": output.get("release"),
+                **(
+                    {
+                        "prune": {
+                            key: prune.get(key) for key in ("started_at", "finished_at")
+                        }
+                    }
+                    if prune
+                    else {}
+                ),
                 **(
                     {
                         "changes": [

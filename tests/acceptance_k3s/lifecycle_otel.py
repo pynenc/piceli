@@ -1,6 +1,6 @@
-"""Stage 30 of the k3s lifecycle acceptance: the controller's OpenTelemetry (0.16).
+"""Stage 31 of the k3s lifecycle acceptance: the controller's OpenTelemetry (0.16).
 
-30. An OpenTelemetry Collector (pinned by digest; OTLP gRPC and HTTP in, a
+31. An OpenTelemetry Collector (pinned by digest; OTLP gRPC and HTTP in, a
     bearer token required, the ``file`` exporter writing JSON lines that a
     sidecar reads) runs in the cluster. ``Controller(telemetry=Otlp(...))``
     in ``infra.py`` with a headers Secret, the ``telemetry`` group (the
@@ -69,7 +69,7 @@ FAILING_CHECK = """EXTRA_CHECKS: list = [
     ),
 ]"""
 REPORTER_COMMAND = '"while true; do sleep 3600; done"'
-EVENT_ID = re.compile(r"lifecycle:[a-z0-9-]+/\d{8}T\d{8}Z:[a-z0-9:-]+")
+EVENT_ID = re.compile(r"lifecycle:[a-z0-9-]+/\d{8}T\d{9}Z:[a-z0-9:-]+")
 
 
 def _value(value: dict[str, Any]) -> Any:
@@ -150,9 +150,16 @@ class Telemetry:
     def named(self, name: str) -> list[dict[str, Any]]:
         return [event for event in self.events if event["name"] == name]
 
+    def with_event(self, root: str, event: str, **attributes: Any) -> Telemetry | None:
+        """Itself once the newest ``root`` span and its ``event`` both arrived
+        (spans and log records are exported in separate batches)."""
+        roots = self.roots(root, **attributes)
+        traces = {item.get("traceId") for item in self.named(event)}
+        return self if roots and roots[-1]["traceId"] in traces else None
+
 
 class OtelStages:
-    """Stage 30; mixed into ``Lifecycle``."""
+    """Stage 31; mixed into ``Lifecycle``."""
 
     otel_token = ""
 
@@ -318,16 +325,16 @@ class OtelStages:
                 f"{root['name']}: trace id {root['traceId']} is not derived"
             )
 
-    def stage_30_otel(self) -> None:
+    def stage_31_otel(self) -> None:
         self.otel_token = secrets.token_urlsafe(24)  # throwaway, never printed
         problems: list[str] = []
         try:
-            self._stage_30(problems)
+            self._stage_31(problems)
         finally:
             self._ok("delete", "namespace", NAMESPACE, "--wait=false", check_exit=None)
         check(not problems, "; ".join(problems))
 
-    def _stage_30(self, problems: list[str]) -> None:
+    def _stage_31(self, problems: list[str]) -> None:
         token = self.otel_token
         self.cluster.apply(self._collector_objects(token))  # type: ignore[attr-defined]
         self._collector_ready()
@@ -381,6 +388,7 @@ class OtelStages:
             lambda d: [
                 r for r in d.roots("SYNC lifecycle/main", **{"piceli.deploy.result": "success"})
                 if sha in (r["attributes"].get("piceli.source.revisions") or [])
+                and r["traceId"] in {e.get("traceId") for e in d.named("piceli.deploy.rolled")}
             ] and d,
         )  # fmt: skip
         root = next(
@@ -450,12 +458,11 @@ class OtelStages:
             timeout=1500, what="the failed check's rollback",
         )  # fmt: skip
         data = self._wait_data(
-            "the rolled-back trace",
-            lambda d: (
-                d.roots(
-                    "SYNC lifecycle/main", **{"piceli.deploy.result": "rolled-back"}
-                )
-                and d
+            "the rolled-back trace and its rollback event",
+            lambda d: d.with_event(
+                "SYNC lifecycle/main",
+                "piceli.deploy.rollback",
+                **{"piceli.deploy.result": "rolled-back"},
             ),
         )
         root = data.roots(
@@ -514,10 +521,11 @@ class OtelStages:
             what="approved deploy",
         )  # type: ignore[attr-defined]
         data = self._wait_data(
-            "rc's trace",
-            lambda d: (
-                d.roots("SYNC lifecycle/rc", **{"piceli.deploy.result": "success"})
-                and d
+            "rc's trace and its approval",
+            lambda d: d.with_event(
+                "SYNC lifecycle/rc",
+                "piceli.deploy.approved",
+                **{"piceli.deploy.result": "success"},
             ),
         )
         root = data.roots("SYNC lifecycle/rc", **{"piceli.deploy.result": "success"})[
@@ -559,9 +567,8 @@ class OtelStages:
         data = self._wait_data(
             "stop and start events",
             lambda d: (
-                d.named("piceli.environment.stopped")
-                and d.named("piceli.environment.started")
-                and d
+                d.with_event("STOP lifecycle/rc", "piceli.environment.stopped")
+                and d.with_event("START lifecycle/rc", "piceli.environment.started")
             ),
         )
         for name, span in (
@@ -588,7 +595,8 @@ class OtelStages:
             timeout=1500, what="the broken build",
         )  # fmt: skip
         data = self._wait_data(
-            "piceli.build.failed", lambda d: d.named("piceli.build.failed") and d
+            "the broken build's trace and piceli.build.failed",
+            lambda d: d.with_event("SYNC lifecycle/wp-otel", "piceli.build.failed"),
         )
         event = data.named("piceli.build.failed")[-1]
         tail = str(event["attributes"].get("piceli.build.log_tail") or "")
@@ -648,12 +656,11 @@ class OtelStages:
             what="after the restart",
         )  # type: ignore[attr-defined]
         data = self._wait_data(
-            "the interrupted run",
-            lambda d: (
-                d.roots(
-                    "SYNC lifecycle/main", **{"piceli.deploy.result": "interrupted"}
-                )
-                and d
+            "the interrupted run and its event",
+            lambda d: d.with_event(
+                "SYNC lifecycle/main",
+                "piceli.deploy.interrupted",
+                **{"piceli.deploy.result": "interrupted"},
             ),
         )
         root = data.roots(

@@ -197,7 +197,7 @@ Common attributes: `piceli.event.id`, `cicd.pipeline.name`,
 `k8s.namespace.name`, `piceli.cluster`.
 
 **`piceli.event.id`** is stable: `<cluster>:<env>/<run>:<what>` (for
-example `my-cluster:main/20261004T10150012Z:rolled:1`;
+example `my-cluster:main/20261004T101500123Z:rolled:1`;
 `<cluster>:controller/<start>:started` for the controller). An event sent
 again carries the same id, so a backend can drop the duplicate.
 

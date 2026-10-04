@@ -103,7 +103,7 @@ From 0.15.1 (``lifecycle_integrity.py``):
 
 From 0.16.0 (``lifecycle_otel.py``; after 1, the candidate):
 
-30. The controller's OpenTelemetry: a pinned Collector in the cluster,
+31. The controller's OpenTelemetry: a pinned Collector in the cluster,
     ``Controller(telemetry=Otlp(...))`` and its headers Secret; a deploy, a
     failed check with rollback, an approval wait, a stop and start, a broken
     build and a controller killed mid-build each give the expected spans,
@@ -233,7 +233,7 @@ ALL_CHECKS = {
 STAGE_ORDER = (
     "2", "3", "1", "4", "5", "6", "11", "7", "12", "16", "17", "18", "19",
     "8", "15", "9", "10", "13", "14", "20", "21", "22", "23", "24",
-    "25", "26", "27", "28", "29", "30",
+    "25", "26", "27", "28", "29", "31",
 )  # fmt: skip
 STAGE_TITLES = {
     "1": "upgrade from the previous release",
@@ -265,7 +265,7 @@ STAGE_TITLES = {
     "27": "an edge cluster leaves the environment",
     "28": "machines: plan, apply, install, register, destroy (OpenTofu)",
     "29": "a corrupted controller image: reported down with its message",
-    "30": "the controller's OpenTelemetry: traces, events, metrics",
+    "31": "the controller's OpenTelemetry: traces, events, metrics",
 }
 STAGE_METHODS = {
     "1": "1_upgrade", "2": "2_bootstrap", "3": "3_first_main", "4": "4_one_source",
@@ -277,7 +277,7 @@ STAGE_METHODS = {
     "21": "21_rollback_no_loop", "22": "22_checks_status", "23": "23_stop_start",
     "24": "24_access_ui_killed", "25": "25_edge_add",
     "26": "26_edge_unreachable", "27": "27_edge_remove", "28": "28_infra",
-    "29": "29_corrupt_controller_image", "30": "30_otel",
+    "29": "29_corrupt_controller_image", "31": "31_otel",
 }  # fmt: skip
 #: Stages whose failure stops the run (the rest depend on them).
 CRITICAL = {"2", "3"}
@@ -938,7 +938,7 @@ class Lifecycle(
         self.cand_cli = str(cand / "bin" / "piceli")
 
     def _site(self, controller_image: str, telemetry: str | None = None) -> str:
-        """``lifecycle_site.py``; ``telemetry``: an ``Otlp(...)`` expression (stage 30)."""
+        """``lifecycle_site.py``; ``telemetry``: an ``Otlp(...)`` expression (stage 31)."""
         extra = (
             f"\nfrom piceli.infra import Otlp  # noqa: E402\n\nTELEMETRY = {telemetry}\n"
             if telemetry
@@ -2494,8 +2494,8 @@ def main(argv: list[str] | None = None) -> int:
                         "or images/Dockerfile")  # fmt: skip
     parser.add_argument(
         "--stages",
-        default="1-30",
-        help="e.g. 1-30 or 1,2,3 (setup always runs; 28 alone runs without the bootstrap)",
+        default="1-31",
+        help="e.g. 1-31 or 1,2,3 (setup always runs; 28 alone runs without the bootstrap)",
     )
     parser.add_argument("--playwright-ui", type=Path, default=None,
                         help="ui/ directory with node_modules for the optional browser "
