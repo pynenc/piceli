@@ -351,3 +351,4 @@
   .composition-details[data-cards="1"] .inspector-version-chain>li { padding-bottom:20px; }
   .composition-details[data-cards="1"] .inspector-version-chain>li:not(:last-child)::before { left:11px; right:auto; top:26px; bottom:3px; border-top:0; border-left:1px solid var(--line); }
 }
+.controller-down { margin:0 0 14px; }

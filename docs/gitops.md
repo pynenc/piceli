@@ -150,7 +150,29 @@ $ docker buildx build -f images/Dockerfile --target builder \
 ```
 
 The push prints each digest. Add whatever your pipeline module imports
-besides Piceli with a `FROM …piceli-controller@sha256:…` image of your own.
+besides Piceli with a `FROM …piceli-controller@sha256:…` image of your own
+(and end it with `RUN python -B -m piceli.integrity write --out
+/usr/local/share/piceli/files.sha256`, so the self-check below covers your
+files too).
+
+**Self-check (0.15.1).** The images ship the SHA-256 of every file of their
+Python installation (`/usr/local/share/piceli/files.sha256`, written as the
+last build step). The controller and UI Deployments set
+`PICELI_SELF_CHECK` to it, and `piceli` verifies every file before it
+imports anything else (under a second). A node whose disk or memory altered
+the unpacked image (the container then fails at some import with an
+unrelated error, such as `ValueError: code: co_varnames is too small` from
+a damaged `.pyc`) gets one message instead, exit status 70:
+
+```text
+controller image files corrupted on this node; remove the image from the node's containerd and restart (1 file(s) differ from the image: …)
+```
+
+Remove the image from that node (`crictl rmi <image@digest>` on the node),
+delete the pod so it pulls again, and check the node's disk and memory.
+The containers keep their last log lines as their termination message
+(`FallbackToLogsOnError`), so the status below shows why any crash
+happened. An image older than the check (no manifest) starts as before.
 Without `--builder-image`, a branch deploys only images pushed with `piceli
 env push`.
 
@@ -324,7 +346,17 @@ environment) prunes only with `Pipeline(prune=True)`.
 The controller publishes its status in the ConfigMap `piceli-gitops-status`
 (key `status.json`, schema `piceli.gitops-status.v1`) of its namespace;
 `piceli gitops status --json` prints it with `health` (`healthy`,
-`degraded`, `stale`, `starting`, `down`) and `deployment_ready`, and
+`degraded`, `stale`, `starting`, `down`), `deployment_ready` and, from
+0.15.1, `controller_live`: the controller's pod as Kubernetes sees it
+(`state` `running`, `down`, `stale` or `starting`; `message`, such as
+`CrashLoopBackOff, 37 restarts; last error: …` or the self-check's;
+`pod` with its node, restarts, waiting reason and last exit;
+`status_is_stale` and `note` when the document was written before the
+controller stopped: the environments' states are then as of `last_poll`,
+and the text output says so first). `piceli cluster status` adds the same
+under `controller.live` and prints the message; the UI shows the
+controller down with it. Without permission to read the controller's pods,
+only the age of the last poll decides (`stale`). And
 `piceli envs` reads it (`piceli.gitops.state.read_status`). Per branch,
 `envs.<branch>` holds `commit` (wanted), `deployed_commit`, `state`
 (`pending`, `retrying`, `approval-required`, `deployed`, `failed`,

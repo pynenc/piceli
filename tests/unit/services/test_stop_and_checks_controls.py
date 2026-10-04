@@ -194,3 +194,48 @@ def test_env_start_of_a_declared_stop_is_refused_before_any_request(
         app, ["env", "stop", "nope", "--cluster", "infra.py:cluster"]
     )
     assert unknown.exit_code == 2 and '"reason": "env-not-found"' in unknown.stdout
+
+
+def test_a_controller_that_is_down_wins_over_its_last_document(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """0.15.1: the overview shows the controller down, with why, and the
+    environments' states marked as written before it stopped."""
+    from piceli.gitops import liveness
+
+    channel = DirectoryChannel(tmp_path / "channel")
+    status = _status()
+    status["controller"].update(state="running", last_poll="2026-10-04T14:25:00Z")
+    channel.publish(status)
+    # The cluster channel: it has an API client and a namespace.
+    channel.client = object()  # type: ignore[attr-defined]
+    channel.namespace = "piceli-system"  # type: ignore[attr-defined]
+    seen: list[str] = []
+
+    def down(api: Any, namespace: str, document: Any, now: float) -> dict[str, Any]:
+        seen.append(namespace)
+        return {
+            "state": "down",
+            "message": "controller image files corrupted on this node; remove the image "
+            "from the node's containerd and restart",
+            "pod": {"restarts": 37},
+            "status_is_stale": True,
+        }
+
+    monkeypatch.setattr(liveness, "check", down)
+
+    @contextmanager
+    def factory() -> Any:
+        yield channel
+
+    control = CompositionControl(_query(tmp_path), "cluster", factory)
+    controller = control.overview()["controller"]
+    assert seen == ["piceli-system"]
+    assert controller["state"] == "down"
+    assert controller["message"].startswith("controller image files corrupted on this node")
+    assert controller["restarts"] == 37
+    assert controller["status_is_stale"] is True
+    assert controller["last_poll"] == "2026-10-04T14:25:00Z"
+    # A local state directory (no cluster) keeps the document's own state.
+    del channel.client  # type: ignore[attr-defined]
+    assert control.overview()["controller"]["state"] == "running"

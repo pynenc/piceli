@@ -946,8 +946,10 @@ def status(
         with _guard():
             document = channel.read_status()
         ready: bool | None = None
+        live: dict[str, Any] | None = None
         api_client = getattr(channel, "client", None)
         if api_client is not None:
+            from piceli.gitops import liveness
             from piceli.gitops.install import NAME, Api
 
             with _guard():
@@ -958,6 +960,8 @@ def status(
             ready = bool(
                 rollout.get("availableReplicas") or rollout.get("readyReplicas")
             )
+            # 0.15.1: the controller's pod, not only its last document.
+            live = liveness.check(Api(api_client), namespace, document, time.time())
     health = _health(document, ready, time.time())
     body: dict[str, Any] = {
         "schema": "piceli.gitops-status.v1",
@@ -965,11 +969,17 @@ def status(
         "deployment_ready": ready,
         **(document or {"controller": None, "envs": {}, "rejected_requests": []}),
     }
+    if live is not None:
+        body["controller_live"] = live
     controller = body.get("controller") or {}
     say(
         f"gitops controller: {health}"
         + (f" (last poll {controller.get('last_poll')})" if controller else "")
     )
+    if live is not None and live.get("message"):
+        say(f"  controller {live['state']}: {live['message']}")
+    if live is not None and live.get("status_is_stale"):
+        say(f"  NOTE: {live['note']}; the states below are as of then")
     if controller:
         say(
             f"  repo {controller.get('repo')} branches {','.join(controller.get('branches') or [])}"

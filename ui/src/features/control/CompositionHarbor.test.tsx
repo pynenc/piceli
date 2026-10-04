@@ -265,3 +265,20 @@ it('closing the primary card promotes the first pinned one, and a plain click ke
   expect(details.getAttribute('data-cards')).toBe('1');
   expect(screen.getByLabelText('Current location').textContent).toBe('?environment=production&component=api');
 });
+
+it('says the controller is down, why, and that the states shown are as of its last poll', async () => {
+  const down = { ...overview, controller: { state: 'down', last_poll: '2026-10-04T14:25:00Z', message: "controller image files corrupted on this node; remove the image from the node's containerd and restart", restarts: 37, status_is_stale: true } };
+  open({ snapshot: down as typeof overview });
+  const notice = await screen.findByText('GitOps controller is down');
+  const box = notice.closest('.notice') as HTMLElement;
+  expect(box.className).toContain('danger');
+  expect(within(box).getByText(/controller image files corrupted on this node/)).toBeTruthy();
+  expect(within(box).getByText(/may be out of date/)).toBeTruthy();
+  expect(within(screen.getByLabelText('Composition summary')).getByText('Down')).toBeTruthy();
+});
+
+it('shows no controller notice while it runs', async () => {
+  open();
+  await screen.findByRole('region', { name: 'Selected details' });
+  expect(screen.queryByText('GitOps controller is down')).toBeNull();
+});

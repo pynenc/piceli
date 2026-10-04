@@ -7820,6 +7820,7 @@
    "gitops": {},
    "importing": {},
    "infra": {},
+   "integrity": {},
    "k8s": {},
    "maintenance": {},
    "pipeline": {},
@@ -8527,6 +8528,7 @@
   "piceli.gitops.controller",
   "piceli.gitops.history",
   "piceli.gitops.install",
+  "piceli.gitops.liveness",
   "piceli.gitops.ports",
   "piceli.gitops.repo",
   "piceli.gitops.state",
@@ -8559,6 +8561,7 @@
   "piceli.infra.render",
   "piceli.infra.sources",
   "piceli.infra.ui_install",
+  "piceli.integrity",
   "piceli.k8s",
   "piceli.k8s.access",
   "piceli.k8s.automation",
@@ -8780,5 +8783,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.15.0"
+ "version": "0.15.1"
 }

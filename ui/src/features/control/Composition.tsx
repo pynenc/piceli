@@ -49,7 +49,7 @@ export type PendingPlan = {
 /** A checks-only run against the running release: nothing applied or rolled back. */
 export type Verification = { state: string; trigger?: string | null; checks_hash?: string | null; at?: string | null; failed: { check?: string | null; code?: string | null }[] };
 export type Source = { name: string; url?: string | null; refs: Record<string, string>; last_poll?: string | null; error?: string | null };
-type Controller = { state?: string | null; last_poll?: string | null; poll_seconds?: number | null } | null;
+type Controller = { state?: string | null; last_poll?: string | null; poll_seconds?: number | null; message?: string | null; restarts?: number | null; status_is_stale?: boolean } | null;
 type Overview = { configured: boolean; controller: Controller; sources: Source[]; environments: Environment[] };
 type Detail = { configured: boolean; controller: Controller; sources: Source[]; environment: Environment };
 type SyncResult = { state: string; env: string; component?: string | null; request: string };
@@ -112,8 +112,17 @@ export function ClusterStates({ env, detailed = false }: { env: Environment; det
   </li>)}</ul>;
 }
 
+/** A controller that is not running: why, and that the states shown are as of its last poll. */
+export function ControllerDown({ controller }: { controller: Controller }) {
+  if (!controller || (controller.state !== 'down' && controller.state !== 'stale')) return null;
+  return <div className="controller-down"><Notice title={controller.state === 'down' ? 'GitOps controller is down' : 'GitOps controller has not polled'} danger>
+    {controller.message && <p className="small"><code>{controller.message}</code></p>}
+    {controller.status_is_stale && <p className="small">The states below were written by the controller at {formatTime(controller.last_poll)}; nothing deploys until it runs again, so they may be out of date.</p>}
+  </Notice></div>;
+}
+
 function ControllerLine({ controller }: { controller: Controller }) {
-  return <p className="small muted controller-line">Controller <Badge value={controller?.state ?? 'unknown'} /> · last poll {formatTime(controller?.last_poll)}</p>;
+  return <><p className="small muted controller-line">Controller <Badge value={controller?.state ?? 'unknown'} /> · last poll {formatTime(controller?.last_poll)}</p><ControllerDown controller={controller} /></>;
 }
 
 function NotConfigured() {
@@ -205,6 +214,7 @@ export function CompositionOverview({ canSync }: { canSync: boolean }) {
     <div className="heading detail-heading composition-explorer-heading"><div><h1>Your delivery landscape</h1>{data?.configured ? <div className="composition-statusline" aria-label="Composition summary"><span><strong>{environments.length}</strong> environments</span><span><strong>{environments.reduce((count, item) => count + item.components.length, 0)}</strong> components</span><span><strong>{environments.filter(item => item.state === 'approval-required').length}</strong> awaiting approval</span><span className="composition-controller-status" title={`Last controller poll: ${formatTime(data.controller?.last_poll)}`}>Controller <Badge value={data.controller?.state ?? 'unknown'} /></span></div> : <p className="subtitle">Sources, components and environments.</p>}</div><button onClick={() => void query.refetch()} disabled={query.isFetching}>Refresh overview</button></div>
     {query.isPending && <Loading text="Loading composition…" />}{query.isError && <Failure error={query.error} retry={() => void query.refetch()} />}
     {data && !data.configured && <NotConfigured />}
+    {data?.configured && <ControllerDown controller={data.controller} />}
     {data?.configured && <Dialog.Root open={expanded} onOpenChange={setExpanded}>
       <div className="composition-viewbar"><div className="composition-view-tabs" role="group" aria-label="Infrastructure view">{['topology', 'versions', 'attention'].map(item => <button key={item} aria-pressed={view === item} onClick={() => setView(item)}>{item[0].toUpperCase() + item.slice(1)}</button>)}</div>{view === 'topology' && environment ? <Dialog.Trigger asChild><button className="composition-expand" aria-label="Expand topology"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M7 2H2v5M13 2h5v5M2 13v5h5m11-5v5h-5" /></svg>Expand topology</button></Dialog.Trigger> : <span className="small muted">Controller snapshot</span>}</div>
       {view === 'versions' ? <CompositionVersions environments={environments} sources={data.sources} onInspect={(name, componentName) => selectNode({ kind: 'component', environment: name, name: componentName })} /> : view === 'attention' ? <CompositionAttention environments={environments} sources={data.sources} /> : <>

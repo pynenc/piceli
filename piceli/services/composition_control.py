@@ -38,6 +38,7 @@ from __future__ import annotations
 import hashlib
 import re
 import threading
+import time
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
 from dataclasses import replace
@@ -374,9 +375,25 @@ class CompositionControl:
         self.query.registration(self.application_id, action=action)
 
     def _status(self) -> dict[str, Any] | None:
+        return self._read()[0]
+
+    def _read(self) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        """The published status, and the controller's liveness when the
+        channel is the cluster (0.15.1: a crash-looping controller leaves its
+        last document behind, which must not read as current)."""
+        from piceli.gitops import liveness
+
         try:
             with self.channel_factory() as channel:
-                return channel.read_status()
+                document = channel.read_status()
+                client = getattr(channel, "client", None)
+                namespace = getattr(channel, "namespace", None)
+                live = None
+                if client is not None and isinstance(namespace, str):
+                    from piceli.gitops.install import Api
+
+                    live = liveness.check(Api(client), namespace, document, time.time())
+                return document, live
         except GitOpsError:
             raise QueryError("ui-observation-unavailable", 503) from None
 
@@ -408,7 +425,7 @@ class CompositionControl:
         return identity
 
     def _document(self) -> dict[str, Any]:
-        document = self._status()
+        document, live = self._read()
         if document is None:
             return {
                 "configured": False,
@@ -444,9 +461,17 @@ class CompositionControl:
         return {
             "configured": True,
             "controller": {
-                "state": _text(controller.get("state")),
+                # A controller that is not running wins over its last document.
+                "state": _text(
+                    live["state"]
+                    if live and live.get("state") != "running"
+                    else controller.get("state")
+                ),
                 "last_poll": _text(controller.get("last_poll")),
                 "poll_seconds": _number(controller.get("poll_seconds")),
+                "message": _text((live or {}).get("message")),
+                "restarts": _number(((live or {}).get("pod") or {}).get("restarts")),
+                "status_is_stale": bool((live or {}).get("status_is_stale")),
             },
             "sources": [
                 _source(name, value)

@@ -2,6 +2,11 @@ import sys
 
 
 def main() -> None:
+    # First, before any other import: in the controller and UI images, verify
+    # the installed files against the build's manifest (PICELI_SELF_CHECK).
+    from piceli.integrity import self_check
+
+    self_check()
     from piceli.tempfiles import install_signal_cleanup
 
     # SIGTERM/SIGHUP remove live temporary directories (TLS material, OCI
