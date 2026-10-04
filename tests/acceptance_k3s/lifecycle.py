@@ -216,15 +216,15 @@ BUSYBOX = (
     "@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e"
 )
 #: The previous release and its public images (amd64 + arm64; the index
-#: digests of ghcr.io/pynenc/piceli-{controller,builder}:0.15.0).
-PREVIOUS = "0.15.0"
+#: digests of ghcr.io/pynenc/piceli-{controller,builder}:0.15.1).
+PREVIOUS = "0.15.1"
 PREVIOUS_IMAGE = (
     "ghcr.io/pynenc/piceli-controller"
-    "@sha256:870e425162235897a89e56db42080478113d37711a6d42e8faebb98c2a28c4da"
+    "@sha256:442599475ee6548f5243405281a77b2d56a3a905cece4d6eac5a1cbfbce079a1"
 )
 PREVIOUS_BUILDER = (
     "ghcr.io/pynenc/piceli-builder"
-    "@sha256:6f7ab25472c6c818cfa6bb016166e300351a0e276b4c5d87d49674eb1d4198a0"
+    "@sha256:ddb4d663f35449d41066b0b1562e5d9f44e33a2b45761ff348badf79f9c76ed1"
 )
 #: The in-cluster UI's local port (``piceli access ui``).
 UI_PORT = 8790
