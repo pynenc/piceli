@@ -982,3 +982,26 @@ def test_deliver_line_shortens_the_digest() -> None:
         "127.0.0.1:5001/web@sha256:aaaaaaaaaaaa…"
     )
     assert _short_reference("web:1.0") == "web:1.0"
+
+
+def test_status_lists_stateful_sets_when_the_app_cannot_render_offline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B16: a render failure without the cluster must not drop StatefulSets."""
+    from piceli import App
+    from piceli.k8s.access import _app_workloads
+
+    app = App("shop")
+    app.deployment("web", image="registry.example/web:1")
+    app.stateful_set("db", image="registry.example/db:1")
+    app.daemon_set("agent", image="registry.example/agent:1")
+    app.job("migrate", image="registry.example/web:1")
+    rendered = set(_app_workloads(app, "shop"))
+
+    def refuse(*args: Any, **kwargs: Any) -> Any:
+        raise ValueError("needs the cluster")
+
+    monkeypatch.setattr(App, "render", refuse)
+    expected = {("Deployment", "web"), ("StatefulSet", "db"), ("DaemonSet", "agent")}
+    assert rendered == expected
+    assert set(_app_workloads(app, "shop")) == expected

@@ -516,6 +516,15 @@ class _Instance:
         return self.env.sources
 
 
+def _running_images(record: Mapping[str, Any]) -> dict[str, Any]:
+    """The images the environment runs, by component (the release's identity)."""
+    return {
+        key: entry.get("deployed_image")
+        for key, entry in sorted((record.get("components") or {}).items())
+        if isinstance(entry, Mapping)
+    }
+
+
 class CompositionController:
     """Poll every source and keep each environment at its revision.
 
@@ -1583,6 +1592,8 @@ class CompositionController:
                     else record.get("verification")
                 ),
             )
+            if action == "unchanged":
+                self._settle_checks(record)
             changed = sorted(rolled)
             if action == "verified":
                 self.log(
@@ -1697,6 +1708,13 @@ class CompositionController:
         self, record: dict[str, Any], run: Mapping[str, Any] | None, trigger: Any
     ) -> None:
         """Keep the last checks a run of this environment executed (status ``checks``)."""
+        outcome = self._last_outcome
+        if (
+            outcome is not None
+            and getattr(outcome, "action", None) == "unchanged"
+            and not getattr(outcome, "run_id", None)
+        ):
+            return  # a no-op runs no checks: never another run's (0.15.0)
         checks = (run or {}).get("checks")
         if not isinstance(checks, Mapping):
             return
@@ -1737,6 +1755,28 @@ class CompositionController:
                 else {}
             ),
         }
+        if record["checks"]["state"] == "passed" and record.get("state") == "deployed":
+            record["release_checks"] = {
+                "images": _running_images(record),
+                "checks": record["checks"],
+            }
+
+    @staticmethod
+    def _settle_checks(record: dict[str, Any]) -> None:
+        """A no-op deploy settles on the running release: show its checks.
+
+        After a failed release was rolled back, a revert deploys nothing; the
+        checks of the failed run are not the running release's (0.15.0). The
+        last passing checks of the same images come back, else none.
+        """
+        checks = record.get("checks")
+        if not isinstance(checks, Mapping) or checks.get("state") == "passed":
+            return
+        kept = record.get("release_checks")
+        if isinstance(kept, Mapping) and kept.get("images") == _running_images(record):
+            record["checks"] = dict(kept["checks"])
+        else:
+            record["checks"] = None
 
     def _degraded(self, record: dict[str, Any], verification: dict[str, Any]) -> None:
         """Failing checks on an unchanged release: keep it running, mark it degraded.
@@ -1924,6 +1964,13 @@ class CompositionController:
         started = (_iso(self.clock()), record.get("trigger"), record.get("approval"))
         self._built, self._last_outcome = [], None
         self._step_started, self._step_env = started[0], str(record.get("branch"))
+        # Added in 0.15.0: the step shows in the status while it runs, not
+        # only when the whole poll ends (a long rollout left it minutes stale).
+        record["in_progress"] = {
+            "action": work.__name__.lstrip("_"),
+            "since": started[0],
+        }
+        self._publish()
         try:
             work(record)
         except Exception as error:  # one bad environment never stops the loop
@@ -1936,9 +1983,11 @@ class CompositionController:
                 self._fail(record, step_reason(error), error)
         finally:
             self.busy = False
+            record.pop("in_progress", None)
             if deploy:
                 self._record_step(record, *started)
             save_state(self.state_dir, self.state)
+            self._publish()
 
     def _record_step(
         self,
@@ -2155,7 +2204,11 @@ class CompositionController:
     def status(self) -> dict[str, Any]:
         """The published status (``piceli.gitops-status.v1`` with composition keys)."""
         envs = {
-            name: {k: v for k, v in record.items() if k != "approved_hash"}
+            name: {
+                k: v
+                for k, v in record.items()
+                if k not in ("approved_hash", "release_checks")
+            }
             for name, record in sorted(self._envs().items())
         }
         for record in envs.values():
