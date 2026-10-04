@@ -149,6 +149,16 @@ noted.
   out and referenced by name). `piceli chart publish TARGET --to oci://…`
   **without** `--approve` prints the chart's digest (exit `3`); nothing is
   pushed. See {doc}`helm_charts`.
+- `piceli bundle TARGET --env ENV --out DIR [--receipt R]`: renders the app
+  for a cluster Piceli never accesses (kustomize base and overlay,
+  `prepare.sh`, image archives, `INSTALL.md`, `UNINSTALL.md`,
+  `SHA256SUMS`); it writes only local files, contacts no cluster or
+  registry and writes no secret value. A refusal `bundle-unsafe-<rule>`
+  lists every violation; fix the model or, with the owner, declare
+  `app.safety_exception(...)`. See {doc}`client_delivery`.
+- `piceli support-bundle --kubeconfig F --context C --namespace NS --out
+  FILE`: reads one namespace with GET requests only (never Secrets, never
+  env or ConfigMap values) and writes a redacted archive.
 - `piceli artifacts publish --receipt R --to oci://… --tag V` **without**
   `--approve`: reads the build receipt and prints the publish plan and its
   digest (exit `3`); it contacts no registry. `piceli artifacts build-spec

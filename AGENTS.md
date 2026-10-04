@@ -122,6 +122,7 @@ These are enforced by tests or review. Do not weaken them.
 | Post-deploy checks (`Checks`, `release check`) | `piceli/checks/` |
 | Builds, source identity, image delivery | `piceli/artifacts/` |
 | Typed apps (`App`, `app.override`) | `piceli/app/` |
+| Client bundles, the foreign-cluster safety gate, support bundles (`piceli bundle`, `piceli support-bundle`, `app.cluster_identity`) | `piceli/bundle/`, `piceli/app/identity.py`, `piceli/k8s/cli/bundle.py`, `tests/acceptance_k3s/bundle.py` (`make acceptance-bundle`) |
 | Import live objects or YAML as a typed module (`piceli import`) | `piceli/importing/`, `piceli/k8s/cli/importing.py` |
 | Public fake Kubernetes API for tests | `piceli/testing/` |
 | Observe / operator UI and REST API | `piceli/k8s/observe*.py`, `piceli/k8s/operator*.py` |

@@ -4,6 +4,44 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.15.0
+
+- **Deliver to a cluster you never access: `piceli bundle TARGET --env ENV
+  --out DIR`.** The same typed `App` as one directory a client installs
+  with `kubectl` alone: a kustomize base and `overlays/dev` (namespace,
+  image registry and digests, requests and limits, storage class), every
+  object labelled `app.kubernetes.io/part-of=<name>`; `prepare.sh
+  NAMESPACE`, a POSIX script that makes the app's generated Secrets
+  (random tokens, templates, a private CA and its certificates) in the
+  client's cluster with `kubectl` and `openssl` (idempotent, never prints a
+  value; no Secret is shipped); OCI image-layout archives of the build
+  receipt's images (`--receipt`; amd64 by default, `--platform` or
+  `--all-platforms`) with their SBOM and provenance, whose digest survives
+  `skopeo copy --preserve-digests`; `INSTALL.md` and `UNINSTALL.md` with
+  the exact commands; `bundle.json` and `SHA256SUMS`. A generated
+  default-deny NetworkPolicy admits nothing from outside the namespace.
+  Never contacts a cluster or registry. See {doc}`client_delivery`.
+- **A safety gate for foreign clusters.** `piceli bundle` refuses
+  (`bundle-unsafe-<rule>`, with every violation) containers that may run as
+  root, write their root filesystem, escalate privileges or use the host,
+  lack cpu/memory requests and limits, NetworkPolicies admitting ingress
+  from outside the namespace, RBAC beyond least privilege, and node ports.
+  `app.safety_exception(item, rule, reason=...)` waives one rule for one
+  object; the reason is an annotation in the client's cluster and is listed
+  in the bundle.
+- **The cluster's identity, read from the cluster:
+  `app.cluster_identity(image=...)`** declares a ServiceAccount allowed only
+  to `get` the `kube-system` namespace and returns a `ClusterIdentity`: an
+  init container writing its UID to `/run/cluster-identity/uid`, the volume,
+  the account and the egress rule to the API server. No per-cluster
+  constant in the model.
+- **`piceli support-bundle --kubeconfig F --context C --namespace NS --out
+  FILE`**: a read-only (GET only, any other method refused before it is
+  sent), redacted `.tar.gz` of a namespace: versions, pod status, workloads,
+  declared health, events, Services, ConfigMap keys, log tails, with a
+  manifest. Secrets are never requested; env and ConfigMap values are never
+  collected.
+
 ## Version 0.14.7
 
 - **Stop a named environment.** `Environment(..., stopped=True)` in a
