@@ -8,8 +8,8 @@ encrypted. Skipped without OpenTofu (``PICELI_TOFU`` or ``tofu`` on PATH).
 from __future__ import annotations
 
 import base64
-import os
 import json
+import os
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -386,7 +386,9 @@ def test_hetzner_rendering_plans_with_the_pinned_provider(homes: Path) -> None:
             servers=[server],
             records=[
                 DnsRecord("example.com", "www", "A", server=server),
-                DnsRecord("example.com", "@", "TXT", value="v=spf1 -all", provider=hcloud),
+                DnsRecord(
+                    "example.com", "@", "TXT", value="v=spf1 -all", provider=hcloud
+                ),
             ],
             state_dir=homes / "state",
         )
@@ -403,5 +405,7 @@ def test_hetzner_rendering_plans_with_the_pinned_provider(homes: Path) -> None:
         "hcloud_zone_rrset.record-example-com-www-a",
         "hcloud_zone_rrset.record-example-com-apex-txt",
     }
-    assert result.estimate is not None and result.estimate["monthly_net"] == pytest.approx(4.29)
+    assert result.estimate is not None and result.estimate[
+        "monthly_net"
+    ] == pytest.approx(4.29)
     assert ("GET", "/v1/pricing", True) in api.requests

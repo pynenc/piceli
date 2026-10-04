@@ -23,6 +23,7 @@ LATEST_ONLY = {
     "crds",
     "deploy_events",
     "environments",
+    "infrastructure",
     "gitops",
     "heavy_work",
     "maintenance",

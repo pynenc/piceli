@@ -4929,7 +4929,6 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         True,
         "cluster-ui",
     ),
-
     # ------------------------------------------------------------ 0.15 infra
     _E(
         "infra-invalid",

@@ -17,16 +17,34 @@ deploys to.
 ```python
 # machines.py
 from piceli.infra import (
-    Cluster, DnsRecord, Firewall, Hetzner, Hook, Infrastructure, PrimaryIp, Rule, Server, Ssh,
+    Cluster,
+    DnsRecord,
+    Firewall,
+    Hetzner,
+    Hook,
+    Infrastructure,
+    PrimaryIp,
+    Rule,
+    Server,
+    Ssh,
 )
 
-hcloud = Hetzner(credentials="hcloud", location="fsn1")  # the token: piceli secrets provider
-edge = Firewall("edge", rules=[
-    Rule.tcp(443, name="https"),
-    Rule.udp(3478, name="turn"),
-    Rule.tcp(22, sources=["100.64.0.0/10"], name="ssh"),  # SSH from a private network only
-])
-edge_cluster = Cluster("edge-1", api="https://edge-1.example.net:6443", credentials="edge-1")
+hcloud = Hetzner(
+    credentials="hcloud", location="fsn1"
+)  # the token: piceli secrets provider
+edge = Firewall(
+    "edge",
+    rules=[
+        Rule.tcp(443, name="https"),
+        Rule.udp(3478, name="turn"),
+        Rule.tcp(
+            22, sources=["100.64.0.0/10"], name="ssh"
+        ),  # SSH from a private network only
+    ],
+)
+edge_cluster = Cluster(
+    "edge-1", api="https://edge-1.example.net:6443", credentials="edge-1"
+)
 
 edge_1 = Server(
     "edge-1",

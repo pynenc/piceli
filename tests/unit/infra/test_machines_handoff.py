@@ -22,8 +22,8 @@ import yaml
 from typer.testing import CliRunner, Result
 
 from piceli import profiles
-from piceli.infra.machines.plan import INVENTORY
 from piceli.infra import Cluster
+from piceli.infra.machines.plan import INVENTORY
 from piceli.infra.machines.register import fingerprint, register_cluster
 from piceli.infra.machines.state import read_record, write_record
 from piceli.k8s.cli import app as cli
@@ -307,7 +307,11 @@ def test_registration_goes_through_the_multicluster_call_when_there(
 
     def multicluster_register(cluster: Cluster, **kwargs: Any) -> dict[str, Any]:
         calls.append({"cluster": cluster.name, **kwargs})
-        return {"state": "created", "profile": cluster.credentials, "secret": {"name": "piceli-cluster-edge-1"}}
+        return {
+            "state": "created",
+            "profile": cluster.credentials,
+            "secret": {"name": "piceli-cluster-edge-1"},
+        }
 
     module = types.ModuleType("piceli.infra.multicluster")
     module.register_cluster = multicluster_register  # type: ignore[attr-defined]

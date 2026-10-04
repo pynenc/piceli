@@ -1476,7 +1476,10 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
         "infra status": _C(
             "Show a declared Infrastructure's servers (state, addresses, install, "
             "cluster registration, monthly cost), records and estimate.",
-            reads=("MODULE:ATTR (piceli.infra.Infrastructure)", "state directory records"),
+            reads=(
+                "MODULE:ATTR (piceli.infra.Infrastructure)",
+                "state directory records",
+            ),
             contract="conforms",
             exit_codes=(0, 2),
             notes="Read-only and offline: no tofu run, no credential, no network; it "
@@ -1486,7 +1489,10 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
         "infra install": _C(
             "Run a server's install hook (Server(install=Hook([...]))) with its "
             "addresses, after approval of the rendered command's digest.",
-            reads=("MODULE:ATTR (piceli.infra.Infrastructure)", "state directory records"),
+            reads=(
+                "MODULE:ATTR (piceli.infra.Infrastructure)",
+                "state directory records",
+            ),
             writes=("the server (whatever the owner's command does)", "installs.json"),
             approval_required=True,
             safe_to_retry=False,

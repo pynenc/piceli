@@ -3037,6 +3037,7 @@ Register an existing definition or inventory scope and serve the bundled UI.
 | `--docker` | path |  | Docker executable to pin for isolated evaluation |
 | `--docker-socket` | path | `/var/run/docker.sock` | Explicit local Docker daemon socket |
 | `--state-dir` | path |  | Private UI state directory (default: $XDG_STATE_HOME/piceli/ui) |
+| `--infra` | text |  | Also show the machines of a piceli.infra.Infrastructure MODULE:ATTR (read-only) |
 
 **Contract**
 
