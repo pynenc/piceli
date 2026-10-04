@@ -469,6 +469,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/composition/environments/{env}/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Named Environment Start */
+        post: operations["named_environment_start_api_v1_composition_environments__env__start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/composition/environments/{env}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Named Environment Stop */
+        post: operations["named_environment_stop_api_v1_composition_environments__env__stop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/composition/environments/{env}/wake": {
         parameters: {
             query?: never;
@@ -591,6 +625,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/forwards": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Forward List */
+        get: operations["forward_list_api_v1_forwards_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/forwards/stale/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Forward Stop Stale */
+        post: operations["forward_stop_stale_api_v1_forwards_stale_stop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/gitops": {
         parameters: {
             query?: never;
@@ -636,6 +704,57 @@ export interface paths {
         put?: never;
         /** Gitops Promotion */
         post: operations["gitops_promotion_api_v1_gitops_promotions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/logs/lines": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Workspace Log Lines */
+        get: operations["workspace_log_lines_api_v1_logs_lines_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/logs/sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Workspace Log Sources */
+        get: operations["workspace_log_sources_api_v1_logs_sources_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/navigation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Navigation Summary */
+        get: operations["navigation_summary_api_v1_navigation_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -845,6 +964,40 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/profiles/scopes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Add Profile Scope */
+        post: operations["add_profile_scope_api_v1_profiles_scopes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/profiles/scopes/{scope_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove Profile Scope */
+        delete: operations["remove_profile_scope_api_v1_profiles_scopes__scope_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1205,6 +1358,39 @@ export interface components {
             /** Path */
             path: string;
         };
+        /** ForwardEntry */
+        ForwardEntry: {
+            /** Application Name */
+            application_name: string;
+            scope?: components["schemas"]["WorkspaceScope"] | null;
+            session: components["schemas"]["AccessSession"];
+            /**
+             * Stale
+             * @default false
+             */
+            stale: boolean;
+            /** Stale Reason */
+            stale_reason?: string | null;
+            /** Url */
+            url?: string | null;
+        };
+        /** ForwardPage */
+        ForwardPage: {
+            /** Items */
+            items: components["schemas"]["ForwardEntry"][];
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "local" | "cluster" | "unavailable";
+            /**
+             * Orphans
+             * @default 0
+             */
+            orphans: number;
+            /** Reason */
+            reason?: string | null;
+        };
         /** Freshness */
         Freshness: {
             /** Observed At */
@@ -1320,6 +1506,32 @@ export interface components {
             branch: string;
             /** Commit */
             commit: string;
+        };
+        /** NavigationEnvironment */
+        NavigationEnvironment: {
+            /** Application Id */
+            application_id?: string | null;
+            /** Health */
+            health: string;
+            /** Name */
+            name: string;
+            /** State */
+            state: string;
+        };
+        /** NavigationSummary */
+        NavigationSummary: {
+            /** Approvals */
+            approvals?: number | null;
+            /** Degraded Environments */
+            degraded_environments?: number | null;
+            /** Environments */
+            environments?: components["schemas"]["NavigationEnvironment"][];
+            /** Failed Builds */
+            failed_builds?: number | null;
+            /** Registry Warnings */
+            registry_warnings?: number | null;
+            /** Stale Forwards */
+            stale_forwards?: number | null;
         };
         /** Operation */
         Operation: {
@@ -1564,6 +1776,13 @@ export interface components {
             /** Name */
             name: string;
         };
+        /** ProfileScopeRequest */
+        ProfileScopeRequest: {
+            /** Namespace */
+            namespace: string;
+            /** Profile */
+            profile: string;
+        };
         /** ProfileSwitchRequest */
         ProfileSwitchRequest: {
             /** Name */
@@ -1777,6 +1996,13 @@ export interface components {
              */
             state: "pending" | "running" | "succeeded" | "failed" | "skipped" | "interrupted";
         };
+        /** StaleForwardResult */
+        StaleForwardResult: {
+            /** Orphans */
+            orphans: number;
+            /** Stopped */
+            stopped: number;
+        };
         /** Target */
         Target: {
             /** Cluster Uid */
@@ -1802,6 +2028,120 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+        };
+        /** WorkloadRef */
+        WorkloadRef: {
+            /** Kind */
+            kind: string;
+            /** Name */
+            name: string;
+        };
+        /** WorkspaceLogBatch */
+        WorkspaceLogBatch: {
+            /** Cursor */
+            cursor: string;
+            /** Lines */
+            lines: components["schemas"]["WorkspaceLogLine"][];
+            /** Streams */
+            streams: components["schemas"]["WorkspaceLogStream"][];
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated: boolean;
+        };
+        /** WorkspaceLogLine */
+        WorkspaceLogLine: {
+            /** At */
+            at?: string | null;
+            /** Level */
+            level?: ("error" | "warn" | "info" | "debug") | null;
+            /** Stream */
+            stream: number;
+            /** Text */
+            text: string;
+        };
+        /** WorkspaceLogSource */
+        WorkspaceLogSource: {
+            /** Containers */
+            containers: string[];
+            /** Phase */
+            phase?: string | null;
+            pod: components["schemas"]["ResourceIdentity"];
+            /**
+             * Restarts
+             * @default 0
+             */
+            restarts: number;
+            /** Scope Id */
+            scope_id: string;
+            /** Started At */
+            started_at?: string | null;
+            workload?: components["schemas"]["WorkloadRef"] | null;
+        };
+        /** WorkspaceLogSources */
+        WorkspaceLogSources: {
+            freshness: components["schemas"]["Freshness"];
+            /** Items */
+            items: components["schemas"]["WorkspaceLogSource"][];
+            /** Partial */
+            partial?: components["schemas"]["PartialError"][];
+            /** Scopes */
+            scopes: components["schemas"]["WorkspaceScope"][];
+        };
+        /** WorkspaceLogStream */
+        WorkspaceLogStream: {
+            /** Code */
+            code?: string | null;
+            /** Container */
+            container: string;
+            /**
+             * Gap
+             * @default false
+             */
+            gap: boolean;
+            /**
+             * Lines
+             * @default 0
+             */
+            lines: number;
+            /** Pod Name */
+            pod_name: string;
+            /** Pod Uid */
+            pod_uid: string;
+            /**
+             * Previous
+             * @default false
+             */
+            previous: boolean;
+            /** Scope Id */
+            scope_id: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "ok" | "unavailable" | "not-found";
+        };
+        /**
+         * WorkspaceScope
+         * @description One readable namespace: an application, environment or profile scope.
+         */
+        WorkspaceScope: {
+            /** Cluster */
+            cluster: string;
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "application" | "environment" | "profile";
+            /** Name */
+            name: string;
+            /** Namespace */
+            namespace: string;
+            /** Profile */
+            profile?: string | null;
         };
     };
     responses: never;
@@ -2868,6 +3208,72 @@ export interface operations {
             };
         };
     };
+    named_environment_start_api_v1_composition_environments__env__start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                env: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    named_environment_stop_api_v1_composition_environments__env__stop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                env: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     named_environment_wake_api_v1_composition_environments__env__wake_post: {
         parameters: {
             query?: never;
@@ -3078,6 +3484,46 @@ export interface operations {
             };
         };
     };
+    forward_list_api_v1_forwards_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ForwardPage"];
+                };
+            };
+        };
+    };
+    forward_stop_stale_api_v1_forwards_stale_stop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StaleForwardResult"];
+                };
+            };
+        };
+    };
     gitops_api_v1_gitops_get: {
         parameters: {
             query?: never;
@@ -3166,6 +3612,93 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    workspace_log_lines_api_v1_logs_lines_get: {
+        parameters: {
+            query: {
+                stream: string[];
+                previous?: boolean;
+                tail_lines?: number;
+                since_seconds?: number | null;
+                q?: string | null;
+                level?: string[] | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceLogBatch"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    workspace_log_sources_api_v1_logs_sources_get: {
+        parameters: {
+            query?: {
+                scope?: string[] | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceLogSources"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    navigation_summary_api_v1_navigation_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NavigationSummary"];
                 };
             };
         };
@@ -3556,6 +4089,68 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+        };
+    };
+    add_profile_scope_api_v1_profiles_scopes_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProfileScopeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceScope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_profile_scope_api_v1_profiles_scopes__scope_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scope_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

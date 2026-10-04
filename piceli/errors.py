@@ -2999,6 +2999,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "pipeline",
     ),
     _E(
+        "checks-failed-rolled-back",
+        "Checks failed; rolled back and not retried",
+        "A GitOps controller deployed a revision whose post-deploy checks failed, and the release was rolled back (`rollback_on_failed_checks`). The controller does not try that revision again: retrying would apply it, fail and roll back again.",
+        "Read the failed checks in the run (`piceli runs`, the deployment history), push a fix (a new revision) or run `piceli gitops sync ENV` to try the same revision again.",
+        False,
+        "gitops",
+    ),
+    _E(
         "prerollout-mount-missing",
         "Pre-rollout check would fail to start",
         "A workload with a pre-rollout check (`App.pre_rollout`) reads a Secret or ConfigMap (environment, `envFrom` or a mount) that the release does not create and that is absent from the cluster or lacks the referenced key. The check Job would fail to start, and so would the workload's pods. Planning refuses it; a run refuses it before creating the Job.",
@@ -4507,6 +4515,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "`piceli gitops approve ENV HASH` named a plan hash the environment is not waiting for: a newer push or re-plan replaced the plan, or the environment is not waiting for approval.",
         "Run `piceli gitops status`, review the pending plan and approve the hash it shows.",
         True,
+        "gitops",
+    ),
+    _E(
+        "gitops-env-stop-declared",
+        "Environment declared stopped",
+        "`piceli env start ENV` named an environment the composition declares `Environment(stopped=True)`: the declaration wins over a start request, so the controller keeps it stopped.",
+        "Remove `stopped=True` from the environment in the composition and push it; the controller starts it on its next poll.",
+        False,
         "gitops",
     ),
     _E(

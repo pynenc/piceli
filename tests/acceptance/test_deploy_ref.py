@@ -23,7 +23,7 @@ from typer.testing import CliRunner
 from piceli.k8s.cli import app as cli
 from piceli.pipeline.backend import Backend
 from tests.acceptance.fake_api import TARGET, serve
-from tests.acceptance.test_deploy_pipeline import SCHEMA, FakeBackend, image
+from tests.acceptance.test_deploy_pipeline import VALIDATOR, FakeBackend, image
 
 BUILD_TOML = """
 revision = "piceli.build-spec.v1"
@@ -184,14 +184,12 @@ def ref_shop(tmp_path, monkeypatch):
 
 
 def deploy(repo: Path, *args: str) -> tuple[int, list[dict[str, Any]], Any]:
-    import jsonschema
-
     result = CliRunner().invoke(
         cli, ["deploy", str(repo / "deploy" / "app.py:pipeline"), *args]
     )
     lines = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
     for line in lines:
-        jsonschema.validate(line, SCHEMA)
+        VALIDATOR.validate(line)
     return result.exit_code, lines, result
 
 

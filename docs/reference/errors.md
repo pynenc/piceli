@@ -83,6 +83,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`check-raised`](#error-check-raised) | checks | no |
 | [`check-target-not-found`](#error-check-target-not-found) | checks | yes |
 | [`check-timed-out`](#error-check-timed-out) | checks | yes |
+| [`checks-failed-rolled-back`](#error-checks-failed-rolled-back) | gitops | no |
 | [`checks-rollback-failed`](#error-checks-rollback-failed) | checks | no |
 | [`checks-rollback-unavailable`](#error-checks-rollback-unavailable) | checks | no |
 | [`claim-expansion-failed`](#error-claim-expansion-failed) | restore | yes |
@@ -237,6 +238,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`gitops-config-invalid`](#error-gitops-config-invalid) | gitops | no |
 | [`gitops-controller-locked`](#error-gitops-controller-locked) | gitops | yes |
 | [`gitops-empty`](#error-gitops-empty) | gitops | no |
+| [`gitops-env-stop-declared`](#error-gitops-env-stop-declared) | gitops | no |
 | [`gitops-git-failed`](#error-gitops-git-failed) | gitops | yes |
 | [`gitops-image-unpinned`](#error-gitops-image-unpinned) | gitops | no |
 | [`gitops-image-unresolved`](#error-gitops-image-unresolved) | gitops | no |
@@ -4042,6 +4044,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 ## GitOps handoff (`piceli publish`, `piceli render --out`) and the GitOps controller (`piceli gitops …`, `piceli promote`)
 
+(error-checks-failed-rolled-back)=
+### `checks-failed-rolled-back`
+
+**Checks failed; rolled back and not retried.** A GitOps controller deployed a revision whose post-deploy checks failed, and the release was rolled back (`rollback_on_failed_checks`). The controller does not try that revision again: retrying would apply it, fail and roll back again.
+
+- **Fix:** Read the failed checks in the run (`piceli runs`, the deployment history), push a fix (a new revision) or run `piceli gitops sync ENV` to try the same revision again.
+- **Retry-safe:** no
+
 (error-gitops-approval-stale)=
 ### `gitops-approval-stale`
 
@@ -4088,6 +4098,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Nothing to hand off.** The render has no object left to publish (for example only Secrets, left out by `--secrets external`).
 
 - **Fix:** Check the target and `--env`; `piceli render` shows what it renders.
+- **Retry-safe:** no
+
+(error-gitops-env-stop-declared)=
+### `gitops-env-stop-declared`
+
+**Environment declared stopped.** `piceli env start ENV` named an environment the composition declares `Environment(stopped=True)`: the declaration wins over a start request, so the controller keeps it stopped.
+
+- **Fix:** Remove `stopped=True` from the environment in the composition and push it; the controller starts it on its next poll.
 - **Retry-safe:** no
 
 (error-gitops-git-failed)=

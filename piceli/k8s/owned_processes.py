@@ -207,6 +207,26 @@ class OwnedProcessRegistry:
         )
         return OwnedChild(entry.pid, entry.owner_pid, alive, entry.label)
 
+    def orphans(self) -> tuple[int, ...]:
+        """Recorded children still running whose owner is gone (nothing is signalled).
+
+        These are what :meth:`reap_orphans` would stop: the stale forwards a
+        crashed or killed server left behind.
+        """
+        if not self.directory.is_dir():
+            return ()
+        found: list[int] = []
+        for _path, entry in self._entries():
+            if entry is None or process_identity(entry.pid) != entry.identity:
+                continue
+            if (
+                entry.owner_pid == self._owner_pid
+                or process_identity(entry.owner_pid) == entry.owner_identity
+            ):
+                continue
+            found.append(entry.pid)
+        return tuple(found)
+
     def reap_orphans(self, *, timeout: float = 3.0) -> tuple[int, ...]:
         """Stop recorded children whose owner is gone; return the pids stopped.
 

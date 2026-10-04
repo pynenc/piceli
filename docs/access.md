@@ -151,6 +151,33 @@ New to Piceli? Start with {doc}`getting_started/index`.
   `release.toml`) adds the release state, and `.last_checks()` adds the
   latest checks result.
 
+A **composition environment** is the third form: its name as `TARGET` and
+the composition's cluster with `--cluster`:
+
+```sh
+piceli access main --cluster infra.py:my_cluster
+```
+
+The composition module names the environment's namespace, and the cluster's
+`credentials` profile reaches it (its explicit kubeconfig and context, never
+the current context). An environment that deploys a `Pipeline`
+(`Environment(pipeline=…)`) forwards what its app declares
+(`app.access.forward(...)`) on the declared local port, with its path, health
+probe and restart policy (a declared Service that is not live is left out).
+Every other Service port (component ports live in their contracts, in the
+source repositories) gets one forward on a free loopback port, so several
+environments are reachable at once. Only named environments are supported
+(`env-not-found` otherwise; a branch environment uses `--pipeline`). The web
+UI describes its forwards the same way (see {doc}`ui`).
+
+`--ui` also forwards the cluster's in-cluster UI in the same command, as
+`piceli access ui --cluster` does (127.0.0.1:8790, the launch URL printed
+once, `"ui"` in the `started` JSON line):
+
+```sh
+piceli access main --cluster infra.py:my_cluster --ui
+```
+
 ## If it fails
 
 | You see | Meaning | Next step |
@@ -251,7 +278,7 @@ The JSON object:
 | --- | --- |
 | Arguments | `TARGET` (text, required); `--only ID` (repeatable); `--json` (flag); `--kubectl PATH` (default `kubectl`); `--poll SECONDS` (0.1-60, default 1); `--dashboard PORT` (optional); `--ui-config PATH` (optional, also `$PICELI__UI_CONFIG`) |
 | Reads | `release.toml` or the target module, the kubeconfig, `kubectl` |
-| Writes | Loopback ports only: one `kubectl port-forward --address 127.0.0.1` process per forward, each in its own process group, all stopped on exit. Nothing in the cluster. |
+| Writes | Loopback ports only: one `kubectl port-forward --address 127.0.0.1` process per forward, each in its own process group, all stopped on exit (also when `piceli` is killed: see below). Nothing in the cluster. |
 | Approval | None; it only reads the cluster. Ask the owner before starting long-running processes on their machine. |
 | Exit codes | `0` stopped by Ctrl-C, SIGTERM or SIGHUP; `1` every forward gave up (`access-forwards-failed`); `2` rejected before starting anything |
 | Output | Human lines, or with `--json` JSON lines: one `started` event, one `status` event per change, one `stopped` event |
@@ -276,6 +303,19 @@ it reconnects to the live owner without counting a restart or a failure. Each
 forward is connected to now (`null` for a `pod/NAME` target, when nothing is
 Ready yet, or when the API cannot be read: the forward then keeps kubectl's
 own choice, as before). A change of pod is a new `status` event.
+
+Every `kubectl` stops with `piceli access` (and `piceli access ui`). On
+Ctrl-C, SIGTERM or SIGHUP it stops them itself. Each forward runs in its own
+session, so when `piceli` dies another way (SIGKILL, a crash) a small
+watchdog process it starts in its own process group, which holds the other
+end of a pipe, sees the pipe close and stops every forward still registered
+(SIGTERM, then SIGKILL after 3 seconds); it never signals anything else.
+Only a `piceli` killed together with its watchdog (its whole process group)
+leaves a forward behind, which `piceli access stop --stale` stops.
+
+`piceli access ui` (and `--ui`) keeps its forward through an API outage: a
+`kubectl port-forward` that exits is restarted with a backoff capped at 30
+seconds until you stop it, instead of giving up after a number of restarts.
 
 Port conflicts: before starting anything, every declared local port is checked.
 A required forward on a taken port rejects the command:

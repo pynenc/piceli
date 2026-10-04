@@ -14,6 +14,8 @@ const paths: Record<string, ReactNode> = {
   cluster: <><rect x="7" y="2" width="10" height="5" rx="1" /><rect x="2" y="17" width="8" height="5" rx="1" /><rect x="14" y="17" width="8" height="5" rx="1" /><path d="M12 7v5M6 17v-5h12v5" /></>,
   gitops: <><path d="M20 8a8 8 0 0 0-14-3L3 8m0-5v5h5M4 16a8 8 0 0 0 14 3l3-3m0 5v-5h-5" /></>,
   arrow: <path d="M4 12h16m-6-6 6 6-6 6" />,
+  logs: <><path d="M4 5h16M4 10h10M4 15h16M4 20h7" /></>,
+  forwards: <><path d="M3 8h13m-4-4 4 4-4 4M21 16H8m4-4-4 4 4 4" /></>,
   system: <><rect x="3" y="3" width="18" height="14" rx="2" /><path d="M8 21h8m-4-4v4" /></>,
 };
 

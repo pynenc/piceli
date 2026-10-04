@@ -65,6 +65,8 @@ RULES = {"rejecting"}
 # Codes built at runtime, which a literal scan cannot see. Keep this list next
 # to the code that builds them.
 DYNAMIC = {
+    # gitops.controller.step_reason: the ROLLED_BACK reason of a failed step
+    "checks-failed-rolled-back",
     # delivery_inputs.discover_tool: f"{name}-tool-required"
     "docker-tool-required",
     "ssh-tool-required",

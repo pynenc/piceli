@@ -12,7 +12,12 @@ Contract (see ``docs/access.md``):
   otherwise, ``2`` when TARGET is rejected.
 - ``access`` starts one ``kubectl port-forward`` per declared forward and
   supervises it (health probes, bounded restarts) until interrupted. ``--json``
-  prints JSON lines (``started``, ``status``, ``stopped`` events). A required
+  prints JSON lines (``started``, ``status``, ``stopped`` events). Every
+  ``kubectl`` it started stops with it: on Ctrl-C, SIGTERM or SIGHUP it stops
+  them itself, and a watchdog process stops them when ``piceli`` dies
+  otherwise (``SIGKILL``, a crash; :mod:`piceli.k8s.forward_watchdog`).
+  ``access ENV --cluster infra.py:CLUSTER --ui`` also forwards the cluster's
+  in-cluster UI and prints its launch URL. A required
   forward whose local port is taken is refused with ``access-port-conflict``
   and the owner's pid (its command only when it is Piceli's own process for
   this app, with the hint ``piceli access stop --stale TARGET``); nothing is
@@ -50,7 +55,9 @@ from piceli.k8s.access import (
     stale_hint,
     stop_stale,
 )
+from piceli.k8s.cli import ui_forward
 from piceli.k8s.cli.ui_forward import access_ui
+from piceli.k8s.env_access import composition_env_target
 from piceli.k8s.ui_config import UI_CONFIG_ENV, load_ui_config
 
 TARGET_HELP = (
@@ -85,7 +92,16 @@ def _is_env(target: str) -> bool:
     return ":" not in target and not target.endswith((".toml", ".py"))
 
 
-def _resolve(target: str, pipeline: str | None = None) -> AccessTarget:
+def _resolve(
+    target: str, pipeline: str | None = None, cluster: str | None = None
+) -> AccessTarget:
+    if cluster is not None:
+        if not _is_env(target):
+            reject("access-target-invalid", "with --cluster, TARGET is an environment")
+        try:
+            return composition_env_target(cluster, target, Path.cwd())
+        except AccessTargetError as error:
+            reject(error.code, str(error))
     if pipeline and _is_env(target):
         return _resolve_env(target, pipeline)
     try:
@@ -404,19 +420,46 @@ def access(
             show_default=False,
         ),
     ] = None,
+    cluster: Annotated[
+        str | None,
+        typer.Option(
+            "--cluster",
+            help="With an environment name as TARGET: the composition's Cluster "
+            "(infra.py:ATTR). Forwards the environment's declared forwards and "
+            "every other Service port of it on free local ports, with the "
+            "cluster's credentials profile",
+            show_default=False,
+        ),
+    ] = None,
+    ui: Annotated[
+        bool,
+        typer.Option(
+            "--ui",
+            help="With --cluster: also forward the in-cluster UI (127.0.0.1:8790) "
+            "and print its launch URL, as `piceli access ui` does",
+        ),
+    ] = False,
 ) -> None:
     """Forward the app's declared ports to 127.0.0.1 and keep them healthy.
 
     Supervises exactly the forwards the model declares (``app.access.forward``)
     with health probes and bounded restarts until Ctrl-C, SIGTERM or SIGHUP,
-    then stops every forward it started. Refuses before starting anything when
+    then stops every forward it started (a watchdog stops them when piceli
+    is killed). With --cluster and --ui it also forwards the in-cluster UI
+    and prints its launch URL. Refuses before starting anything when
     a required local port is held by another process, naming its pid (and,
     when it is Piceli's own stale process for this app, how to stop it).
     """
     from piceli.k8s.cli.observe import interrupts_as_keyboard_interrupt
+    from piceli.k8s.forward_watchdog import ParentWatchdog
     from piceli.k8s.observe import ForwardSupervisor
 
-    resolved = _resolve(target, pipeline)
+    if ui and cluster is None:
+        say(
+            "piceli: --ui takes the composition's cluster: add --cluster infra.py:CLUSTER"
+        )
+        reject("access-ui-target-required")
+    resolved = _resolve(target, pipeline, cluster)
     selected, unknown = select_shortcuts(resolved.shortcuts, only)
     if unknown:
         say(f"piceli: unknown forward id(s): {', '.join(unknown)}")
@@ -451,6 +494,13 @@ def access(
             )
     skipped = {item.id for item in conflicts}
     start = [item for item in selected if item.id not in skipped]
+    launch: str | None = None
+    registry = None
+    if ui:
+        assert cluster is not None
+        launch, registry, ui_item = _ui_forward(cluster)
+        selected = (*selected, ui_item)
+        start.append(ui_item)
     reader = _live_reader(resolved)
     supervisor = ForwardSupervisor(
         kubeconfig=resolved.kubeconfig,
@@ -459,6 +509,8 @@ def access(
         shortcuts=selected,
         namespace=resolved.namespace,
         owner_resolver=LivePodResolver(reader) if reader is not None else None,
+        registry=registry,
+        watchdog=ParentWatchdog(),
     )
     server = None
     failed = False
@@ -483,6 +535,8 @@ def access(
             ],
             "skipped": [item.to_dict() for item in conflicts],
             "dashboard": f"http://127.0.0.1:{dashboard}" if dashboard else None,
+            # Added in 0.14.7 (--ui): the in-cluster UI's launch URL.
+            **({"ui": launch} if launch else {}),
         }
         if as_json:
             emit_json(started)
@@ -499,6 +553,8 @@ def access(
                 typer.echo(f"  skipped: {conflict.describe()}")
             if dashboard:
                 typer.echo(f"  dashboard    http://127.0.0.1:{dashboard}")
+            if launch:
+                typer.echo(f"Piceli UI: {launch}")
         ids = {item.id for item in start}
         seen: dict[str, tuple[Any, ...]] = {}
         wake = threading.Event()
@@ -546,6 +602,44 @@ def access(
             typer.echo("stopped")
     if failed:
         raise typer.Exit(EXIT_FAILED)
+
+
+def _ui_forward(cluster: str) -> tuple[str, Any, Any]:
+    """``--ui``: the UI's launch URL, the forward registry and its forward.
+
+    The same forward as ``piceli access ui`` (127.0.0.1:8790, recorded in
+    piceli's forward registry so ``access stop --stale --cluster`` knows it),
+    reached with the cluster's credentials profile.
+    """
+    from piceli.k8s.access import port_conflicts
+
+    kubeconfig, context = ui_forward._credentials(cluster, None)
+    try:
+        token = ui_forward._launch_reader(kubeconfig, context)
+    except ui_forward.LaunchError as error:
+        reject(error.code)
+    registry = ui_forward.ui_registry()
+    if registry is not None:
+        registry.reap_orphans()  # forwards of a piceli that crashed
+    item = ui_forward.ui_shortcut()
+    taken = port_conflicts(
+        [item],
+        recognise_owner=ui_forward.ui_holder_check(
+            kubeconfig, context, registry=registry
+        ),
+    )
+    if taken:
+        say(f"piceli: ui {taken[0].describe()}")
+        if any(getattr(getattr(c, "holder", None), "piceli", False) for c in taken):
+            say(
+                "piceli: stop piceli's stale processes with: "
+                + ui_forward.stale_ui_command(cluster, None)
+            )
+        reject(
+            "access-port-conflict",
+            conflicts=[conflict.to_dict() for conflict in taken],
+        )
+    return ui_forward.launch_url(token), registry, item
 
 
 def stop(

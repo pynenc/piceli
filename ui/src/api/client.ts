@@ -1,6 +1,6 @@
 import createClient from 'openapi-fetch';
 import type { paths } from './openapi';
-import type { ServiceError, PlanRequest, EvaluationRequest, OperationRequest, RecoveryRequest, CancelRequest, AccessStartRequest, RemoteAccessStartRequest, EnvironmentActionRequest, GitOpsApprovalRequest, GitOpsPromotionRequest, ClusterBuildPlanRequest, ClusterBuildOperationRequest, CompositionSyncRequest, NamedEnvironmentApprovalRequest, NamedEnvironmentPromotionRequest, ProfileSwitchRequest } from './generated';
+import type { ServiceError, PlanRequest, EvaluationRequest, OperationRequest, RecoveryRequest, CancelRequest, AccessStartRequest, RemoteAccessStartRequest, EnvironmentActionRequest, GitOpsApprovalRequest, GitOpsPromotionRequest, ClusterBuildPlanRequest, ClusterBuildOperationRequest, CompositionSyncRequest, NamedEnvironmentApprovalRequest, NamedEnvironmentPromotionRequest, ProfileSwitchRequest, ProfileScopeRequest } from './generated';
 
 export class ApiError extends Error {
   constructor(public status: number, public detail: ServiceError) { super(detail.message); }
@@ -89,9 +89,37 @@ export const api = {
   approveNamedEnvironment: (env: string, body: NamedEnvironmentApprovalRequest) => service().POST('/api/v1/composition/environments/{env}/approvals', { params: { path: { env } }, body }).then(data),
   promoteNamedEnvironment: (env: string, body: NamedEnvironmentPromotionRequest) => service().POST('/api/v1/composition/environments/{env}/promotions', { params: { path: { env } }, body }).then(data),
   wakeNamedEnvironment: (env: string) => service().POST('/api/v1/composition/environments/{env}/wake', { params: { path: { env } } }).then(data),
+  stopNamedEnvironment: (env: string) => service().POST('/api/v1/composition/environments/{env}/stop', { params: { path: { env } } }).then(data),
+  startNamedEnvironment: (env: string) => service().POST('/api/v1/composition/environments/{env}/start', { params: { path: { env } } }).then(data),
+  workspaceLogSources: (scope: string[], signal?: AbortSignal) => service().GET('/api/v1/logs/sources', { params: { query: { scope } }, signal }).then(data),
+  workspaceLogLines: (query: { stream: string[]; previous?: boolean; tail_lines?: number; since_seconds?: number | null; q?: string | null; level?: string[] }, signal?: AbortSignal) => service().GET('/api/v1/logs/lines', { params: { query }, signal }).then(data),
+  forwards: (signal?: AbortSignal) => service().GET('/api/v1/forwards', { signal }).then(data),
+  stopStaleForwards: () => service().POST('/api/v1/forwards/stale/stop', {}).then(data),
+  navigation: (signal?: AbortSignal) => service().GET('/api/v1/navigation', { signal }).then(data),
+  addProfileScope: (body: ProfileScopeRequest) => service().POST('/api/v1/profiles/scopes', { body }).then(data),
+  removeProfileScope: (scope_id: string) => service().DELETE('/api/v1/profiles/scopes/{scope_id}', { params: { path: { scope_id } } }).then(() => undefined),
 
 };
 export const applicationPath = (id: string) => `/applications/${encodeURIComponent(id)}`;
+type LogLink = { scope?: string | null; workload?: string | null; pod?: string | null; container?: string | null; previous?: boolean; q?: string | null };
+/** A URL-backed Logs workspace filter; every field is optional. */
+export function logsPath(link: LogLink = {}): string {
+  const params = new URLSearchParams();
+  if (link.scope) params.append('scope', link.scope);
+  for (const key of ['workload', 'pod', 'container', 'q'] as const) if (link[key]) params.set(key, link[key]!);
+  if (link.previous) params.set('previous', '1');
+  const query = params.toString();
+  return query ? `/logs?${query}` : '/logs';
+}
+/** The Forwards workspace with a target preselected. */
+export function forwardsPath(link: { application?: string | null; resource?: string | null; port?: number | null } = {}): string {
+  const params = new URLSearchParams();
+  if (link.application) params.set('application', link.application);
+  if (link.resource) params.set('resource', link.resource);
+  if (link.port) params.set('port', String(link.port));
+  const query = params.toString();
+  return query ? `/forwards?${query}` : '/forwards';
+}
 export function eventUrl(applicationId: string, cursor: string): string {
   const url = new URL(`${basePath()}/api/v1/events`, window.location.origin);
   url.searchParams.set('application_id', applicationId);

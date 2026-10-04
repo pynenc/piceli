@@ -46,8 +46,9 @@ From 0.14.6 (stage numbers say what they check, not when they run):
     A's plan, which rc applies without asking again.
 12. After 7: the in-cluster UI (``piceli access ui``, as a user opens it)
     lists the branch environment's runs in its deployment history.
-13. A stale UI forward: ``piceli access ui`` killed with SIGKILL leaves its
-    ``kubectl``; the next ``access ui`` reaps it (piceli recorded it) or,
+13. A stale UI forward: ``piceli access ui`` killed with SIGKILL together
+    with its forward watchdog (its process group) leaves its ``kubectl``;
+    the next ``access ui`` reaps it (piceli recorded it) or,
     with that record lost, names it as Piceli's own and ``piceli access stop
     --stale`` stops it.
 14. Last: the UI's deployment history lists every run of main and rc that a
@@ -58,6 +59,47 @@ From 0.14.6 (stage numbers say what they check, not when they run):
     ConfigMap has its schema. Stage 11 also reads rc's pending plan in the UI.
 15. After 8: the broken build's run in the UI (``failure.log_tail``), then
     the branch is deleted with its kept Job.
+
+From 0.14.7 (``lifecycle_reach.py``; after 12, while main, rc and the
+branch run):
+
+16. Workload logs through the in-cluster UI: the store's log in main, rc and
+    the branch environment holds a line the example prints; after its
+    container restarts, rc's previous container's log too.
+17. The store prints a secret-like setting (a made-up ``password=``): the
+    UI's logs mask it.
+18. A forward from the in-cluster UI: a ticket for main's ``web``, ``piceli
+    ui connect`` (pairing secret on stdin, never printed) binds a local port
+    that serves the page; stopping it in the UI stops the client; the
+    session list shows pending, ready, stopped.
+19. A forward from the CLI: ``piceli access lifecycle_access.py:main`` (and
+    rc) serves the page on 127.0.0.1:18080; a forward left behind (its piceli
+    killed) is stopped by ``piceli access stop --stale``, which otherwise
+    leaves nothing to stop.
+
+Also from 0.14.7 (``lifecycle_prune.py``; last, in main):
+
+20. A push removes a StatefulSet with a retained claim and turns a
+    Deployment into a StatefulSet of the same name behind the same Service:
+    one sync deletes the old objects (none left by the app's label), the
+    Service selects only the new pod, the checks pass, and the claim is kept
+    and listed with its delete command in the status and the history.
+21. A push removes a workload and adds a failing check: the rollback does not
+    re-create the workload, main stays ``failed``
+    (``checks-failed-rolled-back``) with no new run for several polls, and
+    the fix deploys.
+
+From 0.14.7 too (``lifecycle_ops.py``; last, after 6 and 21):
+
+22. After a rollout ``gitops status`` shows each environment's last checks
+    (passed N/N, every check's name, when, the trigger), and so does the
+    in-cluster UI's environment view.
+23. ``piceli env stop rc``: no replicas, volumes kept; a push to a source rc
+    follows deploys main and is not even planned for rc; the UI offers Start;
+    ``piceli env start rc`` scales it back and deploys the moved revision.
+24. ``piceli access main --cluster infra.py:cluster --ui``: main's declared
+    forward and the UI in one command; piceli killed with SIGKILL leaves no
+    ``kubectl`` and frees every port.
 
 The UI's launch token is never printed: the served command's output stays
 in memory and is redacted before any failure prints it.
@@ -77,7 +119,6 @@ import os
 import re
 import secrets
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
@@ -90,6 +131,9 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from lifecycle_ops import OpsStages
+from lifecycle_prune import PruneStages
+from lifecycle_reach import ReachStages
 from lifecycle_support import (
     Commands,
     GitServer,
@@ -126,15 +170,15 @@ BUSYBOX = (
     "@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e"
 )
 #: The previous release and its public images (amd64 + arm64; the index
-#: digests of ghcr.io/pynenc/piceli-{controller,builder}:0.14.5).
-PREVIOUS = "0.14.5"
+#: digests of ghcr.io/pynenc/piceli-{controller,builder}:0.14.6).
+PREVIOUS = "0.14.6"
 PREVIOUS_IMAGE = (
     "ghcr.io/pynenc/piceli-controller"
-    "@sha256:bb2a693ec923ce514ba1dde507a07a9938791581fe1b7d65643c4da269a60a44"
+    "@sha256:46b0d91b7306e871ae730f1abf95660db24ab8ec3705a86e83db0328f67bcf3c"
 )
 PREVIOUS_BUILDER = (
     "ghcr.io/pynenc/piceli-builder"
-    "@sha256:7a35ab4d4d8ea3c09ce6e65a756ad4b338bbcc56f33d073aef931f8136e92e11"
+    "@sha256:f6e5712e5d3f1bebeb9d1cf5881dead173ce832d69563072da2c5044c2f54851"
 )
 #: The in-cluster UI's local port (``piceli access ui``).
 UI_PORT = 8790
@@ -149,7 +193,8 @@ ALL_CHECKS = {
     "site-config",
 }
 STAGE_ORDER = (
-    "2", "3", "1", "4", "5", "6", "11", "7", "12", "8", "15", "9", "10", "13", "14",
+    "2", "3", "1", "4", "5", "6", "11", "7", "12", "16", "17", "18", "19",
+    "8", "15", "9", "10", "13", "14", "20", "21", "22", "23", "24",
 )  # fmt: skip
 STAGE_TITLES = {
     "1": "upgrade from the previous release",
@@ -167,13 +212,25 @@ STAGE_TITLES = {
     "13": "stale access forward",
     "14": "UI history of main and rc",
     "15": "UI history of the broken build",
+    "16": "workload logs in the UI",
+    "17": "log redaction in the UI",
+    "18": "forward from the in-cluster UI",
+    "19": "forward from the CLI",
+    "20": "removed and renamed workloads are pruned",
+    "21": "a failed check after a removal: rollback, no loop",
+    "22": "status and UI show the checks of a rollout",
+    "23": "stop and start a named environment",
+    "24": "access ENV --ui, piceli killed: no kubectl left",
 }
 STAGE_METHODS = {
     "1": "1_upgrade", "2": "2_bootstrap", "3": "3_first_main", "4": "4_one_source",
     "5": "5_check_only", "6": "6_promote", "7": "7_branch", "8": "8_broken_build",
     "9": "9_teardown", "10": "10_retention", "11": "11_reverted_check",
     "12": "12_ui_branch", "13": "13_stale_access", "14": "14_ui_history",
-    "15": "15_ui_broken",
+    "15": "15_ui_broken", "16": "16_ui_logs", "17": "17_ui_log_redaction",
+    "18": "18_ui_forward", "19": "19_cli_forward", "20": "20_prune",
+    "21": "21_rollback_no_loop", "22": "22_checks_status", "23": "23_stop_start",
+    "24": "24_access_ui_killed",
 }  # fmt: skip
 #: Stages whose failure stops the run (the rest depend on them).
 CRITICAL = {"2", "3"}
@@ -213,7 +270,7 @@ EXTRA_CHECK = """EXTRA_CHECKS: list = [
 ]"""
 
 
-class Lifecycle:
+class Lifecycle(OpsStages, PruneStages, ReachStages):
     def __init__(self, args: argparse.Namespace, scratch: Path) -> None:
         self.args = args
         self.scratch = scratch
@@ -501,16 +558,34 @@ class Lifecycle:
         )
 
     # ------------------------------------------------------------ the UI
-    def serve(self, step: str) -> Served:
-        """Start a ``serve`` step of the commands file as written (until stopped)."""
-        argv = self.commands.argv(step, {**self.values, "piceli": self.piceli})
-        served = Served(argv, env=self.env, cwd=self.infra)
+    def serve(
+        self,
+        step: str,
+        *,
+        values: dict[str, str] | None = None,
+        secrets: dict[str, str] | None = None,
+    ) -> Served:
+        """Start a ``serve`` step of the commands file as written (until stopped).
+
+        ``values`` fill its placeholders; its ``stdin`` secret comes from
+        ``secrets`` (fed once, never logged).
+        """
+        spec = self.commands.steps[step]
+        argv = self.commands.argv(
+            step, {**self.values, "piceli": self.piceli, **(values or {})}
+        )
+        stdin = (secrets or {})[spec["stdin"]] if spec.get("stdin") else None
+        served = Served(argv, env=self.env, cwd=self.infra, stdin=stdin)
         self.served.append(served)
         return served
 
-    def bounded(self, step: str, timeout: float = 120) -> Result:
+    def bounded(
+        self, step: str, timeout: float = 120, values: dict[str, str] | None = None
+    ) -> Result:
         """Run a step that might start a forward instead of exiting (own session)."""
-        argv = self.commands.argv(step, {**self.values, "piceli": self.piceli})
+        argv = self.commands.argv(
+            step, {**self.values, "piceli": self.piceli, **(values or {})}
+        )
         return run_bounded(argv, env=self.env, cwd=self.infra, timeout=timeout)
 
     def _ui_port_free(self) -> None:
@@ -769,7 +844,7 @@ class Lifecycle:
         cand = self.scratch / "venv-candidate"
         self.proc.run([uv, "venv", "-q", "--python", "3.12", str(cand)], timeout=300)
         if self.args.candidate_version:
-            spec = f"piceli=={self.args.candidate_version}"
+            spec = f"piceli[ui]=={self.args.candidate_version}"
         else:
             dist = self.scratch / "dist"
             self.proc.run(
@@ -785,7 +860,8 @@ class Lifecycle:
                 timeout=600,
             )
             wheel = next(dist.glob("piceli-*.whl"))
-            spec = str(wheel)
+            # As documented for `piceli ui connect`: the ui extra.
+            spec = f"piceli[ui] @ {wheel.as_uri()}"
         self.proc.run(
             [uv, "pip", "install", "-q", "--python", str(cand / "bin" / "python"), spec],
             timeout=900,
@@ -1874,7 +1950,10 @@ class Lifecycle:
                 kubectl,
                 f"no kubectl port-forward child of piceli access ui ({first.pid})",
             )
-            os.kill(first.pid, signal.SIGKILL)
+            # piceli and its forward watchdog (its process group, as a crash
+            # of the whole tree): piceli alone no longer leaves its kubectl
+            # (stage 24 checks that).
+            kill_group(first.pid)
             first.process.wait(timeout=10)
             time.sleep(2)
             check(
@@ -2338,7 +2417,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="candidate images: previous images plus the wheel (default), "
                         "or images/Dockerfile")  # fmt: skip
     parser.add_argument(
-        "--stages", default="1-15", help="e.g. 1-15 or 1,2,3 (setup always runs)"
+        "--stages", default="1-24", help="e.g. 1-24 or 1,2,3 (setup always runs)"
     )
     parser.add_argument("--playwright-ui", type=Path, default=None,
                         help="ui/ directory with node_modules for the optional browser "

@@ -14,14 +14,13 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import jsonschema
 import pytest
 from typer.testing import CliRunner
 
 from piceli.k8s.cli import app as cli
 from tests.acceptance.test_deploy_pipeline import (
     PIPELINE,
-    SCHEMA,
+    VALIDATOR,
     FakeBackend,
     image,
     make_shop,
@@ -74,7 +73,7 @@ class Runner:
             "deploy", str(self.root / "app.py:pipeline"), *args
         )
         for line in lines:
-            jsonschema.validate(line, SCHEMA)
+            VALIDATOR.validate(line)
         return code, lines, result
 
 

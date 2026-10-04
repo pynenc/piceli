@@ -820,6 +820,7 @@ class ForwardSupervisor:
         owner_resolver: PodResolver | None = None,
         owner_interval: float = 2.0,
         registry: OwnedProcessRegistry | None = None,
+        watchdog: Any = None,
     ) -> None:
         if not context:
             # kubectl would otherwise fall back to the file's current-context.
@@ -828,6 +829,9 @@ class ForwardSupervisor:
         self._resolver = owner_resolver
         self._owner_interval = owner_interval
         self._registry = registry
+        # A ParentWatchdog (piceli.k8s.forward_watchdog): stops the forwards
+        # this supervisor started when its process dies (SIGKILL included).
+        self._watchdog = watchdog
         self._preferences = preferences
         self._user = user
         self._kubeconfig = kubeconfig
@@ -1113,6 +1117,8 @@ class ForwardSupervisor:
                 self._stop_locked(name)
         if self._thread is not None:
             self._thread.join(timeout=5)
+        if self._watchdog is not None:
+            self._watchdog.close()
 
     def _ensure_thread_locked(self) -> None:
         if self._thread is None and not self._stopped.is_set():
@@ -1267,7 +1273,10 @@ class ForwardSupervisor:
         managed.last_error = reason
         managed.consecutive_failures = 0
         managed.attempts += 1
-        if managed.attempts > managed.policy.max_restarts:
+        if (
+            not managed.policy.forever
+            and managed.attempts > managed.policy.max_restarts
+        ):
             managed.given_up = True
             managed.health = "failed"
             managed.error = (
@@ -1328,6 +1337,8 @@ class ForwardSupervisor:
             managed.process = None
             self._schedule_restart_locked(managed, type(error).__name__)
             return
+        if self._watchdog is not None:
+            self._watchdog.add(managed.process.pid)
         if self._registry is not None:
             # Survives a crash of this process: the next start reaps it, and
             # `piceli access stop --stale` recognises it by its label.
@@ -1400,8 +1411,12 @@ class ForwardSupervisor:
         self._forget(process)
 
     def _forget(self, process: subprocess.Popen[bytes]) -> None:
-        if self._registry is not None and process.poll() is not None:
+        if process.poll() is None:
+            return
+        if self._registry is not None:
             self._registry.forget(process.pid)
+        if self._watchdog is not None:
+            self._watchdog.remove(process.pid)
 
     @staticmethod
     def _stop_process(process: subprocess.Popen[bytes]) -> None:

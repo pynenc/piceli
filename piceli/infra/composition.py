@@ -289,7 +289,12 @@ def _env_dict(item: EnvItem) -> dict[str, Any]:
         # A summary (the plan hash covers it); the controller imports the module.
         common["pipeline"] = pipeline_summary(item.pipeline)
     if isinstance(item, Environment):
-        return {"kind": "environment", **common}
+        # Only when declared: compositions without it keep their summary hash.
+        return {
+            "kind": "environment",
+            **common,
+            **({"stopped": True} if item.stopped else {}),
+        }
     return {
         "kind": "branches",
         **common,
@@ -360,7 +365,7 @@ def _env_from(
             allow_api=item.get("allow_api") is True,
             **common,
         )
-    return Environment(item["name"], **common)
+    return Environment(item["name"], stopped=item.get("stopped") is True, **common)
 
 
 def _component_dict(item: Component) -> dict[str, Any]:

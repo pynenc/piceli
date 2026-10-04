@@ -62,10 +62,14 @@ class RemoteAccessService:
     heartbeat_seconds = 15
     history_seconds = 600
 
-    def __init__(self, query: QueryService) -> None:
-        if query.scope_policy is None:
+    def __init__(self, query: QueryService, *, local_session: bool = False) -> None:
+        # ``local_session``: the in-cluster composition UI, reached only through
+        # `piceli access ui` with its launch session (no OIDC). Its one local
+        # principal issues tickets; the client still needs the one-time secret.
+        if query.scope_policy is None and not local_session:
             raise ValueError("remote access requires a scoped cluster service")
         self.query = query
+        self.local_session = query.scope_policy is None
         self._lock = threading.RLock()
         self._tickets: dict[str, _Ticket] = {}
         query.access_capability = self.capability
@@ -227,6 +231,18 @@ class RemoteAccessService:
                 ]
             )
 
+    def sessions(self) -> tuple[AccessSession, ...]:
+        """This principal's tickets in every scope it may still access."""
+        principal_id = self.query._principal().id
+        with self._lock:
+            self._sweep()
+            return tuple(
+                item.session
+                for item in self._tickets.values()
+                if item.session.principal_id == principal_id
+                and self.query._allowed(item.session.application_id, "access")
+            )
+
     def get(self, application_id: str, id: str) -> AccessSession:
         with self._lock:
             self._sweep()
@@ -250,9 +266,12 @@ class RemoteAccessService:
         ):
             raise QueryError("ui-not-found")
         policy = self.query.scope_policy
-        assert policy is not None
-        if not policy.allows(
-            ticket.session.principal_id, ticket.session.application_id, "access"
+        if (
+            not policy.allows(
+                ticket.session.principal_id, ticket.session.application_id, "access"
+            )
+            if policy is not None
+            else ticket.session.application_id not in self.query.registrations
         ):
             self._end(ticket, "stopped", "scope-revoked")
             raise QueryError("ui-not-found")

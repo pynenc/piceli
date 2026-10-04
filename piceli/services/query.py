@@ -160,11 +160,21 @@ class KubernetesReader:
             limit_bytes=1_048_576,
             follow=False,
             _request_timeout=self.request_seconds,
+            # The generated client turns a text body into "b'...'" when it
+            # preloads it; read the bytes and decode them here.
+            _preload_content=False,
         )
+        try:
+            raw = result.read(1_048_576 + 1) if hasattr(result, "read") else result
+        finally:
+            if hasattr(result, "close"):
+                result.close()
+            if hasattr(result, "release_conn"):
+                result.release_conn()
         return (
-            result.decode("utf-8", errors="replace")
-            if isinstance(result, bytes)
-            else str(result)
+            raw.decode("utf-8", errors="replace")
+            if isinstance(raw, bytes)
+            else str(raw)
         )
 
 

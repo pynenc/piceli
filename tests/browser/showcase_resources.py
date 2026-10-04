@@ -69,3 +69,37 @@ def seed_resources(api: FakeAPI) -> None:
     }
     api.put(service)
     api.put(manifest("ConfigMap", "settings"))
+
+
+def seed_logs(api: FakeAPI) -> None:
+    """Recent, timestamped container output for both api pods (fixture text only)."""
+    from datetime import UTC, datetime, timedelta
+
+    now = datetime.now(UTC)
+    lines = {
+        "api-release-1": [
+            (240, "INFO starting api v1.4.0"),
+            (236, "INFO listening on :8080"),
+            (120, "INFO GET /healthz 200 1ms"),
+            (64, "WARN slow upstream response from cache after 812ms"),
+            (31, "ERROR request failed: upstream timeout token=fixture-secret-value"),
+            (30, "    at fetchCatalog (catalog.js:41)"),
+            (12, "INFO GET /orders 200 18ms"),
+        ],
+        "api-release-2": [
+            (238, "INFO starting api v1.4.0"),
+            (233, 'level=info msg="listening" port=8080'),
+            (90, 'level=debug msg="cache refresh" keys=128'),
+            (45, 'level=warn msg="retrying payment provider" attempt=2'),
+            (8, "INFO GET /orders 200 22ms"),
+        ],
+    }
+    for pod, rows in lines.items():
+        api.pod_logs[(pod, "api", False)] = "".join(
+            f"{(now - timedelta(seconds=age)).strftime('%Y-%m-%dT%H:%M:%S.%fZ')} {text}\n"
+            for age, text in rows
+        )
+    api.pod_logs[("api-release-1", "api", True)] = (
+        f"{(now - timedelta(hours=2)).strftime('%Y-%m-%dT%H:%M:%SZ')} "
+        "ERROR previous instance exited: out of memory\n"
+    )

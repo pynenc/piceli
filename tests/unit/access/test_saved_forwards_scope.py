@@ -365,28 +365,37 @@ def test_operator_serve_access_refuses_a_taken_required_port(tmp_path: Path) -> 
 
 
 def test_supervisor_does_not_call_a_foreign_listener_healthy(tmp_path: Path) -> None:
-    """A probe answered by someone else's process is a conflict, not healthy (B8)."""
+    """A probe answered by someone else's process is a conflict, not healthy (B8).
+
+    The test drives every step itself: it holds its port from the first line
+    to the last (no free-then-rebind window another process could take), the
+    background probe thread is not started (only the explicit ``tick`` calls
+    probe), and the start preflight sees the port free, as it was when the
+    forward started before the foreign listener appeared.
+    """
     from piceli.k8s.port_owner import PortOwner
 
-    port = _free_port()
-    supervisor = ForwardSupervisor(
-        kubeconfig=tmp_path / "kubeconfig",
-        context="lab",
-        shortcuts=(),
-    )
-    forward = PortForward("web", "demo", "service/web", port, 80)
     with (
         patch("piceli.k8s.observe.subprocess.Popen") as spawn,
         patch.object(ForwardSupervisor, "_stop_process") as stop,
+        patch.object(ForwardSupervisor, "_ensure_thread_locked"),
+        patch.object(ForwardSupervisor, "_port_available", return_value=True),
         socket.socket() as listener,
     ):
+        listener.bind(("127.0.0.1", 0))
+        port = int(listener.getsockname()[1])
+        supervisor = ForwardSupervisor(
+            kubeconfig=tmp_path / "kubeconfig",
+            context="lab",
+            shortcuts=(),
+        )
+        forward = PortForward("web", "demo", "service/web", port, 80)
         spawn.return_value.poll.return_value = None
         spawn.return_value.pid = 111
         try:
             supervisor.add_or_update(forward, persist=False)
             supervisor.start("web")
-            listener.bind(("127.0.0.1", port))
-            listener.listen(1)
+            listener.listen(8)  # someone else now answers on the port
             supervisor._forwards["web"].next_probe = 0.0  # probe now
             with patch.object(
                 ForwardSupervisor,
@@ -399,17 +408,12 @@ def test_supervisor_does_not_call_a_foreign_listener_healthy(tmp_path: Path) -> 
             assert status.state == "failed"
             stop.assert_called_once()
             # Our own process answering is healthy.
-            listener.close()
             supervisor.start("web")
-            with socket.socket() as again:
-                again.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                again.bind(("127.0.0.1", port))
-                again.listen(1)
-                supervisor._forwards["web"].next_probe = 0.0
-                with patch.object(
-                    ForwardSupervisor, "_owner", return_value=PortOwner(port, 111)
-                ):
-                    supervisor.tick()
-                assert supervisor.statuses()[0].health == "healthy"
+            supervisor._forwards["web"].next_probe = 0.0
+            with patch.object(
+                ForwardSupervisor, "_owner", return_value=PortOwner(port, 111)
+            ):
+                supervisor.tick()
+            assert supervisor.statuses()[0].health == "healthy"
         finally:
             supervisor.close()

@@ -4,6 +4,124 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.14.7
+
+- **Stop a named environment.** `Environment(..., stopped=True)` in a
+  composition, or `piceli env stop ENV --cluster infra.py:CLUSTER` (a
+  request; `piceli env start ENV` ends it, also `--state-dir` for a local
+  controller): the controller scales its workloads to zero (namespace,
+  volumes and objects kept) and neither plans nor deploys it while stopped
+  (`state: stopped`, `reason` `declared` or `requested`, `stop` in the
+  status). The declaration wins: `env start` of a declared stop is refused
+  (`gitops-env-stop-declared`). Start scales back and deploys the revision
+  when it moved (with its usual approval). The UI has Stop and Start.
+- **Status keeps the checks of every deploy.** A composition environment's
+  record has `checks` (passed N/N, each check's name and code, when, the
+  trigger, the run) after a rollout too, not only after a checks-only
+  verification; `gitops status` prints it and the UI's environment shows a
+  Last checks card.
+- **`piceli access ENV --cluster infra.py:CLUSTER`** forwards an
+  environment's declared forwards (a pipeline environment's
+  `app.access.forward`, on their declared ports) besides its other Services;
+  `--ui` also forwards the in-cluster UI and prints its launch URL.
+- **No `kubectl` outlives `piceli access`.** A watchdog process stops every
+  forward when `piceli access` or `piceli access ui` is killed (SIGKILL, a
+  crash), on Linux and macOS; Ctrl-C, SIGTERM and SIGHUP still stop them
+  directly.
+- **`piceli access ui` keeps trying through an API outage**: its forward
+  restarts with a backoff capped at 30 seconds until stopped
+  (`RestartPolicy(forever=True)`) instead of giving up.
+- **Fixes in the composition controller's records:** a branch
+  environment's run names its branch's push as trigger and `policy` as its
+  approver when the owner's policy applied it; an approval stands across an
+  unrelated push that keeps the plan hash; a component's `commit` is the
+  commit of the source that triggered its build (`sources` lists every
+  source's commit); the log says `rolled nothing` unless an image digest or
+  a workload changed; a failed attempt's log tail is kept
+  (`failed_attempts`) in the status and in the history of the run that
+  succeeds after it.
+- **UI: one Logs workspace** (`/logs`, **Operations → Logs**): container logs
+  of every application, environment and profile scope the session may read,
+  merged by time, with URL-backed filters (scope, workload, pod, container,
+  previous instance, time range, level detected from the line, text search,
+  lines per container) and a live tail you can pause. A local `piceli ui
+  serve` can add read-only namespaces of other saved profiles, each read with
+  its own kubeconfig and context. Every application, environment, component,
+  workload and pod links into it with its filters set; the per-pod Logs tab
+  stays and links there too. New read APIs: `GET /api/v1/logs/sources`,
+  `GET /api/v1/logs/lines` (at most 12 containers and 5,000 lines per read,
+  the same `logs` grant as before), `POST|DELETE /api/v1/profiles/scopes`.
+- **UI: one Port forwards workspace** (`/forwards`): every forward or
+  connection ticket of the session across scopes, with its state, local
+  address and expiry; start one (target and ports, preselected by each
+  workload's **Forward** link) and stop it through the existing per-application
+  paths. Stale forwards (a removed scope, a forward reconnecting, or one left
+  running by a previous UI process, from the same registry `piceli ui serve`
+  reaps at start) are shown and can be stopped without touching anything
+  else. APIs: `GET /api/v1/forwards`, `POST /api/v1/forwards/stale/stop`.
+- **UI: the in-cluster composition UI issues connection tickets.** Forwards
+  from the UI that `piceli access ui` opens run on your machine through
+  `piceli ui connect --server http://127.0.0.1:8790 …` (pending → ready →
+  stopped, listed in the Forwards workspace). The UI only reads the selected
+  object; it needs no new RBAC. `piceli ui connect` accepts plain http only
+  for a loopback server; any other server still needs https.
+- **`piceli access ENV --cluster infra.py:CLUSTER`**: forwards every Service
+  port of a composition environment on free local ports, with the cluster's
+  credentials profile (named environments; refusals `env-not-found`,
+  `access-target-invalid`).
+- **UI: Overview without nested scroll.** The system schematic is sized to its
+  content and fits the width (pan and zoom only after you zoom in, or in the
+  expanded explorer); smaller cards, a tighter header, a compact environment
+  strip that wraps instead of scrolling, and the inspector beside the canvas.
+- **UI: navigation** with alert counts (approvals waiting, degraded
+  environments, failed builds, stale forwards, registry warnings, from
+  `GET /api/v1/navigation`) and collapsible, keyboard-accessible sub-menus
+  (each environment, history and approvals, cluster nodes and registry) whose
+  open state is remembered in the browser.
+- **Fix:** pod logs read by the UI were one line holding a Python bytes
+  literal (`b'…\n…'`); they are decoded (UTF-8, invalid bytes replaced) and
+  split into lines.
+- **Fix:** log lines the UI and API return are redacted with the shared
+  redaction (`password=`, `token:`, bearer tokens, URL credentials, JSON Web
+  Tokens, private keys become `[REDACTED]`).
+- **Fix:** the GitOps controllers delete what an app no longer declares.
+  Every environment deploy (single-repository and composition controllers,
+  named, main and branch environments, `piceli env up`) plans the deletion
+  of the objects an earlier release created and the current render no longer
+  declares (a removed workload, its Service and NetworkPolicy, a Deployment
+  renamed to a StatefulSet) as `delete` actions of the same plan and hash.
+  They run after the new objects are ready and before the checks, a
+  workload `Foreground` (its pods first), so a leftover can no longer join
+  the new pods or fail the checks. Only objects with this release's
+  `piceli.io/owner` are deleted. `Pipeline(prune=None|True|False)` is new
+  (default: environments prune, plain `piceli deploy` does not).
+- **Approval:** an `auto_approve` policy covers a prune (new class `prune`,
+  marked `"prune": true` on `delete` changes) unless it denies `prune` or
+  `delete`; any other `delete`, `replace` or `adopt` still needs the hash.
+  Without a covering policy the environment asks, with the deletes in the
+  plan it shows.
+- **Data:** claims, Secrets, retained objects, the claims a removed
+  StatefulSet created from its templates, and a StatefulSet whose retention
+  policy would delete its claims are never deleted: plans, status
+  (`envs.<env>.kept_orphaned`), run summaries and the deployment history list
+  them with `why` and the `kubectl` command that deletes each. Status and
+  history runs also have `deleted` (additive JSON).
+- **Fix:** an automatic rollback after failed checks restores only what the
+  failed release changed (objects both releases declare): it no longer
+  re-creates objects the failed release removed (by its prune or by hand).
+  The controllers no longer retry a revision whose checks failed and whose
+  release was rolled back: the environment is `failed` with reason
+  `checks-failed-rolled-back` until a new revision or `piceli gitops sync`.
+- **Testing:** the fake API (`piceli.testing`) accepts `Foreground` deletes.
+- **Tests:** the local executor's delayed-mutation test, the heavy-lock tests
+  and the saved-forward conflict test no longer depend on timing: the test
+  sets "in flight", "applied" and "lock released" itself instead of waiting
+  for wall-clock windows. `piceli.testing.FakeAPI.inject` takes `hold` and
+  `applied` events for that (`hold_timeout` bounds a held request). The
+  access-history test checks the bound at a small limit (130 real starts
+  passed the 30 s timeout under load), and deploy acceptance tests check
+  their event schema once instead of on every line (about 3x faster).
+
 ## Version 0.14.6
 
 - **Fix:** an environment does not ask twice for the plan it already runs.

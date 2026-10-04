@@ -52,7 +52,7 @@ HISTORY_KEY = "history.json"
 #: Who sent an approval (``via`` of an approve request; recorded as its approver).
 APPROVAL_VIA = ("cli", "ui")
 #: Request kinds (the prefix of their key).
-REQUEST_KINDS = ("approve", "promote", "sync")
+REQUEST_KINDS = ("approve", "promote", "sync", "stop", "start")
 #: Env states a status may carry.
 ENV_STATES = (
     "pending",
@@ -197,7 +197,7 @@ def request(kind: str, **fields: Any) -> tuple[str, dict[str, Any]]:
 
     ``approve``: ``env``, ``plan_hash``. ``promote``: ``branch``, ``commit``
     and, for a named environment, ``env``. ``sync``: optional ``env`` and
-    ``component``.
+    ``component``. ``stop`` / ``start``: ``env``, ``via`` and ``at``.
     """
     if kind not in REQUEST_KINDS:
         raise GitOpsError("gitops-request-invalid", f"unknown request kind {kind!r}")
@@ -274,6 +274,33 @@ def sync_request(
     if component is not None:
         fields["component"] = component
     return request("sync", **fields)
+
+
+def stop_request(
+    env: str, *, start: bool = False, via: str = "cli", at: str | None = None
+) -> tuple[str, dict[str, Any]]:
+    """Stop (or start) the named environment ``env`` (``piceli env stop|start``).
+
+    ``at`` (an ISO time with microseconds, now by default) orders a stop and
+    a start that wait together: the controller handles them oldest first, so
+    the later one wins.
+    """
+    if (
+        not isinstance(env, str)
+        or not env
+        or len(env) > 63
+        or any(ch not in "abcdefghijklmnopqrstuvwxyz0123456789-" for ch in env)
+    ):
+        raise GitOpsError(
+            "gitops-request-invalid", "the environment name is not a DNS label"
+        )
+    if via not in APPROVAL_VIA:
+        raise GitOpsError("gitops-request-invalid", "unknown request origin")
+    if at is None:
+        from datetime import UTC, datetime
+
+        at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    return request("start" if start else "stop", env=env, via=via, at=at)
 
 
 class Channel(Protocol):

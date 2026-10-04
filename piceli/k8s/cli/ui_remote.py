@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 import typer
 
 from piceli.artifacts.process import ToolPin
-from piceli.cli_contract import emit_json, reject
+from piceli.cli_contract import emit_json, reject, say
 from piceli.k8s.observe import ForwardSupervisor
 from piceli.k8s.ops.provider_factory import KubeconfigTarget
 from piceli.k8s.owned_processes import OwnedProcessRegistry
@@ -57,11 +57,14 @@ def _server_url(value: str, *, allow_insecure_loopback_test: bool) -> str:
     ):
         raise RemoteClientError("ui-invalid-request")
     if parsed.scheme != "https":
+        # Plain http only reaches this machine: the in-cluster UI that
+        # `piceli access ui` forwards to 127.0.0.1. Anything else needs TLS.
+        # (``allow_insecure_loopback_test`` is kept for older callers.)
         try:
             local = ipaddress.ip_address(parsed.hostname).is_loopback
         except ValueError:
-            local = False
-        if not (allow_insecure_loopback_test and parsed.scheme == "http" and local):
+            local = parsed.hostname == "localhost"
+        if not (parsed.scheme == "http" and local):
             raise RemoteClientError("ui-invalid-request")
     return value.rstrip("/") + "/"
 
@@ -288,7 +291,13 @@ class RemoteAccessClient:
 
 
 def connect(
-    server: Annotated[str, typer.Option(help="Cluster UI HTTPS origin and prefix")],
+    server: Annotated[
+        str,
+        typer.Option(
+            help="Cluster UI HTTPS origin and prefix, or the loopback http address "
+            "of `piceli access ui`"
+        ),
+    ],
     ticket: Annotated[str, typer.Option(help="Pending remote-access ticket ID")],
     kubeconfig: Annotated[Path, typer.Option(help="Explicit local kubeconfig file")],
     context: Annotated[str, typer.Option(help="Explicit local kubeconfig context")],
@@ -346,6 +355,8 @@ def connect(
     except KeyboardInterrupt:
         emit_json({"state": "stopped", "ticket": ticket})
     except RemoteClientError as error:
+        if error.code == "ui-assets-unavailable":
+            say("Install piceli[ui] to connect to a remote Piceli UI.")
         reject(error.code)
     except (OSError, ValueError):
         reject("ui-invalid-request")

@@ -227,6 +227,98 @@ an environment (or every one) now at its revision; with `--component` a
 composition controller also rebuilds that component. The deploy still needs
 the environment's usual approval.
 
+A component's `commit` is the commit of the source whose change triggered
+its build (the run's trigger first when several changed; an image whose
+change key did not move keeps the source and commit it was built at), and
+`sources` lists the commit of every source it reads. The controller's log
+says `rolled web` only for components whose image digest or workload
+changed, else `rolled nothing`. A failed attempt (code, time and the build
+log's tail, at most 2000 characters) stays in `failed_attempts` until the
+revision deploys; the run that then succeeds lists them in the history.
+
+(gitops-stop-named)=
+#### Stop a named environment
+
+A composition's named environment can be stopped: its Deployments and
+StatefulSets are scaled to zero (the namespace, volumes and every other
+object stay), and the controller neither plans nor deploys it, whatever is
+pushed, until it is started again.
+
+```sh
+piceli env stop rc --cluster infra.py:cluster    # a request; the next poll stops it
+piceli env start rc --cluster infra.py:cluster   # scales back; deploys the moved revision
+```
+
+Or declare it in the composition, `Environment("rc", …, stopped=True)`:
+pushed, the controller stops it on its next poll and starts it when the
+declaration is removed. **The declaration wins**: `piceli env start` of a
+declared stop is refused (`gitops-env-stop-declared`), by the CLI when the
+module it reads says so and by the controller otherwise; a requested stop
+lasts until `env start`, also after a declared stop is removed. The status
+shows `state: stopped`, `reason` `declared` or `requested` and `stop`
+(`by`, `via`, `at`); a sync or promotion while stopped is not deployed (a
+promotion is kept for the start). Starting scales the workloads back to the
+replicas they had and, when the revision moved meanwhile, deploys it with
+the environment's usual approval (an unchanged release the owner approved
+is not asked for again). Branch environments keep their idle stop. Both
+commands only write a request (`--state-dir DIR` for a local controller);
+the UI's **Stop** and **Start** write the same ones.
+
+### Removed objects are deleted (pruning)
+
+New in 0.14.7. Every sync, of a branch, a named environment or main, and of
+both controllers (one repository, a composition), plans the deletion of the
+objects an earlier release of the app created and the current render no
+longer declares: a removed workload, its Service, its NetworkPolicy, a
+Deployment that became a StatefulSet of the same name. They are `delete`
+actions of the same plan, so the same plan hash covers them, and they follow
+the apply's approval rules:
+
+- a branch environment with `EnvConfig(auto_approve=True)`, or an
+  environment whose plan is inside the pipeline's `auto_approve` policy,
+  deletes them without asking: a policy covers a prune (the class `prune`:
+  the delete of an object this release's owner wrote and no longer declares)
+  unless it denies `"prune"` or `"delete"`; it counts towards `max_objects`,
+  and a cluster-scoped one also needs `cluster_scoped`;
+- any other environment waits for `piceli gitops approve ENV HASH`, and the
+  plan it shows lists the deletes.
+
+Only an object whose `piceli.io/owner` annotation is this release's owner
+(or an inherited owner) in the environment's namespace is ever deleted: never
+an object another owner or a person wrote, never one without that
+annotation. The deletes run **after** every new object is applied and ready
+and **before** the checks: a removed workload is deleted `Foreground` (its
+pods first, so a Service of the same name and the checks see only the new
+pods), and the next step starts once it is gone. A renamed workload therefore
+switches in one sync: the new StatefulSet becomes ready behind the shared
+Service, then the old Deployment and its pods go.
+
+Data is never deleted automatically. Claims, Secrets, objects marked
+`piceli.io/retained`, the claims a removed StatefulSet created from its
+claim templates, and a StatefulSet whose retention policy would delete its
+claims are **kept, orphaned**: the plan, the status and the deployment
+history list them under `kept_orphaned`, each with `why` (`claim`, `secret`,
+`retained`, `deletes-claims`) and the exact command that deletes it, for
+when its data is no longer needed:
+
+```json
+{"kind": "PersistentVolumeClaim", "name": "data-db-0", "namespace": "shop-main",
+ "why": "claim", "command": "kubectl --namespace shop-main delete persistentvolumeclaim data-db-0"}
+```
+
+A claim's volume stays after that while its reclaim policy is `Retain`.
+
+When a deploy's checks fail and its release is rolled back
+(`rollback_on_failed_checks`), the rollback restores only the objects both
+releases declare: what the failed release removed is not re-created, and
+what it added is left (see {doc}`checks`). The controller then does **not**
+retry that revision: the environment is `failed` with reason
+`checks-failed-rolled-back` and no `next_attempt_at`, until a new revision
+or `piceli gitops sync ENV` (one try, no loop of restore point, apply and
+rollback on every poll).
+`Pipeline(prune=False)` turns pruning off; `piceli deploy` (outside an
+environment) prunes only with `Pipeline(prune=True)`.
+
 ### Status and requests (for tools)
 
 The controller publishes its status in the ConfigMap `piceli-gitops-status`
@@ -240,11 +332,27 @@ The controller publishes its status in the ConfigMap `piceli-gitops-status`
 `stopped`), `plan_hash`, `deployed_plan_hash` (the owner-approved plan of
 the running release), `reason` (an error code), `attempts`,
 `next_attempt_at`, `pushed_at`, `updated_at`, `namespace` and `trigger`
-(`push`, `tag v1.2.0`, `promote BRANCH@SHA`). A deployed environment has
+(`push`, `tag v1.2.0`, `promote BRANCH@SHA`). After a deploy, `deleted`
+lists the objects it pruned (`kind`, `name`) and `kept_orphaned` the ones it
+kept with the command deleting each (see above); both are empty lists when
+it pruned nothing. A deployed environment has
 `health` (`healthy`, or `degraded` after a failing verification, with
 `reason: pipeline-checks-failed`) and `last_action`: `deployed` (something
 was applied), `verified` (nothing was applied; a changed check set ran
-against the running release) or `unchanged`. `verification` describes the
+against the running release) or `unchanged`. A composition controller adds
+`checks` (0.14.7): the last checks a run executed, after a rollout too:
+
+```json
+{"state": "passed", "passed": 6, "total": 6, "failed": [],
+ "results": [{"name": "web-index", "passed": true}, {"name": "store-ready", "passed": true}],
+ "at": "2026-10-03T10:00:00Z", "trigger": "push web/main",
+ "run_id": "20261003T095800Z-…", "action": "deployed"}
+```
+
+(`failed` names the failing checks, each result has its `code` when it
+failed; `rollback` is there when the failing checks rolled the release back;
+a run whose checks were skipped keeps the previous `checks`.) `gitops
+status` prints it as `checks passed 6/6 at …`. `verification` describes the
 last verification (`null` after a deploy that applied):
 
 ```json
@@ -265,10 +373,14 @@ and HTTP `status` of the request the Kubernetes API refused, as Piceli asked
 for it; never the server's answer). Dropped requests are listed in
 `rejected_requests` with their code.
 
-`piceli gitops approve`, `piceli gitops sync` and `piceli promote` add one
-key each to the ConfigMap `piceli-gitops-requests` (kinds `approve`,
-`sync`, `promote`); the controller removes a request once it
-handled it. Locally, `piceli gitops run --once --state-dir DIR` (with
+`piceli gitops approve`, `piceli gitops sync`, `piceli promote` and `piceli
+env stop|start` add one key each to the ConfigMap `piceli-gitops-requests`
+(kinds `approve`, `sync`, `promote`, `stop`, `start`); the controller
+removes a request once it handled it, oldest `at` first (a stop and a start
+waiting together: the later one wins). An approval stands while the plan
+keeps its hash: a push that changes nothing in the plan does not ask again.
+A branch environment's run names its branch's push as its trigger, and a
+deploy applied by the owner's policy records `policy` as its approver. Locally, `piceli gitops run --once --state-dir DIR` (with
 `--kubeconfig`/`--context`) runs one poll, and `status`, `approve` and
 `promote` take `--state-dir DIR` instead of a cluster.
 

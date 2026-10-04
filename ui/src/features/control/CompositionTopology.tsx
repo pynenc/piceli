@@ -4,7 +4,12 @@ import { Icon } from '../../components/Icon';
 import type { Environment, Source } from './Composition';
 import { compositionGraph, graphCard, selectionId, type CompositionNode, type CompositionSelection } from './compositionGraph';
 
-export function CompositionTopology({ sources, environments, selected, onSelect }: { sources: Source[]; environments: Environment[]; selected?: CompositionSelection | null; onSelect: (selection: CompositionSelection) => void }) {
+/**
+ * ``fit`` (the overview) sizes the canvas to its content and the available
+ * width: no inner scroll area until the user zooms in. ``explore`` (the
+ * expanded explorer) fills its frame and pans.
+ */
+export function CompositionTopology({ sources, environments, selected, onSelect, mode = 'explore' }: { sources: Source[]; environments: Environment[]; selected?: CompositionSelection | null; onSelect: (selection: CompositionSelection) => void; mode?: 'fit' | 'explore' }) {
   const graph = useMemo(() => compositionGraph(sources, environments), [sources, environments]);
   const viewport = useRef<HTMLDivElement>(null);
   const [availableWidth, setAvailableWidth] = useState(graph.width);
@@ -16,13 +21,20 @@ export function CompositionTopology({ sources, environments, selected, onSelect 
   useEffect(() => {
     const element = viewport.current;
     if (!element) return;
-    const measure = () => { if (element.clientWidth) setAvailableWidth(element.clientWidth); };
+    const measure = () => {
+      if (!element.clientWidth) return;
+      const style = typeof getComputedStyle === 'function' ? getComputedStyle(element) : null;
+      const padding = style ? (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0) : 0;
+      setAvailableWidth(element.clientWidth - padding);
+    };
     measure();
     if (typeof ResizeObserver === 'undefined') return;
     const observer = new ResizeObserver(measure); observer.observe(element);
     return () => observer.disconnect();
   }, []);
-  const scale = zoom ?? (availableWidth < 540 ? 1 : Math.min(1, availableWidth / graph.width));
+  // A phone keeps cards readable and pans sideways only; never a vertical inner scroll.
+  const fitted = mode === 'fit' ? Math.max(availableWidth < 540 ? .72 : .5, Math.min(1, availableWidth / graph.width)) : availableWidth < 540 ? 1 : Math.min(1, availableWidth / graph.width);
+  const scale = zoom ?? fitted;
   const activeId = selectionId(selected);
   const connected = new Set([activeId]);
   // Highlight the selected source's fan-out, or one component's complete path.
@@ -31,14 +43,14 @@ export function CompositionTopology({ sources, environments, selected, onSelect 
   for (const edge of graph.edges) if (selected?.kind === 'environment' && connected.has(edge.to)) connected.add(edge.from);
   const select = (node: CompositionNode) => onSelect(node.kind === 'component' ? { kind: 'component', name: node.name, environment: node.environment!.name } : { kind: node.kind, name: node.name });
   return <div className="composition-topology">
-    <div className="composition-canvas-toolbar"><span><b>{graph.nodes.length}</b> nodes <span aria-hidden="true">·</span> <b>{graph.edges.length}</b> reported connections</span><div role="group" aria-label="Topology zoom"><button aria-label="Zoom out topology" disabled={scale <= .4} onClick={() => setZoom(Math.max(.4, scale - .15))}>−</button><output aria-label="Topology zoom level">{Math.round(scale * 100)}%</output><button aria-label="Zoom in topology" disabled={scale >= 1.6} onClick={() => setZoom(Math.min(1.6, scale + .15))}>+</button><button onClick={() => { setZoom(Math.max(.4, Math.min(1, availableWidth / graph.width))); viewport.current?.scrollTo?.({ left: 0, top: 0 }); }}>Fit width</button></div></div>
-    <div className="composition-graph-viewport" ref={viewport} role="region" aria-label="Infrastructure topology" aria-describedby={keyboardHint} tabIndex={0} onKeyDown={event => {
+    <div className="composition-canvas-toolbar"><span><b>{graph.nodes.length}</b> nodes <span aria-hidden="true">·</span> <b>{graph.edges.length}</b> reported connections</span><div role="group" aria-label="Topology zoom"><button aria-label="Zoom out topology" disabled={scale <= .4} onClick={() => setZoom(Math.max(.4, scale - .15))}>−</button><output aria-label="Topology zoom level">{Math.round(scale * 100)}%</output><button aria-label="Zoom in topology" disabled={scale >= 1.6} onClick={() => setZoom(Math.min(1.6, scale + .15))}>+</button><button onClick={() => { setZoom(null); viewport.current?.scrollTo?.({ left: 0, top: 0 }); }}>Fit width</button></div></div>
+    <div className="composition-graph-viewport" data-mode={mode} data-pannable={mode === 'explore' || scale > fitted + .001 || graph.width * scale > availableWidth + 1 ? 'true' : undefined} ref={viewport} role="region" aria-label="Infrastructure topology" aria-describedby={keyboardHint} tabIndex={0} onKeyDown={event => {
       if (event.target !== event.currentTarget) return;
       if (event.key === '+' || event.key === '=') { event.preventDefault(); setZoom(Math.min(1.6, scale + .15)); }
       else if (event.key === '-') { event.preventDefault(); setZoom(Math.max(.4, scale - .15)); }
       else if (event.key === '0') { event.preventDefault(); setZoom(1); }
     }} onPointerDown={event => {
-      if (event.pointerType !== 'mouse' || event.button !== 0 || (event.target as HTMLElement).closest('button')) return;
+      if (event.pointerType !== 'mouse' || event.button !== 0 || (event.target as HTMLElement).closest('button') || !event.currentTarget.dataset.pannable) return;
       drag.current = { id: event.pointerId, x: event.clientX, y: event.clientY, left: event.currentTarget.scrollLeft, top: event.currentTarget.scrollTop };
       event.currentTarget.setPointerCapture?.(event.pointerId); event.currentTarget.dataset.dragging = 'true'; event.currentTarget.focus(); event.preventDefault();
     }} onPointerMove={event => {
@@ -57,8 +69,8 @@ export function CompositionTopology({ sources, environments, selected, onSelect 
           else if (event.key === 'ArrowUp') next = graph.nodes[Math.max(index - 1, 0)]?.id;
           else return;
           event.preventDefault(); if (next) buttons.current.get(next)?.focus();
-        }}><span className="composition-node-kind">{node.kind === 'source' ? 'Source' : node.kind === 'component' ? node.environment!.name : 'Environment'}<Icon name={node.kind === 'source' ? 'sources' : node.kind === 'component' ? 'build' : 'environments'} /></span><strong title={node.name}>{node.name}</strong><span className="composition-node-detail">{node.kind === 'source' ? node.source ? `${Object.keys(node.source.refs).length} tracked refs` : 'Source details unavailable' : node.kind === 'component' ? node.component!.commit?.slice(0, 7) ?? 'Commit unreported' : node.environment!.namespace ?? 'Namespace pending'}</span><span className="composition-node-state">{node.kind === 'source' ? <Badge value={node.source?.error ? 'failed' : node.source?.last_poll ? 'observed' : 'unknown'} /> : <Badge value={node.component?.state ?? node.environment!.state} />}{node.kind === 'component' && <span className="small muted">{node.component!.health}</span>}</span></button></li>)}</ul>
+        }}><span className="composition-node-kind">{node.kind === 'source' ? 'Source' : node.kind === 'component' ? node.environment!.name : 'Environment'}<Icon name={node.kind === 'source' ? 'sources' : node.kind === 'component' ? 'build' : 'environments'} /></span><strong title={node.name}>{node.name}</strong><span className="composition-node-meta"><span className="composition-node-detail">{node.kind === 'source' ? node.source ? `${Object.keys(node.source.refs).length} tracked refs` : 'Source details unavailable' : node.kind === 'component' ? `${node.component!.commit?.slice(0, 7) ?? 'Commit unreported'} · ${node.component!.health}` : node.environment!.namespace ?? 'Namespace pending'}</span><span className="composition-node-state">{node.kind === 'source' ? <Badge value={node.source?.error ? 'failed' : node.source?.last_poll ? 'observed' : 'unknown'} /> : <Badge value={node.component?.state ?? node.environment!.state} />}</span></span></button></li>)}</ul>
       </div></div>
-    </div><div className="composition-graph-legend"><span><i /> Source reference / environment membership</span><span id={keyboardHint}>Drag canvas to pan. Arrow keys follow nodes; Enter inspects. Canvas + / − / 0 zooms.</span></div>
+    </div><div className="composition-graph-legend"><span><i /> Source reference / environment membership</span><span id={keyboardHint}>{mode === 'fit' ? 'Arrow keys follow nodes; Enter inspects. Canvas + / − / 0 zooms; Expand to explore.' : 'Drag canvas to pan. Arrow keys follow nodes; Enter inspects. Canvas + / − / 0 zooms.'}</span></div>
   </div>;
 }

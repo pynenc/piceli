@@ -42,6 +42,8 @@ def test_local_profile_names_and_switch_boundary(tmp_path: Path, monkeypatch) ->
                 {"name": "alpha", "available": True},
                 {"name": "beta", "available": True},
             ],
+            # Other profiles' read-only scopes (0.14.7), none added yet.
+            "scopes": [],
         }
         assert str(config) not in str(listed)
         assert "fake fixture" not in str(listed)

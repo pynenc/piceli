@@ -57,6 +57,10 @@ class EnvOutcome:
     :param plan: For ``approval-required``, the compact plan the owner
         approves (:func:`compact_plan`): object counts and changed objects
         (operation, kind, name), never values.
+    :param pruned: For ``deployed``, what the deploy's prune did when it did
+        something: ``{"deleted": [{kind, name}], "kept_orphaned": [{kind,
+        name, namespace, why, command}]}`` (see
+        :func:`piceli.pipeline.runner.pruned_objects`).
     """
 
     state: str
@@ -68,6 +72,7 @@ class EnvOutcome:
     run_id: str | None = None
     combined_hash: str | None = None
     plan: Mapping[str, Any] | None = None
+    pruned: Mapping[str, Any] | None = None
 
     @classmethod
     def from_result(cls, value: Any) -> EnvOutcome:
@@ -109,6 +114,7 @@ class EnvOutcome:
         elif state == "deployed" and verification is not None:
             action = "verified"
         run_id = result.get("run_id") if isinstance(result, Mapping) else None
+        pruned = result.get("pruned") if isinstance(result, Mapping) else None
         combined = (
             result.get("combined_hash") if isinstance(result, Mapping) else None
         ) or get("combined_hash")
@@ -122,6 +128,9 @@ class EnvOutcome:
             run_id=run_id if isinstance(run_id, str) else None,
             combined_hash=combined if isinstance(combined, str) else None,
             plan=compact_plan(value) if state == "approval-required" else None,
+            pruned=dict(pruned)
+            if state == "deployed" and isinstance(pruned, Mapping)
+            else None,
         )
 
 
@@ -133,7 +142,7 @@ def compact_plan(value: Any) -> dict[str, Any] | None:
     """What an approver reviews of an ``env_up`` result, or ``None``.
 
     ``{combined_hash, release, counts, changes: [{operation, kind, name}],
-    changes_total, create_namespace, stop, images}`` from the result's
+    changes_total, kept_orphaned, create_namespace, stop, images}`` from the result's
     ``deploy`` (the combined plan) and environment plan: names, counts and
     image references only, never field values or secrets. A new namespace
     has no release plan yet (``changes`` is empty, ``create_namespace``
@@ -160,6 +169,9 @@ def compact_plan(value: Any) -> dict[str, Any] | None:
         if isinstance(item, Mapping) and item.get("operation") != "no-op"
     ]
     counts = stage.get("summary")
+    kept = stage.get("kept_orphaned")
+    if not isinstance(kept, list) and isinstance(stage.get("preview"), Mapping):
+        kept = stage["preview"].get("kept_orphaned")
     images = value.get("images")
     stop = value.get("stop")
     return {
@@ -177,6 +189,16 @@ def compact_plan(value: Any) -> dict[str, Any] | None:
         else {},
         "changes": changes[:MAX_PLAN_CHANGES],
         "changes_total": len(changes),
+        # What a prune would keep (claims, Secrets, retained objects), with
+        # the command deleting each; the deletes are in ``changes``.
+        "kept_orphaned": [
+            {
+                key: item.get(key)
+                for key in ("kind", "name", "namespace", "why", "command")
+            }
+            for item in kept or ()
+            if isinstance(item, Mapping)
+        ][:MAX_PLAN_CHANGES],
         "create_namespace": value.get("create_namespace") is True,
         "stop": [str(item) for item in stop] if isinstance(stop, list) else [],
         "images": {
@@ -249,7 +271,11 @@ class Ports(Protocol):
         ...
 
     def env_stop(self, pipeline: Any, branch: str) -> None:
-        """Scale an idle branch environment to zero (``EnvConfig(idle_stop=...)``)."""
+        """Scale an idle branch environment to zero (``EnvConfig(idle_stop=...)``).
+
+        A composition controller also passes ``reason="declared"`` or
+        ``"requested"`` for a named environment the owner stopped.
+        """
         ...
 
     def namespace_live(self, namespace: str) -> bool | None:
@@ -501,12 +527,22 @@ class DefaultPorts:
             return None  # unknown: never delete on it
         return isinstance(found, dict)
 
-    def env_stop(self, pipeline: Any, branch: str) -> None:
+    def env_stop(self, pipeline: Any, branch: str, reason: str = "idle") -> None:
+        """Scale ``branch`` to zero: ``idle`` (a branch environment's idle stop),
+        ``declared`` or ``requested`` (a named environment the owner stopped)."""
         result = self._envs().env_stop(
-            pipeline, branch, approve_if_policy=True, reason="idle"
+            pipeline,
+            branch,
+            approve_if_policy=True,
+            reason=reason,
+            named=reason in {"declared", "requested"},
         )
         if result.get("state") == "approval-required":
             raise GitOpsError(
                 "gitops-step-failed",
                 f"stopping the environment of {branch} needs EnvConfig(idle_stop=...)",
             )
+
+    def env_start(self, pipeline: Any, branch: str) -> None:
+        """Scale a stopped environment back to its recorded replicas."""
+        self._envs().env_start(pipeline, branch)

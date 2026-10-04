@@ -3099,6 +3099,7 @@
     "field_manager",
     "inherited_owners",
     "owner",
+    "prune",
     "replace",
     "restore_points",
     "rollback_on_failed_checks",
@@ -4012,11 +4013,13 @@
     "backoff_initial",
     "backoff_max",
     "delay",
+    "forever",
     "max_restarts"
    ],
    "init": [
     "backoff_initial",
     "backoff_max",
+    "forever",
     "max_restarts"
    ],
    "methods": {
@@ -5010,12 +5013,14 @@
      "target"
     ],
     "flags": [
+     "--cluster",
      "--dashboard",
      "--json",
      "--kubectl",
      "--only",
      "--pipeline",
      "--poll",
+     "--ui",
      "--ui-config"
     ],
     "subcommands": []
@@ -5487,6 +5492,8 @@
      "down",
      "push",
      "seed",
+     "start",
+     "stop",
      "up"
     ]
    },
@@ -5525,6 +5532,30 @@
      "--approve-if-policy",
      "--from",
      "--pipeline"
+    ],
+    "subcommands": []
+   },
+   "env start": {
+    "arguments": [
+     "env"
+    ],
+    "flags": [
+     "--cluster",
+     "--namespace",
+     "--state-dir",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "env stop": {
+    "arguments": [
+     "env"
+    ],
+    "flags": [
+     "--cluster",
+     "--namespace",
+     "--state-dir",
+     "--transport"
     ],
     "subcommands": []
    },
@@ -6716,6 +6747,7 @@
    "check-raised",
    "check-target-not-found",
    "check-timed-out",
+   "checks-failed-rolled-back",
    "checks-rollback-failed",
    "checks-rollback-unavailable",
    "claim-expansion-failed",
@@ -6870,6 +6902,7 @@
    "gitops-config-invalid",
    "gitops-controller-locked",
    "gitops-empty",
+   "gitops-env-stop-declared",
    "gitops-git-failed",
    "gitops-image-unpinned",
    "gitops-image-unresolved",
@@ -8248,6 +8281,7 @@
   "piceli.k8s.cli.deploy_pipeline",
   "piceli.k8s.cli.env",
   "piceli.k8s.cli.env_push",
+  "piceli.k8s.cli.env_stop",
   "piceli.k8s.cli.gitops",
   "piceli.k8s.cli.heavy",
   "piceli.k8s.cli.importing",
@@ -8274,6 +8308,8 @@
   "piceli.k8s.constants.secret_type",
   "piceli.k8s.constants.strategies",
   "piceli.k8s.constants.verbs",
+  "piceli.k8s.env_access",
+  "piceli.k8s.forward_watchdog",
   "piceli.k8s.observe",
   "piceli.k8s.observe_server",
   "piceli.k8s.operator",
@@ -8389,8 +8425,11 @@
   "piceli.services.environment_control",
   "piceli.services.evaluation",
   "piceli.services.execution_evidence",
+  "piceli.services.forwards",
+  "piceli.services.log_workspace",
   "piceli.services.logs",
   "piceli.services.named_environment_actions",
+  "piceli.services.navigation",
   "piceli.services.observation",
   "piceli.services.operations",
   "piceli.services.pipeline_control",
@@ -8445,5 +8484,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.14.6"
+ "version": "0.14.7"
 }

@@ -433,7 +433,8 @@ class FakeAPI:
     - ``terminating_reads``: when above ``0``, an ``Orphan`` delete, or the
       delete of an object with finalizers (a claim's ``pvc-protection``),
       keeps the object (with a ``deletionTimestamp``, and the ``orphan``
-      finalizer for an ``Orphan`` delete) for that many more reads of it, as
+      finalizer for an ``Orphan`` delete, ``foregroundDeletion`` for a
+      ``Foreground`` one) for that many more reads of it, as
       a real API server does until its controllers remove the finalizers.
     - ``nodes``: ``{name: Node manifest}`` served at ``/api/v1/nodes/NAME``
       (read-only, not part of discovery); add one with :meth:`add_node`.
@@ -457,6 +458,9 @@ class FakeAPI:
       true drops the connection at that point: a ``"received"`` request is
       then never applied, a ``"committed"`` one is applied but unanswered.
       Kill tests use it to stop a client process at an exact step.
+    - ``hold_timeout``: the longest a request with a ``hold`` fault waits
+      for its event (see :meth:`inject`), so a test that fails before
+      setting it cannot hang the server.
 
     Use :meth:`put` to seed objects and :meth:`inject` to add faults.
 
@@ -481,6 +485,7 @@ class FakeAPI:
         self.objects: dict[tuple[str, str], dict[str, Any]] = {}
         self.requests: list[dict[str, Any]] = []
         self.faults: list[dict[str, Any]] = []
+        self.hold_timeout = 30.0
         self.lock = threading.RLock()
         self.ready = True
         self.wait_for_first_consumer: set[str] = set()
@@ -944,7 +949,8 @@ class FakeAPI:
             if ("Pod", rest[1]) not in self.objects:
                 return 404, {}
             container = query.get("container", [""])[0]
-            previous = query.get("previous", ["false"])[0] == "true"
+            # The API parses booleans like strconv.ParseBool ("true", "True", "1").
+            previous = query.get("previous", ["false"])[0].lower() in {"true", "1"}
             text = self.pod_logs.get((rest[1], container, previous))
             if text is None:
                 return (400, {}) if previous else (200, b"")
@@ -1127,7 +1133,14 @@ class FakeAPI:
         ``fault`` keys: ``status`` (HTTP error), ``raw`` (body bytes),
         ``delay`` / ``after_commit_delay`` (seconds), ``disconnect_before`` /
         ``disconnect_after`` (drop the connection), ``dry_run`` (match only
-        dry-run or only real requests). Each fault fires once.
+        dry-run or only real requests), ``hold`` (a :class:`threading.Event`:
+        the request waits until the test sets it, at most
+        :attr:`hold_timeout` seconds, before it is applied) and ``applied``
+        (a :class:`threading.Event` the server sets once the request has been
+        applied). Each fault fires once.
+
+        ``hold`` and ``applied`` let a test drive "still in flight" and
+        "applied" as states it sets, not as wall-clock windows.
         """
         self.faults.append({"method": method, "suffix": path_suffix, **fault})
 
@@ -1184,6 +1197,8 @@ class FakeAPI:
                         api.faults.remove(fault)
                 if fault.get("delay"):
                     time.sleep(fault["delay"])
+                if fault.get("hold") is not None:
+                    fault["hold"].wait(api.hold_timeout)
                 if "status" in fault:
                     self.respond(
                         fault["status"], {"message": "server-password-do-not-publish"}
@@ -1199,6 +1214,8 @@ class FakeAPI:
                     return
                 with api.lock:
                     status, response = api.route(request)
+                if fault.get("applied") is not None:
+                    fault["applied"].set()
                 if api.intercept is not None and api.intercept(request, "committed"):
                     self.connection.shutdown(socket.SHUT_RDWR)
                     self.connection.close()
@@ -1358,14 +1375,21 @@ class FakeAPI:
             if body.get("preconditions") != {
                 "uid": current["metadata"]["uid"],
                 "resourceVersion": current["metadata"]["resourceVersion"],
-            } or body.get("propagationPolicy") not in {"Orphan", "Background"}:
+            } or body.get("propagationPolicy") not in {
+                "Orphan",
+                "Background",
+                "Foreground",
+            }:
                 return 409, {}
             # Like the API server: with a body, DeleteOptions come from the
             # body only (a dryRun query parameter alone would delete).
             if body.get("dryRun") == ["All"]:
                 return 200, {"kind": "Status", "status": "Success"}
             held = list(current["metadata"].get("finalizers") or ())
-            orphan = body["propagationPolicy"] == "Orphan"
+            policy = body["propagationPolicy"]
+            orphan = policy == "Orphan"
+            if policy == "Foreground":
+                held = [*held, "foregroundDeletion"]
             if self.terminating_reads > 0 and (orphan or held):
                 self.version += 1
                 current["metadata"].update(

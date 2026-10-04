@@ -155,3 +155,31 @@ def test_partial_rbac_and_provider_errors_are_safe(
             pod_uid="pod-old",
             container="api",
         )
+
+
+def test_log_lines_are_redacted_before_they_leave_the_service(
+    service: tuple[QueryService, LogService], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    query, logs = service
+    monkeypatch.setattr(
+        Reader,
+        "logs",
+        lambda *_args, **_kwargs: (
+            "2026-09-29T10:00:00Z store: upstream password=hunter2-value\n"
+            "2026-09-29T10:00:01Z Authorization: Bearer abcdefghijkl123\n"
+            "2026-09-29T10:00:02Z plain\n"
+        ),
+    )
+    selected = query.resources("shop").items[0]
+    batch = logs.read(
+        "shop",
+        selected.id,
+        resource_uid=selected.identity.uid or "",
+        pod_name="api-old",
+        pod_uid="pod-old",
+        container="api",
+    )
+    text = "\n".join(batch.lines)
+    assert "hunter2-value" not in text and "abcdefghijkl123" not in text
+    assert batch.lines[0].endswith("store: upstream password=[REDACTED]")
+    assert batch.lines[2] == "2026-09-29T10:00:02Z plain"

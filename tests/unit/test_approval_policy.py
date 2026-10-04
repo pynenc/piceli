@@ -64,7 +64,9 @@ def test_invalid_declarations_are_refused(value: Any) -> None:
 
 def test_defaults_and_identity_round_trip() -> None:
     policy = ApprovalPolicy()
-    assert policy.effective == {"create", "apply", "no-op"}
+    # A prune (a delete of an object the release owns and no longer
+    # declares) is inside every policy that does not deny it.
+    assert policy.effective == {"create", "apply", "no-op", "prune"}
     assert ApprovalPolicy.from_identity(policy.identity()) == policy
     assert ApprovalPolicy.from_value(None) is None
     assert ApprovalPolicy.from_value(policy) is policy
@@ -170,7 +172,7 @@ def test_the_policy_is_part_of_the_release_plan_hash() -> None:
 
 def test_a_policy_approved_run_is_checked_again_after_delivery() -> None:
     """The real release plan (with digests) must stay inside the policy too."""
-    policy = ApprovalPolicy()
+    policy = ApprovalPolicy(deny={"prune"})
     result = SimpleNamespace(
         to_dict=lambda: {"actions": [_action("delete", "old")]}, drift=[]
     )
@@ -187,3 +189,26 @@ def test_a_policy_approved_run_is_checked_again_after_delivery() -> None:
         PipelineRunner._within_policy(runner("policy"), result)
     assert caught.value.code == "approval-policy-exceeded"
     assert caught.value.details["policy"]["violations"] == ["delete Deployment/old"]
+
+
+def test_a_prune_is_inside_every_policy_unless_denied() -> None:
+    """A delete of an object the release owns and no longer declares (0.14.7)."""
+    prune = {"operation": "delete", "kind": "Deployment", "name": "old", "prune": True}
+    plain = {"operation": "delete", "kind": "Deployment", "name": "old"}
+    assert ApprovalPolicy().evaluate([prune]).allowed
+    assert ApprovalPolicy(allow={"create"}).evaluate([prune]).allowed
+    # Any other delete is never inside a policy.
+    assert ApprovalPolicy().evaluate([plain]).violations == ("delete Deployment/old",)
+    for deny in ({"prune"}, {"delete"}):
+        decision = ApprovalPolicy(deny=deny).evaluate([prune])
+        assert decision.violations == ("delete Deployment/old",)
+    # It counts as a change, and a cluster-scoped prune needs cluster_scoped.
+    capped = ApprovalPolicy(max_objects=0).evaluate([prune])
+    assert not capped.allowed and capped.changes == 1
+    wide = {**prune, "kind": "ClusterRole", "cluster_scoped": True}
+    assert ApprovalPolicy().evaluate([wide]).violations == (
+        "cluster_scoped ClusterRole/old",
+    )
+    assert ApprovalPolicy(allow={"cluster_scoped"}).evaluate([wide]).allowed
+    # Naming it explicitly is allowed and changes nothing.
+    assert ApprovalPolicy(allow={"create", "prune"}).effective == {"create", "prune"}

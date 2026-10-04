@@ -2,11 +2,11 @@ import { useState, type ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { api, applicationPath } from '../../api/client';
+import { api, applicationPath, forwardsPath, logsPath } from '../../api/client';
 import { Badge, Failure, formatTime, Loading, Notice } from '../../components/State';
 import './composition-harbor.css';
 import { CompositionTopology } from './CompositionTopology';
-import { CompositionInspector, EnvironmentVerification } from './CompositionInspector';
+import { CompositionInspector, EnvironmentChecks, EnvironmentVerification, checksSummary } from './CompositionInspector';
 import { CompositionVersions } from './CompositionVersions';
 import { CompositionAttention } from './CompositionAttention';
 import { CompositionEnvironmentRail } from './CompositionEnvironmentRail';
@@ -25,6 +25,12 @@ export type Environment = {
   last_action?: string | null; verification?: Verification | null;
   trigger?: string | null; approval?: { via: string; at?: string | null } | null;
   pending_plan?: PendingPlan | null;
+  checks?: EnvironmentChecksReport | null; stop?: { by: string; via?: string | null; at?: string | null } | null;
+};
+/** The last checks a run of the environment executed (a rollout or a verification). */
+export type EnvironmentChecksReport = {
+  state: string; passed?: number | null; total?: number | null; at?: string | null; trigger?: string | null;
+  run_id?: string | null; action?: string | null; results: { name?: string | null; passed: boolean; code?: string | null }[];
 };
 /** The plan an environment waits on: exactly the hash an approval names. */
 export type PendingPlan = {
@@ -99,8 +105,9 @@ function EnvironmentInventory({ environments, canSync, sync }: { environments: E
     <div className="composition-inventory-name"><h2><Link to={environmentPath(env.name)}>{env.name}</Link></h2><p className="small muted">{env.namespace ?? 'Namespace pending'}</p></div>
     <div className="composition-inventory-state"><span className="state-label">Health / state</span><div><Badge value={env.health} /> <Badge value={env.state} /></div>{env.reason && <p className="small muted">{env.reason}</p>}</div>
     <div className="composition-inventory-revision"><span className="state-label">Revision per source</span><Revision revision={env.revision} /></div>
-    <div className="composition-inventory-components"><span className="state-label">Components</span><p className="small">{componentSummary(env.components)}</p><p className="small muted">Last sync {formatTime(env.last_sync)}</p></div>
+    <div className="composition-inventory-components"><span className="state-label">Components</span><p className="small">{componentSummary(env.components)}</p><p className="small muted">Last sync {formatTime(env.last_sync)}</p>{env.checks && <p className="small" aria-label={`Last checks of ${env.name}`}>{checksSummary(env.checks)}</p>}</div>
     <div className="composition-inventory-actions"><Link className="button" to={environmentPath(env.name)}>Open environment</Link>{canSync && <SyncButton env={env.name} sync={sync} label={`Sync ${env.name}`} />}</div>
+    {env.state === 'stopped' && env.stop && <div className="composition-inventory-notice"><Notice title="Stopped">{env.stop.by === 'declared' ? 'Declared stopped in the composition (Environment(stopped=True)); remove the declaration to start it.' : `Stopped on request; start it with piceli env start ${env.name} or Start on the environment.`}</Notice></div>}
     {env.state === 'approval-required' && <div className="composition-inventory-notice"><Notice title="Approval pending">Approve the pending plan with <code>piceli gitops approve {env.name} {env.plan_hash ?? 'HASH'}</code>.</Notice></div>}
   </section>)}</div>;
 }
@@ -127,12 +134,12 @@ export function CompositionOverview({ canSync }: { canSync: boolean }) {
   const selectNode = (node: CompositionSelection) => { const next = new URLSearchParams(params); next.delete('view'); next.delete('node'); next.delete('source'); if (node.kind === 'component') { next.set('environment', node.environment); next.set('component', node.name); } else if (node.kind === 'source') { next.set('node', 'source'); next.set('source', node.name); } else { next.set('node', 'environment'); next.set('environment', node.name); next.delete('component'); } setParams(next, { replace: true }); };
   const clearSelection = (scope: 'environment' | 'component') => { const next = new URLSearchParams(params); if (scope === 'environment') next.delete('environment'); next.delete('component'); next.delete('node'); next.delete('source'); setParams(next, { replace: true }); };
   const scopeEnvironment = (name: string) => { const next = new URLSearchParams(params); next.set('environment', name); for (const key of ['scope', 'component', 'node', 'source']) next.delete(key); setParams(next); };
-  const explorer = () => data && environment ? <div className="composition-explorer">
+  const explorer = (mode: 'fit' | 'explore') => data && environment ? <div className="composition-explorer">
     <CompositionEnvironmentRail environments={environments} selected={environment.name} allEnvironments={allEnvironments} onSelect={scopeEnvironment} />
     <div className="composition-landscape">
       <section className="composition-map" aria-label="Component dependencies">
         <div className="composition-map-heading"><div><h2>System schematic</h2><p>{allEnvironments ? 'All environments' : environment.namespace ?? 'Namespace pending'}</p></div><div className="composition-scope-controls"><label className="composition-environment-picker"><span className="sr-only">Environment</span><select value={environment.name} onChange={event => selectEnvironment(event.target.value)}>{environments.map(item => <option key={item.name} value={item.name}>{item.name}</option>)}</select></label><label className="composition-all-scope"><input type="checkbox" checked={allEnvironments} onChange={event => { const next = new URLSearchParams(params); if (event.target.checked) next.set('scope', 'all'); else next.delete('scope'); setParams(next, { replace: true }); }} /> All environments</label></div></div>
-        <CompositionTopology sources={data.sources} environments={allEnvironments ? environments : [environment]} selected={selection} onSelect={selectNode} />
+        <CompositionTopology mode={mode} sources={data.sources} environments={allEnvironments ? environments : [environment]} selected={selection} onSelect={selectNode} />
         {!environment.components.length && !allEnvironments && <div className="composition-empty-map"><h3>No components reported</h3><p>Component relationships appear after the controller publishes them.</p></div>}
       </section>
       <CompositionInspector selection={selection} environment={environment} component={component} source={selectedSource} requestedComponent={requestedComponent} onClear={() => clearSelection('component')} environments={environments} sources={data.sources} onInspect={(name, componentName) => selectNode({ kind: 'component', environment: name, name: componentName })} onInspectSource={name => selectNode({ kind: 'source', name })} />
@@ -145,10 +152,10 @@ export function CompositionOverview({ canSync }: { canSync: boolean }) {
     {data?.configured && <Dialog.Root open={expanded} onOpenChange={setExpanded}>
       <div className="composition-viewbar"><div className="composition-view-tabs" role="group" aria-label="Infrastructure view">{['topology', 'versions', 'attention'].map(item => <button key={item} aria-pressed={view === item} onClick={() => setView(item)}>{item[0].toUpperCase() + item.slice(1)}</button>)}</div>{view === 'topology' && environment ? <Dialog.Trigger asChild><button className="composition-expand" aria-label="Expand topology"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M7 2H2v5M13 2h5v5M2 13v5h5m11-5v5h-5" /></svg>Expand topology</button></Dialog.Trigger> : <span className="small muted">Controller snapshot</span>}</div>
       {view === 'versions' ? <CompositionVersions environments={environments} sources={data.sources} onInspect={(name, componentName) => selectNode({ kind: 'component', environment: name, name: componentName })} /> : view === 'attention' ? <CompositionAttention environments={environments} sources={data.sources} /> : <>
-        {environment ? !expanded && explorer() : missingEnvironment ? <Notice title="Selected environment unavailable"><p><code>{requestedEnvironment}</code> is not in the reported snapshot. Its selection is preserved in the address.</p><button onClick={() => clearSelection('environment')}>Reset environment selection</button></Notice> : <section className="panel empty"><h2>No environments yet</h2><p>The controller has not resolved an environment. Check its sources and refresh.</p></section>}
+        {environment ? !expanded && explorer('fit') : missingEnvironment ? <Notice title="Selected environment unavailable"><p><code>{requestedEnvironment}</code> is not in the reported snapshot. Its selection is preserved in the address.</p><button onClick={() => clearSelection('environment')}>Reset environment selection</button></Notice> : <section className="panel empty"><h2>No environments yet</h2><p>The controller has not resolved an environment. Check its sources and refresh.</p></section>}
         <details className="composition-inventory-disclosure"><summary><span>Environment inventory</span><span>{environments.length} environments</span></summary><div className="composition-section-heading"><p className="small muted">Reported revisions, health and controller actions.</p><Link to="/composition">Open environments →</Link></div><SyncError sync={sync} /><EnvironmentInventory environments={environments} canSync={canSync} sync={sync} /></details>
       </>}
-      <Dialog.Portal><Dialog.Overlay className="composition-expanded-overlay" /><Dialog.Content className="composition-expanded"><header className="composition-expanded-heading"><div><Dialog.Title>Infrastructure explorer</Dialog.Title><Dialog.Description>Select an environment or follow the connections. Escape returns to overview.</Dialog.Description></div><Dialog.Close className="composition-close">Close expanded topology <span aria-hidden="true">×</span></Dialog.Close></header>{environment ? explorer() : <Notice title="Selected environment unavailable"><p>The selected environment is no longer in the controller snapshot.</p><button onClick={() => clearSelection('environment')}>Reset environment selection</button></Notice>}</Dialog.Content></Dialog.Portal>
+      <Dialog.Portal><Dialog.Overlay className="composition-expanded-overlay" /><Dialog.Content className="composition-expanded"><header className="composition-expanded-heading"><div><Dialog.Title>Infrastructure explorer</Dialog.Title><Dialog.Description>Select an environment or follow the connections. Escape returns to overview.</Dialog.Description></div><Dialog.Close className="composition-close">Close expanded topology <span aria-hidden="true">×</span></Dialog.Close></header>{environment ? explorer('explore') : <Notice title="Selected environment unavailable"><p>The selected environment is no longer in the controller snapshot.</p><button onClick={() => clearSelection('environment')}>Reset environment selection</button></Notice>}</Dialog.Content></Dialog.Portal>
     </Dialog.Root>}
   </div>;
 }
@@ -182,8 +189,8 @@ export function CompositionEnvironment({ canSync, actions }: { canSync: boolean;
     {query.isPending && <Loading text="Loading environment…" />}
     {query.isError && <Failure error={query.error} retry={() => void query.refetch()} />}
     {item && <>
-      <div className="heading detail-heading"><div><p className="eyebrow">Environment</p><h1>{item.name}</h1><p className="subtitle">{item.namespace ?? 'Namespace pending'}</p></div><div className="run-actions"><button onClick={() => void query.refetch()} disabled={query.isFetching}>Refresh</button>{actions?.(item)}{canSync && <SyncButton env={item.name} sync={sync} label={`Sync ${item.name}`} />}</div></div>
-      <div className="statusbar" aria-label="Environment state"><div className="statusitem"><span className="statuslabel">Health</span><Badge value={item.health} /></div><div className="statusitem"><span className="statuslabel">State</span><Badge value={item.state} />{item.reason && <p>{item.reason}</p>}</div><div className="statusitem"><span className="statuslabel">Last sync</span><p>{formatTime(item.last_sync)}</p></div><div className="statusitem"><span className="statuslabel">Revision</span><Revision revision={item.revision} /></div></div><EnvironmentVerification verification={item.verification} />
+      <div className="heading detail-heading"><div><p className="eyebrow">Environment</p><h1>{item.name}</h1><p className="subtitle">{item.namespace ?? 'Namespace pending'}</p></div><div className="run-actions"><button onClick={() => void query.refetch()} disabled={query.isFetching}>Refresh</button>{item.application_id && <><Link className="button" to={logsPath({ scope: item.application_id })}>Logs</Link><Link className="button" to={forwardsPath({ application: item.application_id })}>Forwards</Link></>}{actions?.(item)}{canSync && <SyncButton env={item.name} sync={sync} label={`Sync ${item.name}`} />}</div></div>
+      <div className="statusbar" aria-label="Environment state"><div className="statusitem"><span className="statuslabel">Health</span><Badge value={item.health} /></div><div className="statusitem"><span className="statuslabel">State</span><Badge value={item.state} />{item.reason && <p>{item.reason}</p>}</div><div className="statusitem"><span className="statuslabel">Last sync</span><p>{formatTime(item.last_sync)}</p></div><div className="statusitem"><span className="statuslabel">Revision</span><Revision revision={item.revision} /></div></div><EnvironmentVerification verification={item.verification} /><EnvironmentChecks checks={item.checks} />
       <SyncError sync={sync} />
       <section className="panel control-card" aria-label="Components"><div className="panelhead"><h2>Components <span className="count">{item.components.length}</span></h2></div>
         {item.components.length === 0 ? <p className="panelbody muted">No components reported for this environment yet.</p> : <ul className="component-list">{item.components.map(component => <li key={component.name}>
@@ -194,7 +201,7 @@ export function CompositionEnvironment({ canSync, actions }: { canSync: boolean;
         </li>)}</ul>}
       </section>
       <EnvironmentHistory env={item.name} />
-      <section className="panel control-card"><div className="panelhead"><h2>Workloads and logs</h2></div><div className="panelbody">{item.application_id ? <Link className="button" to={`${applicationPath(item.application_id)}/resources`}>Open workloads, pods and logs</Link> : <p className="small muted">The namespace is not created yet; workloads appear after the first sync.</p>}</div></section>
+      <section className="panel control-card"><div className="panelhead"><h2>Workloads and logs</h2></div><div className="panelbody">{item.application_id ? <div className="run-actions"><Link className="button" to={`${applicationPath(item.application_id)}/resources`}>Open workloads, pods and logs</Link><Link className="button" to={logsPath({ scope: item.application_id })}>All logs of {item.name}</Link></div> : <p className="small muted">The namespace is not created yet; workloads appear after the first sync.</p>}</div></section>
     </>}
   </div>;
 }

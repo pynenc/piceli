@@ -21,8 +21,8 @@ import secrets
 import shutil
 import tempfile
 import threading
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -170,13 +170,8 @@ def forward_serve(
 
         from piceli.gitops.install import connect
         from piceli.gitops.state import ConfigMapChannel
-        from piceli.server.app import create_app
         from piceli.server.incluster import InClusterCredential
         from piceli.server.security import uvicorn_log_config
-        from piceli.services.composition_control import CompositionControl
-        from piceli.services.logs import LogService
-        from piceli.services.query import QueryService
-        from piceli.services.registration import Registration
     except ImportError:
         say("Install piceli[ui] to serve the web application.")
         reject("ui-assets-unavailable")
@@ -191,18 +186,6 @@ def forward_serve(
                 namespace,
             )
             target = credential.write_kubeconfig(Path(private) / "config")
-            base = Registration("cluster", namespace, target)
-            registration = Registration(
-                "cluster",
-                namespace,
-                target,
-                kinds=tuple(
-                    item
-                    for item in base.kinds
-                    if item[1] not in {"Secret", "ConfigMap"}
-                ),
-            )
-            query = QueryService([registration])
 
             @contextmanager
             def channel() -> Iterator[Any]:
@@ -210,12 +193,12 @@ def forward_serve(
                     yield ConfigMapChannel(api.client, namespace)
 
             token = secrets.token_urlsafe(32)
-            server = create_app(
-                query,
+            server = forward_app(
+                target,
+                namespace,
+                channel,
+                token=token,
                 origin=f"http://127.0.0.1:{port}",
-                logs=LogService(query),
-                composition_control=CompositionControl(query, "cluster", channel),
-                launch_token=token,
             )
             with connect(target.kubeconfig, target.context) as api:
                 publish_token(api.client, token, namespace)
@@ -242,6 +225,50 @@ def forward_serve(
                     publish_token(api.client, "", namespace)
             except Exception:  # best effort on the way out
                 pass
+
+
+def forward_app(
+    target: Any,
+    namespace: str,
+    channel: Callable[[], AbstractContextManager[Any]],
+    *,
+    token: str,
+    origin: str,
+    static_dir: Path | None = None,
+) -> Any:
+    """The composition UI app ``forward-serve`` runs: views, logs, connection tickets.
+
+    Tickets let `piceli ui connect` open a forward on the user's machine with
+    the user's own kubeconfig: the UI only reads the selected Service, Pod or
+    Deployment (its existing read grant) and never binds a port, so it needs
+    no extra RBAC (no ``pods/portforward``).
+    """
+    from piceli.server.app import create_app
+    from piceli.services.composition_control import CompositionControl
+    from piceli.services.logs import LogService
+    from piceli.services.query import QueryService
+    from piceli.services.registration import Registration
+    from piceli.services.remote_access import RemoteAccessService
+
+    base = Registration("cluster", namespace, target)
+    registration = Registration(
+        "cluster",
+        namespace,
+        target,
+        kinds=tuple(
+            item for item in base.kinds if item[1] not in {"Secret", "ConfigMap"}
+        ),
+    )
+    query = QueryService([registration])
+    return create_app(
+        query,
+        origin=origin,
+        static_dir=static_dir,
+        logs=LogService(query),
+        composition_control=CompositionControl(query, "cluster", channel),
+        remote_access=RemoteAccessService(query, local_session=True),
+        launch_token=token,
+    )
 
 
 # --------------------------------------------------------- on a laptop
@@ -325,6 +352,30 @@ def _credentials(cluster: str | None, profile: str | None) -> tuple[Path, str]:
     return found.kubeconfig, found.context
 
 
+def ui_shortcut() -> Any:
+    """The UI forward: ``127.0.0.1:8790`` to the UI Service, restarted until stopped.
+
+    An API outage makes ``kubectl port-forward`` exit over and over: the
+    forward backs off (capped at 30 s) and keeps trying instead of giving up.
+    """
+    from piceli.k8s.ui_config import RestartPolicy, UiShortcut
+
+    return UiShortcut(
+        id="ui",
+        label="Piceli UI",
+        target=f"service/{NAME}",
+        namespace=NAMESPACE,
+        local_port=PORT,
+        remote_port=PORT,
+        restart=RestartPolicy(backoff_max=30.0, forever=True),
+    )
+
+
+def launch_url(token: str) -> str:
+    """The one URL that opens the UI (holds the launch token: print it once)."""
+    return f"http://127.0.0.1:{PORT}/?token={token}"
+
+
 def access_ui(
     cluster: Annotated[
         str | None,
@@ -361,7 +412,6 @@ def access_ui(
     from piceli.k8s.access import port_conflicts
     from piceli.k8s.cli.observe import interrupts_as_keyboard_interrupt
     from piceli.k8s.observe import ForwardSupervisor
-    from piceli.k8s.ui_config import UiShortcut
 
     kubeconfig, context = _credentials(cluster, profile)
     executable = shutil.which(kubectl)
@@ -371,14 +421,7 @@ def access_ui(
         token = _launch_reader(kubeconfig, context)
     except LaunchError as error:
         reject(error.code)
-    shortcut = UiShortcut(
-        id="ui",
-        label="Piceli UI",
-        target=f"service/{NAME}",
-        namespace=NAMESPACE,
-        local_port=PORT,
-        remote_port=PORT,
-    )
+    shortcut = ui_shortcut()
     registry = ui_registry()
     if registry is not None:
         registry.reap_orphans()  # forwards of an `access ui` that crashed
@@ -397,6 +440,8 @@ def access_ui(
             "access-port-conflict",
             conflicts=[item.to_dict() for item in conflicts],
         )
+    from piceli.k8s.forward_watchdog import ParentWatchdog
+
     supervisor = ForwardSupervisor(
         kubeconfig=kubeconfig,
         context=context,
@@ -404,8 +449,9 @@ def access_ui(
         shortcuts=[shortcut],
         namespace=NAMESPACE,
         registry=registry,
+        watchdog=ParentWatchdog(),
     )
-    url = f"http://127.0.0.1:{PORT}/?token={token}"
+    url = launch_url(token)
     failed = False
     seen: tuple[Any, ...] | None = None
     try:

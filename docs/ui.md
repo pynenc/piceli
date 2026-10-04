@@ -57,8 +57,26 @@ other sessions start at Applications.
 | Read deployment output | Deployment history → Runs & logs → Open logs | Captured output, visual transitions and raw journal |
 | Compare recorded configurations | Deployment history → Compare revisions | Exact source versions, resource additions/removals and before/after fields |
 | Review a Pipeline or build | Delivery → Pipeline or Cluster build | Real stage/placement details and exact approvals |
+| Read logs of anything you can see | Operations → Logs, `/logs`, or **Logs** on an application, environment, component, workload or pod | Merged, redacted lines with scope, workload, pod, container, time and level filters and a live tail |
+| Reach a workload's port | Operations → Port forwards, `/forwards`, or **Forward** on a workload | Every forward or connection ticket, its state and local address; start, stop and stale forwards |
 
 ## Workspace navigation
+
+The navigation groups pages into Workspace, Delivery and Operations. Counts
+beside a page show what needs you: approvals waiting (Deployment history),
+degraded environments (Environments), failed builds (Cluster build, else
+Overview), stale forwards (Port forwards) and registry warnings (Cluster).
+A count is shown only when the session can read its source; nothing is shown
+as zero when it cannot be observed. Environments, Deployment history and
+Cluster open sub-menus (each environment with its state; History and
+Approvals; Nodes and Registry). The current page's sub-menu is open; the
+chevron opens or closes one with the mouse or Enter/Space, and the browser
+remembers that choice. Phones keep a single scrolling row without sub-menus.
+
+```{image} _static/ui/navigation-badges.webp
+:alt: Navigation with approval, environment and registry counts and an Environments sub-menu listing each environment
+:width: 720px
+```
 
 The workspace uses a compact vector adaptation of Piceli's mushroom/network
 mark, warm neutral surfaces and orange navigation accents. Available pages are
@@ -73,9 +91,13 @@ state and layout stay in the address when shared or reloaded. The appearance
 picker offers Light, Dark and System, and remembers the choice in this browser.
 
 Composition sessions open directly on the infrastructure Overview. Its compact
-environment switchboard keeps scope, state and revisions visible above the canvas.
-Expand the explorer for more space; drag its background or use the zoom controls
-and keyboard to navigate. Escape returns to the overview and its original focus.
+environment strip keeps scope, state and revisions visible above the canvas
+and wraps onto more rows instead of scrolling. The system schematic is sized
+to its content and fits the available width: the page is the only scroll
+area. Zooming in lets you pan sideways; a phone keeps cards readable and pans
+sideways only. The inspector sits beside the canvas (below it on narrow
+screens). Expand the explorer for a full-screen canvas you can drag and zoom.
+Escape returns to the overview and its original focus.
 Overview has three views:
 
 - **Topology** maps reported sources to components and environments. Select a
@@ -130,6 +152,81 @@ Raw log tails appear only when the execution recorded and safely published them;
 unavailable output is stated explicitly. Captured pod output requires the same
 logs authorization as live logs; activity access alone does not grant it. Journal
 transitions retain sequence numbers because event timestamps are not recorded.
+
+## Logs workspace
+
+**Operations → Logs** (`/logs`) reads container logs from every scope the
+session may read logs in: applications, composition environments and, on a
+local `piceli ui serve`, namespaces of other saved profiles. Lines from the
+selected containers are merged by their Kubernetes timestamps (a stack trace
+keeps its first line's time) and show their scope, pod and container.
+
+- **Scopes** are grouped by cluster. With none selected, every scope is read.
+  **Add another profile** adds a namespace of another saved profile, read
+  only, with that profile's own kubeconfig file and context (never the
+  current context); it is refused by the installed service and inside a
+  cluster.
+- **Source** narrows to a workload (Deployment, StatefulSet, DaemonSet, Job),
+  a pod and a container, or the previous container instance.
+- **Window** limits the time range and the lines read per container.
+- **Level** filters by the level stated in the line (`ERROR`,
+  `level=warn`, `"level":"info"`, `[debug]`; lines without one are "No
+  level"); its counts are those of the lines shown.
+- Search filters lines by text. **Pause live tail** stops the two-second
+  refresh; the address keeps every filter, so a link or reload restores it.
+- Select a line for its full text, time, scope, workload and container, and
+  to narrow to that pod or open it in Resources.
+
+Each read is bounded: at most 12 containers, 5,000 lines in total and
+1 MiB per container. Narrowing notices name what was left out, a container
+that could not be read stays listed, and a replaced pod is not read. Every
+line is redacted before it leaves the service: `password=`, `token:`,
+bearer tokens, URL credentials, JSON Web Tokens and private keys become
+`[REDACTED]`. The same `logs` grant as the per-pod Logs tab applies: a scope
+without it is neither listed nor read. Every application, environment,
+component, workload and pod has a **Logs** link with these filters set; the
+per-pod Logs tab remains and links here.
+
+```{image} _static/ui/logs-workspace.webp
+:alt: The Logs workspace merging redacted lines of two pods, filtered to errors and warnings, with a selected line's details
+:width: 720px
+```
+
+The JSON is `GET /api/v1/logs/sources?scope=ID` (scopes and their pods with
+workload, containers, phase and restarts) and
+`GET /api/v1/logs/lines?stream=SCOPE/POD/UID/CONTAINER&…` (with `previous`,
+`tail_lines`, `since_seconds`, `q`, `level`).
+
+## Port forwards workspace
+
+**Operations → Port forwards** (`/forwards`) lists every forward or
+connection ticket of the session across applications, environments and
+profile scopes: state, target, scope, ports, where the port is bound,
+expiry and the local address. Start one by choosing a scope, a Service,
+Deployment or Pod with a port, and the ports; a workload's **Forward** link
+opens this page with the target and port preselected. Stop ends it through
+the same path as the workload's Access panel.
+
+- On a local `piceli ui serve`, forwards are supervised loopback forwards on
+  the UI host, ready only after a probe. A forward is **stale** when its
+  scope was removed or its probe failed and it is reconnecting; a forward
+  left running by a previous Piceli UI process (the same private registry
+  `piceli ui serve` reaps at start) is counted too. **Stop stale forwards**
+  stops those only: a recorded process whose owner is gone, never another
+  process.
+- On the installed service and the in-cluster composition UI, the page issues
+  connection tickets: run the printed `piceli ui connect` on your machine with
+  your own kubeconfig; the ticket goes pending, then ready when your client
+  reports its probed port, and ends when you stop it.
+
+```{image} _static/ui/forwards-workspace.webp
+:alt: Starting a forward to a Service from its Forward link and stopping it from the Port forwards workspace
+:width: 720px
+```
+
+The JSON is `GET /api/v1/forwards` (`mode` `local`, `cluster` or
+`unavailable`, entries with `session`, `scope`, `url`, `stale`,
+`stale_reason`, and `orphans`) and `POST /api/v1/forwards/stale/stop`.
 
 ## Previous plans, revision changes and deployment logs
 
@@ -202,8 +299,8 @@ with its explicit cluster declaration as described below.
 The screenshots come from `make ui-clips`, which records fixed journeys on a
 disposable fake Kubernetes API (no real cluster or credential).
 
-```{image} _static/ui/composition-overview.png
-:alt: Piceli infrastructure canvas connecting sources, components and environments beside a selected component inspector
+```{image} _static/ui/overview-compact.png
+:alt: The compact Overview: environment strip, a schematic sized to its content with no inner scroll, and the inspector beside it
 :width: 720px
 ```
 
@@ -374,6 +471,18 @@ The command reads the launch token with the profile's explicit kubeconfig and
 context (never the current context), forwards `127.0.0.1:8790` to the UI
 Service, and prints one line, `Piceli UI: http://127.0.0.1:8790/?token=…`.
 Open it once: the token becomes a session cookie and leaves the address bar.
+
+Forwards from this UI run on your machine. **Forward** on a workload (or
+**Port forwards**) issues a one-time ticket; run the printed command, for
+example `piceli ui connect --server http://127.0.0.1:8790 --ticket ID
+--kubeconfig PATH --context NAME --local-port 8080`, with your own explicit
+kubeconfig and context. `piceli ui connect` accepts plain http only for a
+loopback server such as this forward; any other server needs https. It needs
+the `ui` extra on your machine (`pip install "piceli[ui]"`). The UI
+reads the selected Service, Pod or Deployment with its existing read grant and
+never binds a port, so it needs no `pods/portforward` permission. To forward
+every Service port of an environment instead, run
+`piceli access ENV --cluster infra.py:CLUSTER` (see {doc}`access`).
 The token appears nowhere else, not in the UI's logs. Ctrl-C stops the
 forward. When port 8790 is taken, `access-port-conflict` names its owner;
 when it is a stale `piceli access ui` for the same credentials, stderr
@@ -421,6 +530,15 @@ promotion is a request to the controller; its declared follow policy still
 decides whether to accept it. An environment stopped by the idle policy shows
 “Idle-stopped since” and **Wake**; Wake confirms a sync request, which the
 controller processes at its next poll. The next push can wake it as well.
+A named environment has **Stop** (a reviewed request, as `piceli env stop`:
+no replicas, volumes kept, not planned or deployed while stopped) and, once
+stopped on request, **Start**; an environment the composition declares
+`stopped=True` shows why Start is unavailable (see {ref}`gitops-stop-named`).
+
+Each environment shows its **Last checks**: passed N of N with every check's
+name, when, the trigger and whether they ran after a rollout or as a
+verification (the inventory row says `Checks passed 6/6 · time`); a failing
+check shows its code, never its output.
 
 The controller publishes each environment's `Promote()` policy and, for a
 source followed with `Promote()`, its branch heads, so Promote offers exactly
