@@ -101,6 +101,15 @@ From 0.15.1 (``lifecycle_integrity.py``):
     controller refuses to start (self-check), and cluster status, gitops
     status and the UI report it down with the message; restored after.
 
+From 0.16.0 (``lifecycle_otel.py``; after 1, the candidate):
+
+30. The controller's OpenTelemetry: a pinned Collector in the cluster,
+    ``Controller(telemetry=Otlp(...))`` and its headers Secret; a deploy, a
+    failed check with rollback, an approval wait, a stop and start, a broken
+    build and a controller killed mid-build each give the expected spans,
+    events (stable ids, in their traces) and metrics; with the Collector at
+    0 replicas deploys go on, and data resumes when it is back.
+
 From 0.14.7 too (``lifecycle_ops.py``; last, after 6 and 21):
 
 22. After a rollout ``gitops status`` shows each environment's last checks
@@ -160,6 +169,7 @@ from lifecycle_edges import EdgeStages
 from lifecycle_infra import InfraStages
 from lifecycle_integrity import IntegrityStages
 from lifecycle_ops import OpsStages
+from lifecycle_otel import OtelStages
 from lifecycle_prune import PruneStages
 from lifecycle_reach import ReachStages
 from lifecycle_support import (
@@ -223,7 +233,7 @@ ALL_CHECKS = {
 STAGE_ORDER = (
     "2", "3", "1", "4", "5", "6", "11", "7", "12", "16", "17", "18", "19",
     "8", "15", "9", "10", "13", "14", "20", "21", "22", "23", "24",
-    "25", "26", "27", "28", "29",
+    "25", "26", "27", "28", "29", "30",
 )  # fmt: skip
 STAGE_TITLES = {
     "1": "upgrade from the previous release",
@@ -255,6 +265,7 @@ STAGE_TITLES = {
     "27": "an edge cluster leaves the environment",
     "28": "machines: plan, apply, install, register, destroy (OpenTofu)",
     "29": "a corrupted controller image: reported down with its message",
+    "30": "the controller's OpenTelemetry: traces, events, metrics",
 }
 STAGE_METHODS = {
     "1": "1_upgrade", "2": "2_bootstrap", "3": "3_first_main", "4": "4_one_source",
@@ -266,7 +277,7 @@ STAGE_METHODS = {
     "21": "21_rollback_no_loop", "22": "22_checks_status", "23": "23_stop_start",
     "24": "24_access_ui_killed", "25": "25_edge_add",
     "26": "26_edge_unreachable", "27": "27_edge_remove", "28": "28_infra",
-    "29": "29_corrupt_controller_image",
+    "29": "29_corrupt_controller_image", "30": "30_otel",
 }  # fmt: skip
 #: Stages whose failure stops the run (the rest depend on them).
 CRITICAL = {"2", "3"}
@@ -281,7 +292,7 @@ USER root
 RUN --mount=type=bind,source=dist,target=/tmp/dist \\
     set -eu; wheel="$(ls /tmp/dist/piceli-*.whl)"; \\
     pip install --no-cache-dir --force-reinstall --no-deps "$wheel"; \\
-    pip install --no-cache-dir "piceli[ui] @ file://${wheel}"; \\
+    pip install --no-cache-dir "piceli[ui,telemetry] @ file://${wheel}"; \\
     python -B -m piceli.integrity write --out /usr/local/share/piceli/files.sha256
 USER 65532:65532
 
@@ -311,7 +322,13 @@ EXTRA_CHECK = """EXTRA_CHECKS: list = [
 
 
 class Lifecycle(
-    OpsStages, PruneStages, ReachStages, EdgeStages, InfraStages, IntegrityStages
+    OpsStages,
+    PruneStages,
+    ReachStages,
+    EdgeStages,
+    InfraStages,
+    IntegrityStages,
+    OtelStages,
 ):
     def __init__(self, args: argparse.Namespace, scratch: Path) -> None:
         self.args = args
@@ -920,7 +937,13 @@ class Lifecycle(
         )  # fmt: skip
         self.cand_cli = str(cand / "bin" / "piceli")
 
-    def _site(self, controller_image: str) -> str:
+    def _site(self, controller_image: str, telemetry: str | None = None) -> str:
+        """``lifecycle_site.py``; ``telemetry``: an ``Otlp(...)`` expression (stage 30)."""
+        extra = (
+            f"\nfrom piceli.infra import Otlp  # noqa: E402\n\nTELEMETRY = {telemetry}\n"
+            if telemetry
+            else ""
+        )
         return (
             '"""Where this composition runs (written by the lifecycle acceptance)."""\n\n'
             f"API = {self.cluster.api_server()!r}\n"
@@ -930,7 +953,7 @@ class Lifecycle(
             f"ARCH = {self.arch!r}\n"
             f"GIT_BASE = {f'https://host.k3d.internal:{self.git.port}'!r}\n"
             f"CONTROLLER_IMAGE = {controller_image!r}\n"
-            'POLL = "10s"\n'
+            'POLL = "10s"\n' + extra
         )
 
     def _repositories(self) -> None:
@@ -2471,8 +2494,8 @@ def main(argv: list[str] | None = None) -> int:
                         "or images/Dockerfile")  # fmt: skip
     parser.add_argument(
         "--stages",
-        default="1-29",
-        help="e.g. 1-29 or 1,2,3 (setup always runs; 28 alone runs without the bootstrap)",
+        default="1-30",
+        help="e.g. 1-30 or 1,2,3 (setup always runs; 28 alone runs without the bootstrap)",
     )
     parser.add_argument("--playwright-ui", type=Path, default=None,
                         help="ui/ directory with node_modules for the optional browser "

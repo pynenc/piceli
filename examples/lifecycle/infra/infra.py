@@ -26,6 +26,7 @@ cluster.
 
 from __future__ import annotations
 
+import lifecycle_site
 from lifecycle_app import pipeline, registry
 from lifecycle_site import (
     AGENT_A,
@@ -56,8 +57,18 @@ cluster = Cluster(
     storage_class="lifecycle-retain",
     registry=registry,
     # Branch teardown deletes the branch's retained volumes too.
+    # With TELEMETRY = Otlp(...) in lifecycle_site.py the controller sends
+    # OpenTelemetry traces, events and metrics there (from 0.16).
     controller=Controller(
-        on=SERVER, poll=POLL, image=CONTROLLER_IMAGE, delete_volumes=True
+        on=SERVER,
+        poll=POLL,
+        image=CONTROLLER_IMAGE,
+        delete_volumes=True,
+        **(
+            {"telemetry": lifecycle_site.TELEMETRY}
+            if getattr(lifecycle_site, "TELEMETRY", None) is not None
+            else {}
+        ),
     ),
     ui=Ui(access="forward"),
 )
