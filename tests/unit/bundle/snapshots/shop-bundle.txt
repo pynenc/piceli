@@ -491,4 +491,3 @@ $KUBECTL -n "$NAMESPACE" create secret generic 'shop-private' --type='Opaque' --
 $KUBECTL -n "$NAMESPACE" label secret 'shop-private' 'app.kubernetes.io/part-of=shop' --overwrite >/dev/null
 echo 'prepare.sh: created Secret shop-private'
 echo "prepare.sh: 1 Secret(s) ready in $NAMESPACE"
-

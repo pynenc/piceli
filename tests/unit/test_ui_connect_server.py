@@ -91,7 +91,7 @@ def test_the_standard_library_client_posts_json_without_proxies(
     seen: list[tuple[str, dict[str, Any]]] = []
 
     class Handler(BaseHTTPRequestHandler):
-        def do_POST(self) -> None:  # noqa: N802
+        def do_POST(self) -> None:
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             seen.append((self.path, body))
             status = 404 if self.path.endswith("/missing") else 200

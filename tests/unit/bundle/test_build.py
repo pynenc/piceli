@@ -35,6 +35,7 @@ HERE = Path(__file__).parent
 
 def _check_snapshot(name: str, text: str) -> None:
     path = SNAPSHOTS / name
+    text = text.rstrip("\n") + "\n"  # one final newline, as pre-commit keeps it
     if os.environ.get("PICELI_UPDATE_SNAPSHOTS"):
         path.write_text(text)
     assert path.exists(), f"missing snapshot {name}; set PICELI_UPDATE_SNAPSHOTS=1"
