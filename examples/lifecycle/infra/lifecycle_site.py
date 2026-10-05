@@ -21,3 +21,6 @@ GIT_BASE = "https://git.example.com/lifecycle"
 CONTROLLER_IMAGE = "ghcr.io/pynenc/piceli-controller@sha256:" + "0" * 64
 #: How often the controller polls its sources.
 POLL = "1m"
+#: Where the controller sends OpenTelemetry: ``Otlp(...)`` (from
+#: ``piceli.infra``), or ``None`` for no telemetry.
+TELEMETRY = None

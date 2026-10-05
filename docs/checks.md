@@ -266,13 +266,16 @@ exactly one automatic rollback:
   Its history entry has `"trigger": "checks-failed"`, `rolled_back_from` and
   `failed_execution_id`; the failed entry gets `rollback` with the state,
   target and execution id.
-- It restores only what the failed release changed (0.14.7): the objects
-  **both** releases declare go back to the target's version. An object the
-  failed release no longer declares (removed by its prune, or deleted by
-  hand) is not re-created, and an object only the failed release declares is
-  not deleted: an automatic rollback never creates or deletes an object the
-  failed release did not also declare. A manual `piceli release rollback`
-  restores the target release whole, as before.
+- It restores the target release whole (0.16.0), like a manual
+  `piceli release rollback`: the objects both releases declare go back to
+  the target's version, an object the failed release removed (by its prune,
+  or by hand) that the target declares is created again, and an object only
+  the failed release declares is pruned like in any apply (claims, Secrets
+  and retained objects are kept). From 0.14.7 to 0.15.1 it restored only the
+  objects both releases declare, which could leave a workload without an
+  object it needs (a Role the failed release had removed). A GitOps
+  controller then stops: the environment is `failed` with
+  `checks-failed-rolled-back` and is not retried (see {doc}`gitops`).
 - It needs no second approval: `rollback_on_failed_checks = true` was part of
   the approved plan. It never triggers another rollback. If the rollback is
   refused, does not become ready or fails its own checks, `rollback.state` is

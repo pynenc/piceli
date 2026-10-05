@@ -38,6 +38,7 @@ from __future__ import annotations
 import fnmatch
 import importlib.metadata
 import re
+import threading
 import time
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
@@ -46,6 +47,7 @@ from typing import Any, Protocol
 
 from piceli.gitops import GitOpsError
 from piceli.gitops.config import ControllerConfig, backoff
+from piceli.gitops.heartbeat import HEARTBEAT_SECONDS
 from piceli.gitops.ports import APPROVE_POLICY, EnvOutcome, Ports
 from piceli.gitops.repo import RemoteRefs
 from piceli.gitops.state import (
@@ -380,6 +382,10 @@ class Controller:
         self.state = load_state(state_dir)
         self.busy = False  # one step at a time (asserted by the tests)
         self.swept = False  # stale state is swept once, at the first poll
+        # 0.16.0: the heartbeat (beat) and the step's publish never interleave.
+        self.publish_lock = threading.RLock()
+        self.heartbeat_at: str | None = None
+        self.recovered = False  # interrupted steps and runs marked once, at start
 
     # ------------------------------------------------------------ helpers
     def _envs(self) -> dict[str, dict[str, Any]]:
@@ -967,6 +973,7 @@ class Controller:
             "action": "teardown" if record["state"] == "deleting" else "deploy",
             "since": _iso(self.clock()),
         }
+        record.pop("interrupted", None)  # a new step of it runs
         self._publish()
         try:
             if record["state"] == "deleting":
@@ -993,6 +1000,9 @@ class Controller:
         """One poll and the work it found; returns the published status."""
         now = self.clock()
         self.state["last_poll"] = _iso(now)
+        if not self.recovered:
+            self.recovered = True
+            self._recover()
         try:
             refs = self.source.ls_remote()
         except GitOpsError as error:
@@ -1058,6 +1068,9 @@ class Controller:
                 "pipeline": self.config.pipeline,
                 "poll_seconds": self.config.poll_seconds,
                 "last_poll": self.state.get("last_poll"),
+                # Added in 0.16.0 (see piceli.gitops.heartbeat).
+                "heartbeat_at": self.heartbeat_at,
+                "heartbeat_seconds": HEARTBEAT_SECONDS,
                 "last_error": self.state.get("last_error"),
                 "poll_failures": failures,
                 **(
@@ -1081,12 +1094,36 @@ class Controller:
 
     def _publish(self) -> dict[str, Any]:
         save_state(self.state_dir, self.state)
-        status = self.status()
-        try:
-            self.channel.publish(status)
-        except GitOpsError as error:
-            self.log(f"status not published ({error.code})")
+        with self.publish_lock:
+            self.heartbeat_at = _iso(self.clock())
+            status = self.status()
+            try:
+                self.channel.publish(status)
+            except GitOpsError as error:
+                self.log(f"status not published ({error.code})")
         return status
+
+    def beat(self) -> None:
+        """Publish ``controller.heartbeat_at`` only (the heartbeat thread)."""
+        publish = getattr(self.channel, "publish_heartbeat", None)
+        with self.publish_lock:
+            self.heartbeat_at = _iso(self.clock())
+            if callable(publish):
+                publish(self.heartbeat_at)
+
+    def _recover(self) -> None:
+        """At start: mark the steps and runs the previous process died under."""
+        from piceli.gitops.recovery import interrupt_runs, interrupted_steps
+
+        for name, step in interrupted_steps(self._envs(), _iso(self.clock())):
+            self.log(f"{name}: its {step.get('action')} was interrupted (restart)")
+        try:
+            marked = interrupt_runs(self.state_dir)
+        except OSError as error:  # never fail a start on it
+            self.log(f"interrupted runs not marked ({type(error).__name__})")
+            return
+        if marked:
+            self.log(f"{len(marked)} run(s) interrupted by the restart marked")
 
     def run_forever(
         self,

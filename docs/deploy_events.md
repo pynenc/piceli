@@ -14,6 +14,12 @@ that accepts OTLP/HTTP), so a dashboard can show each deploy as a marker and a
 trace of its stages. It is **off unless you configure it**, it **never fails or
 noticeably slows a deploy**, and it **never exports secrets**.
 
+```{note}
+This page is about `piceli deploy` and `piceli release` on a laptop or in CI.
+The GitOps controller sends its own traces, events and metrics over OTLP
+gRPC or HTTP (`Controller(telemetry=Otlp(...))`): see {doc}`opentelemetry`.
+```
+
 ## Turn it on
 
 Use the standard OpenTelemetry variables, or the option:

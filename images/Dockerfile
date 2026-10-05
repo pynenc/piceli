@@ -32,7 +32,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 RUN --mount=type=bind,source=dist,target=/tmp/dist \
     set -eu; wheel="$(ls /tmp/dist/piceli-*.whl)"; \
-    pip install --no-cache-dir "piceli[ui] @ file://${wheel}"
+    pip install --no-cache-dir "piceli[ui,telemetry] @ file://${wheel}"
 # Last step of the Python files: their digests, verified when the controller
 # and UI start (PICELI_SELF_CHECK, set by their Deployments). -B: writing
 # the manifest compiles nothing new.

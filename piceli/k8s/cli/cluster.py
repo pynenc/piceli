@@ -525,6 +525,8 @@ def _controller_health(api: Api, ns: str, deployment: Any) -> dict[str, Any]:
     return {
         "health": _health(document, ready, time.time()),
         "last_poll": controller.get("last_poll"),
+        # 0.16.0: the heartbeat (refreshed during long steps too).
+        "heartbeat_at": controller.get("heartbeat_at"),
         # 0.15.1: the pod's state (a crash loop, its last error line).
         "live": liveness.check(api, ns, document, time.time()),
     }

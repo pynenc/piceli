@@ -83,6 +83,10 @@ def write_run(
         refs={name: dict(value) for name, value in sources.items()},
         approved_by="policy" if policy else None,
     )
+    for name in ("inputs", "build", "deliver", "plan", "apply", "checks"):
+        # As the runner does: each stage runs (``started_at``), then ends.
+        run.data["stages"][name]["state"] = "running"
+        run.data["stages"][name]["started_at"] = run.data["created_at"]
     run.set_stage("inputs", state="done", seconds=0.4)
     run.set_stage("build", state="skipped", seconds=0.0)
     run.set_stage("deliver", state="skipped", seconds=0.0)

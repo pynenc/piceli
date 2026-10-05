@@ -1440,6 +1440,8 @@ class PlanExecutor:
             if resume:
                 self.journal.resume(execution)
             self.journal.clear_diagnosis(execution)
+            # 0.16.0: when the deletes (a prune) started and ended.
+            prune: dict[str, str] = {}
             try:
                 deferred = self._first_consumer_refs(plan)
                 deferred_rows: list[tuple[dict[str, Any], PlanAction]] = []
@@ -1479,6 +1481,7 @@ class PlanExecutor:
                         # the release is applied and ready, so a removed
                         # workload keeps serving until its replacement does.
                         settle_deferred()
+                        prune.setdefault("started_at", _utc_now())
                     self._note(
                         f"applying {index}/{total}: "
                         f"{action.resource.ref.kind}/{action.resource.ref.name}"
@@ -1731,6 +1734,8 @@ class PlanExecutor:
                     else:
                         self._ready(execution, row, action, authorization, deadline)
                 settle_deferred()
+                if prune:
+                    prune["finished_at"] = _utc_now()
                 self.journal.set_state(execution, "ready")
             except ProviderError as error:
                 if isinstance(error, _Diagnosed):
@@ -1749,7 +1754,11 @@ class PlanExecutor:
                     if error.ambiguous
                     else "failed",
                 )
-            return self.journal.summary(execution)
+            result = self.journal.summary(execution)
+            if prune:
+                prune.setdefault("finished_at", _utc_now())
+                result["prune"] = prune
+            return result
 
     def compensate(
         self,
@@ -2018,3 +2027,8 @@ def _restore_manifest(before: DiscoveredResource) -> dict[str, Any]:
 def _contains(actual: Any, expected: Any) -> bool:
     """SSA may add server defaults. Every explicitly desired value must survive."""
     return manifest_contains(actual, expected)
+
+
+def _utc_now() -> str:
+    """Now as ISO 8601 UTC with milliseconds (like the run journal's times)."""
+    return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")

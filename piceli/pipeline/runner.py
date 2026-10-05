@@ -1897,6 +1897,7 @@ class PipelineRunner:
         built = False
         for item in work.builds:
             name = item.spec.name
+            began = now()  # 0.16.0: each build's own times
             if not item.cached:
                 item.cached, item.images = self._cached_build(item)
             if item.cached:
@@ -1942,6 +1943,8 @@ class PipelineRunner:
                 built = True
             output[name] = {
                 "cached": item.cached,
+                "started_at": began,
+                "finished_at": now(),
                 "plan_hash": item.plan.plan_hash,
                 "receipt": str(item.receipt_path),
                 "images": {
@@ -2624,7 +2627,13 @@ class PipelineRunner:
         )
 
     def _rollback(self, work: _Work) -> dict[str, Any]:
-        """Re-apply the previous release (journaled in the run's checks stage)."""
+        """Re-apply the previous release (journaled in the run's checks stage)
+        with its ``started_at`` and ``finished_at`` (0.16.0)."""
+        began = now()
+        result = self._rollback_to_previous(work)
+        return {**result, "started_at": began, "finished_at": now()}
+
+    def _rollback_to_previous(self, work: _Work) -> dict[str, Any]:
         from piceli.k8s.release_runner import ReleaseError
 
         runner = work.runner
@@ -2650,10 +2659,10 @@ class PipelineRunner:
         self.say(f"[checks] rolling back to {target}")
         self._bind(runner, f"[checks] rollback {target}: ")
         try:
-            failed = work.release_plan.release if work.release_plan else None
-            # Restore only what the failed release changed: never re-create
-            # what it no longer declares (see scoped_rollback).
-            result = runner.plan(rollback_to="previous", rollback_of=failed)
+            # The whole previous release (0.16.0): what the failed release
+            # removed and the previous one declares is created again. No
+            # loop: the environment stops at ``checks-failed-rolled-back``.
+            result = runner.plan(rollback_to="previous")
             outcome = runner.apply(
                 result.plan_hash, expected_intent="rollback", expected_release=target
             )

@@ -574,3 +574,36 @@ def test_the_status_names_the_cluster_at_work(multi: dict[str, Any]) -> None:
     assert busy[0]["clusters"]["edge-canary"]["in_progress"]["action"] == "deploy"
     assert "in_progress" not in status["envs"]["edge"]
     assert all("in_progress" not in view for view in _clusters(status).values())
+
+
+def test_a_requested_stop_survives_a_controller_restart(multi: dict[str, Any]) -> None:
+    """0.16.0: a multi-cluster environment stopped on request stays stopped
+    after the controller restarts and a push arrives (lifecycle stage 31)."""
+    from piceli.gitops.state import request
+    from piceli.infra.controller import CompositionController
+    from piceli.infra.sources import SourceSet
+
+    controller, ports, channel = multi["controller"], multi["ports"], multi["channel"]
+    controller.poll_once()
+    channel.add_request(*request("stop", env="edge", via="cli"))
+    status = controller.poll_once()
+    assert {e["state"] for e in _clusters(status).values()} == {"stopped"}
+    restarted = CompositionController(
+        controller.config,
+        state_dir=controller.state_dir,
+        sources=SourceSet(
+            multi["composition"].sources, controller.state_dir / "sources"
+        ),
+        ports=ports,
+        channel=channel,
+        clock=lambda: multi["clock"]["now"],
+    )
+    started = len(ports.order)
+    status = restarted.poll_once()
+    multi["shop"].commit({"web/index.html": "<h1>after restart</h1>\n"})
+    _later(multi, 60)
+    status = restarted.poll_once()
+    assert {e["state"] for e in _clusters(status).values()} == {"stopped"}, _clusters(
+        status
+    )
+    assert not [name for name in ports.order[started:] if name.startswith("edge")]

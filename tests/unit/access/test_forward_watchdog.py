@@ -173,7 +173,9 @@ def _session(
     try:
         yield process
     finally:
-        with suppress(ProcessLookupError):
+        # macOS answers EPERM for a group that is already exiting (the test
+        # killed it); _kill below treats it the same way.
+        with suppress(ProcessLookupError, PermissionError):
             os.killpg(process.pid, signal.SIGKILL)
         process.wait(timeout=10)
         if process.stdout is not None:

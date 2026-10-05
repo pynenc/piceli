@@ -357,6 +357,12 @@ class DirectoryChannel:
         value = read_json(self.directory / "status.json")
         return dict(value) if isinstance(value, Mapping) else None
 
+    def publish_heartbeat(self, at: str) -> None:
+        """Set only ``controller.heartbeat_at`` of the published status."""
+        status = self.read_status()
+        if status is not None:
+            write_json(self.directory / "status.json", with_heartbeat(status, at))
+
     def publish_history(self, history: Mapping[str, Any]) -> None:
         write_json(self.directory / HISTORY_KEY, history)
 
@@ -494,6 +500,23 @@ class ConfigMapChannel:
     def read_status(self) -> dict[str, Any] | None:
         return self._document(STATUS_CONFIGMAP, STATUS_KEY)
 
+    def publish_heartbeat(self, at: str) -> None:
+        """Set only ``controller.heartbeat_at`` of the published status
+        (a read-modify-write of the one key; nothing when there is none)."""
+
+        def change(data: dict[str, Any]) -> dict[str, Any]:
+            try:
+                status = json.loads(data.get(STATUS_KEY) or "null")
+            except ValueError:
+                return data
+            if not isinstance(status, dict):
+                return data
+            text = json.dumps(with_heartbeat(status, at), sort_keys=True)
+            return {**data, STATUS_KEY: text}
+
+        if self._read(STATUS_CONFIGMAP) is not None:
+            self._update(STATUS_CONFIGMAP, change)
+
     def publish_history(self, history: Mapping[str, Any]) -> None:
         text = json.dumps(dict(history), sort_keys=True)
         self._update(HISTORY_CONFIGMAP, lambda data: {HISTORY_KEY: text})
@@ -517,6 +540,15 @@ class _Conflict(Exception):
     pass
 
 
+def with_heartbeat(status: Mapping[str, Any], at: str) -> dict[str, Any]:
+    """``status`` with ``controller.heartbeat_at`` set to ``at`` (0.16.0)."""
+    document = dict(status)
+    controller = dict(document.get("controller") or {})
+    controller["heartbeat_at"] = at
+    document["controller"] = controller
+    return document
+
+
 def read_status(client: Any, namespace: str = "piceli-system") -> dict[str, Any] | None:
     """The controller's published status (``piceli.gitops-status.v1``) or ``None``.
 
@@ -524,7 +556,11 @@ def read_status(client: Any, namespace: str = "piceli-system") -> dict[str, Any]
     ``commit`` (wanted), ``deployed_commit``, ``state`` (one of
     :data:`ENV_STATES`), ``plan_hash`` (when approval is required),
     ``reason``, ``attempts``, ``next_attempt_at``, ``pushed_at``,
-    ``updated_at``, ``namespace`` and ``trigger``.
+    ``updated_at``, ``namespace`` and ``trigger``. ``status["controller"]``
+    has ``heartbeat_at`` (0.16.0; see :mod:`piceli.gitops.heartbeat`).
+
+    The schema changes only additively within v1: fields are added, never
+    removed or renamed.
     """
     return ConfigMapChannel(client, namespace).read_status()
 

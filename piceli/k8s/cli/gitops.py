@@ -524,6 +524,13 @@ def _enable_composition(
             build_git_secret=build_git_secret or "piceli-build-git",
             builder_selector=parse_selector(builder_selector or []),
             build_storage=build_storage,
+            telemetry=(
+                composition.cluster.controller.telemetry.to_dict()
+                if composition.cluster is not None
+                and composition.cluster.controller is not None
+                and composition.cluster.controller.telemetry is not None
+                else None
+            ),
         )
         controller = (
             composition.cluster.controller if composition.cluster is not None else None
@@ -913,20 +920,17 @@ def disable(
 
 
 def _health(status: dict[str, Any] | None, ready: bool | None, now: float) -> str:
-    from datetime import datetime
+    from piceli.gitops.liveness import silence
 
     if status is None:
         return "starting" if ready else "down"
     controller = status.get("controller") or {}
     if ready is False:
         return "down"
-    last = controller.get("last_poll")
-    if last:
-        seconds = (
-            now - datetime.fromisoformat(str(last).replace("Z", "+00:00")).timestamp()
-        )
-        if seconds > 3 * int(controller.get("poll_seconds") or 60) + 60:
-            return "stale"
+    # 0.16.0: the heartbeat when the controller publishes one, else the last poll.
+    quiet = silence(controller, now)
+    if quiet["age"] is not None and quiet["age"] > quiet["limit"]:
+        return "stale"
     return "degraded" if controller.get("last_error") else "healthy"
 
 
@@ -974,7 +978,13 @@ def status(
     controller = body.get("controller") or {}
     say(
         f"gitops controller: {health}"
-        + (f" (last poll {controller.get('last_poll')})" if controller else "")
+        + (f" (last poll {controller.get('last_poll')}" if controller else "")
+        + (
+            f", heartbeat {controller['heartbeat_at']}"
+            if controller.get("heartbeat_at")
+            else ""
+        )
+        + (")" if controller else "")
     )
     if live is not None and live.get("message"):
         say(f"  controller {live['state']}: {live['message']}")
@@ -1303,6 +1313,9 @@ def _run_composition(
                 local_build=local_build,
                 private=Path(private),
             )
+            telemetry = _controller_telemetry(
+                config, state_dir, target, namespace, transport
+            )
             controller = CompositionController(
                 config,
                 state_dir=state_dir,
@@ -1310,18 +1323,67 @@ def _run_composition(
                 ports=ports,
                 channel=channel,
                 log=say,
+                telemetry=telemetry,
             )
-            if once:
-                emit_json(controller.poll_once())
-                return
-            say(
-                f"gitops controller polling {len(sources.remotes)} source(s) every "
-                f"{config.poll_seconds}s"
-            )
-            refresh = _refresher(service_account, Path(private), channel, transport)
-            _forever(controller, refresh)
+            try:
+                if once:
+                    emit_json(controller.poll_once())
+                    return
+                say(
+                    f"gitops controller polling {len(sources.remotes)} source(s) "
+                    f"every {config.poll_seconds}s"
+                )
+                telemetry.start_heartbeat()
+                refresh = _refresher(service_account, Path(private), channel, transport)
+                _forever(controller, refresh)
+            finally:
+                telemetry.shutdown()
         finally:
             closer()
+
+
+def _controller_telemetry(
+    config: Any,
+    state_dir: Path,
+    target: tuple[Path, str] | None,
+    namespace: str | None,
+    transport: str,
+) -> Any:
+    """The controller's OpenTelemetry (:mod:`piceli.gitops.otel`): OTLP when
+    ``Controller(telemetry=Otlp(...))`` or ``OTEL_EXPORTER_OTLP_*`` asks for
+    it, else a no-op. Never fails the controller's start."""
+    from piceli.gitops.controller import _version
+    from piceli.gitops.otel import cluster_uid, for_controller, resolve
+
+    composition = getattr(config, "composition", None) or {}
+    cluster = composition.get("cluster") if isinstance(composition, Mapping) else None
+    uid = None
+    try:
+        wanted = resolve(getattr(config, "telemetry", None)) is not None
+    except Exception:
+        wanted = True  # for_controller reports the refusal
+    if wanted and target is not None:
+        from piceli.gitops.install import connect
+
+        try:
+            with connect(target[0], target[1], transport=transport) as api:
+                uid = cluster_uid(api)
+        except Exception:  # the cluster's uid is optional
+            uid = None
+    return for_controller(
+        state_dir,
+        getattr(config, "telemetry", None),
+        cluster=str(cluster["name"])
+        if isinstance(cluster, Mapping) and cluster.get("name")
+        else None,
+        composition=str(composition.get("name") or "")
+        if isinstance(composition, Mapping)
+        else None,
+        version=_version(),
+        cluster_uid=uid,
+        namespace=namespace,
+        log=say,
+    )
 
 
 class _NoBuilder:
@@ -1552,10 +1614,14 @@ def _forever(
     A failed poll (an API timeout, a dropped connection) never ends the
     process, which would crash-loop the pod: it is logged by type and
     retried after 5 s, doubling per consecutive failure up to 5 minutes; a
-    successful poll restores the normal cadence.
+    successful poll restores the normal cadence. A heartbeat thread
+    (0.16.0, :mod:`piceli.gitops.heartbeat`) publishes
+    ``controller.heartbeat_at`` meanwhile, also during a long step.
     """
     import signal
     import time
+
+    from piceli.gitops.heartbeat import Heartbeat
 
     sleep = sleep or time.sleep
     clock = clock or time.time
@@ -1570,11 +1636,35 @@ def _forever(
             stopping["now"] = True
 
         signal.signal(signal.SIGTERM, on_term)
+    beat = getattr(controller, "beat", None)
+    heartbeat = Heartbeat(beat, log=say) if callable(beat) else None
+    if heartbeat is not None:
+        heartbeat.start()
+    try:
+        _loop(controller, refresh, stopped, sleep, clock, handle_signals)
+    finally:
+        if heartbeat is not None:
+            heartbeat.stop()
+
+
+def _loop(
+    controller: Any,
+    refresh: Callable[[], None],
+    stopped: Callable[[], bool],
+    sleep: Callable[[float], None],
+    clock: Callable[[], float],
+    handle_signals: bool,
+) -> None:
+    import contextlib
+
+    # The heartbeat thread never publishes through a client being replaced.
+    lock = getattr(controller, "publish_lock", None) or contextlib.nullcontext()
     failures = 0
     while not stopped():
         started = clock()
         try:
-            refresh()
+            with lock:
+                refresh()
         except Exception as error:  # never crash-loop on a refresh
             say(f"service account refresh failed ({type(error).__name__})")
         try:

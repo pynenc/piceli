@@ -4,6 +4,78 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.16.0
+
+- **A stopped multi-cluster environment stays stopped across a controller
+  restart.** The first poll after a start forgot stop requests (and other
+  per-environment memory) kept under the environment's name when its
+  records are per cluster (`edge@<cluster>`), so the environment deployed
+  again (0.15.0–0.15.1).
+- **Stage and build times.** Run journals, run summaries and the deployment
+  history (`piceli.gitops-history.v1`) give each stage `started_at` and
+  `finished_at` (inputs, build, deliver, prerollout, backup, plan, apply,
+  checks), each build its own (`builds.<name>`: `started_at`,
+  `finished_at`, `state`), the apply's deletes (`prune`) and the automatic
+  rollback (`rollback`) theirs, and an owner-approved run its
+  `approval_wait`. Runs and summaries also have `finished_at`.
+- **Interrupted runs.** A controller that restarts after dying during a
+  step marks that step and every run journal still `running` as
+  `interrupted` (reason `gitops-run-interrupted`, `finished_at` when
+  detected): they no longer show as running forever in the history and the
+  status (`envs.<env>.interrupted` until the next step).
+- **Approval and stop times.** `approved_by.at` is set for policy approvals
+  (when the run was created) and `stop.at` for declared stops (when the
+  controller first saw the declaration); both were `null`.
+- **Stops, starts and teardowns in the history**: entries of their own
+  `kind` (`stop`, `start`, `teardown`; runs are `kind: "run"`) with `at`,
+  `by`, `via`, `state` and the environment; a torn-down branch environment
+  keeps its entries.
+- **Controller heartbeat.** The status has `controller.heartbeat_at`,
+  refreshed every 30 s (`controller.heartbeat_seconds`) by a thread of the
+  controller, also during a long build or deploy; it writes only that field,
+  never at the same time as the step's own publish. `gitops status`,
+  `cluster status` and the UI report `stale` from the heartbeat when there
+  is one (from `last_poll` for older controllers): a long build no longer
+  reads as a stopped controller.
+- **Fix:** an automatic rollback after failed checks restores the previous
+  release whole again: what the failed release removed and the previous one
+  declares is created again (a workload kept running without the Role the
+  failed release had deleted), and what only the failed release declares is
+  pruned. The environment still stops at `failed`
+  (`checks-failed-rolled-back`) with no retry until a new revision or
+  `piceli gitops sync`. Same for `release apply` with
+  `rollback_on_failed_checks`.
+- **Compatibility promise:** `piceli.gitops-status.v1` and
+  `piceli.gitops-history.v1` change only additively within v1 (documented in
+  {doc}`gitops`); a test fails when a field disappears.
+- **The controller's OpenTelemetry.** `Controller(telemetry=Otlp(endpoint,
+  protocol="grpc"|"http/protobuf", headers_secret=, ca_secret=,
+  insecure=))` makes the GitOps controller send, with the OpenTelemetry SDK
+  (the `telemetry` extra, now in the controller image), one trace per
+  environment deploy (`SYNC <composition>/<env>`, CI/CD semantic
+  conventions v1.43.0) with a span per stage: each image's build, plan,
+  approval wait, restore point, pre-rollout, apply with prune, checks with
+  one span per check, rollback; times from the run journal and the
+  controller's own hooks. Events (log records with an event name and a
+  stable `piceli.event.id`) for approvals, rollouts, failed checks,
+  rollbacks, prunes, failed builds (the last 20 redacted log lines), stops,
+  starts and the controller's start; CI/CD metrics (`cicd.pipeline.run.*`,
+  `cicd.worker.count`) and Piceli's (build durations, check results,
+  approval and queue waits, time since the last successful deploy, a
+  heartbeat from a background thread that keeps ticking during long
+  builds). A run the controller was in when it died is closed as
+  `interrupted` in the same trace at its next start. Telemetry never blocks
+  or fails a deploy (bounded queues, background export, bounded timeouts);
+  header and CA Secrets are mounted, never printed. Without the setting the
+  standard `OTEL_EXPORTER_OTLP_*` variables are honoured; the controller's
+  configuration (and its hash) is unchanged when it is not set. See
+  {doc}`opentelemetry`.
+- **k3s lifecycle stage 31**: a pinned OpenTelemetry Collector in the
+  cluster checks the traces, events and metrics of a deploy, a rolled-back
+  check failure, an approval, a stop and start, a broken build and a
+  controller killed mid-build, and that deploys go on with the Collector
+  down.
+
 ## Version 0.15.1
 
 - **A dead controller is visible.** `piceli gitops status` (JSON

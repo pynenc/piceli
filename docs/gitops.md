@@ -278,7 +278,8 @@ declared stop is refused (`gitops-env-stop-declared`), by the CLI when the
 module it reads says so and by the controller otherwise; a requested stop
 lasts until `env start`, also after a declared stop is removed. The status
 shows `state: stopped`, `reason` `declared` or `requested` and `stop`
-(`by`, `via`, `at`); a sync or promotion while stopped is not deployed (a
+(`by`, `via`, `at`; for a declared stop, `at` is when the controller first
+saw the declaration, 0.16.0); a sync or promotion while stopped is not deployed (a
 promotion is kept for the start). Starting scales the workloads back to the
 replicas they had and, when the revision moved meanwhile, deploys it with
 the environment's usual approval (an unchanged release the owner approved
@@ -331,15 +332,30 @@ when its data is no longer needed:
 A claim's volume stays after that while its reclaim policy is `Retain`.
 
 When a deploy's checks fail and its release is rolled back
-(`rollback_on_failed_checks`), the rollback restores only the objects both
-releases declare: what the failed release removed is not re-created, and
-what it added is left (see {doc}`checks`). The controller then does **not**
-retry that revision: the environment is `failed` with reason
+(`rollback_on_failed_checks`), the rollback restores the previous release
+whole (0.16.0): what the failed release removed (by its prune, or by hand)
+and the previous release declares is created again, and what only the
+failed release declares is pruned, with the same data rules as above (see
+{doc}`checks`). From 0.14.7 to 0.15.1 the rollback restored only the
+objects both releases declare, which could leave a workload without an
+object it needs, such as the Role a failed release had removed. The
+controller then does **not** retry that revision: the environment is `failed` with reason
 `checks-failed-rolled-back` and no `next_attempt_at`, until a new revision
 or `piceli gitops sync ENV` (one try, no loop of restore point, apply and
 rollback on every poll).
 `Pipeline(prune=False)` turns pruning off; `piceli deploy` (outside an
 environment) prunes only with `Pipeline(prune=True)`.
+
+### Traces, events and metrics (OpenTelemetry)
+
+From 0.16 the controller sends OpenTelemetry when the composition's
+`Controller(telemetry=Otlp("https://collector:4317", headers_secret=...))`
+says where (or the standard `OTEL_EXPORTER_OTLP_*` variables): one trace per
+deploy with a span per stage (builds, plan, approval wait, restore point,
+pre-rollout, apply, checks, rollback), events for approvals, rollouts,
+failed checks, rollbacks, failed builds, stops and starts, and CI/CD
+metrics with a heartbeat that ticks during long builds. It never blocks or
+fails a deploy. See {doc}`opentelemetry` for every name.
 
 ### Status and requests (for tools)
 
@@ -428,6 +444,67 @@ A branch environment's run names its branch's push as its trigger, and a
 deploy applied by the owner's policy records `policy` as its approver. Locally, `piceli gitops run --once --state-dir DIR` (with
 `--kubeconfig`/`--context`) runs one poll, and `status`, `approve` and
 `promote` take `--state-dir DIR` instead of a cluster.
+
+#### Heartbeat (0.16.0)
+
+`controller.last_poll` is written when a poll starts, so it stands still
+while one step runs (a long build or rollout). The controller therefore
+also publishes `controller.heartbeat_at`, refreshed every
+`controller.heartbeat_seconds` (30) by a thread of its own while the process
+is alive, also during builds and deploys. The heartbeat writes only that
+field of the status document (no history), never at the same time as the
+step's own publish. `gitops status` (`health`), `cluster status` and the
+UI's `controller_live` report `stale` when the heartbeat is older than three
+heartbeats and a minute; for a controller without `heartbeat_at` (before
+0.16.0) the age of `last_poll` decides, as before.
+
+#### Restarts during a step (0.16.0)
+
+A controller that stops during a step (a crash, an out-of-memory kill, a
+node drain) left its record `in_progress` and its run journal `running`.
+When it starts again it marks them: the record loses `in_progress` and has
+`interrupted` (`action`, `since`, `at`: when the restart found it) until its
+next step, and every run journal still `running` becomes `interrupted`
+(reason `gitops-run-interrupted`, `finished_at` when it was detected, its
+running stage `interrupted` too). The history lists that run as
+`interrupted`; the environment is retried as before.
+
+#### Deployment history (`piceli-gitops-history`)
+
+A composition controller publishes each environment's recent runs in the
+ConfigMap `piceli-gitops-history` (key `history.json`, schema
+`piceli.gitops-history.v1`), which the UI reads. Since 0.16.0 each run
+(`kind: "run"`) has, besides its outcome, plan, checks and images:
+
+- `stages.<stage>` with `state`, `seconds`, `started_at` and `finished_at`
+  for `inputs`, `build`, `deliver`, `prerollout`, `backup` (the restore
+  point), `plan`, `apply` and `checks`, plus `prune` (the apply's deletes)
+  and `rollback` (the automatic rollback after failed checks) when they ran;
+- `builds.<image>`: `started_at`, `finished_at` and `state` (`done`,
+  `failed`, `cached`) of each image the controller built or mirrored
+  (images built by one build Job share its times) and of the run's builds;
+- `approval_wait` (`started_at`, `finished_at`, `seconds`): from the plan
+  waiting for approval to the owner's approval;
+- `approved_by` (`via`, `at`); `at` is set for `policy` approvals too (when
+  the run the policy approved was created);
+- `state` and `run_state` `interrupted` for a run the controller died under.
+
+Stops, starts and teardowns are entries of their own, newest first next to
+the runs: `kind` (`stop`, `start`, `teardown`), `action` (the same), `state`
+(`stopped`, `started`, `removed`), `at`, `by` (`declared`, `requested`,
+`idle`, `removed`), `via` (`cli`, `ui`, `declaration`, `controller`),
+`started_at`, `finished_at`, `namespace` and, for a stop, `stop` (`by`,
+`via`, `at`). A torn-down branch environment keeps its entries in the
+history (the newest 20 such environments).
+
+#### Compatibility of the documents
+
+`piceli.gitops-status.v1` and `piceli.gitops-history.v1` change only
+**additively** within v1: a release adds fields, and never removes, renames
+or changes the type or meaning of one. A tool that reads them keeps working
+across Piceli releases as long as it ignores fields it does not know. A test
+in Piceli's suite fails when a documented field disappears. A change that is
+not additive would be a new schema (`v2`) published next to the old one.
 
 ## What an export does not cover
 

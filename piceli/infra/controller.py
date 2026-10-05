@@ -65,8 +65,10 @@ Importing this module is side-effect free.
 from __future__ import annotations
 
 import fnmatch
+import functools
 import json
 import re
+import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -104,6 +106,7 @@ from piceli.gitops.controller import (
     step_reason,
     verified,
 )
+from piceli.gitops.heartbeat import HEARTBEAT_SECONDS
 from piceli.gitops.ports import EnvOutcome
 from piceli.gitops.repo import RemoteRefs
 from piceli.gitops.state import (
@@ -175,6 +178,9 @@ class CompositionConfig:
         "branch", "entry"}``, :class:`~piceli.infra.pipelines.RepoSettings`):
         the controller follows it and imports the module at its commit;
         ``composition`` is then the summary recorded at ``gitops enable``.
+    :param telemetry: ``Otlp(...).to_dict()`` of ``Controller(telemetry=)``
+        (0.16): where the controller sends OpenTelemetry
+        (:mod:`piceli.gitops.otel`).
     """
 
     composition: Mapping[str, Any]
@@ -188,8 +194,16 @@ class CompositionConfig:
     builder_selector: tuple[tuple[str, str], ...] = ()
     build_storage: str = "20Gi"
     repo: Mapping[str, Any] | None = None
+    telemetry: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
+        if self.telemetry is not None:
+            from piceli.infra import Otlp
+
+            try:
+                Otlp.from_dict(self.telemetry)
+            except ValueError as error:
+                raise GitOpsError("gitops-config-invalid", str(error)) from None
         if self.repo is None:
             Composition.from_dict(self.composition)  # validates it
         else:
@@ -282,6 +296,12 @@ class CompositionConfig:
             # Only for a composition followed in its repository: other
             # configs (and their install plan hashes) are unchanged.
             **({"repo": dict(self.repo)} if self.repo is not None else {}),
+            # 0.16, only when set: other configs and their hashes are unchanged.
+            **(
+                {"telemetry": dict(self.telemetry)}
+                if self.telemetry is not None
+                else {}
+            ),
         }
 
     @classmethod
@@ -304,6 +324,7 @@ class CompositionConfig:
                 builder_selector=tuple(sorted((build.get("selector") or {}).items())),
                 build_storage=build.get("storage") or "20Gi",
                 repo=value.get("repo"),
+                telemetry=value.get("telemetry"),
             )
         except (KeyError, TypeError, ValueError) as error:
             if isinstance(error, GitOpsError):
@@ -697,6 +718,7 @@ class CompositionController:
         channel: Channel,
         clock: Callable[[], float] = time.time,
         log: Callable[[str], None] = lambda _: None,
+        telemetry: Any = None,
     ) -> None:
         self.config = config
         self.repo: Any = None
@@ -723,6 +745,8 @@ class CompositionController:
             "forced",
             "composition",
             "stops",
+            "declared_stops",
+            "starts",
         ):
             self.state.setdefault(key, {})
         self.refs: dict[str, RemoteRefs] = {}
@@ -739,6 +763,16 @@ class CompositionController:
         #: Each other cluster's contact this poll; whether it answered last time.
         self._polled: dict[str, dict[str, Any]] = {}
         self._reach_memory: dict[str, bool] = {}
+        # 0.16.0: the heartbeat (beat) and the step's publish never interleave.
+        self.publish_lock = threading.RLock()
+        self.heartbeat_at: str | None = None
+        self._builds: dict[str, dict[str, Any]] = {}
+        self.recovered = False  # interrupted steps and runs marked once, at start
+        # 0.16: OpenTelemetry (piceli.gitops.otel); a no-op unless configured.
+        from piceli.gitops.otel import ControllerTelemetry
+
+        self.telemetry = telemetry or ControllerTelemetry.disabled(state_dir)
+        self.telemetry.attach(self)  # closes runs a crash interrupted
 
     # ------------------------------------------------------------ helpers
     @property
@@ -901,6 +935,8 @@ class CompositionController:
             if not isinstance(instance.env, Environment):
                 continue
             why = self._stop_reason(instance)
+            if why != "declared":
+                self.state["declared_stops"].pop(instance.group, None)
             record = self._envs().get(instance.name)
             stopped = (
                 record is not None
@@ -931,10 +967,15 @@ class CompositionController:
 
     def _stop_detail(self, instance: _Instance, why: str) -> dict[str, Any]:
         request = self.state["stops"].get(instance.group) or {}
+        declared = self.state["declared_stops"]
         return {
             "by": why,
             "via": request.get("via") if why == "requested" else "declaration",
-            "at": request.get("at") if why == "requested" else None,
+            # 0.16.0: a declared stop's ``at`` is when the controller first
+            # saw the declaration.
+            "at": request.get("at")
+            if why == "requested"
+            else declared.setdefault(instance.group, _iso(self.clock())),
         }
 
     def _stop_owner(self, record: dict[str, Any], why: str) -> None:
@@ -976,6 +1017,7 @@ class CompositionController:
             next_attempt_at=None,
             stopped_at=_iso(self.clock()),
         )
+        self._lifecycle(record, "stop", "stopped", **record["stop"])
         self.log(f"{name}: stopped ({why}); scaled to zero, claims kept")
 
     def _start_owner(self, record: dict[str, Any]) -> None:
@@ -987,8 +1029,17 @@ class CompositionController:
         start = getattr(ports, "env_start", None)
         if record.get("namespace") and callable(start):
             start(self._down_pipeline(instance.env, ports), instance.deploys_as)
-        record.pop("stop", None)
+        stop = record.pop("stop", None) or {}
         record.pop("stopped_at", None)
+        request = self.state["starts"].pop(instance.group, None) or {}
+        self._lifecycle(
+            record,
+            "start",
+            "started",
+            by="requested" if request else f"{stop.get('by') or 'stop'}-removed",
+            via=request.get("via") or ("declaration" if not request else None),
+            at=request.get("at"),
+        )
         revision, used, missing = self._resolve(instance)
         deployed = record.get("deployed_revision")
         if not missing and deployed and dict(deployed) == revision:
@@ -1375,8 +1426,13 @@ class CompositionController:
             approval={
                 "via": body.get("via") if body.get("via") in ("cli", "ui") else None,
                 "at": _iso(self.clock()),
+                # 0.16.0: since when the plan waited (the history's
+                # ``approval_wait``).
+                "requested_at": record.get("approval_required_since"),
             },
         )
+        record.pop("approval_required_since", None)
+        self.telemetry.approved(record, body.get("via"))
 
     def _stop_request(self, body: Mapping[str, Any], *, start: bool) -> None:
         """``piceli env stop|start ENV``: remember (or forget) the owner's stop."""
@@ -1395,8 +1451,16 @@ class CompositionController:
                     f"{name} is declared stopped (Environment(stopped=True)); "
                     "remove the declaration to start it",
                 )
-            self.state["stops"].pop(name, None)
+            if self.state["stops"].pop(name, None) is not None:
+                # Recorded as the start's origin in the history (0.16.0).
+                self.state["starts"][name] = {
+                    "via": body.get("via")
+                    if body.get("via") in ("cli", "ui")
+                    else None,
+                    "at": str(body.get("at") or _iso(self.clock()))[:32],
+                }
             return
+        self.state["starts"].pop(name, None)
         via = body.get("via") if body.get("via") in ("cli", "ui") else None
         at = body.get("at") if isinstance(body.get("at"), str) else None
         self.state["stops"][name] = {
@@ -1492,6 +1556,7 @@ class CompositionController:
     def _remember(self, component: str, digest: str, image: BuiltImage) -> None:
         write_json(self._cache_path(component, digest), image.to_dict())
         self._built.append(component)  # built (or mirrored) in this step
+        self.telemetry.built(component, image.manifest_digest)
 
     def _contracts(
         self, instance: _Instance, revision: Mapping[str, str]
@@ -1584,15 +1649,26 @@ class CompositionController:
         record["components"] = components
         if to_build or to_mirror:
             self._publish()  # show "building" while it runs
+            self.telemetry.build_started(
+                [item.component for item in to_mirror]
+                + [item.component for item in to_build]
+            )
         try:
             if to_mirror:
-                for key, image in self.ports.builder.mirror(to_mirror).items():
+                mirrored = self._timed(
+                    [item.component for item in to_mirror],
+                    lambda: self.ports.builder.mirror(to_mirror),
+                )
+                for key, image in mirrored.items():
                     self._remember(
                         key, str(self.composition.component(key).mirrored), image
                     )
                     images[key] = image
             if to_build:
-                built = self.ports.builder.build(to_build, self.sources.checkout)
+                built = self._timed(
+                    [item.component for item in to_build],
+                    lambda: self.ports.builder.build(to_build, self.sources.checkout),
+                )
                 for item in to_build:
                     image = built[item.component]
                     self._remember(item.component, item.digest, image)
@@ -1729,12 +1805,20 @@ class CompositionController:
         record["components"] = components
         if requests or to_mirror:
             self._publish()  # show "building" while it runs
+            self.telemetry.build_started(
+                [name for request in requests for name in request.images]
+            )
         try:
             if to_mirror:
                 for ref, image in self.ports.builder.mirror(to_mirror).items():
                     self._remember("mirror", key_of(ref), image)
             for request in requests:
-                built = self.ports.builder.build_spec(request, self.sources.checkout)
+                built = self._timed(
+                    sorted(request.images),
+                    functools.partial(
+                        self.ports.builder.build_spec, request, self.sources.checkout
+                    ),
+                )
                 for image_name, wanted in request.images.items():
                     if image_name not in built:
                         raise CompositionError(
@@ -1787,6 +1871,23 @@ class CompositionController:
             )
         )
         self._outcome(record, outcome)
+
+    def _timed(self, names: list[str], call: Callable[[], Any]) -> Any:
+        """``call()`` (a build or mirror of ``names``), its times in the step's
+        ``builds`` (0.16.0; images built by one call share its times)."""
+        began = _iso(self.clock())
+        state = "failed"
+        try:
+            result = call()
+            state = "done"
+            return result
+        finally:
+            for name in names:
+                self._builds[name] = {
+                    "started_at": began,
+                    "finished_at": _iso(self.clock()),
+                    "state": state,
+                }
 
     @staticmethod
     def _built_from(
@@ -1957,6 +2058,7 @@ class CompositionController:
             if line:
                 self.log(line)
         elif outcome.state == "approval-required":
+            record.setdefault("approval_required_since", now)
             self._set(
                 record,
                 state="approval-required",
@@ -2193,6 +2295,7 @@ class CompositionController:
             self._down_pipeline(env, ports), record.get("deploys_as") or name
         )
         remove_env_dir(self._branch_dirs(rule, cluster), record.get("namespace"))
+        self._lifecycle(record, "teardown", "removed", by="removed", via="controller")
         self._forget(name)
         del self._envs()[name]
         self.log(f"{name}: environment removed")
@@ -2245,7 +2348,15 @@ class CompositionController:
         )
 
     #: Per-environment memory besides its record (keyed by environment name).
-    _MEMORY = ("env_seen", "promoted", "forced", "rebuild", "stops")
+    _MEMORY = (
+        "env_seen",
+        "promoted",
+        "forced",
+        "rebuild",
+        "stops",
+        "declared_stops",
+        "starts",
+    )
 
     def _forget(self, name: str) -> None:
         """Drop what the controller remembers of a removed environment."""
@@ -2278,7 +2389,9 @@ class CompositionController:
                 if isinstance(namespace, str) and live(namespace) is False:
                     del records[name]
                     dropped.append(name)
-        known = alive | set(records)
+        # Memory of an environment on several clusters is keyed by its group
+        # (``edge``), its records by instance (``edge@<cluster>``): both are known.
+        known = alive | {item.group for item in self._instances()} | set(records)
         for key in self._MEMORY:
             memory = self.state.get(key)
             if isinstance(memory, dict):
@@ -2347,6 +2460,9 @@ class CompositionController:
             next_attempt_at=None,
             stopped_at=_iso(self.clock()),
         )
+        self._lifecycle(
+            record, "stop", "stopped", by="idle", via="controller", reason="idle-stop"
+        )
         self.log(f"{record['branch']}: no push for a while; scaled to zero")
 
     def _due(self) -> list[dict[str, Any]]:
@@ -2382,7 +2498,9 @@ class CompositionController:
         deploy = work == self._deploy
         started = (_iso(self.clock()), record.get("trigger"), record.get("approval"))
         self._built, self._last_outcome = [], None
+        self._builds = {}
         self._step_started, self._step_env = started[0], str(record.get("branch"))
+        record.pop("interrupted", None)  # a new step of it runs
         # Added in 0.15.0: the step shows in the status while it runs, not
         # only when the whole poll ends (a long rollout left it minutes stale).
         record["in_progress"] = {
@@ -2390,6 +2508,7 @@ class CompositionController:
             "since": started[0],
         }
         self._publish()
+        self.telemetry.step_started(record, work.__name__.lstrip("_"))
         try:
             work(record)
         except Exception as error:  # one bad environment never stops the loop
@@ -2405,6 +2524,9 @@ class CompositionController:
             record.pop("in_progress", None)
             if deploy:
                 self._record_step(record, *started)
+            self.telemetry.step_finished(
+                record, work.__name__.lstrip("_"), self._last_outcome
+            )
             save_state(self.state_dir, self.state)
             self._publish()
 
@@ -2429,8 +2551,14 @@ class CompositionController:
             and record.get("deployed_plan_hash") is None
         ):
             # Applied without an owner's approval: the policy covered it
-            # (the pipeline's auto_approve or the environment's).
-            approval = {"via": "policy", "at": None}
+            # (the pipeline's auto_approve or the environment's); ``at``
+            # (0.16.0) is when the run it approved was created.
+            approval = {
+                "via": "policy",
+                "at": (run or {}).get("approved_at")
+                or (run or {}).get("started_at")
+                or started,
+            }
         if record.get("state") == "approval-required" and outcome is not None:
             record["pending_plan"] = (
                 {**dict(outcome.plan), "plan_hash": outcome.plan_hash}
@@ -2450,8 +2578,11 @@ class CompositionController:
                 approval=approval if isinstance(approval, Mapping) else None,
                 outcome=outcome,
                 built=[item for item in self._built if item != "mirror"],
+                builds=self._builds,
             ),
         )
+        if record.get("state") != "approval-required":
+            record.pop("approval_required_since", None)
         if record.get("state") == "deployed":
             record["failed_attempts"] = []  # kept by this run's history event
         if record.get("approved_hash") is None:
@@ -2462,6 +2593,9 @@ class CompositionController:
         """One poll and the work it found; returns the published status."""
         now = self.clock()
         self.state["last_poll"] = _iso(now)
+        if not self.recovered:
+            self.recovered = True
+            self._recover()
         self.sources.new_poll()
         failed: list[str] = []
         self.refs = {}
@@ -2832,6 +2966,10 @@ class CompositionController:
                 "composition": None if loaded is None else loaded.name,
                 "poll_seconds": self.config.poll_seconds,
                 "last_poll": self.state.get("last_poll"),
+                # Added in 0.16.0: refreshed while the process lives, also
+                # during a long step (see piceli.gitops.heartbeat).
+                "heartbeat_at": self.heartbeat_at,
+                "heartbeat_seconds": HEARTBEAT_SECONDS,
                 "last_error": self.state.get("last_error"),
                 "poll_failures": int(self.state.get("poll_failures") or 0),
                 # Added in 0.14.6: the registry claim's use measured by the
@@ -3028,13 +3166,95 @@ class CompositionController:
 
     def _publish(self) -> dict[str, Any]:
         save_state(self.state_dir, self.state)
-        status = self.status()
-        try:
-            self.channel.publish(status)
-        except GitOpsError as error:
-            self.log(f"status not published ({error.code})")
+        with self.publish_lock:
+            self.heartbeat_at = _iso(self.clock())
+            status = self.status()
+            try:
+                self.channel.publish(status)
+            except GitOpsError as error:
+                self.log(f"status not published ({error.code})")
         self._publish_history()
         return status
+
+    def beat(self) -> None:
+        """Publish ``controller.heartbeat_at`` only (the heartbeat thread)."""
+        publish = getattr(self.channel, "publish_heartbeat", None)
+        with self.publish_lock:
+            self.heartbeat_at = _iso(self.clock())
+            if callable(publish):
+                publish(self.heartbeat_at)
+
+    def _recover(self) -> None:
+        """At start: mark the steps and runs the previous process died under."""
+        from piceli.gitops import history
+        from piceli.gitops.recovery import (
+            INTERRUPTED,
+            interrupt_runs,
+            interrupted_steps,
+        )
+
+        at = _iso(self.clock())
+        for name, step in interrupted_steps(self._envs(), at):
+            record = self._envs()[name]
+            self.log(f"{name}: its {step.get('action')} was interrupted (restart)")
+            if step.get("action") != "deploy":
+                continue
+            entry = history.event(
+                record,
+                started_at=str(step.get("since") or at),
+                finished_at=at,
+                trigger=record.get("trigger")
+                if isinstance(record.get("trigger"), str)
+                else None,
+                approval=None,
+                outcome=None,
+                built=[],
+            )
+            entry.update(state="interrupted", reason=INTERRUPTED, action=None)
+            entry.pop("failure", None)
+            history.remember(self.state, name, entry)
+        try:
+            marked = interrupt_runs(self.state_dir)
+        except OSError as error:  # never fail a start on it
+            self.log(f"interrupted runs not marked ({type(error).__name__})")
+            return
+        if marked:
+            self.log(f"{len(marked)} run(s) interrupted by the restart marked")
+
+    def _lifecycle(
+        self,
+        record: Mapping[str, Any],
+        kind: str,
+        state: str,
+        *,
+        by: Any = None,
+        via: Any = None,
+        at: Any = None,
+        reason: Any = None,
+    ) -> None:
+        """Remember a stop, start or teardown in the history (0.16.0).
+
+        ``at`` is when it was asked (a request's time), now by default.
+        """
+        from piceli.gitops import history
+
+        now = _iso(self.clock())
+        history.remember(
+            self.state,
+            str(record["branch"]),
+            history.lifecycle(
+                kind,
+                at=now,
+                started_at=self._step_started or now,
+                state=state,
+                by=by,
+                via=via,
+                reason=reason,
+                namespace=record.get("namespace"),
+                cluster=record.get("cluster"),
+            )
+            | ({"requested_at": str(at)[:32]} if at else {}),
+        )
 
     def _history_document(self) -> dict[str, Any]:
         """``piceli.gitops-history.v1``: an environment on several clusters

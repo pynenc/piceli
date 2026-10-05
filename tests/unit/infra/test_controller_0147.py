@@ -80,7 +80,8 @@ def test_a_branch_run_records_its_branch_push_and_the_policy(
     assert branch["trigger"] == "push shop/wp-login"
     run = _published(channel)["envs"]["wp-login"]["runs"][0]
     assert run["trigger"] == "push shop/wp-login"
-    assert run["approved_by"] == {"via": "policy", "at": None}
+    # 0.16.0: a policy approval has its time too (it was null before).
+    assert run["approved_by"]["via"] == "policy" and run["approved_by"]["at"]
 
 
 def test_an_approval_survives_an_unrelated_push_with_the_same_plan(

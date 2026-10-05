@@ -7141,6 +7141,7 @@
    "gitops-push-failed",
    "gitops-repo-invalid",
    "gitops-request-invalid",
+   "gitops-run-interrupted",
    "gitops-secret-value",
    "gitops-secrets-present",
    "gitops-state-invalid",
@@ -8526,10 +8527,13 @@
   "piceli.gitops",
   "piceli.gitops.config",
   "piceli.gitops.controller",
+  "piceli.gitops.heartbeat",
   "piceli.gitops.history",
   "piceli.gitops.install",
   "piceli.gitops.liveness",
+  "piceli.gitops.otel",
   "piceli.gitops.ports",
+  "piceli.gitops.recovery",
   "piceli.gitops.repo",
   "piceli.gitops.state",
   "piceli.importing",
@@ -8783,5 +8787,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.15.1"
+ "version": "0.16.0"
 }
