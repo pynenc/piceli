@@ -2389,7 +2389,9 @@ class CompositionController:
                 if isinstance(namespace, str) and live(namespace) is False:
                     del records[name]
                     dropped.append(name)
-        known = alive | set(records)
+        # Memory of an environment on several clusters is keyed by its group
+        # (``edge``), its records by instance (``edge@<cluster>``): both are known.
+        known = alive | {item.group for item in self._instances()} | set(records)
         for key in self._MEMORY:
             memory = self.state.get(key)
             if isinstance(memory, dict):

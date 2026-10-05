@@ -6,6 +6,11 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ## Version 0.16.0
 
+- **A stopped multi-cluster environment stays stopped across a controller
+  restart.** The first poll after a start forgot stop requests (and other
+  per-environment memory) kept under the environment's name when its
+  records are per cluster (`edge@<cluster>`), so the environment deployed
+  again (0.15.0–0.15.1).
 - **Stage and build times.** Run journals, run summaries and the deployment
   history (`piceli.gitops-history.v1`) give each stage `started_at` and
   `finished_at` (inputs, build, deliver, prerollout, backup, plan, apply,
