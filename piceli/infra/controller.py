@@ -148,7 +148,7 @@ STOP_REASONS = ("declared", "requested")
 #: Failed attempts of one revision a record (and its successful run) keeps.
 MAX_FAILED_ATTEMPTS = 3
 #: Characters of a failed attempt's log tail kept.
-ATTEMPT_TAIL_CHARS = 2000
+ATTEMPT_TAIL_CHARS = 8000  # 2000 before 0.17.0: about 80 lines
 #: Workload kinds whose change in a plan rolls their pods.
 _ROLLING_KINDS = frozenset(
     {"Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob", "ReplicaSet"}
@@ -908,6 +908,8 @@ class CompositionController:
             entry["log_tail"] = tail[-ATTEMPT_TAIL_CHARS:]
         if isinstance(failure, Mapping) and isinstance(failure.get("kept_job"), str):
             entry["kept_job"] = failure["kept_job"]
+        if isinstance(failure, Mapping) and failure.get("writers_started"):
+            entry["writers_started"] = list(failure["writers_started"])
         kept = [
             item
             for item in record.get("failed_attempts") or []
@@ -1586,6 +1588,9 @@ class CompositionController:
         if hasattr(self.ports.builder, "environment"):
             # Its build Jobs are labelled with it (removed at its teardown).
             self.ports.builder.environment = name
+        if hasattr(self.ports.builder, "attempt"):
+            # A retry's build Job gets a name of its own (0.17.0).
+            self.ports.builder.attempt = int(record.get("attempts") or 0) + 1
         if instance.env.pipeline is not None:
             self._deploy_pipeline(record, instance)
             return
@@ -1648,7 +1653,7 @@ class CompositionController:
             }
         record["components"] = components
         if to_build or to_mirror:
-            self._publish()  # show "building" while it runs
+            self._stage(record, "build")  # show "building" while it runs
             self.telemetry.build_started(
                 [item.component for item in to_mirror]
                 + [item.component for item in to_build]
@@ -1708,6 +1713,7 @@ class CompositionController:
                     receipt=None,
                     digests=None,
                     approve=approve,
+                    on_stage=self._stage_event(record),
                 ),
                 policy=bool(instance.env.auto_approve),
                 log=self.log,
@@ -1804,7 +1810,7 @@ class CompositionController:
         ]
         record["components"] = components
         if requests or to_mirror:
-            self._publish()  # show "building" while it runs
+            self._stage(record, "build")  # show "building" while it runs
             self.telemetry.build_started(
                 [name for request in requests for name in request.images]
             )
@@ -1827,6 +1833,7 @@ class CompositionController:
                         )
                     self._remember(image_name, wanted["key"], built[image_name])
                     images[image_name] = built[image_name]
+                self._build_times(name, sorted(request.images))
         except Exception:
             for entry in components.values():
                 if entry["state"] == "building":
@@ -1865,6 +1872,7 @@ class CompositionController:
                     receipt=None,
                     digests=refs,
                     approve=approve,
+                    on_stage=self._stage_event(record),
                 ),
                 policy=bool(env.auto_approve),
                 log=self.log,
@@ -1888,6 +1896,60 @@ class CompositionController:
                     "finished_at": _iso(self.clock()),
                     "state": state,
                 }
+
+    def _stage(self, record: dict[str, Any], stage: str) -> None:
+        """Show the stage the step is in (0.17.0: ``in_progress.stage``)."""
+        progress = record.get("in_progress")
+        if not isinstance(progress, dict) or progress.get("stage") == stage:
+            return
+        progress.update(stage=stage, stage_since=_iso(self.clock()))
+        self._publish()
+
+    def _stage_event(self, record: dict[str, Any]) -> Callable[[Any], None]:
+        """The pipeline runner's stage events, as :meth:`_stage` (never raises)."""
+
+        def seen(event: Any) -> None:
+            if (
+                isinstance(event, Mapping)
+                and event.get("event") == "stage"
+                and event.get("state") == "running"
+                and isinstance(event.get("stage"), str)
+            ):
+                try:
+                    self._stage(record, event["stage"])
+                except Exception:  # a status write never fails the deploy
+                    pass
+
+        return seen
+
+    def _build_times(self, env: str, names: list[str]) -> None:
+        """Each image's timings from the builder (0.17.0), in ``builds`` and the log.
+
+        The spec's commands build every image of one Job: ``shared_with``
+        names the others, whose ``commands_seconds`` is the same time.
+        """
+        found = getattr(self.ports.builder, "timings", None)
+        if not isinstance(found, Mapping):
+            return
+        for name in names:
+            timings = found.get(name)
+            if not isinstance(timings, Mapping) or name not in self._builds:
+                continue
+            values = {
+                key: round(float(timings.get(key) or 0), 3)
+                for key in ("commands_seconds", "assemble_seconds", "push_seconds")
+            }
+            others = [item for item in names if item != name]
+            self._builds[name]["timings"] = values
+            self._builds[name]["shared_with"] = others
+            total = round(sum(values.values()), 3)
+            self.log(
+                f"{env}: built {name} in {total}s (commands "
+                f"{values['commands_seconds']}s"
+                + (f", shared with {', '.join(others)}" if others else "")
+                + f"; assembly {values['assemble_seconds']}s, push "
+                f"{values['push_seconds']}s)"
+            )
 
     @staticmethod
     def _built_from(
@@ -2501,6 +2563,7 @@ class CompositionController:
         self._builds = {}
         self._step_started, self._step_env = started[0], str(record.get("branch"))
         record.pop("interrupted", None)  # a new step of it runs
+        record.pop("failed_stage", None)
         # Added in 0.15.0: the step shows in the status while it runs, not
         # only when the whole poll ends (a long rollout left it minutes stale).
         record["in_progress"] = {
@@ -2518,6 +2581,11 @@ class CompositionController:
             if failed is not None and record.get("state") != "deleting":
                 self._degraded(record, failed)
             else:
+                # 0.17.0: the stage the step failed in (gitops wait shows it).
+                stage = (record.get("in_progress") or {}).get("stage")
+                record["failed_stage"] = stage or (
+                    "teardown" if record.get("state") == "deleting" else "prepare"
+                )
                 self._fail(record, step_reason(error), error)
         finally:
             self.busy = False

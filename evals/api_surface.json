@@ -4091,6 +4091,8 @@
     "directory",
     "image",
     "include",
+    "max_claim_bytes",
+    "over_limit",
     "resolve_directory",
     "run_as_user",
     "timeout_seconds"
@@ -4099,6 +4101,8 @@
     "directory",
     "image",
     "include",
+    "max_claim_bytes",
+    "over_limit",
     "run_as_user",
     "timeout_seconds"
    ],
@@ -5681,7 +5685,8 @@
      "enable",
      "run",
      "status",
-     "sync"
+     "sync",
+     "wait"
     ]
    },
    "gitops approve": {
@@ -5786,6 +5791,23 @@
      "--kubeconfig",
      "--namespace",
      "--state-dir",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "gitops wait": {
+    "arguments": [
+     "env",
+     "commit"
+    ],
+    "flags": [
+     "--context",
+     "--interval",
+     "--json",
+     "--kubeconfig",
+     "--namespace",
+     "--state-dir",
+     "--timeout",
      "--transport"
     ],
     "subcommands": []
@@ -7382,8 +7404,10 @@
    "restore-plan-changed",
    "restore-point-archive-invalid",
    "restore-point-archive-missing",
+   "restore-point-busy",
    "restore-point-checksum-mismatch",
    "restore-point-claim-missing",
+   "restore-point-claim-too-large",
    "restore-point-claim-unknown",
    "restore-point-copy-failed",
    "restore-point-exists",
@@ -8532,10 +8556,12 @@
   "piceli.gitops.install",
   "piceli.gitops.liveness",
   "piceli.gitops.otel",
+  "piceli.gitops.otlp_spool",
   "piceli.gitops.ports",
   "piceli.gitops.recovery",
   "piceli.gitops.repo",
   "piceli.gitops.state",
+  "piceli.gitops.wait",
   "piceli.importing",
   "piceli.importing.clean",
   "piceli.importing.codegen",
@@ -8787,5 +8813,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.16.0"
+ "version": "0.17.0"
 }

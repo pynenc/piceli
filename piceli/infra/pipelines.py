@@ -445,7 +445,11 @@ def run_spec_build(
 
     ``deliver(image, archive, image_id, repository)`` pushes one image and
     returns its delivery receipt. Returns ``{"images": {name: {"pull_ref",
-    "manifest_digest", "key", "platform"}}}`` for the first platform.
+    "manifest_digest", "key", "platform", "timings"}}, "commands": [...]}``
+    for the first platform. ``timings`` (0.17.0): ``commands_seconds`` (the
+    spec's commands, shared by every image), ``assemble_seconds`` and
+    ``push_seconds``; ``commands``: each command's ``index``, ``tool``,
+    ``seconds`` and ``state``.
     """
     import time
 
@@ -457,6 +461,7 @@ def run_spec_build(
     root = roots[request.repo]
     path = root.joinpath(*PurePosixPath(request.spec).parts)
     results: dict[str, Any] = {}
+    commands: list[dict[str, Any]] = []
     declared = NodeFacts.from_dict(request.facts) if request.facts else None
     for platform in platforms:
         facts = (
@@ -479,12 +484,31 @@ def run_spec_build(
             raise build_failed(
                 f"build {request.spec}: host build failed ({error.code})", error
             ) from None
+        steps = [item for item in receipt.get("steps") or () if isinstance(item, dict)]
+        ran: list[dict[str, Any]] = [
+            {
+                "index": int(str(item["kind"]).partition("-")[2]),
+                "tool": str(item.get("tool")),
+                "seconds": float(item.get("seconds") or 0),
+                "state": str(item.get("state")),
+            }
+            for item in steps
+            if str(item.get("kind")).startswith("command-")
+        ]
+        assembled = {
+            str(item["kind"])[len("image-") :]: float(item.get("seconds") or 0)
+            for item in steps
+            if str(item.get("kind")).startswith("image-")
+        }
+        if not commands:
+            commands = ran
         for name, wanted in sorted(request.images.items()):
             entry = receipt["outputs"]["images"].get(name)
             if entry is None:
                 raise CompositionError(
                     "component-build-failed", f"the build made no image {name!r}"
                 )
+            began = time.monotonic()
             delivered = deliver(
                 name,
                 (directory / entry["archive"]).absolute(),
@@ -493,9 +517,21 @@ def run_spec_build(
             )
             image = _pinned(delivered, name)
             results.setdefault(
-                name, {**image.to_dict(), "platform": platform, "key": wanted["key"]}
+                name,
+                {
+                    **image.to_dict(),
+                    "platform": platform,
+                    "key": wanted["key"],
+                    "timings": {
+                        "commands_seconds": round(
+                            sum(float(item["seconds"]) for item in ran), 3
+                        ),
+                        "assemble_seconds": assembled.get(name, 0.0),
+                        "push_seconds": round(time.monotonic() - began, 3),
+                    },
+                },
             )
-    return {"images": results}
+    return {"images": results, "commands": commands}
 
 
 # ---------------------------------------------------------------- render
@@ -609,7 +645,37 @@ def environment_pipeline(
     derived.envs = env_config_of(composition, env)
     if derived.auto_approve is None and env.auto_approve:
         derived.auto_approve = ApprovalPolicy()
+    policy = getattr(env, "restore_points", None)
+    if policy is not None:
+        derived.restore_points = environment_restore_points(
+            policy, pipeline, f"environment {env.name!r}"
+        )
     return derived
+
+
+def environment_restore_points(policy: Any, pipeline: Any, what: str) -> Any:
+    """The ``RestorePoints`` (or ``None``) an environment's policy gives.
+
+    ``"off"``: none; ``"touched"`` / ``"all"``: the pipeline's settings (or
+    the defaults) with that ``include``; a ``RestorePoints``: as given.
+
+    :raises CompositionError: ``composition-invalid`` for ``"off"`` when the
+        app grows or moves a claim (only the backup stage does that).
+    """
+    from piceli.restore.model import RestorePoints
+
+    if isinstance(policy, RestorePoints):
+        return policy
+    if policy == "off":
+        growth = getattr(pipeline.app, "claim_growth", None)
+        if callable(growth) and growth():
+            raise _invalid(
+                f'{what}: restore_points="off", but the app grows or moves a '
+                "claim, which only the deploy's backup stage does"
+            )
+        return None
+    declared = pipeline.restore_points or RestorePoints()
+    return declared.model_copy(update={"include": policy})
 
 
 def mirror_target(

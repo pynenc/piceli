@@ -1,6 +1,6 @@
 [project]
 name = "piceli"
-version = "0.16.0"
+version = "0.17.0"
 description = "Kubernetes infrastructure as typed Python: model, plan, apply and observe"
 authors = [{ name = "Jose Diaz" }]
 license = "MIT"
@@ -23,7 +23,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "kubernetes>=29.0.0",
+    "kubernetes>=29.0.0,<37",  # 37 changed ApiClient (call_api, auth, models)
     "pydantic>=2.6",
     "pyyaml>=6.0.1",
     "typer>=0.12",

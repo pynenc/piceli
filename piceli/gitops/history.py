@@ -109,7 +109,20 @@ def _builds(value: Any) -> dict[str, dict[str, Any]]:
             "finished_at": _text(entry.get("finished_at"), 40),
             "state": state if state in _BUILD_STATES else None,
         }
+        timings = _dict(entry.get("timings"))
+        if timings:  # 0.17.0: only when the builder reported them
+            found[name]["timings"] = {
+                key: float(value)
+                for key, value in timings.items()
+                if key in _TIMINGS and isinstance(value, int | float)
+            }
+            found[name]["shared_with"] = [
+                str(item) for item in entry.get("shared_with") or () if _text(item, 80)
+            ][:20]
     return found
+
+
+_TIMINGS = ("commands_seconds", "assemble_seconds", "push_seconds")
 
 
 # ------------------------------------------------------------------ events

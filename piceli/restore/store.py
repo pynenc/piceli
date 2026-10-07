@@ -18,6 +18,7 @@ Importing this module is side-effect free.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -201,9 +202,17 @@ def verify_claim(directory: Path, entry: dict[str, Any]) -> dict[str, Any]:
             f"the archive of claim {entry['claim']} is missing",
         )
     if file_sha256(path) != entry["sha256"]:
+        size, recorded = path.stat().st_size, entry.get("bytes")
         raise RestorePointError(
             "restore-point-checksum-mismatch",
-            f"the archive of claim {entry['claim']} does not match its SHA-256",
+            f"the archive of claim {entry['claim']} does not match its SHA-256"
+            + (
+                f" (the file has {size} bytes, {recorded} were recorded: something "
+                "else wrote it)"
+                if isinstance(recorded, int) and recorded != size
+                else f" ({size} bytes, as recorded: its content changed on disk)"
+            ),
+            details={"file_bytes": size, "recorded_bytes": recorded},
         )
     listing = inspect_archive(path)
     expected = entry.get("content_sha256")
@@ -270,3 +279,79 @@ def points(root: Path) -> Iterator[tuple[Path, dict[str, Any]]]:
             yield load_record(root, child.name)
         except RestorePointError:
             continue
+
+
+LOCK = ".take.lock"
+
+
+@contextlib.contextmanager
+def take_lock(root: Path) -> Iterator[None]:
+    """Hold the directory's lock while a restore point is taken into it.
+
+    One process takes into a directory at a time: two controllers or a
+    controller and a laptop sharing it would write and verify each other's
+    files. The lock is released when the process dies.
+
+    :raises RestorePointError: ``restore-point-busy`` when it is held.
+    """
+    private_dir(root)
+    descriptor = os.open(root / LOCK, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        try:
+            import fcntl
+
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except ImportError:  # pragma: no cover - no flock (Windows)
+            pass
+        except OSError:
+            raise RestorePointError(
+                "restore-point-busy",
+                "another process is taking a restore point into this directory",
+            ) from None
+        yield
+    finally:
+        os.close(descriptor)
+
+
+def new_point_dir(root: Path, point: str) -> Path:
+    """Create the point's directory; it must not exist (one per attempt).
+
+    :raises RestorePointError: ``restore-point-exists``.
+    """
+    private_dir(root)
+    directory = root / point
+    try:
+        directory.mkdir(mode=0o700)
+    except FileExistsError:
+        raise RestorePointError(
+            "restore-point-exists",
+            f"restore point {point} already exists; every attempt takes a new one",
+        ) from None
+    return directory
+
+
+def close_interrupted(root: Path) -> dict[str, int]:
+    """Close the restore points of processes that died while taking them.
+
+    Call with :func:`take_lock` held: a point still ``running`` then belongs
+    to a process that is gone (a killed controller). Each becomes
+    ``interrupted`` and loses its ``.partial`` files; its writers may still
+    be at zero replicas, so their recorded counts are returned
+    (``Kind/name``: the newest positive count).
+    """
+    found: dict[str, int] = {}
+    for directory, record in points(root):
+        if record.get("state") != "running":
+            continue
+        for item in record.get("writers") or ():
+            if not isinstance(item, dict):
+                continue
+            workload, replicas = item.get("workload"), item.get("replicas")
+            if isinstance(workload, str) and isinstance(replicas, int) and replicas:
+                found.setdefault(workload, replicas)
+        for partial in directory.glob(".*.partial"):
+            partial.unlink(missing_ok=True)
+        record["state"] = "interrupted"
+        record["reason"] = "restore-point-interrupted"
+        write_record(directory, record)
+    return found

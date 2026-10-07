@@ -103,8 +103,10 @@ STALE_APPROVAL_CODES = frozenset({"env-plan-changed", "pipeline-plan-changed"})
 DEPLOYED_PLAN_KEY = "deployed_plan_hash"
 
 
-#: The longest build log tail a status keeps (characters).
-FAILURE_TAIL_CHARS = 4000
+#: The longest build log tail a status keeps (characters; 4000 before 0.17.0).
+FAILURE_TAIL_CHARS = 8000
+#: How many lines of a failed build's log a status keeps (0.17.0).
+FAILURE_TAIL_LINES = 80
 
 
 def failure_detail(error: BaseException) -> dict[str, Any] | None:
@@ -113,7 +115,9 @@ def failure_detail(error: BaseException) -> dict[str, Any] | None:
     ``log_tail``: the scrubbed end of a failed build Job's log (bounded);
     ``kept_job``: the failed build Job kept for diagnosis until the next
     build; ``denied`` / ``refused``: the request the Kubernetes API refused
-    (verb, resource, namespace, HTTP status), as Piceli asked for it.
+    (verb, resource, namespace, HTTP status), as Piceli asked for it;
+    ``writers_started`` (0.17.0): the workloads a failed restore point
+    stopped and started again on the running release before any retry.
     """
     details = getattr(error, "details", None)
     if not isinstance(details, Mapping):
@@ -122,9 +126,13 @@ def failure_detail(error: BaseException) -> dict[str, Any] | None:
     outcome = details.get("outcome")
     tail = outcome.get("log_tail") if isinstance(outcome, Mapping) else None
     if isinstance(tail, str) and tail:
-        found["log_tail"] = tail[-FAILURE_TAIL_CHARS:]
+        lines = tail.rstrip("\n").splitlines()[-FAILURE_TAIL_LINES:]
+        found["log_tail"] = "\n".join(lines)[-FAILURE_TAIL_CHARS:]
     if isinstance(details.get("kept_job"), str):
         found["kept_job"] = details["kept_job"]
+    started = details.get("writers_started")
+    if isinstance(started, list):
+        found["writers_started"] = [str(item) for item in started]
     for key in ("denied", "refused"):
         value = details.get(key)
         if isinstance(value, Mapping):

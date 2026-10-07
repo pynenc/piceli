@@ -65,6 +65,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli gitops run`](#cli-gitops-run) | Run the controller loop (the Deployment's entrypoint); --once for one poll. | writes | no |
 | [`piceli gitops status`](#cli-gitops-status) | Controller health, repository, last poll and every branch's state. | reads | no |
 | [`piceli gitops sync`](#cli-gitops-sync) | Ask the controller to deploy ENV now at its revision (--component: rebuild one). | writes | no |
+| [`piceli gitops wait`](#cli-gitops-wait) | Wait until ENV runs COMMIT: deployed, failed (stage, cause) or timed out. | reads | no |
 | [`piceli heavy run`](#cli-heavy-run) | Run COMMAND once the lock is free; exit with its exit code. | none | no |
 | [`piceli heavy status`](#cli-heavy-status) | Show who holds the lock and the most recent receipts. | none | no |
 | [`piceli help-json`](#cli-help-json) | Print the whole CLI tree (commands, options, contracts) as JSON. | none | no |
@@ -1323,6 +1324,35 @@ Ask the controller to deploy ENV now at its revision (--component: rebuild one).
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** Writes a request to the ConfigMap piceli-gitops-requests; the controller deploys on its next poll with the environment's usual approval (auto_approve or gitops approve of the plan hash). An unknown environment or component is dropped (gitops-request-invalid in gitops status); --component needs a composition controller.
+
+(cli-gitops-wait)=
+### `piceli gitops wait`
+
+Wait until ENV runs COMMIT: deployed, failed (stage, cause) or timed out.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `ENV` | text | required |  |
+| `COMMIT` | text | required |  |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--state-dir` | path |  | A local controller's state directory instead of a cluster (the one `gitops run --once --state-dir` uses) |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+| `--timeout` | integer | `1800` | Give up after this many seconds |
+| `--interval` | float | `10.0` | Seconds between two status reads |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** kubeconfig or --state-dir
+- **Writes:** nothing (read-only)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object), `3` approval required; nothing was executed
+- **Output contract:** conforms
+- **Notes:** Read-only; safe to run and to retry. Polls the status ConfigMap every --interval seconds (default 10) for at most --timeout seconds (default 1800). Retries of the controller are waited through. Exit 0 deployed, 1 failed, superseded, stopped or timed out, 3 approval-required (the plan hash is in the output). COMMIT is a commit of any source of the environment.
 
 (cli-heavy-run)=
 ### `piceli heavy run`

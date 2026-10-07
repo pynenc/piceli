@@ -183,13 +183,17 @@ belong to. Severity is `INFO`, or `ERROR` for failures.
 | Event | Span | Attributes (besides the common ones) |
 | --- | --- | --- |
 | `piceli.controller.started` | — | `piceli.controller.version` |
+| `piceli.deploy.started` (0.17.0) | root | `piceli.run.attempt`, `piceli.trigger`, `piceli.trigger.kind` |
+| `piceli.deploy.stage` (0.17.0) | the stage's span | `piceli.stage` (`prerollout`, `backup`, `plan`, `apply`, `checks`), `piceli.stage.result`, `error.type`; stamped when the stage finished |
+| `piceli.deploy.retry` (0.17.0) | root | `piceli.run.attempt` (the attempt that failed), `error.type`, `piceli.retry.at`, `piceli.retry.in_seconds` |
+| `piceli.deploy.finished` (0.17.0) | root | `piceli.deploy.result`, `piceli.run.attempt`, `error.type` |
 | `piceli.deploy.approval.required` | `approval wait` | `piceli.plan.hash` |
 | `piceli.deploy.approved` | `approval wait` (cli, ui) or root (policy) | `piceli.approval.via`, `piceli.plan.hash` |
 | `piceli.deploy.rolled` | `apply` | `piceli.components` (rolled), `piceli.image.digests`, `piceli.release.id`, `k8s.deployment.name`, `k8s.statefulset.name`, `piceli.k8s.*` |
 | `piceli.deploy.pruned` | `prune` | `piceli.pruned` |
 | `piceli.deploy.checks.failed` | `checks` | `piceli.checks.failed` (names), `piceli.checks.detail` (`name: detail`), `error.type` |
 | `piceli.deploy.rollback` | `rollback` | `piceli.rollback.from`, `piceli.rollback.to` (releases), `piceli.rollback.state` |
-| `piceli.build.failed` | `build <image>` | `piceli.build.images`, `piceli.build.log_tail` (the last 20 lines, redacted as the build log is), `piceli.build.kept_job`, `error.type` |
+| `piceli.build.failed` | `build <image>` | `piceli.build.images`, `piceli.build.log_tail` (the last 80 lines, 20 before 0.17.0, redacted as the build log is), `piceli.build.kept_job`, `error.type` |
 | `piceli.environment.stopped` | `STOP …` | `piceli.stop.reason` (`declared`, `requested`, `idle-stop`), `piceli.stop.via` |
 | `piceli.environment.started` | `START …` | — |
 | `piceli.deploy.interrupted` | root | `error.type = controller-restarted` |
@@ -254,9 +258,15 @@ Telemetry is off the deploy path:
   SDK exports them in background threads in batches, each export bounded
   to 5 seconds with the exporter's own retries inside that time; when the
   queue is full, new data is dropped;
-- nothing is persisted for an unreachable endpoint except the open run:
-  data produced while the Collector is down is lost, and export resumes
-  when it answers again;
+- spans and events the endpoint refuses are spooled (0.17.0): each refused
+  batch is written as its OTLP request to the controller's state volume
+  (`telemetry/spool/traces`, `telemetry/spool/logs`; at most 64 MiB per
+  signal, the oldest dropped first) and sent again, oldest first and with
+  its original timestamps, after the next successful export and on the
+  heartbeat (at most every 30 seconds while the endpoint stays away). A
+  controller whose deploy stops its own receiver (an app that observes the
+  cluster) no longer loses that deploy's trace. Metrics are not spooled:
+  the next reading carries the totals;
 - every hook catches its own errors: a telemetry problem logs one line per
   kind (`telemetry: step end skipped (…)`) and the deploy goes on;
 - a configuration that cannot work logs `telemetry: off (…)` once at start

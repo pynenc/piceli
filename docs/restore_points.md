@@ -130,7 +130,7 @@ workload, size and SHA-256) and `summary.md` a "Restore point" section.
 
 ## Settings
 
-`RestorePoints(directory=None, image=None, timeout_seconds=600, run_as_user=0, include="touched")`:
+`RestorePoints(directory=None, image=None, timeout_seconds=600, run_as_user=0, include="touched", max_claim_bytes=None, over_limit="fail")`:
 
 - `include`: `"touched"` covers the claims of the workloads the release
   changes; `"all"` also covers, whenever there is a restore point, every other
@@ -145,6 +145,17 @@ workload, size and SHA-256) and `summary.md` a "Restore point" section.
   Default: each writer's current image, which is already on the node, so
   nothing new is pulled; set it when that image lacks the tools (distroless).
 - `timeout_seconds`: bound for each wait and each copy.
+- `max_claim_bytes` (0.17.0): a size guard, off by default. Before any
+  quiesce hook runs or any writer stops, a read-only helper measures each
+  claim next to its running writer (`du`, in bytes of the claim, not of the
+  gzip archive). A claim holding more is handled by `over_limit`:
+  `"fail"` (default) fails the stage with nothing stopped
+  (`restore-point-claim-too-large`); `"skip"` leaves the claim out of the
+  restore point with a warning (`skipped_claims` in the backup stage's
+  output), and a writer whose every claim is left out is not stopped. When
+  every claim is left out, no restore point is taken. Measuring needs a
+  helper pod next to the running writer: storage that attaches a claim to a
+  single pod (`ReadWriteOncePod`) cannot be measured before the writers stop.
 - `run_as_user`: the helper's user. `0` (default) reads files of any owner
   and restores their ownership; the helper gets only the capabilities
   `CHOWN`, `DAC_OVERRIDE`, `DAC_READ_SEARCH`, `FOWNER` and `FSETID`, no
@@ -156,6 +167,52 @@ secrets; a claim bound to one node (a local-path volume) pulls it there. The
 Kubernetes user running Piceli needs `create`/`delete` on Jobs, `list` on
 pods and claims, `patch` on the writers' `scale` subresource, and `create` on
 `pods/exec` (and `pods/proxy` for `Quiesce.http`).
+
+## Turn it off, or set it per environment
+
+`Pipeline(..., restore_points=None)` (the default) takes no restore points:
+the run has no `backup` stage and no writer is ever stopped for one.
+
+A composition environment that deploys a pipeline can choose its own
+(0.17.0), so test environments skip the backups production keeps:
+
+```python
+Environment(
+    "main",
+    namespace="shop",
+    pipeline=pipeline,
+    follow={app_repo: "main"},
+    restore_points="all",
+)
+Environment.per_branch(
+    "wp-*",
+    namespace="shop-{branch}",
+    pipeline=pipeline,
+    follow={app_repo: "{branch}"},
+    restore_points="off",
+)
+```
+
+- `"off"`: none (refused when the app grows or moves a claim, which only the
+  backup stage does);
+- `"touched"` / `"all"`: the pipeline's `RestorePoints` (or the defaults)
+  with that `include`;
+- a `RestorePoints(...)`: these settings for this environment;
+- not set: the pipeline's `restore_points`.
+
+## Attempts and retries
+
+Every attempt writes a new restore point (`rp-<time>-<hex>`); a retry never
+writes into an earlier attempt's directory. One process at a time takes a
+restore point into a directory (`restore-point-busy` otherwise, before
+anything stops). A point whose process died mid-copy (a killed controller)
+is closed by the next attempt: `state: interrupted`, its `.partial` files
+removed. Its writers may still be at zero replicas: the replica counts are
+written to the record before any writer is scaled, and the next attempt
+starts them at those counts. When the backup stage fails, its writers are
+started again on the running release before the deploy reports the failure
+(and before a GitOps controller backs off); the status' `failure` lists them
+(`writers_started`).
 
 ## List and verify
 

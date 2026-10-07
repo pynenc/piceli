@@ -767,3 +767,31 @@ def test_a_restart_marks_the_step_it_died_in_and_publishes_a_heartbeat(
     assert published is not None
     assert published["controller"]["heartbeat_at"] > status["controller"]["last_poll"]
     assert published["envs"] == status["envs"]
+
+
+def test_a_failed_restore_point_shows_the_writers_it_started_again() -> None:
+    from piceli.gitops.controller import failure_detail
+    from piceli.pipeline import PipelineError
+
+    error = PipelineError(
+        "restore-point-checksum-mismatch",
+        "the archive of claim data-db-0 does not match its SHA-256",
+        failed=True,
+        details={"writers_started": ["StatefulSet/db"]},
+    )
+    assert failure_detail(error) == {"writers_started": ["StatefulSet/db"]}
+
+
+def test_a_failed_build_keeps_the_last_80_lines_of_its_log() -> None:
+    from piceli.gitops.controller import failure_detail
+    from piceli.gitops.otel import tail_lines
+
+    log = "\n".join(f"line {index}" for index in range(200))
+    error = GitOpsError(
+        "component-build-failed",
+        "the image build Job ended failed",
+        details={"outcome": {"state": "failed", "log_tail": log}},
+    )
+    kept = failure_detail(error)["log_tail"]  # type: ignore[index]
+    assert kept.splitlines() == [f"line {index}" for index in range(120, 200)]
+    assert tail_lines(log).splitlines()[0] == "line 120"  # type: ignore[union-attr]

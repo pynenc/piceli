@@ -370,6 +370,10 @@ def _env_dict(item: EnvItem, home: Cluster | None = None) -> dict[str, Any]:
     if item.pipeline is not None:
         # A summary (the plan hash covers it); the controller imports the module.
         common["pipeline"] = pipeline_summary(item.pipeline)
+        if item.restore_points is not None:
+            from piceli.envs.model import describe_restore_points
+
+            common["restore_points"] = describe_restore_points(item.restore_points)
     if item.replicas:
         # Only when declared (0.15): other configs keep their hash.
         common["replicas"] = dict(item.replicas)

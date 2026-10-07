@@ -4,6 +4,80 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.17.0
+
+- **`kubernetes<37`.** The kubernetes Python client 37.0.0 changed
+  `ApiClient` (`call_api`, `update_params_for_auth`, model constructors);
+  Piceli needs a client from 29 to 36 until it is ported. Fresh installs of
+  0.16.0 and earlier pick 37 and fail on their first API call.
+- **A failed restore point leaves the release running.** When a deploy's
+  `backup` stage fails, its writers are started again on the running
+  release before the controller backs off, also when an earlier attempt
+  was killed mid-copy and left them at zero replicas (0.16.0 started them
+  "again" at zero: the retry had recorded the replicas it found). The
+  replica counts are written to the restore point's record before any
+  writer is scaled, and a retry takes them from a point that never ended.
+  The deploy says so (`[backup] started again on the running release:
+  ...`) and the status' `failure.writers_started` lists the workloads.
+- **Every restore point attempt writes a clean point.** A point directory
+  is created only once (a reused id is refused with `restore-point-exists`
+  before any writer stops); a take first closes the points of attempts that
+  died mid-copy (`state: interrupted`, their `.partial` files removed); and
+  one process at a time takes into a directory (`restore-point-busy`,
+  new: two controllers, or a controller and a laptop, sharing one would
+  write and verify each other's files). A `restore-point-checksum-mismatch`
+  now says whether the file's size differs from the recorded one.
+- **Restore points per environment.** `Environment(restore_points=...)` and
+  `Environment.per_branch(restore_points=...)` take `"off"`, `"touched"`,
+  `"all"` or a `RestorePoints(...)` for a pipeline environment; not set,
+  the pipeline's `restore_points` apply as before. `Pipeline(...,
+  restore_points=None)` (the default) turns them off.
+- **A restore point size guard.** `RestorePoints(max_claim_bytes=N,
+  over_limit="fail" | "skip")`, off by default: each claim is measured by a
+  read-only helper before anything is quiesced or stopped; `"fail"` fails
+  the stage with nothing stopped (`restore-point-claim-too-large`, new),
+  `"skip"` leaves the claim out with a warning (`skipped_claims`).
+- **Build times per image.** A pipeline image build Job reports each
+  command's time and, per image, `commands_seconds` (the spec's commands,
+  shared by every image of the Job), `assemble_seconds` and `push_seconds`;
+  the deployment history keeps them under `builds.<image>.timings` with
+  `shared_with` (the other images of the same Job), and the controller logs
+  one line per image (`built poet in 812.4s (commands 790.1s, shared with
+  kabuki, shibuya; assembly 14.2s, push 8.1s)`). Images whose inputs did not
+  change are still not built (each image's change key covers only the
+  contexts it lists).
+- **A persistent cargo cache for the build Job.** `CARGO_HOME` is on the
+  build cache claim (`/cache/cargo-home`) next to the target directory, so a
+  build no longer downloads the registry index and crates again.
+- **Failed builds keep their evidence.** A retry's image build Job gets a
+  name of its own (`piceli-image-build-<key>-r<attempt>`); the failed
+  attempts' Jobs and pod logs stay until a build on that cache succeeds (0.16
+  deleted the failed Job and reused its name, so the failure's log was gone).
+  The status (`failure.log_tail`), each failed attempt and the
+  `piceli.build.failed` event keep the last 80 lines of the build log
+  (20 lines or 4000 characters before), at most 8000 characters.
+- **Telemetry that survives its receiver's restart.** Spans and events the
+  OTLP endpoint refuses are spooled on the controller's state volume (at
+  most 64 MiB per signal) and sent again with their original times when it
+  answers; a deploy that stops its own receiver keeps its trace.
+- **Deploy events for timelines**: `piceli.deploy.started`,
+  `piceli.deploy.stage` (one per stage that ran, at its end),
+  `piceli.deploy.retry` (attempt, cause, next retry) and
+  `piceli.deploy.finished` (result).
+- **Timestamps on the controller's log lines.** Every line `piceli gitops
+  run` prints starts with its UTC time, as do the Python logging lines
+  (an OTLP exporter's errors).
+- **`piceli gitops wait ENV COMMIT`** blocks until the environment runs the
+  commit (of any of its sources) and returns `deployed`, `failed` (with the
+  `stage` and `cause`), `approval-required`, `superseded`, `stopped` or
+  `timed-out` (`--timeout`, default 1800 s; `--json`); retries are waited
+  through. Agents end an integration round with it.
+- **The status shows the running stage and a summary.** While a step runs,
+  `envs.<env>.in_progress.stage` (`build`, then the pipeline's stages) and
+  `stage_since` are published as they change; a failed step records
+  `failed_stage`. `piceli gitops status --json` adds `summary.<env>`:
+  state, commit, stage, attempt, next retry (ISO time) and last error.
+
 ## Version 0.16.0
 
 - **A stopped multi-cluster environment stays stopped across a controller

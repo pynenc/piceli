@@ -345,6 +345,9 @@ class LocalBuilder:
 #: reaches Git only through ``GIT_ASKPASS`` (never a URL, argument or log).
 _SCRIPT = """set -eu
 export HOME=/work/home GIT_TERMINAL_PROMPT=0
+# 0.17.0: cargo's registry index and downloaded crates stay on the cache claim
+# (the target directory already does), so a build does not fetch them again.
+export CARGO_HOME="${CARGO_HOME:-/cache/cargo-home}"
 mkdir -p "$HOME" /work/src /work/out
 cat > /work/askpass <<'ASK'
 #!/bin/sh
@@ -497,14 +500,15 @@ def _cache_label(claim: str) -> str:
     return slug(claim, 50)
 
 
-def _run(cluster: Any, job: Mapping[str, Any]) -> Any:
-    """Run a build Job: a failed one is kept until the next build of its key."""
+def _run(cluster: Any, job: Mapping[str, Any], **options: Any) -> Any:
+    """Run a build Job: a failed one is kept until the next build of its key
+    (with ``keep_earlier``: until a build of its key passes)."""
     run_build = getattr(cluster, "run_build", None)
     if run_build is None:
         return cluster.run_job(job)
     from piceli.artifacts.cluster_build import build_key
 
-    return run_build(job, build_key(job))
+    return run_build(job, build_key(job), **options)
 
 
 def build_failed(message: str, error: Any) -> CompositionError:
@@ -761,6 +765,11 @@ class JobBuilder:
         self.mirror_route = mirror_route
         self.backend = backend
         self.say = say
+        #: The step's attempt (the controller sets it; 0.17.0): a retry's
+        #: image build Job is named ``...-r<attempt>``, never the failed one's.
+        self.attempt = 1
+        #: Each image's ``timings`` from the last :meth:`build_spec` (0.17.0).
+        self.timings: dict[str, dict[str, float]] = {}
         #: The environment the next build is for (the controller sets it):
         #: its Jobs carry ``piceli.io/build-env`` so its teardown removes a
         #: failed Job kept for it (:meth:`forget`).
@@ -847,12 +856,15 @@ class JobBuilder:
         if not request.images:
             return {}
         job = self._for_environment(spec_job(self.settings, request, self.urls))
+        if self.attempt > 1:
+            job["metadata"]["name"] += f"-r{self.attempt}"
         self.cluster.ensure_claim(self._claim())
         self.say(
             f"[build] Job {job['metadata']['name']}: "
             + ", ".join(sorted(request.images))
         )
-        outcome = _run(self.cluster, job)
+        # Earlier failed Jobs (and their logs) stay until a build succeeds.
+        outcome = _run(self.cluster, job, keep_earlier=True)
         if outcome.state != "passed" or self.cluster.receipt_text is None:
             raise _job_failed(outcome, "image")
         try:
@@ -863,6 +875,11 @@ class JobBuilder:
             ) from None
         found = receipt.get("images") or {}
         built: dict[str, BuiltImage] = {}
+        self.timings = {
+            name: dict(entry["timings"])
+            for name, entry in found.items()
+            if isinstance(entry, Mapping) and isinstance(entry.get("timings"), Mapping)
+        }
         for name, wanted in request.images.items():
             entry = found.get(name)
             if not isinstance(entry, Mapping) or entry.get("key") != wanted["key"]:

@@ -28,6 +28,8 @@ from piceli.restore.plan import writer_pods
 MOUNT = "/piceli/claim"
 #: A gzip tarball of the claim on stdout.
 BACKUP = ["sh", "-c", f"cd {MOUNT} && tar -czf - ."]
+#: The bytes a claim holds (``du -sk``, KiB on stdout; busybox has it).
+SIZE = ["sh", "-c", f"cd {MOUNT} && du -sk . | cut -f1"]
 #: The content digest (see :mod:`piceli.restore.store`), 64 hex on stdout.
 DIGEST = [
     "sh",

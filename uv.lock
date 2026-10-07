@@ -1793,7 +1793,7 @@ wheels = [
 
 [[package]]
 name = "piceli"
-version = "0.16.0"
+version = "0.17.0"
 source = { editable = "." }
 dependencies = [
     { name = "cron-validator" },
@@ -1895,7 +1895,7 @@ requires-dist = [
     { name = "google-cloud-container", marker = "extra == 'gcp'", specifier = ">=2.40" },
     { name = "httpx2", marker = "extra == 'ui'", specifier = ">=2.13,<3" },
     { name = "itsdangerous", marker = "extra == 'ui'", specifier = ">=2.2,<3" },
-    { name = "kubernetes", specifier = ">=29.0.0" },
+    { name = "kubernetes", specifier = ">=29.0.0,<37" },
     { name = "opentelemetry-api", marker = "extra == 'telemetry'", specifier = ">=1.41.1" },
     { name = "opentelemetry-exporter-otlp-proto-grpc", marker = "extra == 'telemetry'", specifier = ">=1.44.0" },
     { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'telemetry'", specifier = ">=1.44.0" },

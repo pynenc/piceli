@@ -181,7 +181,7 @@ def test_a_failed_copy_starts_writers_again_and_leaves_no_partial_file(
         )
     assert caught.value.code == "restore-point-copy-failed"
     assert cluster.calls[-1] == "scale StatefulSet/db 2"
-    (point,) = list(root.iterdir())
+    (point,) = list(root.glob("rp-*"))
     assert [path.name for path in point.iterdir()] == ["record.json"]
     assert json.loads((point / "record.json").read_text())["state"] == "failed"
 
@@ -311,3 +311,99 @@ def test_the_helper_job_mounts_the_claim_and_ends_by_itself() -> None:
     assert container["volumeMounts"][0]["readOnly"] is True
     assert container["securityContext"]["capabilities"]["drop"] == ["ALL"]
     assert container["securityContext"]["allowPrivilegeEscalation"] is False
+
+
+def _interrupted_point(root: Path, replicas: int = 2) -> Path:
+    """What a controller killed mid-copy leaves: a ``running`` record, a partial."""
+    from piceli.restore.store import write_record
+
+    directory = root / "rp-20260101t000000z-abcdef"
+    write_record(
+        directory,
+        {
+            "schema": "piceli.restore-point.v1",
+            "id": directory.name,
+            "state": "running",
+            "namespace": "shop",
+            "writers": [
+                {
+                    "workload": "StatefulSet/db",
+                    "kind": "StatefulSet",
+                    "name": "db",
+                    "replicas": replicas,
+                }
+            ],
+            "claims": [],
+        },
+    )
+    (directory / ".00-data-db-0.tar.gz.partial").write_bytes(b"half an archive")
+    return directory
+
+
+@needs_tools
+def test_a_failed_copy_after_an_interrupted_one_starts_writers_at_their_replicas(
+    tmp_path: Path,
+) -> None:
+    """The writers an interrupted attempt stopped are at 0 when the retry
+    starts; a failing retry scales them back to the count before the first."""
+    cluster, result = _setup(tmp_path)
+    cluster.live["StatefulSet/db"]["spec"]["replicas"] = 0
+    root = tmp_path / "points"
+    _interrupted_point(root)
+    cluster.fail["tar -czf"] = 2
+    with pytest.raises(RestorePointError) as caught:
+        take(
+            cluster,  # type: ignore[arg-type]
+            result,
+            RestorePoints(),
+            root,
+            context={"namespace": "shop"},
+            keep_stopped={"StatefulSet/db"},
+        )
+    assert caught.value.code == "restore-point-copy-failed"
+    assert cluster.live["StatefulSet/db"]["spec"]["replicas"] == 2
+    assert caught.value.details["writers_started"] == ["StatefulSet/db"]
+
+
+@needs_tools
+def test_a_retry_records_the_replicas_before_the_interrupted_attempt(
+    tmp_path: Path,
+) -> None:
+    cluster, result = _setup(tmp_path)
+    cluster.live["StatefulSet/db"]["spec"]["replicas"] = 0
+    root = tmp_path / "points"
+    _interrupted_point(root, replicas=3)
+    record = take(
+        cluster,  # type: ignore[arg-type]
+        result,
+        RestorePoints(),
+        root,
+        context={"namespace": "shop"},
+    )
+    assert record["writers"][0]["replicas"] == 3
+    assert cluster.live["StatefulSet/db"]["spec"]["replicas"] == 3
+
+
+@needs_tools
+def test_the_replicas_are_recorded_before_any_writer_is_scaled(tmp_path: Path) -> None:
+    """A controller killed right after a scale still knows the count."""
+    cluster, result = _setup(tmp_path)
+    root = tmp_path / "points"
+    seen: list[Any] = []
+    scale = cluster.scale
+
+    def recording_scale(kind: str, name: str, replicas: int) -> None:
+        if replicas == 0:
+            (point,) = list(root.glob("rp-*"))
+            seen.append(json.loads((point / "record.json").read_text())["writers"])
+        scale(kind, name, replicas)
+
+    cluster.scale = recording_scale  # type: ignore[method-assign]
+    take(
+        cluster,  # type: ignore[arg-type]
+        result,
+        RestorePoints(),
+        root,
+        context={"namespace": "shop"},
+    )
+    assert seen and seen[0][0]["replicas"] == 2

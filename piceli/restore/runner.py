@@ -27,6 +27,7 @@ from typing import Any
 from piceli.restore.cluster import (
     BACKUP,
     DIGEST,
+    SIZE,
     RestoreCluster,
     helper_job,
     restore_command,
@@ -38,10 +39,13 @@ from piceli.restore.store import (
     RECORD_SCHEMA,
     ArchiveWriter,
     archive_name,
+    close_interrupted,
     file_sha256,
     load_record,
+    new_point_dir,
     new_point_id,
     private_dir,
+    take_lock,
     verify_claim,
     write_record,
 )
@@ -82,7 +86,23 @@ class _Writers:
         self.say = say
         self.stopped: list[dict[str, Any]] = []
 
-    def stop(self, writers: Iterable[Mapping[str, Any]]) -> None:
+    def stop(
+        self,
+        writers: Iterable[Mapping[str, Any]],
+        prior: Mapping[str, int] | None = None,
+        recorded: Callable[[list[dict[str, Any]]], None] | None = None,
+    ) -> None:
+        """Remember each writer's replicas, call ``recorded`` with them, then
+        scale every writer to zero.
+
+        :param prior: Replica counts an interrupted restore point recorded
+            (:func:`~piceli.restore.store.close_interrupted`): a writer found at
+            zero replicas that one of them stopped is remembered at that
+            count, so it is started again at it.
+        :param recorded: Persists the counts before anything is scaled (a
+            process killed after a scale still knows them).
+        """
+        prior = prior or {}
         for writer in writers:
             kind, name = str(writer["kind"]), str(writer["name"])
             live = self.cluster.workload(kind, name)
@@ -90,17 +110,27 @@ class _Writers:
                 continue
             replicas = (live.get("spec") or {}).get("replicas")
             replicas = 1 if replicas is None else int(replicas)
+            workload = f"{kind}/{name}"
+            if not replicas and prior.get(workload):
+                replicas = int(prior[workload])
+                self.say(
+                    f"{workload} was stopped by an interrupted restore point; "
+                    f"it had {replicas} replicas"
+                )
             self.stopped.append(
-                {
-                    "workload": f"{kind}/{name}",
-                    "kind": kind,
-                    "name": name,
-                    "replicas": replicas,
-                }
+                {"workload": workload, "kind": kind, "name": name, "replicas": replicas}
             )
-            if replicas:
-                self.say(f"stopping {kind}/{name} ({replicas} -> 0 replicas)")
-                self.cluster.scale(kind, name, 0)
+        if recorded is not None:
+            recorded(self.stopped)
+        for item in self.stopped:
+            if item["replicas"]:
+                live = self.cluster.workload(item["kind"], item["name"])
+                if live is not None and not (live.get("spec") or {}).get("replicas"):
+                    continue  # already at zero (an interrupted attempt)
+                self.say(
+                    f"stopping {item['workload']} ({item['replicas']} -> 0 replicas)"
+                )
+                self.cluster.scale(item["kind"], item["name"], 0)
 
     def start(self, keep_stopped: Iterable[str] = ()) -> list[str]:
         """Scale every stopped writer back unless listed; errors are reported,
@@ -131,6 +161,87 @@ class _Writers:
                 failed=True,
             ) from None
         return started
+
+
+def _owner(live: Mapping[str, Any], workload: Any) -> dict[str, Any] | None:
+    found = live.get(str(workload))
+    return found or next((value for value in live.values() if value is not None), None)
+
+
+def _guard_sizes(
+    cluster: RestoreCluster,
+    plan: RestorePlan,
+    settings: RestorePoints,
+    live: Mapping[str, Any],
+    point: str,
+    record: dict[str, Any],
+    say: Callable[[str], None],
+) -> RestorePlan:
+    """Measure each claim next to its running writer; apply ``over_limit``.
+
+    Nothing has been quiesced or stopped yet. Returns the plan without the
+    claims left out (and without writers left with no claim).
+
+    :raises RestorePointError: ``restore-point-claim-too-large`` with
+        ``over_limit="fail"``; helper errors.
+    """
+    limit = int(settings.max_claim_bytes or 0)
+    timeout = float(settings.timeout_seconds)
+    over: list[dict[str, Any]] = []
+    for index, item in enumerate(plan.claims):
+        claim = str(item["claim"])
+        owner = _owner(live, item["workload"])
+        image = settings.image or _main_image(owner)
+        if image is None:
+            raise RestorePointError(
+                "restore-point-helper-failed",
+                f"no image for the helper of claim {claim}: declare "
+                "RestorePoints(image=...)",
+            )
+        name = _job_name(point, "size", index)
+        manifest = helper_job(
+            name,
+            point=point,
+            claim=claim,
+            image=image,
+            read_only=True,
+            seconds=int(timeout * 4),
+            run_as_user=settings.run_as_user,
+            template=_template(owner),
+        )
+        output = bytearray()
+        with cluster.helper(name, manifest, timeout) as pod:
+            code = cluster.exec(pod, SIZE, timeout=timeout, stdout=output.extend)
+        text = bytes(output[:64]).decode(errors="replace").strip()
+        if code != 0 or not text.isdigit():
+            raise RestorePointError(
+                "restore-point-helper-failed",
+                f"the size of claim {claim} could not be measured (exit {code})",
+            )
+        size = int(text) * 1024
+        if size > limit:
+            over.append({"claim": claim, "bytes": size})
+    if not over:
+        return plan
+    names = ", ".join(f"{item['claim']} ({item['bytes']} bytes)" for item in over)
+    if settings.over_limit == "fail":
+        raise RestorePointError(
+            "restore-point-claim-too-large",
+            f"claims over max_claim_bytes={limit}: {names}; nothing was stopped",
+            details={"claims": over},
+        )
+    for item in over:
+        say(
+            f"warning: claim {item['claim']} holds {item['bytes']} bytes, over "
+            f"max_claim_bytes={limit}: not in this restore point"
+        )
+    record["skipped"] = over
+    left_out = {item["claim"] for item in over}
+    kept = [item for item in plan.claims if item["claim"] not in left_out]
+    writers = [item for item in plan.writers if set(item["claims"]) - left_out]
+    return RestorePlan(
+        claims=kept, writers=writers, unchanged_claims=list(plan.unchanged_claims)
+    )
 
 
 def _digest_in_pod(cluster: RestoreCluster, pod: str, timeout: float) -> str:
@@ -166,10 +277,39 @@ def take(
         when anything fails.
     :raises RestorePointError: with a registered code; the writers are
         started again and the partial point is recorded as ``failed``.
+        ``restore-point-busy`` (another process takes into ``root``) and
+        ``restore-point-exists`` (``point`` was taken before) stop nothing.
+
+    Every attempt writes a new point directory. Points of earlier attempts
+    that died mid-copy are closed first (:func:`close_interrupted`), and
+    writers they left at zero replicas are remembered at their counts.
     """
-    say = say or (lambda _line: None)
-    point = point or new_point_id()
-    directory = root / point
+    with take_lock(root):
+        prior = close_interrupted(root)
+        return _take(
+            cluster,
+            plan,
+            settings,
+            new_point_dir(root, point or new_point_id()),
+            prior,
+            context=context,
+            keep_stopped=keep_stopped,
+            say=say or (lambda _line: None),
+        )
+
+
+def _take(
+    cluster: RestoreCluster,
+    plan: RestorePlan,
+    settings: RestorePoints,
+    directory: Path,
+    prior: Mapping[str, int],
+    *,
+    context: Mapping[str, Any],
+    keep_stopped: Iterable[str],
+    say: Callable[[str], None],
+) -> dict[str, Any]:
+    point = directory.name
     record: dict[str, Any] = {
         "schema": RECORD_SCHEMA,
         "id": point,
@@ -182,19 +322,29 @@ def take(
     }
     writers = _Writers(cluster, say)
     timeout = float(settings.timeout_seconds)
-    claims = [str(item["claim"]) for item in plan.claims]
     live = {
         str(item["workload"]): cluster.workload(str(item["kind"]), str(item["name"]))
         for item in plan.writers
     }
     try:
+        if settings.max_claim_bytes is not None:
+            plan = _guard_sizes(cluster, plan, settings, live, point, record, say)
+            if not plan.claims:
+                record["state"] = "skipped"
+                write_record(directory, record)
+                say("every claim is over max_claim_bytes: no restore point taken")
+                return record
+        claims = [str(item["claim"]) for item in plan.claims]
         for writer in plan.writers:
             for hook in writer["quiesce"]:
                 say(f"quiesce {writer['workload']}: {hook['type']} hook")
                 cluster.run_hook(writer, hook)
-        writers.stop(plan.writers)
-        record["writers"] = writers.stopped
-        write_record(directory, record)
+
+        def recorded(stopped: list[dict[str, Any]]) -> None:
+            record["writers"] = stopped
+            write_record(directory, record)
+
+        writers.stop(plan.writers, prior, recorded)
         cluster.wait_stopped(plan.writers, claims, timeout)
         say(f"writers stopped; no pod mounts {len(claims)} claim(s) writably")
         for index, item in enumerate(plan.claims):
@@ -267,7 +417,10 @@ def take(
                 write_record(directory, record)
             except OSError:
                 pass
-        writers.start()
+        started = writers.start()
+        if isinstance(error, RestorePointError):
+            # Shown in the deploy's status: the release before keeps running.
+            error.details["writers_started"] = started
         raise
     record["started"] = writers.start(keep_stopped)
     record["left_stopped"] = [

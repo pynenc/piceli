@@ -117,7 +117,18 @@ noted.
   Secret exists (key names only); changes nothing.
 - `piceli gitops status [--json]` (with `--kubeconfig`/`--context`, or
   `--state-dir` for a local controller): reads the controller's health and
-  each branch's commit, state and pending plan hash; changes nothing.
+  each branch's commit, state and pending plan hash; changes nothing. Its
+  JSON `summary.<env>` (0.17.0) is the compact view: `state`, `commit`,
+  `stage` (while a step runs: `build`, `prerollout`, `backup`, `plan`,
+  `apply`, `checks`), `attempt`, `next_retry_at` and `last_error`
+  (`reason`, `stage`, `failure`).
+- `piceli gitops wait ENV COMMIT [--timeout 1800] [--json]` (0.17.0): blocks
+  until the environment runs that commit (of any of its sources) and prints
+  `state`: `deployed` (exit 0), `failed` with `stage` and `cause`,
+  `superseded` (a newer revision replaced it), `stopped` or `timed-out`
+  (exit 1), or `approval-required` with `plan_hash` (exit 3: ask the owner).
+  Controller retries are waited through. Read-only; end an integration
+  round with it instead of polling `gitops status` yourself.
 - `piceli explain`, `piceli help-json`; `piceli explain --run ID --spec …`
   reads why a past execution failed from local state (same as
   `release status --run`).
