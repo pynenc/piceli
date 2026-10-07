@@ -6,6 +6,10 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ## Version 0.17.0
 
+- **`kubernetes<37`.** The kubernetes Python client 37.0.0 changed
+  `ApiClient` (`call_api`, `update_params_for_auth`, model constructors);
+  Piceli needs a client from 29 to 36 until it is ported. Fresh installs of
+  0.16.0 and earlier pick 37 and fail on their first API call.
 - **A failed restore point leaves the release running.** When a deploy's
   `backup` stage fails, its writers are started again on the running
   release before the controller backs off, also when an earlier attempt
