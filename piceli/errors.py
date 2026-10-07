@@ -3985,6 +3985,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "restore",
     ),
     _E(
+        "restore-point-claim-too-large",
+        "Claim over the restore point size guard",
+        'A claim the restore point would archive holds more than `RestorePoints(max_claim_bytes=...)` (measured by a read-only helper next to the running writer), and `over_limit` is `"fail"`. Nothing was quiesced or stopped.',
+        'Bound the workload\'s disk use, raise `max_claim_bytes`, set `over_limit="skip"` to leave such claims out with a warning, or turn restore points off for the environment (`restore_points="off"`).',
+        False,
+        "restore",
+    ),
+    _E(
         "restore-point-busy",
         "Restore point directory in use",
         "Another process is taking a restore point into the same directory (two controllers, or a controller and a laptop, sharing it). Two takes at once would write and verify each other's files, so nothing was stopped.",

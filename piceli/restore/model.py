@@ -182,6 +182,14 @@ class RestorePoints(BaseModel):
         release changes; ``"all"``: when there are any, every other retained
         claim the app's Deployments and StatefulSets write too, so the
         restore point holds the whole app at one moment.
+    :param max_claim_bytes: A size guard (0.17.0; default none): before any
+        hook runs or writer stops, a read-only helper measures each claim
+        (``du``, next to the running writer). A claim holding more is
+        handled by ``over_limit``.
+    :param over_limit: ``"fail"`` (default): the stage fails before
+        anything is stopped (``restore-point-claim-too-large``);
+        ``"skip"``: the claim is left out of the restore point with a
+        warning, and a writer whose every claim is left out is not stopped.
     :param run_as_user: The helper's user; ``0`` (default) reads files of any
         owner and restores their ownership (it gets only the file
         capabilities ``CHOWN``, ``DAC_OVERRIDE``, ``DAC_READ_SEARCH``,
@@ -199,6 +207,8 @@ class RestorePoints(BaseModel):
     timeout_seconds: int = Field(default=600, ge=10, le=86400)
     run_as_user: int = Field(default=0, ge=0)
     include: Literal["touched", "all"] = "touched"
+    max_claim_bytes: int | None = Field(default=None, ge=1)
+    over_limit: Literal["fail", "skip"] = "fail"
 
     @model_validator(mode="after")
     def _shape(self) -> RestorePoints:
@@ -227,6 +237,11 @@ class RestorePoints(BaseModel):
             "run_as_user": self.run_as_user,
             # Only when not the default, so other plans keep their hashes.
             **({"include": self.include} if self.include != "touched" else {}),
+            **(
+                {"max_claim_bytes": self.max_claim_bytes, "over_limit": self.over_limit}
+                if self.max_claim_bytes is not None
+                else {}
+            ),
         }
 
 

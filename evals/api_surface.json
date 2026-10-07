@@ -4091,6 +4091,8 @@
     "directory",
     "image",
     "include",
+    "max_claim_bytes",
+    "over_limit",
     "resolve_directory",
     "run_as_user",
     "timeout_seconds"
@@ -4099,6 +4101,8 @@
     "directory",
     "image",
     "include",
+    "max_claim_bytes",
+    "over_limit",
     "run_as_user",
     "timeout_seconds"
    ],
@@ -7382,8 +7386,10 @@
    "restore-plan-changed",
    "restore-point-archive-invalid",
    "restore-point-archive-missing",
+   "restore-point-busy",
    "restore-point-checksum-mismatch",
    "restore-point-claim-missing",
+   "restore-point-claim-too-large",
    "restore-point-claim-unknown",
    "restore-point-copy-failed",
    "restore-point-exists",

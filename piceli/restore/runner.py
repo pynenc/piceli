@@ -27,6 +27,7 @@ from typing import Any
 from piceli.restore.cluster import (
     BACKUP,
     DIGEST,
+    SIZE,
     RestoreCluster,
     helper_job,
     restore_command,
@@ -162,6 +163,87 @@ class _Writers:
         return started
 
 
+def _owner(live: Mapping[str, Any], workload: Any) -> dict[str, Any] | None:
+    found = live.get(str(workload))
+    return found or next((value for value in live.values() if value is not None), None)
+
+
+def _guard_sizes(
+    cluster: RestoreCluster,
+    plan: RestorePlan,
+    settings: RestorePoints,
+    live: Mapping[str, Any],
+    point: str,
+    record: dict[str, Any],
+    say: Callable[[str], None],
+) -> RestorePlan:
+    """Measure each claim next to its running writer; apply ``over_limit``.
+
+    Nothing has been quiesced or stopped yet. Returns the plan without the
+    claims left out (and without writers left with no claim).
+
+    :raises RestorePointError: ``restore-point-claim-too-large`` with
+        ``over_limit="fail"``; helper errors.
+    """
+    limit = int(settings.max_claim_bytes or 0)
+    timeout = float(settings.timeout_seconds)
+    over: list[dict[str, Any]] = []
+    for index, item in enumerate(plan.claims):
+        claim = str(item["claim"])
+        owner = _owner(live, item["workload"])
+        image = settings.image or _main_image(owner)
+        if image is None:
+            raise RestorePointError(
+                "restore-point-helper-failed",
+                f"no image for the helper of claim {claim}: declare "
+                "RestorePoints(image=...)",
+            )
+        name = _job_name(point, "size", index)
+        manifest = helper_job(
+            name,
+            point=point,
+            claim=claim,
+            image=image,
+            read_only=True,
+            seconds=int(timeout * 4),
+            run_as_user=settings.run_as_user,
+            template=_template(owner),
+        )
+        output = bytearray()
+        with cluster.helper(name, manifest, timeout) as pod:
+            code = cluster.exec(pod, SIZE, timeout=timeout, stdout=output.extend)
+        text = bytes(output[:64]).decode(errors="replace").strip()
+        if code != 0 or not text.isdigit():
+            raise RestorePointError(
+                "restore-point-helper-failed",
+                f"the size of claim {claim} could not be measured (exit {code})",
+            )
+        size = int(text) * 1024
+        if size > limit:
+            over.append({"claim": claim, "bytes": size})
+    if not over:
+        return plan
+    names = ", ".join(f"{item['claim']} ({item['bytes']} bytes)" for item in over)
+    if settings.over_limit == "fail":
+        raise RestorePointError(
+            "restore-point-claim-too-large",
+            f"claims over max_claim_bytes={limit}: {names}; nothing was stopped",
+            details={"claims": over},
+        )
+    for item in over:
+        say(
+            f"warning: claim {item['claim']} holds {item['bytes']} bytes, over "
+            f"max_claim_bytes={limit}: not in this restore point"
+        )
+    record["skipped"] = over
+    left_out = {item["claim"] for item in over}
+    kept = [item for item in plan.claims if item["claim"] not in left_out]
+    writers = [item for item in plan.writers if set(item["claims"]) - left_out]
+    return RestorePlan(
+        claims=kept, writers=writers, unchanged_claims=list(plan.unchanged_claims)
+    )
+
+
 def _digest_in_pod(cluster: RestoreCluster, pod: str, timeout: float) -> str:
     output = bytearray()
     code = cluster.exec(pod, DIGEST, timeout=timeout, stdout=output.extend)
@@ -240,12 +322,19 @@ def _take(
     }
     writers = _Writers(cluster, say)
     timeout = float(settings.timeout_seconds)
-    claims = [str(item["claim"]) for item in plan.claims]
     live = {
         str(item["workload"]): cluster.workload(str(item["kind"]), str(item["name"]))
         for item in plan.writers
     }
     try:
+        if settings.max_claim_bytes is not None:
+            plan = _guard_sizes(cluster, plan, settings, live, point, record, say)
+            if not plan.claims:
+                record["state"] = "skipped"
+                write_record(directory, record)
+                say("every claim is over max_claim_bytes: no restore point taken")
+                return record
+        claims = [str(item["claim"]) for item in plan.claims]
         for writer in plan.writers:
             for hook in writer["quiesce"]:
                 say(f"quiesce {writer['workload']}: {hook['type']} hook")

@@ -609,7 +609,37 @@ def environment_pipeline(
     derived.envs = env_config_of(composition, env)
     if derived.auto_approve is None and env.auto_approve:
         derived.auto_approve = ApprovalPolicy()
+    policy = getattr(env, "restore_points", None)
+    if policy is not None:
+        derived.restore_points = environment_restore_points(
+            policy, pipeline, f"environment {env.name!r}"
+        )
     return derived
+
+
+def environment_restore_points(policy: Any, pipeline: Any, what: str) -> Any:
+    """The ``RestorePoints`` (or ``None``) an environment's policy gives.
+
+    ``"off"``: none; ``"touched"`` / ``"all"``: the pipeline's settings (or
+    the defaults) with that ``include``; a ``RestorePoints``: as given.
+
+    :raises CompositionError: ``composition-invalid`` for ``"off"`` when the
+        app grows or moves a claim (only the backup stage does that).
+    """
+    from piceli.restore.model import RestorePoints
+
+    if isinstance(policy, RestorePoints):
+        return policy
+    if policy == "off":
+        growth = getattr(pipeline.app, "claim_growth", None)
+        if callable(growth) and growth():
+            raise _invalid(
+                f'{what}: restore_points="off", but the app grows or moves a '
+                "claim, which only the deploy's backup stage does"
+            )
+        return None
+    declared = pipeline.restore_points or RestorePoints()
+    return declared.model_copy(update={"include": policy})
 
 
 def mirror_target(

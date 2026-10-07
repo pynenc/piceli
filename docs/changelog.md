@@ -23,6 +23,16 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   new: two controllers, or a controller and a laptop, sharing one would
   write and verify each other's files). A `restore-point-checksum-mismatch`
   now says whether the file's size differs from the recorded one.
+- **Restore points per environment.** `Environment(restore_points=...)` and
+  `Environment.per_branch(restore_points=...)` take `"off"`, `"touched"`,
+  `"all"` or a `RestorePoints(...)` for a pipeline environment; not set,
+  the pipeline's `restore_points` apply as before. `Pipeline(...,
+  restore_points=None)` (the default) turns them off.
+- **A restore point size guard.** `RestorePoints(max_claim_bytes=N,
+  over_limit="fail" | "skip")`, off by default: each claim is measured by a
+  read-only helper before anything is quiesced or stopped; `"fail"` fails
+  the stage with nothing stopped (`restore-point-claim-too-large`, new),
+  `"skip"` leaves the claim out with a warning (`skipped_claims`).
 
 ## Version 0.16.0
 
