@@ -52,6 +52,17 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   The status (`failure.log_tail`), each failed attempt and the
   `piceli.build.failed` event keep the last 80 lines of the build log
   (20 lines or 4000 characters before), at most 8000 characters.
+- **Telemetry that survives its receiver's restart.** Spans and events the
+  OTLP endpoint refuses are spooled on the controller's state volume (at
+  most 64 MiB per signal) and sent again with their original times when it
+  answers; a deploy that stops its own receiver keeps its trace.
+- **Deploy events for timelines**: `piceli.deploy.started`,
+  `piceli.deploy.stage` (one per stage that ran, at its end),
+  `piceli.deploy.retry` (attempt, cause, next retry) and
+  `piceli.deploy.finished` (result).
+- **Timestamps on the controller's log lines.** Every line `piceli gitops
+  run` prints starts with its UTC time, as do the Python logging lines
+  (an OTLP exporter's errors).
 
 ## Version 0.16.0
 

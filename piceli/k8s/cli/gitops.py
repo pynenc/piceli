@@ -1211,6 +1211,10 @@ def run(
     """Run the controller loop (the Deployment's entrypoint); --once for one poll."""
     import json
 
+    from piceli.cli_contract import stamp_lines
+
+    stamp_lines()  # 0.17.0: every line the controller prints has its time
+
     from piceli.gitops.config import ControllerConfig
     from piceli.gitops.controller import Controller
     from piceli.gitops.repo import GitRemote
