@@ -148,7 +148,7 @@ STOP_REASONS = ("declared", "requested")
 #: Failed attempts of one revision a record (and its successful run) keeps.
 MAX_FAILED_ATTEMPTS = 3
 #: Characters of a failed attempt's log tail kept.
-ATTEMPT_TAIL_CHARS = 2000
+ATTEMPT_TAIL_CHARS = 8000  # 2000 before 0.17.0: about 80 lines
 #: Workload kinds whose change in a plan rolls their pods.
 _ROLLING_KINDS = frozenset(
     {"Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob", "ReplicaSet"}
@@ -1588,6 +1588,9 @@ class CompositionController:
         if hasattr(self.ports.builder, "environment"):
             # Its build Jobs are labelled with it (removed at its teardown).
             self.ports.builder.environment = name
+        if hasattr(self.ports.builder, "attempt"):
+            # A retry's build Job gets a name of its own (0.17.0).
+            self.ports.builder.attempt = int(record.get("attempts") or 0) + 1
         if instance.env.pipeline is not None:
             self._deploy_pipeline(record, instance)
             return

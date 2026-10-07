@@ -307,3 +307,80 @@ def test_composition_teardown_forgets_the_environments_builds(tmp_path: Path) ->
     )
     ports.env_down(object(), "wp-broken")
     assert calls == ["down wp-broken", "forget wp-broken"]
+
+
+def _spec_request() -> Any:
+    from piceli.infra.pipelines import SpecBuildRequest
+
+    return SpecBuildRequest(
+        "host-build.toml",
+        "infra",
+        {"infra": "a" * 40},
+        {"api": {"repository": "example/api", "key": "sha256:" + "1" * 64}},
+        None,
+        {"infra": "https://git.example/infra.git"},
+    )
+
+
+def test_a_retry_never_reuses_the_failed_jobs_name_and_keeps_it() -> None:
+    """The failed attempt's Job (and its pod log) stays; the retry is another Job."""
+
+    class Failed:
+        state = "failed"
+        extra = {"kept_job": "kept"}
+
+        def public(self) -> dict[str, Any]:
+            return {"state": "failed", "log_tail": "error"}
+
+    class Cluster(_Cluster):
+        options: list[dict[str, Any]] = []
+
+        def run_build(
+            self, job: dict[str, Any], key: dict[str, str], **options: Any
+        ) -> Failed:
+            self.jobs.append(job)
+            self.options.append(options)
+            return Failed()
+
+    cluster = Cluster({})
+    settings = JobSettings(
+        image="registry.example/builder@sha256:" + "f" * 64,
+        namespace="piceli-system",
+        registry_url="oci://registry:5000",
+        node_registry="registry:5000",
+    )
+    builder = JobBuilder(settings, {}, cluster, mirror_route=None)
+    for attempt in (1, 2):
+        builder.attempt = attempt
+        with pytest.raises(CompositionError):
+            builder.build_spec(_spec_request(), checkout=None)  # type: ignore[arg-type]
+    first, second = (job["metadata"]["name"] for job in cluster.jobs)
+    assert second == first + "-r2"
+    # Earlier failed Jobs of this cache are removed only after a success.
+    assert cluster.options == [{"keep_earlier": True}, {"keep_earlier": True}]
+
+
+def test_earlier_failed_jobs_go_only_after_a_build_succeeds() -> None:
+    from piceli.artifacts.cluster_build import BuildCluster
+
+    class Probe(BuildCluster):
+        def __init__(self, state: str) -> None:
+            self.state, self.calls = state, []
+
+        def remove_kept(self, key: Any) -> list[str]:
+            self.calls.append("remove_kept")
+            return []
+
+        def run_job(self, job: Any, **_: Any) -> Any:
+            self.calls.append("run")
+            outcome = type("Outcome", (), {})()
+            outcome.state, outcome.extra = self.state, {}
+            return outcome
+
+    for state, expected in (("failed", ["run"]), ("passed", ["run", "remove_kept"])):
+        probe = Probe(state)
+        probe.run_build({}, {"k": "v"}, keep_earlier=True)
+        assert probe.calls == expected
+    probe = Probe("failed")
+    probe.run_build({}, {"k": "v"})  # the single-repo controller: as before
+    assert probe.calls == ["remove_kept", "run"]

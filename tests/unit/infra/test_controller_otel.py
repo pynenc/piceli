@@ -452,7 +452,8 @@ def test_a_build_failure_closes_the_run_with_the_log_tail(
     assert build.end_time - build.start_time == 30 * 10**9
     event = signals.events("piceli.build.failed")[0]
     tail = event.attributes["piceli.build.log_tail"].splitlines()
-    assert len(tail) == 20 and tail[-1] == "step 30: compiling"
+    # 0.17.0: up to 80 lines, so all 30 of this log (20 before).
+    assert len(tail) == 30 and tail[-1] == "step 30: compiling"
     assert event.trace_id == root.context.trace_id
     # The retry is a run of its own (attempt 2).
     world["ports"].builder.fail = None
