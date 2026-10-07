@@ -525,13 +525,22 @@ class BuildCluster(PreRolloutCluster):
     _job_failed: bool = False
     kept_job: str | None = None
 
-    def run_build(self, job: Mapping[str, Any], key: Mapping[str, str]) -> Outcome:
+    def run_build(
+        self,
+        job: Mapping[str, Any],
+        key: Mapping[str, str],
+        *,
+        keep_earlier: bool = False,
+    ) -> Outcome:
         """Run a build Job; keep it when it fails (``outcome.extra["kept_job"]``).
 
         ``key`` are the labels of one build key (a branch's cache): failed
-        Jobs kept by earlier attempts with those labels are removed first.
+        Jobs kept by earlier attempts with those labels are removed first, or
+        with ``keep_earlier`` (0.17.0) only once this build passed, so the
+        failed attempts' Jobs and logs stay while it is retried.
         """
-        self.remove_kept(key)
+        if not keep_earlier:
+            self.remove_kept(key)
         self.kept_job = None
         self._job_failed = False
         self._keeping = True
@@ -541,6 +550,8 @@ class BuildCluster(PreRolloutCluster):
             self._keeping = False
         if self.kept_job is not None:
             outcome.extra["kept_job"] = self.kept_job
+        if keep_earlier and outcome.state == "passed":
+            self.remove_kept(key)
         return outcome
 
     def remove_kept(self, key: Mapping[str, str]) -> list[str]:
@@ -589,7 +600,8 @@ class BuildCluster(PreRolloutCluster):
         self.receipt_text = None
         texts: list[str] = []
         statuses: list[int] = []
-        for lines, limit in ((60, 16384), (2, 16 * 1024 * 1024)):
+        # 0.17.0: 80 lines of evidence (60 before).
+        for lines, limit in ((80, 32768), (2, 16 * 1024 * 1024)):
             try:
                 response = self.client.call_api(
                     self._ns("pods", pod["metadata"]["name"], "log"),

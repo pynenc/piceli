@@ -780,3 +780,18 @@ def test_a_failed_restore_point_shows_the_writers_it_started_again() -> None:
         details={"writers_started": ["StatefulSet/db"]},
     )
     assert failure_detail(error) == {"writers_started": ["StatefulSet/db"]}
+
+
+def test_a_failed_build_keeps_the_last_80_lines_of_its_log() -> None:
+    from piceli.gitops.controller import failure_detail
+    from piceli.gitops.otel import tail_lines
+
+    log = "\n".join(f"line {index}" for index in range(200))
+    error = GitOpsError(
+        "component-build-failed",
+        "the image build Job ended failed",
+        details={"outcome": {"state": "failed", "log_tail": log}},
+    )
+    kept = failure_detail(error)["log_tail"]  # type: ignore[index]
+    assert kept.splitlines() == [f"line {index}" for index in range(120, 200)]
+    assert tail_lines(log).splitlines()[0] == "line 120"  # type: ignore[union-attr]

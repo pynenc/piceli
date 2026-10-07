@@ -45,6 +45,13 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 - **A persistent cargo cache for the build Job.** `CARGO_HOME` is on the
   build cache claim (`/cache/cargo-home`) next to the target directory, so a
   build no longer downloads the registry index and crates again.
+- **Failed builds keep their evidence.** A retry's image build Job gets a
+  name of its own (`piceli-image-build-<key>-r<attempt>`); the failed
+  attempts' Jobs and pod logs stay until a build on that cache succeeds (0.16
+  deleted the failed Job and reused its name, so the failure's log was gone).
+  The status (`failure.log_tail`), each failed attempt and the
+  `piceli.build.failed` event keep the last 80 lines of the build log
+  (20 lines or 4000 characters before), at most 8000 characters.
 
 ## Version 0.16.0
 

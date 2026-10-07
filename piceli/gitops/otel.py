@@ -72,7 +72,7 @@ MAX_QUEUE = 2048
 #: Events remembered per open run (resent when a restart closes it).
 MAX_RUN_EVENTS = 40
 #: Build log lines a ``piceli.build.failed`` event carries.
-BUILD_TAIL_LINES = 20
+BUILD_TAIL_LINES = 80  # 20 before 0.17.0
 #: Seconds between heartbeats.
 HEARTBEAT_SECONDS = 15.0
 
@@ -516,7 +516,7 @@ def _text(value: Any, limit: int = _LIMIT) -> str | None:
 
 
 #: Attributes allowed longer than :data:`_LIMIT` characters.
-_LONG = {"piceli.build.log_tail": 4000, "piceli.check.detail": 300}
+_LONG = {"piceli.build.log_tail": 8000, "piceli.check.detail": 300}
 
 
 def _attrs(values: Mapping[str, Any]) -> dict[str, Any]:
@@ -559,7 +559,7 @@ def tail_lines(text: Any, lines: int = BUILD_TAIL_LINES) -> str | None:
     """The last ``lines`` lines of a (redacted) build log tail."""
     if not isinstance(text, str) or not text:
         return None
-    return "\n".join(text.rstrip("\n").splitlines()[-lines:])[-4000:]
+    return "\n".join(text.rstrip("\n").splitlines()[-lines:])[-8000:]
 
 
 # ---------------------------------------------------------------- the store
