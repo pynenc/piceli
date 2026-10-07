@@ -58,8 +58,39 @@ def emit_json(value: Mapping[str, Any]) -> None:
     sys.stdout.flush()
 
 
+_STAMPED = False
+
+
+def stamp_lines(on: bool = True) -> None:
+    """Prefix every human line with its UTC time (0.17.0; ``gitops run``).
+
+    A long-running process (the GitOps controller) prints lines read later
+    in ``kubectl logs``, where a line without its time cannot be placed. The
+    Python ``logging`` lines (an OTLP exporter's errors) get the same prefix.
+    """
+    import logging
+    import time
+
+    global _STAMPED
+    _STAMPED = on
+    if on and not logging.getLogger().handlers:
+        handler = logging.StreamHandler(sys.stderr)
+        formatter = logging.Formatter(
+            "%(asctime)s %(name)s: %(message)s", "%Y-%m-%dT%H:%M:%SZ"
+        )
+        formatter.converter = time.gmtime
+        handler.setFormatter(formatter)
+        logging.getLogger().addHandler(handler)
+
+
 def say(message: str) -> None:
-    """Print human text on stderr."""
+    """Print human text on stderr (each line with its UTC time after
+    :func:`stamp_lines`)."""
+    if _STAMPED:
+        from datetime import UTC, datetime
+
+        now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        message = "\n".join(f"{now} {line}" for line in message.split("\n"))
     sys.stderr.write(message + "\n")
     sys.stderr.flush()
 

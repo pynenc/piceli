@@ -271,6 +271,13 @@ class Providers:
     logger_provider: Any
     meter_provider: Any
     ids: Any
+    #: 0.17.0: the exporters that spool what the receiver refused
+    #: (:mod:`piceli.gitops.otlp_spool`); resent on the heartbeat.
+    spools: tuple[Any, ...] = ()
+
+    def resend(self) -> int:
+        """Send spooled telemetry again (rate-limited by each spool)."""
+        return sum(int(spool.resend()) for spool in self.spools)
 
     def shutdown(self, timeout: float = EXPORT_TIMEOUT) -> bool:
         """Flush and stop, waiting at most ``timeout`` seconds in all."""
@@ -395,8 +402,16 @@ def build_providers(
     return Providers(tracer_provider, logger_provider, meter_provider, ids)
 
 
-def otlp_providers(settings: Settings, resource: Mapping[str, Any]) -> Providers:
-    """Providers exporting over OTLP as ``settings`` say."""
+def otlp_providers(
+    settings: Settings,
+    resource: Mapping[str, Any],
+    spool_dir: Path | None = None,
+) -> Providers:
+    """Providers exporting over OTLP as ``settings`` say.
+
+    ``spool_dir`` (0.17.0): spans and log records the receiver refused are
+    kept there and sent again when it is back (:mod:`piceli.gitops.otlp_spool`).
+    """
     import logging
 
     from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
@@ -405,18 +420,26 @@ def otlp_providers(settings: Settings, resource: Mapping[str, Any]) -> Providers
     # warning per retry (the controller's log stays readable).
     logging.getLogger("opentelemetry.exporter.otlp").setLevel(logging.ERROR)
     span, log, metric = _exporters(settings)
+    spools: tuple[Any, ...] = ()
+    if spool_dir is not None:
+        from piceli.gitops.otlp_spool import spooling
+
+        span, log = spooling(span, log, settings.protocol, spool_dir)
+        spools = (span, log)
     reader = PeriodicExportingMetricReader(
         metric,
         export_interval_millis=30_000,
         export_timeout_millis=int(settings.timeout * 1000),
     )
-    return build_providers(
+    providers = build_providers(
         resource,
         span_exporter=span,
         log_exporter=log,
         metric_reader=reader,
         timeout=settings.timeout,
     )
+    providers.spools = spools
+    return providers
 
 
 def _exporters(settings: Settings) -> tuple[Any, Any, Any]:
@@ -847,6 +870,8 @@ class ControllerTelemetry:
             self.store.beat(now)
             assert self.instruments is not None
             self.instruments.heartbeats.add(1)
+            assert self.providers is not None
+            self.providers.resend()  # 0.17.0: the receiver may be back
 
     def shutdown(self, timeout: float = EXPORT_TIMEOUT) -> bool:
         """Stop the heartbeat and flush what is queued (bounded)."""
@@ -885,6 +910,19 @@ class ControllerTelemetry:
                 run = self._open(record, work, now)
                 runs[key] = run
                 self._set_active(run, "executing")
+                if work == "deploy":  # 0.17.0: a change on the user's timeline
+                    self._run_event(
+                        run,
+                        "piceli.deploy.started",
+                        "started",
+                        now,
+                        body=f"{run['env']}: deploy started",
+                        attributes={
+                            "piceli.run.attempt": run.get("attempt"),
+                            "piceli.trigger": run.get("trigger"),
+                            "piceli.trigger.kind": trigger_kind(run.get("trigger")),
+                        },
+                    )
                 pushed = _iso_ns(record.get("pushed_at"))
                 if work == "deploy" and pushed is not None:
                     self.instruments.queue_wait.record(
@@ -998,6 +1036,9 @@ class ControllerTelemetry:
                 )
             state = str(record.get("state") or "")
             self._step_events(run, record, journal, now)
+            self._stage_events(run, journal)
+            if state == "retrying":
+                self._retry_event(run, record, now)
             if state == "approval-required":
                 run["approval"] = {
                     "start": now,
@@ -1218,6 +1259,64 @@ class ControllerTelemetry:
         return "failure"
 
     # ------------------------------------------------------------ step events
+    def _stage_events(
+        self, run: dict[str, Any], journal: Mapping[str, Any] | None
+    ) -> None:
+        """``piceli.deploy.stage``: each journal stage that ran, at its end (0.17.0)."""
+        if journal is None:
+            return
+        stages = _dict(journal.get("stages"))
+        for name in STAGES:
+            stage = _dict(stages.get(name))
+            at = _iso_ns(stage.get("finished_at"))
+            if at is None or not stage.get("started_at"):
+                continue
+            result = _STAGE_RESULT.get(str(stage.get("state")), "failure")
+            self._run_event(
+                run,
+                "piceli.deploy.stage",
+                f"stage:{name}:{run.get('step')}",
+                at,
+                span_path=f"stage:{name}:{run.get('step')}",
+                body=f"{run['env']}: {STAGES[name][0]} {result}",
+                attributes={
+                    "piceli.stage": name,
+                    "piceli.stage.result": result,
+                    "error.type": _text(stage.get("reason"), 64)
+                    if result == "failure"
+                    else None,
+                },
+                error=result == "failure",
+            )
+
+    def _retry_event(
+        self, run: dict[str, Any], record: Mapping[str, Any], now: int
+    ) -> None:
+        """``piceli.deploy.retry``: the step failed and is retried later (0.17.0)."""
+        at = record.get("next_attempt_at")
+        when = (
+            datetime.fromtimestamp(float(at), UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+            if isinstance(at, int | float)
+            else None
+        )
+        self._run_event(
+            run,
+            "piceli.deploy.retry",
+            f"retry:{run.get('attempt')}",
+            now,
+            body=f"{run['env']}: retry {when or 'later'} "
+            f"({_text(record.get('reason'), 64)})",
+            attributes={
+                "piceli.run.attempt": run.get("attempt"),
+                "error.type": _text(record.get("reason"), 64),
+                "piceli.retry.at": when,
+                "piceli.retry.in_seconds": round(float(at) - now / 1e9, 3)
+                if isinstance(at, int | float)
+                else None,
+            },
+            error=True,
+        )
+
     def _step_events(
         self,
         run: dict[str, Any],
@@ -1429,6 +1528,19 @@ class ControllerTelemetry:
             approval["end"] = end
         if run.get("kind") == "deploy":
             self._approval_event(run, record, end)
+            self._run_event(  # 0.17.0
+                run,
+                "piceli.deploy.finished",
+                "finished",
+                end,
+                body=f"{run['env']}: deploy {result}",
+                attributes={
+                    "piceli.deploy.result": result,
+                    "piceli.run.attempt": run.get("attempt"),
+                    "error.type": reason if result != "success" else None,
+                },
+                error=result != "success",
+            )
         self._spans(run, result, end, reason, record)
         self._metrics(run, result, end, reason)
         if result == "success" and run.get("kind") == "deploy":
@@ -2002,7 +2114,9 @@ def for_controller(
         namespace=namespace,
     )
     try:
-        providers = otlp_providers(settings, resource)
+        providers = otlp_providers(
+            settings, resource, spool_dir=state_dir / "telemetry" / "spool"
+        )
     except ImportError:
         log("telemetry: off (install piceli[telemetry] for the OpenTelemetry SDK)")
         return ControllerTelemetry.disabled(state_dir)

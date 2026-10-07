@@ -841,3 +841,52 @@ def test_journal_times_of_rollback_and_prune_win(world: dict[str, Any]) -> None:
     rollback = signals.tree(root)["rollback"]
     assert rollback.end_time - rollback.start_time == 10**9
     assert rollback.start_time == otel._iso_ns(_iso(1_790_000_000.0 + 30 + 7.5))
+
+
+def test_a_deploy_emits_start_stage_and_end_events(world: dict[str, Any]) -> None:
+    """IH draws these as changes on its timeline (0.17.0)."""
+    world["controller"].poll_once()
+    signals: Signals = world["signals"]
+    root = _main_root(signals)
+    (started,) = [
+        e
+        for e in signals.events("piceli.deploy.started")
+        if e.trace_id == root.context.trace_id
+    ]
+    assert started.attributes["piceli.run.attempt"] == 1
+    assert started.attributes["piceli.trigger"]
+    stages = [
+        e
+        for e in signals.events("piceli.deploy.stage")
+        if e.trace_id == root.context.trace_id
+    ]
+    assert [
+        (e.attributes["piceli.stage"], e.attributes["piceli.stage.result"])
+        for e in stages
+    ] == [("plan", "success"), ("apply", "success"), ("checks", "success")]
+    # Each stage event is stamped when its stage finished.
+    assert stages[1].timestamp == otel._iso_ns(_iso(world["clock"]["now"] - 10 + 4))
+    (finished,) = [
+        e
+        for e in signals.events("piceli.deploy.finished")
+        if e.trace_id == root.context.trace_id
+    ]
+    assert finished.attributes["piceli.deploy.result"] == "success"
+    assert started.timestamp < finished.timestamp
+
+
+def test_a_failed_step_emits_a_retry_event_with_its_next_attempt(
+    world: dict[str, Any],
+) -> None:
+    world["ports"].builder.fail = "error"
+    status = world["controller"].poll_once()
+    main = status["envs"]["main"]
+    signals: Signals = world["signals"]
+    (retry,) = signals.events("piceli.deploy.retry")
+    assert retry.attributes["piceli.run.attempt"] == 1
+    assert retry.attributes["error.type"] == "component-build-failed"
+    assert (
+        retry.attributes["piceli.retry.at"] == _iso(main["next_attempt_at"])[:19] + "Z"
+    )
+    (finished,) = signals.events("piceli.deploy.finished")
+    assert finished.attributes["piceli.deploy.result"] == "failure"
