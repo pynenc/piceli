@@ -975,6 +975,10 @@ def status(
     }
     if live is not None:
         body["controller_live"] = live
+    from piceli.gitops.wait import summary
+
+    # 0.17.0: per environment, what an agent needs (stage, attempt, retry, error).
+    body["summary"] = summary(document)
     controller = body.get("controller") or {}
     say(
         f"gitops controller: {health}"
@@ -1035,6 +1039,84 @@ def status(
             say(part)
     if as_json:
         emit_json(body)
+
+
+@app.command("wait")
+def wait(
+    env: Annotated[str, typer.Argument(help="The environment (pipeline), e.g. main")],
+    commit: Annotated[
+        str,
+        typer.Argument(help="A commit of one of its sources (7 to 40 hex characters)"),
+    ],
+    kubeconfig: KubeconfigOption = None,
+    context: ContextOption = None,
+    namespace: NamespaceOption = "piceli-system",
+    state_dir: StateDirOption = None,
+    transport: TransportOption = "https",
+    timeout: Annotated[
+        int,
+        typer.Option("--timeout", help="Give up after this many seconds", min=0),
+    ] = 1800,
+    interval: Annotated[
+        float,
+        typer.Option("--interval", help="Seconds between two status reads", min=1),
+    ] = 10.0,
+    as_json: JsonOption = False,
+) -> None:
+    """Wait until ENV runs COMMIT: deployed, failed (stage, cause) or timed out."""
+    import time
+
+    from piceli.gitops.wait import COMMIT, WAIT_SCHEMA, outcome
+
+    if not COMMIT.fullmatch(commit):
+        reject("gitops-request-invalid", "COMMIT is 7 to 40 lowercase hex characters")
+    started = time.monotonic()
+    seen, last, state = False, None, None
+    body: dict[str, Any] = {}
+    with _channel(state_dir, kubeconfig, context, namespace, transport) as channel:
+        while True:
+            with _guard():
+                document = channel.read_status()
+            state, body = outcome(document, env, commit, seen=seen)
+            seen = bool(body.get("seen"))
+            line = (body.get("state"), body.get("stage"), body.get("attempt"))
+            if line != last:
+                last = line
+                say(
+                    f"{env}: {body.get('state')}"
+                    + (f", stage {body['stage']}" if body.get("stage") else "")
+                    + (f", attempt {body['attempt']}" if body.get("attempt") else "")
+                    + (
+                        f", next retry {body['next_retry_at']}"
+                        if body.get("next_retry_at")
+                        else ""
+                    )
+                )
+            waited = time.monotonic() - started
+            if state is not None or waited >= timeout:
+                break
+            time.sleep(min(interval, max(0.0, timeout - waited)))
+    result = {
+        "schema": WAIT_SCHEMA,
+        **body,
+        "state": state or "timed-out",
+        "env_state": body.get("state"),
+        "waited_seconds": round(time.monotonic() - started, 1),
+    }
+    say(
+        f"{env} {commit}: {result['state']}"
+        + (
+            f" in stage {result.get('stage')} ({result.get('cause')})"
+            if result["state"] == "failed"
+            else ""
+        )
+    )
+    if as_json:
+        emit_json(result)
+    if result["state"] == "approval-required":
+        raise typer.Exit(EXIT_APPROVAL)
+    if result["state"] != "deployed":
+        raise typer.Exit(1)
 
 
 @app.command("approve")

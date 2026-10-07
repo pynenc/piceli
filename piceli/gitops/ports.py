@@ -465,8 +465,12 @@ class DefaultPorts:
         receipt: Mapping[str, Any] | None,
         digests: Mapping[str, Any] | None,
         approve: str | None,
+        on_stage: Callable[[Any], None] | None = None,
     ) -> EnvOutcome:
         kwargs: dict[str, Any] = {"commit": commit, "approve": approve}
+        if on_stage is not None:
+            # 0.17.0: the runner's stage events (the status shows the stage).
+            kwargs["runner_options"] = {"on_event": on_stage}
         # "policy": the owner's ApprovalPolicy, or EnvConfig(auto_approve=True)
         # for a branch; also without a policy when the owner allows branches.
         envs = getattr(pipeline, "envs", None)
