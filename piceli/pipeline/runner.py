@@ -2268,6 +2268,12 @@ class PipelineRunner:
             ) from None
         finally:
             cluster.close()
+        skipped = record.get("skipped") or []
+        if record.get("state") == "skipped":
+            return "skipped", {
+                "why": "every claim the release touches is over max_claim_bytes",
+                "skipped_claims": skipped,
+            }
         # Writers changed: the release plan is made again from live state.
         work.runner, work.release_plan = None, None
         self.say(
@@ -2293,6 +2299,7 @@ class PipelineRunner:
             "stopped": record["writers"],
             "left_stopped": record.get("left_stopped", []),
             **({"claim_changes": grown} if grown else {}),
+            **({"skipped_claims": skipped} if skipped else {}),
         }
 
     def _grow_claims(

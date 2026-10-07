@@ -518,6 +518,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`restore-point-busy`](#error-restore-point-busy) | restore | yes |
 | [`restore-point-checksum-mismatch`](#error-restore-point-checksum-mismatch) | restore | no |
 | [`restore-point-claim-missing`](#error-restore-point-claim-missing) | restore | no |
+| [`restore-point-claim-too-large`](#error-restore-point-claim-too-large) | restore | no |
 | [`restore-point-claim-unknown`](#error-restore-point-claim-unknown) | restore | no |
 | [`restore-point-copy-failed`](#error-restore-point-copy-failed) | restore | yes |
 | [`restore-point-exists`](#error-restore-point-exists) | restore | yes |
@@ -4589,6 +4590,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Claim does not exist.** A claim of the restore point does not exist in the target namespace, so there is nothing to restore into. Piceli never creates claims.
 
 - **Fix:** Create the claim (or run the release that creates it), then plan the restore again.
+- **Retry-safe:** no
+
+(error-restore-point-claim-too-large)=
+### `restore-point-claim-too-large`
+
+**Claim over the restore point size guard.** A claim the restore point would archive holds more than `RestorePoints(max_claim_bytes=...)` (measured by a read-only helper next to the running writer), and `over_limit` is `"fail"`. Nothing was quiesced or stopped.
+
+- **Fix:** Bound the workload's disk use, raise `max_claim_bytes`, set `over_limit="skip"` to leave such claims out with a warning, or turn restore points off for the environment (`restore_points="off"`).
 - **Retry-safe:** no
 
 (error-restore-point-claim-unknown)=

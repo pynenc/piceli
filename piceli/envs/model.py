@@ -430,6 +430,10 @@ class Environment:
     #: 0.15: the order the ``clusters`` deploy a revision in
     #: (:class:`~piceli.envs.placement.Rollout`).
     rollout: Any = None
+    #: 0.17: this environment's restore points: ``"off"``, ``"touched"``,
+    #: ``"all"`` or a :class:`~piceli.restore.RestorePoints`; ``None``
+    #: (default): the pipeline's ``restore_points``.
+    restore_points: Any = field(default=None, compare=False)
     #: ``follow={Source: rule}`` normalised: ``((source, rules), ...)``.
     sources: tuple[tuple[Any, tuple[Any, ...]], ...] = field(
         init=False, default=(), compare=False, repr=False
@@ -532,6 +536,7 @@ class Environment:
         clusters: Sequence[Any] = (),
         rollout: Any = None,
         replicas: Mapping[str, int] | None = None,
+        restore_points: Any = None,
     ) -> BranchEnvironments:
         """One environment per Git branch of the sources (a composition's branch rule).
 
@@ -545,6 +550,9 @@ class Environment:
             (``EnvConfig(max_envs=...)``).
         :param pipeline: Deploy this :class:`piceli.Pipeline`'s app instead of
             contract components (``stack`` then names its workloads).
+        :param restore_points: ``"off"``, ``"touched"``, ``"all"`` or a
+            :class:`~piceli.restore.RestorePoints` for these environments
+            (default: the pipeline's ``restore_points``).
 
         Every other parameter is the :class:`EnvConfig` one of the same name
         (``on_nodes`` is ``branch_nodes``, ``stack`` is ``branch_stack``).
@@ -571,6 +579,7 @@ class Environment:
             clusters=tuple(clusters),
             rollout=rollout,
             replicas=replicas,
+            restore_points=restore_points,
         )
 
     @property
@@ -613,6 +622,11 @@ class Environment:
             **({"stopped": True} if self.stopped else {}),
             **({"replicas": dict(self.replicas)} if self.replicas else {}),
             **_describe_clusters(self),
+            **(
+                {"restore_points": describe_restore_points(self.restore_points)}
+                if self.restore_points is not None
+                else {}
+            ),
         }
 
 
@@ -641,9 +655,38 @@ def _describe_clusters(env: Any) -> dict[str, Any]:
     }
 
 
+#: ``restore_points=`` of an environment besides a ``RestorePoints``.
+RESTORE_POLICIES = ("off", "touched", "all")
+
+
+def _check_restore_points(env: Any, what: str) -> None:
+    value = env.restore_points
+    if value is None or value in RESTORE_POLICIES:
+        return
+    from piceli.restore.model import RestorePoints
+
+    if not isinstance(value, RestorePoints):
+        raise EnvError(
+            "env-config-invalid",
+            f'{what}: restore_points is "off", "touched", "all" or RestorePoints(...)',
+        )
+
+
+def describe_restore_points(value: Any) -> Any:
+    """An environment's ``restore_points`` as JSON (a policy name or settings)."""
+    return value if value is None or isinstance(value, str) else value.describe()
+
+
 def _check_pipeline(env: Any, what: str) -> None:
     """``pipeline=``: a Pipeline, never mixed with contract components."""
+    _check_restore_points(env, what)
     if env.pipeline is None:
+        if env.restore_points is not None:
+            raise EnvError(
+                "env-config-invalid",
+                f"{what}: restore_points= needs pipeline= (restore points are "
+                "taken by a Pipeline's deploy)",
+            )
         return
     from piceli.pipeline.model import Pipeline
 
@@ -691,6 +734,7 @@ class BranchEnvironments:
     replicas: Mapping[str, int] | None = None
     clusters: Sequence[Any] = ()
     rollout: Any = None
+    restore_points: Any = field(default=None, compare=False)
     sources: tuple[tuple[Any, tuple[Any, ...]], ...] = field(
         init=False, default=(), compare=False, repr=False
     )
@@ -774,6 +818,11 @@ class BranchEnvironments:
             "settings": dict(self.settings),
             **({"pipeline": self.pipeline.name} if self.pipeline is not None else {}),
             **_describe_clusters(self),
+            **(
+                {"restore_points": describe_restore_points(self.restore_points)}
+                if self.restore_points is not None
+                else {}
+            ),
         }
 
 
