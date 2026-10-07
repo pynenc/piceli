@@ -767,3 +767,16 @@ def test_a_restart_marks_the_step_it_died_in_and_publishes_a_heartbeat(
     assert published is not None
     assert published["controller"]["heartbeat_at"] > status["controller"]["last_poll"]
     assert published["envs"] == status["envs"]
+
+
+def test_a_failed_restore_point_shows_the_writers_it_started_again() -> None:
+    from piceli.gitops.controller import failure_detail
+    from piceli.pipeline import PipelineError
+
+    error = PipelineError(
+        "restore-point-checksum-mismatch",
+        "the archive of claim data-db-0 does not match its SHA-256",
+        failed=True,
+        details={"writers_started": ["StatefulSet/db"]},
+    )
+    assert failure_detail(error) == {"writers_started": ["StatefulSet/db"]}

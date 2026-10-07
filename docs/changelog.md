@@ -4,6 +4,18 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.17.0
+
+- **A failed restore point leaves the release running.** When a deploy's
+  `backup` stage fails, its writers are started again on the running
+  release before the controller backs off, also when an earlier attempt
+  was killed mid-copy and left them at zero replicas (0.16.0 started them
+  "again" at zero: the retry had recorded the replicas it found). The
+  replica counts are written to the restore point's record before any
+  writer is scaled, and a retry takes them from a point that never ended.
+  The deploy says so (`[backup] started again on the running release:
+  ...`) and the status' `failure.writers_started` lists the workloads.
+
 ## Version 0.16.0
 
 - **A stopped multi-cluster environment stays stopped across a controller

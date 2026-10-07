@@ -270,3 +270,23 @@ def points(root: Path) -> Iterator[tuple[Path, dict[str, Any]]]:
             yield load_record(root, child.name)
         except RestorePointError:
             continue
+
+
+def replicas_before(root: Path) -> dict[str, int]:
+    """Writers' replica counts recorded by restore points that never ended.
+
+    A point still ``running`` belongs to a process that died mid-copy (a
+    killed controller): its writers may still be at zero replicas. The
+    newest positive count of each writer (``Kind/name``) wins.
+    """
+    found: dict[str, int] = {}
+    for _directory, record in points(root):
+        if record.get("state") != "running":
+            continue
+        for item in record.get("writers") or ():
+            if not isinstance(item, dict):
+                continue
+            workload, replicas = item.get("workload"), item.get("replicas")
+            if isinstance(workload, str) and isinstance(replicas, int) and replicas:
+                found.setdefault(workload, replicas)
+    return found

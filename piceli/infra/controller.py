@@ -908,6 +908,8 @@ class CompositionController:
             entry["log_tail"] = tail[-ATTEMPT_TAIL_CHARS:]
         if isinstance(failure, Mapping) and isinstance(failure.get("kept_job"), str):
             entry["kept_job"] = failure["kept_job"]
+        if isinstance(failure, Mapping) and failure.get("writers_started"):
+            entry["writers_started"] = list(failure["writers_started"])
         kept = [
             item
             for item in record.get("failed_attempts") or []

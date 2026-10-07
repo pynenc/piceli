@@ -42,6 +42,7 @@ from piceli.restore.store import (
     load_record,
     new_point_id,
     private_dir,
+    replicas_before,
     verify_claim,
     write_record,
 )
@@ -82,7 +83,23 @@ class _Writers:
         self.say = say
         self.stopped: list[dict[str, Any]] = []
 
-    def stop(self, writers: Iterable[Mapping[str, Any]]) -> None:
+    def stop(
+        self,
+        writers: Iterable[Mapping[str, Any]],
+        prior: Mapping[str, int] | None = None,
+        recorded: Callable[[list[dict[str, Any]]], None] | None = None,
+    ) -> None:
+        """Remember each writer's replicas, call ``recorded`` with them, then
+        scale every writer to zero.
+
+        :param prior: Replica counts an interrupted restore point recorded
+            (:func:`~piceli.restore.store.replicas_before`): a writer found at
+            zero replicas that one of them stopped is remembered at that
+            count, so it is started again at it.
+        :param recorded: Persists the counts before anything is scaled (a
+            process killed after a scale still knows them).
+        """
+        prior = prior or {}
         for writer in writers:
             kind, name = str(writer["kind"]), str(writer["name"])
             live = self.cluster.workload(kind, name)
@@ -90,17 +107,27 @@ class _Writers:
                 continue
             replicas = (live.get("spec") or {}).get("replicas")
             replicas = 1 if replicas is None else int(replicas)
+            workload = f"{kind}/{name}"
+            if not replicas and prior.get(workload):
+                replicas = int(prior[workload])
+                self.say(
+                    f"{workload} was stopped by an interrupted restore point; "
+                    f"it had {replicas} replicas"
+                )
             self.stopped.append(
-                {
-                    "workload": f"{kind}/{name}",
-                    "kind": kind,
-                    "name": name,
-                    "replicas": replicas,
-                }
+                {"workload": workload, "kind": kind, "name": name, "replicas": replicas}
             )
-            if replicas:
-                self.say(f"stopping {kind}/{name} ({replicas} -> 0 replicas)")
-                self.cluster.scale(kind, name, 0)
+        if recorded is not None:
+            recorded(self.stopped)
+        for item in self.stopped:
+            if item["replicas"]:
+                live = self.cluster.workload(item["kind"], item["name"])
+                if live is not None and not (live.get("spec") or {}).get("replicas"):
+                    continue  # already at zero (an interrupted attempt)
+                self.say(
+                    f"stopping {item['workload']} ({item['replicas']} -> 0 replicas)"
+                )
+                self.cluster.scale(item["kind"], item["name"], 0)
 
     def start(self, keep_stopped: Iterable[str] = ()) -> list[str]:
         """Scale every stopped writer back unless listed; errors are reported,
@@ -192,9 +219,12 @@ def take(
             for hook in writer["quiesce"]:
                 say(f"quiesce {writer['workload']}: {hook['type']} hook")
                 cluster.run_hook(writer, hook)
-        writers.stop(plan.writers)
-        record["writers"] = writers.stopped
-        write_record(directory, record)
+
+        def recorded(stopped: list[dict[str, Any]]) -> None:
+            record["writers"] = stopped
+            write_record(directory, record)
+
+        writers.stop(plan.writers, replicas_before(root), recorded)
         cluster.wait_stopped(plan.writers, claims, timeout)
         say(f"writers stopped; no pod mounts {len(claims)} claim(s) writably")
         for index, item in enumerate(plan.claims):
@@ -267,7 +297,10 @@ def take(
                 write_record(directory, record)
             except OSError:
                 pass
-        writers.start()
+        started = writers.start()
+        if isinstance(error, RestorePointError):
+            # Shown in the deploy's status: the release before keeps running.
+            error.details["writers_started"] = started
         raise
     record["started"] = writers.start(keep_stopped)
     record["left_stopped"] = [

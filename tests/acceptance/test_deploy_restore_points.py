@@ -303,3 +303,52 @@ def test_a_failing_pre_rollout_check_stops_the_run_before_any_writer_stops(
     assert fake.calls[:2] == ["hook StatefulSet/db exec", "scale StatefulSet/db 0"]
     stateful = api.objects[("StatefulSet", "db")]
     assert stateful["spec"]["template"]["spec"]["containers"][0]["image"] == NEW
+
+
+def test_a_failed_copy_leaves_the_stateful_set_at_its_replicas(
+    shop, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An earlier attempt was killed mid-copy (writers left at 0); the retry's
+    copy fails too: the StatefulSet runs again at its replicas on the old
+    release before the deploy reports the failure, and the failure says so."""
+    api, tmp_path, fake = shop
+    code, _events, result = deploy(tmp_path, "--auto-approve", "--json")
+    assert code == 0, result.stderr
+    _claims(api, fake)
+
+    def scale(self: HybridCluster, kind: str, name: str, replicas: int) -> None:
+        self.fake.calls.append(f"scale {kind}/{name} {replicas}")
+        api.objects[(kind, name)]["spec"]["replicas"] = replicas
+
+    monkeypatch.setattr(HybridCluster, "scale", scale)
+    from piceli.restore.store import write_record
+
+    api.objects[("StatefulSet", "db")]["spec"]["replicas"] = 0
+    interrupted = tmp_path / "state" / "restore-points" / "rp-20260101t000000z-abcdef"
+    write_record(
+        interrupted,
+        {
+            "schema": "piceli.restore-point.v1",
+            "id": interrupted.name,
+            "state": "running",
+            "namespace": TARGET.namespace,
+            "writers": [
+                {
+                    "workload": "StatefulSet/db",
+                    "kind": "StatefulSet",
+                    "name": "db",
+                    "replicas": 2,
+                }
+            ],
+            "claims": [],
+        },
+    )
+    fake.fail["tar -czf"] = 2
+    write_app(tmp_path, PIPELINE.replace("IMAGE", NEW))
+    code, events, result = deploy(tmp_path, "--auto-approve", "--json")
+    assert code == 1, result.stdout + result.stderr
+    stateful = api.objects[("StatefulSet", "db")]
+    assert stateful["spec"]["replicas"] == 2
+    assert stateful["spec"]["template"]["spec"]["containers"][0]["image"] == OLD
+    assert "started again on the running release: StatefulSet/db" in result.stderr
+    assert events[-1]["reason"] == "restore-point-copy-failed"
