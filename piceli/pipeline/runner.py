@@ -2254,7 +2254,18 @@ class PipelineRunner:
             if steps:
                 grown = self._grow_claims(cluster, record, steps, keep)
         except RestorePointError as error:
-            raise PipelineError(error.code, str(error), failed=True) from None
+            started = error.details.get("writers_started")
+            if started:
+                self.say(
+                    "[backup] started again on the running release: "
+                    + ", ".join(started)
+                )
+            raise PipelineError(
+                error.code,
+                str(error),
+                failed=True,
+                details={"writers_started": started} if started is not None else None,
+            ) from None
         finally:
             cluster.close()
         # Writers changed: the release plan is made again from live state.
@@ -2298,6 +2309,7 @@ class PipelineRunner:
         workloads were not switched) and the error propagates.
         """
         from piceli.restore.claims import grow
+        from piceli.restore.model import RestorePointError
         from piceli.restore.runner import _Writers
 
         settings = self.pipeline.restore_points
@@ -2330,9 +2342,11 @@ class PipelineRunner:
                 close = getattr(jobs, "close", None)
                 if callable(close):
                     close()
-        except BaseException:
-            writers.start()
+        except BaseException as error:
+            started = writers.start()
             record["left_stopped"] = []
+            if isinstance(error, RestorePointError):
+                error.details["writers_started"] = started
             raise
         started = writers.start(keep)
         record["left_stopped"] = [
