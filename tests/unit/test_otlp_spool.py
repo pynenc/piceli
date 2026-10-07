@@ -154,3 +154,15 @@ def test_the_controller_prints_each_line_with_its_time(
     assert re.fullmatch(stamp + "main: push infinite-haiku -> abc", lines[0])
     assert re.fullmatch(stamp + "second line", lines[1])
     assert lines[2] == "plain again"
+
+
+def test_stamping_ends_with_the_command(capsys: pytest.CaptureFixture[str]) -> None:
+    """``gitops run`` stamps its own lines only: other commands in the same
+    process (tests run several) print plain lines again."""
+    from piceli import cli_contract
+
+    with cli_contract.stamped_lines():
+        cli_contract.say("stamped")
+    cli_contract.say("plain")
+    lines = capsys.readouterr().err.splitlines()
+    assert lines[0].endswith("Z stamped") and lines[1] == "plain"

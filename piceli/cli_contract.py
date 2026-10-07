@@ -83,6 +83,17 @@ def stamp_lines(on: bool = True) -> None:
         logging.getLogger().addHandler(handler)
 
 
+@contextmanager
+def stamped_lines() -> Iterator[None]:
+    """:func:`stamp_lines` for the duration of a command (restored after)."""
+    was = _STAMPED
+    stamp_lines()
+    try:
+        yield
+    finally:
+        stamp_lines(was)
+
+
 def say(message: str) -> None:
     """Print human text on stderr (each line with its UTC time after
     :func:`stamp_lines`)."""

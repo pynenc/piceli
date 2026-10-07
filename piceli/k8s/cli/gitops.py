@@ -1293,65 +1293,68 @@ def run(
     """Run the controller loop (the Deployment's entrypoint); --once for one poll."""
     import json
 
-    from piceli.cli_contract import stamp_lines
+    from piceli.cli_contract import stamped_lines
 
-    stamp_lines()  # 0.17.0: every line the controller prints has its time
+    with stamped_lines():  # 0.17.0: every line the controller prints has its time
+        from piceli.gitops.config import ControllerConfig
+        from piceli.gitops.controller import Controller
+        from piceli.gitops.repo import GitRemote
+        from piceli.gitops.state import controller_lock
+        from piceli.infra.controller import is_composition_config
 
-    from piceli.gitops.config import ControllerConfig
-    from piceli.gitops.controller import Controller
-    from piceli.gitops.repo import GitRemote
-    from piceli.gitops.state import controller_lock
-    from piceli.infra.controller import is_composition_config
-
-    if service_account and kubeconfig is not None:
-        reject(
-            "gitops-target-required",
-            "--service-account and --kubeconfig exclude each other",
-        )
-    try:
-        document = json.loads(config_file.read_text())
-    except (OSError, ValueError):
-        document = None
-    if is_composition_config(document):
-        _run_composition(
-            config_file, state_dir, once=once, service_account=service_account,
-            kubeconfig=kubeconfig, context=context, namespace=namespace,
-            credentials_dir=credentials_dir, local_build=local_build,
-            transport=transport,
-        )  # fmt: skip
-        return
-    if local_build:
-        reject("gitops-config-invalid", "--local-build needs a composition controller")
-    with _guard():
-        config = ControllerConfig.load(config_file)
-    with (
-        tempfile.TemporaryDirectory(prefix="piceli-gitops-") as private,
-        _guard(),
-        controller_lock(state_dir),
-    ):
-        target = _run_target(service_account, kubeconfig, context, Path(private))
-        remote = GitRemote(
-            config.repo, state_dir / "mirror", credentials_dir=credentials_dir
-        )
-        channel, closer = _run_channel(target, namespace, state_dir, transport)
-        try:
-            ports = _ports(target, state_dir, config, transport)
-            controller = Controller(
-                config,
-                state_dir=state_dir,
-                source=remote,
-                ports=ports,
-                channel=channel,
-                log=say,
+        if service_account and kubeconfig is not None:
+            reject(
+                "gitops-target-required",
+                "--service-account and --kubeconfig exclude each other",
             )
-            if once:
-                emit_json(controller.poll_once())
-                return
-            say(f"gitops controller polling {config.repo} every {config.poll_seconds}s")
-            refresh = _refresher(service_account, Path(private), channel, transport)
-            _forever(controller, refresh)
-        finally:
-            closer()
+        try:
+            document = json.loads(config_file.read_text())
+        except (OSError, ValueError):
+            document = None
+        if is_composition_config(document):
+            _run_composition(
+                config_file, state_dir, once=once, service_account=service_account,
+                kubeconfig=kubeconfig, context=context, namespace=namespace,
+                credentials_dir=credentials_dir, local_build=local_build,
+                transport=transport,
+            )  # fmt: skip
+            return
+        if local_build:
+            reject(
+                "gitops-config-invalid", "--local-build needs a composition controller"
+            )
+        with _guard():
+            config = ControllerConfig.load(config_file)
+        with (
+            tempfile.TemporaryDirectory(prefix="piceli-gitops-") as private,
+            _guard(),
+            controller_lock(state_dir),
+        ):
+            target = _run_target(service_account, kubeconfig, context, Path(private))
+            remote = GitRemote(
+                config.repo, state_dir / "mirror", credentials_dir=credentials_dir
+            )
+            channel, closer = _run_channel(target, namespace, state_dir, transport)
+            try:
+                ports = _ports(target, state_dir, config, transport)
+                controller = Controller(
+                    config,
+                    state_dir=state_dir,
+                    source=remote,
+                    ports=ports,
+                    channel=channel,
+                    log=say,
+                )
+                if once:
+                    emit_json(controller.poll_once())
+                    return
+                say(
+                    f"gitops controller polling {config.repo} every {config.poll_seconds}s"
+                )
+                refresh = _refresher(service_account, Path(private), channel, transport)
+                _forever(controller, refresh)
+            finally:
+                closer()
 
 
 def _run_composition(
