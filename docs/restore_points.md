@@ -177,10 +177,20 @@ A composition environment that deploys a pipeline can choose its own
 (0.17.0), so test environments skip the backups production keeps:
 
 ```python
-Environment("main", namespace="shop", pipeline=pipeline, follow={app_repo: "main"},
-            restore_points="all")
-Environment.per_branch("wp-*", namespace="shop-{branch}", pipeline=pipeline,
-                       follow={app_repo: "{branch}"}, restore_points="off")
+Environment(
+    "main",
+    namespace="shop",
+    pipeline=pipeline,
+    follow={app_repo: "main"},
+    restore_points="all",
+)
+Environment.per_branch(
+    "wp-*",
+    namespace="shop-{branch}",
+    pipeline=pipeline,
+    follow={app_repo: "{branch}"},
+    restore_points="off",
+)
 ```
 
 - `"off"`: none (refused when the app grows or moves a claim, which only the
