@@ -1829,6 +1829,7 @@ class CompositionController:
                         )
                     self._remember(image_name, wanted["key"], built[image_name])
                     images[image_name] = built[image_name]
+                self._build_times(name, sorted(request.images))
         except Exception:
             for entry in components.values():
                 if entry["state"] == "building":
@@ -1890,6 +1891,35 @@ class CompositionController:
                     "finished_at": _iso(self.clock()),
                     "state": state,
                 }
+
+    def _build_times(self, env: str, names: list[str]) -> None:
+        """Each image's timings from the builder (0.17.0), in ``builds`` and the log.
+
+        The spec's commands build every image of one Job: ``shared_with``
+        names the others, whose ``commands_seconds`` is the same time.
+        """
+        found = getattr(self.ports.builder, "timings", None)
+        if not isinstance(found, Mapping):
+            return
+        for name in names:
+            timings = found.get(name)
+            if not isinstance(timings, Mapping) or name not in self._builds:
+                continue
+            values = {
+                key: round(float(timings.get(key) or 0), 3)
+                for key in ("commands_seconds", "assemble_seconds", "push_seconds")
+            }
+            others = [item for item in names if item != name]
+            self._builds[name]["timings"] = values
+            self._builds[name]["shared_with"] = others
+            total = round(sum(values.values()), 3)
+            self.log(
+                f"{env}: built {name} in {total}s (commands "
+                f"{values['commands_seconds']}s"
+                + (f", shared with {', '.join(others)}" if others else "")
+                + f"; assembly {values['assemble_seconds']}s, push "
+                f"{values['push_seconds']}s)"
+            )
 
     @staticmethod
     def _built_from(
