@@ -15,6 +15,14 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   writer is scaled, and a retry takes them from a point that never ended.
   The deploy says so (`[backup] started again on the running release:
   ...`) and the status' `failure.writers_started` lists the workloads.
+- **Every restore point attempt writes a clean point.** A point directory
+  is created only once (a reused id is refused with `restore-point-exists`
+  before any writer stops); a take first closes the points of attempts that
+  died mid-copy (`state: interrupted`, their `.partial` files removed); and
+  one process at a time takes into a directory (`restore-point-busy`,
+  new: two controllers, or a controller and a laptop, sharing one would
+  write and verify each other's files). A `restore-point-checksum-mismatch`
+  now says whether the file's size differs from the recorded one.
 
 ## Version 0.16.0
 

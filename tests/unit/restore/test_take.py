@@ -181,7 +181,7 @@ def test_a_failed_copy_starts_writers_again_and_leaves_no_partial_file(
         )
     assert caught.value.code == "restore-point-copy-failed"
     assert cluster.calls[-1] == "scale StatefulSet/db 2"
-    (point,) = list(root.iterdir())
+    (point,) = list(root.glob("rp-*"))
     assert [path.name for path in point.iterdir()] == ["record.json"]
     assert json.loads((point / "record.json").read_text())["state"] == "failed"
 
@@ -394,7 +394,7 @@ def test_the_replicas_are_recorded_before_any_writer_is_scaled(tmp_path: Path) -
 
     def recording_scale(kind: str, name: str, replicas: int) -> None:
         if replicas == 0:
-            (point,) = list(root.iterdir())
+            (point,) = list(root.glob("rp-*"))
             seen.append(json.loads((point / "record.json").read_text())["writers"])
         scale(kind, name, replicas)
 
