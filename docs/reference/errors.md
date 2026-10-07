@@ -515,6 +515,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`restore-plan-changed`](#error-restore-plan-changed) | restore | no |
 | [`restore-point-archive-invalid`](#error-restore-point-archive-invalid) | restore | no |
 | [`restore-point-archive-missing`](#error-restore-point-archive-missing) | restore | no |
+| [`restore-point-busy`](#error-restore-point-busy) | restore | yes |
 | [`restore-point-checksum-mismatch`](#error-restore-point-checksum-mismatch) | restore | no |
 | [`restore-point-claim-missing`](#error-restore-point-claim-missing) | restore | no |
 | [`restore-point-claim-unknown`](#error-restore-point-claim-unknown) | restore | no |
@@ -4566,6 +4567,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Restore the file from your copy of the restore point directory, or use another restore point (`piceli restore-points`).
 - **Retry-safe:** no
 
+(error-restore-point-busy)=
+### `restore-point-busy`
+
+**Restore point directory in use.** Another process is taking a restore point into the same directory (two controllers, or a controller and a laptop, sharing it). Two takes at once would write and verify each other's files, so nothing was stopped.
+
+- **Fix:** Wait for the other deploy to end, then run again. Give each runner its own restore point directory.
+- **Retry-safe:** yes
+
 (error-restore-point-checksum-mismatch)=
 ### `restore-point-checksum-mismatch`
 
@@ -4603,7 +4612,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 **Archive already exists.** An archive with the same restore point id and claim already exists. Restore points are never overwritten.
 
-- **Fix:** Run again: every run takes a new restore point id.
+- **Fix:** Run again: every attempt takes a new restore point id (a retry never writes into an earlier attempt's point).
 - **Retry-safe:** yes
 
 (error-restore-point-helper-failed)=

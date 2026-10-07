@@ -38,11 +38,13 @@ from piceli.restore.store import (
     RECORD_SCHEMA,
     ArchiveWriter,
     archive_name,
+    close_interrupted,
     file_sha256,
     load_record,
+    new_point_dir,
     new_point_id,
     private_dir,
-    replicas_before,
+    take_lock,
     verify_claim,
     write_record,
 )
@@ -93,7 +95,7 @@ class _Writers:
         scale every writer to zero.
 
         :param prior: Replica counts an interrupted restore point recorded
-            (:func:`~piceli.restore.store.replicas_before`): a writer found at
+            (:func:`~piceli.restore.store.close_interrupted`): a writer found at
             zero replicas that one of them stopped is remembered at that
             count, so it is started again at it.
         :param recorded: Persists the counts before anything is scaled (a
@@ -193,10 +195,39 @@ def take(
         when anything fails.
     :raises RestorePointError: with a registered code; the writers are
         started again and the partial point is recorded as ``failed``.
+        ``restore-point-busy`` (another process takes into ``root``) and
+        ``restore-point-exists`` (``point`` was taken before) stop nothing.
+
+    Every attempt writes a new point directory. Points of earlier attempts
+    that died mid-copy are closed first (:func:`close_interrupted`), and
+    writers they left at zero replicas are remembered at their counts.
     """
-    say = say or (lambda _line: None)
-    point = point or new_point_id()
-    directory = root / point
+    with take_lock(root):
+        prior = close_interrupted(root)
+        return _take(
+            cluster,
+            plan,
+            settings,
+            new_point_dir(root, point or new_point_id()),
+            prior,
+            context=context,
+            keep_stopped=keep_stopped,
+            say=say or (lambda _line: None),
+        )
+
+
+def _take(
+    cluster: RestoreCluster,
+    plan: RestorePlan,
+    settings: RestorePoints,
+    directory: Path,
+    prior: Mapping[str, int],
+    *,
+    context: Mapping[str, Any],
+    keep_stopped: Iterable[str],
+    say: Callable[[str], None],
+) -> dict[str, Any]:
+    point = directory.name
     record: dict[str, Any] = {
         "schema": RECORD_SCHEMA,
         "id": point,
@@ -224,7 +255,7 @@ def take(
             record["writers"] = stopped
             write_record(directory, record)
 
-        writers.stop(plan.writers, replicas_before(root), recorded)
+        writers.stop(plan.writers, prior, recorded)
         cluster.wait_stopped(plan.writers, claims, timeout)
         say(f"writers stopped; no pod mounts {len(claims)} claim(s) writably")
         for index, item in enumerate(plan.claims):
