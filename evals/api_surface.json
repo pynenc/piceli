@@ -5685,7 +5685,8 @@
      "enable",
      "run",
      "status",
-     "sync"
+     "sync",
+     "wait"
     ]
    },
    "gitops approve": {
@@ -5790,6 +5791,23 @@
      "--kubeconfig",
      "--namespace",
      "--state-dir",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "gitops wait": {
+    "arguments": [
+     "env",
+     "commit"
+    ],
+    "flags": [
+     "--context",
+     "--interval",
+     "--json",
+     "--kubeconfig",
+     "--namespace",
+     "--state-dir",
+     "--timeout",
      "--transport"
     ],
     "subcommands": []
@@ -8538,10 +8556,12 @@
   "piceli.gitops.install",
   "piceli.gitops.liveness",
   "piceli.gitops.otel",
+  "piceli.gitops.otlp_spool",
   "piceli.gitops.ports",
   "piceli.gitops.recovery",
   "piceli.gitops.repo",
   "piceli.gitops.state",
+  "piceli.gitops.wait",
   "piceli.importing",
   "piceli.importing.clean",
   "piceli.importing.codegen",

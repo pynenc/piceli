@@ -63,6 +63,16 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 - **Timestamps on the controller's log lines.** Every line `piceli gitops
   run` prints starts with its UTC time, as do the Python logging lines
   (an OTLP exporter's errors).
+- **`piceli gitops wait ENV COMMIT`** blocks until the environment runs the
+  commit (of any of its sources) and returns `deployed`, `failed` (with the
+  `stage` and `cause`), `approval-required`, `superseded`, `stopped` or
+  `timed-out` (`--timeout`, default 1800 s; `--json`); retries are waited
+  through. Agents end an integration round with it.
+- **The status shows the running stage and a summary.** While a step runs,
+  `envs.<env>.in_progress.stage` (`build`, then the pipeline's stages) and
+  `stage_since` are published as they change; a failed step records
+  `failed_stage`. `piceli gitops status --json` adds `summary.<env>`:
+  state, commit, stage, attempt, next retry (ISO time) and last error.
 
 ## Version 0.16.0
 

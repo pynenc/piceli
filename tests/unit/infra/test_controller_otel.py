@@ -890,3 +890,34 @@ def test_a_failed_step_emits_a_retry_event_with_its_next_attempt(
     )
     (finished,) = signals.events("piceli.deploy.finished")
     assert finished.attributes["piceli.deploy.result"] == "failure"
+
+
+def test_the_status_shows_the_stage_a_step_is_in(world: dict[str, Any]) -> None:
+    """0.17.0: ``in_progress.stage`` follows the runner's stage events."""
+    ports: Ports = world["ports"]
+    seen: list[Any] = []
+    deploy = ports.env_up
+
+    def env_up(pipeline: Any, name: str, **kwargs: Any) -> dict[str, Any]:
+        if kwargs["approve"] is not None:
+            for stage in ("plan", "backup", "apply"):
+                kwargs["on_stage"](
+                    {"event": "stage", "stage": stage, "state": "running"}
+                )
+                seen.append(
+                    world["channel"].read_status()["envs"]["main"]["in_progress"][
+                        "stage"
+                    ]
+                )
+        return deploy(pipeline, name, **kwargs)
+
+    ports.env_up = env_up  # type: ignore[method-assign]
+    world["controller"].poll_once()
+    assert seen == ["plan", "backup", "apply"]
+    assert "in_progress" not in world["channel"].read_status()["envs"]["main"]
+
+
+def test_a_failed_step_records_the_stage_it_failed_in(world: dict[str, Any]) -> None:
+    world["ports"].builder.fail = "error"
+    status = world["controller"].poll_once()
+    assert status["envs"]["main"]["failed_stage"] == "build"

@@ -99,6 +99,20 @@ piceli gitops status --kubeconfig cluster.kubeconfig --context my-cluster
 #   wp-login: deployed 8c1d2e3f4a5b in shop-wp-login
 ```
 
+To wait for one commit to reach an environment (an agent's integration
+round, a CI job), `piceli gitops wait` (0.17.0) blocks until it is
+deployed, failed (with the stage and cause), waiting for an approval,
+superseded by a newer revision, or `--timeout` seconds passed:
+
+```sh
+piceli gitops wait main 3f2a91c --kubeconfig cluster.kubeconfig --context my-cluster --json
+# main: pending
+# main: pending, stage build
+# main: retrying, attempt 1, next retry 2026-09-30T10:04:30Z
+# main: deployed
+# main 3f2a91c: deployed
+```
+
 Each deploy records the digest of the check set it verified (its
 `checks_hash`), so unchanged checks never run again on the next sync of an
 unchanged release, and a changed check set always does. On start, the

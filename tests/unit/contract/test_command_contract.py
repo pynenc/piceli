@@ -565,6 +565,10 @@ CASES: dict[str, tuple[Argv, str]] = {
     ),
     "gitops disable": (lambda p: ["gitops", "disable"], "gitops-target-required"),
     "gitops status": (lambda p: ["gitops", "status"], "gitops-target-required"),
+    "gitops wait": (
+        lambda p: ["gitops", "wait", "main", "not-a-commit"],
+        "gitops-request-invalid",
+    ),
     "registry install": (
         lambda p: ["registry", "install", "--on", "node-a"],
         "cluster-registry-target-required",

@@ -1642,6 +1642,21 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "degraded (last poll failed), stale (no poll for 3 intervals), "
             "starting, down. gitops-not-installed without a controller.",
         ),
+        "gitops wait": _C(
+            "Wait until an environment runs a commit: deployed, failed (the "
+            "stage and cause), approval-required, superseded, stopped or "
+            "timed-out.",
+            reads=("kubeconfig or --state-dir",),
+            cluster="reads",
+            contract="conforms",
+            exit_codes=(0, 1, 2, 3),
+            notes="Read-only; safe to run and to retry. Polls the status "
+            "ConfigMap every --interval seconds (default 10) for at most "
+            "--timeout seconds (default 1800). Retries of the controller are "
+            "waited through. Exit 0 deployed, 1 failed, superseded, stopped "
+            "or timed out, 3 approval-required (the plan hash is in the "
+            "output). COMMIT is a commit of any source of the environment.",
+        ),
         "gitops approve": _C(
             "Approve the pending plan hash of one branch environment; the "
             "controller applies it on its next poll.",
