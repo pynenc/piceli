@@ -722,3 +722,104 @@ def test_the_job_builds_two_contexts_of_one_source_from_one_checkout(
     )
     assert sorted(pushed) == ["example/api", "example/worker"]
     assert set(receipt["images"]) == {"api", "worker"}
+
+
+def test_the_job_run_reports_each_images_build_times(tmp_path: Path) -> None:
+    sources = tmp_path / "sources"
+    files = {
+        "infra": {"host-build.toml": SPEC, "config/api.json": "{}\n"},
+        "api": {"site/index.html": "<h1>hi</h1>\n"},
+        "worker": {"jobs/run.sh": "echo hi\n"},
+    }
+    sources.mkdir()
+    for name, content in files.items():
+        repo = Repo(tmp_path / "remotes", name, content)
+        repo.work.rename(sources / name)
+
+    def deliver(
+        archive: Any, target: Any, grant: Any, *, node_registry: Any
+    ) -> dict[str, Any]:
+        return {
+            "state": "succeeded",
+            "pull_ref": f"{node_registry}/{target.repository}@sha256:" + "8" * 64,
+        }
+
+    receipt = job_run_spec(
+        sources=sources,
+        spec="infra/host-build.toml",
+        images=[
+            {"image": name, "repository": f"example/{name}", "key": "sha256:" + c * 64}
+            for name, c in (("api", "6"), ("worker", "7"))
+        ],
+        platforms=("linux/arm64",),
+        cache=tmp_path / "cache",
+        out=tmp_path / "out",
+        registry_url="oci://registry.example:5000",
+        node_registry="registry.example:5000",
+        deliver=deliver,
+    )
+    commands = receipt["commands"]
+    assert commands and all(
+        set(item) == {"index", "tool", "seconds", "state"} for item in commands
+    )
+    for name in ("api", "worker"):
+        timings = receipt["images"][name]["timings"]
+        assert set(timings) == {"commands_seconds", "assemble_seconds", "push_seconds"}
+        assert all(value >= 0 for value in timings.values())
+        # The commands build every image of the spec: their time is shared.
+        assert timings["commands_seconds"] == round(
+            sum(item["seconds"] for item in commands), 3
+        )
+
+
+def test_the_history_shows_each_images_build_times(world: dict[str, Any]) -> None:
+    controller, ports = world["controller"], world["ports"]
+    timings = {
+        "api": {"commands_seconds": 30.0, "assemble_seconds": 2.0, "push_seconds": 1.5},
+        "worker": {
+            "commands_seconds": 30.0,
+            "assemble_seconds": 4.0,
+            "push_seconds": 0.5,
+        },
+    }
+    ports.builder.timings = timings
+    lines: list[str] = []
+    controller.log = lines.append
+    controller.poll_once()
+    from piceli.gitops import history as history_module
+
+    controller._runs = history_module.RunReader()
+    history = controller._history_document()
+    (run,) = [r for r in history["envs"]["main"]["runs"] if r.get("builds")]
+    assert run["builds"]["api"]["timings"] == timings["api"]
+    assert run["builds"]["worker"]["shared_with"] == ["api"]
+    assert any(
+        "built worker in 34.5s (commands 30.0s, shared with api; assembly 4.0s, "
+        "push 0.5s)" in line
+        for line in lines
+    )
+
+
+def test_the_build_job_keeps_cargos_downloads_on_its_cache_claim() -> None:
+    from piceli.infra.builders import JobSettings, spec_job
+
+    request = SpecBuildRequest(
+        "host-build.toml",
+        "infra",
+        {"infra": "a" * 40},
+        {"api": {"repository": "example/api", "key": "sha256:" + "1" * 64}},
+        None,
+        {"infra": "https://example.com/infra.git"},
+    )
+    job = spec_job(
+        JobSettings(
+            image="example/builder@sha256:" + "2" * 64,
+            namespace="piceli-system",
+            registry_url="oci://registry:5000",
+            node_registry="registry:5000",
+        ),
+        request,
+        {},
+    )
+    script = job["spec"]["template"]["spec"]["containers"][0]["command"][2]
+    assert 'export CARGO_HOME="${CARGO_HOME:-/cache/cargo-home}"' in script

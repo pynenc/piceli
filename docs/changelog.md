@@ -33,6 +33,18 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   read-only helper before anything is quiesced or stopped; `"fail"` fails
   the stage with nothing stopped (`restore-point-claim-too-large`, new),
   `"skip"` leaves the claim out with a warning (`skipped_claims`).
+- **Build times per image.** A pipeline image build Job reports each
+  command's time and, per image, `commands_seconds` (the spec's commands,
+  shared by every image of the Job), `assemble_seconds` and `push_seconds`;
+  the deployment history keeps them under `builds.<image>.timings` with
+  `shared_with` (the other images of the same Job), and the controller logs
+  one line per image (`built poet in 812.4s (commands 790.1s, shared with
+  kabuki, shibuya; assembly 14.2s, push 8.1s)`). Images whose inputs did not
+  change are still not built (each image's change key covers only the
+  contexts it lists).
+- **A persistent cargo cache for the build Job.** `CARGO_HOME` is on the
+  build cache claim (`/cache/cargo-home`) next to the target directory, so a
+  build no longer downloads the registry index and crates again.
 
 ## Version 0.16.0
 

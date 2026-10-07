@@ -239,10 +239,19 @@ class HostExecution:
                 shutil.rmtree(images_dir)
             images_dir.mkdir(parents=True)
             bases: dict[str, BaseImage] = {}
-            images = {
-                image.name: self._image(image, images_dir, bases)
-                for image in self.plan.images
-            }
+            images = {}
+            for image in self.plan.images:
+                began = time.monotonic()
+                images[image.name] = self._image(image, images_dir, bases)
+                # 0.17.0: each image's assembly time (base pull, layers, archive).
+                self.steps.append(
+                    {
+                        "platform": self.plan.platform,
+                        "kind": f"image-{image.name}",
+                        "state": "succeeded",
+                        "seconds": round(time.monotonic() - began, 3),
+                    }
+                )
         except LayerError as error:
             raise BuildSpecError(
                 error.code, str(error), steps=tuple(self.steps)

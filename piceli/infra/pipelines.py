@@ -445,7 +445,11 @@ def run_spec_build(
 
     ``deliver(image, archive, image_id, repository)`` pushes one image and
     returns its delivery receipt. Returns ``{"images": {name: {"pull_ref",
-    "manifest_digest", "key", "platform"}}}`` for the first platform.
+    "manifest_digest", "key", "platform", "timings"}}, "commands": [...]}``
+    for the first platform. ``timings`` (0.17.0): ``commands_seconds`` (the
+    spec's commands, shared by every image), ``assemble_seconds`` and
+    ``push_seconds``; ``commands``: each command's ``index``, ``tool``,
+    ``seconds`` and ``state``.
     """
     import time
 
@@ -457,6 +461,7 @@ def run_spec_build(
     root = roots[request.repo]
     path = root.joinpath(*PurePosixPath(request.spec).parts)
     results: dict[str, Any] = {}
+    commands: list[dict[str, Any]] = []
     declared = NodeFacts.from_dict(request.facts) if request.facts else None
     for platform in platforms:
         facts = (
@@ -479,12 +484,31 @@ def run_spec_build(
             raise build_failed(
                 f"build {request.spec}: host build failed ({error.code})", error
             ) from None
+        steps = [item for item in receipt.get("steps") or () if isinstance(item, dict)]
+        ran: list[dict[str, Any]] = [
+            {
+                "index": int(str(item["kind"]).partition("-")[2]),
+                "tool": str(item.get("tool")),
+                "seconds": float(item.get("seconds") or 0),
+                "state": str(item.get("state")),
+            }
+            for item in steps
+            if str(item.get("kind")).startswith("command-")
+        ]
+        assembled = {
+            str(item["kind"])[len("image-") :]: float(item.get("seconds") or 0)
+            for item in steps
+            if str(item.get("kind")).startswith("image-")
+        }
+        if not commands:
+            commands = ran
         for name, wanted in sorted(request.images.items()):
             entry = receipt["outputs"]["images"].get(name)
             if entry is None:
                 raise CompositionError(
                     "component-build-failed", f"the build made no image {name!r}"
                 )
+            began = time.monotonic()
             delivered = deliver(
                 name,
                 (directory / entry["archive"]).absolute(),
@@ -493,9 +517,21 @@ def run_spec_build(
             )
             image = _pinned(delivered, name)
             results.setdefault(
-                name, {**image.to_dict(), "platform": platform, "key": wanted["key"]}
+                name,
+                {
+                    **image.to_dict(),
+                    "platform": platform,
+                    "key": wanted["key"],
+                    "timings": {
+                        "commands_seconds": round(
+                            sum(float(item["seconds"]) for item in ran), 3
+                        ),
+                        "assemble_seconds": assembled.get(name, 0.0),
+                        "push_seconds": round(time.monotonic() - began, 3),
+                    },
+                },
             )
-    return {"images": results}
+    return {"images": results, "commands": commands}
 
 
 # ---------------------------------------------------------------- render

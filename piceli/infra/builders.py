@@ -345,6 +345,9 @@ class LocalBuilder:
 #: reaches Git only through ``GIT_ASKPASS`` (never a URL, argument or log).
 _SCRIPT = """set -eu
 export HOME=/work/home GIT_TERMINAL_PROMPT=0
+# 0.17.0: cargo's registry index and downloaded crates stay on the cache claim
+# (the target directory already does), so a build does not fetch them again.
+export CARGO_HOME="${CARGO_HOME:-/cache/cargo-home}"
 mkdir -p "$HOME" /work/src /work/out
 cat > /work/askpass <<'ASK'
 #!/bin/sh
@@ -761,6 +764,8 @@ class JobBuilder:
         self.mirror_route = mirror_route
         self.backend = backend
         self.say = say
+        #: Each image's ``timings`` from the last :meth:`build_spec` (0.17.0).
+        self.timings: dict[str, dict[str, float]] = {}
         #: The environment the next build is for (the controller sets it):
         #: its Jobs carry ``piceli.io/build-env`` so its teardown removes a
         #: failed Job kept for it (:meth:`forget`).
@@ -863,6 +868,11 @@ class JobBuilder:
             ) from None
         found = receipt.get("images") or {}
         built: dict[str, BuiltImage] = {}
+        self.timings = {
+            name: dict(entry["timings"])
+            for name, entry in found.items()
+            if isinstance(entry, Mapping) and isinstance(entry.get("timings"), Mapping)
+        }
         for name, wanted in request.images.items():
             entry = found.get(name)
             if not isinstance(entry, Mapping) or entry.get("key") != wanted["key"]:
