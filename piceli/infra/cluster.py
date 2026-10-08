@@ -143,6 +143,15 @@ def check_cluster(cluster: Cluster) -> None:
     for what, node in placed.items():
         if node is not None and names and node not in names:
             raise _invalid(f"{what} names {node!r}, which is not one of the nodes")
+    if cluster.dev is not None:
+        from piceli.dev.model import DevBuilds
+
+        if not isinstance(cluster.dev, DevBuilds):
+            raise _invalid("Cluster(dev=) must be DevBuilds(...)")
+        if cluster.dev.node not in names:
+            raise _invalid(
+                f"DevBuilds(node={cluster.dev.node!r}) is not a declared node"
+            )
 
 
 def _origin(url: str) -> tuple[str, str, int] | None:
@@ -209,6 +218,8 @@ def describe(cluster: Cluster) -> dict[str, Any]:
             body["controller"]["delete_volumes"] = True
         if cluster.controller.telemetry is not None:  # absent when off: same hashes
             body["controller"]["telemetry"] = cluster.controller.telemetry.to_dict()
+    if cluster.dev is not None:  # 0.18.0; absent when off: same hashes
+        body["dev"] = cluster.dev.describe()
     if cluster.ui is not None:
         body["ui"] = {
             "access": cluster.ui.access,

@@ -10,6 +10,7 @@ from piceli.k8s.cli.cluster import register as register_cluster_commands
 from piceli.k8s.cli.codegen import app as codegen_app
 from piceli.k8s.cli.contract import register as register_contract_commands
 from piceli.k8s.cli.deploy_pipeline import deploy
+from piceli.k8s.cli.dev import register as register_dev_commands
 from piceli.k8s.cli.env import register as register_env_commands
 from piceli.k8s.cli.gitops import register as register_gitops_commands
 from piceli.k8s.cli.heavy import register as register_heavy_commands
@@ -56,6 +57,7 @@ register_cluster_commands(app)
 register_infra_commands(app)
 register_profile_commands(app)
 register_bundle_commands(app)
+register_dev_commands(app)
 
 
 def _version(value: bool) -> None:

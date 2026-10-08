@@ -4,6 +4,23 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.18.0
+
+- **Development builds** (`piceli dev run`): a developer's or coding agent's
+  build and test commands run on the cluster's builder node for a commit
+  (`--ref`), with sibling sources at pinned commits (`--source
+  NAME=PATH@REF`), in a shared warm cache. Declared on the cluster
+  (`Cluster(dev=DevBuilds(node=, image=, profiles=[DevProfile(...)]))`) and
+  installed by `piceli cluster init`: namespace `piceli-dev`, cache claim,
+  NetworkPolicy, configuration. Each run is an isolated pod; the commit is
+  packed on the client and uploaded over `pods/exec` (no registry, no Git
+  credentials in the cluster); it builds in a cache lineage synced keeping
+  unchanged files' mtimes, so cargo rebuilds only what changed. The result
+  (`piceli.dev-run.v1`) has the exit code, phase durations, cargo test
+  counts, crates compiled and the log tail; `--artifact` copies files back.
+  New codes `dev-*` (`piceli explain`); see `docs/dev_builds.md`.
+- **The builder image has Node.js** (for development runs of small JS tests).
+
 ## Version 0.17.0
 
 - **`kubernetes<37`.** The kubernetes Python client 37.0.0 changed

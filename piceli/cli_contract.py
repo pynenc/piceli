@@ -1439,6 +1439,32 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "until interrupted. Pushes through it go by digest; nodes pull "
             "by the stable name. " + _EXPLICIT_CONTEXT,
         ),
+        "dev run": _C(
+            "Run a build or test command on the cluster's builder node for a "
+            "commit, with the shared warm cache; stream its log, print the "
+            "result (exit code, phases, tests, cache use, log tail).",
+            reads=(
+                "MODULE:ATTR (piceli.infra.Cluster with dev=)",
+                "credential profile",
+                "the local Git repositories of the sources",
+            ),
+            writes=("--artifacts-dir RUN/ (with --artifact)",),
+            cluster="writes",
+            approval_required=False,
+            safe_to_retry=True,
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            notes="Safe for agents: the owner approved what runs may do when "
+            "piceli cluster init applied Cluster(dev=DevBuilds(...)); each run is "
+            "an isolated pod in piceli-dev (non-root, no token, no Secret, no "
+            "cluster network) that only builds in the shared dev cache, never in "
+            "release caches. Exit 0 the command passed; 1 it failed "
+            "(dev-command-failed), timed out, ran out of memory, was cancelled or "
+            "the run broke; 2 refused (dev-not-enabled, dev-ref-unknown, "
+            "dev-source-invalid, dev-profile-unknown, dev-run-invalid). The run's "
+            "Job is removed on every outcome.",
+        ),
         "cluster init": _C(
             "Plan and, with --approve HASH, set a declared cluster up: node role "
             "labels, the in-cluster registry and its node mirrors, the GitOps "

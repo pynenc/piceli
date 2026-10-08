@@ -44,14 +44,15 @@ CMD ["piceli", "--help"]
 # --- builder: the controller plus the host-build tools for Rust and Python --
 # cargo (rustup, with the linux and wasm32 targets), cargo-zigbuild, zig, uv,
 # python3, sh, and what crates with C builds need (jemalloc-sys: make;
-# aws-lc-sys: cmake; pkg-config, curl, xz). The toolchain is read-only; cargo
+# aws-lc-sys: cmake; pkg-config, curl, xz) and node with npm (development
+# runs of small JS tests, 0.18.0). The toolchain is read-only; cargo
 # writes under $HOME, which the build Job points at its work directory.
 FROM controller AS builder
 LABEL org.opencontainers.image.description="Piceli cluster build Job (Rust and Python host builds)"
 USER root
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-       gcc g++ libc6-dev make cmake pkg-config curl xz-utils \
+       gcc g++ libc6-dev make cmake pkg-config curl xz-utils nodejs npm \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=rust /usr/local/rustup /usr/local/rustup
 COPY --from=rust /usr/local/cargo/bin /usr/local/cargo/bin

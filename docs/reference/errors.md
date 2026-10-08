@@ -180,6 +180,19 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`deploy-ref-source-unknown`](#error-deploy-ref-source-unknown) | pipeline | no |
 | [`deploy-ref-unknown`](#error-deploy-ref-unknown) | pipeline | yes |
 | [`deploy-stage-unknown`](#error-deploy-stage-unknown) | cli | no |
+| [`dev-command-failed`](#error-dev-command-failed) | dev | yes |
+| [`dev-not-enabled`](#error-dev-not-enabled) | dev | no |
+| [`dev-profile-unknown`](#error-dev-profile-unknown) | dev | no |
+| [`dev-queue-timeout`](#error-dev-queue-timeout) | dev | yes |
+| [`dev-ref-unknown`](#error-dev-ref-unknown) | dev | no |
+| [`dev-run-cancelled`](#error-dev-run-cancelled) | dev | yes |
+| [`dev-run-failed`](#error-dev-run-failed) | dev | yes |
+| [`dev-run-invalid`](#error-dev-run-invalid) | dev | no |
+| [`dev-run-out-of-memory`](#error-dev-run-out-of-memory) | dev | yes |
+| [`dev-run-timed-out`](#error-dev-run-timed-out) | dev | yes |
+| [`dev-source-invalid`](#error-dev-source-invalid) | dev | no |
+| [`dev-tool-missing`](#error-dev-tool-missing) | dev | no |
+| [`dev-upload-failed`](#error-dev-upload-failed) | dev | yes |
 | [`digest-mismatch`](#error-digest-mismatch) | artifacts-delivery | no |
 | [`discovery-incomplete`](#error-discovery-incomplete) | release | yes |
 | [`docker-socket-required`](#error-docker-socket-required) | artifacts-input | no |
@@ -4775,6 +4788,113 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Deploy the workload first, or restrict the verify to other claims with `--claim`.
 - **Retry-safe:** no
+
+
+## Development builds on a cluster builder (`Cluster(dev=DevBuilds(...))`, `piceli dev …`)
+
+(error-dev-command-failed)=
+### `dev-command-failed`
+
+**Command failed.** The command ran and exited non-zero (a compile error or a failing test). The result has `exit_code`, `tests` and the last log lines.
+
+- **Fix:** Read `log_tail` (or `piceli dev logs RUN`), fix the code, run again.
+- **Retry-safe:** yes
+
+(error-dev-not-enabled)=
+### `dev-not-enabled`
+
+**Development builds not installed.** The cluster has no `piceli-dev-config` ConfigMap in namespace `piceli-dev`: `Cluster(dev=DevBuilds(...))` is not declared, or `piceli cluster init` has not applied it.
+
+- **Fix:** Declare `dev=DevBuilds(node=..., image=...)` on the Cluster, then `piceli cluster init MODULE:ATTR` and approve its plan.
+- **Retry-safe:** no
+
+(error-dev-profile-unknown)=
+### `dev-profile-unknown`
+
+**Unknown dev profile.** `--profile` names no `DevProfile` of the installed `DevBuilds`.
+
+- **Fix:** Use one of the profiles the error lists, or declare it and run `piceli cluster init` again.
+- **Retry-safe:** no
+
+(error-dev-queue-timeout)=
+### `dev-queue-timeout`
+
+**Run did not start in time.** The run waited longer than `--queue-timeout` for a slot or for its pod to be scheduled.
+
+- **Fix:** Wait for the queue (`piceli dev status`), raise `--queue-timeout`, or add slots (`DevBuilds(slots=...)`).
+- **Retry-safe:** yes
+
+(error-dev-ref-unknown)=
+### `dev-ref-unknown`
+
+**Ref not in the local repository.** The ref does not name a commit of the local repository; runs ship commits from the client, the cluster never fetches.
+
+- **Fix:** `git fetch` the commit (or branch) first, then run again.
+- **Retry-safe:** no
+
+(error-dev-run-cancelled)=
+### `dev-run-cancelled`
+
+**Run cancelled.** The run's Job was deleted (`piceli dev cancel`, Ctrl-C) before it finished.
+
+- **Fix:** Run again when wanted.
+- **Retry-safe:** yes
+
+(error-dev-run-failed)=
+### `dev-run-failed`
+
+**Run pod failed.** The run's pod ended without a result, could not start (image pull, admission) or ended before its upload.
+
+- **Fix:** Check the profile's image and the builder node; `piceli dev logs RUN` shows what the pod printed.
+- **Retry-safe:** yes
+
+(error-dev-run-invalid)=
+### `dev-run-invalid`
+
+**Run request refused.** No command after `--`, an unknown priority, a `--cwd` outside the root source, or a `--node` other than the declared builder.
+
+- **Fix:** Fix the arguments the message names.
+- **Retry-safe:** no
+
+(error-dev-run-out-of-memory)=
+### `dev-run-out-of-memory`
+
+**Run out of memory.** The kernel killed the run's container at its memory limit (OOMKilled).
+
+- **Fix:** Raise the profile's `memory` (or `DevBuilds(run_memory=...)`), or lower the build's parallelism (`CARGO_BUILD_JOBS`).
+- **Retry-safe:** yes
+
+(error-dev-run-timed-out)=
+### `dev-run-timed-out`
+
+**Run over its time.** The command ran longer than the profile's timeout and its process group was killed, or no lineage became free in that time.
+
+- **Fix:** Raise the profile's `timeout`, split the command, or find what hangs (the log tail shows the last output).
+- **Retry-safe:** yes
+
+(error-dev-source-invalid)=
+### `dev-source-invalid`
+
+**Source not usable.** A source is not `NAME=PATH[@REF]`, its path is not in a Git repository, two sources share a name, or a working tree could not be read.
+
+- **Fix:** Give each source a directory name and a path inside a Git repository (`--source ih-muse=../ih-muse@<sha>`).
+- **Retry-safe:** no
+
+(error-dev-tool-missing)=
+### `dev-tool-missing`
+
+**Tool missing in the image.** A tool the profile declares (`DevProfile(tools=...)`) is not on the image's PATH.
+
+- **Fix:** Use an image with the tool or remove it from the profile.
+- **Retry-safe:** no
+
+(error-dev-upload-failed)=
+### `dev-upload-failed`
+
+**Upload failed.** The archive did not reach the run's pod (exec refused or broken), did not match its SHA-256, held an unsafe path, or did not arrive in time.
+
+- **Fix:** Run again; check that your credentials allow `pods/exec` in namespace `piceli-dev`.
+- **Retry-safe:** yes
 
 
 ## Helm charts and manifests with values (`piceli chart …`)
