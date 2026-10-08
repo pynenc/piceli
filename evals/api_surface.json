@@ -7159,6 +7159,7 @@
    "deploy-ref-unknown",
    "deploy-stage-unknown",
    "dev-command-failed",
+   "dev-isolation-not-enforced",
    "dev-not-enabled",
    "dev-profile-unknown",
    "dev-queue-timeout",
@@ -8928,5 +8929,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.17.0"
+ "version": "0.18.0"
 }

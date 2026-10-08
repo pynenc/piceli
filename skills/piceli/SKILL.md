@@ -3,7 +3,7 @@ name: piceli
 description: Deploy and operate Kubernetes apps described as typed Python with Piceli, safely, from an agent. Covers installing piceli, describing an App and a Pipeline, rendering without a cluster, planning and showing the plan to the owner, deploying only with the hash the owner approved (or inside the owner's declared auto_approve policy), checking status and access, diagnosing failures with `piceli explain` and the JSON output contract, resuming interrupted runs and rolling back. Use when a project imports piceli or has a Pipeline or release.toml, or when asked to deploy, plan, roll back or debug a Piceli release.
 license: MIT
 metadata:
-  piceli-version: "0.17"
+  piceli-version: "0.18"
 ---
 
 # Piceli
@@ -232,6 +232,18 @@ A rollback restores what the release declares (the recorded images and
 objects), never data or external side effects. A pipeline with
 `rollback_on_failed_checks=True` rolls back by itself when checks fail.
 
+## 9. Build and test on the cluster (development builds)
+
+When the cluster declares `dev=DevBuilds(...)`, compile and test there, not
+on the owner's laptop: `piceli dev run --cluster MODULE:ATTR --json --quiet
+-- cargo test -p NAME --lib` ships your working tree (`--ref REF` for a
+commit, `--source NAME=PATH@REF` for a sibling repository) and prints
+`state`, `exit_code`, `tests`, `durations` and `log_tail`. The owner approved
+these runs once (the declaration); run as many as your task needs with your
+own `PICELI_DEV_REQUESTER`. Exit 1 with `dev-command-failed` is your code:
+read `log_tail`, fix, run again. `piceli dev status` shows the queue. Never
+change the declaration, never cancel another requester's run.
+
 ## Safe to run without asking
 
 `piceli explain`, `piceli help-json`, `piceli --version`, `piceli render`,
@@ -241,7 +253,9 @@ objects), never data or external side effects. A pipeline with
 `python scripts/plan.py …`, `python scripts/status.py …`,
 `python scripts/diagnose.py …`, `python scripts/rollback.py …` without
 `--approve` (it only plans), `piceli infra status|plan` (plan never changes a
-resource), `piceli bundle … --out DIR` (local files only, no secret value).
+resource), `piceli bundle … --out DIR` (local files only, no secret value),
+`piceli dev status|logs`, and `piceli dev run` where the owner declared
+`dev=DevBuilds(...)` (section 9).
 
 ## Never do without the owner's approval
 
