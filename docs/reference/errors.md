@@ -190,6 +190,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`dev-run-invalid`](#error-dev-run-invalid) | dev | no |
 | [`dev-run-out-of-memory`](#error-dev-run-out-of-memory) | dev | yes |
 | [`dev-run-timed-out`](#error-dev-run-timed-out) | dev | yes |
+| [`dev-run-unknown`](#error-dev-run-unknown) | dev | no |
 | [`dev-source-invalid`](#error-dev-source-invalid) | dev | no |
 | [`dev-tool-missing`](#error-dev-tool-missing) | dev | no |
 | [`dev-upload-failed`](#error-dev-upload-failed) | dev | yes |
@@ -4871,6 +4872,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Raise the profile's `timeout`, split the command, or find what hangs (the log tail shows the last output).
 - **Retry-safe:** yes
+
+(error-dev-run-unknown)=
+### `dev-run-unknown`
+
+**Unknown run.** No run with that id is queued, running or recorded in `piceli-dev-status` (the last 50 finished runs).
+
+- **Fix:** List runs with `piceli dev status`.
+- **Retry-safe:** no
 
 (error-dev-source-invalid)=
 ### `dev-source-invalid`

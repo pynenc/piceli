@@ -1424,11 +1424,34 @@ def _run_composition(
                 )
                 telemetry.start_heartbeat()
                 refresh = _refresher(service_account, Path(private), channel, transport)
-                _forever(controller, refresh)
+                stop_dev = _dev_scheduler(target, transport, telemetry)
+                try:
+                    _forever(controller, refresh)
+                finally:
+                    stop_dev()
             finally:
                 telemetry.shutdown()
         finally:
             closer()
+
+
+def _dev_scheduler(target: Any, transport: str, telemetry: Any) -> Callable[[], None]:
+    """0.18.0: the development-run queue, on a thread of this controller."""
+    from piceli.dev.scheduler import start_thread
+    from piceli.gitops.install import Api
+    from piceli.k8s.ops.provider_factory import api_client_from_kubeconfig
+
+    def make_api() -> Any:
+        return Api(
+            api_client_from_kubeconfig(target[0], target[1], transport=transport)  # type: ignore[arg-type]
+        )
+
+    record = getattr(telemetry, "dev_run", None)
+    return start_thread(
+        make_api,
+        on_finished=record if callable(record) else (lambda _record: None),
+        log=say,
+    )
 
 
 def _controller_telemetry(

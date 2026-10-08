@@ -18,7 +18,13 @@ from typing import Any
 from urllib.parse import quote
 
 from piceli.dev.jobs import RUN_LABEL
-from piceli.dev.model import CONFIG_MAP, NAMESPACE, DevBuilds, DevError
+from piceli.dev.model import (
+    CONFIG_MAP,
+    NAMESPACE,
+    STATUS_CONFIG_MAP,
+    DevBuilds,
+    DevError,
+)
 
 _CHUNK = 256 * 1024
 
@@ -81,6 +87,83 @@ class DevCluster:
             {"propagationPolicy": "Background"},
         )
 
+    def unsuspend(self, run: str) -> None:
+        from piceli.dev.jobs import run_name
+
+        self.api.call(
+            f"/apis/batch/v1/namespaces/{NAMESPACE}/jobs/{run_name(run)}",
+            "PATCH",
+            {"spec": {"suspend": False}},
+            "application/merge-patch+json",
+        )
+
+    def node(self, name: str) -> dict[str, Any] | None:
+        found = self.api.call(f"/api/v1/nodes/{quote(name)}", "GET")
+        return found if isinstance(found, dict) else None
+
+    def result(self, run: str) -> dict[str, Any] | None:
+        """The wrapper's result line from the run's log, if it printed one."""
+        from piceli.dev.pod import RESULT_MARKER
+
+        pod = self.pod(run)
+        if pod is None:
+            return None
+        text = self.api.text(
+            f"/api/v1/namespaces/{NAMESPACE}/pods/{pod['metadata']['name']}/log",
+            [("container", "run"), ("tailLines", "5")],
+        )
+        for line in reversed((text or "").splitlines()):
+            if line.startswith(RESULT_MARKER):
+                try:
+                    value = json.loads(line[len(RESULT_MARKER) :])
+                except ValueError:
+                    return None
+                return value if isinstance(value, dict) else None
+        return None
+
+    def logs(self, run: str, tail: int | None = None) -> str | None:
+        pod = self.pod(run)
+        if pod is None:
+            return None
+        query = [("container", "run")] + ([("tailLines", str(tail))] if tail else [])
+        return self.api.text(
+            f"/api/v1/namespaces/{NAMESPACE}/pods/{pod['metadata']['name']}/log", query
+        )
+
+    def status(self) -> dict[str, Any] | None:
+        """The scheduler's published ``piceli-dev-status``, if any."""
+        from piceli.infra.cluster_init import NAMESPACE as SYSTEM
+
+        found = self.api.call(
+            f"/api/v1/namespaces/{SYSTEM}/configmaps/{STATUS_CONFIG_MAP}", "GET"
+        )
+        data = (found or {}).get("data") if isinstance(found, dict) else None
+        try:
+            value = json.loads((data or {}).get("status.json") or "null")
+        except ValueError:
+            return None
+        return value if isinstance(value, dict) else None
+
+    def publish(self, document: dict[str, Any]) -> None:
+        """Write ``piceli-dev-status`` in ``piceli-system``."""
+        from piceli.infra.cluster_init import NAMESPACE as SYSTEM
+
+        path = f"/api/v1/namespaces/{SYSTEM}/configmaps"
+        body = {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {
+                "name": STATUS_CONFIG_MAP,
+                "namespace": SYSTEM,
+                "labels": {"app.kubernetes.io/managed-by": "piceli"},
+            },
+            "data": {"status.json": json.dumps(document, sort_keys=True)},
+        }
+        if self.api.call(f"{path}/{STATUS_CONFIG_MAP}", "GET") is None:
+            self.api.call(path, "POST", body, missing_ok=False)
+        else:
+            self.api.call(f"{path}/{STATUS_CONFIG_MAP}", "PUT", body, missing_ok=False)
+
     # ------------------------------------------------------------ the pod
     def wait_started(
         self,
@@ -96,14 +179,27 @@ class DevCluster:
         """
         deadline = time.monotonic() + timeout
         last = None
+        position_at, position = 0.0, ""
         while True:
-            if self.job(run) is None:
+            job = self.job(run)
+            if job is None:
                 raise DevError(
                     "dev-run-cancelled", f"run {run} was cancelled", failed=True
                 )
             pod = self.pod(run)
             phase = ((pod or {}).get("status") or {}).get("phase")
             why = _waiting(pod)
+            if pod is None and (job.get("spec") or {}).get("suspend"):
+                if time.monotonic() - position_at >= 5:
+                    position_at = time.monotonic()
+                    queued = (self.status() or {}).get("queued") or ()
+                    found = next((q for q in queued if q.get("run") == run), None)
+                    position = (
+                        f"queued #{found['position']} of {len(queued)}"
+                        if found
+                        else "queued"
+                    )
+                why = position or "queued"
             if phase == "Running":
                 return str(pod["metadata"]["name"])  # type: ignore[index]
             if phase in {"Succeeded", "Failed"}:

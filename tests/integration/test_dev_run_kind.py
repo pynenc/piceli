@@ -11,6 +11,7 @@ current context. Removes the ``piceli-dev`` namespace it creates.
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import shutil
@@ -213,3 +214,91 @@ def test_a_run_reaches_neither_the_api_server_nor_a_secret(
     assert result["state"] == "passed", result
     assert "dns ok" in lines and "token False" in lines
     assert "api blocked" in lines
+
+
+def test_the_queue_runs_one_at_a_time_rounds_first(dev: Any, tmp_path: Path) -> None:
+    """One slot: a round queued after an agent run starts before it; the
+    scheduler records every run and removes its Job."""
+    import dataclasses
+    import threading
+    import time
+
+    from piceli.dev.client import RunRequest, run
+    from piceli.dev.pack import SourceRequest
+    from piceli.dev.scheduler import Scheduler, loop
+
+    port, settings = dev
+    kubectl("create", "namespace", "piceli-system", check=False)
+    scheduler = Scheduler(port, dataclasses.replace(settings, slots=1))
+    stopping = threading.Event()
+    thread = threading.Thread(
+        target=loop,
+        args=(lambda: scheduler,),
+        kwargs={"stop": stopping.is_set, "sleep": stopping.wait},
+        daemon=True,
+    )
+    thread.start()
+    repo = _repo(tmp_path, {"work.sh": "date -u +%s > /dev/null; sleep 4; echo done"})
+    results: dict[str, dict[str, Any]] = {}
+
+    def submit(requester: str, priority: str) -> None:
+        results[requester] = run(
+            port,
+            settings,
+            RunRequest(
+                SourceRequest("shop", repo, "HEAD"),
+                ["sh", "work.sh"],
+                requester=requester,
+                priority=priority,
+                queue_timeout=600,
+            ),
+        )
+
+    try:
+        deadline = time.monotonic() + 60
+        while (
+            not (port.status() or {}).get("scheduler_at")
+            and time.monotonic() < deadline
+        ):
+            time.sleep(1)
+        first = threading.Thread(target=submit, args=("first", "agent"))
+        first.start()
+        while (
+            not (port.status() or {}).get("running")
+            and time.monotonic() < deadline + 60
+        ):
+            time.sleep(1)
+        agent = threading.Thread(target=submit, args=("agent", "agent"))
+        agent.start()
+        time.sleep(2)  # the round is queued after the agent run
+        round_ = threading.Thread(target=submit, args=("round", "round"))
+        round_.start()
+        for thread_ in (first, agent, round_):
+            thread_.join(300)
+        deadline = time.monotonic() + 60
+        while port.jobs() and time.monotonic() < deadline:
+            time.sleep(1)
+    finally:
+        stopping.set()
+        thread.join(10)
+        kubectl(
+            "delete",
+            "configmap",
+            "piceli-dev-status",
+            "-n",
+            "piceli-system",
+            check=False,
+        )
+    assert {name: r["state"] for name, r in results.items()} == dict.fromkeys(
+        ("first", "agent", "round"), "passed"
+    )
+    recorded = {item["requester"]: item for item in scheduler.recent}
+    assert set(recorded) >= {"first", "agent", "round"}
+    assert recorded["round"]["started_at"] <= recorded["agent"]["started_at"]
+    # One slot: no two runs overlapped.
+    spans = sorted((r["started_at"], r["finished_at"]) for r in recorded.values())
+    assert all(left[1] <= right[0] for left, right in itertools.pairwise(spans))
+    assert (
+        results["agent"]["durations"]["queue"] > results["first"]["durations"]["queue"]
+    )
+    assert port.jobs() == []

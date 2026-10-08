@@ -78,7 +78,7 @@ def run(
     log: Callable[[str], None] | None = None,
     clock: Callable[[], float] = time.monotonic,
     run_id: str | None = None,
-    suspend: bool = False,
+    suspend: bool | None = None,
 ) -> dict[str, Any]:
     """Run ``request`` on the builder; the ``piceli.dev-run.v1`` result.
 
@@ -97,6 +97,13 @@ def run(
     if cwd.is_absolute() or ".." in cwd.parts:
         raise DevError("dev-run-invalid", "--cwd is a path inside the root source")
     run_id = run_id or new_run_id()
+    if suspend is None:
+        # A live scheduler queues the run and records it; without one the
+        # run starts at once and this client removes its Job.
+        from piceli.dev.scheduler import alive
+
+        status = getattr(port, "status", lambda: None)()
+        suspend = alive(status, time.time())
     began = clock()
     durations: dict[str, float] = {}
     body: dict[str, Any] = {
@@ -143,6 +150,9 @@ def run(
             f"run {run_id}: {profile.name} on {dev.node}, {packed.bytes} bytes to upload"
         )
         result: dict[str, Any] | None = None
+        # With a scheduler the Job stays until it records the run; a run that
+        # never got its result (interrupted, failed to start) goes now.
+        remove = not suspend
         try:
             step = clock()
             pod = port.wait_started(
@@ -185,6 +195,7 @@ def run(
                     "durations": {},
                 }
         except KeyboardInterrupt:
+            remove = True
             result = {
                 "state": "cancelled",
                 "reason": "dev-run-cancelled",
@@ -192,6 +203,7 @@ def run(
                 "durations": {},
             }
         except DevError as error:
+            remove = True
             result = {
                 "state": "cancelled" if error.code == "dev-run-cancelled" else "error",
                 "reason": error.code,
@@ -200,7 +212,7 @@ def run(
                 "durations": {},
             }
         finally:
-            if not request.keep:
+            if remove and not request.keep:
                 try:
                     port.delete(run_id)
                 except Exception:  # the TTL removes it

@@ -5526,6 +5526,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "dev",
     ),
     _E(
+        "dev-run-unknown",
+        "Unknown run",
+        "No run with that id is queued, running or recorded in `piceli-dev-status` (the last 50 finished runs).",
+        "List runs with `piceli dev status`.",
+        False,
+        "dev",
+    ),
+    _E(
         "dev-tool-missing",
         "Tool missing in the image",
         "A tool the profile declares (`DevProfile(tools=...)`) is not on the image's PATH.",

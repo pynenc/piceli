@@ -50,7 +50,14 @@ def test_init_installs_a_namespace_cache_policy_config_and_scheduler_rights() ->
     assert config["node"] == "builder-1" and config["profiles"][0]["name"] == "rust"
     role = found["Role/piceli-dev-scheduler"]
     resources = {r for rule in role["rules"] for r in rule["resources"]}
-    assert resources == {"jobs", "pods", "pods/log"}
+    assert resources == {"jobs", "pods", "pods/log", "configmaps"}
+    (config_rule,) = [r for r in role["rules"] if r["resources"] == ["configmaps"]]
+    assert config_rule == {
+        "apiGroups": [""],
+        "resources": ["configmaps"],
+        "resourceNames": ["piceli-dev-config"],
+        "verbs": ["get"],
+    }
     assert all("create" not in rule["verbs"] for rule in role["rules"])
     binding = found["RoleBinding/piceli-dev-scheduler"]
     assert binding["subjects"][0]["namespace"] == "piceli-system"
