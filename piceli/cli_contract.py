@@ -1441,7 +1441,7 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
         ),
         "dev run": _C(
             "Run a build or test command on the cluster's builder node for a "
-            "commit, with the shared warm cache; stream its log, print the "
+            "working tree or a commit, with the shared warm cache; stream its log, print the "
             "result (exit code, phases, tests, cache use, log tail).",
             reads=(
                 "MODULE:ATTR (piceli.infra.Cluster with dev=)",

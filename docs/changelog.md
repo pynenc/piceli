@@ -7,9 +7,11 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 ## Version 0.18.0
 
 - **Development builds** (`piceli dev run`): a developer's or coding agent's
-  build and test commands run on the cluster's builder node for a commit
-  (`--ref`), with sibling sources at pinned commits (`--source
-  NAME=PATH@REF`), in a shared warm cache. Declared on the cluster
+  build and test commands run on the cluster's builder node for a working
+  tree as it is on disk (the default, or `--worktree PATH`: uncommitted and
+  new files, never Git's ignored ones) or a commit (`--ref`), with sibling
+  sources at pinned commits or as working trees (`--source
+  NAME=PATH[@REF]`), in a shared warm cache. Declared on the cluster
   (`Cluster(dev=DevBuilds(node=, image=, profiles=[DevProfile(...)]))`) and
   installed by `piceli cluster init`: namespace `piceli-dev`, cache claim,
   NetworkPolicy, configuration. Each run is an isolated pod; the commit is
