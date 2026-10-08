@@ -110,9 +110,19 @@ def run(
             "--ref", help="Build this commit (branch, tag or sha) of the repository"
         ),
     ] = None,
+    worktree: Annotated[
+        Path | None,
+        typer.Option(
+            "--worktree",
+            help="Build this working tree as it is on disk (uncommitted and new files; "
+            "not Git's ignored ones). The default without --ref: here",
+        ),
+    ] = None,
     repo: Annotated[
         Path,
-        typer.Option("--repo", help="The root source's repository (default: here)"),
+        typer.Option(
+            "--repo", help="The root source's repository with --ref (default: here)"
+        ),
     ] = Path("."),
     name: Annotated[
         str | None,
@@ -182,7 +192,7 @@ def run(
     transport: TransportOption = "https",
     as_json: JsonOption = False,
 ) -> None:
-    """Run COMMAND on the builder for a commit: piceli dev run --cluster infra.py:c --ref HEAD -- cargo test."""
+    """Run COMMAND on the builder for a commit (--ref) or a working tree (default: here)."""
     from piceli.dev.client import RunRequest
     from piceli.dev.client import run as run_on
     from piceli.dev.cluster import DevCluster
@@ -191,9 +201,9 @@ def run(
 
     declared = load_cluster(cluster)
     try:
-        if ref is None:
-            raise DevError("dev-run-invalid", "give --ref (a commit to build)")
-        root_dir = toplevel(repo)
+        if ref is not None and worktree is not None:
+            raise DevError("dev-run-invalid", "give --ref or --worktree, not both")
+        root_dir = toplevel(repo if ref is not None else (worktree or Path(".")))
         here = Path.cwd().resolve()
         where = cwd
         if where is None:

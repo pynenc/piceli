@@ -5,10 +5,10 @@ builder node instead of your laptop: for a commit, with a warm cache shared
 by every run, from one command whose result an agent can read (0.18.0).
 
 ```sh
-piceli dev run --cluster infra.py:my_cluster --ref HEAD -- cargo test -p api --lib
+piceli dev run --cluster infra.py:my_cluster -- cargo test -p api --lib
 ```
 
-Piceli packs the commit on your machine, uploads it into a fresh pod on
+Piceli packs your working tree (or a commit, `--ref`) on your machine, uploads it into a fresh pod on
 the builder, runs the command there and streams its output back. The pod
 builds in a **lineage** of the shared cache: a second run of a sibling
 branch recompiles only what changed.
@@ -76,8 +76,15 @@ default `rustc --version`), `cpu`, `memory`, `timeout`.
 ## Run
 
 ```sh
-# A commit of the repository you are in (branch, tag or sha); the command
-# runs in your directory's place in the repository.
+# The working tree you are in, as it is on disk: committed, changed and new
+# files, never what Git ignores (target/ stays home). The command runs in
+# your directory's place in the repository.
+piceli dev run --cluster infra.py:my_cluster -- cargo test -p api --lib --offline
+
+# Another working tree.
+piceli dev run --cluster infra.py:my_cluster --worktree ../shop-wp-login -- cargo build
+
+# A commit of the repository you are in (branch, tag or sha).
 piceli dev run --cluster infra.py:my_cluster --ref wp-login -- cargo test -p api --lib --offline
 
 # A sibling repository at a pinned commit, next to the root as ../shared-lib.
@@ -89,14 +96,20 @@ piceli dev run --cluster infra.py:my_cluster --ref HEAD --profile node \
   --artifact target/report.json --json -- npm test
 ```
 
-`PICELI_DEV_CLUSTER=infra.py:my_cluster` saves the `--cluster`. The
-commits come from your local repositories (`git archive`): the cluster
-never fetches and holds no Git credentials. A ref your repository does not
-have is `dev-ref-unknown`: `git fetch` it first.
+`PICELI_DEV_CLUSTER=infra.py:my_cluster` saves the `--cluster`.
+Everything comes from your machine: a working tree is its tracked files as
+they are now plus the untracked files Git does not ignore (`git ls-files
+--cached --others --exclude-standard`; deleted files are left out), a
+commit is `git archive` of it. The cluster never fetches and holds no Git
+credentials. A ref your repository does not have is `dev-ref-unknown`:
+`git fetch` it first. A sibling `--source NAME=PATH` without `@REF` ships
+that working tree too. The result's `sources` records each source's
+commit (`HEAD` for a working tree) and whether it was `dirty`.
 
-Options: `--ref`, `--repo PATH` (the root repository, default here),
+Options: `--worktree PATH` (default: here, without `--ref`), `--ref`,
+`--repo PATH` (the root repository with `--ref`, default here),
 `--name` (its directory name in the run, default the repository's),
-`--cwd` (where the command runs inside it), `--source NAME=PATH@REF`
+`--cwd` (where the command runs inside it), `--source NAME=PATH[@REF]`
 (repeat), `--profile`, `--priority round|agent|normal`, `--requester`,
 `--artifact GLOB` (repeat; `target/...` is the cargo target directory),
 `--artifacts-dir`, `--queue-timeout`, `--quiet` (no streamed log), `--keep`

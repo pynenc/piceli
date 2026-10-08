@@ -132,8 +132,11 @@ def pack(root: SourceRequest, extras: list[SourceRequest], out: Path) -> Packed:
     with tarfile.open(path, "w:gz", compresslevel=3) as archive:
         for request in (root, *extras):
             if request.ref is None:
-                raise _bad_source(f"source {request.name} needs a ref (NAME=PATH@REF)")
-            sources[request.name] = _add_commit(archive, request)
+                from piceli.dev.worktree import add_worktree
+
+                sources[request.name] = add_worktree(archive, request)
+            else:
+                sources[request.name] = _add_commit(archive, request)
     digest = hashlib.sha256()
     with path.open("rb") as stream:
         for block in iter(lambda: stream.read(1 << 20), b""):

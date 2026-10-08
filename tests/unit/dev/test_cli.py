@@ -82,7 +82,7 @@ def test_a_failing_command_exits_1(stand_in: dict[str, Any]) -> None:
 
 
 def test_refusals_exit_2_with_a_code(stand_in: dict[str, Any]) -> None:
-    result = invoke("--json", "--", "true")
+    result = invoke("--ref", "HEAD", "--worktree", ".", "--json", "--", "true")
     assert (
         result.exit_code == 2
         and json.loads(result.stdout)["reason"] == "dev-run-invalid"
@@ -97,3 +97,12 @@ def test_refusals_exit_2_with_a_code(stand_in: dict[str, Any]) -> None:
         result.exit_code == 2
         and json.loads(result.stdout)["reason"] == "dev-not-enabled"
     )
+
+
+def test_without_ref_the_working_tree_runs_as_it_is(stand_in: dict[str, Any]) -> None:
+    Path("ok.sh").write_text("echo edited, not committed")
+    result = invoke("--json", "--", "sh", "ok.sh")
+    assert result.exit_code == 0, result.stderr
+    body = json.loads(result.stdout)
+    assert "edited, not committed" in result.stderr
+    assert body["sources"]["shop"]["dirty"] is True

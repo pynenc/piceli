@@ -50,7 +50,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli cluster status`](#cli-cluster-status) | Nodes, registry and mirrors, controller, UI and Git Secret of a declared cluster (read-only). | reads | no |
 | [`piceli codegen crd`](#cli-codegen-crd) | Generate pydantic models for one CRD version, from a file or a cluster. | reads | no |
 | [`piceli deploy`](#cli-deploy) | Deploy a pipeline: inputs → build → deliver → plan → apply → checks. | writes | yes |
-| [`piceli dev run`](#cli-dev-run) | Run COMMAND on the builder for a commit: piceli dev run --cluster infra.py:c --ref HEAD -- cargo test. | writes | no |
+| [`piceli dev run`](#cli-dev-run) | Run COMMAND on the builder for a commit (--ref) or a working tree (default: here). | writes | no |
 | [`piceli doctor`](#cli-doctor) | Check this runner: free disk and memory against what the next build needs (estimated from the last build receipts), and the tools the pipeline uses (docker, docker buildx, kubectl). Exit 1 on a warning. | none | no |
 | [`piceli env down`](#cli-env-down) | Delete BRANCH's environment: its claims, namespace and volumes (never main's). | writes | yes |
 | [`piceli env push`](#cli-env-push) | Record a laptop-built digest for a branch environment (plan, then --approve HASH). | writes | yes |
@@ -929,14 +929,15 @@ Deploy a pipeline: inputs → build → deliver → plan → apply → checks.
 (cli-dev-run)=
 ### `piceli dev run`
 
-Run COMMAND on the builder for a commit: piceli dev run --cluster infra.py:c --ref HEAD -- cargo test.
+Run COMMAND on the builder for a commit (--ref) or a working tree (default: here).
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `COMMAND` | text | required |  |
 | `--cluster` | text | env `PICELI_DEV_CLUSTER` | MODULE:ATTR of the piceli.infra.Cluster with dev=DevBuilds(...) (or PICELI_DEV_CLUSTER) |
 | `--ref` | text |  | Build this commit (branch, tag or sha) of the repository |
-| `--repo` | path | `.` | The root source's repository (default: here) |
+| `--worktree` | path |  | Build this working tree as it is on disk (uncommitted and new files; not Git's ignored ones). The default without --ref: here |
+| `--repo` | path | `.` | The root source's repository with --ref (default: here) |
 | `--name` | text |  | The root source's directory name (default: the repository's) |
 | `--cwd` | text |  | Where the command runs, inside the root source (default: your directory's place in it) |
 | `--source` | text (repeatable) |  | A sibling source NAME=PATH@REF (repeat); it sits next to the root, as ../NAME |
