@@ -93,6 +93,10 @@ See also {ref}`the release contract changes <release-contract-changes>`.
 These never change a cluster, registry or node. Some write local files, as
 noted.
 
+- `piceli dev status [--json]` and `piceli dev logs RUN [--follow]`
+  (0.18.0, `--cluster MODULE:ATTR`): read the development-run queue (slots,
+  running and queued runs with their position, recent results, cache use)
+  and a run's output; change nothing. See {doc}`dev_builds`.
 - `piceli profiles [--json]`: lists the stored credential profiles (names,
   contexts, kubeconfig paths; never secrets). `piceli login NAME --kubeconfig
   F --context C` and `piceli logout NAME` only write or remove the local
@@ -322,6 +326,9 @@ Exporting deploy events (`--otlp-endpoint`, or `OTEL_EXPORTER_OTLP_*` in the env
 | `piceli promote` | Asks the controller to deploy `BRANCH@SHA` to the main environment, or `piceli promote ENV BRANCH@SHA` to a named environment that follows `Promote()` (which then waits for `gitops approve` unless it declares `auto_approve=True`) | The owner's go-ahead for that commit and environment |
 | `piceli gitops sync` | Asks the controller to deploy an environment (or every one) now at its revision; with `--component NAME` (a composition controller) also rebuilds that component | The owner's go-ahead; the deploy still needs the environment's usual approval (`auto_approve`, or `piceli gitops approve` of its plan hash) |
 | `piceli env stop`, `piceli env start` (`ENV --cluster infra.py:CLUSTER`) | Asks the composition controller to stop a named environment (workloads scaled to zero, volumes kept, not planned or deployed) or start it again (scaled back; a moved revision deploys with its usual approval) | The owner's go-ahead: stopping takes the environment's workloads down; `env start` of an environment declared `stopped=True` is refused (`gitops-env-stop-declared`) |
+| `piceli dev run` (0.18.0) | Creates one Job in `piceli-dev` that runs your build or test command on the builder node in the shared development cache (isolated: non-root, no token, no Secret, no cluster network); it is removed afterwards | Approved **once**: the owner's approval of `Cluster(dev=DevBuilds(...))` in `piceli cluster init` covers every run inside that declaration. After that, run it as often as you need, with the commits and commands of your task; never change the declaration or the profiles yourself. A failing command is `dev-command-failed` (exit 1): read `log_tail`, fix, run again; see {doc}`dev_builds` |
+| `piceli dev cancel` (0.18.0) | Deletes a queued or running development run's Job | Your own runs only (the id `dev run` printed), when you no longer need the result; never another requester's |
+| `piceli dev schedule` (0.18.0) | Runs the development-run queue in your process: starts queued runs, records finished ones, deletes their Jobs | Only when the owner asked (a cluster without the GitOps controller, which runs the queue itself) |
 | `piceli gitops run` | The controller loop itself (normally only inside its Deployment); deploys and tears down branch environments | Never run it yourself unless the owner asked for a local `--once` poll |
 | `piceli deploy` | Builds images, pushes them to a registry or node, applies a release | `--approve <combined hash>` from `piceli deploy MODULE:ATTR --plan`, after the owner reviewed that plan (or `--apply <plan file> --approve <its hash>` on another runner); `--resume` continues an approved run; `--approve-if-policy` only when the owner declared an `auto_approve` policy (see below) |
 | `piceli restore` | Replaces every file of the restore point's claims (stops their writers, then starts them again) | `--approve <restore_hash>` printed by `piceli restore MODULE:ATTR --point ID` without `--approve`, after the owner chose that restore point and agreed to lose what the claims hold now |

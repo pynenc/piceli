@@ -5039,6 +5039,7 @@
      "cluster",
      "codegen",
      "deploy",
+     "dev",
      "doctor",
      "env",
      "envs",
@@ -5551,6 +5552,94 @@
      "--ref",
      "--resume",
      "--until"
+    ],
+    "subcommands": []
+   },
+   "dev": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "cancel",
+     "logs",
+     "run",
+     "schedule",
+     "status"
+    ]
+   },
+   "dev cancel": {
+    "arguments": [
+     "run_id"
+    ],
+    "flags": [
+     "--allow-exec",
+     "--cluster",
+     "--exec-sha256",
+     "--json",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "dev logs": {
+    "arguments": [
+     "run_id"
+    ],
+    "flags": [
+     "--allow-exec",
+     "--cluster",
+     "--exec-sha256",
+     "--follow",
+     "--tail",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "dev run": {
+    "arguments": [
+     "command"
+    ],
+    "flags": [
+     "--allow-exec",
+     "--artifact",
+     "--artifacts-dir",
+     "--cluster",
+     "--cwd",
+     "--exec-sha256",
+     "--json",
+     "--keep",
+     "--name",
+     "--node",
+     "--priority",
+     "--profile",
+     "--queue-timeout",
+     "--quiet",
+     "--ref",
+     "--repo",
+     "--requester",
+     "--source",
+     "--transport",
+     "--worktree"
+    ],
+    "subcommands": []
+   },
+   "dev schedule": {
+    "arguments": [],
+    "flags": [
+     "--allow-exec",
+     "--cluster",
+     "--exec-sha256",
+     "--once",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "dev status": {
+    "arguments": [],
+    "flags": [
+     "--allow-exec",
+     "--cluster",
+     "--exec-sha256",
+     "--json",
+     "--transport"
     ],
     "subcommands": []
    },
@@ -7069,6 +7158,21 @@
    "deploy-ref-source-unknown",
    "deploy-ref-unknown",
    "deploy-stage-unknown",
+   "dev-command-failed",
+   "dev-isolation-not-enforced",
+   "dev-not-enabled",
+   "dev-profile-unknown",
+   "dev-queue-timeout",
+   "dev-ref-unknown",
+   "dev-run-cancelled",
+   "dev-run-failed",
+   "dev-run-invalid",
+   "dev-run-out-of-memory",
+   "dev-run-timed-out",
+   "dev-run-unknown",
+   "dev-source-invalid",
+   "dev-tool-missing",
+   "dev-upload-failed",
    "digest-mismatch",
    "discovery-incomplete",
    "docker-socket-required",
@@ -7839,6 +7943,7 @@
    "checks": {},
    "cli_contract": {},
    "codegen": {},
+   "dev": {},
    "envs": {},
    "errors": {},
    "gcp": {},
@@ -8538,6 +8643,15 @@
   "piceli.codegen",
   "piceli.codegen.crd",
   "piceli.deploy_events",
+  "piceli.dev",
+  "piceli.dev.client",
+  "piceli.dev.cluster",
+  "piceli.dev.jobs",
+  "piceli.dev.model",
+  "piceli.dev.pack",
+  "piceli.dev.pod",
+  "piceli.dev.scheduler",
+  "piceli.dev.worktree",
   "piceli.envs",
   "piceli.envs.cluster",
   "piceli.envs.isolation",
@@ -8605,6 +8719,7 @@
   "piceli.k8s.cli.codegen",
   "piceli.k8s.cli.contract",
   "piceli.k8s.cli.deploy_pipeline",
+  "piceli.k8s.cli.dev",
   "piceli.k8s.cli.env",
   "piceli.k8s.cli.env_push",
   "piceli.k8s.cli.env_stop",
@@ -8748,6 +8863,7 @@
   "piceli.services.composition_control",
   "piceli.services.composition_history",
   "piceli.services.contracts",
+  "piceli.services.dev_status",
   "piceli.services.engine",
   "piceli.services.environment_control",
   "piceli.services.evaluation",
@@ -8813,5 +8929,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.17.0"
+ "version": "0.18.0"
 }

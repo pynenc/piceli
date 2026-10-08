@@ -52,7 +52,8 @@ $ piceli cluster status infra.py:my_cluster
 | `registry=Registry.in_cluster(on=NODE, …)` | The {doc}`cluster_registry`, with its node mirrors (containerd or k3s, per node). |
 | `controller=Controller(on=NODE, poll="1m")` | Where the GitOps controller runs. Init installs its foundation; `piceli gitops enable` adds its configuration and the Deployment, pinned to `on`. |
 | `ui=Ui(access="forward")` | The UI, installed without OIDC or any exposed Service; reach it with `piceli access ui` (see {doc}`ui`). It runs a Piceli image pinned by digest: `Ui(image=…)`, else `Controller(image=…)` (`ui-install-image-unpinned` otherwise), on `Ui(on=)`, else the controller's node. |
-| `storage_class=` | The StorageClass of the controller's state claim. |
+| `dev=DevBuilds(...)` | Development builds (0.18.0): the builder node, image, profiles, slots and cache size of `piceli dev run` (see {doc}`dev_builds`). |
+| `storage_class=` | The StorageClass of the controller's state claim (and of the development cache claim). |
 
 Lists may be written as lists; they are stored as tuples. Every value is
 checked when the module is imported (`cluster-invalid`).
@@ -74,7 +75,12 @@ One plan with one hash covers:
 4. **The UI** (after the controller's objects): its Deployment, ClusterIP
    Service, ServiceAccount and read-only RBAC, the empty launch Secret and
    the controller's request inbox (see {doc}`ui`).
-5. The ConfigMap `piceli-system/piceli-cluster` with the declaration
+5. **Development builds**, with `dev=`: the namespace `piceli-dev`, the
+   cache claim `piceli-dev-cache`, the NetworkPolicy `piceli-dev-runs`, the
+   ConfigMap `piceli-dev-config` and the controller's Role there (see
+   {doc}`dev_builds`). Approving the plan approves the runs the declaration
+   bounds.
+6. The ConfigMap `piceli-system/piceli-cluster` with the declaration
    (`piceli.cluster.v1`, no credentials), which the controller and the UI
    read.
 

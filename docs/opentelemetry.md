@@ -235,6 +235,26 @@ pod), `k8s.cluster.uid` (the `kube-system` namespace's UID, when the
 controller may read it), `k8s.cluster.name` (the composition's cluster) and
 `piceli.controller.namespace`.
 
+## Development runs
+
+With development builds (0.18.0, {doc}`dev_builds`), the controller runs
+their queue and sends each finished run as its own trace:
+
+- root span `DEV <profile> <requester>` (from the run's creation to its
+  end; status `ERROR` unless it passed), with `piceli.dev.run`,
+  `piceli.dev.requester`, `piceli.dev.priority`, `piceli.dev.profile`,
+  `piceli.dev.state`, `piceli.dev.exit_code`, `error.type`,
+  `piceli.dev.queue.wait` (seconds), `piceli.dev.cache.lineage`,
+  `piceli.dev.cache.warm`, `piceli.dev.cache.crates_compiled`,
+  `piceli.dev.cache.hit_ratio`, `piceli.dev.tests.passed` and
+  `piceli.dev.tests.failed`;
+- child spans `queue` (created to started) and, one after the other from
+  the start, `sync`, `fetch`, `build` and `test` (their durations as the run
+  measured them);
+- the event `piceli.dev.run.finished` on the root span (same attributes);
+- histograms `piceli.dev.run.duration` (by profile and state) and
+  `piceli.dev.queue.wait` (by priority).
+
 ## A controller restart
 
 The open run (its ids, start, stage marks and the events it sent) is kept

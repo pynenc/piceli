@@ -4,6 +4,41 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.18.0
+
+- **Development builds** (`piceli dev run`): a developer's or coding agent's
+  build and test commands run on the cluster's builder node for a working
+  tree as it is on disk (the default, or `--worktree PATH`: uncommitted and
+  new files, never Git's ignored ones) or a commit (`--ref`), with sibling
+  sources at pinned commits or as working trees (`--source
+  NAME=PATH[@REF]`), in a shared warm cache. Declared on the cluster
+  (`Cluster(dev=DevBuilds(node=, image=, profiles=[DevProfile(...)]))`) and
+  installed by `piceli cluster init`: namespace `piceli-dev`, cache claim,
+  NetworkPolicy, configuration. Each run is an isolated pod; the commit is
+  packed on the client and uploaded over `pods/exec` (no registry, no Git
+  credentials in the cluster), runs nothing from the repository until its
+  NetworkPolicy holds (`dev-isolation-not-enforced` otherwise); it builds in a cache lineage synced keeping
+  unchanged files' mtimes, so cargo rebuilds only what changed. The result
+  (`piceli.dev-run.v1`) has the exit code, phase durations, cargo test
+  counts, crates compiled and the log tail; `--artifact` copies files back.
+  New codes `dev-*` (`piceli explain`); see `docs/dev_builds.md`.
+- **A queue for development runs.** `slots` (auto from the builder's CPU
+  and memory, or fixed); the GitOps controller runs the queue on a thread
+  (or `piceli dev schedule`): runs start by priority (`round` before
+  `agent` before `normal`), then fair share per requester, then age, are
+  recorded in `piceli-dev-status` (last 50) and their Jobs removed.
+  `piceli dev status` (slots, running, queued with position, recent runs,
+  cache use), `piceli dev logs RUN [--follow]`, `piceli dev cancel RUN`.
+- **Observe the development cycle.** Each finished run is an OpenTelemetry
+  trace (`DEV <profile> <requester>`, spans `queue`, `sync`, `fetch`,
+  `build`, `test`; event `piceli.dev.run.finished`; histograms
+  `piceli.dev.run.duration`, `piceli.dev.queue.wait`) through the
+  controller's exporter, and the UI has a **Development builds** page
+  (slots, running, queue order, recent results, cache use; shown where
+  development builds are installed). `docs/dev_builds.md` has an agent
+  section and an integration-round recipe.
+- **The builder image has Node.js** (for development runs of small JS tests).
+
 ## Version 0.17.0
 
 - **`kubernetes<37`.** The kubernetes Python client 37.0.0 changed

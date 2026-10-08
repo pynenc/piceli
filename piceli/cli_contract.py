@@ -1439,6 +1439,86 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "until interrupted. Pushes through it go by digest; nodes pull "
             "by the stable name. " + _EXPLICIT_CONTEXT,
         ),
+        "dev run": _C(
+            "Run a build or test command on the cluster's builder node for a "
+            "working tree or a commit, with the shared warm cache; stream its log, print the "
+            "result (exit code, phases, tests, cache use, log tail).",
+            reads=(
+                "MODULE:ATTR (piceli.infra.Cluster with dev=)",
+                "credential profile",
+                "the local Git repositories of the sources",
+            ),
+            writes=("--artifacts-dir RUN/ (with --artifact)",),
+            cluster="writes",
+            approval_required=False,
+            safe_to_retry=True,
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            notes="Safe for agents: the owner approved what runs may do when "
+            "piceli cluster init applied Cluster(dev=DevBuilds(...)); each run is "
+            "an isolated pod in piceli-dev (non-root, no token, no Secret, no "
+            "cluster network) that only builds in the shared dev cache, never in "
+            "release caches. Exit 0 the command passed; 1 it failed "
+            "(dev-command-failed), timed out, ran out of memory, was cancelled or "
+            "the run broke; 2 refused (dev-not-enabled, dev-ref-unknown, "
+            "dev-source-invalid, dev-profile-unknown, dev-run-invalid). The run's "
+            "Job is removed on every outcome.",
+        ),
+        "dev status": _C(
+            "Show the development-run queue: slots, running and queued runs with "
+            "their position, the last finished runs and the cache use.",
+            reads=(
+                "MODULE:ATTR (piceli.infra.Cluster with dev=)",
+                "credential profile",
+            ),
+            cluster="reads",
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="Read-only. Reads the Jobs in piceli-dev and the scheduler's "
+            "ConfigMap piceli-dev-status (piceli-system).",
+        ),
+        "dev logs": _C(
+            "Print a development run's output: live (--follow), or the recorded "
+            "tail of a finished run.",
+            reads=(
+                "MODULE:ATTR (piceli.infra.Cluster with dev=)",
+                "credential profile",
+            ),
+            cluster="reads",
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="Read-only. The log on stdout; dev-run-unknown for a run that is "
+            "neither live nor among the last 50 recorded.",
+        ),
+        "dev cancel": _C(
+            "Cancel a queued or running development run: its Job and pod are deleted.",
+            reads=(
+                "MODULE:ATTR (piceli.infra.Cluster with dev=)",
+                "credential profile",
+            ),
+            cluster="writes",
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="Only your own runs (the run id dev run printed); the run ends "
+            "as dev-run-cancelled. dev-run-unknown when it is not queued or running.",
+        ),
+        "dev schedule": _C(
+            "Run the development-run queue in this process (a cluster without the "
+            "GitOps controller, which runs it on a thread).",
+            reads=(
+                "MODULE:ATTR (piceli.infra.Cluster with dev=)",
+                "credential profile",
+            ),
+            writes=("ConfigMap piceli-dev-status in piceli-system",),
+            cluster="writes",
+            long_running=True,
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="Starts queued runs into the slots, records finished runs and "
+            "deletes their Jobs. --once ticks once and prints the status. Only one "
+            "queue should run: not next to a controller that runs it.",
+        ),
         "cluster init": _C(
             "Plan and, with --approve HASH, set a declared cluster up: node role "
             "labels, the in-cluster registry and its node mirrors, the GitOps "

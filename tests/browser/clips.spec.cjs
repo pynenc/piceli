@@ -233,6 +233,16 @@ test('cluster-overview', async ({ page }) => {
   await shot(page, 'cluster');
 });
 
+test('dev-builds', async ({ page }) => {
+  await page.goto('/dev-builds');
+  await expect(page.getByRole('heading', { name: 'Development builds', exact: true })).toBeVisible();
+  await expect(page.getByText('#1 20261008t072010-ef56')).toBeVisible();
+  await expect(page.getByText(/1204 passed, 0 failed/)).toBeVisible();
+  await expect(page.getByText('Development builds', { exact: true }).first()).toBeVisible();
+  await pause(page, 1500);
+  await shot(page, 'dev-builds');
+});
+
 test('named-environment-actions', async ({ page }) => {
   await page.goto('/composition/environments/preview');
   await expect(page.getByRole('heading', { name: 'preview', exact: true })).toBeVisible();

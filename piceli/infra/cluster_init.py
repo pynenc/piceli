@@ -213,6 +213,10 @@ def render_objects(
         )
     if cluster.ui is not None and ui is not None:
         objects += ui(cluster)
+    if cluster.dev is not None:  # 0.18.0: development builds
+        from piceli.dev.jobs import install_objects
+
+        objects += install_objects(cluster)
     seen: set[tuple[str, str | None, str]] = set()
     unique: list[dict[str, Any]] = []
     for item in objects:

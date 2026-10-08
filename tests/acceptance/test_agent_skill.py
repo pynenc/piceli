@@ -39,9 +39,9 @@ def test_skill_walkthrough_runs_from_a_copy_of_the_skill() -> None:
 def test_front_matter_and_snippets_are_checked() -> None:
     harness = _harness()
     text = (ROOT / "skills" / "piceli" / "SKILL.md").read_text()
-    assert harness.front_matter_problems(text, "0.17.0") == []
-    assert harness.front_matter_problems(text, "0.18.0") != []
-    assert harness.front_matter_problems(text, "0.16.0") != []
+    assert harness.front_matter_problems(text, "0.18.0") == []
+    assert harness.front_matter_problems(text, "0.19.0") != []
+    assert harness.front_matter_problems(text, "0.17.0") != []
     assert harness.front_matter_problems("no front matter", "0.8.0") != []
     assert harness.snippet_problems("```python\nnot_in_the_file()\n```", "x = 1") != []
 

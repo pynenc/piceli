@@ -15,6 +15,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from piceli.dev.model import DevBuilds, DevProfile
 from piceli.pipeline.errors import PipelineError
 from piceli.pipeline.model import Registry
 
@@ -37,6 +38,8 @@ __all__ = [
     "Component",
     "CompositionError",
     "Controller",
+    "DevBuilds",
+    "DevProfile",
     "DnsRecord",
     "Firewall",
     "Hetzner",
@@ -194,6 +197,8 @@ class Cluster:
     registry: Registry | None = None
     controller: Controller | None = None
     ui: Ui | None = None
+    #: 0.18.0: development builds on a builder node (``DevBuilds(...)``).
+    dev: DevBuilds | None = None
 
     def __post_init__(self) -> None:
         from piceli.infra.cluster import as_tuple, check_cluster

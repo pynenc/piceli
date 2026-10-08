@@ -14,6 +14,7 @@ import sys
 import tempfile
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
+from typing import Any
 
 import uvicorn
 
@@ -31,6 +32,7 @@ from piceli.server.security import uvicorn_log_config
 from piceli.services.access import AccessService
 from piceli.services.cluster_status import ClusterStatusControl
 from piceli.services.composition_control import CompositionControl
+from piceli.services.dev_status import DevStatusControl
 from piceli.services.environment_control import EnvironmentControl
 from piceli.services.log_workspace import ProfileScopes
 from piceli.services.logs import LogService
@@ -109,6 +111,41 @@ COMPOSITION_STATUS["envs"]["wp-idle"] = {
     },
     "components": {},
 }
+
+
+def _dev_status() -> dict[str, Any]:
+    """Development runs as a live queue publishes them (scheduler_at: now)."""
+    import time
+    from datetime import UTC, datetime
+
+    now = datetime.fromtimestamp(time.time(), UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    run = {"profile": "rust", "created_at": now, "started_at": now}
+    return {
+        "schema": "piceli.dev-status.v1",
+        "scheduler_at": now,
+        "node": "builder-1",
+        "slots": 5,
+        "running": [
+            {**run, "run": "20261008t071900-ab12", "requester": "agent-ux", "priority": "agent", "waited_seconds": 4},
+            {**run, "run": "20261008t071930-cd34", "requester": "coordinator", "priority": "round", "waited_seconds": 0},
+        ],
+        "queued": [
+            {**run, "run": "20261008t072010-ef56", "requester": "agent-store", "priority": "agent", "position": 1, "waited_seconds": 20},
+        ],
+        "recent": [
+            {"run": "20261008t071500-aa11", "requester": "coordinator", "priority": "round", "profile": "rust",
+             "state": "passed", "exit_code": 0, "finished_at": now, "durations": {"build": 96.0, "test": 41.0},
+             "tests": {"passed": 1204, "failed": 0, "ignored": 6},
+             "cache": {"lineage": "shop-rust/0", "warm": True, "crates_compiled": 7, "hit_ratio": 0.98}},
+            {"run": "20261008t071200-bb22", "requester": "agent-ux", "priority": "agent", "profile": "rust",
+             "state": "failed", "exit_code": 101, "reason": "dev-command-failed", "finished_at": now,
+             "durations": {"build": 38.0, "test": 9.0}, "tests": {"passed": 211, "failed": 1, "ignored": 0},
+             "cache": {"lineage": "shop-rust/1", "warm": True, "crates_compiled": 3, "hit_ratio": 0.99}},
+        ],
+        "cache": {"used_bytes": 74 * 2**30, "max_bytes": 255 * 2**30, "at": now},
+    }  # fmt: skip
+
+
 CLUSTER_STATUS = {
     "state": "degraded",
     "cluster": "my-cluster",
@@ -247,6 +284,7 @@ def main() -> None:
                 cluster_status_control=ClusterStatusControl(
                     query, "shop", lambda: CLUSTER_STATUS
                 ),
+                dev_status_control=DevStatusControl(query, "shop", _dev_status),
                 active_profile="demo-east",
                 profile_switch=lambda _name: None,
                 # Forwards are real loopback listeners standing in for kubectl.
