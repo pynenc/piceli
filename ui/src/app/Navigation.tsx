@@ -79,6 +79,7 @@ export function Navigation({ capabilities }: { capabilities?: Capabilities }) {
     ...(allowed('access') || composition ? [{ to: '/forwards', label: 'Port forwards', icon: 'forwards' as const, badge: <Count value={summary.stale_forwards} tone="warning" label="stale forwards" /> }] : []),
     ...(allowed('environments') ? [{ to: '/environments', label: composition ? 'Branch environments' : 'Environments', icon: 'environments' as const }] : []),
     ...(allowed('gitops') ? [{ to: '/gitops', label: 'GitOps', icon: 'gitops' as const }] : []),
+    ...(allowed('dev_builds') ? [{ to: '/dev-builds', label: 'Development builds', icon: 'build' as const }] : []),
   ];
   const groups: [string, Item[]][] = [['Workspace', workspace], ['Delivery', delivery], ['Operations', operations]];
   const current = (item: Item) => location.pathname === item.to.split('?')[0] || (item.children ?? []).some(child => childCurrent(child.to, location));

@@ -36,9 +36,16 @@ my_cluster = Cluster(
         cache_size="300Gi",
         profiles=[
             DevProfile("rust", tools=["cargo"], prefetch="cargo"),
-            DevProfile("cross", tools=["cargo", "cargo-zigbuild", "zig"], prefetch="cargo"),
-            DevProfile("node", tools=["node", "npm"], toolchain=["node", "--version"],
-                       cpu="2", memory="2Gi"),
+            DevProfile(
+                "cross", tools=["cargo", "cargo-zigbuild", "zig"], prefetch="cargo"
+            ),
+            DevProfile(
+                "node",
+                tools=["node", "npm"],
+                toolchain=["node", "--version"],
+                cpu="2",
+                memory="2Gi",
+            ),
         ],
     ),
 )
@@ -171,9 +178,24 @@ A run is untrusted code from a repository. Each one is its own pod in
 `piceli-dev`, pinned to the builder: user 10001, no capabilities, no
 privilege escalation, `RuntimeDefault` seccomp, no service account token,
 no Secret, a memory limit, a bounded scratch (an `emptyDir` removed with
-the pod) and a deadline; the NetworkPolicy above. The wrapper that runs the
+the pod) and a deadline; the NetworkPolicy above. A CNI programs a new
+pod's NetworkPolicy a moment after its network comes up, so the wrapper
+runs nothing from the repository until the API server is unreachable from
+the pod; if it still is after a minute (a CNI without NetworkPolicy
+support), the run ends as `dev-isolation-not-enforced` without running
+anything. The wrapper that runs the
 command is standard-library Python carried in the Job itself, so any image
 with `python3` works.
+
+## Observe the development cycle
+
+Each finished run is in the UI's **Development builds** page (running and
+queued runs with their position, recent results with their phases, tests
+and cache use, the cache's size) and, with `Controller(telemetry=Otlp(...))`,
+in OpenTelemetry: one trace per run (`DEV <profile> <requester>`) with a
+span per phase (`queue`, `sync`, `fetch`, `build`, `test`), an event
+`piceli.dev.run.finished`, and the histograms `piceli.dev.run.duration` and
+`piceli.dev.queue.wait` (see {doc}`opentelemetry`).
 
 ## The result
 
@@ -218,6 +240,76 @@ with `python3` works.
 Exit codes: `0` the command passed; `1` it failed, timed out, ran out of
 memory, was cancelled or the run broke; `2` refused before anything ran.
 
+## For coding agents
+
+Development builds are what an agent should compile and test with when the
+cluster has them: your laptop stays free, the builder has the cores and the
+cache is warm. The owner approved them once (the `DevBuilds` declaration);
+you may run as many as your task needs.
+
+```sh
+export PICELI_DEV_CLUSTER=infra.py:my_cluster PICELI_DEV_REQUESTER=agent-login
+# Your working tree, as it is now: compile and test one crate.
+piceli dev run --json --quiet -- cargo test -p api --lib --offline > result.json
+echo "exit $?"
+jq '{state, exit_code, reason, tests, durations: .durations | {queue, build, test}}' result.json
+```
+
+- Read the result, not the log: `state`, `exit_code`, `reason`, `tests`,
+  `log_tail` (the last 80 lines when it did not pass). `--quiet` keeps the
+  streamed log out of your context; `piceli dev logs RUN` shows more of it.
+- Exit `0`: passed. Exit `1`: `dev-command-failed` is your code (fix it,
+  run again); `dev-run-out-of-memory` and `dev-run-timed-out` need a smaller
+  command or another profile; `dev-upload-failed`, `dev-run-failed` and
+  `dev-queue-timeout` may be retried once, then reported. Exit `2`: fix the
+  arguments the message names (`piceli explain CODE`).
+- Keep the default `--priority agent`; integration rounds use `round`. Give
+  each agent its own `PICELI_DEV_REQUESTER`: fair share is per requester.
+- A sibling repository your build reads by path goes in with `--source
+  NAME=PATH[@REF]`; pin it to the commit your round uses.
+- Copy reports back with `--artifact target/nextest/default/junit.xml`
+  (`target/...` is the run's `CARGO_TARGET_DIR`).
+- Never edit the declaration, the profiles or `piceli-dev` objects, and
+  never cancel another requester's run.
+
+## Recipe: an integration round
+
+A coordinator merges the branches agents finished into one worktree, runs
+the integration tests once on the builder at the top priority, and reports:
+
+```sh
+#!/usr/bin/env bash
+# int-round.sh BASE BRANCH...: merge, test on the builder, report.
+set -euo pipefail
+base=$1; shift
+wt=$(mktemp -d)/int
+trap 'git worktree remove --force "$wt" 2>/dev/null || true' EXIT
+git worktree add -q -b "int/$(date +%F-%H%M%S)" "$wt" "$base"
+merged=() ejected=()
+for branch in "$@"; do
+  if git -C "$wt" merge -q --no-ff --no-edit "$branch" >/dev/null 2>&1; then
+    merged+=("$branch")
+  else
+    git -C "$wt" merge --abort; ejected+=("$branch")
+  fi
+done
+status=0
+piceli dev run --worktree "$wt" --priority round --requester coordinator \
+  --source shared-lib=../shared-lib@"$(git -C ../shared-lib rev-parse tested)" \
+  --artifact target/nextest/default/junit.xml --json --quiet \
+  -- ./scripts/int-test.sh > round.json || status=$?
+jq -r '"merged: '"${merged[*]:-none}"'; ejected: '"${ejected[*]:-none}"'",
+       "tests: \(.state) (exit \(.exit_code)), \(.tests.passed // 0) passed, \(.tests.failed // 0) failed",
+       "time: queue \(.durations.queue)s, build \(.durations.build // 0)s, test \(.durations.test // 0)s"' round.json
+[ "$status" -eq 0 ] || jq -r '.log_tail[]' round.json
+exit "$status"
+```
+
+The run builds the merged tree (`--worktree`) in the lineage the last round
+used, so only what the merged branches changed recompiles; `--priority
+round` puts it ahead of every agent's run, and `round.json` is the report:
+its `tests`, `durations` and `log_tail`.
+
 ## Failure codes
 
 | Code | Meaning | What to do |
@@ -229,6 +321,7 @@ memory, was cancelled or the run broke; `2` refused before anything ran.
 | `dev-run-cancelled` | The Job was deleted (Ctrl-C) | Run again when wanted |
 | `dev-queue-timeout` | No start within `--queue-timeout` | Wait or raise it |
 | `dev-upload-failed` | The archive did not arrive intact | Run again; check `pods/exec` rights |
+| `dev-isolation-not-enforced` | The cluster does not enforce the NetworkPolicy; nothing ran | Report it to the owner |
 | `dev-tool-missing` | The image lacks a profile tool | Use another profile |
 | `dev-ref-unknown` | The commit is not in your repository | `git fetch` it |
 | `dev-source-invalid` | A source is not `NAME=PATH@REF` in a Git repository | Fix the argument |

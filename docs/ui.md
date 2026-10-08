@@ -160,6 +160,16 @@ unavailable output is stated explicitly. Captured pod output requires the same
 logs authorization as live logs; activity access alone does not grant it. Journal
 transitions retain sequence numbers because event timestamps are not recorded.
 
+## Development builds
+
+With `Cluster(dev=DevBuilds(...))` installed (0.18.0), **Development
+builds** (Operations) shows the builder's slots in use, the running runs,
+the queue in start order, the recent runs (result, build and test time,
+test counts, warm or cold lineage, crates compiled) and how much of the
+cache the lineages use. The installed UI reads the queue's ConfigMap
+`piceli-dev-status`; the entry is hidden on clusters without development
+builds. See {doc}`dev_builds`.
+
 ## Logs workspace
 
 **Operations → Logs** (`/logs`) reads container logs from every scope the

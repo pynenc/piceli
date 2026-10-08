@@ -54,6 +54,8 @@ REQUESTS_CONFIGMAP = "piceli-gitops-requests"
 HISTORY_CONFIGMAP = "piceli-gitops-history"
 #: The declaration ``piceli cluster init`` stores (``cluster_init.CLUSTER_CONFIG``).
 CLUSTER_CONFIG = "piceli-cluster"
+#: Development runs, queue and cache use (0.18.0, ``piceli.dev.scheduler``).
+DEV_STATUS_CONFIGMAP = "piceli-dev-status"
 READER = "piceli-ui-read"
 MANAGED = {"app.kubernetes.io/managed-by": "piceli", "piceli.io/component": "ui"}
 _RBAC = "rbac.authorization.k8s.io"
@@ -182,13 +184,14 @@ def render_ui(cluster: Cluster) -> list[dict[str, Any]]:
             "apiGroups": [""],
             "resources": ["configmaps"],
             # The controller's status and run history, the requests it reads,
-            # and the cluster declaration `piceli cluster init` stores
-            # (Cluster page).
+            # the cluster declaration `piceli cluster init` stores (Cluster
+            # page) and the development-run status (Development builds page).
             "resourceNames": [
                 STATUS_CONFIGMAP,
                 HISTORY_CONFIGMAP,
                 REQUESTS_CONFIGMAP,
                 CLUSTER_CONFIG,
+                DEV_STATUS_CONFIGMAP,
             ],
             "verbs": ["get"],
         },

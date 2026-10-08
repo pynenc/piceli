@@ -117,6 +117,43 @@ def extract(archive: Path, into: Path) -> None:
         ) from None
 
 
+# ------------------------------------------------------------------ isolation
+
+
+def wait_isolated(
+    spec: dict[str, Any], clock: Callable[[], float], emit: Callable[[str], None]
+) -> None:
+    """Return once the API server is unreachable from this pod.
+
+    A CNI programs a new pod's NetworkPolicy a moment after its network is
+    up (or never, without policy support): the repository's code must not
+    run before. Fails closed after ``isolation_timeout_seconds``.
+    """
+    if not spec.get("isolation_check"):
+        return
+    import socket
+
+    host = os.environ.get("KUBERNETES_SERVICE_HOST") or "kubernetes.default.svc"
+    port = int(os.environ.get("KUBERNETES_SERVICE_PORT") or 443)
+    deadline = clock() + float(spec.get("isolation_timeout_seconds") or 60)
+    said = False
+    while True:
+        try:
+            socket.create_connection((host, port), timeout=1).close()
+        except OSError:
+            return
+        if clock() >= deadline:
+            raise RunError(
+                "dev-isolation-not-enforced",
+                "the API server stays reachable from the run's pod: the "
+                "cluster does not enforce the NetworkPolicy of piceli-dev",
+            )
+        if not said:
+            emit("[piceli-dev] waiting for the network policy to take effect")
+            said = True
+        time.sleep(0.5)
+
+
 # ------------------------------------------------------------------ lineages
 
 
@@ -513,6 +550,7 @@ def main(
         step = clock()
         extract(archive, tree)
         archive.unlink(missing_ok=True)
+        wait_isolated(spec, clock, emit)
         missing = [
             tool for tool in spec.get("tools") or () if shutil.which(tool) is None
         ]
