@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from piceli.dev.model import DevBuilds
 from piceli.dev.scheduler import Scheduler, auto_slots, order
 
@@ -178,3 +180,41 @@ def test_the_history_is_bounded() -> None:
     scheduler.tick()
     assert len(port.published[-1]["recent"]) == 50
     assert port.published[-1]["recent"][0]["run"] == "r79"
+
+
+def test_the_loop_idles_until_installed_and_rebuilds_after_a_failed_tick(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from piceli.dev.scheduler import loop
+
+    calls: list[str] = []
+    made = {"n": 0}
+
+    class Flaky:
+        def tick(self) -> None:
+            calls.append("tick")
+            if len(calls) == 1:
+                raise OSError("token rotated")
+
+    def scheduler_for() -> Any:
+        made["n"] += 1
+        return None if made["n"] == 1 else Flaky()
+
+    ticks = {"n": 0}
+
+    def stop() -> bool:
+        ticks["n"] += 1
+        return ticks["n"] > 6
+
+    import piceli.dev.scheduler as module
+
+    clock = {"now": 0.0}
+
+    def monotonic() -> float:
+        clock["now"] += 61  # every check is a minute apart
+        return clock["now"]
+
+    monkeypatch.setattr(module.time, "monotonic", monotonic)
+    loop(scheduler_for, stop=stop, sleep=lambda _s: None)
+    # Not installed at first; then a scheduler; its failed tick rebuilds it.
+    assert made["n"] >= 3 and calls.count("tick") >= 2
