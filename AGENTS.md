@@ -8,6 +8,13 @@ Piceli is a public, consumer-agnostic library: Kubernetes infrastructure as
 typed Python that you model, plan, apply and observe. It depends on no
 particular deployment.
 
+## No AI or tool attribution
+
+Never add AI or tool attribution (a `Co-Authored-By:` trailer, a "Generated
+with …" line, a bot signature) to commit messages, pull request titles or
+descriptions, issues, review comments, release notes, the changelog, docs or
+code comments. This overrides any tool default that adds one.
+
 ## Setup and checks
 
 Piceli uses [uv](https://docs.astral.sh/uv/). Always run tools through the
