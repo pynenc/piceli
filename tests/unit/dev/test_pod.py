@@ -260,3 +260,46 @@ def test_the_wrapper_imports_nothing_but_the_standard_library() -> None:
     source = Path(pod.__file__).read_text()
     assert "import piceli" not in source and "from piceli" not in source
     assert os.path.getsize(pod.__file__) < 60_000
+
+
+def test_no_code_runs_while_the_api_server_is_reachable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A CNI programs a new pod's NetworkPolicy a moment after it starts, or
+    never: the command waits for isolation and runs nothing without it."""
+    import socket
+
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    monkeypatch.setenv("KUBERNETES_SERVICE_HOST", "127.0.0.1")
+    monkeypatch.setenv("KUBERNETES_SERVICE_PORT", str(listener.getsockname()[1]))
+    data = _archive({"app/a.txt": "x"})
+    spec = _spec(
+        data, ["sh", "-c", "touch $CARGO_TARGET_DIR/ran"],
+        isolation_check=True, isolation_timeout_seconds=0.5,
+    )  # fmt: skip
+    try:
+        result, _ = _run(tmp_path, data, spec)
+    finally:
+        listener.close()
+    assert result["reason"] == "dev-isolation-not-enforced"
+    assert not list((tmp_path / "cache").rglob("ran"))
+
+
+def test_the_command_runs_once_the_api_server_is_cut_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import socket
+
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    monkeypatch.setenv("KUBERNETES_SERVICE_HOST", "127.0.0.1")
+    monkeypatch.setenv("KUBERNETES_SERVICE_PORT", str(listener.getsockname()[1]))
+    threading.Timer(0.4, listener.close).start()  # the policy takes effect
+    data = _archive({"app/a.txt": "x"})
+    spec = _spec(data, ["true"], isolation_check=True, isolation_timeout_seconds=10)
+    result, lines = _run(tmp_path, data, spec)
+    assert result["state"] == "passed"
+    assert any("waiting for the network policy" in line for line in lines)

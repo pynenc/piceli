@@ -5559,8 +5559,39 @@
     "arguments": [],
     "flags": [],
     "subcommands": [
-     "run"
+     "cancel",
+     "logs",
+     "run",
+     "schedule",
+     "status"
     ]
+   },
+   "dev cancel": {
+    "arguments": [
+     "run_id"
+    ],
+    "flags": [
+     "--allow-exec",
+     "--cluster",
+     "--exec-sha256",
+     "--json",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "dev logs": {
+    "arguments": [
+     "run_id"
+    ],
+    "flags": [
+     "--allow-exec",
+     "--cluster",
+     "--exec-sha256",
+     "--follow",
+     "--tail",
+     "--transport"
+    ],
+    "subcommands": []
    },
    "dev run": {
     "arguments": [
@@ -5585,6 +5616,29 @@
      "--repo",
      "--requester",
      "--source",
+     "--transport",
+     "--worktree"
+    ],
+    "subcommands": []
+   },
+   "dev schedule": {
+    "arguments": [],
+    "flags": [
+     "--allow-exec",
+     "--cluster",
+     "--exec-sha256",
+     "--once",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "dev status": {
+    "arguments": [],
+    "flags": [
+     "--allow-exec",
+     "--cluster",
+     "--exec-sha256",
+     "--json",
      "--transport"
     ],
     "subcommands": []
@@ -7114,6 +7168,7 @@
    "dev-run-invalid",
    "dev-run-out-of-memory",
    "dev-run-timed-out",
+   "dev-run-unknown",
    "dev-source-invalid",
    "dev-tool-missing",
    "dev-upload-failed",
@@ -8594,6 +8649,8 @@
   "piceli.dev.model",
   "piceli.dev.pack",
   "piceli.dev.pod",
+  "piceli.dev.scheduler",
+  "piceli.dev.worktree",
   "piceli.envs",
   "piceli.envs.cluster",
   "piceli.envs.isolation",
@@ -8805,6 +8862,7 @@
   "piceli.services.composition_control",
   "piceli.services.composition_history",
   "piceli.services.contracts",
+  "piceli.services.dev_status",
   "piceli.services.engine",
   "piceli.services.environment_control",
   "piceli.services.evaluation",

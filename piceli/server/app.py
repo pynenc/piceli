@@ -190,6 +190,7 @@ def create_app(
     pipeline_control: PipelineControl | None = None,
     cluster_build_control: ClusterBuildControl | None = None,
     cluster_status_control: ClusterStatusControl | None = None,
+    dev_status_control: Any = None,
     composition_control: CompositionControl | None = None,
     logs: LogService | None = None,
     cluster_security: ClusterSecurity | None = None,
@@ -339,6 +340,13 @@ def create_app(
         )
         cluster_status_control = ClusterStatusControl(service, scope)
     navigation.cluster_status = cluster_status_control
+    # 0.18.0: development builds (runs, queue, cache) in the same scope.
+    if dev_status_control is None and cluster_status_control is not None:
+        from piceli.services.dev_status import DevStatusControl
+
+        dev_status_control = DevStatusControl(
+            service, cluster_status_control.application_id
+        )
     if cluster_security is not None:
         app.add_middleware(
             SessionMiddleware,
@@ -562,6 +570,15 @@ def create_app(
             actions["cluster_status"] = Capability(
                 allowed=visible, reason=None if visible else "not-authorized"
             )
+        if dev_status_control is not None:
+            visible = service._allowed(dev_status_control.application_id, "inspect")
+            installed = visible and dev_status_control.installed()
+            actions["dev_builds"] = Capability(
+                allowed=installed,
+                reason=None
+                if installed
+                else ("not-authorized" if not visible else "not-installed"),
+            )
         if composition_control is not None:
             visible = service._allowed(composition_control.application_id, "inspect")
             can_sync = service._allowed(composition_control.application_id, "deploy")
@@ -765,6 +782,12 @@ def create_app(
         if cluster_status_control is None:
             raise QueryError("ui-operation-unavailable", 409)
         return cluster_status_control.status()
+
+    @app.get(f"{api}/dev/status")
+    def dev_status() -> dict[str, Any]:
+        if dev_status_control is None:
+            raise QueryError("ui-operation-unavailable", 409)
+        return dev_status_control.status()
 
     @app.get(f"{api}/machines")
     def machines() -> dict[str, Any]:

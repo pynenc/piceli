@@ -124,6 +124,7 @@ def test_a_run_job_is_isolated() -> None:
     spec = json.loads(env["PICELI_DEV_SPEC"])
     assert spec["command"] == ["cargo", "test"] and spec["prefetch"] == "cargo"
     assert spec["tools"] == ["cargo"] and spec["timeout_seconds"] == 3600
+    assert spec["isolation_check"] is True  # no code before the policy holds
     assert container["command"][:3] == ["python3", "-I", "-c"]
     assert "def main(" in container["command"][3]  # the wrapper travels with the Job
     labels = job["metadata"]["labels"]

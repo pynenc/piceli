@@ -195,6 +195,9 @@ def run_job(
         else list(profile.toolchain),
         "tools": list(profile.tools),
         "artifacts": [],
+        # No code from the repository runs until the API server is cut off.
+        "isolation_check": True,
+        "isolation_timeout_seconds": 60,
         **spec,
     }
     labels = {

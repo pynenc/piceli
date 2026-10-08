@@ -5526,6 +5526,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "dev",
     ),
     _E(
+        "dev-isolation-not-enforced",
+        "Run not isolated",
+        "The run's pod could still reach the API server a minute after it started: the cluster does not enforce the NetworkPolicy of namespace `piceli-dev` (a CNI without NetworkPolicy support). No code from the repository ran.",
+        "Use a CNI that enforces NetworkPolicy (k3s's default does; on kind, kindnet does), then run again.",
+        False,
+        "dev",
+    ),
+    _E(
         "dev-run-unknown",
         "Unknown run",
         "No run with that id is queued, running or recorded in `piceli-dev-status` (the last 50 finished runs).",

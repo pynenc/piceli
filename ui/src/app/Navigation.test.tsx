@@ -51,3 +51,15 @@ it('opens the current sub-menu and remembers an explicit choice', async () => {
   expect(await screen.findByRole('button', { name: 'Expand Environments' })).toBeTruthy();
   expect(screen.getByRole('button', { name: 'Collapse Cluster' })).toBeTruthy();
 });
+
+it('lists development builds only where they are installed', async () => {
+  open('/applications');
+  const nav = screen.getByRole('navigation', { name: 'Main navigation' });
+  expect(within(nav).queryByRole('link', { name: 'Development builds' })).toBeNull();
+  cleanup();
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  const withDev: Capabilities = { ...capabilities, actions: { ...capabilities.actions, dev_builds: allowed } };
+  render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/applications']}><Navigation capabilities={withDev} /></MemoryRouter></QueryClientProvider>);
+  const again = screen.getByRole('navigation', { name: 'Main navigation' });
+  expect(within(again).getByRole('link', { name: 'Development builds' }).getAttribute('href')).toBe('/dev-builds');
+});

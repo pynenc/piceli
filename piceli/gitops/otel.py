@@ -644,6 +644,8 @@ class _Instruments:
     approval_wait: Any
     queue_wait: Any
     heartbeats: Any
+    dev_run_duration: Any = None
+    dev_queue_wait: Any = None
 
 
 class ControllerTelemetry:
@@ -788,6 +790,102 @@ class ControllerTelemetry:
             description="Unix time of the controller's last heartbeat.",
         )
         return found
+
+    def _dev_instruments(self) -> None:
+        """0.18.0: development runs' durations and queue waits."""
+        assert self.instruments is not None
+        if self.instruments.dev_run_duration is None:
+            self.instruments.dev_run_duration = self.meter.create_histogram(
+                "piceli.dev.run.duration",
+                unit="s",
+                description="Duration of a development run by profile and state.",
+            )
+            self.instruments.dev_queue_wait = self.meter.create_histogram(
+                "piceli.dev.queue.wait",
+                unit="s",
+                description="Time a development run waited for a slot, by priority.",
+            )
+
+    def dev_run(self, record: Mapping[str, Any]) -> None:
+        """A finished development run (0.18.0): one trace with its phases,
+        an event ``piceli.dev.run.finished`` and two histograms."""
+        if not self.enabled:
+            return
+        with self._guard("dev run"):
+            self._dev_instruments()
+            assert self.instruments is not None
+            run_id = str(record.get("run") or "run")
+            end = _iso_ns(record.get("finished_at")) or self._now()
+            started = _iso_ns(record.get("started_at"))
+            created = _iso_ns(record.get("created_at")) or started or end
+            durations = _dict(record.get("durations"))
+            cache = _dict(record.get("cache"))
+            tests = _dict(record.get("tests"))
+            state = str(record.get("state") or "error")
+            run = {
+                "trace_id": f"{trace_id_of(self.cluster, 'dev', run_id):032x}",
+                "record": "dev",
+                "run": run_id,
+            }
+            waited = (started - created) / 1e9 if started is not None else None
+            attributes = {
+                "piceli.dev.run": run_id,
+                "piceli.dev.requester": _text(record.get("requester"), 64),
+                "piceli.dev.priority": _text(record.get("priority"), 16),
+                "piceli.dev.profile": _text(record.get("profile"), 64),
+                "piceli.dev.state": state,
+                "piceli.dev.exit_code": record.get("exit_code"),
+                "error.type": _text(record.get("reason"), 64)
+                if state != "passed"
+                else None,
+                "piceli.dev.queue.wait": round(waited, 3)
+                if waited is not None
+                else None,
+                "piceli.dev.cache.lineage": _text(cache.get("lineage"), 128),
+                "piceli.dev.cache.warm": cache.get("warm"),
+                "piceli.dev.cache.crates_compiled": cache.get("crates_compiled"),
+                "piceli.dev.cache.hit_ratio": cache.get("hit_ratio"),
+                "piceli.dev.tests.passed": tests.get("passed"),
+                "piceli.dev.tests.failed": tests.get("failed"),
+                "k8s.node.name": None,
+            }
+            name = f"DEV {record.get('profile') or 'run'} {record.get('requester') or ''}".strip()
+            self._span(
+                run, "root", name, created, end, attributes,
+                ok=state == "passed", root=True, parent=None,
+                message=_text(record.get("reason"), 64),
+            )  # fmt: skip
+            if started is not None:
+                self._span(run, "queue", "queue", created, started, {}, ok=None)
+                at = started
+                for phase in ("sync", "fetch", "build", "test"):
+                    seconds = durations.get(phase)
+                    if not isinstance(seconds, int | float):
+                        continue
+                    later = at + int(seconds * 1e9)
+                    self._span(run, phase, phase, at, min(later, end), {}, ok=None)
+                    at = later
+            self._event(
+                "piceli.dev.run.finished",
+                f"{self.cluster}:dev/{run_id}:finished",
+                end,
+                body=f"dev run {run_id} ({record.get('requester')}): {state}",
+                attributes=attributes,
+                context=self._span_context(run, "root"),
+                error=state != "passed",
+            )
+            labels = {
+                "piceli.dev.profile": _text(record.get("profile"), 64),
+                "piceli.dev.state": state,
+            }
+            self.instruments.dev_run_duration.record(
+                max(0.0, (end - created) / 1e9), labels
+            )
+            if waited is not None:
+                self.instruments.dev_queue_wait.record(
+                    max(0.0, waited),
+                    {"piceli.dev.priority": _text(record.get("priority"), 16)},
+                )
 
     def _last_success_age(self, _options: Any) -> Iterator[Any]:
         from opentelemetry.metrics import Observation

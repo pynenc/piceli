@@ -16,7 +16,8 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   installed by `piceli cluster init`: namespace `piceli-dev`, cache claim,
   NetworkPolicy, configuration. Each run is an isolated pod; the commit is
   packed on the client and uploaded over `pods/exec` (no registry, no Git
-  credentials in the cluster); it builds in a cache lineage synced keeping
+  credentials in the cluster), runs nothing from the repository until its
+  NetworkPolicy holds (`dev-isolation-not-enforced` otherwise); it builds in a cache lineage synced keeping
   unchanged files' mtimes, so cargo rebuilds only what changed. The result
   (`piceli.dev-run.v1`) has the exit code, phase durations, cargo test
   counts, crates compiled and the log tail; `--artifact` copies files back.
@@ -28,6 +29,14 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   recorded in `piceli-dev-status` (last 50) and their Jobs removed.
   `piceli dev status` (slots, running, queued with position, recent runs,
   cache use), `piceli dev logs RUN [--follow]`, `piceli dev cancel RUN`.
+- **Observe the development cycle.** Each finished run is an OpenTelemetry
+  trace (`DEV <profile> <requester>`, spans `queue`, `sync`, `fetch`,
+  `build`, `test`; event `piceli.dev.run.finished`; histograms
+  `piceli.dev.run.duration`, `piceli.dev.queue.wait`) through the
+  controller's exporter, and the UI has a **Development builds** page
+  (slots, running, queue order, recent results, cache use; shown where
+  development builds are installed). `docs/dev_builds.md` has an agent
+  section and an integration-round recipe.
 - **The builder image has Node.js** (for development runs of small JS tests).
 
 ## Version 0.17.0

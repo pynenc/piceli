@@ -40,6 +40,7 @@ class LocalPort:
         }
         spec = json.loads(env["PICELI_DEV_SPEC"])
         spec["poll_seconds"] = 0.01
+        spec["isolation_check"] = False  # no API server here to cut off
         lines: queue.Queue[str | None] = queue.Queue()
         self.lines[run] = lines
 

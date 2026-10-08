@@ -181,6 +181,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`deploy-ref-unknown`](#error-deploy-ref-unknown) | pipeline | yes |
 | [`deploy-stage-unknown`](#error-deploy-stage-unknown) | cli | no |
 | [`dev-command-failed`](#error-dev-command-failed) | dev | yes |
+| [`dev-isolation-not-enforced`](#error-dev-isolation-not-enforced) | dev | no |
 | [`dev-not-enabled`](#error-dev-not-enabled) | dev | no |
 | [`dev-profile-unknown`](#error-dev-profile-unknown) | dev | no |
 | [`dev-queue-timeout`](#error-dev-queue-timeout) | dev | yes |
@@ -4800,6 +4801,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 - **Fix:** Read `log_tail` (or `piceli dev logs RUN`), fix the code, run again.
 - **Retry-safe:** yes
+
+(error-dev-isolation-not-enforced)=
+### `dev-isolation-not-enforced`
+
+**Run not isolated.** The run's pod could still reach the API server a minute after it started: the cluster does not enforce the NetworkPolicy of namespace `piceli-dev` (a CNI without NetworkPolicy support). No code from the repository ran.
+
+- **Fix:** Use a CNI that enforces NetworkPolicy (k3s's default does; on kind, kindnet does), then run again.
+- **Retry-safe:** no
 
 (error-dev-not-enabled)=
 ### `dev-not-enabled`
