@@ -50,7 +50,11 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli cluster status`](#cli-cluster-status) | Nodes, registry and mirrors, controller, UI and Git Secret of a declared cluster (read-only). | reads | no |
 | [`piceli codegen crd`](#cli-codegen-crd) | Generate pydantic models for one CRD version, from a file or a cluster. | reads | no |
 | [`piceli deploy`](#cli-deploy) | Deploy a pipeline: inputs → build → deliver → plan → apply → checks. | writes | yes |
+| [`piceli dev cancel`](#cli-dev-cancel) | Cancel a queued or running run (its Job and pod are deleted). | writes | no |
+| [`piceli dev logs`](#cli-dev-logs) | A run's output (stdout): live, or the recorded tail of a finished run. | reads | no |
 | [`piceli dev run`](#cli-dev-run) | Run COMMAND on the builder for a commit (--ref) or a working tree (default: here). | writes | no |
+| [`piceli dev schedule`](#cli-dev-schedule) | Run the queue yourself (a cluster without the GitOps controller, which runs it). | writes | no |
+| [`piceli dev status`](#cli-dev-status) | Slots, running and queued runs (with their position), recent runs and cache use. | reads | no |
 | [`piceli doctor`](#cli-doctor) | Check this runner: free disk and memory against what the next build needs (estimated from the last build receipts), and the tools the pipeline uses (docker, docker buildx, kubectl). Exit 1 on a warning. | none | no |
 | [`piceli env down`](#cli-env-down) | Delete BRANCH's environment: its claims, namespace and volumes (never main's). | writes | yes |
 | [`piceli env push`](#cli-env-push) | Record a laptop-built digest for a branch environment (plan, then --approve HASH). | writes | yes |
@@ -926,6 +930,57 @@ Deploy a pipeline: inputs → build → deliver → plan → apply → checks.
 - **Output contract:** conforms
 - **Notes:** --plan never changes the cluster, a registry or a node (it reads the namespace's Deployments and the registry node for a NodeLoopbackRegistry); before the images exist it previews the release with placeholder images (never approvable, never sent to the cluster) and refuses with the blocking objects when it needs adoption or replacement; --approve HASH executes exactly the combined plan, including mirror= copies and a registry adopt=/replace=, and a release planned after delivery may not adopt, replace or delete more than the approved preview; --resume continues the latest interrupted run without a new approval. Unchanged stages are skipped. --ref [SOURCE=]REV builds the sources from commits in temporary worktrees; the combined hash covers the resolved SHAs, --approve needs the same --ref, and --resume reuses the run's SHAs. --plan --out FILE writes a portable plan; --apply FILE --approve HASH applies it on any runner (it re-plans and refuses any difference; no build cache needed for images already delivered). With state="cluster" every command holds the release's Lease (pipeline-locked when another runner holds it; a stale lease is taken over) and --plan writes its state to the cluster too. --env NAME deploys one environment (the app's overrides and the pipeline's target for it, state under <state_dir>/environments/NAME); the combined hash covers the environment's name and resolved values, so --approve, --resume and --plan --out/--apply need the same --env. --approve-if-policy plans and executes without a hash only when every action is inside the pipeline's auto_approve policy (declared by the owner, part of the combined hash; never delete, replace or adopt); otherwise exit 3 with reason approval-policy-exceeded and the approval command. Every run that starts executing writes <state_dir>/runs/<run id>/summary.json (schema docs/schemas/piceli-run-summary-v1.schema.json) and summary.md; the result names them (summary). With the pipeline's cache_budget the state directory is pruned after the run (result: cache).
 
+(cli-dev-cancel)=
+### `piceli dev cancel`
+
+Cancel a queued or running run (its Job and pod are deleted).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `RUN_ID` | text | required |  |
+| `--cluster` | text | env `PICELI_DEV_CLUSTER` | MODULE:ATTR of the piceli.infra.Cluster with dev=DevBuilds(...) (or PICELI_DEV_CLUSTER) |
+| `--allow-exec` | boolean | `False` | Allow the profile's exec credential plugin |
+| `--exec-sha256` | text |  | Pin the exec credential plugin's sha256 |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.Cluster with dev=), credential profile
+- **Writes:** nothing (read-only)
+- **Cluster:** writes
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Only your own runs (the run id dev run printed); the run ends as dev-run-cancelled. dev-run-unknown when it is not queued or running.
+
+(cli-dev-logs)=
+### `piceli dev logs`
+
+A run's output (stdout): live, or the recorded tail of a finished run.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `RUN_ID` | text | required |  |
+| `--cluster` | text | env `PICELI_DEV_CLUSTER` | MODULE:ATTR of the piceli.infra.Cluster with dev=DevBuilds(...) (or PICELI_DEV_CLUSTER) |
+| `--follow` | boolean | `False` | Stream until the run ends |
+| `--tail` | integer |  | Only the last N lines |
+| `--allow-exec` | boolean | `False` | Allow the profile's exec credential plugin |
+| `--exec-sha256` | text |  | Pin the exec credential plugin's sha256 |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.Cluster with dev=), credential profile
+- **Writes:** nothing (read-only)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Read-only. The log on stdout; dev-run-unknown for a run that is neither live nor among the last 50 recorded.
+
 (cli-dev-run)=
 ### `piceli dev run`
 
@@ -965,6 +1020,54 @@ Run COMMAND on the builder for a commit (--ref) or a working tree (default: here
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** Safe for agents: the owner approved what runs may do when piceli cluster init applied Cluster(dev=DevBuilds(...)); each run is an isolated pod in piceli-dev (non-root, no token, no Secret, no cluster network) that only builds in the shared dev cache, never in release caches. Exit 0 the command passed; 1 it failed (dev-command-failed), timed out, ran out of memory, was cancelled or the run broke; 2 refused (dev-not-enabled, dev-ref-unknown, dev-source-invalid, dev-profile-unknown, dev-run-invalid). The run's Job is removed on every outcome.
+
+(cli-dev-schedule)=
+### `piceli dev schedule`
+
+Run the queue yourself (a cluster without the GitOps controller, which runs it).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--cluster` | text | env `PICELI_DEV_CLUSTER` | MODULE:ATTR of the piceli.infra.Cluster with dev=DevBuilds(...) (or PICELI_DEV_CLUSTER) |
+| `--once` | boolean | `False` | One tick, print the status, exit |
+| `--allow-exec` | boolean | `False` | Allow the profile's exec credential plugin |
+| `--exec-sha256` | text |  | Pin the exec credential plugin's sha256 |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.Cluster with dev=), credential profile
+- **Writes:** ConfigMap piceli-dev-status in piceli-system
+- **Cluster:** writes
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Starts queued runs into the slots, records finished runs and deletes their Jobs. --once ticks once and prints the status. Only one queue should run: not next to a controller that runs it.
+
+(cli-dev-status)=
+### `piceli dev status`
+
+Slots, running and queued runs (with their position), recent runs and cache use.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--cluster` | text | env `PICELI_DEV_CLUSTER` | MODULE:ATTR of the piceli.infra.Cluster with dev=DevBuilds(...) (or PICELI_DEV_CLUSTER) |
+| `--allow-exec` | boolean | `False` | Allow the profile's exec credential plugin |
+| `--exec-sha256` | text |  | Pin the exec credential plugin's sha256 |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.Cluster with dev=), credential profile
+- **Writes:** nothing (read-only)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** Read-only. Reads the Jobs in piceli-dev and the scheduler's ConfigMap piceli-dev-status (piceli-system).
 
 (cli-doctor)=
 ### `piceli doctor`

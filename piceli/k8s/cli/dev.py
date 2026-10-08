@@ -64,7 +64,7 @@ def requester_label(value: str | None) -> str:
     return slug or "anonymous"
 
 
-def _summary(result: dict[str, Any]) -> str:
+def run_summary(result: dict[str, Any]) -> str:
     durations = result.get("durations") or {}
     parts = [
         f"{name} {durations[name]:.0f}s"
@@ -252,7 +252,7 @@ def run(
             )
         except DevError as error:
             reject(error.code, str(error))
-    say(_summary(result))
+    say(run_summary(result))
     if result.get("state") != "passed" and quiet:
         for line in result.get("log_tail") or ():
             say(f"  | {line}")
@@ -264,3 +264,206 @@ def run(
 
 def register(root: typer.Typer) -> None:
     root.add_typer(app, name="dev")
+
+
+def _port(
+    cluster: str, transport: str, allow_exec: bool, exec_sha256: str | None
+) -> Any:
+    """A context manager yielding ``(DevCluster, DevBuilds)`` (refusal when not installed)."""
+    from contextlib import contextmanager
+
+    from piceli.dev.cluster import DevCluster
+
+    declared = load_cluster(cluster)
+
+    @contextmanager
+    def opened() -> Any:
+        with (
+            connect(declared, transport, allow_exec, exec_sha256) as api,
+            _cluster_guard(),
+        ):
+            port = DevCluster(api)
+            dev = port.config()
+            if dev is None:
+                reject(
+                    "dev-not-enabled",
+                    f"development builds are not installed on {declared.name}",
+                )
+            yield port, dev
+
+    return opened()
+
+
+def queue_view(port: Any, dev: Any, now: float) -> dict[str, Any]:
+    """Runs, queue and cache use from the live Jobs and the scheduler's status."""
+    from piceli.dev.scheduler import (
+        STATUS_SCHEMA,
+        alive,
+        auto_slots,
+        order,
+        run_summary,
+        state_of,
+    )
+
+    jobs = port.jobs()
+    status = port.status() or {}
+    running = [job for job in jobs if state_of(job) == "running"]
+    queued = [job for job in jobs if state_of(job) == "queued"]
+    finished = [job for job in jobs if state_of(job) in {"complete", "failed"}]
+    slots = status.get("slots") or auto_slots(
+        dev, None if isinstance(dev.slots, int) else port.node(dev.node)
+    )
+    return {
+        "schema": STATUS_SCHEMA,
+        "node": dev.node,
+        "slots": slots,
+        "scheduler": {"alive": alive(status, now), "at": status.get("scheduler_at")},
+        "running": [run_summary(job, now) for job in running],
+        "queued": [
+            {**run_summary(job, now), "position": index + 1}
+            for index, job in enumerate(order(queued, running))
+        ],
+        "finishing": [run_summary(job, now) for job in finished],
+        "recent": list(status.get("recent") or ()),
+        "cache": dict(status.get("cache") or {}),
+    }
+
+
+@app.command("status")
+def status(
+    cluster: ClusterOption,
+    allow_exec: AllowExecOption = False,
+    exec_sha256: ExecSha256Option = None,
+    transport: TransportOption = "https",
+    as_json: JsonOption = False,
+) -> None:
+    """Slots, running and queued runs (with their position), recent runs and cache use."""
+    import time
+
+    with _port(cluster, transport, allow_exec, exec_sha256) as (port, dev):
+        view = queue_view(port, dev, time.time())
+    scheduler = view["scheduler"]
+    say(
+        f"dev builds on {view['node']}: {len(view['running'])}/{view['slots']} slots busy, "
+        f"{len(view['queued'])} queued; scheduler "
+        + ("alive" if scheduler["alive"] else "not running (runs start at once)")
+    )
+    for item in view["running"]:
+        say(
+            f"  running {item['run']} {item['requester']} ({item['priority']}, {item['profile']})"
+        )
+    for item in view["queued"]:
+        say(
+            f"  queued  #{item['position']} {item['run']} {item['requester']} ({item['priority']})"
+        )
+    for item in view["recent"][:10]:
+        say(
+            f"  done    {item.get('run')} {item.get('requester')}: {item.get('state')}"
+            + (f" ({item['reason']})" if item.get("reason") else "")
+        )
+    cache = view["cache"]
+    if cache.get("used_bytes") is not None:
+        say(
+            f"  cache   {cache['used_bytes'] / 2**30:.1f} GiB of "
+            f"{(cache.get('max_bytes') or 0) / 2**30:.1f} GiB in lineages"
+        )
+    if as_json:
+        emit_json(view)
+
+
+@app.command("logs")
+def logs(
+    run_id: Annotated[str, typer.Argument(help="The run (from dev run or dev status)")],
+    cluster: ClusterOption,
+    follow: Annotated[
+        bool, typer.Option("--follow", help="Stream until the run ends")
+    ] = False,
+    tail: Annotated[
+        int | None, typer.Option("--tail", help="Only the last N lines", min=1)
+    ] = None,
+    allow_exec: AllowExecOption = False,
+    exec_sha256: ExecSha256Option = None,
+    transport: TransportOption = "https",
+) -> None:
+    """A run's output (stdout): live, or the recorded tail of a finished run."""
+    from piceli.dev.pod import RESULT_MARKER
+
+    with _port(cluster, transport, allow_exec, exec_sha256) as (port, _dev):
+        pod = port.pod(run_id)
+        if pod is not None and follow:
+            port.follow(
+                pod["metadata"]["name"],
+                lambda line: (
+                    None if line.startswith(RESULT_MARKER) else typer.echo(line)
+                ),
+            )
+            return
+        text = port.logs(run_id, tail) if pod is not None else None
+        if text is not None:
+            for line in text.splitlines():
+                if not line.startswith(RESULT_MARKER):
+                    typer.echo(line)
+            return
+        recorded = next(
+            (
+                item
+                for item in (port.status() or {}).get("recent") or ()
+                if item.get("run") == run_id
+            ),
+            None,
+        )
+    if recorded is None:
+        reject("dev-run-unknown", f"no run {run_id} (piceli dev status lists them)")
+    say(
+        f"run {run_id} finished ({recorded.get('state')}); its pod is gone, the recorded tail:"
+    )
+    for line in recorded.get("log_tail") or ():
+        typer.echo(line)
+
+
+@app.command("cancel")
+def cancel(
+    run_id: Annotated[str, typer.Argument(help="The run to cancel")],
+    cluster: ClusterOption,
+    allow_exec: AllowExecOption = False,
+    exec_sha256: ExecSha256Option = None,
+    transport: TransportOption = "https",
+    as_json: JsonOption = False,
+) -> None:
+    """Cancel a queued or running run (its Job and pod are deleted)."""
+    with _port(cluster, transport, allow_exec, exec_sha256) as (port, _dev):
+        if port.job(run_id) is None:
+            reject("dev-run-unknown", f"no run {run_id} is queued or running")
+        port.delete(run_id)
+    say(f"run {run_id}: cancelled")
+    if as_json:
+        emit_json({"run": run_id, "state": "cancelled"})
+
+
+@app.command("schedule")
+def schedule(
+    cluster: ClusterOption,
+    once: Annotated[
+        bool, typer.Option("--once", help="One tick, print the status, exit")
+    ] = False,
+    allow_exec: AllowExecOption = False,
+    exec_sha256: ExecSha256Option = None,
+    transport: TransportOption = "https",
+) -> None:
+    """Run the queue yourself (a cluster without the GitOps controller, which runs it)."""
+    import time
+
+    from piceli.dev.scheduler import TICK_SECONDS, Scheduler
+
+    with _port(cluster, transport, allow_exec, exec_sha256) as (port, dev):
+        scheduler = Scheduler(port, dev, say=say)
+        if once:
+            emit_json(scheduler.tick())
+            return
+        say(f"dev scheduler: queueing development runs on {dev.node} (Ctrl-C stops)")
+        try:
+            while True:
+                scheduler.tick()
+                time.sleep(TICK_SECONDS)
+        except KeyboardInterrupt:
+            return

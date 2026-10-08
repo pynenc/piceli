@@ -106,3 +106,114 @@ def test_without_ref_the_working_tree_runs_as_it_is(stand_in: dict[str, Any]) ->
     body = json.loads(result.stdout)
     assert "edited, not committed" in result.stderr
     assert body["sources"]["shop"]["dirty"] is True
+
+
+class QueuePort:
+    """Jobs and a scheduler status, for dev status, logs and cancel."""
+
+    def __init__(self) -> None:
+        from tests.unit.dev.test_scheduler import job
+
+        self.items = [
+            job("r-running", requester="alice", suspend=False),
+            job("r-agent", requester="bob", created="2026-10-08T07:00:01Z"),
+            job(
+                "r-round",
+                requester="coordinator",
+                priority="round",
+                created="2026-10-08T07:00:09Z",
+            ),
+        ]
+        self.deleted: list[str] = []
+
+    def jobs(self, selector: str | None = None) -> list[dict[str, Any]]:
+        return self.items
+
+    def job(self, run: str) -> dict[str, Any] | None:
+        return next(
+            (
+                j
+                for j in self.items
+                if j["metadata"]["labels"]["piceli.io/dev-run"] == run
+            ),
+            None,
+        )
+
+    def pod(self, run: str) -> dict[str, Any] | None:
+        return {"metadata": {"name": f"{run}-pod"}} if run == "r-running" else None
+
+    def logs(self, run: str, tail: int | None = None) -> str:
+        return "compiling\nPICELI-DEV-RESULT {}\n"
+
+    def delete(self, run: str) -> None:
+        self.deleted.append(run)
+
+    def node(self, name: str) -> dict[str, Any]:
+        return {"status": {"allocatable": {"cpu": "8", "memory": "16Gi"}}}
+
+    def status(self) -> dict[str, Any]:
+        return {
+            "scheduler_at": "2000-01-01T00:00:00Z",
+            "slots": 1,
+            "recent": [
+                {
+                    "run": "r-old",
+                    "state": "failed",
+                    "requester": "bob",
+                    "log_tail": ["boom"],
+                }
+            ],
+            "cache": {"used_bytes": 3 * 2**30, "max_bytes": 100 * 2**30},
+        }
+
+
+@pytest.fixture
+def queue(monkeypatch: pytest.MonkeyPatch) -> QueuePort:
+    import piceli.k8s.cli.dev as dev_cli
+
+    port = QueuePort()
+
+    @contextmanager
+    def opened(*_args: Any) -> Iterator[tuple[QueuePort, DevBuilds]]:
+        yield port, DEV
+
+    monkeypatch.setattr(dev_cli, "_port", opened)
+    return port
+
+
+def dev(*args: str) -> Any:
+    return CliRunner().invoke(cli, ["dev", *args, "--cluster", "infra.py:c"])
+
+
+def test_status_shows_slots_queue_order_recent_and_cache(queue: QueuePort) -> None:
+    result = dev("status", "--json")
+    assert result.exit_code == 0, result.stderr
+    view = json.loads(result.stdout)
+    assert view["slots"] == 1 and view["scheduler"]["alive"] is False
+    assert [r["run"] for r in view["running"]] == ["r-running"]
+    assert [(q["run"], q["position"]) for q in view["queued"]] == [
+        ("r-round", 1),
+        ("r-agent", 2),
+    ]
+    assert (
+        view["recent"][0]["run"] == "r-old" and view["cache"]["used_bytes"] == 3 * 2**30
+    )
+    assert "1/1 slots busy, 2 queued" in result.stderr
+
+
+def test_logs_of_a_live_and_a_finished_run(queue: QueuePort) -> None:
+    live = dev("logs", "r-running")
+    assert live.exit_code == 0 and live.stdout == "compiling\n"
+    finished = dev("logs", "r-old")
+    assert finished.exit_code == 0 and finished.stdout == "boom\n"
+    unknown = dev("logs", "nope")
+    assert (
+        unknown.exit_code == 2 and "dev-run-unknown" in unknown.stdout + unknown.stderr
+    )
+
+
+def test_cancel_deletes_a_queued_run_only_once(queue: QueuePort) -> None:
+    result = dev("cancel", "r-agent", "--json")
+    assert result.exit_code == 0 and json.loads(result.stdout)["state"] == "cancelled"
+    assert queue.deleted == ["r-agent"]
+    assert dev("cancel", "nope").exit_code == 2

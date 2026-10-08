@@ -140,6 +140,12 @@ def install_objects(cluster: Any) -> list[dict[str, Any]]:
                         "verbs": ["get", "list"],
                     },
                     {"apiGroups": [""], "resources": ["pods/log"], "verbs": ["get"]},
+                    {
+                        "apiGroups": [""],
+                        "resources": ["configmaps"],
+                        "resourceNames": [CONFIG_MAP],
+                        "verbs": ["get"],
+                    },
                 ],
             },
             {

@@ -115,6 +115,40 @@ Options: `--worktree PATH` (default: here, without `--ref`), `--ref`,
 `--artifacts-dir`, `--queue-timeout`, `--quiet` (no streamed log), `--keep`
 (keep the Job), `--json`.
 
+## The queue
+
+Runs share `slots` on the builder. With `slots="auto"` (default) there are
+as many as the node's allocatable CPU and memory hold runs of `run_cpu` and
+`run_memory` (at least one); `slots=N` fixes it.
+
+The GitOps controller runs the queue on a thread (or the owner runs
+`piceli dev schedule --cluster MODULE:ATTR` on a cluster without one). While
+it is alive, `dev run` creates its Job suspended and waits (`queued #2 of
+5`); the queue starts runs into free slots in this order:
+
+1. priority: `round` (integration rounds) before `agent` before `normal`;
+2. fair share: within a priority, the requester with the fewest runs going
+   (`--requester`, or `PICELI_DEV_REQUESTER`, else your user and host);
+3. the oldest first.
+
+It records every finished run (state, exit code, durations, tests, cache
+use; the last 20 log lines of one that did not pass) in the ConfigMap
+`piceli-dev-status`, keeps the last 50, and deletes the run's Job, which
+removes its scratch. Without a queue, runs start at once (Kubernetes still
+schedules them by their requests) and `dev run` deletes its own Job.
+
+```sh
+piceli dev status --cluster infra.py:my_cluster          # slots, running, queued (#position), recent, cache
+piceli dev logs 20261008t071900-ab12 --cluster infra.py:my_cluster --follow
+piceli dev cancel 20261008t071900-ab12 --cluster infra.py:my_cluster
+```
+
+`dev status --json` prints `piceli.dev-status.v1`: `node`, `slots`,
+`scheduler {alive, at}`, `running[]`, `queued[]` (with `position`),
+`recent[]` and `cache {used_bytes, max_bytes}`. `dev logs` streams a
+running run (`--follow`) or prints the recorded tail of a finished one.
+`dev cancel` ends a queued or running run (`dev-run-cancelled`).
+
 ## The shared cache
 
 Each run builds in a **lineage**: a stable directory holding the synced
@@ -200,4 +234,5 @@ memory, was cancelled or the run broke; `2` refused before anything ran.
 | `dev-source-invalid` | A source is not `NAME=PATH@REF` in a Git repository | Fix the argument |
 | `dev-profile-unknown` | No such profile | Use a declared one |
 | `dev-run-invalid` | No command, a bad priority, `--cwd` or `--node` | Fix the argument |
+| `dev-run-unknown` | No such run queued, running or recorded | `piceli dev status` |
 | `dev-not-enabled` | No `DevBuilds` installed on the cluster | Ask the owner to declare it and run `cluster init` |

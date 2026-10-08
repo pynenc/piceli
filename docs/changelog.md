@@ -21,6 +21,13 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   (`piceli.dev-run.v1`) has the exit code, phase durations, cargo test
   counts, crates compiled and the log tail; `--artifact` copies files back.
   New codes `dev-*` (`piceli explain`); see `docs/dev_builds.md`.
+- **A queue for development runs.** `slots` (auto from the builder's CPU
+  and memory, or fixed); the GitOps controller runs the queue on a thread
+  (or `piceli dev schedule`): runs start by priority (`round` before
+  `agent` before `normal`), then fair share per requester, then age, are
+  recorded in `piceli-dev-status` (last 50) and their Jobs removed.
+  `piceli dev status` (slots, running, queued with position, recent runs,
+  cache use), `piceli dev logs RUN [--follow]`, `piceli dev cancel RUN`.
 - **The builder image has Node.js** (for development runs of small JS tests).
 
 ## Version 0.17.0

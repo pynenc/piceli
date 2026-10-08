@@ -151,8 +151,9 @@ def du(path: Path) -> int:
     return total
 
 
-def evict(cache: Path, limit: int) -> list[str]:
-    """Remove least recently used free lineages until the recorded bytes fit."""
+def evict(cache: Path, limit: int) -> tuple[list[str], int]:
+    """Remove least recently used free lineages until the recorded bytes fit;
+    the removed lineages and the bytes still recorded."""
     lineages = cache / "lineages"
     found = []
     for meta in lineages.glob("*/*/meta.json"):
@@ -184,7 +185,7 @@ def evict(cache: Path, limit: int) -> list[str]:
         shutil.rmtree(path, ignore_errors=True)
         total -= size
         removed.append(f"{path.parent.name}/{path.name}")
-    return removed
+    return removed, total
 
 
 class Lineage:
@@ -522,7 +523,8 @@ def main(
                 missing_tools=missing,
             )
         toolchain = _toolchain(spec)
-        evicted = evict(cache, int(spec.get("cache_max_bytes") or 1 << 62))
+        limit = int(spec.get("cache_max_bytes") or 1 << 62)
+        evicted, used = evict(cache, limit)
         if toolchain != "none":
             spec = {**spec, "lineage_key": f"{spec['lineage_key']}-{toolchain}"}
         lineage = take_lineage(cache, spec, clock)
@@ -531,6 +533,8 @@ def main(
             "lineage_dir": str(lineage.path),
             "warm": lineage.warm,
             "evicted": evicted,
+            "used_bytes": used,
+            "max_bytes": limit,
         }
         emit(
             f"[piceli-dev] lineage {result['cache']['lineage']} "
