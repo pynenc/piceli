@@ -256,6 +256,7 @@ def env_pipeline(
     alias = pin_alias(pipeline) if pipeline.deliver is not None else None
     node = pipeline.target.nodes.get(alias) if alias is not None else None
     placement: dict[str, Any] = {}
+    access = None
     if fixed is not None:
         placement = {
             "stack": fixed.stack,
@@ -265,12 +266,19 @@ def env_pipeline(
             "environment": fixed.name,
             "prebuilt": bool(images),
         }
+        access = fixed.access or getattr(fixed.cluster, "access", None)
     elif not main:
         placement = {
             "stack": config.branch_stack,
             "on_nodes": config.branch_nodes,
             "replicas": config.branch_replicas,
         }
+        access = config.branch_access
+    if access is not None and access.tailnet:
+        from piceli.envs.access import exposed_services
+
+        placement["access"] = access
+        placement["exposed"] = exposed_services(access, pipeline.app, namespace)
     env = BranchEnv(
         branch=branch,
         namespace=namespace,

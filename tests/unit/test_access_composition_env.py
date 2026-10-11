@@ -161,3 +161,78 @@ def test_a_pipeline_environment_forwards_what_its_app_declares(
         "infra.py:cluster", "main", tmp_path, services=lambda _t: [], port=lambda: 1
     )
     assert gone.shortcuts == ()
+
+
+def _companion(name: str, port: int, host: str | None) -> dict[str, Any]:
+    raw = service(f"{name}-tailnet", port)
+    raw["metadata"]["labels"] = {
+        "piceli.io/access": "tailnet",
+        "piceli.io/access-service": name,
+    }
+    if host:
+        raw["status"] = {
+            "loadBalancer": {"ingress": [{"hostname": host, "ip": "100.64.0.7"}]}
+        }
+    return raw
+
+
+def test_tailnet_exposed_services_are_reached_on_the_tailnet(
+    profile: Path, tmp_path: Path
+) -> None:
+    """0.19: a forward whose Service has a tailnet companion with a MagicDNS
+    name gets its tailnet URL; one without a name yet is not ready."""
+    (tmp_path / "infra.py").write_text(_PIPELINE_INFRA)
+    free = iter(range(43000, 43010))
+    live = [
+        service("web", 80),
+        service("cache", 6379),
+        _companion("web", 80, "main-web.tail1.ts.net"),
+    ]
+    resolved = composition_env_target(
+        "infra.py:cluster",
+        "main",
+        tmp_path,
+        services=lambda _t: live,
+        port=lambda: next(free),
+    )
+    assert resolved.tailnet == (
+        {
+            "id": "web",
+            "service": "web",
+            "port": 80,
+            "host": "main-web.tail1.ts.net",
+            "ready": True,
+            "url": "http://main-web.tail1.ts.net:80/login",
+        },
+    )
+    pending = composition_env_target(
+        "infra.py:cluster", "main", tmp_path,
+        services=lambda _t: [service("web", 80), _companion("web", 80, None)], port=lambda: 1,
+    )  # fmt: skip
+    assert pending.tailnet[0]["ready"] is False and pending.tailnet[0]["url"] is None
+
+
+def test_access_prints_tailnet_urls_instead_of_forwarding(
+    profile: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import json
+
+    import piceli.k8s.cli.access as cli
+    from piceli.k8s.cli import app
+    from piceli.k8s.env_access import composition_env_target as real
+
+    (tmp_path / "infra.py").write_text(_PIPELINE_INFRA)
+    live = [service("web", 80), _companion("web", 80, "main-web.tail1.ts.net")]
+    monkeypatch.setattr(
+        cli, "composition_env_target",
+        lambda target, env, root, **_k: real(target, env, root, services=lambda _t: live, port=lambda: 43001),
+    )  # fmt: skip
+    monkeypatch.setattr(cli.shutil, "which", lambda _name: "/usr/bin/kubectl")
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(
+        app, ["access", "main", "--cluster", "infra.py:cluster", "--json"]
+    )
+    assert result.exit_code == 0, result.stdout + result.stderr
+    started = json.loads(result.stdout.splitlines()[0])
+    assert started["forwards"] == []
+    assert started["tailnet"][0]["url"] == "http://main-web.tail1.ts.net:80/login"

@@ -434,6 +434,9 @@ class Environment:
     #: ``"all"`` or a :class:`~piceli.restore.RestorePoints`; ``None``
     #: (default): the pipeline's ``restore_points``.
     restore_points: Any = field(default=None, compare=False)
+    #: 0.19: how people reach its services (``Access(tailnet=True)``);
+    #: ``None``: the cluster's ``access``, else port-forward only.
+    access: Any = field(default=None, compare=False)
     #: ``follow={Source: rule}`` normalised: ``((source, rules), ...)``.
     sources: tuple[tuple[Any, tuple[Any, ...]], ...] = field(
         init=False, default=(), compare=False, repr=False
@@ -537,6 +540,7 @@ class Environment:
         rollout: Any = None,
         replicas: Mapping[str, int] | None = None,
         restore_points: Any = None,
+        access: Any = None,
     ) -> BranchEnvironments:
         """One environment per Git branch of the sources (a composition's branch rule).
 
@@ -580,6 +584,7 @@ class Environment:
             rollout=rollout,
             replicas=replicas,
             restore_points=restore_points,
+            access=access,
         )
 
     @property
@@ -627,6 +632,7 @@ class Environment:
                 if self.restore_points is not None
                 else {}
             ),
+            **({"access": self.access.describe()} if self.access is not None else {}),
         }
 
 
@@ -677,9 +683,19 @@ def describe_restore_points(value: Any) -> Any:
     return value if value is None or isinstance(value, str) else value.describe()
 
 
+def _check_access(env: Any, what: str) -> None:
+    if env.access is None:
+        return
+    from piceli.envs.access import Access
+
+    if not isinstance(env.access, Access):
+        raise EnvError("env-config-invalid", f"{what}: access is Access(...)")
+
+
 def _check_pipeline(env: Any, what: str) -> None:
     """``pipeline=``: a Pipeline, never mixed with contract components."""
     _check_restore_points(env, what)
+    _check_access(env, what)
     if env.pipeline is None:
         if env.restore_points is not None:
             raise EnvError(
@@ -735,6 +751,7 @@ class BranchEnvironments:
     clusters: Sequence[Any] = ()
     rollout: Any = None
     restore_points: Any = field(default=None, compare=False)
+    access: Any = field(default=None, compare=False)
     sources: tuple[tuple[Any, tuple[Any, ...]], ...] = field(
         init=False, default=(), compare=False, repr=False
     )
@@ -799,6 +816,7 @@ class BranchEnvironments:
             branch_nodes=self.on_nodes,
             idle_stop=self.idle_stop,
             branch_replicas=self.replicas,
+            branch_access=self.access,
         )
 
     def describe(self) -> dict[str, Any]:
@@ -823,6 +841,7 @@ class BranchEnvironments:
                 if self.restore_points is not None
                 else {}
             ),
+            **({"access": self.access.describe()} if self.access is not None else {}),
         }
 
 
@@ -897,6 +916,8 @@ class EnvConfig:
     idle_stop: str | int | None = None
     #: 0.15: ``{workload: count}`` of branch environments.
     branch_replicas: Mapping[str, int] | None = None
+    #: 0.19: ``Access(tailnet=True)`` of branch environments.
+    branch_access: Any = field(default=None, compare=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.prefix, str) or not _PREFIX.fullmatch(self.prefix):
@@ -1141,6 +1162,10 @@ class BranchEnv:
     #: ``(address, port)`` of the API server, read by ``env up`` when
     #: ``config.allow_api`` (the egress the isolation then allows).
     api_endpoints: tuple[tuple[str, int], ...] = ()
+    #: 0.19: ``Access`` of the environment and the Services it exposes on
+    #: the tailnet (``{service: ports}``, see :mod:`piceli.envs.access`).
+    access: Any = None
+    exposed: Mapping[str, tuple[int, ...]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

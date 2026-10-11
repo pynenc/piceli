@@ -161,6 +161,7 @@ Forward the app's declared ports to 127.0.0.1 and keep them healthy.
 | `--pipeline` | text | env `PICELI_PIPELINE` | With a branch name as TARGET: the pipeline declaring envs=EnvConfig(...) (MODULE:ATTR; default $PICELI_PIPELINE). A branch's forwards get free local ports |
 | `--cluster` | text |  | With an environment name as TARGET: the composition's Cluster (infra.py:ATTR). Forwards the environment's declared forwards and every other Service port of it on free local ports, with the cluster's credentials profile |
 | `--ui` | boolean | `False` | With --cluster: also forward the in-cluster UI (127.0.0.1:8790) and print its launch URL, as `piceli access ui` does |
+| `--forward` | boolean | `False` | Port-forward every service, also those the environment exposes on the tailnet (Access(tailnet=True)) |
 
 **Contract**
 

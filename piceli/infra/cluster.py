@@ -143,6 +143,11 @@ def check_cluster(cluster: Cluster) -> None:
     for what, node in placed.items():
         if node is not None and names and node not in names:
             raise _invalid(f"{what} names {node!r}, which is not one of the nodes")
+    if cluster.access is not None:
+        from piceli.envs.access import Access
+
+        if not isinstance(cluster.access, Access):
+            raise _invalid("Cluster(access=) must be Access(...)")
     if cluster.dev is not None:
         from piceli.dev.model import DevBuilds
 
@@ -220,6 +225,8 @@ def describe(cluster: Cluster) -> dict[str, Any]:
             body["controller"]["telemetry"] = cluster.controller.telemetry.to_dict()
     if cluster.dev is not None:  # 0.18.0; absent when off: same hashes
         body["dev"] = cluster.dev.describe()
+    if cluster.access is not None:  # 0.19.0; absent when off: same hashes
+        body["access"] = cluster.access.describe()
     if cluster.ui is not None:
         body["ui"] = {
             "access": cluster.ui.access,

@@ -27,6 +27,7 @@ Importing this package reads no file and contacts nothing.
 
 from typing import TYPE_CHECKING, Any
 
+from piceli.envs.access import Access
 from piceli.envs.model import (
     Branch,
     BranchEnv,
@@ -55,6 +56,7 @@ if TYPE_CHECKING:
     )
 
 __all__ = [
+    "Access",
     "Branch",
     "BranchEnv",
     "BranchEnvironments",
