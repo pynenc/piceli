@@ -103,15 +103,40 @@ piceli dev run --cluster infra.py:my_cluster --ref HEAD --profile node \
   --artifact target/report.json --json -- npm test
 ```
 
-`PICELI_DEV_CLUSTER=infra.py:my_cluster` saves the `--cluster`.
-Everything comes from your machine: a working tree is its tracked files as
-they are now plus the untracked files Git does not ignore (`git ls-files
---cached --others --exclude-standard`; deleted files are left out), a
-commit is `git archive` of it. The cluster never fetches and holds no Git
-credentials. A ref your repository does not have is `dev-ref-unknown`:
-`git fetch` it first. A sibling `--source NAME=PATH` without `@REF` ships
-that working tree too. The result's `sources` records each source's
-commit (`HEAD` for a working tree) and whether it was `dirty`.
+`PICELI_DEV_CLUSTER=infra.py:my_cluster` saves the `--cluster`. A ref
+your repository does not have is `dev-ref-unknown`: `git fetch` it first.
+A sibling `--source NAME=PATH` without `@REF` ships that working tree too;
+a `--source` that is the tree being run is skipped with a note (`notes`).
+
+## What travels: Git deltas
+
+A run ships only what the builder lacks (0.19.0), so it works over a slow
+link (a laptop on a VPN, a phone tether):
+
+1. The builder keeps one Git mirror per repository on the cache claim.
+   Before anything from the repository runs, the run pod's init container
+   fetches the repository's remote into its mirror with the cluster's Git
+   credentials (the GitOps controller keeps a copy for runs, the Secret
+   `piceli-dev-git`, limited to the composition's source URLs; the
+   container that runs your command never mounts it), then reports which
+   of a few commits the mirror has: your branch's upstream tip, its merge
+   base with the remote's default branch, and ancestors of `HEAD`.
+2. Your machine then uploads a `git bundle` of the commits from the
+   nearest of those to `HEAD` (none when the mirror has `HEAD`), plus, for
+   a working tree, the uncommitted diff (`git diff --binary HEAD`) and the
+   untracked files Git does not ignore. A typical agent run uploads a few
+   kilobytes. Without any known commit (a new repository, a remote the
+   cluster may not fetch) it uploads the whole history once: that seeds
+   the mirror, and the next run is a delta.
+3. The pod unbundles into the mirror, exports `HEAD`, applies the diff and
+   the untracked files, and syncs the tree into its lineage, keeping the
+   modification time of unchanged files as before.
+
+Uploads go in 4 MiB chunks over `pods/exec`, each retried on a dropped
+connection (after 1, 2, 4, 8 and 16 s), with progress on stderr (`upload
+1.2 MB of 4.0 MB (1.1 MB/s)`); the run waits as long as parts keep
+arriving. A `dev-upload-failed` names the chunk, how much was sent and the
+cause. An image without `git` gets the whole tree, as in 0.18.
 
 Options: `--worktree PATH` (default: here, without `--ref`), `--ref`,
 `--repo PATH` (the root repository with `--ref`, default here),
@@ -214,7 +239,11 @@ span per phase (`queue`, `sync`, `fetch`, `build`, `test`), an event
   "node": "builder-1",
   "requester": "agent-7",
   "priority": "agent",
-  "sources": {"shop": {"commit": "3f2a…", "ref": "wp-login", "dirty": false}},
+  "sources": {"shop": {"commit": "3f2a…", "ref": null, "dirty": true, "mode": "delta",
+                       "base": "9c1e…", "bundle_bytes": 1840,
+                       "fetch": {"fetched": true, "error": null, "note": null}}},
+  "upload": {"mode": "delta", "bytes": 2711, "chunks": 1, "retries": 0, "seconds": 0.4},
+  "upload_bytes": 2711,
   "durations": {"pack": 0.4, "queue": 2.1, "transfer": 0.9, "sync": 1.2,
                 "fetch": 0.3, "build": 41.0, "test": 12.5, "command": 53.5, "total": 59.1},
   "tests": {"passed": 211, "failed": 1, "ignored": 3, "suites": 4},
@@ -227,8 +256,14 @@ span per phase (`queue`, `sync`, `fetch`, `build`, `test`), an event
 
 - `state`: `passed`, `failed`, `timed-out`, `cancelled` or `error`;
   `reason` is a registered code (`piceli explain CODE`).
-- `durations` (seconds): `pack` (on your machine), `queue` (until the pod
-  ran), `transfer` (the upload), `sync` (into the lineage), `fetch`
+- `sources`: each source's `commit` (`HEAD` for a working tree), `dirty`,
+  the `base` the mirror had and the `bundle_bytes` sent; `fetch` says
+  whether the init container fetched the remote and, when it could not,
+  why (`error`, credentials masked) or why it did not try (`note`).
+- `upload`: `mode` (`delta`, or `tree` for an image without git), the
+  `bytes` sent, `chunks`, `retries` and `seconds`.
+- `durations` (seconds): `queue` (until the pod ran), `pack` (on your
+  machine, against what the mirror has), `transfer` (the upload), `sync` (into the lineage), `fetch`
   (`prefetch`), `build` and `test` (split at cargo's `Finished` line),
   `command`, `total`.
 - `tests`: summed from cargo's `test result:` lines (absent otherwise).
@@ -320,7 +355,7 @@ its `tests`, `durations` and `log_tail`.
 | `dev-run-failed` | The pod ended without a result or could not start | Check the image; report it |
 | `dev-run-cancelled` | The Job was deleted (Ctrl-C) | Run again when wanted |
 | `dev-queue-timeout` | No start within `--queue-timeout` | Wait or raise it |
-| `dev-upload-failed` | The archive did not arrive intact | Run again; check `pods/exec` rights |
+| `dev-upload-failed` | The upload did not arrive intact; the message names the chunk and the cause (a dropped link after five retries, a bundle that does not apply, a commit the mirror lacks) | Run again; check `pods/exec` rights and the link |
 | `dev-isolation-not-enforced` | The cluster does not enforce the NetworkPolicy; nothing ran | Report it to the owner |
 | `dev-tool-missing` | The image lacks a profile tool | Use another profile |
 | `dev-ref-unknown` | The commit is not in your repository | `git fetch` it |
