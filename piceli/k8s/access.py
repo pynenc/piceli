@@ -38,6 +38,7 @@ from piceli.k8s.observe import local_port_in_use, probe_endpoint
 from piceli.k8s.ops.exec_credentials import ProviderFactoryError
 from piceli.k8s.port_owner import (
     OTHER,
+    PICELI_SERVER,
     UNKNOWN,
     Holder,
     PortOwner,
@@ -876,9 +877,11 @@ def forward_status(
     listens). A forward counts as Piceli's only when the listener is the
     ``kubectl`` argv Piceli builds for this context, namespace, target and
     ports, started by a Piceli process (see
-    :func:`~piceli.k8s.port_owner.is_piceli_forward`); without ``context``
-    nothing can be verified and a listener is ``occupied``. Contacts only
-    the loopback address, never the cluster.
+    :func:`~piceli.k8s.port_owner.is_piceli_forward`), or (since 0.19.0,
+    through ``owned``) the ``piceli access`` for this target, whose relay
+    holds the port in front of ``kubectl``; without ``context`` nothing can
+    be verified and a listener is ``occupied``. Contacts only the loopback
+    address, never the cluster.
     """
     owner = owner or _full_owner
     owned = owned or is_piceli_forward
@@ -992,8 +995,12 @@ def collect_status(
     *,
     reader_error: str | None = None,
     forward: Callable[[UiShortcut], dict[str, Any]] | None = None,
+    names: Iterable[str] = (),
 ) -> dict[str, Any]:
     """The ``piceli.status.v1`` document for ``target``.
+
+    ``names``: the TARGET arguments a ``piceli access`` for it may have been
+    started with; its relay holding a declared port is Piceli's forward.
 
     :param reader: Live workload reader; ``None`` when it could not be built,
         in which case ``reader_error`` is the error code recorded.
@@ -1048,10 +1055,17 @@ def collect_status(
             item["error"] = pods_error
         summary.workloads.append(item)
     if forward is None:
+        check = holder_check(target, names)
+
+        def owned(holder: PortOwner | None, **declared: Any) -> bool:
+            return (
+                is_piceli_forward(holder, **declared)
+                or check(holder).kind == PICELI_SERVER
+            )
 
         def forward(item: UiShortcut) -> dict[str, Any]:
             return forward_status(
-                item, context=target.context, namespace=target.namespace
+                item, context=target.context, namespace=target.namespace, owned=owned
             )
 
     forwards = [forward(item) for item in target.shortcuts]

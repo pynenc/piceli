@@ -127,7 +127,9 @@ New to Piceli? Start with {doc}`getting_started/index`.
 
    `up` means the port is held by the `kubectl port-forward` that Piceli
    started for this declaration (same context, namespace, target and ports,
-   started by `piceli access` or a dashboard) and its health probe passes.
+   started by `piceli access` or a dashboard), or since 0.19.0 by the
+   `piceli access` for this TARGET itself (its relay, with `kubectl` behind
+   it), and its health probe passes.
    If another process holds the port (another project's forward, a dev
    server), the forward is `occupied`, never `up`, and only that process's
    pid is shown:

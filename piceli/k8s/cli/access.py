@@ -249,7 +249,9 @@ def status(
         except Exception:  # detail may contain credentials
             reader_error = "status-cluster-unreadable"
     try:
-        document = collect_status(resolved, reader, reader_error=reader_error)
+        document = collect_status(
+            resolved, reader, reader_error=reader_error, names=_names(target)
+        )
     finally:
         close = getattr(reader, "close", None)
         if close is not None:

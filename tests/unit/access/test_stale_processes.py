@@ -394,3 +394,43 @@ def test_cli_access_stop_stale_stops_a_leftover_piceli_access(
         # A failure above must not leave the fake kubectl (started in its own
         # session by piceli access) holding the port for later runs.
         _kill_fake_kubectl(fake_kubectl)
+
+
+@pytest.mark.skipif(
+    not (sys.platform.startswith("linux") or shutil.which("lsof")),
+    reason="needs /proc or lsof to find a port's owner",
+)
+def test_status_counts_a_running_access_relay_as_piceli_forward(
+    tmp_path: Path, fake_kubectl: Path, upstream: int
+) -> None:
+    """0.19: `piceli access` holds the declared port in its relay (kubectl
+    sits behind it); `piceli status` reports that forward `up`, not
+    `occupied` (found by the kind suite)."""
+    local = _free_port()
+    spec = write_spec(tmp_path, local=local, upstream=upstream)
+    process = subprocess.Popen(
+        [
+            sys.executable, "-m", "piceli", "access", str(spec), "--only", "api",
+            "--json", "--kubectl", str(fake_kubectl), "--poll", "0.2",
+        ],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=REPO,
+        env={**os.environ, "PICELI__UI_CONFIG": ""},
+    )  # fmt: skip
+    try:
+        events = _read_events(process, lambda event: event.get("health") == "healthy")
+        assert events and events[-1].get("health") == "healthy", events
+        shown = CliRunner().invoke(app, ["status", str(spec), "--json"])
+        document = json.loads(shown.stdout)
+        forwards = {item["id"]: item for item in document["access"]["forwards"]}
+        assert forwards["api"]["forward"] == "up", forwards["api"]
+        assert forwards["api"]["error"] is None
+    finally:
+        process.send_signal(signal.SIGTERM)
+        try:
+            process.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+        for stream in (process.stdout, process.stderr):
+            if stream is not None:
+                stream.close()
