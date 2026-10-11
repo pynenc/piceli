@@ -199,6 +199,9 @@ class Cluster:
     ui: Ui | None = None
     #: 0.18.0: development builds on a builder node (``DevBuilds(...)``).
     dev: DevBuilds | None = None
+    #: 0.19.0: how people reach every environment of this cluster that
+    #: declares no ``access`` of its own (``Access(tailnet=True)``).
+    access: Any = None
 
     def __post_init__(self) -> None:
         from piceli.infra.cluster import as_tuple, check_cluster

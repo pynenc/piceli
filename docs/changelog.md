@@ -24,6 +24,17 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   the run waits while parts keep arriving; `dev-upload-failed` names the
   chunk, the bytes sent and the cause. The waiting line says `fetching
   sources` while the init container runs (it said `ContainerCreating`).
+- **Environments on the tailnet.** `Environment(access=Access(tailnet=True))`
+  (also `Cluster(access=...)` for every environment, and
+  `Environment.per_branch(access=...)`) adds, per Service with a declared
+  forward, a companion Service `<name>-tailnet` (`loadBalancerClass:
+  tailscale`) that the Tailscale Kubernetes operator exposes on the tailnet
+  under `hostname` (`{env}-{service}` by default); the environment's
+  ingress policies that select those pods admit the operator's namespace.
+  `piceli access ENV --cluster ...` prints the tailnet URLs instead of
+  forwarding them (`tailnet` in the `started` event; exits 0 when nothing is
+  left to forward); a companion without a name yet is forwarded, with a
+  note; `--forward` forwards everything.
 - **`piceli dev run` no longer leaves its packed tree behind** when it is
   stopped by SIGTERM or SIGHUP (a cancelled agent): its scratch is a tracked
   Piceli temporary directory.

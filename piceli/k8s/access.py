@@ -90,6 +90,9 @@ class AccessTarget:
     checks: Callable[[], Any] | None = None
     app: Any = None
     exec_policy: Any = None
+    #: 0.19.0: forwards reachable on the tailnet instead (``id``, ``service``,
+    #: ``url``, ``host``, ``ready``), see :mod:`piceli.envs.access`.
+    tailnet: tuple[dict[str, Any], ...] = ()
 
     def shortcut(self, ident: str) -> UiShortcut | None:
         return next((item for item in self.shortcuts if item.id == ident), None)

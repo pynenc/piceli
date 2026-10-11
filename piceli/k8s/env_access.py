@@ -131,6 +131,63 @@ def _live_services(target: KubeconfigTarget) -> list[dict[str, Any]]:
         reader.close()
 
 
+def tailnet_urls(
+    shortcuts: Iterable[UiShortcut], services: Iterable[Mapping[str, Any]]
+) -> tuple[dict[str, Any], ...]:
+    """The tailnet URL of each forward whose Service has a tailnet companion.
+
+    The companion (label ``piceli.io/access=tailnet``) gets its MagicDNS name
+    from the Tailscale operator in ``status.loadBalancer.ingress``; until it
+    has one the entry is ``ready: False`` and the forward stays the way in.
+    """
+    from piceli.envs.access import ACCESS_LABEL
+
+    companions: dict[str, Mapping[str, Any]] = {}
+    for raw in services:
+        labels = (raw.get("metadata") or {}).get("labels") or {}
+        if labels.get(ACCESS_LABEL) == "tailnet" and labels.get(
+            "piceli.io/access-service"
+        ):
+            companions[labels["piceli.io/access-service"]] = raw
+    found = []
+    for item in shortcuts:
+        if not item.target.startswith("service/"):
+            continue
+        service = item.target.split("/", 1)[1]
+        companion = companions.get(service)
+        if companion is None:
+            continue
+        ports = {
+            int(port.get("port") or 0)
+            for port in (companion.get("spec") or {}).get("ports") or ()
+        }
+        if item.remote_port not in ports:
+            continue
+        ingress = (
+            ((companion.get("status") or {}).get("loadBalancer") or {}).get("ingress")
+        ) or []
+        host = next(
+            (
+                entry.get("hostname") or entry.get("ip")
+                for entry in ingress
+                if entry.get("hostname") or entry.get("ip")
+            ),
+            None,
+        )
+        path = getattr(item, "path", None) or ""
+        found.append(
+            {
+                "id": item.id,
+                "service": service,
+                "port": item.remote_port,
+                "host": host,
+                "ready": host is not None,
+                "url": f"http://{host}:{item.remote_port}{path}" if host else None,
+            }
+        )
+    return tuple(found)
+
+
 def composition_env_target(
     cluster: str,
     env: str,
@@ -199,6 +256,14 @@ def composition_env_target(
             code if isinstance(code, str) else "access-target-invalid",
             f"the services of {environment.namespace} could not be read",
         ) from None
+    from piceli.envs.access import ACCESS_LABEL
+
+    companions = [
+        raw for raw in live
+        if ((raw.get("metadata") or {}).get("labels") or {}).get(ACCESS_LABEL) == "tailnet"
+    ]  # fmt: skip
+    every = live
+    live = [raw for raw in live if raw not in companions]
     declared = declared_forwards(environment, live)
     covered = {(item.target, item.remote_port) for item in declared}
     taken = {item.id for item in declared}
@@ -210,6 +275,7 @@ def composition_env_target(
         if (item.target, item.remote_port) not in covered and item.id not in taken
     )
     return AccessTarget(
+        tailnet=tailnet_urls(shortcuts, every),
         name=f"{composition.name} environment {env}",
         namespace=environment.namespace,
         kubeconfig=credentials.kubeconfig,

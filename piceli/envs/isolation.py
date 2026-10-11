@@ -665,6 +665,31 @@ def scale(manifests: Mapping[ResourceRef, dict[str, Any]], env: BranchEnv) -> No
 # ------------------------------------------------------------------- entry
 
 
+def _replace(
+    components: list[DeploymentComponent], ref: ResourceRef, manifest: dict[str, Any]
+) -> list[DeploymentComponent]:
+    """``components`` with the resource ``ref`` rebuilt from ``manifest``."""
+    rebuilt = []
+    for component in components:
+        resources = []
+        for resource in component.resources:
+            if resource.ref == ref:
+                updated = ResourceIntent.from_manifest(manifest, resource.dependencies)
+                for binding in resource.secret_bindings:
+                    updated = updated.with_secret(
+                        binding.json_pointer, binding.reference
+                    )
+                resources.append(updated)
+            else:
+                resources.append(resource)
+        rebuilt.append(
+            DeploymentComponent(
+                component.name, tuple(resources), component.dependencies
+            )
+        )
+    return rebuilt
+
+
 def isolate(
     composition: DeploymentComposition, env: BranchEnv
 ) -> DeploymentComposition:
@@ -746,6 +771,24 @@ def isolate(
         added = list(isolation_objects(env))
     elif env.quota:
         added = [quota_object(env, env.quota)]
+    if env.access is not None and env.access.tailnet and env.exposed:
+        # 0.19: companion Services on the tailnet; the policies that select
+        # their pods let the Tailscale operator's proxies in.
+        from piceli.envs.access import allow_tailnet, tailnet_services
+
+        exposed = tailnet_services(
+            list(manifests.values()),
+            env.access,
+            env.exposed,
+            env.environment or env.branch,
+            env.namespace,
+        )
+        policies = [m for ref, m in manifests.items() if ref.kind == "NetworkPolicy"]
+        for policy in allow_tailnet(policies, exposed, env.access):
+            changed_ref = next(ref for ref, m in manifests.items() if m is policy)
+            components = _replace(components, changed_ref, policy)
+        allow_tailnet(added, exposed, env.access)
+        added += exposed
     if added:
         if any(component.name == COMPONENT for component in components):
             raise EnvError(
