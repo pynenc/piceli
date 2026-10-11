@@ -53,8 +53,8 @@ def process_identity(pid: int, *, proc: Path = Path("/proc")) -> str | None:
             return None
         # "pid (comm) state ppid ..."; field 22 (starttime) is the 20th after comm.
         fields = stat.rsplit(")", 1)[-1].split()
-        if len(fields) < 20:
-            return None
+        if len(fields) < 20 or fields[0] in {"Z", "X"}:
+            return None  # a zombie has exited: only its parent has not waited yet
         raw = fields[19].encode() + b"\0" + command
     else:
         ps = shutil.which("ps")

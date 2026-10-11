@@ -167,8 +167,8 @@ def test_the_relay_passes_bytes_on_counts_them_and_survives_a_new_target() -> No
         relay.close()
         first.close()
         second.close()
-    with socket.socket() as probe:  # closing the relay frees its port
-        probe.bind(("127.0.0.1", relay.port))
+    with socket.socket() as probe:  # closing the relay stops listening
+        assert probe.connect_ex(("127.0.0.1", relay.port)) != 0
 
 
 def test_a_busy_forward_is_not_restarted_while_its_probe_times_out(

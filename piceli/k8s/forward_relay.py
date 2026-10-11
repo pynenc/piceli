@@ -72,6 +72,12 @@ class PortRelay:
     def close(self) -> None:
         self._closed.set()
         try:
+            # On Linux, close() alone leaves a thread blocked in accept()
+            # holding the socket (the port stays bound); shutdown wakes it.
+            self._listener.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass  # macOS: a listening socket is "not connected"
+        try:
             self._listener.close()
         except OSError:
             pass

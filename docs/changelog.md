@@ -42,7 +42,9 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   local port. `status` events and the dashboard carry `restart_reasons`
   (last ten, `{at, reason}`) and `traffic`. `access stop --stale` now
   identifies every port's holder before signalling any, so one leftover
-  holding several ports is stopped through all of them.
+  holding several ports is stopped through all of them. On Linux, a forward
+  reaped after its server was killed and left a zombie no longer counts as
+  running.
 - **A failing Git remote is never silent.** Git's stderr, masked, is kept in
   `gitops-git-failed` (`controller.last_error_detail`,
   `sources.*.error_detail`, `gitops status`, the UI's Cluster page), logged
