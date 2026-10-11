@@ -1424,7 +1424,10 @@ def _run_composition(
                 )
                 telemetry.start_heartbeat()
                 refresh = _refresher(service_account, Path(private), channel, transport)
-                stop_dev = _dev_scheduler(target, transport, telemetry)
+                stop_dev = _dev_scheduler(
+                    target, transport, telemetry, credentials_dir,
+                    [source.url for source in config.sources],
+                )  # fmt: skip
                 try:
                     _forever(controller, refresh)
                 finally:
@@ -1435,9 +1438,16 @@ def _run_composition(
             closer()
 
 
-def _dev_scheduler(target: Any, transport: str, telemetry: Any) -> Callable[[], None]:
-    """0.18.0: the development-run queue, on a thread of this controller."""
-    from piceli.dev.scheduler import start_thread
+def _dev_scheduler(
+    target: Any,
+    transport: str,
+    telemetry: Any,
+    credentials_dir: Path | None = None,
+    source_urls: list[str] | None = None,
+) -> Callable[[], None]:
+    """0.18.0: the development-run queue, on a thread of this controller
+    (0.19.0: it also keeps the runs' Git credentials, ``piceli-dev-git``)."""
+    from piceli.dev.scheduler import git_credentials_of, start_thread
     from piceli.gitops.install import Api
     from piceli.k8s.ops.provider_factory import api_client_from_kubeconfig
 
@@ -1451,6 +1461,7 @@ def _dev_scheduler(target: Any, transport: str, telemetry: Any) -> Callable[[], 
         make_api,
         on_finished=record if callable(record) else (lambda _record: None),
         log=say,
+        git_credentials=git_credentials_of(credentials_dir, source_urls or []),
     )
 
 

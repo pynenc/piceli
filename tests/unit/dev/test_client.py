@@ -121,3 +121,48 @@ def test_refusals_create_nothing(
     with pytest.raises(DevError) as raised:
         run(port, DEV, request)
     assert raised.value.code == code and port.jobs == {}
+
+
+def test_after_the_first_run_only_a_delta_travels(tmp_path: Path) -> None:
+    import base64
+    import os
+
+    noise = base64.b64encode(os.urandom(300_000)).decode()  # does not compress away
+    app = repo(tmp_path / "shop", {"big.bin": noise, "t.sh": "cat note.txt"})
+    (app / "note.txt").write_text("first\n")
+    port = LocalPort(tmp_path / "cluster")
+    first = run(port, DEV, RunRequest(SourceRequest("shop", app, None), ["sh", "t.sh"]))
+    assert first["state"] == "passed" and first["upload"]["mode"] == "delta"
+    seeded = first["upload_bytes"]
+    (app / "note.txt").write_text("second\n")  # an uncommitted change
+    lines: list[str] = []
+    second = run(
+        port,
+        DEV,
+        RunRequest(SourceRequest("shop", app, None), ["sh", "t.sh"]),
+        log=lines.append,
+    )
+    assert second["state"] == "passed" and "second" in lines
+    assert second["upload_bytes"] < 4_000 < seeded
+    assert second["sources"]["shop"]["base"] == second["sources"]["shop"]["commit"]
+
+
+def test_a_source_that_is_the_tree_being_run_is_skipped_with_a_note(
+    tmp_path: Path,
+) -> None:
+    from piceli.dev.pack import parse_source
+
+    app = repo(tmp_path / "ih-lib", {"t.sh": "true"})
+    result = run(
+        LocalPort(tmp_path / "cluster"),
+        DEV,
+        RunRequest(
+            SourceRequest("ih-lib", app, None),
+            ["sh", "t.sh"],
+            extras=[parse_source(f"ih-lib-again={app}")],
+        ),
+    )
+    assert result["state"] == "passed"
+    assert result["notes"] == [
+        "--source ih-lib-again: it is the tree being run; skipped"
+    ]

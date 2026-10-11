@@ -8646,6 +8646,7 @@
   "piceli.dev",
   "piceli.dev.client",
   "piceli.dev.cluster",
+  "piceli.dev.delta",
   "piceli.dev.jobs",
   "piceli.dev.model",
   "piceli.dev.pack",

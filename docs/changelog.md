@@ -4,6 +4,30 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.19.0
+
+- **Development runs ship Git deltas.** The builder keeps a Git mirror per
+  repository; the run pod's init container fetches the repository's remote
+  with the cluster's Git credentials (the controller keeps a copy for runs,
+  `piceli-dev-git` in `piceli-dev`, limited to the composition's source
+  URLs, mounted only by that init container) and reports which commits the
+  mirror has. The client uploads only a `git bundle` from the nearest
+  known commit, the uncommitted diff and the untracked files: kilobytes for
+  a typical run instead of the whole tree. Without a known commit the whole
+  history goes once and seeds the mirror. Sibling sources the same way; a
+  `--source` that is the tree being run is skipped with a note. The result
+  gains `upload` (`mode`, `bytes`, `chunks`, `retries`, `seconds`) and
+  per-source `base`, `bundle_bytes` and `fetch` (fetched, masked error,
+  note). An image without git still gets the whole tree.
+- **Uploads survive a slow or dropped link.** 4 MiB chunks over
+  `pods/exec`, each retried after 1, 2, 4, 8 and 16 s, progress on stderr;
+  the run waits while parts keep arriving; `dev-upload-failed` names the
+  chunk, the bytes sent and the cause. The waiting line says `fetching
+  sources` while the init container runs (it said `ContainerCreating`).
+- **`piceli dev run` no longer leaves its packed tree behind** when it is
+  stopped by SIGTERM or SIGHUP (a cancelled agent): its scratch is a tracked
+  Piceli temporary directory.
+
 ## Version 0.18.0
 
 - **Development builds** (`piceli dev run`): a developer's or coding agent's

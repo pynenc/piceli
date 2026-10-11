@@ -77,7 +77,9 @@ One plan with one hash covers:
    the controller's request inbox (see {doc}`ui`).
 5. **Development builds**, with `dev=`: the namespace `piceli-dev`, the
    cache claim `piceli-dev-cache`, the NetworkPolicy `piceli-dev-runs`, the
-   ConfigMap `piceli-dev-config` and the controller's Role there (see
+   ConfigMap `piceli-dev-config` and the controller's Role there (it may
+   also keep the Secret `piceli-dev-git`, the runs' copy of its Git
+   credentials, 0.19.0; see
    {doc}`dev_builds`). Approving the plan approves the runs the declaration
    bounds.
 6. The ConfigMap `piceli-system/piceli-cluster` with the declaration

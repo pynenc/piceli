@@ -66,30 +66,70 @@ class RunError(Exception):
 # ------------------------------------------------------------------ upload
 
 
+#: An upload still writing parts keeps the run waiting this long past its
+#: last part (a slow link), up to :data:`UPLOAD_HARD_SECONDS` in all.
+UPLOAD_GRACE_SECONDS = 120
+UPLOAD_HARD_SECONDS = 4 * 3600
+
+
 def wait_upload(work: Path, spec: dict[str, Any], clock: Callable[[], float]) -> Path:
-    """The uploaded archive once ``ready`` exists and its digest matches."""
-    ready = work / "upload" / "ready"
-    deadline = clock() + float(spec.get("upload_timeout_seconds") or 600)
+    """The uploaded archive once ``ready`` exists and its digest matches.
+
+    While the client is still writing parts (``part-*``), the wait extends.
+    """
+    upload = work / "upload"
+    ready = upload / "ready"
+    began = clock()
+    deadline = began + float(spec.get("upload_timeout_seconds") or 600)
     while not ready.exists():
-        if clock() >= deadline:
-            raise RunError("dev-upload-failed", "no upload arrived in time")
+        now = clock()
+        newest = (
+            max(
+                (
+                    item.stat().st_mtime
+                    for item in [*upload.glob("part-*"), *upload.glob(".part-*")]
+                ),
+                default=None,
+            )
+            if upload.is_dir()
+            else None
+        )
+        if newest is not None and time.time() - newest < UPLOAD_GRACE_SECONDS:
+            deadline = max(
+                deadline, min(now + UPLOAD_GRACE_SECONDS, began + UPLOAD_HARD_SECONDS)
+            )
+        if now >= deadline:
+            raise RunError(
+                "dev-upload-failed",
+                "no upload arrived in time"
+                if newest is None
+                else "the upload stopped before it completed",
+            )
         time.sleep(float(spec.get("poll_seconds") or 0.5))
     archive = work / "upload" / "tree.tar.gz"
     digest = hashlib.sha256()
     with archive.open("rb") as stream:
         for block in iter(lambda: stream.read(1 << 20), b""):
             digest.update(block)
-    if digest.hexdigest() != spec.get("archive_sha256"):
+    expected = spec.get("archive_sha256")
+    if expected is None and (upload / "tree.sha256").is_file():
+        expected = (upload / "tree.sha256").read_text().strip()  # 0.19 uploads
+    if digest.hexdigest() != expected:
         raise RunError("dev-upload-failed", "the upload does not match its SHA-256")
     return archive
 
 
-def extract(archive: Path, into: Path) -> None:
+def extract_plain(archive: Path, into: Path) -> None:
+    """:func:`extract` of an uncompressed tar (the untracked files)."""
+    extract(archive, into, mode="r:")
+
+
+def extract(archive: Path, into: Path, mode: str = "r:gz") -> None:
     """Extract regular files, directories and in-tree symlinks only."""
     into.mkdir(parents=True, exist_ok=True)
     root = into.resolve()
     try:
-        with tarfile.open(archive, "r:gz") as tar:
+        with tarfile.open(archive, mode) as tar:  # type: ignore[call-overload]
             for member in tar.getmembers():
                 name = member.name
                 if name.startswith("/") or ".." in Path(name).parts:
@@ -115,6 +155,241 @@ def extract(archive: Path, into: Path) -> None:
         raise RunError(
             "dev-upload-failed", f"the archive cannot be read ({type(error).__name__})"
         ) from None
+
+
+# ------------------------------------------------------------------ git mirrors
+
+
+def _mask(text: str, secrets: list[str]) -> str:
+    for secret in secrets:
+        if secret:
+            text = text.replace(secret, "***")
+    return re.sub(r"(https?://)[^/@\s]+@", r"\1***@", text)[-400:]
+
+
+def _git(
+    *args: str,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    timeout: float = 600,
+    input_: bytes | None = None,
+) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        ["git", *args], cwd=cwd, env=env, input=input_, capture_output=True,
+        timeout=timeout, check=False,
+    )  # fmt: skip
+
+
+def _mirror(cache: Path, key: str) -> Path:
+    if not re.fullmatch(r"[a-z0-9._-]{1,120}", key):
+        raise RunError("dev-run-invalid", "a source key is not a safe name")
+    path = cache / "git" / f"{key}.git"
+    if not (path / "HEAD").exists():
+        path.mkdir(parents=True, exist_ok=True)
+        _git("init", "--bare", "--quiet", str(path))
+    return path
+
+
+class _Locked:
+    """An exclusive lock on a mirror (one fetch or unbundle at a time)."""
+
+    def __init__(self, path: Path) -> None:
+        self.descriptor = os.open(path / "piceli.lock", os.O_RDWR | os.O_CREAT, 0o600)
+
+    def __enter__(self) -> _Locked:
+        fcntl.flock(self.descriptor, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *_exc: Any) -> None:
+        os.close(self.descriptor)
+
+
+def _present(mirror: Path, shas: list[str]) -> list[str]:
+    if not shas:
+        return []
+    found = _git(
+        "--git-dir", str(mirror), "cat-file", "--batch-check=%(objectname) %(objecttype)",
+        input_=("\n".join(f"{sha}^{{commit}}" for sha in shas) + "\n").encode(),
+    )  # fmt: skip
+    have = {
+        line.split()[0]
+        for line in found.stdout.decode().splitlines()
+        if line.endswith(" commit")
+    }
+    return [sha for sha in shas if sha in have]
+
+
+def fetch_main(
+    spec: dict[str, Any], work: Path, cache: Path, secret: Path | None
+) -> dict[str, Any]:
+    """The init container: fetch each declared remote into its mirror, then
+    write ``work/have.json``: which of each source's commits the mirror has.
+
+    Runs before any code from the repository, with the Git credentials only
+    it mounts; fetches only URLs the credentials' ``allowed`` list names (the
+    composition's sources). Never fails the pod: errors are reported, masked.
+    """
+    work.mkdir(parents=True, exist_ok=True)
+    report: dict[str, Any] = {
+        "schema": "piceli.dev-have.v1",
+        "git": True,
+        "sources": {},
+    }
+    if shutil.which("git") is None:
+        report["git"] = False
+    allowed: set[str] = set()
+    secrets: list[str] = []
+    if secret is not None and (secret / "allowed").is_file():
+        allowed = {
+            line.strip()
+            for line in (secret / "allowed").read_text().splitlines()
+            if line.strip()
+        }
+        secrets = [
+            (secret / name).read_text().strip()
+            for name in ("password",)
+            if (secret / name).is_file()
+        ]
+    askpass = work / ".askpass"
+    env = {
+        **os.environ,
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_ASKPASS": str(askpass),
+        "HOME": str(work / "home"),
+    }
+    try:
+        if secret is not None and (secret / "password").is_file():
+            askpass.write_text(
+                "#!/bin/sh\n"
+                f'case "$1" in Username*) cat "{secret}/username" ;; *) cat "{secret}/password" ;; esac\n'
+            )
+            os.chmod(askpass, 0o700)
+        for source in spec.get("sources") or ():
+            name = str(source.get("name"))
+            entry: dict[str, Any] = {
+                "fetched": False,
+                "error": None,
+                "note": None,
+                "present": [],
+            }
+            report["sources"][name] = entry
+            if not report["git"]:
+                entry["note"] = "the image has no git"
+                continue
+            try:
+                mirror = _mirror(cache, str(source.get("key")))
+            except (RunError, OSError) as error:
+                entry["error"] = str(error)
+                continue
+            url = source.get("url")
+            with _Locked(mirror):
+                if not url:
+                    entry["note"] = "no remote the cluster may fetch"
+                elif url not in allowed:
+                    entry["note"] = (
+                        "not a declared source of the composition: not fetched"
+                    )
+                else:
+                    try:
+                        done = _git(
+                            "--git-dir", str(mirror), "-c", "credential.helper=",
+                            "fetch", "--quiet", "--no-tags", "--prune", str(url),
+                            "+refs/heads/*:refs/remotes/origin/*", env=env, timeout=900,
+                        )  # fmt: skip
+                    except subprocess.TimeoutExpired:
+                        entry["error"] = "the fetch timed out"
+                    else:
+                        if done.returncode == 0:
+                            entry["fetched"] = True
+                        else:
+                            entry["error"] = _mask(
+                                done.stderr.decode(errors="replace").strip(), secrets
+                            )
+                wanted = [str(source.get("head"))] + [
+                    str(c) for c in source.get("candidates") or ()
+                ]
+                entry["present"] = _present(mirror, wanted)
+                _git("--git-dir", str(mirror), "gc", "--auto", "--quiet", timeout=600)
+    finally:
+        askpass.unlink(missing_ok=True)
+        partial = work / ".have.json.partial"
+        partial.write_text(json.dumps(report, sort_keys=True))
+        os.replace(partial, work / "have.json")
+    return report
+
+
+def apply_delta(
+    inbox: Path, tree: Path, cache: Path, spec: dict[str, Any]
+) -> dict[str, Any]:
+    """Materialize each source of a delta upload into ``tree/<name>``."""
+    manifest = json.loads((inbox / "manifest.json").read_text())
+    keys = {str(s.get("name")): str(s.get("key")) for s in spec.get("sources") or ()}
+    applied: dict[str, Any] = {}
+    for name, entry in sorted((manifest.get("sources") or {}).items()):
+        if name not in keys or not re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9._-]{0,62}", name
+        ):
+            raise RunError(
+                "dev-upload-failed", f"the upload names an unknown source {name}"
+            )
+        mirror = _mirror(cache, keys[name])
+        head = str(entry.get("head"))
+        incoming = inbox / "sources" / name
+        with _Locked(mirror):
+            if (incoming / "bundle").is_file():
+                done = _git(
+                    "--git-dir",
+                    str(mirror),
+                    "bundle",
+                    "unbundle",
+                    str(incoming / "bundle"),
+                )
+                if done.returncode != 0:
+                    raise RunError(
+                        "dev-upload-failed",
+                        f"the bundle of {name} does not apply to the builder's mirror",
+                    )
+            if not _present(mirror, [head]):
+                raise RunError(
+                    "dev-upload-failed",
+                    f"the builder's mirror lacks commit {head[:12]} of {name}",
+                )
+            _git("--git-dir", str(mirror), "update-ref", f"refs/piceli/h/{head}", head)
+        target = tree / name
+        target.mkdir(parents=True, exist_ok=True)
+        archive = subprocess.Popen(
+            ["git", "--git-dir", str(mirror), "archive", "--format=tar", head],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        )  # fmt: skip
+        assert archive.stdout is not None
+        with tarfile.open(fileobj=archive.stdout, mode="r|") as stream:
+            if sys.version_info >= (3, 12):  # noqa: UP036 - any image's python3
+                stream.extractall(target, filter="tar")
+            else:  # pragma: no cover
+                stream.extractall(target)
+        if archive.wait() != 0:
+            raise RunError("dev-upload-failed", f"git archive of {name} failed")
+        if (incoming / "diff").is_file():
+            done = _git(
+                "apply",
+                "--binary",
+                "--whitespace=nowarn",
+                str(incoming / "diff"),
+                cwd=target,
+            )
+            if done.returncode != 0:
+                raise RunError(
+                    "dev-upload-failed",
+                    f"the uncommitted changes of {name} do not apply",
+                )
+        if (incoming / "untracked.tar").is_file():
+            extract_plain(incoming / "untracked.tar", target)
+        applied[name] = {
+            "mode": "delta",
+            "bundle": (incoming / "bundle").is_file(),
+            "diff": (incoming / "diff").is_file(),
+        }
+    return applied
 
 
 # ------------------------------------------------------------------ isolation
@@ -548,8 +823,14 @@ def main(
     try:
         archive = wait_upload(work, spec, clock)
         step = clock()
-        extract(archive, tree)
+        inbox = work / "in"
+        extract(archive, inbox)
         archive.unlink(missing_ok=True)
+        if (inbox / "manifest.json").is_file():  # 0.19: a Git delta
+            result["applied"] = apply_delta(inbox, tree, cache, spec)
+            shutil.rmtree(inbox, ignore_errors=True)
+        else:  # a whole tree (0.18 clients, images without git)
+            os.replace(inbox, tree)
         wait_isolated(spec, clock, emit)
         missing = [
             tool for tool in spec.get("tools") or () if shutil.which(tool) is None
@@ -650,6 +931,7 @@ def main(
         )
     finally:
         shutil.rmtree(tree, ignore_errors=True)
+        shutil.rmtree(work / "in", ignore_errors=True)
         (work / "upload" / "tree.tar.gz").unlink(missing_ok=True)
         if lineage is not None:
             try:
@@ -669,4 +951,13 @@ def main(
 
 
 if __name__ == "__main__":  # pragma: no cover - runs inside the pod
-    main(json.loads(os.environ["PICELI_DEV_SPEC"]), Path("/work"), Path("/cache"))
+    if os.environ.get("PICELI_DEV_ROLE") == "fetch":
+        found = Path("/etc/piceli-git")
+        fetch_main(
+            json.loads(os.environ["PICELI_DEV_SPEC"]),
+            Path("/work"),
+            Path("/cache"),
+            found if found.is_dir() else None,
+        )
+    else:
+        main(json.loads(os.environ["PICELI_DEV_SPEC"]), Path("/work"), Path("/cache"))
