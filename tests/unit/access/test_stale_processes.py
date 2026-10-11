@@ -362,20 +362,23 @@ def test_cli_access_stop_stale_stops_a_leftover_piceli_access(
                 ],
             )
             assert second.exit_code == 2
-            # The fake kubectl is not a real kubectl: its port shows as foreign,
-            # by pid only (a real kubectl forward is covered by the kind test).
-            assert json.loads(second.stdout)["conflicts"][0]["owner"]["command"] is None
+            # 0.19: the forward's local port is held by the leftover access
+            # itself (its relay, piceli.k8s.forward_relay), recognised as
+            # Piceli's own process for this app (kubectl sits behind it).
+            conflict = json.loads(second.stdout)["conflicts"][0]
+            assert conflict["holder"] == "piceli-server"
+            assert conflict["owner"]["pid"] == process.pid
             stop = CliRunner().invoke(
                 app, ["access", "stop", "--stale", str(spec), "--port", str(dashboard)]
             )
             assert stop.exit_code == 0, stop.stdout + stop.stderr
             body = json.loads(stop.stdout)
-            assert [(item["port"], item["pid"]) for item in body["stopped"]] == [
-                (dashboard, process.pid)
-            ]
-            assert body["stopped"][0]["holder"] == "piceli-server"
-            assert [item["port"] for item in body["left"]] == [local]
-            assert body["left"][0]["owner"]["command"] is None
+            # 0.19: the leftover access holds both its relay's port and the
+            # dashboard's; both are attributed to it before one SIGTERM.
+            assert {item["pid"] for item in body["stopped"]} == {process.pid}
+            assert {item["holder"] for item in body["stopped"]} == {"piceli-server"}
+            assert {local, dashboard} <= {item["port"] for item in body["stopped"]}
+            assert body["left"] == [] and body["failed"] == []
             process.wait(timeout=15)
             assert process.returncode is not None
         finally:
