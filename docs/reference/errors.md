@@ -180,6 +180,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`deploy-ref-source-unknown`](#error-deploy-ref-source-unknown) | pipeline | no |
 | [`deploy-ref-unknown`](#error-deploy-ref-unknown) | pipeline | yes |
 | [`deploy-stage-unknown`](#error-deploy-stage-unknown) | cli | no |
+| [`dev-cache-clear-failed`](#error-dev-cache-clear-failed) | dev | yes |
 | [`dev-command-failed`](#error-dev-command-failed) | dev | yes |
 | [`dev-isolation-not-enforced`](#error-dev-isolation-not-enforced) | dev | no |
 | [`dev-not-enabled`](#error-dev-not-enabled) | dev | no |
@@ -4802,6 +4803,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 
 
 ## Development builds on a cluster builder (`Cluster(dev=DevBuilds(...))`, `piceli dev …`)
+
+(error-dev-cache-clear-failed)=
+### `dev-cache-clear-failed`
+
+**Cache clear did not finish.** The cache-clear Job of `piceli dev cache clear` ended without a result (it could not start on the builder node, or ran out of time).
+
+- **Fix:** Check `kubectl -n piceli-dev get pods` on the builder node and run it again.
+- **Retry-safe:** yes
 
 (error-dev-command-failed)=
 ### `dev-command-failed`

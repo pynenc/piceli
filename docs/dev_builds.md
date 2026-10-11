@@ -199,6 +199,43 @@ When the lineages pass `cache_size`, free ones are evicted, least recently
 used first; one in use never is. The dev cache never feeds release builds:
 untrusted development code cannot reach an image the controller deploys.
 
+### A corrupted cache (0.19.0)
+
+A run killed while writing (a timeout, a cancel, an out-of-memory kill) or
+a faulty disk can leave a damaged artifact in a lineage's target, and then
+every run on that lineage fails the same way although the code is fine.
+When the command fails with a loader error (`error while loading shared
+libraries`, `R_X86_64_RELATIVE`, a proc-macro that cannot be loaded),
+invalid crate metadata (`E0786`) or a linker reading a bad object
+(`undefined hidden symbol`, `file truncated`), the wrapper removes the
+blamed crates' artifacts (deps, fingerprints, build script outputs,
+incremental state), runs the command once more, and reports it:
+
+```json
+"cache": {"lineage": "ih-rust-1a2b3c4d5e/0", "warm": true,
+          "repaired": {"kind": "link", "crates": ["ags"], "entries": 3,
+                       "first_error": ["error: linking with `cc` failed: exit status: 1", "…"]}}
+```
+
+Only the build's output counts (not the tests'), and only once per run. When
+the damage is recognised but no crate is named, `cache.suspect` says so.
+To clear by hand:
+
+```sh
+piceli dev cache clear --cluster infra.py:k_lab                    # every free lineage
+piceli dev cache clear --cluster infra.py:k_lab --lineage ih       # every lineage of a root source
+piceli dev cache clear --cluster infra.py:k_lab --lineage ih-rust-1a2b3c4d5e/0 --crate ags
+```
+
+It runs a short Job on the builder (same user and claim as a run, no
+Secret, no repository code) that empties the lineages' cargo targets, or
+only the named crates' artifacts. A lineage a run holds is skipped and
+listed under `busy`. The next run on a cleared lineage is cold.
+
+A failed run's result also carries `first_error`: the first `error` line
+of the output and the 19 lines after it, so the cause survives a long log
+whose `log_tail` only shows the end. `piceli dev run` prints it.
+
 ## Isolation
 
 A run is untrusted code from a repository. Each one is its own pod in
@@ -351,7 +388,8 @@ its `tests`, `durations` and `log_tail`.
 
 | Code | Meaning | What to do |
 | --- | --- | --- |
-| `dev-command-failed` | The command exited non-zero | Read `log_tail`, fix, run again |
+| `dev-command-failed` | The command exited non-zero | Read `first_error` and `log_tail`, fix, run again; with `cache.suspect`, `piceli dev cache clear --lineage NAME` |
+| `dev-cache-clear-failed` | `dev cache clear`'s Job ended without a result | Check its pod in `piceli-dev`; run it again |
 | `dev-run-timed-out` | Over the profile's `timeout` (process group killed) | Split the command or find what hangs |
 | `dev-run-out-of-memory` | Killed at the memory limit | Lower `CARGO_BUILD_JOBS` or ask for a bigger profile |
 | `dev-run-failed` | The pod ended without a result or could not start | Check the image; report it |

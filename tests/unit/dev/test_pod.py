@@ -303,3 +303,62 @@ def test_the_command_runs_once_the_api_server_is_cut_off(
     result, lines = _run(tmp_path, data, spec)
     assert result["state"] == "passed"
     assert any("waiting for the network policy" in line for line in lines)
+
+
+def test_a_corrupted_cached_crate_is_cleared_and_the_command_runs_once_more(
+    tmp_path: Path,
+) -> None:
+    """0.19 (IH item 8): the first run blames a truncated artifact of ``ags``
+    in the lineage's target; it is removed and the second run passes."""
+    script = "\n".join(
+        [
+            'obj="$CARGO_TARGET_DIR/debug/incremental/ags-3k2j1/s-1/x.o"',
+            'if [ -f "$obj" ]; then',
+            "  echo '   Compiling ags v0.4.0 (/x)'",
+            "  echo 'error: linking with `cc` failed: exit status: 1'",
+            "  echo '  = note: rust-lld: error: undefined hidden symbol: ags::f'",
+            '  echo "          >>> referenced by $obj"',
+            "  echo 'error: could not compile `ags` (bin \"ags\") due to 1 previous error'",
+            "  exit 101",
+            "fi",
+            "echo '    Finished `dev` profile [unoptimized] target(s) in 1.0s'",
+        ]
+    )
+    data = _archive({"app/build.sh": script})
+    first, _ = _run(tmp_path, data, _spec(data, ["true"]), "seed")
+    poisoned = Path(first["cache"]["lineage_dir"]) / "target"
+    (poisoned / "debug/incremental/ags-3k2j1/s-1").mkdir(parents=True)
+    (poisoned / "debug/incremental/ags-3k2j1/s-1/x.o").write_bytes(b"\0" * 7)
+    (poisoned / "debug/deps").mkdir(parents=True)
+    (poisoned / "debug/deps/libpoet-1.rlib").write_text("kept")
+    result, lines = _run(tmp_path, data, _spec(data, ["sh", "build.sh"]), "repair")
+    assert result["state"] == "passed", result
+    repaired = result["cache"]["repaired"]
+    assert repaired["kind"] == "link" and repaired["crates"] == ["ags"]
+    assert repaired["entries"] == 1
+    assert repaired["first_error"][0].startswith("error: linking with")
+    assert any("corrupted cache (link): cleared ags" in line for line in lines)
+    assert (poisoned / "debug/deps/libpoet-1.rlib").exists()
+
+
+def test_an_ordinary_failure_is_not_retried_and_keeps_its_first_error(
+    tmp_path: Path,
+) -> None:
+    script = "\n".join(
+        [
+            "echo 'error[E0308]: mismatched types'",
+            "echo ' --> src/lib.rs:3:5'",
+            *[f"echo 'note {i}'" for i in range(10)],
+            "exit 101",
+        ]
+    )
+    data = _archive({"app/build.sh": script})
+    result, lines = _run(tmp_path, data, _spec(data, ["sh", "build.sh"]))
+    assert result["state"] == "failed" and "repaired" not in result["cache"]
+    assert result["first_error"][:2] == [
+        "error[E0308]: mismatched types",
+        " --> src/lib.rs:3:5",
+    ]
+    assert "error[E0308]: mismatched types" not in result["log_tail"]  # 5 lines
+    ran = [line for line in lines if not line.startswith(pod.RESULT_MARKER)]
+    assert sum("mismatched types" in line for line in ran) == 1  # ran once

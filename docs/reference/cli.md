@@ -50,6 +50,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli cluster status`](#cli-cluster-status) | Nodes, registry and mirrors, controller, UI and Git Secret of a declared cluster (read-only). | reads | no |
 | [`piceli codegen crd`](#cli-codegen-crd) | Generate pydantic models for one CRD version, from a file or a cluster. | reads | no |
 | [`piceli deploy`](#cli-deploy) | Deploy a pipeline: inputs → build → deliver → plan → apply → checks. | writes | yes |
+| [`piceli dev cache clear`](#cli-dev-cache-clear) | Empty free lineages' cargo targets (a corrupted cache); busy ones are skipped. | writes | no |
 | [`piceli dev cancel`](#cli-dev-cancel) | Cancel a queued or running run (its Job and pod are deleted). | writes | no |
 | [`piceli dev logs`](#cli-dev-logs) | A run's output (stdout): live, or the recorded tail of a finished run. | reads | no |
 | [`piceli dev run`](#cli-dev-run) | Run COMMAND on the builder for a commit (--ref) or a working tree (default: here). | writes | no |
@@ -65,6 +66,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli envs`](#cli-envs) | List every environment: branch, namespace, commit, deploy state, health, age. | reads | no |
 | [`piceli explain`](#cli-explain) | Explain an error code: cause, fix and whether a retry can succeed. | none | no |
 | [`piceli gitops approve`](#cli-gitops-approve) | Approve the pending plan of ENV; the controller applies it on its next poll. | writes | yes |
+| [`piceli gitops cache clear`](#cli-gitops-cache-clear) | Ask the controller to empty its build cache (a corrupted cargo cache). | writes | no |
 | [`piceli gitops disable`](#cli-gitops-disable) | Remove the controller (plan first; --approve HASH removes). Never an environment. | writes | yes |
 | [`piceli gitops enable`](#cli-gitops-enable) | Install the GitOps controller (plan first; --approve HASH installs). | writes | yes |
 | [`piceli gitops run`](#cli-gitops-run) | Run the controller loop (the Deployment's entrypoint); --once for one poll. | writes | no |
@@ -931,6 +933,32 @@ Deploy a pipeline: inputs → build → deliver → plan → apply → checks.
 - **Output contract:** conforms
 - **Notes:** --plan never changes the cluster, a registry or a node (it reads the namespace's Deployments and the registry node for a NodeLoopbackRegistry); before the images exist it previews the release with placeholder images (never approvable, never sent to the cluster) and refuses with the blocking objects when it needs adoption or replacement; --approve HASH executes exactly the combined plan, including mirror= copies and a registry adopt=/replace=, and a release planned after delivery may not adopt, replace or delete more than the approved preview; --resume continues the latest interrupted run without a new approval. Unchanged stages are skipped. --ref [SOURCE=]REV builds the sources from commits in temporary worktrees; the combined hash covers the resolved SHAs, --approve needs the same --ref, and --resume reuses the run's SHAs. --plan --out FILE writes a portable plan; --apply FILE --approve HASH applies it on any runner (it re-plans and refuses any difference; no build cache needed for images already delivered). With state="cluster" every command holds the release's Lease (pipeline-locked when another runner holds it; a stale lease is taken over) and --plan writes its state to the cluster too. --env NAME deploys one environment (the app's overrides and the pipeline's target for it, state under <state_dir>/environments/NAME); the combined hash covers the environment's name and resolved values, so --approve, --resume and --plan --out/--apply need the same --env. --approve-if-policy plans and executes without a hash only when every action is inside the pipeline's auto_approve policy (declared by the owner, part of the combined hash; never delete, replace or adopt); otherwise exit 3 with reason approval-policy-exceeded and the approval command. Every run that starts executing writes <state_dir>/runs/<run id>/summary.json (schema docs/schemas/piceli-run-summary-v1.schema.json) and summary.md; the result names them (summary). With the pipeline's cache_budget the state directory is pruned after the run (result: cache).
 
+(cli-dev-cache-clear)=
+### `piceli dev cache clear`
+
+Empty free lineages' cargo targets (a corrupted cache); busy ones are skipped.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--cluster` | text | env `PICELI_DEV_CLUSTER` | MODULE:ATTR of the piceli.infra.Cluster with dev=DevBuilds(...) (or PICELI_DEV_CLUSTER) |
+| `--lineage` | text |  | KEY/N, KEY, or a root source name (every lineage of it); default: all |
+| `--crate` | text (repeatable) |  | Only this crate's artifacts (repeat) |
+| `--allow-exec` | boolean | `False` | Allow the profile's exec credential plugin |
+| `--exec-sha256` | text |  | Pin the exec credential plugin's sha256 |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.Cluster with dev=), credential profile
+- **Writes:** a short Job in piceli-dev (deleted when it ends)
+- **Cluster:** writes
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.19.0. A lineage a run holds is skipped and listed under busy. The next run on a cleared lineage is cold. Exit 1: dev-cache-clear-failed (the Job printed no result).
+
 (cli-dev-cancel)=
 ### `piceli dev cancel`
 
@@ -1314,6 +1342,31 @@ Approve the pending plan of ENV; the controller applies it on its next poll.
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** This is the owner's approval: run it only with the hash the owner approved. Writes a request to the ConfigMap piceli-gitops-requests; a hash the environment is no longer waiting for is dropped (gitops-approval-stale in gitops status).
+
+(cli-gitops-cache-clear)=
+### `piceli gitops cache clear`
+
+Ask the controller to empty its build cache (a corrupted cargo cache).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--crate` | text (repeatable) |  | Only this crate's artifacts (repeat) |
+| `--kubeconfig` | path |  | Explicit kubeconfig file (never ~/.kube/config or KUBECONFIG) |
+| `--context` | text |  | Kubeconfig context (required with --kubeconfig) |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--state-dir` | path |  | A local controller's state directory instead of a cluster (the one `gitops run --once --state-dir` uses) |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+
+**Contract**
+
+- **Reads:** kubeconfig or --state-dir
+- **Writes:** --state-dir requests (local controller)
+- **Cluster:** writes
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.19.0. Writes a request to the ConfigMap piceli-gitops-requests; the controller runs a short Job on the builder node between steps and records controller.cache_clear (at, crates, state) in gitops status. The next build is cold for what was cleared. A controller without --builder-image drops it (gitops-request-invalid).
 
 (cli-gitops-disable)=
 ### `piceli gitops disable`

@@ -214,3 +214,18 @@ def test_status_and_wait_print_gits_error_and_the_check_details(tmp_path: Path) 
     assert body["state"] == "failed" and body["cause"] == "gitops-git-failed"
     assert f"controller: {detail} (gitops-git-failed)" in waited.stderr
     assert "failing checks: dashboards: stale source" in waited.stderr
+
+
+def test_gitops_cache_clear_records_a_request(tmp_path: Path) -> None:
+    """0.19 (IH item 10)."""
+    from piceli.gitops.state import DirectoryChannel
+
+    result = CliRunner().invoke(
+        cli,
+        ["gitops", "cache", "clear", "--crate", "ags", "--state-dir", str(tmp_path)],
+    )
+    assert result.exit_code == 0, result.stdout + result.stderr
+    body = json.loads(result.stdout)
+    assert body["state"] == "requested" and body["crates"] == ["ags"]
+    pending = DirectoryChannel(tmp_path).requests()
+    assert [item["kind"] for item in pending.values()] == ["cache-clear"]

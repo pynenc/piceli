@@ -339,3 +339,9 @@ def _say_tail(error: Exception) -> None:
     say(f"[piceli] the failing command's last {len(lines)} line(s) of output:")
     for line in lines:
         say(f"  | {line}")
+    first = getattr(error, "first_error", "")
+    if first and first.splitlines()[0] not in lines[-len(first.splitlines()) :]:
+        # 0.19: last, so the controller's short read of the log keeps it.
+        say("[piceli] the first error:")
+        for line in first.splitlines():
+            say(f"  | {line}")

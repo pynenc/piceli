@@ -5510,6 +5510,14 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "dev",
     ),
     _E(
+        "dev-cache-clear-failed",
+        "Cache clear did not finish",
+        "The cache-clear Job of `piceli dev cache clear` ended without a result (it could not start on the builder node, or ran out of time).",
+        "Check `kubectl -n piceli-dev get pods` on the builder node and run it again.",
+        True,
+        "dev",
+    ),
+    _E(
         "dev-run-cancelled",
         "Run cancelled",
         "The run's Job was deleted (`piceli dev cancel`, Ctrl-C) before it finished.",

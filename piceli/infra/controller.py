@@ -1385,6 +1385,30 @@ class CompositionController:
             self.log(f"{name}: no longer placed there; removing what Piceli created")
 
     # ------------------------------------------------------------ requests
+    def _cache_clear(self, body: Mapping[str, Any]) -> None:
+        """Empty the cluster build cache (``piceli gitops cache clear``, 0.19.0).
+
+        Requests run between steps, so no build Job uses the cache claim.
+        """
+        clear = getattr(self.ports.builder, "clear_cache", None)
+        if clear is None:
+            raise GitOpsError(
+                "gitops-request-invalid",
+                "this controller builds nothing in the cluster (no --builder-image)",
+            )
+        crates = [str(name) for name in body.get("crates") or ()]
+        outcome = clear(crates)
+        self.state["cache_clear"] = {
+            "at": _iso(self.clock()),
+            "crates": crates,
+            "state": outcome.get("state"),
+        }
+        self.log(
+            "build cache cleared"
+            + (f" ({', '.join(crates)})" if crates else "")
+            + f": {outcome.get('state')}"
+        )
+
     def _requests(self) -> None:
         try:
             pending = self.channel.requests()
@@ -1408,6 +1432,8 @@ class CompositionController:
                     self._sync(body)
                 elif kind in {"stop", "start"}:
                     self._stop_request(body, start=kind == "start")
+                elif kind == "cache-clear":
+                    self._cache_clear(body)
                 else:
                     raise GitOpsError("gitops-request-invalid", "unknown request kind")
             except GitOpsError as error:
@@ -3155,6 +3181,8 @@ class CompositionController:
                 # Added in 0.19.0: gitops-token-expiring (a GitHub token
                 # that expires within 7 days).
                 "warnings": self._warnings(self.clock()),
+                # Added in 0.19.0: the last `piceli gitops cache clear`.
+                "cache_clear": self.state.get("cache_clear"),
                 "poll_failures": int(self.state.get("poll_failures") or 0),
                 # Added in 0.14.6: the registry claim's use measured by the
                 # controller (``du`` in the registry pod), for the UI.

@@ -28,6 +28,18 @@ class LocalPort:
         self.threads: dict[str, threading.Thread] = {}
         self.cancel_before_start: set[str] = set()
 
+    def clear_cache(self, job: dict[str, Any]) -> dict[str, Any] | None:
+        """The cache-clear Job, run in place on the shared cache (0.19)."""
+        container = job["spec"]["template"]["spec"]["containers"][0]
+        env = {e["name"]: e["value"] for e in container["env"]}
+        assert env["PICELI_DEV_ROLE"] == "clear"
+        self.cleared_jobs = [*getattr(self, "cleared_jobs", []), job]
+        return wrapper.clear_main(
+            json.loads(env["PICELI_DEV_SPEC"]),
+            self.root / "cache",
+            emit=lambda _l: None,
+        )
+
     def _work(self, run: str) -> Path:
         return self.root / "pods" / run
 

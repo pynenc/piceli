@@ -67,9 +67,9 @@ def test_masking_drops_known_values_userinfo_and_tokens() -> None:
     assert mask_git_output("x\n" * 50 + "last line", []).endswith("last line")
 
 
-def _break(world: dict[str, Any]) -> Path:
+def _break(state: dict[str, Any]) -> Path:
     """Move the shop remote away: ls-remote fails as with a revoked token."""
-    path = Path(world["shop"].remote)
+    path = Path(state["shop"].remote)
     gone = path.with_name("shop-moved.git")
     shutil.move(path, gone)
     return gone
@@ -224,3 +224,74 @@ def test_a_github_token_close_to_expiry_is_warned(
     )
     clock["now"] += 7 * 3600  # the next check
     assert controller.poll_once()["controller"]["warnings"] == []
+
+
+def test_gitops_cache_clear_runs_between_steps_and_is_recorded(
+    world: dict[str, Any],  # noqa: F811
+) -> None:
+    """0.19 (IH item 10): ``piceli gitops cache clear [--crate]``."""
+    from piceli.gitops.state import cache_clear_request
+
+    controller, channel = world["controller"], world["channel"]
+    controller.poll_once()
+    cleared: list[list[str]] = []
+
+    def clear(crates: list[str]) -> dict[str, Any]:
+        cleared.append(crates)
+        return {"state": "passed", "job": "piceli-build-cache-clear-x"}
+
+    controller.ports.builder.clear_cache = clear
+    channel.add_request(*cache_clear_request(["ags", "serde_derive"]))
+    status = controller.poll_once()
+    assert cleared == [["ags", "serde_derive"]]
+    record = status["controller"]["cache_clear"]
+    assert record["crates"] == ["ags", "serde_derive"] and record["state"] == "passed"
+    with pytest.raises(GitOpsError):
+        cache_clear_request(["../etc"])
+
+
+def test_the_build_cache_clear_job_empties_only_targets(tmp_path: Path) -> None:
+    import os
+    import subprocess
+    import sys
+
+    from piceli.infra.builders import JobSettings, cache_clear_job
+
+    settings = JobSettings(
+        image="ghcr.io/x/builder@sha256:" + "a" * 64,
+        namespace="piceli-system",
+        registry_url="oci://registry:5000/x",
+        node_registry="registry:5000",
+    )
+    job = cache_clear_job(settings, ["ags"], "abcd")
+    pod = job["spec"]["template"]["spec"]
+    assert pod["automountServiceAccountToken"] is False
+    assert pod["volumes"] == [
+        {
+            "name": "cache",
+            "persistentVolumeClaim": {"claimName": "piceli-component-cache"},
+        }
+    ]
+    container = pod["containers"][0]
+    assert "env" not in container  # no Git or registry Secret
+    cache = tmp_path / "cache"
+    for name in (
+        "amd64-4096/release/deps/libags-1.rlib",
+        "amd64-4096/release/deps/libpoet-1.rlib",
+    ):
+        (cache / "target" / name).parent.mkdir(parents=True, exist_ok=True)
+        (cache / "target" / name).write_text("x")
+    (cache / "stage").mkdir()
+    script = container["command"][3]
+    env = {**os.environ, "PICELI_CACHE": str(cache)}
+    run = subprocess.run(
+        [sys.executable, "-c", script, "ags"], env=env, capture_output=True, text=True
+    )
+    assert run.returncode == 0, run.stderr
+    assert '"amd64-4096": {"entries": 1}' in run.stdout
+    assert (cache / "target/amd64-4096/release/deps/libpoet-1.rlib").exists()
+    everything = subprocess.run(
+        [sys.executable, "-c", script], env=env, capture_output=True, text=True
+    )
+    assert everything.returncode == 0 and not (cache / "target" / "amd64-4096").exists()
+    assert (cache / "stage").is_dir()

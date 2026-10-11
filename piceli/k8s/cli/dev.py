@@ -92,6 +92,16 @@ def run_summary(result: dict[str, Any]) -> str:
         if cache.get("crates_compiled") is not None:
             line += f", {cache['crates_compiled']} crates compiled"
         line += ")"
+    repaired = cache.get("repaired") or {}
+    if repaired:
+        line += f"; corrupted cache ({repaired.get('kind')}) repaired: " + ", ".join(
+            repaired.get("crates") or ()
+        )
+    elif (cache.get("suspect") or {}).get("kind"):
+        line += (
+            f"; the cache looks corrupted ({cache['suspect']['kind']}): "
+            "piceli dev cache clear --lineage NAME"
+        )
     if result.get("reason") and result.get("state") != "passed":
         line += f" ({result['reason']})"
     return line
@@ -253,7 +263,12 @@ def run(
         except DevError as error:
             reject(error.code, str(error))
     say(run_summary(result))
+    if result.get("state") != "passed" and result.get("first_error"):
+        say("first error:")
+        for line in result["first_error"]:
+            say(f"  | {line}")
     if result.get("state") != "passed" and quiet:
+        say("last lines:")
         for line in result.get("log_tail") or ():
             say(f"  | {line}")
     if as_json:
@@ -371,6 +386,59 @@ def status(
         emit_json(view)
 
 
+cache_app = typer.Typer(
+    help="The development builds' cargo cache on the builder node.",
+    no_args_is_help=True,
+)
+app.add_typer(cache_app, name="cache")
+
+
+@cache_app.command("clear")
+def cache_clear(
+    cluster: ClusterOption,
+    lineage: Annotated[
+        str | None,
+        typer.Option(
+            "--lineage",
+            help="KEY/N, KEY, or a root source name (every lineage of it); default: all",
+        ),
+    ] = None,
+    crate: Annotated[
+        list[str] | None,
+        typer.Option("--crate", help="Only this crate's artifacts (repeat)"),
+    ] = None,
+    allow_exec: AllowExecOption = False,
+    exec_sha256: ExecSha256Option = None,
+    transport: TransportOption = "https",
+    as_json: JsonOption = False,
+) -> None:
+    """Empty free lineages' cargo targets (a corrupted cache); busy ones are skipped."""
+    import secrets
+
+    from piceli.dev.jobs import cache_clear_job
+
+    with _port(cluster, transport, allow_exec, exec_sha256) as (port, dev):
+        job = cache_clear_job(
+            dev, name=secrets.token_hex(4), lineage=lineage, crates=list(crate or ())
+        )
+        result = port.clear_cache(job)
+    if result is None:
+        reject("dev-cache-clear-failed", "the cache-clear Job printed no result")
+    for item in result.get("cleared") or ():
+        what = (
+            f"{item['entries']} entries of {', '.join(crate or ())}"
+            if "entries" in item
+            else f"{(item.get('bytes') or 0) / 2**30:.2f} GiB"
+        )
+        say(f"cleared {item['lineage']}: {what}")
+    for name in result.get("busy") or ():
+        say(f"busy    {name}: a run holds it; not cleared")
+    if not result.get("cleared") and not result.get("busy"):
+        say("no lineage matched")
+    if as_json:
+        emit_json(result)
+
+
 @app.command("logs")
 def logs(
     run_id: Annotated[str, typer.Argument(help="The run (from dev run or dev status)")],
@@ -417,6 +485,11 @@ def logs(
     say(
         f"run {run_id} finished ({recorded.get('state')}); its pod is gone, the recorded tail:"
     )
+    if recorded.get("first_error"):
+        typer.echo("first error:")
+        for line in recorded["first_error"]:
+            typer.echo(line)
+        typer.echo("last lines:")
     for line in recorded.get("log_tail") or ():
         typer.echo(line)
 

@@ -301,6 +301,71 @@ def run_job(
     }  # fmt: skip
 
 
+#: The label of a cache-clear Job (never a run: the scheduler ignores it).
+CLEAR_LABEL = "piceli.io/dev-cache-clear"
+
+
+def cache_clear_job(
+    dev: DevBuilds, *, name: str, lineage: str | None, crates: list[str]
+) -> dict[str, Any]:
+    """A short Job that empties free lineages' cargo targets (0.19.0).
+
+    Same node, user and cache claim as a run; no network need, no Secret,
+    no repository code: it runs the wrapper with ``PICELI_DEV_ROLE=clear``.
+    """
+    labels = {**MANAGED, CLEAR_LABEL: name}
+    spec = {"lineage": lineage, "crates": list(crates)}
+    return {
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": {"name": f"piceli-dev-clear-{name}", "namespace": NAMESPACE, "labels": labels},
+        "spec": {
+            "backoffLimit": 0,
+            "activeDeadlineSeconds": 900,
+            "ttlSecondsAfterFinished": 600,
+            "template": {
+                "metadata": {"labels": labels},
+                "spec": {
+                    "restartPolicy": "Never",
+                    "nodeSelector": {"kubernetes.io/hostname": dev.node},
+                    "automountServiceAccountToken": False,
+                    "enableServiceLinks": False,
+                    "securityContext": {
+                        "runAsNonRoot": True,
+                        "runAsUser": 10001,
+                        "runAsGroup": 10001,
+                        "fsGroup": 10001,
+                        "seccompProfile": {"type": "RuntimeDefault"},
+                    },
+                    "containers": [
+                        {
+                            "name": "run",
+                            "image": dev.image,
+                            "command": ["python3", "-I", "-c", wrapper_source()],
+                            "env": [
+                                {"name": "PICELI_DEV_ROLE", "value": "clear"},
+                                {"name": "PICELI_DEV_SPEC", "value": json.dumps(spec, sort_keys=True)},
+                            ],
+                            "resources": {
+                                "requests": {"cpu": "100m", "memory": "128Mi"},
+                                "limits": {"memory": "256Mi"},
+                            },
+                            "volumeMounts": [{"name": "cache", "mountPath": "/cache"}],
+                            "securityContext": {
+                                "allowPrivilegeEscalation": False,
+                                "capabilities": {"drop": ["ALL"]},
+                            },
+                        }
+                    ],
+                    "volumes": [
+                        {"name": "cache", "persistentVolumeClaim": {"claimName": CACHE_CLAIM}}
+                    ],
+                },
+            },
+        },
+    }  # fmt: skip
+
+
 def _fetch_container(
     profile: DevProfile, dev: DevBuilds, spec: dict[str, Any]
 ) -> dict[str, Any]:

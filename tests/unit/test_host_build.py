@@ -394,3 +394,48 @@ def test_the_build_job_prints_the_failing_commands_tail(
     assert "error: linker failed" in result.stderr
     assert "line 999" in result.stderr
     assert "hunter2-not-printed" not in result.output + result.stderr
+
+
+# The first run plants a proc-macro .so the loader refuses (as on a node
+# with a faulty disk) and fails; a run without it passes.
+POISON = (
+    'commands = [\n  ["sh", "-c", "so=\\"$CARGO_TARGET_DIR/release/deps/libserde_derive-1a2b.so\\"; '
+    'if [ ! -f \\"$CARGO_TARGET_DIR/seeded\\" ]; then mkdir -p \\"$(dirname $so)\\"; '
+    'touch \\"$CARGO_TARGET_DIR/seeded\\" \\"$so\\"; fi; '
+    'if [ -f \\"$so\\" ]; then echo \\"error: $so: error while loading shared libraries: '
+    'unexpected reloc type R_X86_64_RELATIVE\\" >&2; exit 101; fi"],\n'
+)
+
+
+def test_a_corrupted_cached_crate_is_cleared_and_the_step_runs_once_more(
+    project: Path, tmp_path: Path
+) -> None:
+    """0.19 (IH item 10): a release build failed in 1.45 s on a corrupt
+    cached proc-macro; it is cleared and the step retried once."""
+    text = project.read_text()
+    project.write_text(text.replace("commands = [\n", POISON, 1))
+    receipt = build(project, tmp_path / "cache", tmp_path / "out")
+    first = next(step for step in receipt["steps"] if step["kind"] == "command-1")
+    assert first["repaired"] == {"kind": "loader", "crates": ["serde_derive"]}
+    assert first["state"] != "succeeded"
+    again = [step for step in receipt["steps"] if step["kind"] == "command-1"]
+    assert [step["state"] for step in again] == ["failed", "succeeded"]
+
+
+def test_a_failing_command_keeps_its_first_error_apart(
+    project: Path, tmp_path: Path
+) -> None:
+    text = project.read_text()
+    start = text.index("commands = [")
+    end = text.index("\n]\n", start) + 3
+    project.write_text(
+        text[:start]
+        + 'commands = [\n  ["sh", "-c", "echo \\"error[E0308]: mismatched types\\"; '
+        'i=0; while [ $i -lt 300 ]; do echo \\"note $i\\"; i=$((i+1)); done; exit 101"],\n]\n'
+        + text[end:]
+    )
+    with pytest.raises(BuildSpecError) as failed:
+        build(project, tmp_path / "cache", tmp_path / "out")
+    assert "error[E0308]" not in failed.value.output_tail  # the end only
+    assert failed.value.first_error.splitlines()[0] == "error[E0308]: mismatched types"
+    assert len(failed.value.first_error.splitlines()) == 20

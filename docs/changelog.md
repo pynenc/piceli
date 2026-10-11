@@ -53,6 +53,13 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 - **Failed checks say why.** The check's own detail is in
   `checks.results[].detail`, `gitops status`, `gitops wait`
   (`failed_checks`), the controller's log and the UI.
+- **Corrupted caches repair themselves.** A dev run or a cluster build step
+  that fails with a loader, metadata or link error on cached artifacts has
+  the blamed crates cleared and runs once more (`cache.repaired`, the
+  step's `repaired`). `piceli dev cache clear [--lineage] [--crate]` and
+  `piceli gitops cache clear [--crate]` empty the caches without a root pod
+  on the claim. A failure keeps its `first_error` (the first `error` line
+  and 19 more), printed by `dev run` and at the end of a build Job's log.
 - **Dev runs:** the lineage name defaults to the repository's main checkout
   (Git's common dir), so every worktree builds warm on one lineage; the
   builder image has `clippy` and `rustfmt`.

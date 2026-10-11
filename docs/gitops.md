@@ -232,6 +232,24 @@ secret:
   `controller.warnings` (`gitops-token-expiring`, `source`, `expires_at`)
   and the log.
 
+**A corrupted build cache** (0.19.0). A cluster build step that fails
+with a loader or link error on a cached artifact (a proc-macro `.so` the
+loader refuses, invalid crate metadata, a truncated object) has the blamed
+crates' artifacts removed and runs once more; the step in the receipt
+carries `repaired` (`kind`, `crates`). A failed step's Job log ends with
+`[piceli] the first error:` and the first `error` line with the 19 after
+it, so the failure's `log_tail` in `piceli gitops status` shows the cause,
+not only the last lines. To empty the cache by hand:
+
+```sh
+piceli gitops cache clear                 # every cargo target on the build cache claim
+piceli gitops cache clear --crate ags     # only these crates' artifacts
+```
+
+The controller runs it between steps, as a short Job on the builder node
+(the build Job's image and claim, no Secret), and records
+`controller.cache_clear` (`at`, `crates`, `state`).
+
 **Why a check failed** (0.19.0). A failed check's own reason (the string a
 `Checks.python` entry returns, an HTTP status, an exit code) is kept in
 `envs.ENV.checks.results[].detail` and `verification.failed[].detail`;

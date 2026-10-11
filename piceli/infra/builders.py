@@ -490,6 +490,81 @@ def component_job(
     }  # fmt: skip
 
 
+#: Empties the cargo targets of the build cache (``piceli gitops cache
+#: clear``, 0.19.0): every one, or only the named crates' artifacts.
+_CLEAR = """import json, os, shutil, sys
+from pathlib import Path
+from piceli.dev.pod import clear_crates, du
+root = Path(os.environ.get("PICELI_CACHE", "/cache")) / "target"
+crates, cleared = sys.argv[1:], {}
+for target in sorted(root.iterdir()) if root.is_dir() else ():
+    if crates:
+        cleared[target.name] = {"entries": clear_crates(target, crates)}
+    else:
+        cleared[target.name] = {"bytes": du(target)}
+        shutil.rmtree(target, ignore_errors=True)
+print("PICELI-CACHE-CLEAR " + json.dumps(cleared, sort_keys=True), flush=True)
+"""
+
+
+def cache_clear_job(
+    settings: JobSettings, crates: Sequence[str], name: str
+) -> dict[str, Any]:
+    """The Job that empties the build cache claim's cargo targets: the build
+    Job's node, image, user and claim; no Secret, no source."""
+    labels = {
+        "app.kubernetes.io/managed-by": "piceli",
+        "piceli.io/build-cache-clear": name,
+    }
+    return {
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": {
+            "name": f"piceli-build-cache-clear-{name}",
+            "namespace": settings.namespace,
+            "labels": labels,
+        },
+        "spec": {
+            "backoffLimit": 0,
+            "activeDeadlineSeconds": 900,
+            "ttlSecondsAfterFinished": 600,
+            "template": {
+                "metadata": {"labels": labels},
+                "spec": {
+                    "restartPolicy": "Never",
+                    "nodeSelector": dict(settings.selector),
+                    "automountServiceAccountToken": False,
+                    "securityContext": {
+                        "runAsNonRoot": True,
+                        "runAsUser": 10001,
+                        "runAsGroup": 10001,
+                        "fsGroup": 10001,
+                        "seccompProfile": {"type": "RuntimeDefault"},
+                    },
+                    "containers": [
+                        {
+                            "name": "build",
+                            "image": settings.image,
+                            "command": ["python", "-I", "-c", _CLEAR, *crates],
+                            "volumeMounts": [{"name": "cache", "mountPath": "/cache"}],
+                            "securityContext": {
+                                "allowPrivilegeEscalation": False,
+                                "capabilities": {"drop": ["ALL"]},
+                            },
+                        }
+                    ],
+                    "volumes": [
+                        {
+                            "name": "cache",
+                            "persistentVolumeClaim": {"claimName": settings.cache_claim},
+                        }
+                    ],
+                },
+            },
+        },
+    }  # fmt: skip
+
+
 #: The environment a build Job was for (removed with the environment).
 BUILD_ENV_LABEL = "piceli.io/build-env"
 
@@ -774,6 +849,14 @@ class JobBuilder:
         #: its Jobs carry ``piceli.io/build-env`` so its teardown removes a
         #: failed Job kept for it (:meth:`forget`).
         self.environment: str | None = None
+
+    def clear_cache(self, crates: Sequence[str]) -> dict[str, Any]:
+        """Empty the build cache's cargo targets (``piceli gitops cache clear``)."""
+        import secrets
+
+        job = cache_clear_job(self.settings, list(crates), secrets.token_hex(4))
+        outcome = self.cluster.run_job(job)
+        return {"state": outcome.state, "job": job["metadata"]["name"]}
 
     def _for_environment(self, job: dict[str, Any]) -> dict[str, Any]:
         if self.environment:

@@ -1184,6 +1184,42 @@ def approve_env(
     )
 
 
+cache_app = typer.Typer(
+    help="The cluster build cache (cargo targets on the build cache claim).",
+    no_args_is_help=True,
+)
+app.add_typer(cache_app, name="cache")
+
+
+@cache_app.command("clear")
+def cache_clear(
+    crate: Annotated[
+        list[str] | None,
+        typer.Option("--crate", help="Only this crate's artifacts (repeat)"),
+    ] = None,
+    kubeconfig: KubeconfigOption = None,
+    context: ContextOption = None,
+    namespace: NamespaceOption = "piceli-system",
+    state_dir: StateDirOption = None,
+    transport: TransportOption = "https",
+) -> None:
+    """Ask the controller to empty its build cache (a corrupted cargo cache)."""
+    from piceli.gitops.state import cache_clear_request
+
+    with _guard():
+        key, body = cache_clear_request(list(crate or ()))
+    with _channel(state_dir, kubeconfig, context, namespace, transport) as channel:
+        with _guard():
+            channel.add_request(key, body)
+    say(
+        "build cache clear recorded"
+        + (f" ({', '.join(body['crates'])})" if body["crates"] else "")
+        + "; the controller runs it between steps, on its next poll "
+        "(controller.cache_clear in gitops status)"
+    )
+    emit_json({"state": "requested", "request": key, "crates": body["crates"]})
+
+
 @app.command("sync")
 def sync(
     env: Annotated[

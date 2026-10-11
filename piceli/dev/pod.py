@@ -649,6 +649,166 @@ def sync_tree(source: Path, dest: Path) -> dict[str, int]:
 # ------------------------------------------------------------------ command
 
 
+# ------------------------------------------------- corrupted cargo caches (0.19)
+#: Output that means a cached artifact is damaged, not the code: the loader
+#: refusing a proc-macro ``.so``, invalid crate metadata, a linker reading a
+#: truncated or garbled object (a run killed mid-write, a faulty disk).
+_CORRUPT = (
+    (
+        "loader",
+        re.compile(
+            r"error while loading shared libraries|cannot open shared object"
+            r"|invalid ELF header|R_X86_64_[A-Z0-9_]+|\bld\.so\b"
+            r"|(?:failed|cannot) to load proc[- ]macro|proc[- ]macro .* could not be loaded"
+        ),
+    ),
+    (
+        "metadata",
+        re.compile(r"E0786|found invalid metadata files|invalid metadata version"),
+    ),
+    (
+        "link",
+        re.compile(
+            r"undefined hidden symbol|file truncated|file format not recognized"
+            r"|malformed archive|archive has no index"
+        ),
+    ),
+)
+_ARTIFACT = re.compile(
+    r"(?:/deps/(?:lib)?|/incremental/|/build/|/\.fingerprint/)"
+    r"([A-Za-z0-9_-]+)-([0-9a-z]{1,24})(?=[./\s'\"`]|$)"
+)
+_TICKED = re.compile(r"for crate `([A-Za-z0-9_-]+)`")
+_COULD_NOT_COMPILE = re.compile(r"could not compile `([A-Za-z0-9_-]+)`")
+_ENTRY = re.compile(r"^(?:lib)?([A-Za-z0-9_-]+)-[0-9a-z]{1,24}(?:\..*)?$")
+_ARTIFACT_DIRS = frozenset({"deps", ".fingerprint", "build", "incremental"})
+
+
+def _crate(name: str) -> str:
+    return name.replace("-", "_")
+
+
+def corrupt_crates(lines: list[str]) -> tuple[list[str], str | None]:
+    """The crates whose cached artifacts a failed build's output blames, and
+    the kind of damage (``loader``, ``metadata``, ``link``); ``([], None)``
+    for an ordinary failure."""
+    for kind, signature in _CORRUPT:
+        hits = [line for line in lines if signature.search(line)]
+        if not hits:
+            continue
+        found: set[str] = set()
+        for line in hits:
+            found |= {_crate(match[0]) for match in _ARTIFACT.findall(line)}
+            found |= {_crate(name) for name in _TICKED.findall(line)}
+        if kind == "link":  # the objects are the failing crate's own
+            for line in lines:
+                found |= {_crate(match[0]) for match in _ARTIFACT.findall(line)}
+                found |= {_crate(name) for name in _COULD_NOT_COMPILE.findall(line)}
+        return sorted(found), kind
+    return [], None
+
+
+def clear_crates(target: Path, crates: list[str]) -> int:
+    """Remove the named crates' artifacts (deps, fingerprints, build script
+    outputs, incremental state) from a cargo target directory; how many
+    entries went."""
+    wanted = {_crate(name) for name in crates}
+    removed = 0
+    for root, dirs, _files in os.walk(target):
+        here = Path(root)
+        if here.name in _ARTIFACT_DIRS:
+            for entry in list(here.iterdir()):
+                found = _ENTRY.match(entry.name)
+                if found and _crate(found.group(1)) in wanted:
+                    if entry.is_dir() and not entry.is_symlink():
+                        shutil.rmtree(entry, ignore_errors=True)
+                    else:
+                        entry.unlink(missing_ok=True)
+                    removed += 1
+            dirs[:] = []  # never below an artifact directory
+    return removed
+
+
+CLEAR_SCHEMA = "piceli.dev-cache-clear.v1"
+
+
+def _selected(cache: Path, lineage: str | None) -> list[Path]:
+    """Lineage directories matching ``KEY/N``, ``KEY`` or a root source name
+    (every key ``NAME-...``); all without ``lineage``."""
+    roots = cache / "lineages"
+    found = []
+    for key in sorted(roots.iterdir()) if roots.is_dir() else ():
+        for path in sorted(key.iterdir(), key=lambda item: item.name):
+            if not path.name.isdigit():
+                continue
+            name = f"{key.name}/{path.name}"
+            if (
+                lineage is None
+                or lineage in (name, key.name)
+                or key.name.startswith(f"{lineage}-")
+            ):
+                found.append(path)
+    return found
+
+
+def clear_cache(
+    cache: Path, lineage: str | None = None, crates: list[str] | tuple[str, ...] = ()
+) -> dict[str, Any]:
+    """Empty the cargo target of free lineages (0.19.0), or only ``crates``'
+    artifacts; a lineage a run holds is skipped (``busy``)."""
+    cleared: list[dict[str, Any]] = []
+    busy: list[str] = []
+    for path in _selected(cache, lineage):
+        name = f"{path.parent.name}/{path.name}"
+        descriptor = _try_lock(path)
+        if descriptor is None:
+            busy.append(name)
+            continue
+        try:
+            target = path / "target"
+            if crates:
+                cleared.append(
+                    {"lineage": name, "entries": clear_crates(target, list(crates))}
+                )
+                continue
+            size = du(target)
+            shutil.rmtree(target, ignore_errors=True)
+            meta = {**_read_meta(path), "runs": 0, "bytes": du(path)}
+            (path / "meta.json").write_text(json.dumps(meta))
+            cleared.append({"lineage": name, "bytes": size})
+        finally:
+            os.close(descriptor)
+    return {"schema": CLEAR_SCHEMA, "cleared": cleared, "busy": busy}
+
+
+def clear_main(
+    spec: dict[str, Any], cache: Path, emit: Callable[[str], None] = print
+) -> dict[str, Any]:
+    """The cache-clear Job's entry (``PICELI_DEV_ROLE=clear``)."""
+    result = clear_cache(
+        cache, spec.get("lineage"), [str(c) for c in spec.get("crates") or ()]
+    )
+    emit(RESULT_MARKER + json.dumps(result, sort_keys=True))
+    return result
+
+
+class FirstError:
+    """The first ``error`` line of a build and the lines after it, so a long
+    log's cause survives a short tail."""
+
+    _START = re.compile(r"^\s*error(?:\[E\d+\])?:")
+
+    def __init__(self, lines: int = 20) -> None:
+        self.limit = lines
+        self.lines: list[str] = []
+
+    def feed(self, line: str) -> None:
+        if (self.lines and len(self.lines) < self.limit) or (
+            not self.lines and self._START.match(line)
+        ):
+            self.lines.append(line)
+
+
 class CargoOutput:
     """What cargo's output tells: crates compiled, build/test split, tests."""
 
@@ -816,6 +976,7 @@ def main(
         maxlen=int(spec.get("log_tail_lines") or 80)
     )
     lineage: Lineage | None = None
+    first: FirstError | None = None
     tree = work / "tree"
     collected = False
     for scratch in ("home", "tmp"):
@@ -883,17 +1044,46 @@ def main(
             durations["fetch"] = round(clock() - step, 3)
             result["prefetch"] = "ok" if code == 0 else "failed"
         cargo = CargoOutput(clock)
+        errors = first = FirstError(int(spec.get("first_error_lines") or 20))
+        building: collections.deque[str] = collections.deque(maxlen=2000)
 
         def seen(line: str) -> None:
             tail.append(line)
             cargo.feed(line)
+            errors.feed(line)
+            if cargo.finished_at is None:  # the build, not the tests' output
+                building.append(line)
 
         step = clock()
         command = [str(part) for part in spec["command"]]
         emit("[piceli-dev] running " + " ".join(command))
-        code, timed_out = run_command(
-            command, cwd, env, float(spec.get("timeout_seconds") or 3600), emit, seen
+        timeout = float(spec.get("timeout_seconds") or 3600)
+        code, timed_out = run_command(command, cwd, env, timeout, emit, seen)
+        crates, damage = (
+            corrupt_crates(list(building)) if code and not timed_out else ([], None)
         )
+        if crates:
+            # 0.19: a damaged cached artifact, not the code: clear those
+            # crates and run once more (a run killed mid-write, a bad disk).
+            removed = clear_crates(target, crates)
+            emit(
+                f"[piceli-dev] corrupted cache ({damage}): cleared "
+                f"{', '.join(crates)} ({removed} entries); running once more"
+            )
+            result["cache"]["repaired"] = {
+                "kind": damage,
+                "crates": crates,
+                "entries": removed,
+                "first_error": list(errors.lines),
+            }
+            cargo = CargoOutput(clock)
+            errors.lines.clear()
+            building.clear()
+            tail.clear()
+            left = max(1.0, timeout - (clock() - step))
+            code, timed_out = run_command(command, cwd, env, left, emit, seen)
+        elif damage:
+            result["cache"]["suspect"] = {"kind": damage}
         ended = clock()
         durations["command"] = round(ended - step, 3)
         if cargo.finished_at is not None:
@@ -940,6 +1130,8 @@ def main(
                 pass
     if result["state"] != "passed":
         result["log_tail"] = list(tail)
+        if first is not None and first.lines:
+            result["first_error"] = list(first.lines)
     durations["total"] = round(clock() - began, 3)
     emit(RESULT_MARKER + json.dumps(result, sort_keys=True))
     if collected:
@@ -959,5 +1151,7 @@ if __name__ == "__main__":  # pragma: no cover - runs inside the pod
             Path("/cache"),
             found if found.is_dir() else None,
         )
+    elif os.environ.get("PICELI_DEV_ROLE") == "clear":
+        clear_main(json.loads(os.environ["PICELI_DEV_SPEC"]), Path("/cache"))
     else:
         main(json.loads(os.environ["PICELI_DEV_SPEC"]), Path("/work"), Path("/cache"))

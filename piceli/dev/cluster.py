@@ -361,6 +361,50 @@ class DevCluster:
         finally:
             raw.release_conn()
 
+    def clear_cache(
+        self, job: dict[str, Any], timeout: float = 900.0
+    ) -> dict[str, Any] | None:
+        """Run a cache-clear Job to its end; its result, then delete it."""
+        from piceli.dev.jobs import CLEAR_LABEL
+        from piceli.dev.pod import RESULT_MARKER
+
+        name = job["metadata"]["labels"][CLEAR_LABEL]
+        self.api.call(
+            f"/apis/batch/v1/namespaces/{NAMESPACE}/jobs", "POST", job, missing_ok=False
+        )
+        query = f"?labelSelector={quote(f'{CLEAR_LABEL}={name}')}"
+        deadline = time.monotonic() + timeout
+        result = None
+        try:
+            while time.monotonic() < deadline:
+                found = self.api.call(
+                    f"/api/v1/namespaces/{NAMESPACE}/pods{query}", "GET"
+                )
+                pods = [
+                    i for i in (found or {}).get("items") or () if isinstance(i, dict)
+                ]
+                phase = ((pods[-1].get("status") or {}).get("phase")) if pods else None
+                if phase in {"Succeeded", "Failed"}:
+                    text = self.api.text(
+                        f"/api/v1/namespaces/{NAMESPACE}/pods/"
+                        f"{pods[-1]['metadata']['name']}/log",
+                        [("container", "run"), ("tailLines", "5")],
+                    )
+                    for line in reversed((text or "").splitlines()):
+                        if line.startswith(RESULT_MARKER):
+                            value = json.loads(line[len(RESULT_MARKER) :])
+                            result = value if isinstance(value, dict) else None
+                            break
+                    break
+                time.sleep(self.poll_seconds)
+        finally:
+            self.api.call(
+                f"/apis/batch/v1/namespaces/{NAMESPACE}/jobs/{job['metadata']['name']}",
+                "DELETE",
+                {"propagationPolicy": "Background"},
+            )
+        return result
+
     def ended(self, run: str) -> str | None:
         """Why the run's pod ended without a result: a registered reason."""
         if self.job(run) is None:
