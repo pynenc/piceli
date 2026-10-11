@@ -138,6 +138,13 @@ def _public_status(raw: Mapping[str, Any]) -> dict[str, Any]:
             "poll_failures": controller.get("poll_failures")
             if isinstance(controller.get("poll_failures"), int)
             else None,
+            # 0.19: why it is degraded (Git's masked message), if it is.
+            **{
+                key: controller.get(key)
+                if isinstance(controller.get(key), str)
+                else None
+                for key in ("last_error", "last_error_detail")
+            },
         }
         if isinstance(controller, Mapping)
         else None,
@@ -387,6 +394,8 @@ class ClusterStatusControl:
                     "health": "healthy" if controller_healthy else "unavailable",
                     "last_poll": controller_status.get("last_poll"),
                     "poll_failures": controller_status.get("poll_failures"),
+                    "last_error": controller_status.get("last_error"),
+                    "last_error_detail": controller_status.get("last_error_detail"),
                 },
                 "ui": {"health": "healthy" if ui_healthy else "unavailable"},
             }

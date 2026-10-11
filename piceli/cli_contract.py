@@ -1313,6 +1313,23 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "the composition's Cluster credentials profile is used. "
             + _EXPLICIT_CONTEXT,
         ),
+        "gitops cache clear": _C(
+            "Ask the GitOps controller to empty its cluster build cache (the "
+            "cargo targets on the build cache claim), or only some crates' "
+            "artifacts (--crate).",
+            reads=("kubeconfig or --state-dir",),
+            writes=("--state-dir requests (local controller)",),
+            cluster="writes",
+            safe_to_retry=True,
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.19.0. Writes a request to the ConfigMap "
+            "piceli-gitops-requests; the controller runs a short Job on the "
+            "builder node between steps and records controller.cache_clear "
+            "(at, crates, state) in gitops status. The next build is cold for "
+            "what was cleared. A controller without --builder-image drops it "
+            "(gitops-request-invalid).",
+        ),
         "gitops sync": _C(
             "Ask the GitOps controller to deploy an environment (or every one) "
             "now at its revision; --component also rebuilds that component.",
@@ -1490,6 +1507,21 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             exit_codes=(0, 2),
             notes="Read-only. The log on stdout; dev-run-unknown for a run that is "
             "neither live nor among the last 50 recorded.",
+        ),
+        "dev cache clear": _C(
+            "Empty the development builds' cargo cache: every free lineage, one "
+            "(--lineage), or only some crates' artifacts (--crate).",
+            reads=(
+                "MODULE:ATTR (piceli.infra.Cluster with dev=)",
+                "credential profile",
+            ),
+            writes=("a short Job in piceli-dev (deleted when it ends)",),
+            cluster="writes",
+            contract="conforms",
+            exit_codes=(0, 1, 2),
+            notes="0.19.0. A lineage a run holds is skipped and listed under busy. "
+            "The next run on a cleared lineage is cold. Exit 1: "
+            "dev-cache-clear-failed (the Job printed no result).",
         ),
         "dev cancel": _C(
             "Cancel a queued or running development run: its Job and pod are deleted.",

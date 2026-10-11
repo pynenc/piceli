@@ -62,9 +62,12 @@ def test_status_shows_failing_checks_of_a_verification(
     checks = controller.poll_once()["envs"]["main"]["checks"]
     assert checks["state"] == "failed" and checks["trigger"] == "sync"
     assert checks["failed"] == ["deliberate-failure"]
-    assert {"name": "deliberate-failure", "passed": False, "code": "check-failed"} in (
-        checks["results"]
-    )
+    assert {
+        "name": "deliberate-failure",
+        "passed": False,
+        "code": "check-failed",
+        "detail": "sh exited 1, expected 0",  # 0.19
+    } in checks["results"]
 
 
 def test_a_branch_run_records_its_branch_push_and_the_policy(
@@ -264,3 +267,31 @@ def test_a_forever_forward_backs_off_capped_and_never_gives_up(attempts: int) ->
     for _ in range(21):
         supervisor._schedule_restart_locked(bounded, "port-forward exited with 1")
     assert bounded.given_up
+
+
+def test_a_failed_checks_detail_is_in_the_record_and_the_log(
+    journaled: dict[str, Any],
+) -> None:
+    """0.19 (IH item 12): ``gitops status``, ``wait`` and the UI showed only
+    ``check-failed``; the check's own reason is now in the record."""
+    controller, channel, ports = (
+        journaled["controller"],
+        journaled["channel"],
+        journaled["ports"],
+    )
+    logs: list[str] = []
+    controller.log = logs.append
+    controller.poll_once()
+    ports.fail_check = "deliberate-failure"
+    channel.add_request(*sync_request("main"))
+    main = controller.poll_once()["envs"]["main"]
+    failing = [item for item in main["checks"]["results"] if not item["passed"]]
+    assert failing == [
+        {
+            "name": "deliberate-failure",
+            "passed": False,
+            "code": "check-failed",
+            "detail": "sh exited 1, expected 0",
+        }
+    ]
+    assert any("deliberate-failure: sh exited 1, expected 0" in line for line in logs)

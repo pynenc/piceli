@@ -50,7 +50,15 @@ def test_init_installs_a_namespace_cache_policy_config_and_scheduler_rights() ->
     assert config["node"] == "builder-1" and config["profiles"][0]["name"] == "rust"
     role = found["Role/piceli-dev-scheduler"]
     resources = {r for rule in role["rules"] for r in rule["resources"]}
-    assert resources == {"jobs", "pods", "pods/log", "configmaps"}
+    assert resources == {"jobs", "pods", "pods/log", "configmaps", "secrets"}
+    secret_rules = [r for r in role["rules"] if r["resources"] == ["secrets"]]
+    assert {tuple(r["verbs"]) for r in secret_rules} == {
+        ("get", "update", "patch"),
+        ("create",),
+    }
+    assert [r.get("resourceNames") for r in secret_rules if "get" in r["verbs"]] == [
+        ["piceli-dev-git"]
+    ]
     (config_rule,) = [r for r in role["rules"] if r["resources"] == ["configmaps"]]
     assert config_rule == {
         "apiGroups": [""],
@@ -58,7 +66,10 @@ def test_init_installs_a_namespace_cache_policy_config_and_scheduler_rights() ->
         "resourceNames": ["piceli-dev-config"],
         "verbs": ["get"],
     }
-    assert all("create" not in rule["verbs"] for rule in role["rules"])
+    assert all(
+        "create" not in rule["verbs"] or rule["resources"] == ["secrets"]
+        for rule in role["rules"]
+    )
     binding = found["RoleBinding/piceli-dev-scheduler"]
     assert binding["subjects"][0]["namespace"] == "piceli-system"
 
@@ -112,11 +123,12 @@ def test_a_run_job_is_isolated() -> None:
     assert container["resources"]["requests"]["cpu"] == "4"
     assert container["resources"]["limits"]["memory"] == "8Gi"
     assert "cpu" not in container["resources"]["limits"]
-    # No Secret anywhere: no volume, no env reference.
-    text = json.dumps(job)
-    assert (
-        "secretKeyRef" not in text and '"secret"' not in text and "envFrom" not in text
-    )
+    # No Secret reaches the container that runs the repository's code: no
+    # env reference, and it mounts only its scratch and the cache.
+    text = json.dumps(container)
+    assert "secretKeyRef" not in text and "envFrom" not in text
+    assert {m["name"] for m in container["volumeMounts"]} == {"work", "cache"}
+    assert "initContainers" not in pod  # no sources: nothing to fetch
     volumes = {v["name"]: v for v in pod["volumes"]}
     assert volumes["work"]["emptyDir"]["sizeLimit"] == "20Gi"
     assert volumes["cache"]["persistentVolumeClaim"]["claimName"] == "piceli-dev-cache"
@@ -148,3 +160,41 @@ def test_cluster_init_includes_development_builds() -> None:
             f"{o['kind']}/{o['metadata']['name']}" for o in render_objects(plain, None)
         )
     )
+
+
+def test_sources_get_a_fetch_init_container_that_alone_mounts_the_git_secret() -> None:
+    dev = _cluster().dev
+    assert dev is not None
+    job = jobs.run_job(
+        dev,
+        dev.profile("rust"),
+        run="r1",
+        spec={
+            "command": ["cargo", "test"],
+            "sources": [
+                {
+                    "name": "shop",
+                    "key": "shop-1",
+                    "url": None,
+                    "head": "a" * 40,
+                    "candidates": [],
+                }
+            ],
+        },
+        requester="agent-7",
+        priority="agent",
+    )
+    pod = job["spec"]["template"]["spec"]
+    (init,) = pod["initContainers"]
+    (run,) = pod["containers"]
+    env = {item["name"]: item["value"] for item in init["env"]}
+    assert env["PICELI_DEV_ROLE"] == "fetch"
+    assert {m["name"] for m in init["volumeMounts"]} == {"work", "cache", "git"}
+    assert {m["name"] for m in run["volumeMounts"]} == {"work", "cache"}
+    git = next(v for v in pod["volumes"] if v["name"] == "git")
+    assert git["secret"] == {
+        "secretName": "piceli-dev-git",
+        "optional": True,
+        "defaultMode": 0o440,
+    }
+    assert init["securityContext"] == run["securityContext"]

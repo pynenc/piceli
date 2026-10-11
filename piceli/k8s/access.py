@@ -38,6 +38,7 @@ from piceli.k8s.observe import local_port_in_use, probe_endpoint
 from piceli.k8s.ops.exec_credentials import ProviderFactoryError
 from piceli.k8s.port_owner import (
     OTHER,
+    PICELI_SERVER,
     UNKNOWN,
     Holder,
     PortOwner,
@@ -90,6 +91,9 @@ class AccessTarget:
     checks: Callable[[], Any] | None = None
     app: Any = None
     exec_policy: Any = None
+    #: 0.19.0: forwards reachable on the tailnet instead (``id``, ``service``,
+    #: ``url``, ``host``, ``ready``), see :mod:`piceli.envs.access`.
+    tailnet: tuple[dict[str, Any], ...] = ()
 
     def shortcut(self, ident: str) -> UiShortcut | None:
         return next((item for item in self.shortcuts if item.id == ident), None)
@@ -499,7 +503,11 @@ def stop_stale(
     stopped: list[dict[str, Any]] = []
     left: list[dict[str, Any]] = []
     free: list[int] = []
-    signalled: dict[int, list[int]] = {}
+    signalled: dict[int, bool] = {}
+    # Identify every port's holder before signalling any: one process often
+    # holds several of them (its relays, its dashboard), and once it exits a
+    # later port could no longer be attributed to it.
+    found: list[tuple[int, Holder]] = []
     for port in dict.fromkeys(ports):
         if not in_use(port):
             free.append(port)
@@ -508,14 +516,18 @@ def stop_stale(
         if not holder.piceli or holder.stop is None or holder.owner is None:
             left.append({"port": port, **holder.public()})
             continue
-        again = check(owner(port))  # the same process, right before the signal
-        if again.owner is None or again.owner.pid != holder.owner.pid:
-            left.append({"port": port, **again.public()})
-            continue
-        if holder.stop not in signalled and not terminate(holder.stop):
+        found.append((port, holder))
+    for port, holder in found:
+        assert holder.stop is not None and holder.owner is not None
+        if holder.stop not in signalled:
+            again = check(owner(port))  # the same process, right before the signal
+            if again.owner is None or again.owner.pid != holder.owner.pid:
+                left.append({"port": port, **again.public()})
+                continue
+            signalled[holder.stop] = terminate(holder.stop)
+        if not signalled[holder.stop]:
             left.append({"port": port, **holder.public()})
             continue
-        signalled.setdefault(holder.stop, []).append(port)
         stopped.append({"port": port, "pid": holder.stop, **holder.public()})
     deadline = time.monotonic() + wait_seconds
     waiting = {item["port"] for item in stopped}
@@ -865,9 +877,11 @@ def forward_status(
     listens). A forward counts as Piceli's only when the listener is the
     ``kubectl`` argv Piceli builds for this context, namespace, target and
     ports, started by a Piceli process (see
-    :func:`~piceli.k8s.port_owner.is_piceli_forward`); without ``context``
-    nothing can be verified and a listener is ``occupied``. Contacts only
-    the loopback address, never the cluster.
+    :func:`~piceli.k8s.port_owner.is_piceli_forward`), or (since 0.19.0,
+    through ``owned``) the ``piceli access`` for this target, whose relay
+    holds the port in front of ``kubectl``; without ``context`` nothing can
+    be verified and a listener is ``occupied``. Contacts only the loopback
+    address, never the cluster.
     """
     owner = owner or _full_owner
     owned = owned or is_piceli_forward
@@ -981,8 +995,12 @@ def collect_status(
     *,
     reader_error: str | None = None,
     forward: Callable[[UiShortcut], dict[str, Any]] | None = None,
+    names: Iterable[str] = (),
 ) -> dict[str, Any]:
     """The ``piceli.status.v1`` document for ``target``.
+
+    ``names``: the TARGET arguments a ``piceli access`` for it may have been
+    started with; its relay holding a declared port is Piceli's forward.
 
     :param reader: Live workload reader; ``None`` when it could not be built,
         in which case ``reader_error`` is the error code recorded.
@@ -1037,10 +1055,17 @@ def collect_status(
             item["error"] = pods_error
         summary.workloads.append(item)
     if forward is None:
+        check = holder_check(target, names)
+
+        def owned(holder: PortOwner | None, **declared: Any) -> bool:
+            return (
+                is_piceli_forward(holder, **declared)
+                or check(holder).kind == PICELI_SERVER
+            )
 
         def forward(item: UiShortcut) -> dict[str, Any]:
             return forward_status(
-                item, context=target.context, namespace=target.namespace
+                item, context=target.context, namespace=target.namespace, owned=owned
             )
 
     forwards = [forward(item) for item in target.shortcuts]

@@ -4,6 +4,72 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.19.0
+
+- **Development runs ship Git deltas.** The builder keeps a Git mirror per
+  repository; the run pod's init container fetches the repository's remote
+  with the cluster's Git credentials (the controller keeps a copy for runs,
+  `piceli-dev-git` in `piceli-dev`, limited to the composition's source
+  URLs, mounted only by that init container) and reports which commits the
+  mirror has. The client uploads only a `git bundle` from the nearest
+  known commit, the uncommitted diff and the untracked files: kilobytes for
+  a typical run instead of the whole tree. Without a known commit the whole
+  history goes once and seeds the mirror. Sibling sources the same way; a
+  `--source` that is the tree being run is skipped with a note. The result
+  gains `upload` (`mode`, `bytes`, `chunks`, `retries`, `seconds`) and
+  per-source `base`, `bundle_bytes` and `fetch` (fetched, masked error,
+  note). An image without git still gets the whole tree.
+- **Uploads survive a slow or dropped link.** 4 MiB chunks over
+  `pods/exec`, each retried after 1, 2, 4, 8 and 16 s, progress on stderr;
+  the run waits while parts keep arriving; `dev-upload-failed` names the
+  chunk, the bytes sent and the cause. The waiting line says `fetching
+  sources` while the init container runs (it said `ContainerCreating`).
+- **Environments on the tailnet.** `Environment(access=Access(tailnet=True))`
+  (also `Cluster(access=...)` for every environment, and
+  `Environment.per_branch(access=...)`) adds, per Service with a declared
+  forward, a companion Service `<name>-tailnet` (`loadBalancerClass:
+  tailscale`) that the Tailscale Kubernetes operator exposes on the tailnet
+  under `hostname` (`{env}-{service}` by default); the environment's
+  ingress policies that select those pods admit the operator's namespace.
+  `piceli access ENV --cluster ...` prints the tailnet URLs instead of
+  forwarding them (`tailnet` in the `started` event; exits 0 when nothing is
+  left to forward); a companion without a name yet is forwarded, with a
+  note; `--forward` forwards everything.
+- **A busy forward is never restarted.** `piceli access` holds each local
+  port in a relay in front of `kubectl`: a forward that moved bytes in the
+  last 15 s is `busy`, not failed, whatever its probe says; probes go
+  straight to `kubectl` on a connection of their own; restarts keep the
+  local port. `status` events and the dashboard carry `restart_reasons`
+  (last ten, `{at, reason}`) and `traffic`. `access stop --stale` now
+  identifies every port's holder before signalling any, so one leftover
+  holding several ports is stopped through all of them; `piceli status`
+  reports a port held by that relay `up`, not `occupied`. On Linux, a forward
+  reaped after its server was killed and left a zombie no longer counts as
+  running.
+- **A failing Git remote is never silent.** Git's stderr, masked, is kept in
+  `gitops-git-failed` (`controller.last_error_detail`,
+  `sources.*.error_detail`, `gitops status`, the UI's Cluster page), logged
+  once per change, and emitted as `piceli.controller.git.failed`; `gitops
+  wait` for a commit the controller cannot see fails after two failed polls
+  (`stage: fetch`) with `controller_error`; a GitHub token that expires
+  within 7 days is warned (`gitops-token-expiring` in `controller.warnings`).
+- **Failed checks say why.** The check's own detail is in
+  `checks.results[].detail`, `gitops status`, `gitops wait`
+  (`failed_checks`), the controller's log and the UI.
+- **Corrupted caches repair themselves.** A dev run or a cluster build step
+  that fails with a loader, metadata or link error on cached artifacts has
+  the blamed crates cleared and runs once more (`cache.repaired`, the
+  step's `repaired`). `piceli dev cache clear [--lineage] [--crate]` and
+  `piceli gitops cache clear [--crate]` empty the caches without a root pod
+  on the claim. A failure keeps its `first_error` (the first `error` line
+  and 19 more), printed by `dev run` and at the end of a build Job's log.
+- **Dev runs:** the lineage name defaults to the repository's main checkout
+  (Git's common dir), so every worktree builds warm on one lineage; the
+  builder image has `clippy` and `rustfmt`.
+- **`piceli dev run` no longer leaves its packed tree behind** when it is
+  stopped by SIGTERM or SIGHUP (a cancelled agent): its scratch is a tracked
+  Piceli temporary directory.
+
 ## Version 0.18.0
 
 - **Development builds** (`piceli dev run`): a developer's or coding agent's

@@ -52,7 +52,7 @@ HISTORY_KEY = "history.json"
 #: Who sent an approval (``via`` of an approve request; recorded as its approver).
 APPROVAL_VIA = ("cli", "ui")
 #: Request kinds (the prefix of their key).
-REQUEST_KINDS = ("approve", "promote", "sync", "stop", "start")
+REQUEST_KINDS = ("approve", "promote", "sync", "stop", "start", "cache-clear")
 #: Env states a status may carry.
 ENV_STATES = (
     "pending",
@@ -274,6 +274,23 @@ def sync_request(
     if component is not None:
         fields["component"] = component
     return request("sync", **fields)
+
+
+def cache_clear_request(
+    crates: list[str] | tuple[str, ...] = (),
+) -> tuple[str, dict[str, Any]]:
+    """Empty the cluster build cache's cargo targets, or only ``crates``'
+    artifacts (``piceli gitops cache clear``, 0.19.0)."""
+    import re
+    from datetime import UTC, datetime
+
+    names = sorted(set(crates))
+    if any(not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name) for name in names):
+        raise GitOpsError(
+            "gitops-request-invalid", "a crate name is letters, digits, - and _"
+        )
+    at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    return request("cache-clear", crates=names, at=at)
 
 
 def stop_request(

@@ -302,3 +302,54 @@ def test_the_queue_runs_one_at_a_time_rounds_first(dev: Any, tmp_path: Path) -> 
         results["agent"]["durations"]["queue"] > results["first"]["durations"]["queue"]
     )
     assert port.jobs() == []
+
+
+# The 0.18.0 controller image: python3 and git (the delta path needs git).
+GIT_IMAGE = (
+    "ghcr.io/pynenc/piceli-controller"
+    "@sha256:eeae42221192763f053dde5bb5d81188a5ba2f011d767ad2a899c3eeb9b9fcf7"
+)
+
+
+def test_a_working_tree_run_ships_a_git_delta(dev: Any, tmp_path: Path) -> None:
+    """0.19: the first run seeds the builder's mirror; the next one uploads
+    only the uncommitted change (kilobytes), over chunked exec."""
+    import base64
+    import dataclasses
+
+    from piceli.dev.client import RunRequest, run
+    from piceli.dev.pack import SourceRequest
+
+    port, settings = dev
+    with_git = dataclasses.replace(
+        settings,
+        image=GIT_IMAGE,
+        profiles=[
+            dataclasses.replace(
+                settings.profiles[0], image=None, tools=["sh", "git"], toolchain=None
+            )
+        ],
+    )
+    noise = base64.b64encode(os.urandom(400_000)).decode()
+    repo = _repo(tmp_path, {"big.txt": noise, "show.sh": "cat note.txt"})
+    (repo / "note.txt").write_text("first\n")
+    first = run(
+        port,
+        with_git,
+        RunRequest(
+            SourceRequest("shop", repo, None), ["sh", "show.sh"], queue_timeout=600
+        ),
+    )
+    assert first["state"] == "passed", first
+    assert first["upload"]["mode"] == "delta" and first["upload_bytes"] > 300_000
+    (repo / "note.txt").write_text("second\n")
+    lines: list[str] = []
+    second = run(
+        port, with_git,
+        RunRequest(SourceRequest("shop", repo, None), ["sh", "show.sh"], queue_timeout=600),
+        log=lines.append,
+    )  # fmt: skip
+    assert second["state"] == "passed", second
+    assert "second" in lines
+    assert second["upload_bytes"] < 5_000
+    assert second["sources"]["shop"]["fetch"]["fetched"] is False  # no Secret here

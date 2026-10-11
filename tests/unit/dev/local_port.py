@@ -28,6 +28,18 @@ class LocalPort:
         self.threads: dict[str, threading.Thread] = {}
         self.cancel_before_start: set[str] = set()
 
+    def clear_cache(self, job: dict[str, Any]) -> dict[str, Any] | None:
+        """The cache-clear Job, run in place on the shared cache (0.19)."""
+        container = job["spec"]["template"]["spec"]["containers"][0]
+        env = {e["name"]: e["value"] for e in container["env"]}
+        assert env["PICELI_DEV_ROLE"] == "clear"
+        self.cleared_jobs = [*getattr(self, "cleared_jobs", []), job]
+        return wrapper.clear_main(
+            json.loads(env["PICELI_DEV_SPEC"]),
+            self.root / "cache",
+            emit=lambda _l: None,
+        )
+
     def _work(self, run: str) -> Path:
         return self.root / "pods" / run
 
@@ -46,6 +58,8 @@ class LocalPort:
 
         def go() -> None:
             try:
+                if spec.get("sources"):  # the fetch init container, no Secret here
+                    wrapper.fetch_main(spec, self._work(run), self.root / "cache", None)
                 wrapper.main(spec, self._work(run), self.root / "cache", emit=lines.put)
             finally:
                 lines.put(None)
@@ -64,11 +78,27 @@ class LocalPort:
             self.threads[run].start()
         return run
 
-    def upload(self, pod: str, archive: Path) -> None:
+    def have(self, pod: str) -> dict[str, Any] | None:
+        import time
+
+        path = self._work(pod) / "have.json"
+        for _ in range(500):  # the init step runs in the pod's thread
+            if path.exists():
+                return dict(json.loads(path.read_text()))
+            time.sleep(0.01)
+        return None
+
+    def upload(
+        self, pod: str, archive: Path, sha256: str | None = None, progress: Any = None
+    ) -> dict[str, Any]:
         upload = self._work(pod) / "upload"
         upload.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(archive, upload / "tree.tar.gz")
+        if sha256:
+            (upload / "tree.sha256").write_text(sha256)
         (upload / "ready").touch()
+        self.uploaded = archive.stat().st_size
+        return {"bytes": self.uploaded, "chunks": 1, "retries": 0, "seconds": 0.0}
 
     def follow(self, pod: str, on_line: Callable[[str], None]) -> None:
         while (line := self.lines[pod].get(timeout=60)) is not None:

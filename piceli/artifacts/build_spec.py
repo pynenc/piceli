@@ -153,6 +153,7 @@ class BuildSpecError(ValueError):
         *,
         steps: tuple[dict[str, Any], ...] = (),
         output_tail: str = "",
+        first_error: str = "",
     ) -> None:
         super().__init__(message)
         self.code = code
@@ -160,6 +161,8 @@ class BuildSpecError(ValueError):
         #: The redacted, bounded end of a failed command's output (host
         #: builds); never part of the message.
         self.output_tail = output_tail
+        #: 0.19: its first ``error`` line and the lines after (redacted).
+        self.first_error = first_error
 
 
 def _fail(message: str) -> BuildSpecError:

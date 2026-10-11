@@ -32,6 +32,9 @@ REQUESTER_LABEL = "piceli.io/dev-requester"
 PRIORITY_LABEL = "piceli.io/dev-priority"
 PROFILE_LABEL = "piceli.io/dev-profile"
 SCHEDULER = "piceli-dev-scheduler"
+#: The Git credentials the fetch init container uses (0.19.0): kept by the
+#: controller from its own, limited to the composition's source URLs.
+GIT_SECRET = "piceli-dev-git"
 #: Seconds a run waits for its upload, then for the client to take artifacts.
 UPLOAD_SECONDS = 600
 COLLECT_SECONDS = 300
@@ -146,6 +149,14 @@ def install_objects(cluster: Any) -> list[dict[str, Any]]:
                         "resourceNames": [CONFIG_MAP],
                         "verbs": ["get"],
                     },
+                    # 0.19.0: the fetch init container's Git credentials.
+                    {
+                        "apiGroups": [""],
+                        "resources": ["secrets"],
+                        "resourceNames": [GIT_SECRET],
+                        "verbs": ["get", "update", "patch"],
+                    },
+                    {"apiGroups": [""], "resources": ["secrets"], "verbs": ["create"]},
                 ],
             },
             {
@@ -247,6 +258,11 @@ def run_job(
                         "fsGroup": 10001,
                         "seccompProfile": {"type": "RuntimeDefault"},
                     },
+                    **(
+                        {"initContainers": [_fetch_container(profile, dev, full)]}
+                        if full.get("sources")
+                        else {}
+                    ),
                     "containers": [
                         {
                             "name": "run",
@@ -271,11 +287,114 @@ def run_job(
                     "volumes": [
                         {"name": "work", "emptyDir": {"sizeLimit": dev.run_storage}},
                         {"name": "cache", "persistentVolumeClaim": {"claimName": CACHE_CLAIM}},
+                        # Mounted by the fetch init container only (never by
+                        # the container that runs the repository's code).
+                        *(
+                            [{"name": "git", "secret": {"secretName": GIT_SECRET, "optional": True, "defaultMode": 0o440}}]
+                            if full.get("sources")
+                            else []
+                        ),
                     ],
                 },
             },
         },
     }  # fmt: skip
+
+
+#: The label of a cache-clear Job (never a run: the scheduler ignores it).
+CLEAR_LABEL = "piceli.io/dev-cache-clear"
+
+
+def cache_clear_job(
+    dev: DevBuilds, *, name: str, lineage: str | None, crates: list[str]
+) -> dict[str, Any]:
+    """A short Job that empties free lineages' cargo targets (0.19.0).
+
+    Same node, user and cache claim as a run; no network need, no Secret,
+    no repository code: it runs the wrapper with ``PICELI_DEV_ROLE=clear``.
+    """
+    labels = {**MANAGED, CLEAR_LABEL: name}
+    spec = {"lineage": lineage, "crates": list(crates)}
+    return {
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": {"name": f"piceli-dev-clear-{name}", "namespace": NAMESPACE, "labels": labels},
+        "spec": {
+            "backoffLimit": 0,
+            "activeDeadlineSeconds": 900,
+            "ttlSecondsAfterFinished": 600,
+            "template": {
+                "metadata": {"labels": labels},
+                "spec": {
+                    "restartPolicy": "Never",
+                    "nodeSelector": {"kubernetes.io/hostname": dev.node},
+                    "automountServiceAccountToken": False,
+                    "enableServiceLinks": False,
+                    "securityContext": {
+                        "runAsNonRoot": True,
+                        "runAsUser": 10001,
+                        "runAsGroup": 10001,
+                        "fsGroup": 10001,
+                        "seccompProfile": {"type": "RuntimeDefault"},
+                    },
+                    "containers": [
+                        {
+                            "name": "run",
+                            "image": dev.image,
+                            "command": ["python3", "-I", "-c", wrapper_source()],
+                            "env": [
+                                {"name": "PICELI_DEV_ROLE", "value": "clear"},
+                                {"name": "PICELI_DEV_SPEC", "value": json.dumps(spec, sort_keys=True)},
+                            ],
+                            "resources": {
+                                "requests": {"cpu": "100m", "memory": "128Mi"},
+                                "limits": {"memory": "256Mi"},
+                            },
+                            "volumeMounts": [{"name": "cache", "mountPath": "/cache"}],
+                            "securityContext": {
+                                "allowPrivilegeEscalation": False,
+                                "capabilities": {"drop": ["ALL"]},
+                            },
+                        }
+                    ],
+                    "volumes": [
+                        {"name": "cache", "persistentVolumeClaim": {"claimName": CACHE_CLAIM}}
+                    ],
+                },
+            },
+        },
+    }  # fmt: skip
+
+
+def _fetch_container(
+    profile: DevProfile, dev: DevBuilds, spec: dict[str, Any]
+) -> dict[str, Any]:
+    """The init container (0.19.0): fetch the sources' remotes into their
+    mirrors with the cluster's Git credentials, before any repository code
+    runs, and report which commits the mirrors have (``/work/have.json``)."""
+    return {
+        "name": "fetch",
+        "image": profile.image or dev.image,
+        "command": ["python3", "-I", "-c", wrapper_source()],
+        "env": [
+            {"name": "PICELI_DEV_ROLE", "value": "fetch"},
+            {"name": "PICELI_DEV_SPEC", "value": json.dumps(spec, sort_keys=True)},
+            {"name": "HOME", "value": "/work/home"},
+        ],
+        "resources": {
+            "requests": {"cpu": "100m", "memory": "256Mi"},
+            "limits": {"memory": "1Gi"},
+        },
+        "volumeMounts": [
+            {"name": "work", "mountPath": "/work"},
+            {"name": "cache", "mountPath": "/cache"},
+            {"name": "git", "mountPath": "/etc/piceli-git", "readOnly": True},
+        ],
+        "securityContext": {
+            "allowPrivilegeEscalation": False,
+            "capabilities": {"drop": ["ALL"]},
+        },
+    }
 
 
 def max_lineages(dev: DevBuilds) -> int:

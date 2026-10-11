@@ -189,11 +189,12 @@ def test_status_and_access_on_kind(tmp_path: Path, namespace: str) -> None:
         assert rejection["reason"] == "access-port-conflict"
         owner = rejection["conflicts"][0]["owner"]
         if owner is not None:
-            # The first access's own kubectl: recognised as piceli's forward
-            # for this app, and stoppable with `access stop --stale`.
-            assert rejection["conflicts"][0]["holder"] == "piceli-forward"
-            assert "port-forward" in (owner["command"] or "")
-            assert owner["parent"]["pid"] == process.pid
+            # 0.19: the first access itself holds the port (its relay, with
+            # kubectl behind it): recognised as piceli's process for this
+            # app, and stoppable with `access stop --stale`.
+            assert rejection["conflicts"][0]["holder"] == "piceli-server"
+            assert owner["pid"] == process.pid
+            assert " access " in f" {owner['command'] or ''} "
             assert "piceli access stop --stale" in second.stderr
             stop = runner.invoke(app, ["access", "stop", "--stale", str(spec)])
             assert stop.exit_code == 0, stop.stdout + stop.stderr

@@ -25,6 +25,7 @@ import collections
 import time
 from collections.abc import Callable, Iterable, Mapping
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from piceli.dev.jobs import PRIORITY_LABEL, PROFILE_LABEL, REQUESTER_LABEL, RUN_LABEL
@@ -143,7 +144,10 @@ class Scheduler:
         clock: Callable[[], float] = time.time,
         on_finished: Callable[[dict[str, Any]], None] = lambda _record: None,
         say: Callable[[str], None] = lambda _line: None,
+        git_credentials: Callable[[], tuple[str, str, list[str]] | None] | None = None,
     ) -> None:
+        self.git_credentials = git_credentials
+        self._git_checked = 0.0
         self.port = port
         self.dev = dev
         self.clock = clock
@@ -193,6 +197,9 @@ class Scheduler:
             entry["cache"] = cache
             if result.get("state") != "passed":
                 entry["log_tail"] = list(result.get("log_tail") or ())[-RECORDED_TAIL:]
+                # 0.19: the cause survives a tail that only shows the end.
+                if result.get("first_error"):
+                    entry["first_error"] = list(result["first_error"])[:RECORDED_TAIL]
         elif state == "cancelled":
             entry.update(state="cancelled", reason="dev-run-cancelled", exit_code=None)
         else:
@@ -206,9 +213,25 @@ class Scheduler:
             pass
         self.say(f"dev run {run}: {entry.get('state')}")
 
+    def sync_git_secret(self, now: float) -> None:
+        """Keep ``piceli-dev-git`` equal to the controller's own Git
+        credentials (a rotated token reaches runs within a minute)."""
+        if self.git_credentials is None or now - self._git_checked < 60:
+            return
+        self._git_checked = now
+        found = self.git_credentials()
+        if found is not None and self.port.put_git_secret(*found):
+            self.say("dev scheduler: runs' Git credentials updated")
+
     def tick(self) -> dict[str, Any]:
         """Record, start and publish once; the published status."""
         now = self.clock()
+        try:
+            self.sync_git_secret(now)
+        except Exception as error:  # never stops the queue
+            self.say(
+                f"dev scheduler: Git credentials not synced ({type(error).__name__})"
+            )
         jobs = self.port.jobs()
         current = {run_of(job) for job in jobs}
         for run in [r for r in self.seen if r not in current]:
@@ -288,11 +311,34 @@ def loop(
         sleep(TICK_SECONDS)
 
 
+def git_credentials_of(
+    directory: Path | None, urls: Iterable[str]
+) -> Callable[[], tuple[str, str, list[str]] | None]:
+    """The controller's mounted Git Secret (``username``, ``password``) and
+    the canonical URLs runs may fetch (the composition's sources)."""
+    from piceli.dev.delta import canonical_url
+
+    allowed = sorted({u for u in (canonical_url(url) for url in urls) if u})
+
+    def read() -> tuple[str, str, list[str]] | None:
+        if directory is None or not (directory / "password").is_file():
+            return None
+        username = (
+            (directory / "username").read_text().strip()
+            if (directory / "username").is_file()
+            else "x-access-token"
+        )
+        return username, (directory / "password").read_text().strip(), allowed
+
+    return read
+
+
 def start_thread(
     make_api: Callable[[], Any],
     *,
     on_finished: Callable[[dict[str, Any]], None] = lambda _record: None,
     log: Callable[[str], None] = lambda _line: None,
+    git_credentials: Callable[[], tuple[str, str, list[str]] | None] | None = None,
 ) -> Callable[[], None]:
     """Run the queue on a daemon thread (the GitOps controller's); returns its stop.
 
@@ -311,7 +357,9 @@ def start_thread(
         if dev is None:
             return None
         log(f"dev scheduler: queueing development runs on {dev.node}")
-        return Scheduler(port, dev, on_finished=on_finished, say=log)
+        return Scheduler(
+            port, dev, on_finished=on_finished, say=log, git_credentials=git_credentials
+        )
 
     thread = threading.Thread(
         target=loop,

@@ -14,7 +14,6 @@ from __future__ import annotations
 import json
 import secrets
 import tarfile
-import tempfile
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -69,6 +68,14 @@ def _safe_extract(archive: Path, into: Path) -> list[str]:
     return names
 
 
+def _size(count: int) -> str:
+    if count >= 1 << 20:
+        return f"{count / (1 << 20):.1f} MB"
+    if count >= 1 << 10:
+        return f"{count / (1 << 10):.0f} KB"
+    return f"{count} B"
+
+
 def run(
     port: Any,
     dev: DevBuilds,
@@ -116,19 +123,36 @@ def run(
         "requester": request.requester,
         "priority": request.priority,
     }
-    with tempfile.TemporaryDirectory(prefix="piceli-dev-") as scratch:
-        packed = pack(request.root, request.extras, Path(scratch))
-        durations["pack"] = round(clock() - began, 3)
-        body["sources"] = packed.sources
-        body["upload_bytes"] = packed.bytes
+    from piceli.dev.delta import pack_delta, plan_source
+    from piceli.tempfiles import temporary_directory
+
+    plans = [plan_source(request.root)]
+    notes: list[str] = []
+    extras = []
+    for extra in request.extras:
+        from piceli.dev.pack import toplevel
+
+        if toplevel(extra.path).resolve() == toplevel(request.root.path).resolve():
+            notes.append(f"--source {extra.name}: it is the tree being run; skipped")
+            continue
+        extras.append(extra)
+        plans.append(plan_source(extra))
+    if notes:
+        body["notes"] = notes
+        for note in notes:
+            say(f"run {run_id}: {note}")
+    # Removed on every exit, SIGTERM and SIGHUP included (piceli.tempfiles).
+    with temporary_directory("dev") as scratch:
         hint = request.root.ref or f"worktree:{request.root.path.resolve()}"
         spec = {
             "command": list(request.command),
             "cwd": body["cwd"],
-            "archive_sha256": packed.sha256,
             "lineage_key": f"{request.root.name}-{profile.name}",
             "lineage_hint": hint,
             "artifacts": list(request.artifacts),
+            # 0.19: the fetch init container reports which of these commits
+            # the builder's mirrors have; the upload is only the rest.
+            "sources": [plan.describe() for plan in plans],
         }
         job = run_job(
             dev,
@@ -141,14 +165,12 @@ def run(
             annotations={
                 "piceli.io/dev-command": json.dumps(request.command)[:1000],
                 "piceli.io/dev-sources": json.dumps(
-                    {k: v.get("commit") for k, v in packed.sources.items()}
+                    {plan.name: plan.head for plan in plans}
                 ),
             },
         )
         port.create(job)
-        say(
-            f"run {run_id}: {profile.name} on {dev.node}, {packed.bytes} bytes to upload"
-        )
+        say(f"run {run_id}: {profile.name} on {dev.node}")
         result: dict[str, Any] | None = None
         # With a scheduler the Job stays until it records the run; a run that
         # never got its result (interrupted, failed to start) goes now.
@@ -162,8 +184,43 @@ def run(
             )
             durations["queue"] = round(clock() - step, 3)
             step = clock()
-            port.upload(pod, packed.path)
+            have = port.have(pod)
+            if have is None or not have.get("git", True):
+                # An image without git: the whole tree, as 0.18 did.
+                packed = pack(request.root, extras, scratch)
+                mode = "tree"
+            else:
+                present = {
+                    name: set(entry.get("present") or ())
+                    for name, entry in (have.get("sources") or {}).items()
+                }
+                packed = pack_delta(plans, present, scratch)
+                mode = "delta"
+                for name, entry in (have.get("sources") or {}).items():
+                    if name in packed.sources:
+                        packed.sources[name]["fetch"] = {
+                            key: entry.get(key) for key in ("fetched", "error", "note")
+                        }
+            durations["pack"] = round(clock() - step, 3)
+            body["sources"] = packed.sources
+            body["upload_bytes"] = packed.bytes
+            say(f"run {run_id}: uploading {_size(packed.bytes)} ({mode})")
+            step = clock()
+            shown = {"at": 0.0}
+
+            def progress(sent: int, total: int, elapsed: float) -> None:
+                if sent < total and elapsed - shown["at"] < 2:
+                    return
+                shown["at"] = elapsed
+                rate = sent / elapsed if elapsed > 0 else 0.0
+                say(
+                    f"run {run_id}: upload {_size(sent)} of {_size(total)}"
+                    f" ({_size(int(rate))}/s)"
+                )
+
+            report = port.upload(pod, packed.path, packed.sha256, progress)
             durations["transfer"] = round(clock() - step, 3)
+            body["upload"] = {"mode": mode, **(report or {"bytes": packed.bytes})}
             found: list[dict[str, Any]] = []
 
             def line(text: str) -> None:

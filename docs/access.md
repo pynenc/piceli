@@ -22,7 +22,8 @@ An access declaration is part of the model, but not part of the cluster:
   `piceli render` and `piceli release plan` show exactly what they showed
   before;
 - `piceli access` starts one loopback `kubectl port-forward` per declaration,
-  probes it (TCP or HTTP) and restarts it when it stops answering;
+  probes it (TCP or HTTP) and restarts it when it stops answering, but never
+  while it is moving bytes (see [Busy forwards](#busy-forwards-and-restarts));
 - `piceli status` reads the release state, the live workloads and the
   declared forwards, and prints whether the app is up and each URL;
 - the local dashboard shows the same forwards as its shortcuts, so a separate
@@ -126,7 +127,9 @@ New to Piceli? Start with {doc}`getting_started/index`.
 
    `up` means the port is held by the `kubectl port-forward` that Piceli
    started for this declaration (same context, namespace, target and ports,
-   started by `piceli access` or a dashboard) and its health probe passes.
+   started by `piceli access` or a dashboard), or since 0.19.0 by the
+   `piceli access` for this TARGET itself (its relay, with `kubectl` behind
+   it), and its health probe passes.
    If another process holds the port (another project's forward, a dev
    server), the forward is `occupied`, never `up`, and only that process's
    pid is shown:
@@ -194,6 +197,7 @@ piceli access main --cluster infra.py:my_cluster --ui
 | `access-target-invalid` | TARGET is neither a readable `release.toml` nor a `module:attr` object with `.app` and `.target`. | Read the message on stderr. |
 | `status` exits `1` with `state: degraded` or `down` | Some workloads are not ready. | Read `workloads[].problems` (for example `CrashLoopBackOff`, restarts). |
 | `status` shows `state: unknown` and `errors: ["status-cluster-unreadable"]` | The cluster could not be read. | Check that the context reaches the cluster, then retry. |
+| A forward shows `busy` | A probe failed while the forward moved bytes (a large download over a slow link). It is not restarted. | Nothing to do; it turns `healthy` once the transfer ends. Read `restart_reasons` if it restarted before. |
 | A forward shows `unhealthy` | Piceli's forward holds the port but the health probe fails. | The upstream is down or not ready: check the workload (`piceli status`). |
 
 Every code is explained by `piceli explain <code>` and in {doc}`reference/errors`.
@@ -272,11 +276,51 @@ The JSON object:
 - `checks`: the latest checks result when the target records one, else `null`.
 - `errors`: error codes, for example `status-cluster-unreadable`.
 
+## On the tailnet
+
+A `kubectl port-forward` goes through the API server's stream proxy: fine on
+the LAN, slow and fragile over a slow link (a laptop away from home on
+Tailscale, a phone). A composition environment can be reachable on the
+cluster's Tailscale tailnet instead (0.19.0):
+
+```python
+from piceli.envs import Access
+
+Environment("main", namespace="shop-main", pipeline=pipeline, cluster=my_cluster,
+            follow={shop: "main"}, access=Access(tailnet=True, hostname="shop-{env}-{service}"))
+# or every environment of the cluster: Cluster(..., access=Access(tailnet=True))
+# or branch environments: Environment.per_branch(..., access=Access(tailnet=True))
+```
+
+- The environment's release adds, for each Service the app declares a
+  forward for (`app.access.forward`, or `Access(services=[...])`), a
+  companion Service `<name>-tailnet` with `loadBalancerClass: tailscale`.
+  The [Tailscale Kubernetes operator](https://tailscale.com/kb/1236/kubernetes-operator),
+  which the cluster's owner installs (Piceli does not), gives it the
+  machine name `hostname` (`{env}`, `{service}`, `{namespace}`) on the
+  tailnet: only the tailnet's devices reach it, under the tailnet's ACLs,
+  and the app keeps its own login.
+- Every ingress NetworkPolicy of the environment that already selects
+  those pods gets one more rule: the operator's namespace
+  (`operator_namespace`, default `tailscale`) on the exposed ports. Piceli
+  adds no new policy (a new one would cut the pods off from every other
+  source).
+- `piceli access ENV --cluster infra.py:CLUSTER` prints the tailnet URL of
+  each such forward (`http://<name>.<tailnet>.ts.net:<port><path>`) instead of
+  forwarding it, and keeps forwarding the rest (and the UI with `--ui`). A
+  companion without a tailnet name yet (the operator is not installed or
+  not ready) is forwarded as before, with a note. `--forward` forwards
+  everything.
+
+The `started` event (`--json`) lists them under `tailnet` (`id`, `service`,
+`port`, `host`, `ready`, `url`); when every selected forward is on the
+tailnet and there is no `--ui`, `piceli access` prints them and exits 0.
+
 ## Contract: `piceli access`
 
 | | |
 | --- | --- |
-| Arguments | `TARGET` (text, required); `--only ID` (repeatable); `--json` (flag); `--kubectl PATH` (default `kubectl`); `--poll SECONDS` (0.1-60, default 1); `--dashboard PORT` (optional); `--ui-config PATH` (optional, also `$PICELI__UI_CONFIG`) |
+| Arguments | `TARGET` (text, required); `--only ID` (repeatable); `--json` (flag); `--kubectl PATH` (default `kubectl`); `--poll SECONDS` (0.1-60, default 1); `--dashboard PORT` (optional); `--ui-config PATH` (optional, also `$PICELI__UI_CONFIG`); with `--cluster`: `--ui`, `--forward` (0.19.0: also the services on the tailnet) |
 | Reads | `release.toml` or the target module, the kubeconfig, `kubectl` |
 | Writes | Loopback ports only: one `kubectl port-forward --address 127.0.0.1` process per forward, each in its own process group, all stopped on exit (also when `piceli` is killed: see below). Nothing in the cluster. |
 | Approval | None; it only reads the cluster. Ask the owner before starting long-running processes on their machine. |
@@ -312,6 +356,37 @@ end of a pipe, sees the pipe close and stops every forward still registered
 (SIGTERM, then SIGKILL after 3 seconds); it never signals anything else.
 Only a `piceli` killed together with its watchdog (its whole process group)
 leaves a forward behind, which `piceli access stop --stale` stops.
+
+(busy-forwards-and-restarts)=
+### Busy forwards and restarts
+
+`kubectl port-forward` carries every connection through one stream to the API
+server. Over a slow link (a laptop away from the cluster) a large download
+fills that stream, and a health probe sent through the same forward times out
+although the forward is fine. Since 0.19.0 `piceli access` holds each declared
+local port itself, in a small relay in front of `kubectl`, which listens on an
+internal loopback port:
+
+- **Moving bytes means healthy.** A forward with an open connection that moved
+  bytes in the last 15 seconds is never restarted. A failed probe then sets
+  `health: busy` instead of counting a failure.
+- **The probe uses a short request on its own connection**, straight to
+  `kubectl`'s internal port, so it never waits in line behind your download in
+  the relay.
+- **Back off before restarting.** A forward is restarted only after
+  `failure_threshold` failed probes while idle, with the declared backoff.
+  The relay keeps the local port during the restart, so your browser or
+  client sees a refused request at worst, never a port taken by someone else.
+- **Every restart is reported with its reason.** The `status` events and the
+  dashboard's forwards carry `restart_reasons`: the last ten restarts, newest
+  last, as `{"at": "2026-10-11T09:12:03Z", "reason": "health probe failed:
+  …"}`. They also carry `traffic`: `{"active_connections", "bytes", "busy"}`.
+
+Because the relay is part of `piceli access`, a leftover `piceli access`
+holding a forward's port shows as `holder: piceli-server` in a port
+conflict, and `piceli access stop --stale` stops it (and its `kubectl` with
+it). The dashboard's own forwards (`observe serve`) keep the plain
+`kubectl` behaviour.
 
 `piceli access ui` (and `--ui`) keeps its forward through an API outage: a
 `kubectl port-forward` that exits is restarted with a backoff capped at 30

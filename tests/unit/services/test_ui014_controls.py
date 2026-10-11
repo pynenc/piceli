@@ -184,6 +184,8 @@ def test_cluster_projection_whitelists_status_and_shows_k3s_restart(
             "health": "degraded",
             "last_poll": "2026-10-01T09:00:00Z",
             "poll_failures": 2,
+            "last_error": "gitops-git-failed",
+            "last_error_detail": "shop: git ls-remote failed (exit 128): bad token",
         },
         "ui": {"health": "healthy", "token": "never-expose"},
     }
@@ -192,6 +194,7 @@ def test_cluster_projection_whitelists_status_and_shows_k3s_restart(
     assert view["registry"]["storage"]["used_bytes"] == 1024
     assert view["registry"]["storage"]["used_source"] is None
     assert view["controller"]["poll_failures"] == 2
+    assert view["controller"]["last_error_detail"].endswith("bad token")  # 0.19
     assert "never-expose" not in str(view)
 
 

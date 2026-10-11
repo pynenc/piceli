@@ -272,3 +272,20 @@ def test_ui_serve_reaps_orphans_before_serving(
     assert reaped == [tmp_path / "state" / "forwards"]
     assert len(served) == 1
     assert (tmp_path / "state").stat().st_mode & 0o777 == 0o700
+
+
+def test_a_zombie_has_no_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reaped forward whose parent died stays a zombie until init waits for
+    it (seen on CI runners): it has exited, so it is not a live process."""
+    import piceli.k8s.owned_processes as owned
+
+    monkeypatch.setattr(owned.sys, "platform", "linux")
+    rest = " ".join(["0"] * 19) + " 12345 0 0"
+    for pid, state in ((41, "S"), (42, "Z")):
+        (tmp_path / str(pid)).mkdir()
+        (tmp_path / str(pid) / "stat").write_text(f"{pid} (kubectl) {state} {rest}")
+        (tmp_path / str(pid) / "cmdline").write_bytes(b"kubectl\0port-forward\0")
+    assert process_identity(41, proc=tmp_path) is not None
+    assert process_identity(42, proc=tmp_path) is None

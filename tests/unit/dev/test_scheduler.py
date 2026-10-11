@@ -218,3 +218,35 @@ def test_the_loop_idles_until_installed_and_rebuilds_after_a_failed_tick(
     loop(scheduler_for, stop=stop, sleep=lambda _s: None)
     # Not installed at first; then a scheduler; its failed tick rebuilds it.
     assert made["n"] >= 3 and calls.count("tick") >= 2
+
+
+def test_the_runs_git_credentials_follow_the_controllers(tmp_path: Any) -> None:
+    from piceli.dev.scheduler import git_credentials_of
+
+    secret = tmp_path / "git"
+    secret.mkdir()
+    (secret / "username").write_text("x-access-token\n")
+    (secret / "password").write_text("token-1\n")
+    read = git_credentials_of(
+        secret,
+        ["https://github.com/Org/Shop.git", "git@github.com:org/lib.git", "/local"],
+    )
+    assert read() == (
+        "x-access-token",
+        "token-1",
+        ["https://github.com/org/lib", "https://github.com/org/shop"],
+    )
+    port = FakePort([])
+    pushed: list[tuple[str, str, list[str]]] = []
+    port.put_git_secret = lambda *args: pushed.append(args) or True  # type: ignore[attr-defined]
+    clock = {"now": 1000.0}
+    scheduler = Scheduler(
+        port, _dev(), clock=lambda: clock["now"], git_credentials=read
+    )
+    scheduler.tick()
+    scheduler.tick()  # within a minute: not read again
+    (secret / "password").write_text("token-2\n")  # rotated
+    clock["now"] += 61
+    scheduler.tick()
+    assert [args[1] for args in pushed] == ["token-1", "token-2"]
+    assert git_credentials_of(None, [])() is None

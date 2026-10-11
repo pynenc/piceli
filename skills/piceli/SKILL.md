@@ -3,7 +3,7 @@ name: piceli
 description: Deploy and operate Kubernetes apps described as typed Python with Piceli, safely, from an agent. Covers installing piceli, describing an App and a Pipeline, rendering without a cluster, planning and showing the plan to the owner, deploying only with the hash the owner approved (or inside the owner's declared auto_approve policy), checking status and access, diagnosing failures with `piceli explain` and the JSON output contract, resuming interrupted runs and rolling back. Use when a project imports piceli or has a Pipeline or release.toml, or when asked to deploy, plan, roll back or debug a Piceli release.
 license: MIT
 metadata:
-  piceli-version: "0.18"
+  piceli-version: "0.19"
 ---
 
 # Piceli
@@ -238,11 +238,20 @@ When the cluster declares `dev=DevBuilds(...)`, compile and test there, not
 on the owner's laptop: `piceli dev run --cluster MODULE:ATTR --json --quiet
 -- cargo test -p NAME --lib` ships your working tree (`--ref REF` for a
 commit, `--source NAME=PATH@REF` for a sibling repository) and prints
-`state`, `exit_code`, `tests`, `durations` and `log_tail`. The owner approved
-these runs once (the declaration); run as many as your task needs with your
-own `PICELI_DEV_REQUESTER`. Exit 1 with `dev-command-failed` is your code:
-read `log_tail`, fix, run again. `piceli dev status` shows the queue. Never
-change the declaration, never cancel another requester's run.
+`state`, `exit_code`, `tests`, `durations`, `first_error` and `log_tail`.
+Only the Git delta travels (kilobytes); every worktree of a repository
+shares its warm lineages. The owner approved these runs once (the
+declaration); run as many as your task needs with your own
+`PICELI_DEV_REQUESTER`. Exit 1 with `dev-command-failed` is your code: read
+`first_error`, fix, run again. A corrupted cached crate is cleared and the
+command retried by itself (`cache.repaired`); with `cache.suspect`, ask the
+owner before `piceli dev cache clear --lineage NAME`. `piceli dev status`
+shows the queue. Never change the declaration, never cancel another
+requester's run.
+
+`piceli gitops wait ENV COMMIT` fails with `cause: gitops-git-failed` and
+`controller_error` when the controller cannot read Git (an expired token):
+tell the owner, do not retry. A failed check's reason is in `failed_checks`.
 
 ## Safe to run without asking
 

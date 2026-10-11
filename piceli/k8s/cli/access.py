@@ -249,7 +249,9 @@ def status(
         except Exception:  # detail may contain credentials
             reader_error = "status-cluster-unreadable"
     try:
-        document = collect_status(resolved, reader, reader_error=reader_error)
+        document = collect_status(
+            resolved, reader, reader_error=reader_error, names=_names(target)
+        )
     finally:
         close = getattr(reader, "close", None)
         if close is not None:
@@ -439,6 +441,14 @@ def access(
             "and print its launch URL, as `piceli access ui` does",
         ),
     ] = False,
+    forward: Annotated[
+        bool,
+        typer.Option(
+            "--forward",
+            help="Port-forward every service, also those the environment exposes "
+            "on the tailnet (Access(tailnet=True))",
+        ),
+    ] = False,
 ) -> None:
     """Forward the app's declared ports to 127.0.0.1 and keep them healthy.
 
@@ -464,7 +474,36 @@ def access(
     if unknown:
         say(f"piceli: unknown forward id(s): {', '.join(unknown)}")
         reject("access-unknown-forward", unknown=unknown)
-    if not selected:
+    # 0.19: services the environment exposes on the tailnet are reached there
+    # (no forward through the API server); one not ready yet is forwarded.
+    wanted = {item.id for item in selected}
+    tailnet = [] if forward else [t for t in resolved.tailnet if t["id"] in wanted]
+    on_tailnet = [t for t in tailnet if t["ready"]]
+    for item in tailnet:
+        if not item["ready"]:
+            say(
+                f"piceli: {item['id']} has no tailnet address yet (is the Tailscale "
+                "operator installed?); forwarding it instead"
+            )
+    direct = {t["id"] for t in on_tailnet}
+    selected = tuple(item for item in selected if item.id not in direct)
+    if not selected and on_tailnet and not ui:
+        if as_json:
+            emit_json(
+                {
+                    "event": "started",
+                    "app": resolved.name,
+                    "namespace": resolved.namespace,
+                    "forwards": [],
+                    "tailnet": on_tailnet,
+                }
+            )
+        else:
+            typer.echo(f"{resolved.name} on the tailnet (no forward needed):")
+            for item in on_tailnet:
+                typer.echo(f"  {item['id']:<12} {item['url']}")
+        return
+    if not selected and not ui:
         reject("access-none-declared")
     executable = shutil.which(kubectl)
     if executable is None:
@@ -511,6 +550,8 @@ def access(
         owner_resolver=LivePodResolver(reader) if reader is not None else None,
         registry=registry,
         watchdog=ParentWatchdog(),
+        # 0.19: a forward moving bytes is healthy (piceli.k8s.forward_relay).
+        relay=True,
     )
     server = None
     failed = False
@@ -537,6 +578,8 @@ def access(
             "dashboard": f"http://127.0.0.1:{dashboard}" if dashboard else None,
             # Added in 0.14.7 (--ui): the in-cluster UI's launch URL.
             **({"ui": launch} if launch else {}),
+            # Added in 0.19.0: services reached on the tailnet, not forwarded.
+            **({"tailnet": on_tailnet} if on_tailnet else {}),
         }
         if as_json:
             emit_json(started)
@@ -551,6 +594,8 @@ def access(
                 )
             for conflict in conflicts:
                 typer.echo(f"  skipped: {conflict.describe()}")
+            for item in on_tailnet:
+                typer.echo(f"  {item['id']:<12} {item['url']}  (tailnet)")
             if dashboard:
                 typer.echo(f"  dashboard    http://127.0.0.1:{dashboard}")
             if launch:

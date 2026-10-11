@@ -38,7 +38,7 @@ export type EnvironmentCluster = {
 /** The last checks a run of the environment executed (a rollout or a verification). */
 export type EnvironmentChecksReport = {
   state: string; passed?: number | null; total?: number | null; at?: string | null; trigger?: string | null;
-  run_id?: string | null; action?: string | null; results: { name?: string | null; passed: boolean; code?: string | null }[];
+  run_id?: string | null; action?: string | null; results: { name?: string | null; passed: boolean; code?: string | null; detail?: string | null }[];
 };
 /** The plan an environment waits on: exactly the hash an approval names. */
 export type PendingPlan = {
@@ -47,7 +47,7 @@ export type PendingPlan = {
   create_namespace: boolean; stop: string[]; images: Record<string, string>;
 };
 /** A checks-only run against the running release: nothing applied or rolled back. */
-export type Verification = { state: string; trigger?: string | null; checks_hash?: string | null; at?: string | null; failed: { check?: string | null; code?: string | null }[] };
+export type Verification = { state: string; trigger?: string | null; checks_hash?: string | null; at?: string | null; failed: { check?: string | null; code?: string | null; detail?: string | null }[] };
 export type Source = { name: string; url?: string | null; refs: Record<string, string>; last_poll?: string | null; error?: string | null };
 type Controller = { state?: string | null; last_poll?: string | null; poll_seconds?: number | null; message?: string | null; restarts?: number | null; status_is_stale?: boolean } | null;
 type Overview = { configured: boolean; controller: Controller; sources: Source[]; environments: Environment[] };

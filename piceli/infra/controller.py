@@ -72,6 +72,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -91,6 +92,7 @@ from piceli.gitops.config import (
     backoff,
 )
 from piceli.gitops.controller import (
+    CHECK_DETAIL_CHARS,
     ROLLED_BACK,
     _iso,
     _seconds,
@@ -698,6 +700,24 @@ def _running_images(record: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _failing(record: Mapping[str, Any], reason: str) -> str:
+    """``; failing: name: detail, ...`` of a check failure's checks (0.19)."""
+    checks = record.get("checks") or {}
+    if (
+        reason not in {"pipeline-checks-failed", ROLLED_BACK}
+        or checks.get("state") != "failed"
+    ):
+        return ""
+    found = [
+        f"{item.get('name')}: {item['detail']}"
+        if item.get("detail")
+        else str(item.get("name"))
+        for item in checks.get("results") or ()
+        if not item.get("passed")
+    ]
+    return f"; failing: {', '.join(found)}" if found else ""
+
+
 class CompositionController:
     """Poll every source and keep each environment at its revision.
 
@@ -772,6 +792,12 @@ class CompositionController:
         from piceli.gitops.otel import ControllerTelemetry
 
         self.telemetry = telemetry or ControllerTelemetry.disabled(state_dir)
+        #: Reads a GitHub token's expiry (replaced in tests: no network).
+        from piceli.gitops.token_expiry import github_token_expiry
+
+        self.token_expiry: Callable[[Path | None], datetime | None] = (
+            github_token_expiry
+        )
         self.telemetry.attach(self)  # closes runs a crash interrupted
 
     # ------------------------------------------------------------ helpers
@@ -875,7 +901,8 @@ class CompositionController:
                 next_attempt_at=None,
             )
             self.log(
-                f"{record['branch']}: failed ({reason}); waiting for a new revision"
+                f"{record['branch']}: failed ({reason}){_failing(record, reason)}; "
+                "waiting for a new revision"
             )
             return
         delay = backoff(self.config, attempts)  # type: ignore[arg-type]
@@ -886,7 +913,9 @@ class CompositionController:
             reason=reason,
             next_attempt_at=self.clock() + delay,
         )
-        self.log(f"{record['branch']}: {reason}; retry in {delay}s")
+        self.log(
+            f"{record['branch']}: {reason}{_failing(record, reason)}; retry in {delay}s"
+        )
 
     def _remember_attempt(
         self, record: dict[str, Any], reason: str, attempt: int
@@ -1356,6 +1385,30 @@ class CompositionController:
             self.log(f"{name}: no longer placed there; removing what Piceli created")
 
     # ------------------------------------------------------------ requests
+    def _cache_clear(self, body: Mapping[str, Any]) -> None:
+        """Empty the cluster build cache (``piceli gitops cache clear``, 0.19.0).
+
+        Requests run between steps, so no build Job uses the cache claim.
+        """
+        clear = getattr(self.ports.builder, "clear_cache", None)
+        if clear is None:
+            raise GitOpsError(
+                "gitops-request-invalid",
+                "this controller builds nothing in the cluster (no --builder-image)",
+            )
+        crates = [str(name) for name in body.get("crates") or ()]
+        outcome = clear(crates)
+        self.state["cache_clear"] = {
+            "at": _iso(self.clock()),
+            "crates": crates,
+            "state": outcome.get("state"),
+        }
+        self.log(
+            "build cache cleared"
+            + (f" ({', '.join(crates)})" if crates else "")
+            + f": {outcome.get('state')}"
+        )
+
     def _requests(self) -> None:
         try:
             pending = self.channel.requests()
@@ -1379,6 +1432,8 @@ class CompositionController:
                     self._sync(body)
                 elif kind in {"stop", "start"}:
                     self._stop_request(body, start=kind == "start")
+                elif kind == "cache-clear":
+                    self._cache_clear(body)
                 else:
                     raise GitOpsError("gitops-request-invalid", "unknown request kind")
             except GitOpsError as error:
@@ -2251,6 +2306,12 @@ class CompositionController:
                     "name": str(item.get("name") or "check")[:128],
                     "passed": bool(item.get("passed")),
                     **({"code": str(item["code"])[:64]} if item.get("code") else {}),
+                    # 0.19: why a check failed (its returned reason).
+                    **(
+                        {"detail": str(item["detail"])[:CHECK_DETAIL_CHARS]}
+                        if not item.get("passed") and item.get("detail")
+                        else {}
+                    ),
                 }
                 for item in results
             ],
@@ -2325,7 +2386,15 @@ class CompositionController:
             last_action="verified",
             verification=verification,
         )
-        names = ", ".join(item["check"] for item in verification["failed"]) or "checks"
+        names = (
+            ", ".join(
+                f"{item['check']}: {item['detail']}"
+                if item.get("detail")
+                else item["check"]
+                for item in verification["failed"]
+            )
+            or "checks"
+        )
         self.log(
             f"{record['branch']}: verification failed ({names}); rolled nothing, "
             "the release keeps running"
@@ -2671,11 +2740,18 @@ class CompositionController:
             failed += self._poll_source(key, now)
         if self.repo is not None:
             failed += self._load_composition(now)
+        self._check_tokens(now)
         if failed:
             self.state["last_error"] = "gitops-git-failed"
             self.state["poll_failures"] = int(self.state.get("poll_failures") or 0) + 1
+            # 0.19: why, masked (the first failing source's Git message).
+            first = (self.state["sources"].get(failed[0]) or {}).get(
+                "last_error_detail"
+            )
+            self.state["last_error_detail"] = f"{failed[0]}: {first}" if first else None
         else:
             self.state["last_error"] = None
+            self.state["last_error_detail"] = None
             self.state["poll_failures"] = 0
         if self._composition is None:  # nothing to deploy before the first import
             return self._publish()
@@ -2904,14 +2980,69 @@ class CompositionController:
             "measured_epoch": now,
         }
 
+    def _check_tokens(self, now: float) -> None:
+        """Warn before a GitHub token expires (0.19.0, best effort)."""
+        from piceli.gitops import token_expiry
+
+        record = self.state.setdefault("token", {})
+        if now - float(record.get("checked_epoch") or 0) < token_expiry.CHECK_SECONDS:
+            return
+        record["checked_epoch"] = now
+        found = None
+        for key in sorted(self.sources.remotes):
+            remote = self.sources.remotes[key]
+            if not token_expiry.is_github(remote.url):
+                continue
+            expires = self.token_expiry(remote.credentials_dir)
+            if expires is not None and (found is None or expires < found[1]):
+                found = (key, expires)
+        if found is None:
+            record.update(expires_at=None, source=None)
+            return
+        key, expires = found
+        record.update(expires_at=_iso(expires.timestamp()), source=key)
+        days = (expires.timestamp() - now) / 86400
+        if days < token_expiry.WARN_DAYS:
+            self.log(
+                f"source {key}: the Git token expires at {record['expires_at']} "
+                "(gitops-token-expiring): renew it in the credentials Secret"
+            )
+
+    def _warnings(self, now: float) -> list[dict[str, Any]]:
+        from piceli.gitops import token_expiry
+
+        record = self.state.get("token") or {}
+        expires = record.get("expires_at")
+        if not expires:
+            return []
+        at = datetime.strptime(expires, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+        if (at.timestamp() - now) / 86400 >= token_expiry.WARN_DAYS:
+            return []
+        return [
+            {
+                "code": "gitops-token-expiring",
+                "source": record.get("source"),
+                "expires_at": expires,
+            }
+        ]
+
     def _poll_source(self, key: str, now: float) -> list[str]:
         """``git ls-remote`` one source; ``[key]`` when it failed."""
         entry = self.state["sources"].setdefault(key, {})
         try:
             refs = self.sources.ls_remote(key)
         except GitOpsError as error:
-            entry["last_error"] = error.code
+            detail = str(error)
+            if entry.get("last_error_detail") != detail:
+                # Once per change, not every poll (0.19: a revoked token was
+                # a 30-hour silent outage).
+                self.log(f"source {key}: {detail} ({error.code})")
+                self.telemetry.git_failed(key, error.code, detail)
+            entry.update(last_error=error.code, last_error_detail=detail)
             return [key]
+        if entry.get("last_error"):
+            self.log(f"source {key}: git works again")
+        entry.pop("last_error_detail", None)
         self.refs[key] = refs
         entry.update(
             url=self.sources.sources[key].url,
@@ -2955,7 +3086,7 @@ class CompositionController:
                     "repository but has another URL",
                 )
         except (CompositionError, GitOpsError) as error:
-            entry.update(error=error.code)
+            entry.update(error=error.code, error_detail=str(error))
             if isinstance(error, CompositionError):
                 entry["failed"] = commit
             self.log(f"composition at {commit[:12]}: {error} ({error.code})")
@@ -2963,7 +3094,13 @@ class CompositionController:
         if self._composition is not None:
             self.log(f"composition {settings.name}@{commit[:12]}: re-rendering")
         self._composition = composition
-        entry.update(commit=commit, failed=None, error=None, loaded_at=_iso(now))
+        entry.update(
+            commit=commit,
+            failed=None,
+            error=None,
+            error_detail=None,
+            loaded_at=_iso(now),
+        )
         failed: list[str] = []
         for source in composition.sources:
             if source.key not in self.sources.remotes:
@@ -3039,6 +3176,13 @@ class CompositionController:
                 "heartbeat_at": self.heartbeat_at,
                 "heartbeat_seconds": HEARTBEAT_SECONDS,
                 "last_error": self.state.get("last_error"),
+                # Added in 0.19.0: the masked cause (Git's message).
+                "last_error_detail": self.state.get("last_error_detail"),
+                # Added in 0.19.0: gitops-token-expiring (a GitHub token
+                # that expires within 7 days).
+                "warnings": self._warnings(self.clock()),
+                # Added in 0.19.0: the last `piceli gitops cache clear`.
+                "cache_clear": self.state.get("cache_clear"),
                 "poll_failures": int(self.state.get("poll_failures") or 0),
                 # Added in 0.14.6: the registry claim's use measured by the
                 # controller (``du`` in the registry pod), for the UI.
@@ -3071,7 +3215,10 @@ class CompositionController:
                     "refs": value.get("refs") or {},
                     "last_poll": value.get("last_poll"),
                     **(
-                        {"error": value["last_error"]}
+                        {
+                            "error": value["last_error"],
+                            "error_detail": value.get("last_error_detail"),
+                        }
                         if value.get("last_error")
                         else {}
                     ),

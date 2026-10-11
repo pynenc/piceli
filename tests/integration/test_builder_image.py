@@ -95,6 +95,15 @@ def test_builder_has_the_tools_c_builds_need(builder_image: str) -> None:
     assert output.strip() == ""
 
 
+def test_builder_lints_rust_with_clippy_and_rustfmt(builder_image: str) -> None:
+    """0.19 (IH item 3): agents lint on the builder, read-only toolchain."""
+    output = _run(
+        "docker", "run", "--rm", "-e", "HOME=/tmp", builder_image, "sh", "-c",
+        "cargo clippy --version && cargo fmt --version",
+    )  # fmt: skip
+    assert "clippy" in output and "rustfmt" in output
+
+
 def test_builder_builds_a_crate_whose_build_script_runs_cmake_and_make(
     builder_image: str, tmp_path: Path
 ) -> None:
