@@ -4,8 +4,11 @@ Git runs as a subprocess with no terminal prompt. Credentials come only from
 a directory of files (the mounted Secret): ``username`` + ``password`` for
 HTTPS (handed to Git by a credential helper that reads the files, so the
 values never appear in a command line or the environment), or
-``ssh-privatekey`` (+ ``known_hosts``) for SSH. Git's own output is never
-printed or recorded: a failure is ``gitops-git-failed`` with the exit code.
+``ssh-privatekey`` (+ ``known_hosts``) for SSH. A failure is
+``gitops-git-failed`` with the exit code and, since 0.19.0, the last lines
+of Git's stderr masked (:func:`mask_git_output`: the credential values, URL
+user info and token-like strings removed), so "Invalid username or token"
+reaches the status and the log.
 
 Importing this module is side-effect free.
 """
@@ -13,11 +16,12 @@ Importing this module is side-effect free.
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,6 +31,20 @@ from piceli.gitops import GitOpsError
 
 Runner = Callable[..., subprocess.CompletedProcess[bytes]]
 GIT_TIMEOUT_SECONDS = 300
+#: Git's stderr kept in an error: its last lines, each and all bounded.
+GIT_ERROR_LINES = 3
+GIT_ERROR_CHARS = 400
+_USERINFO = re.compile(r"(://)[^/@\s]+@")
+
+
+def mask_git_output(text: str, secrets: Iterable[str] = ()) -> str:
+    """The last :data:`GIT_ERROR_LINES` non-empty lines of Git's output with
+    ``secrets``, URL user info and token-like strings replaced."""
+    from piceli.pipeline.prerollout import scrub
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    kept = _USERINFO.sub(r"\1<redacted>@", "\n".join(lines[-GIT_ERROR_LINES:]))
+    return scrub(kept, secrets).replace("\n", " | ")[:GIT_ERROR_CHARS]
 
 
 @dataclass(frozen=True)
@@ -142,11 +160,30 @@ class GitRemote:
                     "gitops-git-failed", f"git {what} could not run or timed out"
                 ) from None
         if result.returncode != 0:
-            # Never Git's stderr: it can echo URLs and server messages.
+            # Git's stderr can echo URLs and credentials: masked, bounded.
+            stderr = mask_git_output(
+                (result.stderr or b"").decode("utf-8", "replace"), self._secrets()
+            )
+            message = f"git {what} failed (exit {result.returncode})"
             raise GitOpsError(
-                "gitops-git-failed", f"git {what} failed (exit {result.returncode})"
+                "gitops-git-failed",
+                f"{message}: {stderr}" if stderr else message,
+                details={"exit": result.returncode, "stderr": stderr},
             )
         return result.stdout
+
+    def _secrets(self) -> list[str]:
+        """The credential values, to mask in Git's output."""
+        directory = self.credentials_dir
+        found: list[str] = []
+        if directory is None:
+            return found
+        for name in ("username", "password"):
+            try:
+                found.append((directory / name).read_text().strip())
+            except OSError:
+                pass
+        return found
 
     # ------------------------------------------------------------ commands
     def ls_remote(self) -> RemoteRefs:

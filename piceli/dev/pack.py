@@ -83,6 +83,24 @@ def toplevel(path: Path) -> Path:
     return Path(found.stdout.strip())
 
 
+def repository_name(path: Path) -> str:
+    """The repository's name: its main checkout's directory, from Git's
+    common dir, shared by every worktree (a bare repository: its name
+    without ``.git``). It names the run's lineage, so all worktrees of one
+    repository build warm (0.19.0).
+
+    :raises DevError: ``dev-source-invalid``.
+    """
+    top = toplevel(path)
+    found = _git(top, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    if found is None or found.returncode != 0 or not found.stdout.strip():
+        return top.name
+    common = Path(found.stdout.strip())
+    if common.name == ".git":
+        return common.parent.name
+    return common.name[:-4] if common.name.endswith(".git") else common.name
+
+
 def resolve(path: Path, ref: str) -> str:
     """The commit ``ref`` names in the repository at ``path``.
 

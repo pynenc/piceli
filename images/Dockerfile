@@ -42,10 +42,11 @@ WORKDIR /tmp
 CMD ["piceli", "--help"]
 
 # --- builder: the controller plus the host-build tools for Rust and Python --
-# cargo (rustup, with the linux and wasm32 targets), cargo-zigbuild, zig, uv,
-# python3, sh, and what crates with C builds need (jemalloc-sys: make;
-# aws-lc-sys: cmake; pkg-config, curl, xz) and node with npm (development
-# runs of small JS tests, 0.18.0). The toolchain is read-only; cargo
+# cargo (rustup, with the linux and wasm32 targets; clippy and rustfmt since
+# 0.19.0), cargo-zigbuild, zig, uv, python3, sh, and what crates with C
+# builds need (jemalloc-sys: make; aws-lc-sys: cmake; pkg-config, curl, xz)
+# and node with npm (development runs of small JS tests, 0.18.0). The
+# toolchain is read-only; cargo
 # writes under $HOME, which the build Job points at its work directory.
 FROM controller AS builder
 LABEL org.opencontainers.image.description="Piceli cluster build Job (Rust and Python host builds)"
@@ -59,6 +60,7 @@ COPY --from=rust /usr/local/cargo/bin /usr/local/cargo/bin
 ENV RUSTUP_HOME=/usr/local/rustup \
     PATH=/usr/local/cargo/bin:$PATH
 RUN rustup target add aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu wasm32-unknown-unknown \
+    && rustup component add clippy rustfmt \
     && pip install --no-cache-dir ziglang==0.16.0 cargo-zigbuild==0.23.4 uv==0.12.22 \
     && printf '#!/bin/sh\nexec python3 -m ziglang "$@"\n' > /usr/local/bin/zig \
     && chmod 0755 /usr/local/bin/zig \

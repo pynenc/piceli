@@ -999,7 +999,15 @@ def status(
             f"  repo {controller.get('repo')} branches {','.join(controller.get('branches') or [])}"
         )
         if controller.get("last_error"):
-            say(f"  last error: {controller['last_error']}")
+            detail = controller.get("last_error_detail")
+            say(
+                f"  last error: {controller['last_error']}"
+                + (f": {detail}" if detail else "")
+            )
+    for key, source in (body.get("sources") or {}).items():
+        if source.get("error"):
+            # 0.19: Git's masked message (an expired token, a wrong URL).
+            say(f"  source {key}: {source.get('error_detail') or source['error']}")
     for branch, env in (body.get("envs") or {}).items():
         line = f"  {branch}: {env.get('state')} {str(env.get('commit') or '')[:12]}"
         if env.get("namespace"):
@@ -1010,7 +1018,12 @@ def status(
             line += f" ({env['reason']})"
         verification = env.get("verification") or {}
         if env.get("health") == "degraded":
-            failing = [item.get("check") for item in verification.get("failed") or ()]
+            failing = [
+                f"{item.get('check')} ({item['detail']})"
+                if item.get("detail")
+                else str(item.get("check"))
+                for item in verification.get("failed") or ()
+            ]
             line += "; degraded, failing checks: " + (", ".join(failing) or "?")
         elif env.get("last_action") == "verified":
             line += f"; verified ({verification.get('trigger')}), rolled nothing"
@@ -1021,7 +1034,19 @@ def status(
                 f"{checks.get('total')} at {checks.get('at')}"
             )
             if checks.get("failed"):
-                line += f" (failing: {', '.join(checks['failed'])})"
+                details = {
+                    item.get("name"): item.get("detail")
+                    for item in checks.get("results") or ()
+                    if not item.get("passed")
+                }
+                line += (
+                    " (failing: "
+                    + ", ".join(
+                        f"{name}: {details[name]}" if details.get(name) else name
+                        for name in checks["failed"]
+                    )
+                    + ")"
+                )
         say(line)
         for cluster, entry in (env.get("clusters") or {}).items():
             # 0.15: one line per cluster of an environment on several.
@@ -1111,6 +1136,16 @@ def wait(
             else ""
         )
     )
+    error = result.get("controller_error") or {}
+    if error.get("detail"):
+        # 0.19: the controller cannot read Git; nothing new will deploy.
+        say(f"  controller: {error['detail']} ({error['reason']})")
+    failing = [
+        f"{item['name']}: {item['detail']}" if item.get("detail") else item["name"]
+        for item in result.get("failed_checks") or ()
+    ]
+    if failing:
+        say("  failing checks: " + "; ".join(failing))
     if as_json:
         emit_json(result)
     if result["state"] == "approval-required":

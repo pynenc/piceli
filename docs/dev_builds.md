@@ -140,7 +140,9 @@ cause. An image without `git` gets the whole tree, as in 0.18.
 
 Options: `--worktree PATH` (default: here, without `--ref`), `--ref`,
 `--repo PATH` (the root repository with `--ref`, default here),
-`--name` (its directory name in the run, default the repository's),
+`--name` (its directory name in the run and its lineage's key; default,
+since 0.19.0, the repository's main checkout directory from Git's common
+dir, so every worktree of a repository builds warm on the same lineages),
 `--cwd` (where the command runs inside it), `--source NAME=PATH[@REF]`
 (repeat), `--profile`, `--priority round|agent|normal`, `--requester`,
 `--artifact GLOB` (repeat; `target/...` is the cargo target directory),

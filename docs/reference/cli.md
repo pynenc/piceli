@@ -994,7 +994,7 @@ Run COMMAND on the builder for a commit (--ref) or a working tree (default: here
 | `--ref` | text |  | Build this commit (branch, tag or sha) of the repository |
 | `--worktree` | path |  | Build this working tree as it is on disk (uncommitted and new files; not Git's ignored ones). The default without --ref: here |
 | `--repo` | path | `.` | The root source's repository with --ref (default: here) |
-| `--name` | text |  | The root source's directory name (default: the repository's) |
+| `--name` | text |  | The root source's name and lineage (default: the repository's main checkout directory, shared by its worktrees) |
 | `--cwd` | text |  | Where the command runs, inside the root source (default: your directory's place in it) |
 | `--source` | text (repeatable) |  | A sibling source NAME=PATH@REF (repeat); it sits next to the root, as ../NAME |
 | `--profile` | text |  | A DevProfile name (default: the first) |

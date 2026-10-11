@@ -296,6 +296,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`gitops-step-failed`](#error-gitops-step-failed) | gitops | yes |
 | [`gitops-target-invalid`](#error-gitops-target-invalid) | gitops | no |
 | [`gitops-target-required`](#error-gitops-target-required) | gitops | no |
+| [`gitops-token-expiring`](#error-gitops-token-expiring) | gitops | no |
 | [`grant-expired`](#error-grant-expired) | build-spec | yes |
 | [`grant-mismatch`](#error-grant-mismatch) | artifacts-input | yes |
 | [`heavy-command-empty`](#error-heavy-command-empty) | maintenance | no |
@@ -4188,9 +4189,9 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-gitops-git-failed)=
 ### `gitops-git-failed`
 
-**Git command failed.** `git ls-remote`, `clone`, `fetch` or `checkout` failed or timed out (wrong URL, credentials, host key, network, or a commit missing from the mirror). Git's output is not recorded.
+**Git command failed.** `git ls-remote`, `clone`, `fetch` or `checkout` failed or timed out (wrong URL, credentials, host key, network, or a commit missing from the mirror). Since 0.19.0 the message carries the last lines of Git's stderr with the credentials masked (`last_error_detail` in `piceli gitops status`, the controller's log, the `piceli.controller.git.failed` event); `piceli gitops wait` for a commit the controller cannot see fails with it after two failed polls.
 
-- **Fix:** Check the URL, the credentials Secret (and `known_hosts` for SSH) and the network from the cluster; the controller retries on its next poll.
+- **Fix:** Read the message (for example `Invalid username or token`: renew the token in the credentials Secret); otherwise check the URL, `known_hosts` for SSH and the network from the cluster. The controller retries on its next poll.
 - **Retry-safe:** yes
 
 (error-gitops-image-unpinned)=
@@ -4335,6 +4336,14 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **No cluster or state directory named.** The command needs a cluster (`--kubeconfig FILE --context NAME`; `gitops run` in its pod: `--service-account`) or a local controller (`--state-dir`), and got none or both.
 
 - **Fix:** Pass exactly one: `--kubeconfig` with `--context`, or `--state-dir`.
+- **Retry-safe:** no
+
+(error-gitops-token-expiring)=
+### `gitops-token-expiring`
+
+**Git token expires soon.** A warning, not a failure (0.19.0): GitHub reports that the token in the controller's credentials Secret expires within 7 days (`controller.warnings` in `piceli gitops status`, and the controller's log). Once it expires every poll fails with `gitops-git-failed`.
+
+- **Fix:** Create a new token and update the `password` of the credentials Secret (`--credentials-secret`, in the controller's namespace) before `expires_at`; the controller reads it on its next poll.
 - **Retry-safe:** no
 
 (error-rollout-stopped)=

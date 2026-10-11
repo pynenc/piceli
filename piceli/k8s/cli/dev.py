@@ -128,7 +128,7 @@ def run(
         str | None,
         typer.Option(
             "--name",
-            help="The root source's directory name (default: the repository's)",
+            help="The root source's name and lineage (default: the repository's main checkout directory, shared by its worktrees)",
         ),
     ] = None,
     cwd: Annotated[
@@ -197,7 +197,7 @@ def run(
     from piceli.dev.client import run as run_on
     from piceli.dev.cluster import DevCluster
     from piceli.dev.model import DevError
-    from piceli.dev.pack import parse_source, toplevel
+    from piceli.dev.pack import parse_source, repository_name, toplevel
 
     declared = load_cluster(cluster)
     try:
@@ -215,7 +215,7 @@ def run(
         from piceli.dev.pack import SourceRequest
 
         request = RunRequest(
-            root=SourceRequest(name or root_dir.name, root_dir, ref),
+            root=SourceRequest(name or repository_name(root_dir), root_dir, ref),
             command=list(command),
             extras=[parse_source(text) for text in source or ()],
             cwd=where,

@@ -118,7 +118,7 @@ it('keeps incomplete selected commit evidence unknown and does not derive extern
 });
 
 it('shows the controller’s last action and a failed checks verification without rolling', () => {
-  const verified: Environment = { ...environment, health: 'degraded', last_action: 'verified', verification: { state: 'failed', trigger: 'checks-changed', checks_hash: 'e'.repeat(64), at: '2026-10-01T09:02:00Z', failed: [{ check: 'http-ready', code: 'check-failed' }] } };
+  const verified: Environment = { ...environment, health: 'degraded', last_action: 'verified', verification: { state: 'failed', trigger: 'checks-changed', checks_hash: 'e'.repeat(64), at: '2026-10-01T09:02:00Z', failed: [{ check: 'http-ready', code: 'check-failed', detail: 'stale source for k8s.cluster' }] } };
   open({ selection: { kind: 'environment', name: verified.name }, environment: verified, component: undefined, requestedComponent: null });
   const inspector = within(screen.getByRole('complementary', { name: 'Selected environment' }));
   expect(inspector.getByText('Last action')).toBeTruthy();
@@ -126,6 +126,7 @@ it('shows the controller’s last action and a failed checks verification withou
   const notice = inspector.getByText('Checks verification failed').closest('.notice')!;
   expect(notice.textContent).toContain('http-ready');
   expect(notice.textContent).toContain('check-failed');
+  expect(notice.textContent).toContain('stale source for k8s.cluster');
   expect(notice.textContent).toContain('nothing was rolled back');
 });
 

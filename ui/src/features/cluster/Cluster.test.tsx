@@ -23,3 +23,9 @@ it('reports unknown registry use as not reported instead of a node filesystem', 
   expect(await screen.findByText('registry-data · Bound · 20Gi')).toBeTruthy();
   expect(screen.getByText('Not reported')).toBeTruthy();
 });
+
+it('names the controller’s last error with Git’s message', async () => {
+  open({ ...base, controller: { health: 'degraded', last_poll: null, poll_failures: 3, last_error: 'gitops-git-failed', last_error_detail: 'shop: git ls-remote failed (exit 128): Invalid username or token' } });
+  expect(await screen.findByText('gitops-git-failed')).toBeTruthy();
+  expect(screen.getByText(/Invalid username or token/)).toBeTruthy();
+});

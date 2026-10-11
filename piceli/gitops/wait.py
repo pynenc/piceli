@@ -23,6 +23,9 @@ WAIT_SCHEMA = "piceli.gitops-wait.v1"
 COMMIT = re.compile(r"[0-9a-f]{7,64}")
 #: Outcomes that end a wait, besides ``timed-out``.
 FINAL = ("deployed", "failed", "approval-required", "superseded", "stopped")
+#: Polls in a row that failed to read Git before a wait for a commit the
+#: controller has not seen fails (one failed poll may be a network blip).
+GIT_FAILED_POLLS = 2
 
 
 def _iso(value: Any) -> str | None:
@@ -50,7 +53,8 @@ def last_error(record: Mapping[str, Any]) -> dict[str, Any] | None:
 
 def summary(document: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
     """Per environment: ``state``, ``commit``, ``revision``, ``stage``,
-    ``attempt``, ``next_retry_at``, ``last_error``, ``deployed_commit``."""
+    ``attempt``, ``next_retry_at``, ``last_error``, ``deployed_commit``,
+    ``failed_checks`` (0.19.0)."""
     found: dict[str, dict[str, Any]] = {}
     for name, value in sorted(_dict(_dict(document).get("envs")).items()):
         record = _dict(value)
@@ -69,8 +73,37 @@ def summary(document: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
             "deployed_revision": record.get("deployed_revision"),
             "health": record.get("health"),
             "updated_at": record.get("updated_at"),
+            "failed_checks": failed_checks(record),
         }
     return found
+
+
+def failed_checks(record: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """``[{name, code, detail}]`` of the environment's failing checks (0.19.0):
+    a degraded verification's, else the last run's."""
+    verification = _dict(record.get("verification"))
+    if record.get("health") == "degraded" and verification.get("failed"):
+        return [
+            {
+                "name": item.get("check"),
+                "code": item.get("code"),
+                "detail": item.get("detail") or None,
+            }
+            for item in verification["failed"]
+            if isinstance(item, Mapping)
+        ]
+    checks = _dict(record.get("checks"))
+    if checks.get("state") != "failed":
+        return []
+    return [
+        {
+            "name": item.get("name"),
+            "code": item.get("code"),
+            "detail": item.get("detail") or None,
+        }
+        for item in checks.get("results") or ()
+        if isinstance(item, Mapping) and not item.get("passed")
+    ]
 
 
 def _names(commit: str, *values: Any) -> bool:
@@ -90,11 +123,22 @@ def outcome(
     ``seen``: the environment named ``commit`` in an earlier read of this
     wait (``body["seen"]`` says whether it does now); a revision that moved
     on before deploying it is then ``superseded``, while one that never
-    named it yet (the controller has not polled since the push) waits.
+    named it yet (the controller has not polled since the push) waits,
+    unless the controller could not read Git in its last
+    :data:`GIT_FAILED_POLLS` polls (0.19.0): the commit cannot arrive, so
+    the wait fails at once, ``stage: fetch``, with Git's masked
+    message under ``controller_error`` (also attached to any other outcome).
     """
     record = _dict(_dict(_dict(document).get("envs")).get(env))
     view = summary({"envs": {env: record}}).get(env, {})
     body: dict[str, Any] = {"env": env, "commit": commit, **view}
+    controller = _dict(_dict(document).get("controller"))
+    git_failing = controller.get("last_error") == "gitops-git-failed"
+    if git_failing:
+        body["controller_error"] = {
+            "reason": "gitops-git-failed",
+            "detail": controller.get("last_error_detail"),
+        }
     wanted = _names(commit, record.get("revision"), record.get("commit"))
     running = _names(
         commit, record.get("deployed_revision"), record.get("deployed_commit")
@@ -117,4 +161,7 @@ def outcome(
         return None, body
     if seen:
         return "superseded", body
+    if git_failing and int(controller.get("poll_failures") or 0) >= GIT_FAILED_POLLS:
+        body["stage"], body["cause"] = "fetch", "gitops-git-failed"
+        return "failed", body
     return None, body

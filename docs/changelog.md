@@ -43,6 +43,19 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   (last ten, `{at, reason}`) and `traffic`. `access stop --stale` now
   identifies every port's holder before signalling any, so one leftover
   holding several ports is stopped through all of them.
+- **A failing Git remote is never silent.** Git's stderr, masked, is kept in
+  `gitops-git-failed` (`controller.last_error_detail`,
+  `sources.*.error_detail`, `gitops status`, the UI's Cluster page), logged
+  once per change, and emitted as `piceli.controller.git.failed`; `gitops
+  wait` for a commit the controller cannot see fails after two failed polls
+  (`stage: fetch`) with `controller_error`; a GitHub token that expires
+  within 7 days is warned (`gitops-token-expiring` in `controller.warnings`).
+- **Failed checks say why.** The check's own detail is in
+  `checks.results[].detail`, `gitops status`, `gitops wait`
+  (`failed_checks`), the controller's log and the UI.
+- **Dev runs:** the lineage name defaults to the repository's main checkout
+  (Git's common dir), so every worktree builds warm on one lineage; the
+  builder image has `clippy` and `rustfmt`.
 - **`piceli dev run` no longer leaves its packed tree behind** when it is
   stopped by SIGTERM or SIGHUP (a cancelled agent): its scratch is a tracked
   Piceli temporary directory.
