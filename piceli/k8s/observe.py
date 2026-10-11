@@ -641,9 +641,18 @@ _HEALTH_STATES = frozenset(
         "restarting",
         "conflict",
         "failed",
+        # 0.19: a probe failed while the forward moved bytes (relay mode).
+        "busy",
     }
 )
 _OCCUPIED = "loopback port is occupied by an external process"
+
+
+def _free_loopback_port() -> int:
+    """An unused loopback port for kubectl behind a relay."""
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
 
 
 def _iso(timestamp: float | None) -> str | None:
@@ -719,7 +728,8 @@ class ForwardStatus:
 
     ``state`` describes the process; ``health`` describes the connection as
     seen by the last probe (``healthy``, ``unhealthy``, ``restarting``,
-    ``starting``, ``conflict``, ``failed``, ``stopped`` or ``unknown``).
+    ``starting``, ``conflict``, ``failed``, ``stopped``, ``unknown`` or, 0.19,
+    ``busy``: a probe failed while the relayed forward moved bytes).
     """
 
     name: str
@@ -742,6 +752,10 @@ class ForwardStatus:
     #: The pod the forward is connected to when the supervisor resolves the
     #: live owner of a Service or Deployment target (``None`` otherwise).
     pod: str | None = None
+    #: 0.19: the last restarts, newest last: ``{"at", "reason"}``.
+    restart_reasons: tuple[dict[str, Any], ...] = ()
+    #: 0.19 (relay mode): open connections and bytes relayed so far.
+    traffic: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if self.state not in _FORWARD_STATES:
@@ -773,6 +787,15 @@ class _ManagedForward:
     owner: PortOwner | None = None
     pod: str | None = None
     next_owner_check: float = 0.0
+    #: 0.19: the relay holding the local port, and kubectl's internal port.
+    relay: Any = None
+    inner_port: int | None = None
+    restart_history: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def probe_port(self) -> int:
+        """Where probes go: kubectl itself (relay mode), else the local port."""
+        return self.inner_port or self.forward.local_port
 
     def reset(self) -> None:
         """Clear failure bookkeeping before an explicit (re)start."""
@@ -821,11 +844,15 @@ class ForwardSupervisor:
         owner_interval: float = 2.0,
         registry: OwnedProcessRegistry | None = None,
         watchdog: Any = None,
+        relay: bool = False,
     ) -> None:
         if not context:
             # kubectl would otherwise fall back to the file's current-context.
             raise ValueError("an explicit kubeconfig context is required")
         self._scope = scope
+        # 0.19: hold each local port in a byte-counting relay in front of
+        # kubectl (piceli.k8s.forward_relay): a busy forward is never restarted.
+        self._relay = relay
         self._resolver = owner_resolver
         self._owner_interval = owner_interval
         self._registry = registry
@@ -957,6 +984,8 @@ class ForwardSupervisor:
             probe=managed.probe.public_dict(),
             owner=managed.owner.to_dict() if managed.owner is not None else None,
             pod=managed.pod if process is not None and process.poll() is None else None,
+            restart_reasons=tuple(managed.restart_history),
+            traffic=managed.relay.stats() if managed.relay is not None else None,
         )
 
     def statuses(self) -> tuple[ForwardStatus, ...]:
@@ -1098,6 +1127,9 @@ class ForwardSupervisor:
                         "url": sc.url,
                         "owner": status.owner,
                         "pod": status.pod,
+                        # 0.19: why it restarted, and its traffic (relay mode).
+                        "restart_reasons": list(status.restart_reasons),
+                        **({"traffic": status.traffic} if status.traffic else {}),
                     }
                 )
             return results
@@ -1163,12 +1195,14 @@ class ForwardSupervisor:
 
         def run(item: tuple[_ManagedForward, Any]) -> tuple[str | None, Any]:
             managed, process = item
-            outcome = probe_endpoint(managed.forward.local_port, managed.probe)
+            # A short request on a connection of its own (relay mode: straight
+            # to kubectl, never queued behind a busy download).
+            outcome = probe_endpoint(managed.probe_port, managed.probe)
             foreign = None
             if outcome is None and managed.health != "healthy":
                 # Before first calling it healthy, make sure the answer came
                 # from our own process and not from whoever else holds the port.
-                foreign = self._foreign_owner(managed.forward.local_port, process)
+                foreign = self._foreign_owner(managed.probe_port, process)
             return outcome, foreign
 
         results = list(pool.map(run, due)) if pool else [run(item) for item in due]
@@ -1246,6 +1280,14 @@ class ForwardSupervisor:
             managed.next_probe = now + probe.interval
             return
         managed.last_error = outcome
+        if managed.relay is not None and managed.relay.busy():
+            # Moving bytes is the best health signal there is: a probe that
+            # waits behind a large transfer never restarts the forward.
+            managed.health = "busy"
+            managed.error = None
+            managed.last_error = f"probe {outcome} while the forward moves bytes"
+            managed.next_probe = now + probe.interval
+            return
         if (
             managed.health == "starting"
             and now - managed.started_at < probe.startup_grace
@@ -1270,6 +1312,10 @@ class ForwardSupervisor:
 
     def _schedule_restart_locked(self, managed: _ManagedForward, reason: str) -> None:
         """Back off before the next start, or give up once the budget is spent."""
+        managed.restart_history = [
+            *managed.restart_history[-9:],
+            {"at": _iso(time.time()), "reason": reason},
+        ]
         managed.last_error = reason
         managed.consecutive_failures = 0
         managed.attempts += 1
@@ -1307,7 +1353,20 @@ class ForwardSupervisor:
     def _start_locked(self, managed: _ManagedForward) -> None:
         if managed.process is not None and managed.process.poll() is None:
             return
-        if not self._port_available(managed.forward.local_port):
+        if (
+            self._relay
+            and managed.relay is None
+            and self._port_available(managed.forward.local_port)
+        ):
+            from piceli.k8s.forward_relay import PortRelay
+
+            try:
+                managed.relay = PortRelay(managed.forward.local_port).start()
+            except OSError:
+                managed.relay = None
+        if managed.relay is None and not self._port_available(
+            managed.forward.local_port
+        ):
             # An ambient loopback listener is not ours to adopt or terminate.
             # Leave it alone, spawn nothing, name its owner, and stop trying:
             # re-checking until the port frees up would silently take a
@@ -1319,7 +1378,12 @@ class ForwardSupervisor:
         live = self._live_pods(managed.forward)
         managed.pod = live[0] if live else None
         managed.next_owner_check = time.monotonic() + self._owner_interval
-        command = managed.forward.command(
+        forward = managed.forward
+        if managed.relay is not None:
+            managed.inner_port = _free_loopback_port()
+            managed.relay.target = managed.inner_port
+            forward = replace(forward, local_port=managed.inner_port)
+        command = forward.command(
             kubectl=self._kubectl,
             kubeconfig=self._kubeconfig,
             context=self._context,
@@ -1405,6 +1469,10 @@ class ForwardSupervisor:
         managed.health = "stopped"
         if process is not None and process.poll() is None:
             self._stop_owned(process)
+        if managed.relay is not None:
+            managed.relay.close()
+            managed.relay = None
+            managed.inner_port = None
 
     def _stop_owned(self, process: subprocess.Popen[bytes]) -> None:
         self._stop_process(process)

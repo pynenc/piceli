@@ -22,7 +22,8 @@ An access declaration is part of the model, but not part of the cluster:
   `piceli render` and `piceli release plan` show exactly what they showed
   before;
 - `piceli access` starts one loopback `kubectl port-forward` per declaration,
-  probes it (TCP or HTTP) and restarts it when it stops answering;
+  probes it (TCP or HTTP) and restarts it when it stops answering, but never
+  while it is moving bytes (see [Busy forwards](#busy-forwards-and-restarts));
 - `piceli status` reads the release state, the live workloads and the
   declared forwards, and prints whether the app is up and each URL;
 - the local dashboard shows the same forwards as its shortcuts, so a separate
@@ -194,6 +195,7 @@ piceli access main --cluster infra.py:my_cluster --ui
 | `access-target-invalid` | TARGET is neither a readable `release.toml` nor a `module:attr` object with `.app` and `.target`. | Read the message on stderr. |
 | `status` exits `1` with `state: degraded` or `down` | Some workloads are not ready. | Read `workloads[].problems` (for example `CrashLoopBackOff`, restarts). |
 | `status` shows `state: unknown` and `errors: ["status-cluster-unreadable"]` | The cluster could not be read. | Check that the context reaches the cluster, then retry. |
+| A forward shows `busy` | A probe failed while the forward moved bytes (a large download over a slow link). It is not restarted. | Nothing to do; it turns `healthy` once the transfer ends. Read `restart_reasons` if it restarted before. |
 | A forward shows `unhealthy` | Piceli's forward holds the port but the health probe fails. | The upstream is down or not ready: check the workload (`piceli status`). |
 
 Every code is explained by `piceli explain <code>` and in {doc}`reference/errors`.
@@ -352,6 +354,37 @@ end of a pipe, sees the pipe close and stops every forward still registered
 (SIGTERM, then SIGKILL after 3 seconds); it never signals anything else.
 Only a `piceli` killed together with its watchdog (its whole process group)
 leaves a forward behind, which `piceli access stop --stale` stops.
+
+(busy-forwards-and-restarts)=
+### Busy forwards and restarts
+
+`kubectl port-forward` carries every connection through one stream to the API
+server. Over a slow link (a laptop away from the cluster) a large download
+fills that stream, and a health probe sent through the same forward times out
+although the forward is fine. Since 0.19.0 `piceli access` holds each declared
+local port itself, in a small relay in front of `kubectl`, which listens on an
+internal loopback port:
+
+- **Moving bytes means healthy.** A forward with an open connection that moved
+  bytes in the last 15 seconds is never restarted. A failed probe then sets
+  `health: busy` instead of counting a failure.
+- **The probe uses a short request on its own connection**, straight to
+  `kubectl`'s internal port, so it never waits in line behind your download in
+  the relay.
+- **Back off before restarting.** A forward is restarted only after
+  `failure_threshold` failed probes while idle, with the declared backoff.
+  The relay keeps the local port during the restart, so your browser or
+  client sees a refused request at worst, never a port taken by someone else.
+- **Every restart is reported with its reason.** The `status` events and the
+  dashboard's forwards carry `restart_reasons`: the last ten restarts, newest
+  last, as `{"at": "2026-10-11T09:12:03Z", "reason": "health probe failed:
+  …"}`. They also carry `traffic`: `{"active_connections", "bytes", "busy"}`.
+
+Because the relay is part of `piceli access`, a leftover `piceli access`
+holding a forward's port shows as `holder: piceli-server` in a port
+conflict, and `piceli access stop --stale` stops it (and its `kubectl` with
+it). The dashboard's own forwards (`observe serve`) keep the plain
+`kubectl` behaviour.
 
 `piceli access ui` (and `--ui`) keeps its forward through an API outage: a
 `kubectl port-forward` that exits is restarted with a backoff capped at 30

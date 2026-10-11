@@ -35,6 +35,14 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   forwarding them (`tailnet` in the `started` event; exits 0 when nothing is
   left to forward); a companion without a name yet is forwarded, with a
   note; `--forward` forwards everything.
+- **A busy forward is never restarted.** `piceli access` holds each local
+  port in a relay in front of `kubectl`: a forward that moved bytes in the
+  last 15 s is `busy`, not failed, whatever its probe says; probes go
+  straight to `kubectl` on a connection of their own; restarts keep the
+  local port. `status` events and the dashboard carry `restart_reasons`
+  (last ten, `{at, reason}`) and `traffic`. `access stop --stale` now
+  identifies every port's holder before signalling any, so one leftover
+  holding several ports is stopped through all of them.
 - **`piceli dev run` no longer leaves its packed tree behind** when it is
   stopped by SIGTERM or SIGHUP (a cancelled agent): its scratch is a tracked
   Piceli temporary directory.

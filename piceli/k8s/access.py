@@ -502,7 +502,11 @@ def stop_stale(
     stopped: list[dict[str, Any]] = []
     left: list[dict[str, Any]] = []
     free: list[int] = []
-    signalled: dict[int, list[int]] = {}
+    signalled: dict[int, bool] = {}
+    # Identify every port's holder before signalling any: one process often
+    # holds several of them (its relays, its dashboard), and once it exits a
+    # later port could no longer be attributed to it.
+    found: list[tuple[int, Holder]] = []
     for port in dict.fromkeys(ports):
         if not in_use(port):
             free.append(port)
@@ -511,14 +515,18 @@ def stop_stale(
         if not holder.piceli or holder.stop is None or holder.owner is None:
             left.append({"port": port, **holder.public()})
             continue
-        again = check(owner(port))  # the same process, right before the signal
-        if again.owner is None or again.owner.pid != holder.owner.pid:
-            left.append({"port": port, **again.public()})
-            continue
-        if holder.stop not in signalled and not terminate(holder.stop):
+        found.append((port, holder))
+    for port, holder in found:
+        assert holder.stop is not None and holder.owner is not None
+        if holder.stop not in signalled:
+            again = check(owner(port))  # the same process, right before the signal
+            if again.owner is None or again.owner.pid != holder.owner.pid:
+                left.append({"port": port, **again.public()})
+                continue
+            signalled[holder.stop] = terminate(holder.stop)
+        if not signalled[holder.stop]:
             left.append({"port": port, **holder.public()})
             continue
-        signalled.setdefault(holder.stop, []).append(port)
         stopped.append({"port": port, "pid": holder.stop, **holder.public()})
     deadline = time.monotonic() + wait_seconds
     waiting = {item["port"] for item in stopped}

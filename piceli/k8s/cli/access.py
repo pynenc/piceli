@@ -548,6 +548,8 @@ def access(
         owner_resolver=LivePodResolver(reader) if reader is not None else None,
         registry=registry,
         watchdog=ParentWatchdog(),
+        # 0.19: a forward moving bytes is healthy (piceli.k8s.forward_relay).
+        relay=True,
     )
     server = None
     failed = False

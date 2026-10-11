@@ -272,6 +272,9 @@ def test_a_killed_access_with_ui_leaves_no_kubectl_and_frees_its_ports(
             ports = [item["local_port"] for item in event["forwards"]]
             assert int(env["FAKE_UI_PORT"]) in ports and len(ports) == 3
             assert _wait(lambda: all(_accepting(port) for port in ports), 20)
+            # 0.19: Piceli's relay holds each local port from the start, so
+            # wait for the kubectl processes behind it, not for the ports.
+            assert _wait(lambda: len(list(pids_dir.iterdir())) == 3, 20)
             started = [int(path.name) for path in pids_dir.iterdir()]
             assert len(started) == 3 and all(_alive(pid) for pid in started)
 
