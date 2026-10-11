@@ -217,3 +217,46 @@ def test_cancel_deletes_a_queued_run_only_once(queue: QueuePort) -> None:
     assert result.exit_code == 0 and json.loads(result.stdout)["state"] == "cancelled"
     assert queue.deleted == ["r-agent"]
     assert dev("cancel", "nope").exit_code == 2
+
+
+def test_cache_clear_empties_the_lineages_a_run_left(stand_in: dict[str, Any]) -> None:
+    """0.19 (IH item 10): ``piceli dev cache clear [--lineage] [--crate]``."""
+    import json
+
+    assert invoke("--ref", "HEAD", "--", "sh", "ok.sh").exit_code == 0
+    port = stand_in["ports"][-1]
+    lineages = sorted((port.root / "cache" / "lineages").iterdir())
+    assert lineages
+    target = lineages[0] / "0" / "target" / "debug" / "deps"
+    target.mkdir(parents=True, exist_ok=True)
+    (target / "libags-1.rlib").write_text("x")
+    (target / "libpoet-1.rlib").write_text("x")
+    clear = CliRunner().invoke(
+        cli,
+        [
+            "dev",
+            "cache",
+            "clear",
+            "--cluster",
+            "infra.py:c",
+            "--crate",
+            "ags",
+            "--json",
+        ],
+    )
+    assert clear.exit_code == 0, clear.stdout + clear.stderr
+    body = json.loads(clear.stdout)
+    assert body["cleared"] == [{"lineage": f"{lineages[0].name}/0", "entries": 1}]
+    assert (target / "libpoet-1.rlib").exists() and not (
+        target / "libags-1.rlib"
+    ).exists()
+    job = stand_in["ports"][-1].cleared_jobs[-1]
+    pod = job["spec"]["template"]["spec"]
+    assert pod["automountServiceAccountToken"] is False
+    assert [v["name"] for v in pod["volumes"]] == ["cache"]  # no Secret, no work
+    everything = CliRunner().invoke(
+        cli, ["dev", "cache", "clear", "--cluster", "infra.py:c"]
+    )
+    assert everything.exit_code == 0
+    assert f"cleared {lineages[0].name}/0" in everything.stderr
+    assert not (lineages[0] / "0" / "target").exists()

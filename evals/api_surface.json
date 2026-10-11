@@ -5562,12 +5562,33 @@
     "arguments": [],
     "flags": [],
     "subcommands": [
+     "cache",
      "cancel",
      "logs",
      "run",
      "schedule",
      "status"
     ]
+   },
+   "dev cache": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "clear"
+    ]
+   },
+   "dev cache clear": {
+    "arguments": [],
+    "flags": [
+     "--allow-exec",
+     "--cluster",
+     "--crate",
+     "--exec-sha256",
+     "--json",
+     "--lineage",
+     "--transport"
+    ],
+    "subcommands": []
    },
    "dev cancel": {
     "arguments": [
@@ -5773,6 +5794,7 @@
     "flags": [],
     "subcommands": [
      "approve",
+     "cache",
      "disable",
      "enable",
      "run",
@@ -5788,6 +5810,25 @@
     ],
     "flags": [
      "--context",
+     "--kubeconfig",
+     "--namespace",
+     "--state-dir",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "gitops cache": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "clear"
+    ]
+   },
+   "gitops cache clear": {
+    "arguments": [],
+    "flags": [
+     "--context",
+     "--crate",
      "--kubeconfig",
      "--namespace",
      "--state-dir",
@@ -7161,6 +7202,7 @@
    "deploy-ref-source-unknown",
    "deploy-ref-unknown",
    "deploy-stage-unknown",
+   "dev-cache-clear-failed",
    "dev-command-failed",
    "dev-isolation-not-enforced",
    "dev-not-enabled",
@@ -7277,6 +7319,7 @@
    "gitops-step-failed",
    "gitops-target-invalid",
    "gitops-target-required",
+   "gitops-token-expiring",
    "grant-expired",
    "grant-mismatch",
    "heavy-command-empty",
@@ -8680,6 +8723,7 @@
   "piceli.gitops.recovery",
   "piceli.gitops.repo",
   "piceli.gitops.state",
+  "piceli.gitops.token_expiry",
   "piceli.gitops.wait",
   "piceli.importing",
   "piceli.importing.clean",
@@ -8756,6 +8800,7 @@
   "piceli.k8s.constants.strategies",
   "piceli.k8s.constants.verbs",
   "piceli.k8s.env_access",
+  "piceli.k8s.forward_relay",
   "piceli.k8s.forward_watchdog",
   "piceli.k8s.observe",
   "piceli.k8s.observe_server",

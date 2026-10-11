@@ -170,3 +170,62 @@ def test_status_json_has_a_summary_per_environment(tmp_path: Path) -> None:
         view["attempt"] == 2
         and view["last_error"]["reason"] == "component-build-failed"
     )
+
+
+def test_status_and_wait_print_gits_error_and_the_check_details(tmp_path: Path) -> None:
+    """0.19 (IH items 11, 12): the cause, not only its code."""
+    detail = (
+        "product: git ls-remote failed (exit 128): remote: Invalid username or token."
+    )
+    document = _doc(
+        state="deployed",
+        deployed_commit=OLD,
+        health="degraded",
+        verification={
+            "failed": [
+                {
+                    "check": "dashboards",
+                    "code": "check-failed",
+                    "detail": "stale source",
+                }
+            ]
+        },
+    )
+    document["controller"] = {
+        "state": "degraded",
+        "last_error": "gitops-git-failed",
+        "last_error_detail": detail,
+        "poll_failures": 3,
+    }
+    document["sources"] = {
+        "product": {"error": "gitops-git-failed", "error_detail": detail[9:]}
+    }
+    _write_status(tmp_path, document)
+    status = CliRunner().invoke(cli, ["gitops", "status", "--state-dir", str(tmp_path)])
+    assert f"last error: gitops-git-failed: {detail}" in status.stderr
+    assert "source product: git ls-remote failed (exit 128)" in status.stderr
+    assert "failing checks: dashboards (stale source)" in status.stderr
+    waited = CliRunner().invoke(
+        cli,
+        ["gitops", "wait", "main", NEWER[:7], "--state-dir", str(tmp_path), "--json"],
+    )
+    assert waited.exit_code == 1
+    body = json.loads(waited.stdout)
+    assert body["state"] == "failed" and body["cause"] == "gitops-git-failed"
+    assert f"controller: {detail} (gitops-git-failed)" in waited.stderr
+    assert "failing checks: dashboards: stale source" in waited.stderr
+
+
+def test_gitops_cache_clear_records_a_request(tmp_path: Path) -> None:
+    """0.19 (IH item 10)."""
+    from piceli.gitops.state import DirectoryChannel
+
+    result = CliRunner().invoke(
+        cli,
+        ["gitops", "cache", "clear", "--crate", "ags", "--state-dir", str(tmp_path)],
+    )
+    assert result.exit_code == 0, result.stdout + result.stderr
+    body = json.loads(result.stdout)
+    assert body["state"] == "requested" and body["crates"] == ["ags"]
+    pending = DirectoryChannel(tmp_path).requests()
+    assert [item["kind"] for item in pending.values()] == ["cache-clear"]

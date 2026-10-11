@@ -586,6 +586,22 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["dev", "logs", "r1", "--cluster", "no_such_module:c"],
         "cluster-not-found",
     ),
+    "dev cache clear": (
+        lambda p: ["dev", "cache", "clear", "--cluster", "no_such_module:c"],
+        "cluster-not-found",
+    ),
+    "gitops cache clear": (
+        lambda p: [
+            "gitops",
+            "cache",
+            "clear",
+            "--crate",
+            "../x",
+            "--state-dir",
+            str(p),
+        ],
+        "gitops-request-invalid",
+    ),
     "dev cancel": (
         lambda p: ["dev", "cancel", "r1", "--cluster", "no_such_module:c"],
         "cluster-not-found",

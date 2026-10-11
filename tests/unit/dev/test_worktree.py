@@ -53,3 +53,21 @@ def test_a_sibling_without_ref_ships_its_worktree(tmp_path: Path) -> None:
         tmp_path / "out",
     )
     assert names(packed.path)["lib/lib.rs"] == b"work in progress"
+
+
+def test_every_worktree_of_a_repository_shares_its_name(tmp_path: Path) -> None:
+    """0.19 (IH item 4): the lineage name defaults to the main checkout's
+    directory (Git's common dir), so every worktree of a repository builds
+    warm on the same lineage; a bare repository's name drops ``.git``."""
+    from piceli.dev.pack import repository_name
+
+    main = repo(tmp_path / "infinite-haiku", {"a.rs": "x"})
+    other = tmp_path / "wt" / "feature-x"
+    git(main, "worktree", "add", "-q", "-b", "feature-x", str(other))
+    assert repository_name(main) == "infinite-haiku"
+    assert repository_name(other) == "infinite-haiku"
+    bare = tmp_path / "mirror.git"
+    git(tmp_path, "clone", "-q", "--bare", str(main), str(bare))
+    linked = tmp_path / "from-bare"
+    git(bare, "worktree", "add", "-q", "-b", "y", str(linked))
+    assert repository_name(linked) == "mirror"

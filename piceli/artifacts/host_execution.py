@@ -12,6 +12,7 @@ Importing this module runs nothing.
 
 from __future__ import annotations
 
+import collections
 import hashlib
 import os
 import re
@@ -63,6 +64,8 @@ MAX_ARCHIVE_BYTES = 16 * 1024**3
 #: What a failed command keeps of its output (:attr:`BuildSpecError.output_tail`).
 OUTPUT_TAIL_LINES = 200
 OUTPUT_TAIL_BYTES = 16 * 1024
+#: The first error's lines kept apart (0.19.0): printed last in the Job's log.
+FIRST_ERROR_LINES = 20
 _TAIL_LINE_CHARS = 500
 _SECRET_NAME = re.compile(
     r"(?i)pass(?:word|wd)?|secret|token|api[_-]?key|authorization|credential"
@@ -79,20 +82,39 @@ class OutputTail:
     """
 
     def __init__(self) -> None:
+        from piceli.dev.pod import FirstError
+
         self.data = bytearray()
+        #: 0.19: the first ``error`` line and what follows (the cause), and
+        #: the recent lines a corrupted cache shows in (piceli.dev.pod).
+        self.first = FirstError(FIRST_ERROR_LINES)
+        self.recent: collections.deque[str] = collections.deque(maxlen=2000)
+        self._partial = b""
 
     def feed(self, block: bytes) -> None:
         self.data += block
         if len(self.data) > 4 * OUTPUT_TAIL_BYTES:
             del self.data[: len(self.data) - 4 * OUTPUT_TAIL_BYTES]
+        *lines, self._partial = (self._partial + block).split(b"\n")
+        for raw in lines:
+            line = raw.decode("utf-8", "replace").rstrip("\r")
+            self.first.feed(line)
+            self.recent.append(line)
+
+    def first_error(self, secrets: Iterable[str] = ()) -> str:
+        return self._redact(self.first.lines, secrets)
 
     def text(self, secrets: Iterable[str] = ()) -> str:
+        lines = bytes(self.data).decode("utf-8", "replace").replace("\r", "")
+        return self._redact(lines.splitlines()[-OUTPUT_TAIL_LINES:], secrets)
+
+    @staticmethod
+    def _redact(lines: Iterable[str], secrets: Iterable[str]) -> str:
         from piceli.pipeline.prerollout import _SCHEME, _SENSITIVE, _TOKEN
 
         known = sorted({v for v in secrets if len(v) >= 4}, key=len, reverse=True)
-        lines = bytes(self.data).decode("utf-8", "replace").replace("\r", "")
         kept: list[str] = []
-        for line in lines.splitlines()[-OUTPUT_TAIL_LINES:]:
+        for line in lines:
             for value in known:
                 line = line.replace(value, "<redacted>")
             line = _SCHEME.sub(lambda match: match[1] + " <redacted>", line)
@@ -295,7 +317,12 @@ class HostExecution:
         return environment
 
     def _command(
-        self, index: int, command: tuple[str, ...], cwd: Path, env: Mapping[str, str]
+        self,
+        index: int,
+        command: tuple[str, ...],
+        cwd: Path,
+        env: Mapping[str, str],
+        repaired: bool = False,
     ) -> None:
         if self.cancel is not None and self.cancel.is_set():
             raise BuildSpecError(
@@ -344,6 +371,24 @@ class HostExecution:
         self.log.line(f"### {label} {state} {seconds}s")
         self.log.say(f"[piceli] {label}: {state} in {seconds}s")
         if state != "succeeded":
+            from piceli.dev.pod import clear_crates, corrupt_crates
+
+            crates, damage = (
+                corrupt_crates(list(tail.recent))
+                if state != "timed-out" and not repaired
+                else ([], None)
+            )
+            if crates:
+                # 0.19: a damaged cached artifact (a loader or link failure),
+                # not the code: clear those crates and run the step once more.
+                removed = clear_crates(self.target, crates)
+                self.log.say(
+                    f"[piceli] {label}: corrupted cache ({damage}): cleared "
+                    f"{', '.join(crates)} ({removed} entries); running once more"
+                )
+                self.steps[-1]["repaired"] = {"kind": damage, "crates": crates}
+                self._command(index, command, cwd, env, repaired=True)
+                return
             code = "build-timed-out" if state == "timed-out" else "build-failed"
             secrets = [value for key, value in env.items() if _SECRET_NAME.search(key)]
             raise BuildSpecError(
@@ -351,6 +396,7 @@ class HostExecution:
                 "host build step failed",
                 steps=tuple(self.steps),
                 output_tail=tail.text(secrets),
+                first_error=tail.first_error(secrets),
             )
 
     def _verify_tools(self) -> None:

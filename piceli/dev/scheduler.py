@@ -197,6 +197,9 @@ class Scheduler:
             entry["cache"] = cache
             if result.get("state") != "passed":
                 entry["log_tail"] = list(result.get("log_tail") or ())[-RECORDED_TAIL:]
+                # 0.19: the cause survives a tail that only shows the end.
+                if result.get("first_error"):
+                    entry["first_error"] = list(result["first_error"])[:RECORDED_TAIL]
         elif state == "cancelled":
             entry.update(state="cancelled", reason="dev-run-cancelled", exit_code=None)
         else:

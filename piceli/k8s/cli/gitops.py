@@ -999,7 +999,15 @@ def status(
             f"  repo {controller.get('repo')} branches {','.join(controller.get('branches') or [])}"
         )
         if controller.get("last_error"):
-            say(f"  last error: {controller['last_error']}")
+            detail = controller.get("last_error_detail")
+            say(
+                f"  last error: {controller['last_error']}"
+                + (f": {detail}" if detail else "")
+            )
+    for key, source in (body.get("sources") or {}).items():
+        if source.get("error"):
+            # 0.19: Git's masked message (an expired token, a wrong URL).
+            say(f"  source {key}: {source.get('error_detail') or source['error']}")
     for branch, env in (body.get("envs") or {}).items():
         line = f"  {branch}: {env.get('state')} {str(env.get('commit') or '')[:12]}"
         if env.get("namespace"):
@@ -1010,7 +1018,12 @@ def status(
             line += f" ({env['reason']})"
         verification = env.get("verification") or {}
         if env.get("health") == "degraded":
-            failing = [item.get("check") for item in verification.get("failed") or ()]
+            failing = [
+                f"{item.get('check')} ({item['detail']})"
+                if item.get("detail")
+                else str(item.get("check"))
+                for item in verification.get("failed") or ()
+            ]
             line += "; degraded, failing checks: " + (", ".join(failing) or "?")
         elif env.get("last_action") == "verified":
             line += f"; verified ({verification.get('trigger')}), rolled nothing"
@@ -1021,7 +1034,19 @@ def status(
                 f"{checks.get('total')} at {checks.get('at')}"
             )
             if checks.get("failed"):
-                line += f" (failing: {', '.join(checks['failed'])})"
+                details = {
+                    item.get("name"): item.get("detail")
+                    for item in checks.get("results") or ()
+                    if not item.get("passed")
+                }
+                line += (
+                    " (failing: "
+                    + ", ".join(
+                        f"{name}: {details[name]}" if details.get(name) else name
+                        for name in checks["failed"]
+                    )
+                    + ")"
+                )
         say(line)
         for cluster, entry in (env.get("clusters") or {}).items():
             # 0.15: one line per cluster of an environment on several.
@@ -1111,6 +1136,16 @@ def wait(
             else ""
         )
     )
+    error = result.get("controller_error") or {}
+    if error.get("detail"):
+        # 0.19: the controller cannot read Git; nothing new will deploy.
+        say(f"  controller: {error['detail']} ({error['reason']})")
+    failing = [
+        f"{item['name']}: {item['detail']}" if item.get("detail") else item["name"]
+        for item in result.get("failed_checks") or ()
+    ]
+    if failing:
+        say("  failing checks: " + "; ".join(failing))
     if as_json:
         emit_json(result)
     if result["state"] == "approval-required":
@@ -1147,6 +1182,42 @@ def approve_env(
     emit_json(
         {"state": "requested", "request": key, "env": env, "plan_hash": plan_hash}
     )
+
+
+cache_app = typer.Typer(
+    help="The cluster build cache (cargo targets on the build cache claim).",
+    no_args_is_help=True,
+)
+app.add_typer(cache_app, name="cache")
+
+
+@cache_app.command("clear")
+def cache_clear(
+    crate: Annotated[
+        list[str] | None,
+        typer.Option("--crate", help="Only this crate's artifacts (repeat)"),
+    ] = None,
+    kubeconfig: KubeconfigOption = None,
+    context: ContextOption = None,
+    namespace: NamespaceOption = "piceli-system",
+    state_dir: StateDirOption = None,
+    transport: TransportOption = "https",
+) -> None:
+    """Ask the controller to empty its build cache (a corrupted cargo cache)."""
+    from piceli.gitops.state import cache_clear_request
+
+    with _guard():
+        key, body = cache_clear_request(list(crate or ()))
+    with _channel(state_dir, kubeconfig, context, namespace, transport) as channel:
+        with _guard():
+            channel.add_request(key, body)
+    say(
+        "build cache clear recorded"
+        + (f" ({', '.join(body['crates'])})" if body["crates"] else "")
+        + "; the controller runs it between steps, on its next poll "
+        "(controller.cache_clear in gitops status)"
+    )
+    emit_json({"state": "requested", "request": key, "crates": body["crates"]})
 
 
 @app.command("sync")

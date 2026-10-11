@@ -1077,6 +1077,36 @@ class ControllerTelemetry:
                     break
             self.store.save(self._data)
 
+    def git_failed(self, source: str, code: str, detail: str) -> None:
+        """A source's Git remote started failing (0.19.0): one error event
+        (``piceli.controller.git.failed``, the masked message) and one
+        ``cicd.pipeline.run.errors`` point per change."""
+        if not self.enabled:
+            return
+        with self._guard("git failure"):
+            at = self._now()
+            if self.instruments is not None:
+                self.instruments.run_errors.add(
+                    1,
+                    {
+                        "cicd.pipeline.name": self.composition,
+                        "error.type": code,
+                        "piceli.source": source,
+                    },
+                )
+            self._event(
+                "piceli.controller.git.failed",
+                f"{self.cluster}:git:{source}:{at}",
+                at,
+                body=detail,
+                attributes={
+                    "piceli.source": source,
+                    "error.type": code,
+                    "k8s.cluster.name": self.cluster,
+                },
+                error=True,
+            )
+
     def approved(self, record: Mapping[str, Any], via: Any) -> None:
         """The owner approved the plan a run waits for (``cli`` or ``ui``)."""
         if not self.enabled:

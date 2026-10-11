@@ -210,6 +210,54 @@ line, environment, log, status or error; a `--repo` URL with credentials in
 it is refused (`gitops-repo-invalid`). The build Job reads its own Secret
 (`--build-git-secret`, default `piceli-build-git`).
 
+**When Git fails** (0.19.0). A failing `git ls-remote`, `clone` or `fetch`
+keeps the last lines of Git's stderr with the credential values, URL user
+info and token-like strings masked, so the cause is visible without the
+secret:
+
+- `piceli gitops status` prints `last error: gitops-git-failed: shop: git
+  ls-remote failed (exit 128): remote: Invalid username or token. …` and one
+  `source NAME:` line per failing source; the JSON has
+  `controller.last_error_detail` and `sources.NAME.error_detail`;
+- the controller logs it once when it starts failing (and `source NAME: git
+  works again` when it recovers), and emits a `piceli.controller.git.failed`
+  event and a `cicd.pipeline.run.errors` point with `error.type:
+  gitops-git-failed`;
+- `piceli gitops wait ENV COMMIT` for a commit the controller has not seen
+  fails after two failed polls in a row, `stage: fetch`, `cause:
+  gitops-git-failed`, with `controller_error` (any other outcome carries
+  `controller_error` too, so a "deployed" older commit no longer hides it);
+- for HTTPS sources on `github.com` the controller asks GitHub every 6 hours
+  when the token expires and, from 7 days before, warns in
+  `controller.warnings` (`gitops-token-expiring`, `source`, `expires_at`)
+  and the log.
+
+**A corrupted build cache** (0.19.0). A cluster build step that fails
+with a loader or link error on a cached artifact (a proc-macro `.so` the
+loader refuses, invalid crate metadata, a truncated object) has the blamed
+crates' artifacts removed and runs once more; the step in the receipt
+carries `repaired` (`kind`, `crates`). A failed step's Job log ends with
+`[piceli] the first error:` and the first `error` line with the 19 after
+it, so the failure's `log_tail` in `piceli gitops status` shows the cause,
+not only the last lines. To empty the cache by hand:
+
+```sh
+piceli gitops cache clear                 # every cargo target on the build cache claim
+piceli gitops cache clear --crate ags     # only these crates' artifacts
+```
+
+The controller runs it between steps, as a short Job on the builder node
+(the build Job's image and claim, no Secret), and records
+`controller.cache_clear` (`at`, `crates`, `state`).
+
+**Why a check failed** (0.19.0). A failed check's own reason (the string a
+`Checks.python` entry returns, an HTTP status, an exit code) is kept in
+`envs.ENV.checks.results[].detail` and `verification.failed[].detail`;
+`piceli gitops status` prints `failing: dashboards: stale source for
+k8s.cluster`, `piceli gitops wait` adds `failed_checks` (`name`, `code`,
+`detail`) and a `failing checks:` line, the controller's log names it, and
+the UI shows it under the check.
+
 ```{warning}
 The controller imports the pipeline module of every branch it deploys:
 whoever can push a branch matching `--branches` runs code with the

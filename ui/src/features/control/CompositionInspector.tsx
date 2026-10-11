@@ -66,7 +66,7 @@ export function EnvironmentChecks({ checks }: { checks?: EnvironmentChecksReport
     <div className="panelhead"><h2>Last checks <Badge value={checks.state} /></h2><span className="small muted">{checks.total ? `${checks.passed ?? 0}/${checks.total} passed` : ''}</span></div>
     <div className="panelbody">
       <p className="small muted">{checks.action === 'verified' ? 'Verification of the running release' : 'After the rollout'}{checks.trigger ? ` · ${checks.trigger}` : ''}{checks.at ? ` · ${formatTime(checks.at)}` : ''}</p>
-      <ul className="small environment-checks-list">{checks.results.map((item, index) => <li key={index}><Badge value={item.passed ? 'passed' : 'failed'} /> <strong>{item.name ?? 'check'}</strong>{!item.passed && item.code && <> · <code>{item.code}</code></>}</li>)}</ul>
+      <ul className="small environment-checks-list">{checks.results.map((item, index) => <li key={index}><Badge value={item.passed ? 'passed' : 'failed'} /> <strong>{item.name ?? 'check'}</strong>{!item.passed && item.code && <> · <code>{item.code}</code></>}{!item.passed && item.detail && <span className="check-detail"> · {item.detail}</span>}</li>)}</ul>
       {failed && !checks.results.some(item => !item.passed) && <p className="small">No failing check was reported.</p>}
     </div>
   </section>;
@@ -78,7 +78,7 @@ export function EnvironmentVerification({ verification }: { verification?: Verif
   const failed = verification.state === 'failed';
   return <Notice title={failed ? 'Checks verification failed' : 'Checks verified'} danger={failed}>
     <p className="small">{verification.trigger === 'checks-changed' ? 'The check set changed, so the checks ran against the running release.' : 'The checks ran against the running release.'} Nothing was applied{failed ? ' and nothing was rolled back' : ''}.{verification.at ? ` ${formatTime(verification.at)}.` : ''}</p>
-    {failed && (verification.failed.length ? <ul className="small">{verification.failed.map((item, index) => <li key={index}><strong>{item.check ?? 'check'}</strong> · <code>{item.code ?? 'check-failed'}</code></li>)}</ul> : <p className="small">No failing check was reported.</p>)}
+    {failed && (verification.failed.length ? <ul className="small">{verification.failed.map((item, index) => <li key={index}><strong>{item.check ?? 'check'}</strong> · <code>{item.code ?? 'check-failed'}</code>{item.detail && <span className="check-detail"> · {item.detail}</span>}</li>)}</ul> : <p className="small">No failing check was reported.</p>)}
     {verification.checks_hash && <p className="small muted">Checks <code>{verification.checks_hash.slice(0, 12)}</code></p>}
   </Notice>;
 }
