@@ -26,7 +26,7 @@ LLD = [
     "error: linking with `cc` failed: exit status: 1",
     "  = note: rust-lld: error: undefined hidden symbol: ags::thing::h12",
     f"          >>> referenced by {TARGET}/debug/incremental/ags-3k2j1/s-abc/x.o",
-    "error: could not compile `ags` (bin \"ags\") due to 1 previous error",
+    'error: could not compile `ags` (bin "ags") due to 1 previous error',
 ]
 METADATA = [
     "error[E0786]: found invalid metadata files for crate `tokio_util`",
