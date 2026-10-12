@@ -203,6 +203,7 @@ def test_tailnet_exposed_services_are_reached_on_the_tailnet(
             "host": "main-web.tail1.ts.net",
             "ready": True,
             "url": "http://main-web.tail1.ts.net:80/login",
+            "companion": "web-tailnet",
         },
     )
     pending = composition_env_target(
@@ -236,3 +237,113 @@ def test_access_prints_tailnet_urls_instead_of_forwarding(
     started = json.loads(result.stdout.splitlines()[0])
     assert started["forwards"] == []
     assert started["tailnet"][0]["url"] == "http://main-web.tail1.ts.net:80/login"
+
+
+def test_tailnet_notes_say_why_nothing_is_on_the_tailnet() -> None:
+    """0.19 (P1): no companion, no operator, a companion without a name and
+    the operator's latest event on it."""
+    from piceli.envs.access import Access
+    from piceli.k8s.env_access import tailnet_notes
+
+    access = Access(tailnet=True)
+    missing = tailnet_notes(
+        access, [], [], {"deployments": [], "pods": [], "ingress_class": False}
+    )
+    assert [n["code"] for n in missing] == [
+        "access-tailnet-missing",
+        "access-operator-missing",
+    ]
+    pending = _companion("web", 80, None)
+    pending["kind"] = "Service"
+    events = [
+        {"involvedObject": {"kind": "Service", "name": "web-tailnet"}, "reason": "Old",
+         "message": "first", "lastTimestamp": "2026-10-12T08:00:00Z"},
+        {"involvedObject": {"kind": "Service", "name": "web-tailnet"}, "reason": "ProxyError",
+         "message": "requested tags [tag:k8s] are invalid or not permitted",
+         "lastTimestamp": "2026-10-12T09:00:00Z"},
+        {"involvedObject": {"kind": "Service", "name": "other"}, "reason": "X",
+         "message": "not this one", "lastTimestamp": "2026-10-12T10:00:00Z"},
+    ]  # fmt: skip
+    crashing = {
+        "deployments": [{"status": {"readyReplicas": 1}}],
+        "pods": [{"metadata": {"name": "operator-7d9"}, "status": {"containerStatuses": [
+            {"state": {"waiting": {"reason": "CrashLoopBackOff"}}}]}}],
+        "ingress_class": True,
+    }  # fmt: skip
+    notes = tailnet_notes(access, [pending], events, crashing)
+    assert [n["code"] for n in notes] == [
+        "access-operator-not-ready",
+        "access-tailnet-pending",
+    ]
+    assert "operator-7d9" in notes[0]["detail"] and "401" in notes[0]["detail"]
+    assert notes[1]["companion"] == "web-tailnet"
+    assert notes[1]["detail"].endswith(
+        "ProxyError: requested tags [tag:k8s] are invalid or not permitted"
+    )
+    assert [n["code"] for n in tailnet_notes(access, [pending], None, None)] == [
+        "access-operator-unknown", "access-tailnet-pending",
+    ]  # fmt: skip
+    ready = _companion("web", 80, "main-web.tail1.ts.net")
+    assert tailnet_notes(access, [ready], [], None) == []
+
+
+def test_an_https_companion_gives_an_https_url_without_a_port() -> None:
+    from piceli.k8s.env_access import tailnet_urls
+    from piceli.k8s.ui_config import UiShortcut
+
+    ingress = {
+        "kind": "Ingress",
+        "metadata": {"name": "web-tailnet", "labels": {
+            "piceli.io/access": "tailnet", "piceli.io/access-service": "web"}},
+        "spec": {"defaultBackend": {"service": {"name": "web", "port": {"number": 80}}}},
+        "status": {"loadBalancer": {"ingress": [{"hostname": "main-web.tail1.ts.net",
+                                                  "ports": [{"port": 443}]}]}},
+    }  # fmt: skip
+    shortcut = UiShortcut(
+        id="web", label="web", target="service/web", local_port=18080, remote_port=80,
+        path="/login",
+    )  # fmt: skip
+    (found,) = tailnet_urls([shortcut], [ingress])
+    assert found["url"] == "https://main-web.tail1.ts.net/login"
+
+
+def test_access_prints_the_notes_when_the_tailnet_is_not_ready(
+    profile: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import json
+
+    import piceli.k8s.cli.access as cli
+    from piceli.k8s.cli import app
+    from piceli.k8s.env_access import composition_env_target as real
+
+    infra = _PIPELINE_INFRA.replace(
+        "from piceli.envs import Environment",
+        "from piceli.envs import Access, Environment",
+    ).replace(
+        'follow={shop: "main"}),',
+        'follow={shop: "main"}, access=Access(tailnet=True)),',
+    )
+    (tmp_path / "infra.py").write_text(infra)
+    live = [service("web", 80), service("cache", 6379)]
+    reads: list[str] = []
+
+    def tailnet_reads(target: Any, access: Any, companions: Any) -> Any:
+        reads.append(target.namespace)
+        return [], [{"code": "access-tailnet-missing", "detail": "deploy again"}]
+
+    monkeypatch.setattr(
+        cli, "composition_env_target",
+        lambda target, env, root, **_k: real(
+            target, env, root, services=lambda _t: live, port=lambda: 43001,
+            tailnet_reads=tailnet_reads,
+        ),
+    )  # fmt: skip
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(
+        app,
+        ["access", "main", "--cluster", "infra.py:cluster", "--json",
+         "--kubectl", str(tmp_path / "no-kubectl")],
+    )  # fmt: skip
+    assert reads == ["shop-main"]
+    assert "piceli: access-tailnet-missing: deploy again" in result.stderr
+    assert json.loads(result.stdout)["reason"] == "access-kubectl-missing"

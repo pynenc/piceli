@@ -134,6 +134,31 @@ def render_app(pipeline: Pipeline, ctx: ReleaseContext) -> DeploymentComposition
     return isolate(composition, env)
 
 
+def tailnet_report(pipeline: Pipeline) -> dict[str, Any] | None:
+    """What this environment puts on the tailnet, and the notes on what it
+    does not (``None`` without ``Access(tailnet=True)``; 0.19.0)."""
+    env = getattr(pipeline, "branch_env", None)
+    access = getattr(env, "access", None)
+    if env is None or access is None or not access.tailnet:
+        return None
+    from piceli.envs.access import tailnet_report as report
+
+    composition = render_app(pipeline, preview_context(pipeline))
+    manifests = [
+        resource.manifest
+        for component in composition.components
+        for resource in component.resources
+    ]
+    return report(
+        manifests,
+        access,
+        env.exposed,
+        env.environment or env.branch,
+        env.namespace,
+        env.exposed_http,
+    )
+
+
 def used_handles(pipeline: Pipeline) -> list[str]:
     """Build image names the app uses, in first-use order."""
     names: dict[str, None] = {}

@@ -129,3 +129,47 @@ def test_hostnames_are_dns_labels() -> None:
     access = Access(tailnet=True, hostname="{namespace}-{service}")
     assert access.host("main", "Web_App", "shop-main") == "shop-main-web-app"
     assert len(Access(tailnet=True).host("e" * 40, "s" * 40, "n")) <= 63
+
+
+def test_the_plan_shows_what_goes_on_the_tailnet_and_why_not_the_rest() -> None:
+    """0.19 (P1): the plan stage's ``access`` (not hashed)."""
+    from piceli.pipeline.compose import tailnet_report
+
+    pipeline = Pipeline(
+        _app(),
+        Target(Path("/nonexistent/kc"), context="c", namespace="shop"),
+        state_dir=Path("/nonexistent/state"),
+        envs=EnvConfig(
+            prefix="shop-",
+            environments=[
+                Environment(
+                    "main", namespace="shop-main", follow=Branch("main"),
+                    access=Access(tailnet=True, services=["web", "nope"]),
+                )
+            ],
+        ),
+    )  # fmt: skip
+    report = tailnet_report(env_pipeline(pipeline, "main"))
+    assert report is not None
+    assert report["tailnet"] == [
+        {
+            "kind": "Service",
+            "name": "web-tailnet",
+            "service": "web",
+            "host": "main-web",
+            "ports": [3000],
+            "scheme": "http",
+        }
+    ]
+    assert len(report["policies"]) == 1  # the app's policy in front of web
+    assert [(n["code"], n["service"], n["why"]) for n in report["notes"]] == [
+        ("access-tailnet-skipped", "nope", "not-found")
+    ]
+    plain = Pipeline(
+        _app(), Target(Path("/nonexistent/kc"), context="c", namespace="shop"),
+        state_dir=Path("/nonexistent/state"),
+        envs=EnvConfig(prefix="shop-", environments=[
+            Environment("main", namespace="shop-main", follow=Branch("main"))
+        ]),
+    )  # fmt: skip
+    assert tailnet_report(env_pipeline(plain, "main")) is None

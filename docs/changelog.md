@@ -29,12 +29,21 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   `Environment.per_branch(access=...)`) adds, per Service with a declared
   forward, a companion Service `<name>-tailnet` (`loadBalancerClass:
   tailscale`) that the Tailscale Kubernetes operator exposes on the tailnet
-  under `hostname` (`{env}-{service}` by default); the environment's
-  ingress policies that select those pods admit the operator's namespace.
+  under `hostname` (`{env}-{service}` by default). Which ingress policies
+  admit the operator's namespace is decided by the pods: every policy whose
+  `podSelector` (labels and expressions) selects a pod template that an
+  exposed Service selects, on the exposed target ports only; no policy is
+  added or widened. The plan's `access` lists the companions, the amended
+  policies and notes (`access-tailnet-skipped`, `access-policy-unchanged`).
   `piceli access ENV --cluster ...` prints the tailnet URLs instead of
   forwarding them (`tailnet` in the `started` event; exits 0 when nothing is
-  left to forward); a companion without a name yet is forwarded, with a
-  note; `--forward` forwards everything.
+  left to forward); a companion without a name yet is forwarded, and
+  `tailnet_notes` say why (no companion, no or crash-looping operator, the
+  operator's latest Event); `--forward` forwards everything. Options:
+  `tags=` (`tailscale.com/tags`), `https=True` (a Tailscale Ingress per HTTP
+  port: `https://NAME.TAILNET.ts.net/`), `proxy_class=` (now the
+  `tailscale.com/proxy-class` label the operator reads). The access guide
+  has a cluster owner checklist.
 - **A busy forward is never restarted.** `piceli access` holds each local
   port in a relay in front of `kubectl`: a forward that moved bytes in the
   last 15 s is `busy`, not failed, whatever its probe says; probes go

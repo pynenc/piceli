@@ -1166,6 +1166,8 @@ class BranchEnv:
     #: the tailnet (``{service: ports}``, see :mod:`piceli.envs.access`).
     access: Any = None
     exposed: Mapping[str, tuple[int, ...]] = field(default_factory=dict)
+    #: The exposed ports whose forward is HTTP (``Access(https=True)``).
+    exposed_http: Mapping[str, tuple[int, ...]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

@@ -288,33 +288,124 @@ from piceli.envs import Access
 
 Environment("main", namespace="shop-main", pipeline=pipeline, cluster=my_cluster,
             follow={shop: "main"}, access=Access(tailnet=True, hostname="shop-{env}-{service}"))
-# or every environment of the cluster: Cluster(..., access=Access(tailnet=True))
-# or branch environments: Environment.per_branch(..., access=Access(tailnet=True))
+# branch environments: Environment.per_branch(..., access=Access(tailnet=True))
 ```
+
+`Cluster(..., access=Access(tailnet=True))` is the default of **every**
+environment of that cluster: release candidates and every branch
+environment included. Declare it on the environments you mean when that is
+not what you want.
 
 - The environment's release adds, for each Service the app declares a
   forward for (`app.access.forward`, or `Access(services=[...])`), a
   companion Service `<name>-tailnet` with `loadBalancerClass: tailscale`.
   The [Tailscale Kubernetes operator](https://tailscale.com/kb/1236/kubernetes-operator),
-  which the cluster's owner installs (Piceli does not), gives it the
-  machine name `hostname` (`{env}`, `{service}`, `{namespace}`) on the
-  tailnet: only the tailnet's devices reach it, under the tailnet's ACLs,
-  and the app keeps its own login.
-- Every ingress NetworkPolicy of the environment that already selects
-  those pods gets one more rule: the operator's namespace
-  (`operator_namespace`, default `tailscale`) on the exposed ports. Piceli
-  adds no new policy (a new one would cut the pods off from every other
-  source).
+  which the cluster's owner installs (Piceli does not, see the
+  [checklist](#cluster-owner-checklist)), gives it the machine name
+  `hostname` (`{env}`, `{service}`, `{namespace}`) on the tailnet: only the
+  devices the tailnet policy lets reach the proxies' tag get in, and the
+  app keeps its own login. Only the forwarded ports are exposed.
+- **The NetworkPolicies are decided by the pods.** Piceli takes the pod
+  templates of the release's workloads (Deployment, StatefulSet, DaemonSet,
+  ReplicaSet, Job, CronJob, Pod) whose labels match each exposed Service's
+  selector, and every ingress NetworkPolicy of the environment whose
+  `podSelector` (`matchLabels` and `matchExpressions`) selects one of them
+  gets one more rule: the operator's namespace (`operator_namespace`,
+  default `tailscale`) on the exposed target ports only. A policy can
+  select the pods through labels the Service does not use; it is still
+  found. Piceli adds no new policy (a new one would cut the pods off from
+  every other source) and widens none beyond those ports.
 - `piceli access ENV --cluster infra.py:CLUSTER` prints the tailnet URL of
-  each such forward (`http://<name>.<tailnet>.ts.net:<port><path>`) instead of
-  forwarding it, and keeps forwarding the rest (and the UI with `--ui`). A
-  companion without a tailnet name yet (the operator is not installed or
-  not ready) is forwarded as before, with a note. `--forward` forwards
-  everything.
+  each such forward instead of forwarding it, and keeps forwarding the
+  rest (and the UI with `--ui`). The name is read from the companion's
+  `status.loadBalancer.ingress`, never composed: when a stale device still
+  holds the name, Tailscale gives the new proxy `<name>-1`, and that is the
+  URL printed. A companion without a name yet is forwarded as before, with
+  a note. `--forward` forwards everything.
 
 The `started` event (`--json`) lists them under `tailnet` (`id`, `service`,
-`port`, `host`, `ready`, `url`); when every selected forward is on the
-tailnet and there is no `--ui`, `piceli access` prints them and exits 0.
+`port`, `host`, `ready`, `url`, `companion`); when every selected forward is
+on the tailnet and there is no `--ui`, `piceli access` prints them and exits 0.
+
+Options (defaults unchanged):
+
+- `tags=["tag:family-dashboard"]` (annotation `tailscale.com/tags`): the
+  proxies' tags, to give one environment's services wider or narrower
+  access than the operator's default tag. The tailnet policy must make the
+  operator's tag an owner of each (`tagOwners`), or the operator cannot
+  create the proxy (an `access-tailnet-pending` note shows its event).
+- `https=True`: every exposed port whose forward is HTTP (it declares a
+  `path` or an HTTP health check) gets a Tailscale `Ingress`
+  (`ingressClassName: tailscale`) instead, served at
+  `https://<name>.<tailnet>.ts.net/<path>` with a tailnet certificate and
+  no port in the URL. It needs MagicDNS and HTTPS certificates on in the
+  tailnet, which is why it is opt-in. A Service that also exposes
+  non-HTTP ports keeps one plain companion (`https-mixed-ports`).
+- `proxy_class="NAME"` (label `tailscale.com/proxy-class`): the operator's
+  `ProxyClass` for these proxies.
+
+**Branch environments create and delete tailnet devices.** With
+`Environment.per_branch(..., access=Access(tailnet=True))` every branch
+environment adds its companions, so the operator creates one device per
+exposed Service when the branch is deployed. Deleting the environment
+(the branch is deleted, or `idle_stop` and teardown) removes the companions
+and so the devices.
+
+### Why a service is not on the tailnet
+
+Nothing is skipped silently. The plan of an environment with
+`Access(tailnet=True)` has `access` in its `plan` stage (shown, not part of
+the plan hash): `tailnet` (each companion: `kind`, `name`, `service`,
+`host`, `ports`, `scheme`), `policies` (the ingress policies admitting the
+operator's namespace) and `notes`:
+
+| Code | `why` | Meaning |
+| --- | --- | --- |
+| `access-tailnet-skipped` | `not-found`, `no-selector`, `no-matching-port`, `https-mixed-ports` | The Service gets no companion (or not the HTTPS one) |
+| `access-policy-unchanged` | `selector-unevaluable` | A policy's `podSelector` cannot be evaluated (an unknown operator): if it selects the pods, the proxies are blocked |
+| `access-policy-unchanged` | `pods-not-in-release` | No workload of the release has pods the Service selects, so the policies in front of them cannot be checked |
+
+`piceli access` checks the running cluster, read-only, and prints
+`tailnet_notes` (also in its `started` event):
+
+| Code | Meaning |
+| --- | --- |
+| `access-tailnet-missing` | The running release has no companions (rendered before `Access(tailnet=True)`): deploy the environment again |
+| `access-operator-missing` | No operator Deployment in `operator_namespace` and no `tailscale` IngressClass |
+| `access-operator-not-ready` | No ready operator replica, or a crash-looping operator pod |
+| `access-operator-unknown` | The operator's namespace cannot be read with these credentials |
+| `access-tailnet-pending` | A companion has no tailnet name yet; the note quotes the operator's latest Event on it (tags it may not use, OAuth errors) |
+
+(cluster-owner-checklist)=
+### Cluster owner checklist
+
+Piceli holds no Tailscale credential and installs nothing on the tailnet.
+The cluster's owner does this once per cluster:
+
+1. **Tailnet policy.** In `tagOwners`, the operator's tag (for example
+   `tag:k8s-operator`) owned by the tailnet admins, and the proxies' tag
+   (`tag:k8s`, plus every tag an environment names in `Access(tags=...)`)
+   owned by the operator's tag. A grant from the people who should reach
+   the services to the proxies' tag (and none from anyone else). A policy
+   test that checks both (who gets in, who does not) is recommended. A new
+   tailnet Service then needs no policy change.
+2. **An OAuth client for the operator only**: scopes Devices Core (write)
+   and Auth Keys (write), tagged with the operator's tag. Keep it in the
+   cluster only.
+3. **Install the operator** in `operator_namespace` (default `tailscale`),
+   for example with its Helm chart. Two traps:
+   - Create the `operator-oauth` Secret **without trailing newlines**.
+     `echo` and `security find-generic-password -w` add one, the operator
+     sends the file verbatim, and it fails with `oauth2: cannot fetch token:
+     401 ... API token invalid`. Use `printf %s` or `--from-literal`.
+   - The operator has **no readiness probe**: `kubectl rollout status`
+     succeeds while it crash-loops. Wait for the `Startup complete, operator
+     running` line in its log.
+4. **NetworkPolicies must be enforced** for the operator rule to matter
+   (most CNIs; K3s's kube-router does).
+5. The operator's own device does not appear in a laptop's `tailscale
+   status` unless a grant reaches the operator's tag; the proxies do appear
+   once a companion is deployed.
 
 ## Contract: `piceli access`
 

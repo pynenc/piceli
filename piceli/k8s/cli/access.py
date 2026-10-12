@@ -479,12 +479,13 @@ def access(
     wanted = {item.id for item in selected}
     tailnet = [] if forward else [t for t in resolved.tailnet if t["id"] in wanted]
     on_tailnet = [t for t in tailnet if t["ready"]]
+    notes = [] if forward else list(resolved.tailnet_notes)
     for item in tailnet:
         if not item["ready"]:
-            say(
-                f"piceli: {item['id']} has no tailnet address yet (is the Tailscale "
-                "operator installed?); forwarding it instead"
-            )
+            say(f"piceli: {item['id']} has no tailnet name yet; forwarding it instead")
+    for note in notes:
+        # 0.19: why it is not on the tailnet (see `piceli explain CODE`).
+        say(f"piceli: {note['code']}: {note['detail']}")
     direct = {t["id"] for t in on_tailnet}
     selected = tuple(item for item in selected if item.id not in direct)
     if not selected and on_tailnet and not ui:
@@ -496,6 +497,7 @@ def access(
                     "namespace": resolved.namespace,
                     "forwards": [],
                     "tailnet": on_tailnet,
+                    **({"tailnet_notes": notes} if notes else {}),
                 }
             )
         else:
@@ -580,6 +582,7 @@ def access(
             **({"ui": launch} if launch else {}),
             # Added in 0.19.0: services reached on the tailnet, not forwarded.
             **({"tailnet": on_tailnet} if on_tailnet else {}),
+            **({"tailnet_notes": notes} if notes else {}),
         }
         if as_json:
             emit_json(started)

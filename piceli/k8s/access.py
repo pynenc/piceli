@@ -94,6 +94,9 @@ class AccessTarget:
     #: 0.19.0: forwards reachable on the tailnet instead (``id``, ``service``,
     #: ``url``, ``host``, ``ready``), see :mod:`piceli.envs.access`.
     tailnet: tuple[dict[str, Any], ...] = ()
+    #: 0.19.0: why the environment is not (yet) on the tailnet (``code``,
+    #: ``detail``), see :func:`piceli.k8s.env_access.tailnet_notes`.
+    tailnet_notes: tuple[dict[str, Any], ...] = ()
 
     def shortcut(self, ident: str) -> UiShortcut | None:
         return next((item for item in self.shortcuts if item.id == ident), None)

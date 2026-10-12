@@ -275,10 +275,11 @@ def env_pipeline(
         }
         access = config.branch_access
     if access is not None and access.tailnet:
-        from piceli.envs.access import exposed_services
+        from piceli.envs.access import exposed_services, http_ports
 
         placement["access"] = access
         placement["exposed"] = exposed_services(access, pipeline.app, namespace)
+        placement["exposed_http"] = http_ports(pipeline.app, namespace)
     env = BranchEnv(
         branch=branch,
         namespace=namespace,
