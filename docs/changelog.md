@@ -6,6 +6,10 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
 
 ## Version 0.19.1
 
+- **Tailnet companions in GitOps deploys.** The controller rebuilt each
+  composition environment without its `Access` (and ignored the cluster's
+  `access`), so an environment deployed by the GitOps controller got no
+  tailnet companion at all in 0.19.0; only local `piceli env` deploys did.
 - **Tailnet: the NetworkPolicies are decided by the pods.** In 0.19.0 an
   ingress policy was opened to the Tailscale operator's namespace only when
   its `podSelector` labels were all in an exposed Service's selector. A
