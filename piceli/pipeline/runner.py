@@ -83,6 +83,7 @@ from piceli.pipeline.compose import (
     registry_release_spec,
     release_spec,
     scoped_checks,
+    tailnet_report,
     used_handles,
     used_mirrors,
     uses_pending_image,
@@ -1319,6 +1320,10 @@ class PipelineRunner:
         self, work: _Work, reapply: bool
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         fingerprint = model_fingerprint(self.pipeline)
+        # 0.19: what goes on the tailnet and why not the rest; shown, not
+        # hashed (the objects themselves are in the plan's actions).
+        tailnet = tailnet_report(self.pipeline)
+        access = {"access": tailnet} if tailnet is not None else {}
         if any(name not in work.delivered for name in work.used):
             preview = self._preview(work)
             # The preview itself is never hashed (its digests are
@@ -1329,6 +1334,7 @@ class PipelineRunner:
                     "state": "pending",
                     "why": "images are not delivered yet",
                     "preview": preview,
+                    **access,
                 },
                 {"model": fingerprint, "ownership": _ownership(preview["changes"])},
             )
@@ -1344,6 +1350,7 @@ class PipelineRunner:
             "drift": drift,
             "images": work.release_images,
             **({"kept_orphaned": kept} if kept else {}),
+            **access,
         }
         hashed = {
             "model": fingerprint,

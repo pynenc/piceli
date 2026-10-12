@@ -72,6 +72,15 @@ RULES = {"rejecting"}
 # Codes built at runtime, which a literal scan cannot see. Keep this list next
 # to the code that builds them.
 DYNAMIC = {
+    # envs.access (SKIPPED, UNCHANGED) and k8s.env_access (TAILNET_*,
+    # OPERATOR_*): tailnet note codes, set from constants
+    "access-tailnet-skipped",
+    "access-policy-unchanged",
+    "access-tailnet-missing",
+    "access-tailnet-pending",
+    "access-operator-missing",
+    "access-operator-not-ready",
+    "access-operator-unknown",
     # dev.pod.main and dev.cluster.ended: a run's outcome, set in its result
     "dev-command-failed",
     "dev-run-timed-out",

@@ -566,8 +566,14 @@ def env_config_of(composition: Composition, env: EnvItem) -> Any:
     """The ``EnvConfig`` holding exactly ``env`` (its stack, nodes and quota)."""
     from piceli.envs.model import BranchEnvironments, EnvConfig, Environment
 
+    # 0.19.1: the environment's Access, else its cluster's (0.19.0 lost both
+    # here, so a GitOps deploy rendered no tailnet companion).
+    cluster_access = getattr(getattr(env, "cluster", None), "access", None)
     if isinstance(env, BranchEnvironments):
-        return dataclasses.replace(env.env_config(), branch_stack=env.stack)
+        config = dataclasses.replace(env.env_config(), branch_stack=env.stack)
+        if config.branch_access is None and cluster_access is not None:
+            config = dataclasses.replace(config, branch_access=cluster_access)
+        return config
     single = Environment(
         env.name,
         namespace=env.namespace,
@@ -576,6 +582,7 @@ def env_config_of(composition: Composition, env: EnvItem) -> Any:
         replicas=env.replicas,
         quota=env.quota,
         auto_approve=env.auto_approve,
+        access=env.access or cluster_access,
     )
     prefix = (composition.name + "-")[:39].rstrip("-") + "-"
     if not prefix[0].isalpha():

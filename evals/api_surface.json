@@ -7042,9 +7042,16 @@
    "access-kubeconfig-invalid",
    "access-kubectl-missing",
    "access-none-declared",
+   "access-operator-missing",
+   "access-operator-not-ready",
+   "access-operator-unknown",
+   "access-policy-unchanged",
    "access-port-conflict",
    "access-stop-incomplete",
    "access-stop-needs-stale",
+   "access-tailnet-missing",
+   "access-tailnet-pending",
+   "access-tailnet-skipped",
    "access-target-invalid",
    "access-ui-cluster-invalid",
    "access-ui-forbidden",
@@ -8979,5 +8986,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.19.0"
+ "version": "0.19.1"
 }

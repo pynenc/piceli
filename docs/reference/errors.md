@@ -20,9 +20,16 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`access-kubeconfig-invalid`](#error-access-kubeconfig-invalid) | access | no |
 | [`access-kubectl-missing`](#error-access-kubectl-missing) | access | no |
 | [`access-none-declared`](#error-access-none-declared) | access | no |
+| [`access-operator-missing`](#error-access-operator-missing) | access | no |
+| [`access-operator-not-ready`](#error-access-operator-not-ready) | access | no |
+| [`access-operator-unknown`](#error-access-operator-unknown) | access | no |
+| [`access-policy-unchanged`](#error-access-policy-unchanged) | access | no |
 | [`access-port-conflict`](#error-access-port-conflict) | access | no |
 | [`access-stop-incomplete`](#error-access-stop-incomplete) | access | yes |
 | [`access-stop-needs-stale`](#error-access-stop-needs-stale) | access | no |
+| [`access-tailnet-missing`](#error-access-tailnet-missing) | access | no |
+| [`access-tailnet-pending`](#error-access-tailnet-pending) | access | no |
+| [`access-tailnet-skipped`](#error-access-tailnet-skipped) | access | no |
 | [`access-target-invalid`](#error-access-target-invalid) | access | no |
 | [`access-ui-cluster-invalid`](#error-access-ui-cluster-invalid) | cluster-ui | no |
 | [`access-ui-forbidden`](#error-access-ui-forbidden) | cluster-ui | no |
@@ -3184,6 +3191,38 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Add `access=app.access.forward(local=PORT)` to a Service, and return the App itself from the composition function.
 - **Retry-safe:** no
 
+(error-access-operator-missing)=
+### `access-operator-missing`
+
+**Tailscale operator not installed.** `piceli access` (0.19.1): no Deployment in `Access.operator_namespace` and no `tailscale` IngressClass, so nothing gives the companions a tailnet name.
+
+- **Fix:** The cluster owner installs the Tailscale Kubernetes operator in that namespace (see the access guide's cluster owner checklist).
+- **Retry-safe:** no
+
+(error-access-operator-not-ready)=
+### `access-operator-not-ready`
+
+**Tailscale operator not ready.** `piceli access` (0.19.1): the Tailscale operator has no ready replica or a pod is crash-looping. The operator has no readiness probe, so a rollout can look done while it fails.
+
+- **Fix:** Read the operator's log until `Startup complete, operator running`; a 401 `API token invalid` usually means an OAuth secret with a trailing newline.
+- **Retry-safe:** no
+
+(error-access-operator-unknown)=
+### `access-operator-unknown`
+
+**Tailscale operator not checked.** `piceli access` (0.19.1): the operator's namespace could not be read with these credentials, so its state is unknown.
+
+- **Fix:** Ask the cluster owner, or check with credentials that can read that namespace.
+- **Retry-safe:** no
+
+(error-access-policy-unchanged)=
+### `access-policy-unchanged`
+
+**NetworkPolicy not opened to the tailnet.** A note of `Access(tailnet=True)` (0.19.1): an ingress NetworkPolicy that may select the exposed pods was left unchanged, so the Tailscale operator's proxies may be blocked. `why`: `selector-unevaluable` (its podSelector uses an unknown operator or is malformed) or `pods-not-in-release` (no workload of the release has pods the Service selects, so the policies cannot be checked).
+
+- **Fix:** Fix the policy's podSelector, or add a rule admitting the operator's namespace (`Access.operator_namespace`) on the exposed target ports yourself.
+- **Retry-safe:** no
+
 (error-access-port-conflict)=
 ### `access-port-conflict`
 
@@ -3206,6 +3245,30 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Say which processes to stop.** `piceli access stop` only stops Piceli's own stale processes for the app, and needs `--stale` to say so.
 
 - **Fix:** Run `piceli access stop --stale TARGET`.
+- **Retry-safe:** no
+
+(error-access-tailnet-missing)=
+### `access-tailnet-missing`
+
+**No tailnet companion running.** `piceli access` (0.19.1): the environment declares `Access(tailnet=True)` but its running release has no tailnet companion: it was rendered before the declaration, or every Service was skipped.
+
+- **Fix:** Deploy the environment again; its plan's `access.notes` say why a Service is left out.
+- **Retry-safe:** no
+
+(error-access-tailnet-pending)=
+### `access-tailnet-pending`
+
+**Tailnet name not assigned yet.** `piceli access` (0.19.1): a tailnet companion has no name in `status.loadBalancer.ingress` yet; the note carries the Tailscale operator's latest Event on it (for example tags it may not use, or OAuth errors).
+
+- **Fix:** Wait a minute after a deploy; otherwise act on the event (tailnet policy `tagOwners`, the operator's OAuth client) or ask the cluster owner.
+- **Retry-safe:** no
+
+(error-access-tailnet-skipped)=
+### `access-tailnet-skipped`
+
+**Service not put on the tailnet.** A note of `Access(tailnet=True)` in a plan's `access.notes` (0.19.1): an exposed Service gets no tailnet companion. `why`: `not-found` (the release has no such Service), `no-selector` (a Service without a selector has no pods), `no-matching-port` (none of its ports is exposed), `https-mixed-ports` (with `https=True`, a Service exposing non-HTTP ports too keeps one plain companion).
+
+- **Fix:** Fix `Access(services=...)` or the forward declarations (`app.access.forward`), or give the Service a selector.
 - **Retry-safe:** no
 
 (error-access-target-invalid)=

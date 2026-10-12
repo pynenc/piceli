@@ -774,21 +774,25 @@ def isolate(
     if env.access is not None and env.access.tailnet and env.exposed:
         # 0.19: companion Services on the tailnet; the policies that select
         # their pods let the Tailscale operator's proxies in.
-        from piceli.envs.access import allow_tailnet, tailnet_services
+        # Which policies: decided by the pods (see piceli.envs.access).
+        from piceli.envs.access import allow_tailnet, tailnet_plan
 
-        exposed = tailnet_services(
-            list(manifests.values()),
+        everything = list(manifests.values())
+        plan = tailnet_plan(
+            everything,
             env.access,
             env.exposed,
             env.environment or env.branch,
             env.namespace,
+            env.exposed_http,
         )
         policies = [m for ref, m in manifests.items() if ref.kind == "NetworkPolicy"]
-        for policy in allow_tailnet(policies, exposed, env.access):
+        amended, _notes = allow_tailnet(policies, plan.backends, everything, env.access)
+        for policy in amended:
             changed_ref = next(ref for ref, m in manifests.items() if m is policy)
             components = _replace(components, changed_ref, policy)
-        allow_tailnet(added, exposed, env.access)
-        added += exposed
+        allow_tailnet(added, plan.backends, everything, env.access)
+        added += plan.objects
     if added:
         if any(component.name == COMPONENT for component in components):
             raise EnvError(

@@ -4,6 +4,44 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.19.1
+
+- **Tailnet companions in GitOps deploys.** The controller rebuilt each
+  composition environment without its `Access` (and ignored the cluster's
+  `access`), so an environment deployed by the GitOps controller got no
+  tailnet companion at all in 0.19.0; only local `piceli env` deploys did.
+- **Tailnet: the NetworkPolicies are decided by the pods.** In 0.19.0 an
+  ingress policy was opened to the Tailscale operator's namespace only when
+  its `podSelector` labels were all in an exposed Service's selector. A
+  policy that selects the same pods through other labels was skipped and
+  kept blocking the operator's proxies, so those services never answered on
+  the tailnet. Now every ingress policy whose `podSelector`
+  (`matchLabels` and `matchExpressions`) selects a pod template of the
+  release that an exposed Service selects gets the operator rule, on the
+  exposed target ports only; still no policy is added or widened.
+- **Why a service is not on the tailnet.** The plan's `plan` stage has
+  `access` (not hashed): the companions, the policies admitting the
+  operator and `notes` (`access-tailnet-skipped`: not found, no selector,
+  no matching port; `access-policy-unchanged`: a selector that cannot be
+  evaluated, pods not in the release). `piceli access` checks the cluster
+  read-only and prints `tailnet_notes` (also in its JSON events):
+  `access-tailnet-missing` (the running release predates the declaration),
+  `access-operator-missing`, `access-operator-not-ready` (also a
+  crash-looping operator), `access-operator-unknown`, and
+  `access-tailnet-pending` with the operator's latest Event on a companion
+  without a name.
+- **Options**: `Access(tags=[...])` (`tailscale.com/tags`), and opt-in
+  `Access(https=True)`: a Tailscale Ingress per HTTP port,
+  `https://NAME.TAILNET.ts.net/` with a tailnet certificate. `proxy_class`
+  is now rendered as the `tailscale.com/proxy-class` label, which is what
+  the operator reads (0.19.0 wrote an annotation).
+- **Docs**: the access guide's tailnet section says that
+  `Cluster(access=...)` reaches every environment (release candidates and
+  branches included), that branch environments create and delete tailnet
+  devices, that the URL's name is read from the operator (a stale device
+  gives `NAME-1`), and has a cluster owner checklist (tailnet policy, OAuth
+  client, the operator's two traps).
+
 ## Version 0.19.0
 
 - **Development runs ship Git deltas.** The builder keeps a Git mirror per
