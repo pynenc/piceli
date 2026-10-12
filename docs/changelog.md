@@ -4,6 +4,40 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.19.1
+
+- **Tailnet: the NetworkPolicies are decided by the pods.** In 0.19.0 an
+  ingress policy was opened to the Tailscale operator's namespace only when
+  its `podSelector` labels were all in an exposed Service's selector. A
+  policy that selects the same pods through other labels was skipped and
+  kept blocking the operator's proxies, so those services never answered on
+  the tailnet. Now every ingress policy whose `podSelector`
+  (`matchLabels` and `matchExpressions`) selects a pod template of the
+  release that an exposed Service selects gets the operator rule, on the
+  exposed target ports only; still no policy is added or widened.
+- **Why a service is not on the tailnet.** The plan's `plan` stage has
+  `access` (not hashed): the companions, the policies admitting the
+  operator and `notes` (`access-tailnet-skipped`: not found, no selector,
+  no matching port; `access-policy-unchanged`: a selector that cannot be
+  evaluated, pods not in the release). `piceli access` checks the cluster
+  read-only and prints `tailnet_notes` (also in its JSON events):
+  `access-tailnet-missing` (the running release predates the declaration),
+  `access-operator-missing`, `access-operator-not-ready` (also a
+  crash-looping operator), `access-operator-unknown`, and
+  `access-tailnet-pending` with the operator's latest Event on a companion
+  without a name.
+- **Options**: `Access(tags=[...])` (`tailscale.com/tags`), and opt-in
+  `Access(https=True)`: a Tailscale Ingress per HTTP port,
+  `https://NAME.TAILNET.ts.net/` with a tailnet certificate. `proxy_class`
+  is now rendered as the `tailscale.com/proxy-class` label, which is what
+  the operator reads (0.19.0 wrote an annotation).
+- **Docs**: the access guide's tailnet section says that
+  `Cluster(access=...)` reaches every environment (release candidates and
+  branches included), that branch environments create and delete tailnet
+  devices, that the URL's name is read from the operator (a stale device
+  gives `NAME-1`), and has a cluster owner checklist (tailnet policy, OAuth
+  client, the operator's two traps).
+
 ## Version 0.19.0
 
 - **Development runs ship Git deltas.** The builder keeps a Git mirror per
@@ -29,21 +63,12 @@ For detailed information on each version, please visit the [Piceli GitHub Releas
   `Environment.per_branch(access=...)`) adds, per Service with a declared
   forward, a companion Service `<name>-tailnet` (`loadBalancerClass:
   tailscale`) that the Tailscale Kubernetes operator exposes on the tailnet
-  under `hostname` (`{env}-{service}` by default). Which ingress policies
-  admit the operator's namespace is decided by the pods: every policy whose
-  `podSelector` (labels and expressions) selects a pod template that an
-  exposed Service selects, on the exposed target ports only; no policy is
-  added or widened. The plan's `access` lists the companions, the amended
-  policies and notes (`access-tailnet-skipped`, `access-policy-unchanged`).
+  under `hostname` (`{env}-{service}` by default); the environment's
+  ingress policies that select those pods admit the operator's namespace.
   `piceli access ENV --cluster ...` prints the tailnet URLs instead of
   forwarding them (`tailnet` in the `started` event; exits 0 when nothing is
-  left to forward); a companion without a name yet is forwarded, and
-  `tailnet_notes` say why (no companion, no or crash-looping operator, the
-  operator's latest Event); `--forward` forwards everything. Options:
-  `tags=` (`tailscale.com/tags`), `https=True` (a Tailscale Ingress per HTTP
-  port: `https://NAME.TAILNET.ts.net/`), `proxy_class=` (now the
-  `tailscale.com/proxy-class` label the operator reads). The access guide
-  has a cluster owner checklist.
+  left to forward); a companion without a name yet is forwarded, with a
+  note; `--forward` forwards everything.
 - **A busy forward is never restarted.** `piceli access` holds each local
   port in a relay in front of `kubectl`: a forward that moved bytes in the
   last 15 s is `busy`, not failed, whatever its probe says; probes go

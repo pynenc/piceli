@@ -3194,7 +3194,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-access-operator-missing)=
 ### `access-operator-missing`
 
-**Tailscale operator not installed.** `piceli access` (0.19.0): no Deployment in `Access.operator_namespace` and no `tailscale` IngressClass, so nothing gives the companions a tailnet name.
+**Tailscale operator not installed.** `piceli access` (0.19.1): no Deployment in `Access.operator_namespace` and no `tailscale` IngressClass, so nothing gives the companions a tailnet name.
 
 - **Fix:** The cluster owner installs the Tailscale Kubernetes operator in that namespace (see the access guide's cluster owner checklist).
 - **Retry-safe:** no
@@ -3202,7 +3202,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-access-operator-not-ready)=
 ### `access-operator-not-ready`
 
-**Tailscale operator not ready.** `piceli access` (0.19.0): the Tailscale operator has no ready replica or a pod is crash-looping. The operator has no readiness probe, so a rollout can look done while it fails.
+**Tailscale operator not ready.** `piceli access` (0.19.1): the Tailscale operator has no ready replica or a pod is crash-looping. The operator has no readiness probe, so a rollout can look done while it fails.
 
 - **Fix:** Read the operator's log until `Startup complete, operator running`; a 401 `API token invalid` usually means an OAuth secret with a trailing newline.
 - **Retry-safe:** no
@@ -3210,7 +3210,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-access-operator-unknown)=
 ### `access-operator-unknown`
 
-**Tailscale operator not checked.** `piceli access` (0.19.0): the operator's namespace could not be read with these credentials, so its state is unknown.
+**Tailscale operator not checked.** `piceli access` (0.19.1): the operator's namespace could not be read with these credentials, so its state is unknown.
 
 - **Fix:** Ask the cluster owner, or check with credentials that can read that namespace.
 - **Retry-safe:** no
@@ -3218,7 +3218,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-access-policy-unchanged)=
 ### `access-policy-unchanged`
 
-**NetworkPolicy not opened to the tailnet.** A note of `Access(tailnet=True)` (0.19.0): an ingress NetworkPolicy that may select the exposed pods was left unchanged, so the Tailscale operator's proxies may be blocked. `why`: `selector-unevaluable` (its podSelector uses an unknown operator or is malformed) or `pods-not-in-release` (no workload of the release has pods the Service selects, so the policies cannot be checked).
+**NetworkPolicy not opened to the tailnet.** A note of `Access(tailnet=True)` (0.19.1): an ingress NetworkPolicy that may select the exposed pods was left unchanged, so the Tailscale operator's proxies may be blocked. `why`: `selector-unevaluable` (its podSelector uses an unknown operator or is malformed) or `pods-not-in-release` (no workload of the release has pods the Service selects, so the policies cannot be checked).
 
 - **Fix:** Fix the policy's podSelector, or add a rule admitting the operator's namespace (`Access.operator_namespace`) on the exposed target ports yourself.
 - **Retry-safe:** no
@@ -3250,7 +3250,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-access-tailnet-missing)=
 ### `access-tailnet-missing`
 
-**No tailnet companion running.** `piceli access` (0.19.0): the environment declares `Access(tailnet=True)` but its running release has no tailnet companion: it was rendered before the declaration, or every Service was skipped.
+**No tailnet companion running.** `piceli access` (0.19.1): the environment declares `Access(tailnet=True)` but its running release has no tailnet companion: it was rendered before the declaration, or every Service was skipped.
 
 - **Fix:** Deploy the environment again; its plan's `access.notes` say why a Service is left out.
 - **Retry-safe:** no
@@ -3258,7 +3258,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-access-tailnet-pending)=
 ### `access-tailnet-pending`
 
-**Tailnet name not assigned yet.** `piceli access` (0.19.0): a tailnet companion has no name in `status.loadBalancer.ingress` yet; the note carries the Tailscale operator's latest Event on it (for example tags it may not use, or OAuth errors).
+**Tailnet name not assigned yet.** `piceli access` (0.19.1): a tailnet companion has no name in `status.loadBalancer.ingress` yet; the note carries the Tailscale operator's latest Event on it (for example tags it may not use, or OAuth errors).
 
 - **Fix:** Wait a minute after a deploy; otherwise act on the event (tailnet policy `tagOwners`, the operator's OAuth client) or ask the cluster owner.
 - **Retry-safe:** no
@@ -3266,7 +3266,7 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 (error-access-tailnet-skipped)=
 ### `access-tailnet-skipped`
 
-**Service not put on the tailnet.** A note of `Access(tailnet=True)` in a plan's `access.notes` (0.19.0): an exposed Service gets no tailnet companion. `why`: `not-found` (the release has no such Service), `no-selector` (a Service without a selector has no pods), `no-matching-port` (none of its ports is exposed), `https-mixed-ports` (with `https=True`, a Service exposing non-HTTP ports too keeps one plain companion).
+**Service not put on the tailnet.** A note of `Access(tailnet=True)` in a plan's `access.notes` (0.19.1): an exposed Service gets no tailnet companion. `why`: `not-found` (the release has no such Service), `no-selector` (a Service without a selector has no pods), `no-matching-port` (none of its ports is exposed), `https-mixed-ports` (with `https=True`, a Service exposing non-HTTP ports too keeps one plain companion).
 
 - **Fix:** Fix `Access(services=...)` or the forward declarations (`app.access.forward`), or give the Service a selector.
 - **Retry-safe:** no

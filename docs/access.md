@@ -305,7 +305,8 @@ not what you want.
   `hostname` (`{env}`, `{service}`, `{namespace}`) on the tailnet: only the
   devices the tailnet policy lets reach the proxies' tag get in, and the
   app keeps its own login. Only the forwarded ports are exposed.
-- **The NetworkPolicies are decided by the pods.** Piceli takes the pod
+- **The NetworkPolicies are decided by the pods** (0.19.1; 0.19.0 compared
+  policy labels with the Service selector and could miss a policy). Piceli takes the pod
   templates of the release's workloads (Deployment, StatefulSet, DaemonSet,
   ReplicaSet, Job, CronJob, Pod) whose labels match each exposed Service's
   selector, and every ingress NetworkPolicy of the environment whose
@@ -327,7 +328,7 @@ The `started` event (`--json`) lists them under `tailnet` (`id`, `service`,
 `port`, `host`, `ready`, `url`, `companion`); when every selected forward is
 on the tailnet and there is no `--ui`, `piceli access` prints them and exits 0.
 
-Options (defaults unchanged):
+Options (0.19.1; defaults unchanged):
 
 - `tags=["tag:family-dashboard"]` (annotation `tailscale.com/tags`): the
   proxies' tags, to give one environment's services wider or narrower
@@ -353,7 +354,7 @@ and so the devices.
 
 ### Why a service is not on the tailnet
 
-Nothing is skipped silently. The plan of an environment with
+Nothing is skipped silently (0.19.1). The plan of an environment with
 `Access(tailnet=True)` has `access` in its `plan` stage (shown, not part of
 the plan hash): `tailnet` (each companion: `kind`, `name`, `service`,
 `host`, `ports`, `scheme`), `policies` (the ingress policies admitting the

@@ -28,13 +28,20 @@ BASE = {
     "app.kubernetes.io/name": "infinite-haiku",
     "app.kubernetes.io/part-of": "infinite-haiku-p2",
 }
-POD = {**BASE, "ih.network": "primary", "ih.release": "r05", "piceli.io/managed": "true"}
+POD = {
+    **BASE,
+    "ih.network": "primary",
+    "ih.release": "r05",
+    "piceli.io/managed": "true",
+}
 OPERATOR = {
     "namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "tailscale"}}
 }
 
 
-def _deployment(name: str, role: str, port: int, kind: str = "Deployment") -> dict[str, Any]:
+def _deployment(
+    name: str, role: str, port: int, kind: str = "Deployment"
+) -> dict[str, Any]:
     return {
         "apiVersion": "apps/v1",
         "kind": kind,
@@ -43,7 +50,9 @@ def _deployment(name: str, role: str, port: int, kind: str = "Deployment") -> di
             "selector": {"matchLabels": {**BASE, "ih.role": role}},
             "template": {
                 "metadata": {"labels": {**POD, "ih.role": role}},
-                "spec": {"containers": [{"name": role, "ports": [{"containerPort": port}]}]},
+                "spec": {
+                    "containers": [{"name": role, "ports": [{"containerPort": port}]}]
+                },
             },
         },
     }
@@ -56,7 +65,9 @@ def _service(name: str, role: str, *ports: int) -> dict[str, Any]:
         "metadata": {"name": name, "namespace": "ih-main"},
         "spec": {
             "selector": {**BASE, "ih.role": role, "piceli.io/managed": "true"},
-            "ports": [{"name": f"p{port}", "port": port, "targetPort": port} for port in ports],
+            "ports": [
+                {"name": f"p{port}", "port": port, "targetPort": port} for port in ports
+            ],
         },
     }
 
@@ -82,9 +93,16 @@ POET_INGRESS = {
     "kind": "NetworkPolicy",
     "metadata": {"name": "ih-poet-ingress", "namespace": "ih-main"},
     "spec": {
-        "podSelector": {"matchLabels": {"ih.role": "poet", "piceli.io/managed": "true"}},
+        "podSelector": {
+            "matchLabels": {"ih.role": "poet", "piceli.io/managed": "true"}
+        },
         "policyTypes": ["Ingress"],
-        "ingress": [{"from": [{"podSelector": {"matchLabels": BASE}}], "ports": [{"port": 4318}]}],
+        "ingress": [
+            {
+                "from": [{"podSelector": {"matchLabels": BASE}}],
+                "ports": [{"port": 4318}],
+            }
+        ],
     },
 }
 EGRESS_ONLY = {
@@ -121,7 +139,9 @@ EXPOSED = {
 }
 
 
-def _amend(manifests: list[dict[str, Any]]) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]], Any]:
+def _amend(
+    manifests: list[dict[str, Any]],
+) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]], Any]:
     access = Access(tailnet=True)
     plan = tailnet_plan(manifests, access, EXPOSED, "main", "ih-main")
     policies = [m for m in manifests if m["kind"] == "NetworkPolicy"]
@@ -142,7 +162,10 @@ def test_a_policy_selecting_the_pods_by_other_labels_admits_the_operator() -> No
         {"port": 18083, "protocol": "TCP"},
     ]
     poet = by_name["ih-poet-ingress"]["spec"]["ingress"]
-    assert poet[-1] == {"from": [OPERATOR], "ports": [{"port": 8080, "protocol": "TCP"}]}
+    assert poet[-1] == {
+        "from": [OPERATOR],
+        "ports": [{"port": 8080, "protocol": "TCP"}],
+    }
     assert len(poet) == 2  # its own rule is kept as declared
     assert by_name["ih-egress"]["spec"] == EGRESS_ONLY["spec"]  # not an ingress policy
     assert {p["metadata"]["name"] for p in changed} == {"ih-ingress", "ih-poet-ingress"}
@@ -170,7 +193,9 @@ def test_selectors_are_evaluated_like_kubernetes() -> None:
     ]
     for expression, expected in expressions:
         assert selects({"matchExpressions": [expression]}, labels) is expected
-    assert selects({"matchExpressions": [{"key": "a", "operator": "Gt"}]}, labels) is None
+    assert (
+        selects({"matchExpressions": [{"key": "a", "operator": "Gt"}]}, labels) is None
+    )
     assert selects({"matchLabels": ["a"]}, labels) is None
 
 
@@ -203,7 +228,13 @@ def test_skipped_services_and_unknown_pods_are_notes() -> None:
          "spec": {"selector": {"app": "not-here"}, "ports": [{"port": 80}]}},
     ]  # fmt: skip
     access = Access(tailnet=True)
-    exposed = {**EXPOSED, "external": (), "elsewhere": (), "gone": (), "ih-redis": (9999,)}
+    exposed = {
+        **EXPOSED,
+        "external": (),
+        "elsewhere": (),
+        "gone": (),
+        "ih-redis": (9999,),
+    }
     report = tailnet_report(manifests, access, exposed, "main", "ih-main")
     reasons = {(n["code"], n.get("service"), n["why"]) for n in report["notes"]}
     assert reasons == {
@@ -212,7 +243,10 @@ def test_skipped_services_and_unknown_pods_are_notes() -> None:
         (SKIPPED, "ih-redis", "no-matching-port"),
         (UNCHANGED, "elsewhere", "pods-not-in-release"),
     }
-    assert {item["host"] for item in report["tailnet"]} >= {"main-ih-kabuki", "main-ih-poet"}
+    assert {item["host"] for item in report["tailnet"]} >= {
+        "main-ih-kabuki",
+        "main-ih-poet",
+    }
     assert report["policies"] == []  # nothing amended in these manifests yet
 
 
@@ -225,7 +259,9 @@ def test_tags_are_tailscale_tags(tags: Any) -> None:
 
 
 def test_tags_proxy_class_and_https_render_for_the_operator() -> None:
-    access = Access(tailnet=True, tags=["tag:k8s", "tag:family"], proxy_class="small", https=True)
+    access = Access(
+        tailnet=True, tags=["tag:k8s", "tag:family"], proxy_class="small", https=True
+    )
     plan = tailnet_plan(
         _ih(), access, EXPOSED, "main", "ih-main",
         http={"ih-kabuki": (3000,), "ih-poet": (8080,)},
@@ -237,12 +273,16 @@ def test_tags_proxy_class_and_https_render_for_the_operator() -> None:
     assert kabuki["spec"]["defaultBackend"]["service"] == {
         "name": "ih-kabuki", "port": {"number": 3000},
     }  # fmt: skip
-    assert kabuki["metadata"]["annotations"]["tailscale.com/tags"] == "tag:k8s,tag:family"
+    assert (
+        kabuki["metadata"]["annotations"]["tailscale.com/tags"] == "tag:k8s,tag:family"
+    )
     assert kabuki["metadata"]["labels"]["tailscale.com/proxy-class"] == "small"
     assert ("Service", "ih-kabuki-tailnet") not in by
     # Shibuya's forward is not HTTP: a plain companion, tags too.
     shibuya = by[("Service", "ih-shibuya-tailnet")]
-    assert shibuya["metadata"]["annotations"]["tailscale.com/tags"] == "tag:k8s,tag:family"
+    assert (
+        shibuya["metadata"]["annotations"]["tailscale.com/tags"] == "tag:k8s,tag:family"
+    )
     # Poet: exposed 8080 only, and it is HTTP.
     assert ("Ingress", "ih-poet-tailnet") in by
     mixed = tailnet_plan(

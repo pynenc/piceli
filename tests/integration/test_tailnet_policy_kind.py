@@ -135,7 +135,11 @@ def _wait_reachable(namespace: str, url: str, expected: bool) -> bool:
 def test_the_operator_namespace_reaches_pods_behind_an_ih_style_policy(
     namespaces: dict[str, str],
 ) -> None:
-    app, operator, other = namespaces["app"], namespaces["operator"], namespaces["other"]
+    app, operator, other = (
+        namespaces["app"],
+        namespaces["operator"],
+        namespaces["other"],
+    )
     manifests = _manifests(app)
     kubectl("apply", "-f", "-", data=json.dumps({"apiVersion": "v1", "kind": "List",
                                                 "items": manifests}))  # fmt: skip
@@ -154,5 +158,7 @@ def test_the_operator_namespace_reaches_pods_behind_an_ih_style_policy(
     assert [p["metadata"]["name"] for p in changed] == ["shop-ingress"] and notes == []
     kubectl("apply", "-f", "-", data=json.dumps(changed[0]))
 
-    assert _wait_reachable(operator, url, True), "the operator's namespace is still blocked"
+    assert _wait_reachable(operator, url, True), (
+        "the operator's namespace is still blocked"
+    )
     assert not _reaches(other, url), "another namespace got in"
