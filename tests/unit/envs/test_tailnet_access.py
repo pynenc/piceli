@@ -173,3 +173,36 @@ def test_the_plan_shows_what_goes_on_the_tailnet_and_why_not_the_rest() -> None:
         ]),
     )  # fmt: skip
     assert tailnet_report(env_pipeline(plain, "main")) is None
+
+
+def test_the_controllers_environment_keeps_its_access() -> None:
+    """0.19.1: env_config_of (how the GitOps controller deploys a composition
+    environment) dropped Access, so no companion was ever rendered there."""
+    from types import SimpleNamespace
+
+    from piceli.envs import Branches
+    from piceli.infra import Cluster
+    from piceli.infra.pipelines import env_config_of
+
+    composition = SimpleNamespace(name="shop")
+    own = Access(tailnet=True, hostname="own-{service}")
+    shared = Access(tailnet=True)
+    cluster = Cluster("c", api="https://10.0.0.1:6443", credentials="c", access=shared)
+    named = Environment(
+        "main", namespace="shop-main", follow=Branch("main"), access=own
+    )
+    assert env_config_of(composition, named).environments[0].access is own
+    inherited = Environment(
+        "rc", namespace="shop-rc", follow=Branch("main"), cluster=cluster
+    )
+    assert env_config_of(composition, inherited).environments[0].access is shared
+    from piceli.infra import Source
+
+    shop = Source("https://example.com/shop.git", name="shop")
+    branches = Environment.per_branch(
+        Branches("wp-*", fallback="main"),
+        namespace="shop-{branch}",
+        cluster=cluster,
+        follow={shop: "{branch}"},
+    )
+    assert env_config_of(composition, branches).branch_access is shared
