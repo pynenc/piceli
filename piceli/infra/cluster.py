@@ -153,7 +153,7 @@ def check_cluster(cluster: Cluster) -> None:
 
         if not isinstance(cluster.dev, DevBuilds):
             raise _invalid("Cluster(dev=) must be DevBuilds(...)")
-        if cluster.dev.node not in names:
+        if cluster.dev.node is not None and cluster.dev.node not in names:
             raise _invalid(
                 f"DevBuilds(node={cluster.dev.node!r}) is not a declared node"
             )

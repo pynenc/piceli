@@ -396,6 +396,7 @@ def composition_env_target(
     port: Callable[[], int] | None = None,
     tailnet_reads: Callable[..., tuple[list[dict[str, Any]], list[dict[str, Any]]]]
     | None = None,
+    all_ports: bool = False,
 ) -> AccessTarget:
     """The :class:`AccessTarget` of environment ``env`` of the composition holding ``cluster``.
 
@@ -480,13 +481,25 @@ def composition_env_target(
     declared = declared_forwards(environment, live)
     covered = {(item.target, item.remote_port) for item in declared}
     taken = {item.id for item in declared}
-    shortcuts = declared + tuple(
-        item
-        for item in service_forwards(
-            environment.namespace, live, port=port or free_port
-        )
-        if (item.target, item.remote_port) not in covered and item.id not in taken
+    # 0.20: an app that declares forwards gets exactly those (no internal
+    # ports: OTLP, graph TLS, databases); --all-ports, or an app that
+    # declares none, gets every live Service port as before.
+    app = getattr(getattr(environment, "pipeline", None), "app", None)
+    declares = callable(getattr(app, "shortcuts", None)) and bool(
+        app.shortcuts(environment.namespace)  # type: ignore[union-attr]
     )
+    rest = (
+        tuple(
+            item
+            for item in service_forwards(
+                environment.namespace, live, port=port or free_port
+            )
+            if (item.target, item.remote_port) not in covered and item.id not in taken
+        )
+        if all_ports or not declares
+        else ()
+    )
+    shortcuts = declared + rest
     return AccessTarget(
         tailnet=tailnet_urls(shortcuts, companions),
         tailnet_notes=tuple(notes),

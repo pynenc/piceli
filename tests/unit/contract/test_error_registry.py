@@ -72,6 +72,8 @@ RULES = {"rejecting"}
 # Codes built at runtime, which a literal scan cannot see. Keep this list next
 # to the code that builds them.
 DYNAMIC = {
+    # dev.hosts.UNAVAILABLE: a build host that cannot take a run
+    "dev-host-unavailable",
     # envs.access (SKIPPED, UNCHANGED) and k8s.env_access (TAILNET_*,
     # OPERATOR_*): tailnet note codes, set from constants
     "access-tailnet-skipped",

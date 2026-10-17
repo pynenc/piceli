@@ -15,7 +15,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from piceli.dev.model import DevBuilds, DevProfile
+from piceli.dev.model import BuildHost, DevBuilds, DevProfile
 from piceli.pipeline.errors import PipelineError
 from piceli.pipeline.model import Registry
 
@@ -34,6 +34,7 @@ def _slug(text: str) -> str:
 
 
 __all__ = [
+    "BuildHost",
     "Cluster",
     "Component",
     "CompositionError",

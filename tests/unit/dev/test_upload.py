@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -89,3 +90,40 @@ def test_a_link_that_stays_down_names_the_chunk_and_the_cause(tmp_path: Path) ->
         and "Connection reset" in message
         and "0 of 9000 bytes" in message
     )
+
+
+def test_a_dropped_log_stream_resumes_without_repeating_lines(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """0.20 (IH 10.3): ``Response ended prematurely`` right after the upload
+    crashed the client and orphaned the run."""
+    from urllib3.exceptions import ProtocolError
+
+    import piceli.dev.cluster as cluster
+    from piceli.dev.cluster import DevCluster
+
+    lines = ["one", "two", "three", "four"]
+    opened: list[int] = []
+
+    def stream(self: DevCluster, pod: str) -> Any:
+        opened.append(1)
+        if len(opened) == 1:
+            yield from lines[:2]
+            raise ProtocolError("Response ended prematurely")
+        yield from lines
+
+    monkeypatch.setattr(DevCluster, "_stream", stream)
+    monkeypatch.setattr(DevCluster, "_running", lambda self, pod: True)
+    monkeypatch.setattr(cluster.time, "sleep", lambda _s: None)
+    seen: list[str] = []
+    DevCluster(object()).follow("pod-1", seen.append)
+    assert seen == lines and len(opened) == 2
+
+    def always_drops(self: DevCluster, pod: str) -> Any:
+        yield "x"
+        raise ProtocolError("Response ended prematurely")
+
+    monkeypatch.setattr(DevCluster, "_stream", always_drops)
+    with pytest.raises(DevError) as raised:
+        DevCluster(object()).follow("pod-1", lambda _l: None)
+    assert raised.value.code == "dev-run-failed"

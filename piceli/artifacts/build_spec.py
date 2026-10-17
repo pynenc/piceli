@@ -1925,21 +1925,30 @@ class _Execution:
             base = Path(dirpath)
             for name in dirnames:
                 if (base / name).is_symlink():
-                    raise BuildSpecError("output-invalid", "output is a symlink")
+                    rel = (base / name).relative_to(root).as_posix()
+                    raise BuildSpecError(
+                        "output-invalid", f"output is a symlink: {rel[:300]}"
+                    )
             for name in filenames:
                 path = base / name
                 rel = path.relative_to(root).as_posix()
                 metadata = os.lstat(path)
                 if not stat.S_ISREG(metadata.st_mode) or rel not in expected:
                     raise BuildSpecError(
-                        "output-invalid", "build produced an undeclared output"
+                        "output-invalid",
+                        f"build produced an undeclared output: {rel[:300]}",
                     )
                 if metadata.st_size > MAX_OUTPUT_FILE_BYTES:
-                    raise BuildSpecError("output-invalid", "output exceeds its budget")
+                    raise BuildSpecError(
+                        "output-invalid", f"output exceeds its budget: {rel[:300]}"
+                    )
                 with path.open("rb") as stream:
                     found[rel] = (path, digest_stream(stream))
         if set(found) != expected:
-            raise BuildSpecError("output-invalid", "a declared output is missing")
+            missing = ", ".join(sorted(expected - set(found)))[:300]
+            raise BuildSpecError(
+                "output-invalid", f"a declared output is missing: {missing}"
+            )
         return found
 
     def _inspect(

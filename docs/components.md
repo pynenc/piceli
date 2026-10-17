@@ -113,7 +113,9 @@ environments = [
   namespace="<prefix>{branch}", follow={…}, …)`: one environment per branch
   of the sources that follow `"{branch}"`; a source that follows
   `"{branch}"` but lacks the branch deploys `fallback`. It takes
-  `stack`, `on_nodes`, `quota`, `limit` (at most this many run),
+  `stack`, `on_nodes` (since 0.20.0 not applied to DaemonSets: a node
+  agent runs on every node its own `node_selector` allows), `quota`,
+  `limit` (at most this many run),
   `idle_stop`, `claim_sizes`, `allow_egress`, `auto_approve`, `secrets` and
   `settings` (the `EnvConfig` fields of the same meaning). The environment
   is removed with its branch.

@@ -586,6 +586,10 @@ CASES: dict[str, tuple[Argv, str]] = {
         lambda p: ["dev", "logs", "r1", "--cluster", "no_such_module:c"],
         "cluster-not-found",
     ),
+    "dev hosts": (
+        lambda p: ["dev", "hosts", "--cluster", "no_such_module:c"],
+        "cluster-not-found",
+    ),
     "dev cache clear": (
         lambda p: ["dev", "cache", "clear", "--cluster", "no_such_module:c"],
         "cluster-not-found",

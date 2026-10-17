@@ -90,3 +90,36 @@ def test_disabled_telemetry_ignores_runs(tmp_path: Path) -> None:
     from piceli.gitops.otel import ControllerTelemetry
 
     ControllerTelemetry.disabled(tmp_path).dev_run(_record())  # no error, nothing sent
+
+
+def test_a_timeline_gives_contiguous_millisecond_spans(tmp_path: Path) -> None:
+    """0.20 (IH 10.8): every second of a run is in a span, with ms times."""
+    signals = Signals()
+    telemetry = signals.telemetry(tmp_path, {"now": 1_790_000_000.0})
+    from datetime import UTC, datetime
+
+    created = datetime(2026, 10, 8, 7, 19, tzinfo=UTC).timestamp()
+    base = created + 30.0
+    phases = ["extract", "toolchain", "lineage", "sync", "fetch", "build", "test"]
+    timeline = [
+        {"phase": name, "start": base + i * 1.25, "end": base + (i + 1) * 1.25}
+        for i, name in enumerate(phases)
+    ]
+    telemetry.dev_run(
+        _record(
+            created_at="2026-10-08T07:19:00Z",
+            finished_at="2026-10-08T07:21:00Z",
+            timeline=timeline,
+            tests={"passed": 1, "failed": 2, "failed_names": ["a::b", "c::d"]},
+        )
+    )
+    spans = [s for s in signals.spans.get_finished_spans() if s.parent is not None]
+    by_start = sorted(spans, key=lambda s: s.start_time)
+    assert [s.name for s in by_start] == ["queue", *phases]
+    from itertools import pairwise
+
+    for before, after in pairwise(by_start[1:]):
+        assert before.end_time == after.start_time  # no gap between phases
+    assert by_start[1].end_time - by_start[1].start_time == 1_250_000_000
+    root = next(s for s in signals.spans.get_finished_spans() if s.parent is None)
+    assert root.attributes["piceli.dev.tests.failed_names"] == "a::b, c::d"

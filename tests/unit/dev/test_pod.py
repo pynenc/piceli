@@ -259,7 +259,11 @@ def test_old_free_lineages_are_evicted_over_the_cache_size(tmp_path: Path) -> No
 def test_the_wrapper_imports_nothing_but_the_standard_library() -> None:
     source = Path(pod.__file__).read_text()
     assert "import piceli" not in source and "from piceli" not in source
-    assert os.path.getsize(pod.__file__) < 60_000
+    # Shipped as one compressed `python3 -c` argument (Linux caps one
+    # argument at 128 KiB); the source itself may grow.
+    from piceli.dev.jobs import wrapper_source
+
+    assert len(wrapper_source()) < 60_000
 
 
 def test_no_code_runs_while_the_api_server_is_reachable(
@@ -362,3 +366,68 @@ def test_an_ordinary_failure_is_not_retried_and_keeps_its_first_error(
     assert "error[E0308]: mismatched types" not in result["log_tail"]  # 5 lines
     ran = [line for line in lines if not line.startswith(pod.RESULT_MARKER)]
     assert sum("mismatched types" in line for line in ran) == 1  # ran once
+
+
+def test_failed_tests_are_named_in_the_result(tmp_path: Path) -> None:
+    """0.20 (IH 10.8): not only counts."""
+    script = "\n".join(
+        [
+            "echo '    Finished `test` profile [unoptimized] target(s) in 1s'",
+            "echo 'test db::slabs::merges ... ok'",
+            "echo 'test db::slabs::splits ... FAILED'",
+            "echo 'test api::login_rejects_bad_tokens ... FAILED'",
+            "echo 'test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out'",
+            "exit 101",
+        ]
+    )
+    data = _archive({"app/t.sh": script})
+    result, _ = _run(tmp_path, data, _spec(data, ["sh", "t.sh"]))
+    assert result["tests"]["failed"] == 2
+    assert result["tests"]["failed_names"] == [
+        "db::slabs::splits",
+        "api::login_rejects_bad_tokens",
+    ]
+
+
+def test_a_link_out_of_the_tree_is_named(tmp_path: Path) -> None:
+    """0.20 (IH 10.4): the message names the member and its target."""
+    import io
+
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
+        info = tarfile.TarInfo("app/ih-muse")
+        info.type = tarfile.SYMTYPE
+        info.linkname = "../../../ih-muse"
+        tar.addfile(info)
+    data = buffer.getvalue()
+    result, _ = _run(tmp_path, data, _spec(data, ["true"]))
+    assert result["reason"] == "dev-upload-failed"
+    assert "app/ih-muse -> ../../../ih-muse" in result["message"]
+    assert result["path"] == "app/ih-muse"
+
+
+def test_an_unchanged_cargo_lock_is_not_fetched_again(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """0.20: a warm run skips ``cargo fetch --locked`` (2 s each) when its
+    lineage fetched this exact lock into this CARGO_HOME."""
+    import stat
+
+    log = tmp_path / "cargo.log"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "cargo"
+    fake.write_text(f'#!/bin/sh\necho "$*" >> "{log}"\nmkdir -p "$CARGO_HOME"\n')
+    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+    lock = '[[package]]\nname = "a"\n'
+    data = _archive({"app/Cargo.lock": lock, "app/t.sh": "true"})
+    first, _ = _run(tmp_path, data, _spec(data, ["sh", "t.sh"], prefetch="cargo"), "w1")
+    again, _ = _run(tmp_path, data, _spec(data, ["sh", "t.sh"], prefetch="cargo"), "w2")
+    assert first["prefetch"] == "ok" and again["prefetch"] == "cached"
+    assert log.read_text().splitlines() == ["fetch --locked"]
+    changed = _archive({"app/Cargo.lock": lock + 'version = "2"\n', "app/t.sh": "true"})
+    third, _ = _run(
+        tmp_path, changed, _spec(changed, ["sh", "t.sh"], prefetch="cargo"), "w3"
+    )
+    assert third["prefetch"] == "ok" and len(log.read_text().splitlines()) == 2

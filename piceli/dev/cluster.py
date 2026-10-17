@@ -338,7 +338,41 @@ class DevCluster:
             )
 
     def follow(self, pod: str, on_line: Callable[[str], None]) -> None:
-        """Every line of the run's log until the container ends."""
+        """Every line of the run's log until the container ends.
+
+        A dropped stream (0.20: ``Response ended prematurely`` from a proxy or
+        a flaky link) is reopened from the start and the lines already seen
+        are skipped, while the pod still runs; the run is never orphaned.
+        """
+        seen = 0
+        for attempt in range(FOLLOW_ATTEMPTS):
+            count = 0
+            try:
+                for line in self._stream(pod):
+                    count += 1
+                    if count > seen:
+                        seen = count
+                        on_line(line)
+                return
+            except Exception as error:  # urllib3 ProtocolError, OSError, ...
+                if not self._running(pod) or attempt + 1 == FOLLOW_ATTEMPTS:
+                    if self._running(pod):
+                        raise DevError(
+                            "dev-run-failed",
+                            f"the run's log stream kept dropping: "
+                            f"{type(error).__name__}",
+                        ) from None
+                    return
+                time.sleep(min(2.0 * (attempt + 1), 10.0))
+
+    def _running(self, pod: str) -> bool:
+        found = self.api.call(
+            f"/api/v1/namespaces/{NAMESPACE}/pods/{quote(pod)}", "GET"
+        )
+        phase = ((found or {}).get("status") or {}).get("phase")
+        return phase in {"Running", "Pending"}
+
+    def _stream(self, pod: str) -> Iterator[str]:
         response = self.api.client.call_api(
             f"/api/v1/namespaces/{NAMESPACE}/pods/{quote(pod)}/log",
             "GET",
@@ -355,9 +389,9 @@ class DevCluster:
                 pending += block
                 *lines, pending = pending.split(b"\n")
                 for line in lines:
-                    on_line(line.decode("utf-8", "replace"))
+                    yield line.decode("utf-8", "replace")
             if pending:
-                on_line(pending.decode("utf-8", "replace"))
+                yield pending.decode("utf-8", "replace")
         finally:
             raw.release_conn()
 
@@ -419,6 +453,8 @@ class DevCluster:
         return "dev-run-failed"
 
 
+#: Reopenings of a dropped log stream before the client gives up.
+FOLLOW_ATTEMPTS = 30
 #: Bytes per upload chunk, and the waits before each retry of a failed one.
 CHUNK_BYTES = 4 * 1024 * 1024
 RETRY_SECONDS = (1, 2, 4, 8, 16)
@@ -432,6 +468,7 @@ def upload_chunks(
     *,
     chunk_bytes: int = CHUNK_BYTES,
     sleep: Callable[[float], None] = time.sleep,
+    root: str = "/work",
 ) -> dict[str, Any]:
     """Send ``archive`` as numbered parts, each retried on a dropped
     connection, then assemble it in the pod and mark it ready.
@@ -451,9 +488,9 @@ def upload_chunks(
             data = stream.read(chunk_bytes)
             name = f"part-{index:05d}"
             script = (
-                "set -e; mkdir -p /work/upload; "
-                f"head -c {len(data)} > /work/upload/.{name}; "
-                f"mv /work/upload/.{name} /work/upload/{name}"
+                f"set -e; mkdir -p {root}/upload; "
+                f"head -c {len(data)} > {root}/upload/.{name}; "
+                f"mv {root}/upload/.{name} {root}/upload/{name}"
             )
             cause = ""
             for attempt in range(len(RETRY_SECONDS) + 1):
@@ -478,7 +515,7 @@ def upload_chunks(
             progress(sent, total, time.monotonic() - began)
     digest = f"printf %s {sha256} > tree.sha256; " if sha256 else ""
     finish = (
-        "set -e; cd /work/upload; cat part-* > tree.tar.gz; rm -f part-*; "
+        f"set -e; cd {root}/upload; cat part-* > tree.tar.gz; rm -f part-*; "
         f"{digest}touch ready"
     )
     if run_exec(["sh", "-c", finish], None) != 0:

@@ -5079,6 +5079,7 @@
      "target"
     ],
     "flags": [
+     "--all-ports",
      "--cluster",
      "--dashboard",
      "--forward",
@@ -5564,6 +5565,7 @@
     "subcommands": [
      "cache",
      "cancel",
+     "hosts",
      "logs",
      "run",
      "schedule",
@@ -5584,6 +5586,7 @@
      "--cluster",
      "--crate",
      "--exec-sha256",
+     "--host",
      "--json",
      "--lineage",
      "--transport"
@@ -5594,6 +5597,17 @@
     "arguments": [
      "run_id"
     ],
+    "flags": [
+     "--allow-exec",
+     "--cluster",
+     "--exec-sha256",
+     "--json",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "dev hosts": {
+    "arguments": [],
     "flags": [
      "--allow-exec",
      "--cluster",
@@ -5628,10 +5642,12 @@
      "--cluster",
      "--cwd",
      "--exec-sha256",
+     "--host",
      "--json",
      "--keep",
      "--name",
      "--node",
+     "--platform",
      "--priority",
      "--profile",
      "--queue-timeout",
@@ -7211,6 +7227,8 @@
    "deploy-stage-unknown",
    "dev-cache-clear-failed",
    "dev-command-failed",
+   "dev-host-unavailable",
+   "dev-host-unknown",
    "dev-isolation-not-enforced",
    "dev-not-enabled",
    "dev-profile-unknown",
@@ -7224,6 +7242,8 @@
    "dev-run-unknown",
    "dev-source-invalid",
    "dev-tool-missing",
+   "dev-toolchain-failed",
+   "dev-toolchain-invalid",
    "dev-upload-failed",
    "digest-mismatch",
    "discovery-incomplete",
@@ -8700,6 +8720,7 @@
   "piceli.dev.client",
   "piceli.dev.cluster",
   "piceli.dev.delta",
+  "piceli.dev.hosts",
   "piceli.dev.jobs",
   "piceli.dev.model",
   "piceli.dev.pack",

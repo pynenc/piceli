@@ -189,7 +189,14 @@ class Scheduler:
             entry.update(
                 {
                     key: result.get(key)
-                    for key in ("state", "exit_code", "reason", "durations", "tests")
+                    for key in (
+                        "state",
+                        "exit_code",
+                        "reason",
+                        "durations",
+                        "tests",
+                        "timeline",
+                    )
                 }
             )
             cache = dict(result.get("cache") or {})
