@@ -5035,6 +5035,7 @@
      "access",
      "artifacts",
      "build",
+     "builder",
      "bundle",
      "cache",
      "chart",
@@ -5337,6 +5338,7 @@
    "build job-run": {
     "arguments": [],
     "flags": [
+     "--archives-only",
      "--cache",
      "--commit",
      "--component",
@@ -5350,6 +5352,30 @@
      "--sources",
      "--spec",
      "--timeout"
+    ],
+    "subcommands": []
+   },
+   "builder": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "serve"
+    ]
+   },
+   "builder serve": {
+    "arguments": [],
+    "flags": [
+     "--allow-exec",
+     "--cluster",
+     "--exec-sha256",
+     "--host",
+     "--image",
+     "--json",
+     "--namespace",
+     "--once",
+     "--poll",
+     "--state-dir",
+     "--transport"
     ],
     "subcommands": []
    },
@@ -8759,6 +8785,7 @@
   "piceli.importing.generate",
   "piceli.importing.sources",
   "piceli.infra",
+  "piceli.infra.builder_serve",
   "piceli.infra.builders",
   "piceli.infra.cluster",
   "piceli.infra.cluster_init",
@@ -8779,6 +8806,7 @@
   "piceli.infra.machines.tofu",
   "piceli.infra.multicluster",
   "piceli.infra.pipelines",
+  "piceli.infra.remote_builds",
   "piceli.infra.render",
   "piceli.infra.sources",
   "piceli.infra.ui_install",
@@ -8789,6 +8817,7 @@
   "piceli.k8s.cli",
   "piceli.k8s.cli.access",
   "piceli.k8s.cli.build",
+  "piceli.k8s.cli.builder",
   "piceli.k8s.cli.bundle",
   "piceli.k8s.cli.chart",
   "piceli.k8s.cli.cluster",
@@ -9007,5 +9036,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.20.0"
+ "version": "0.21.0"
 }
