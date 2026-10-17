@@ -52,6 +52,10 @@ _FINISHED = re.compile(r"^\s*Finished `")
 _TESTS = re.compile(
     r"test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored"
 )
+#: ``test db::slabs::merge ... FAILED`` (0.20: the failed tests by name).
+_FAILED_TEST = re.compile(r"^test (\S+) \.\.\. FAILED\s*$")
+#: At most this many failed test names in a result.
+FAILED_NAMES = 100
 
 
 class RunError(Exception):
@@ -132,20 +136,29 @@ def extract(archive: Path, into: Path, mode: str = "r:gz") -> None:
         with tarfile.open(archive, mode) as tar:  # type: ignore[call-overload]
             for member in tar.getmembers():
                 name = member.name
+                shown = name[:300]
                 if name.startswith("/") or ".." in Path(name).parts:
                     raise RunError(
-                        "dev-upload-failed", "the archive holds an unsafe path"
+                        "dev-upload-failed",
+                        f"the archive holds an unsafe path: {shown}",
+                        path=shown,
                     )
                 if not (member.isfile() or member.isdir() or member.issym()):
                     raise RunError(
-                        "dev-upload-failed", "the archive holds a special file"
+                        "dev-upload-failed",
+                        f"the archive holds a special file: {shown}",
+                        path=shown,
                     )
                 if member.issym():
                     target = (root / Path(name).parent / member.linkname).resolve()
                     if root not in (target, *target.parents):
                         raise RunError(
                             "dev-upload-failed",
-                            "the archive holds a link out of the tree",
+                            f"the archive holds a link out of the tree: {shown} -> "
+                            f"{member.linkname[:300]} (ship sources link-free, or "
+                            "pass the link's target as its own --source)",
+                            path=shown,
+                            link=member.linkname[:300],
                         )
             if sys.version_info >= (3, 12):  # noqa: UP036 - any image's python3
                 tar.extractall(into, filter="tar")
@@ -318,13 +331,52 @@ def fetch_main(
     return report
 
 
-def apply_delta(
-    inbox: Path, tree: Path, cache: Path, spec: dict[str, Any]
-) -> dict[str, Any]:
-    """Materialize each source of a delta upload into ``tree/<name>``."""
+class DeltaSource:
+    """One source of a delta upload, its commit in the builder's mirror."""
+
+    def __init__(self, name: str, mirror: Path, head: str, incoming: Path) -> None:
+        self.name = name
+        self.mirror = mirror
+        self.head = head
+        self.incoming = incoming
+
+    def overlay(self) -> list[str]:
+        """The paths this run's uncommitted diff and untracked files touch."""
+        found: set[str] = set()
+        diff = self.incoming / "diff"
+        if diff.is_file():
+            listed = _git("apply", "--numstat", "-z", str(diff), cwd=self.incoming)
+            # "added\tdeleted\tpath\0", or for a rename "a\td\t\0old\0new\0".
+            parts = (
+                (listed.stdout or b"").decode("utf-8", "surrogateescape").split("\0")
+            )
+            index = 0
+            while index < len(parts):
+                record = parts[index]
+                if not record:
+                    index += 1
+                    continue
+                fields = record.split("\t", 2)
+                if len(fields) == 3 and fields[2]:
+                    found.add(fields[2])
+                    index += 1
+                elif len(fields) == 3:  # a rename: the next two are the paths
+                    found.update(p for p in parts[index + 1 : index + 3] if p)
+                    index += 3
+                else:
+                    index += 1
+        untracked = self.incoming / "untracked.tar"
+        if untracked.is_file():
+            with tarfile.open(untracked, "r:") as tar:
+                found.update(m.name for m in tar.getmembers() if not m.isdir())
+        return sorted(found)
+
+
+def unbundle(inbox: Path, cache: Path, spec: dict[str, Any]) -> list[DeltaSource]:
+    """Bring each source's bundle into its mirror; the sources, checked."""
     manifest = json.loads((inbox / "manifest.json").read_text())
     keys = {str(s.get("name")): str(s.get("key")) for s in spec.get("sources") or ()}
-    applied: dict[str, Any] = {}
+    found = []
     for name, entry in sorted((manifest.get("sources") or {}).items()):
         if name not in keys or not re.fullmatch(
             r"[A-Za-z0-9][A-Za-z0-9._-]{0,62}", name
@@ -355,41 +407,178 @@ def apply_delta(
                     f"the builder's mirror lacks commit {head[:12]} of {name}",
                 )
             _git("--git-dir", str(mirror), "update-ref", f"refs/piceli/h/{head}", head)
-        target = tree / name
-        target.mkdir(parents=True, exist_ok=True)
-        archive = subprocess.Popen(
-            ["git", "--git-dir", str(mirror), "archive", "--format=tar", head],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-        )  # fmt: skip
-        assert archive.stdout is not None
-        with tarfile.open(fileobj=archive.stdout, mode="r|") as stream:
-            if sys.version_info >= (3, 12):  # noqa: UP036 - any image's python3
-                stream.extractall(target, filter="tar")
-            else:  # pragma: no cover
-                stream.extractall(target)
-        if archive.wait() != 0:
-            raise RunError("dev-upload-failed", f"git archive of {name} failed")
-        if (incoming / "diff").is_file():
-            done = _git(
-                "apply",
-                "--binary",
-                "--whitespace=nowarn",
-                str(incoming / "diff"),
-                cwd=target,
+        found.append(DeltaSource(name, mirror, head, incoming))
+    return found
+
+
+def _archive_into(source: DeltaSource, target: Path, paths: list[str] | None) -> None:
+    """``git archive`` of the head (only ``paths``, when given) into ``target``."""
+    target.mkdir(parents=True, exist_ok=True)
+    if paths is not None and not paths:
+        return
+    archive = subprocess.Popen(
+        ["git", "--git-dir", str(source.mirror), "archive", "--format=tar",
+         source.head, *(["--", *paths] if paths else [])],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+    )  # fmt: skip
+    assert archive.stdout is not None
+    with tarfile.open(fileobj=archive.stdout, mode="r|") as stream:
+        if sys.version_info >= (3, 12):  # noqa: UP036 - any image's python3
+            stream.extractall(target, filter="tar")
+        else:  # pragma: no cover
+            stream.extractall(target)
+    if archive.wait() != 0:
+        raise RunError("dev-upload-failed", f"git archive of {source.name} failed")
+
+
+def _overlay_into(source: DeltaSource, target: Path) -> None:
+    """Apply the run's uncommitted diff and untracked files in ``target``."""
+    if (source.incoming / "diff").is_file():
+        done = _git(
+            "apply",
+            "--binary",
+            "--whitespace=nowarn",
+            str(source.incoming / "diff"),
+            cwd=target,
+        )
+        if done.returncode != 0:
+            raise RunError(
+                "dev-upload-failed",
+                f"the uncommitted changes of {source.name} do not apply",
             )
-            if done.returncode != 0:
-                raise RunError(
-                    "dev-upload-failed",
-                    f"the uncommitted changes of {name} do not apply",
-                )
-        if (incoming / "untracked.tar").is_file():
-            extract_plain(incoming / "untracked.tar", target)
-        applied[name] = {
+    if (source.incoming / "untracked.tar").is_file():
+        extract_plain(source.incoming / "untracked.tar", target)
+
+
+def _in_head(source: DeltaSource, paths: list[str]) -> list[str]:
+    """Which of ``paths`` exist in the head's tree."""
+    if not paths:
+        return []
+    listed = _git(
+        "--git-dir", str(source.mirror), "ls-tree", "-r", "-z", "--name-only",
+        source.head, "--", *paths,
+    )  # fmt: skip
+    text = (listed.stdout or b"").decode("utf-8", "surrogateescape")
+    return [item for item in text.split("\0") if item]
+
+
+def apply_delta(
+    inbox: Path, tree: Path, cache: Path, spec: dict[str, Any]
+) -> dict[str, Any]:
+    """Materialize each source of a delta upload into ``tree/<name>``."""
+    return materialize(unbundle(inbox, cache, spec), tree)
+
+
+def materialize(sources: list[DeltaSource], tree: Path) -> dict[str, Any]:
+    applied: dict[str, Any] = {}
+    for source in sources:
+        target = tree / source.name
+        _archive_into(source, target, None)
+        _overlay_into(source, target)
+        applied[source.name] = {
             "mode": "delta",
-            "bundle": (incoming / "bundle").is_file(),
-            "diff": (incoming / "diff").is_file(),
+            "bundle": (source.incoming / "bundle").is_file(),
+            "diff": (source.incoming / "diff").is_file(),
         }
     return applied
+
+
+#: A lineage refreshed in place this many times gets a full sync (what a
+#: build script wrote into its tree goes).
+FULL_SYNC_EVERY = 50
+
+
+def refresh_in_place(
+    sources: list[DeltaSource],
+    lineage_tree: Path,
+    previous: dict[str, Any] | None,
+    stage: Path,
+) -> dict[str, int] | None:
+    """Bring the lineage's tree to this run's sources by touching only what
+    can differ (0.20): the lineage holds the same heads as last time, so
+    only the paths last run's overlay and this run's overlay touch are
+    re-read from the head, overlaid again, and copied when their content
+    changed (unchanged files keep their mtime). ``None``: not possible (other
+    heads or sources, or due for a full sync)."""
+    if not previous or int(previous.get("refreshed") or 0) >= FULL_SYNC_EVERY:
+        return None
+    heads = previous.get("sources") or {}
+    if sorted(heads) != sorted(s.name for s in sources):
+        return None
+    if any((heads.get(s.name) or {}).get("head") != s.head for s in sources):
+        return None
+    counts = {"written": 0, "removed": 0, "kept": 0}
+    for source in sources:
+        paths = sorted(
+            set((heads.get(source.name) or {}).get("overlay") or ())
+            | set(source.overlay())
+        )
+        here = stage / source.name
+        _archive_into(source, here, _in_head(source, paths))
+        _overlay_into(source, here)
+        dest_root = lineage_tree / source.name
+        for path in paths:
+            item, dest = here / path, dest_root / path
+            if item.is_file() or item.is_symlink():
+                if _same(item, dest):
+                    counts["kept"] += 1
+                    continue
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                if dest.is_dir() and not dest.is_symlink():
+                    shutil.rmtree(dest)
+                elif dest.exists() or dest.is_symlink():
+                    dest.unlink()
+                if item.is_symlink():
+                    os.symlink(os.readlink(item), dest)
+                else:
+                    partial = dest.parent / f".{dest.name}.piceli-sync"
+                    shutil.copyfile(item, partial)
+                    os.chmod(partial, item.stat().st_mode & 0o777)
+                    os.replace(partial, dest)
+                counts["written"] += 1
+            elif dest.exists() or dest.is_symlink():
+                if dest.is_dir() and not dest.is_symlink():
+                    shutil.rmtree(dest)
+                else:
+                    dest.unlink()
+                counts["removed"] += 1
+    return counts
+
+
+def materialized(sources: list[DeltaSource], refreshed: int) -> dict[str, Any]:
+    """What a lineage's tree now holds (its ``meta.json`` ``materialized``)."""
+    return {
+        "refreshed": refreshed,
+        "sources": {s.name: {"head": s.head, "overlay": s.overlay()} for s in sources},
+    }
+
+
+def delta_pin(sources: list[DeltaSource], cwd: str | None, scratch: Path) -> Any:
+    """The Rust pin the run's tree will hold, read from the mirror (no full
+    tree yet); ``...`` (Ellipsis) when this run's overlay changes a pin file."""
+    parts = Path(str(cwd or ".")).parts
+    by_name = {s.name: s for s in sources}
+    source = by_name.get(parts[0]) if parts else None
+    if source is None:
+        return None
+    inner = list(parts[1:])
+    overlay = set(source.overlay())
+    while True:
+        for name in ("rust-toolchain.toml", "rust-toolchain"):
+            path = "/".join([*inner, name])
+            if path in overlay:
+                return ...
+            shown = _git(
+                "--git-dir", str(source.mirror), "show", f"{source.head}:{path}"
+            )
+            if shown.returncode == 0:
+                where = scratch / source.name / path
+                where.parent.mkdir(parents=True, exist_ok=True)
+                where.write_bytes(shown.stdout)
+                return _parse_toolchain(where, scratch)
+        if not inner:
+            return None
+        inner.pop()
 
 
 # ------------------------------------------------------------------ isolation
@@ -438,6 +627,12 @@ def _read_meta(path: Path) -> dict[str, Any]:
     except (OSError, ValueError):
         return {}
     return value if isinstance(value, dict) else {}
+
+
+def _write_meta(path: Path, meta: dict[str, Any]) -> None:
+    partial = path / ".meta.json.partial"
+    partial.write_text(json.dumps(meta))
+    os.replace(partial, path / "meta.json")
 
 
 def _try_lock(path: Path) -> int | None:
@@ -654,6 +849,12 @@ def sync_tree(source: Path, dest: Path) -> dict[str, int]:
 #: refusing a proc-macro ``.so``, invalid crate metadata, a linker reading a
 #: truncated or garbled object (a run killed mid-write, a faulty disk).
 _CORRUPT = (
+    # 0.20: rustc's incremental state broke the compiler itself (an ICE in
+    # dep_graph/serialized.rs on a faulty node): drop incremental/, retry.
+    (
+        "incremental",
+        re.compile(r"internal compiler error|thread 'rustc' panicked"),
+    ),
     (
         "loader",
         re.compile(
@@ -669,7 +870,7 @@ _CORRUPT = (
     (
         "link",
         re.compile(
-            r"undefined hidden symbol|file truncated|file format not recognized"
+            r"undefined (?:hidden )?symbol|file truncated|file format not recognized"
             r"|malformed archive|archive has no index"
         ),
     ),
@@ -706,6 +907,19 @@ def corrupt_crates(lines: list[str]) -> tuple[list[str], str | None]:
                 found |= {_crate(name) for name in _COULD_NOT_COMPILE.findall(line)}
         return sorted(found), kind
     return [], None
+
+
+def clear_incremental(target: Path) -> int:
+    """Remove every ``incremental/`` directory of a cargo target (every
+    profile and triple); how many went."""
+    removed = 0
+    for root, dirs, _files in os.walk(target):
+        if "incremental" in dirs:
+            shutil.rmtree(Path(root) / "incremental", ignore_errors=True)
+            dirs.remove("incremental")
+            removed += 1
+        dirs[:] = [d for d in dirs if d not in _ARTIFACT_DIRS]
+    return removed
 
 
 def clear_crates(target: Path, crates: list[str]) -> int:
@@ -816,9 +1030,16 @@ class CargoOutput:
         self.clock = clock
         self.compiled = 0
         self.finished_at: float | None = None
-        self.tests = {"passed": 0, "failed": 0, "ignored": 0, "suites": 0}
+        self.tests: dict[str, Any] = {
+            "passed": 0, "failed": 0, "ignored": 0, "suites": 0,
+        }  # fmt: skip
+        self.failed_names: list[str] = []
 
     def feed(self, line: str) -> None:
+        failed = _FAILED_TEST.match(line)
+        if failed and len(self.failed_names) < FAILED_NAMES:
+            if failed.group(1) not in self.failed_names:
+                self.failed_names.append(failed.group(1))
         if _COMPILING.match(line):
             self.compiled += 1
         elif self.finished_at is None and _FINISHED.match(line):
@@ -936,17 +1157,159 @@ def collect(
 # ------------------------------------------------------------------ main
 
 
-def _toolchain(spec: dict[str, Any]) -> str:
+def _toolchain(spec: dict[str, Any], env: dict[str, str] | None = None) -> str:
     probe = spec.get("toolchain_probe")
     if not probe or shutil.which(probe[0]) is None:
         return "none"
     try:
         output = subprocess.run(
-            probe, capture_output=True, timeout=30, check=False
+            probe, capture_output=True, timeout=120, check=False, env=env
         ).stdout
     except (OSError, subprocess.SubprocessError):
         return "none"
     return hashlib.sha256(output).hexdigest()[:10]
+
+
+# ------------------------------------------------- the source's toolchain (0.20)
+_CHANNEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+_ITEM = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+
+
+def rust_toolchain(tree: Path, cwd: str | None) -> dict[str, Any] | None:
+    """The Rust toolchain the source pins, as rustup reads it: the nearest
+    ``rust-toolchain.toml`` (or legacy ``rust-toolchain``) from the run's
+    directory up to the tree's root; ``None`` when there is none.
+
+    :raises RunError: ``dev-toolchain-invalid`` (an unreadable pin).
+    """
+    root = tree.resolve()
+    here = (root / str(cwd or ".")).resolve()
+    while True:
+        for name in ("rust-toolchain.toml", "rust-toolchain"):
+            path = here / name
+            if path.is_file():
+                return _parse_toolchain(path, root)
+        if here == root or root not in here.parents:
+            return None
+        here = here.parent
+
+
+def _parse_toolchain(path: Path, root: Path) -> dict[str, Any]:
+    text = path.read_text(errors="replace")
+    where = str(path.relative_to(root))
+    if path.name == "rust-toolchain" and "[toolchain]" not in text:
+        table: dict[str, Any] = {"channel": text.strip()}
+    else:
+        try:
+            import tomllib
+
+            table = dict(tomllib.loads(text).get("toolchain") or {})
+        except Exception as error:
+            raise RunError(
+                "dev-toolchain-invalid", f"{where}: not valid TOML ({error})"
+            ) from None
+    channel = str(table.get("channel") or "")
+    if not _CHANNEL.fullmatch(channel):
+        raise RunError(
+            "dev-toolchain-invalid", f"{where}: [toolchain] channel {channel!r}"
+        )
+    found: dict[str, Any] = {"file": where, "channel": channel}
+    for key in ("targets", "components"):
+        items = [str(item) for item in table.get(key) or ()]
+        if not all(_ITEM.fullmatch(item) for item in items):
+            raise RunError("dev-toolchain-invalid", f"{where}: [toolchain] {key}")
+        found[key] = sorted(items)
+    profile = str(table.get("profile") or "minimal")
+    found["profile"] = (
+        profile if profile in {"minimal", "default", "complete"} else "minimal"
+    )
+    return found
+
+
+def provision_rust(
+    cache: Path,
+    pin: dict[str, Any],
+    emit: Callable[[str], None],
+    clock: Callable[[], float] = time.monotonic,
+) -> tuple[dict[str, str], dict[str, Any]]:
+    """Install the pinned toolchain once into the cache (``rustup``, under a
+    lock, keyed by channel, targets and components) and return the
+    environment that selects it, and what was done."""
+    home = cache / "toolchains" / "rustup"
+    home.mkdir(parents=True, exist_ok=True)
+    key = hashlib.sha256(
+        json.dumps(
+            [pin["channel"], pin["targets"], pin["components"], pin["profile"]]
+        ).encode()
+    ).hexdigest()[:16]
+    done = cache / "toolchains" / f"rust-{key}.done"
+    env = {"RUSTUP_HOME": str(home), "RUSTUP_TOOLCHAIN": pin["channel"]}
+    report: dict[str, Any] = {**pin, "installed": False, "seconds": 0.0}
+    if done.is_file():
+        return env, report
+    began = clock()
+    lock = os.open(cache / "toolchains" / ".rust.lock", os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if not done.is_file():
+            emit(f"[piceli-dev] installing Rust {pin['channel']} ({pin['file']})")
+            command = [
+                "rustup", "toolchain", "install", pin["channel"],
+                "--profile", pin["profile"], "--no-self-update",
+            ]  # fmt: skip
+            for item in pin["components"]:
+                command += ["--component", item]
+            for item in pin["targets"]:
+                command += ["--target", item]
+            installed = subprocess.run(
+                command,
+                env={
+                    k: v
+                    for k, v in {**os.environ, **env}.items()
+                    if k != "RUSTUP_TOOLCHAIN"
+                },
+                capture_output=True,
+                text=True,
+                timeout=1800,
+                check=False,
+            )
+            if installed.returncode != 0:
+                tail = (installed.stderr or installed.stdout).strip().splitlines()[-5:]
+                raise RunError(
+                    "dev-toolchain-failed",
+                    f"rustup could not install {pin['channel']} ({pin['file']}): "
+                    + " | ".join(tail)[:600],
+                )
+            done.write_text(json.dumps(pin))
+            report["installed"] = True
+    finally:
+        os.close(lock)
+    report["seconds"] = round(clock() - began, 3)
+    return env, report
+
+
+class Timeline:
+    """Contiguous phases with wall-clock times (0.20): every second of a run
+    belongs to one phase, so a trace has no unattributed gap."""
+
+    def __init__(self, clock: Callable[[], float] = time.time) -> None:
+        self.clock = clock
+        self.items: list[dict[str, Any]] = []
+        self.current: dict[str, Any] | None = None
+
+    def phase(self, name: str, at: float | None = None) -> None:
+        now = self.clock() if at is None else at
+        if self.current is not None:
+            self.current["end"] = round(now, 3)
+            self.items.append(self.current)
+        self.current = {"phase": name, "start": round(now, 3)}
+
+    def close(self) -> list[dict[str, Any]]:
+        if self.current is not None:
+            self.current["end"] = round(self.clock(), 3)
+            self.items.append(self.current)
+            self.current = None
+        return list(self.items)
 
 
 def main(
@@ -959,6 +1322,8 @@ def main(
 ) -> dict[str, Any]:
     """Run one development build; returns (and prints) its result."""
     began = clock()
+    timeline = Timeline()
+    timeline.phase("upload")
     durations: dict[str, float] = {}
     result: dict[str, Any] = {
         "schema": SCHEMA,
@@ -983,16 +1348,20 @@ def main(
         (work / scratch).mkdir(parents=True, exist_ok=True)
     try:
         archive = wait_upload(work, spec, clock)
+        timeline.phase("extract")
         step = clock()
         inbox = work / "in"
         extract(archive, inbox)
         archive.unlink(missing_ok=True)
+        sources: list[DeltaSource] | None = None
+        full = False
         if (inbox / "manifest.json").is_file():  # 0.19: a Git delta
-            result["applied"] = apply_delta(inbox, tree, cache, spec)
-            shutil.rmtree(inbox, ignore_errors=True)
+            sources = unbundle(inbox, cache, spec)
         else:  # a whole tree (0.18 clients, images without git)
             os.replace(inbox, tree)
+        timeline.phase("isolation")
         wait_isolated(spec, clock, emit)
+        timeline.phase("toolchain")
         missing = [
             tool for tool in spec.get("tools") or () if shutil.which(tool) is None
         ]
@@ -1002,7 +1371,27 @@ def main(
                 "the profile's image lacks " + ", ".join(missing),
                 missing_tools=missing,
             )
-        toolchain = _toolchain(spec)
+        # 0.20: the toolchain the source pins (rust-toolchain.toml), installed
+        # once into the cache, not the image's.
+        selected: dict[str, str] = {}
+        if sources is not None:
+            # 0.20: read from the mirror; the tree is built after the lineage
+            # is known (in place when it can be).
+            pin = delta_pin(sources, spec.get("cwd"), work / "pin")
+            if pin is ...:  # this run changes a pin file: build the tree now
+                result["applied"] = materialize(sources, tree)
+                full = True
+                pin = rust_toolchain(tree, spec.get("cwd"))
+        else:
+            pin = rust_toolchain(tree, spec.get("cwd"))
+        if pin is not None:
+            if spec.get("provision_toolchains", True) and shutil.which("rustup"):
+                selected, done_report = provision_rust(cache, pin, emit, clock)
+                result["toolchain"] = {"rust": done_report}
+            else:  # a native host: its own rustup reads the file itself
+                result["toolchain"] = {"rust": {**pin, "installed": False}}
+        toolchain = _toolchain(spec, {**os.environ, **selected} if selected else None)
+        timeline.phase("lineage")
         limit = int(spec.get("cache_max_bytes") or 1 << 62)
         evicted, used = evict(cache, limit)
         if toolchain != "none":
@@ -1020,29 +1409,82 @@ def main(
             f"[piceli-dev] lineage {result['cache']['lineage']} "
             f"({'warm' if lineage.warm else 'cold'})"
         )
-        result["sync"] = sync_tree(tree, lineage.path / "tree")
+        timeline.phase("sync")
+        lineage_tree = lineage.path / "tree"
+        if sources is not None:
+            previous = _read_meta(lineage.path).get("materialized")
+            counts = (
+                refresh_in_place(sources, lineage_tree, previous, work / "stage")
+                if not full and lineage_tree.is_dir()
+                else None
+            )
+            if counts is not None:
+                result["sync"] = {**counts, "mode": "in-place"}
+                refreshed = int((previous or {}).get("refreshed") or 0) + 1
+                result["applied"] = {
+                    item.name: {
+                        "mode": "delta",
+                        "bundle": (item.incoming / "bundle").is_file(),
+                        "diff": (item.incoming / "diff").is_file(),
+                    }
+                    for item in sources
+                }
+            else:
+                if not full:
+                    result["applied"] = materialize(sources, tree)
+                result["sync"] = sync_tree(tree, lineage_tree)
+                refreshed = 0
+            _write_meta(
+                lineage.path,
+                {
+                    **_read_meta(lineage.path),
+                    "materialized": materialized(sources, refreshed),
+                },
+            )
+        else:
+            result["sync"] = sync_tree(tree, lineage_tree)
+            meta = _read_meta(lineage.path)
+            if meta.pop("materialized", None) is not None:
+                _write_meta(lineage.path, meta)
         shutil.rmtree(tree, ignore_errors=True)
+        shutil.rmtree(work / "stage", ignore_errors=True)
+        shutil.rmtree(inbox, ignore_errors=True)
         durations["sync"] = round(clock() - step, 3)
         cwd = (lineage.path / "tree" / str(spec.get("cwd") or ".")).resolve()
         if lineage.path.resolve() not in cwd.parents and cwd != lineage.path.resolve():
-            raise RunError("dev-run-invalid", "the working directory leaves the tree")
+            raise RunError(
+                "dev-run-invalid",
+                f"the working directory leaves the tree: {str(spec.get('cwd'))[:300]}",
+            )
         target = lineage.path / "target"
         target.mkdir(exist_ok=True)
         env = {
             **os.environ,
             **{str(k): str(v) for k, v in (spec.get("env") or {}).items()},
         }
+        env.update(selected)
         env["CARGO_TARGET_DIR"] = str(target)
         env["CARGO_HOME"] = str(cache / "cargo-home" / toolchain)
         env["PICELI_DEV_RUN"] = str(spec.get("run"))
         if spec.get("prefetch") == "cargo" and (cwd / "Cargo.lock").is_file():
+            timeline.phase("fetch")
             step = clock()
-            emit("[piceli-dev] cargo fetch --locked")
-            code, _ = run_command(
-                ["cargo", "fetch", "--locked"], cwd, env, 600, emit, tail.append
-            )
+            # 0.20: this lineage already fetched this exact Cargo.lock into
+            # this CARGO_HOME: nothing to fetch, skip cargo's 2 s check.
+            lock = hashlib.sha256((cwd / "Cargo.lock").read_bytes()).hexdigest()
+            key = f"{lock}:{env['CARGO_HOME']}:{cwd.relative_to(lineage.path)}"
+            meta = _read_meta(lineage.path)
+            if meta.get("fetched") == key and Path(env["CARGO_HOME"]).is_dir():
+                result["prefetch"] = "cached"
+            else:
+                emit("[piceli-dev] cargo fetch --locked")
+                code, _ = run_command(
+                    ["cargo", "fetch", "--locked"], cwd, env, 600, emit, tail.append
+                )
+                result["prefetch"] = "ok" if code == 0 else "failed"
+                if code == 0:
+                    _write_meta(lineage.path, {**meta, "fetched": key})
             durations["fetch"] = round(clock() - step, 3)
-            result["prefetch"] = "ok" if code == 0 else "failed"
         cargo = CargoOutput(clock)
         errors = first = FirstError(int(spec.get("first_error_lines") or 20))
         building: collections.deque[str] = collections.deque(maxlen=2000)
@@ -1054,7 +1496,9 @@ def main(
             if cargo.finished_at is None:  # the build, not the tests' output
                 building.append(line)
 
+        timeline.phase("command")
         step = clock()
+        attempt_step = step
         command = [str(part) for part in spec["command"]]
         emit("[piceli-dev] running " + " ".join(command))
         timeout = float(spec.get("timeout_seconds") or 3600)
@@ -1062,13 +1506,20 @@ def main(
         crates, damage = (
             corrupt_crates(list(building)) if code and not timed_out else ([], None)
         )
-        if crates:
+        if crates or damage == "incremental":
             # 0.19: a damaged cached artifact, not the code: clear those
             # crates and run once more (a run killed mid-write, a bad disk).
-            removed = clear_crates(target, crates)
+            # 0.20: an ICE in the incremental state: drop incremental/.
+            timeline.phase("repair")
+            removed = (
+                clear_incremental(target)
+                if damage == "incremental"
+                else clear_crates(target, crates)
+            )
             emit(
                 f"[piceli-dev] corrupted cache ({damage}): cleared "
-                f"{', '.join(crates)} ({removed} entries); running once more"
+                f"{', '.join(crates) or 'incremental/'} ({removed} entries); "
+                "running once more"
             )
             result["cache"]["repaired"] = {
                 "kind": damage,
@@ -1081,17 +1532,29 @@ def main(
             building.clear()
             tail.clear()
             left = max(1.0, timeout - (clock() - step))
+            timeline.phase("command")
+            attempt_step = clock()
             code, timed_out = run_command(command, cwd, env, left, emit, seen)
         elif damage:
             result["cache"]["suspect"] = {"kind": damage}
         ended = clock()
+        current = timeline.current
+        if current is not None and cargo.finished_at is not None:
+            # Split the command at cargo's Finished line: build, then tests.
+            current["phase"] = "build"
+            timeline.phase(
+                "test" if cargo.tests["suites"] else "after-build",
+                at=float(current["start"]) + (cargo.finished_at - attempt_step),
+            )
         durations["command"] = round(ended - step, 3)
         if cargo.finished_at is not None:
             durations["build"] = round(cargo.finished_at - step, 3)
             if cargo.tests["suites"]:
                 durations["test"] = round(ended - cargo.finished_at, 3)
-        if cargo.tests["suites"]:
+        if cargo.tests["suites"] or cargo.failed_names:
             result["tests"] = dict(cargo.tests)
+            if cargo.failed_names:
+                result["tests"]["failed_names"] = list(cargo.failed_names)
         locked = _locked_crates(cwd, lineage.path / "tree")
         result["cache"].update(
             crates_compiled=cargo.compiled,
@@ -1107,6 +1570,7 @@ def main(
             result["state"] = "passed"
         else:
             result.update(state="failed", reason="dev-command-failed")
+        timeline.phase("artifacts")
         result["artifacts"] = collect(
             list(spec.get("artifacts") or ()),
             cwd,
@@ -1133,6 +1597,7 @@ def main(
         if first is not None and first.lines:
             result["first_error"] = list(first.lines)
     durations["total"] = round(clock() - began, 3)
+    result["timeline"] = timeline.close()
     emit(RESULT_MARKER + json.dumps(result, sort_keys=True))
     if collected:
         done = work / "out" / "collected"
@@ -1143,15 +1608,19 @@ def main(
 
 
 if __name__ == "__main__":  # pragma: no cover - runs inside the pod
+    # /work and /cache in a pod or container; a native build host (0.20.0)
+    # names its own directories.
+    WORK = Path(os.environ.get("PICELI_DEV_WORK") or "/work")
+    CACHE = Path(os.environ.get("PICELI_DEV_CACHE") or "/cache")
     if os.environ.get("PICELI_DEV_ROLE") == "fetch":
         found = Path("/etc/piceli-git")
         fetch_main(
             json.loads(os.environ["PICELI_DEV_SPEC"]),
-            Path("/work"),
-            Path("/cache"),
+            WORK,
+            CACHE,
             found if found.is_dir() else None,
         )
     elif os.environ.get("PICELI_DEV_ROLE") == "clear":
-        clear_main(json.loads(os.environ["PICELI_DEV_SPEC"]), Path("/cache"))
+        clear_main(json.loads(os.environ["PICELI_DEV_SPEC"]), CACHE)
     else:
-        main(json.loads(os.environ["PICELI_DEV_SPEC"]), Path("/work"), Path("/cache"))
+        main(json.loads(os.environ["PICELI_DEV_SPEC"]), WORK, CACHE)

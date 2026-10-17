@@ -1482,6 +1482,20 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "dev-source-invalid, dev-profile-unknown, dev-run-invalid). The run's "
             "Job is removed on every outcome.",
         ),
+        "dev hosts": _C(
+            "Show each declared build host: up or down (and why), its platforms, "
+            "slots, running and waiting runs.",
+            reads=(
+                "MODULE:ATTR (piceli.infra.Cluster with dev=)",
+                "each host's container engine (docker hosts), the queue files "
+                "(native hosts), the builder node (cluster host)",
+            ),
+            cluster="reads",
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.20.0. Read-only. A docker host is asked with its CLI "
+            "(`info`, `ps`), locally or over its ssh:// context.",
+        ),
         "dev status": _C(
             "Show the development-run queue: slots, running and queued runs with "
             "their position, the last finished runs and the cache use.",

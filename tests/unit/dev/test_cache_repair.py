@@ -127,3 +127,49 @@ def test_cache_clear_empties_free_lineages_and_skips_busy_ones(tmp_path: Path) -
     assert only["cleared"] == [{"lineage": "poet-rust-9f/0", "entries": 1}]
     assert (other / "target" / "debug" / "deps" / "libpoet-1.rlib").exists()
     assert clear_cache(cache, lineage="nothing")["cleared"] == []
+
+
+ICE = [
+    "   Compiling kabuki v0.4.0 (/work/tree/crates/kabuki)",
+    "thread 'rustc' panicked at compiler/rustc_query_system/src/dep_graph/serialized.rs:233:9:",
+    "error: the compiler unexpectedly panicked. this is a bug.",
+    "note: we would appreciate a bug report",
+    "error: internal compiler error: unexpected panic",
+    "error: could not compile `kabuki` (lib)",
+]
+UNDEFINED = [
+    "   Compiling kabuki v0.4.0 (/x)",
+    "error: linking with `cc` failed: exit status: 1",
+    "  = note: rust-lld: error: undefined symbol: "
+    "alloc::collections::btree::navigate::LazyLeafRange::init_front",
+    f"          >>> referenced by {TARGET}/debug/deps/libsignal_hook_registry-7a1b.rlib(x.o)",
+    "error: could not compile `kabuki` (lib test) due to 1 previous error",
+]
+
+
+def test_an_ice_in_incremental_state_and_a_plain_undefined_symbol_are_corruption() -> (
+    None
+):
+    """0.20 (IH 10.1, 10.2)."""
+    assert corrupt_crates(ICE)[1] == "incremental"
+    crates, kind = corrupt_crates(UNDEFINED)
+    assert kind == "link" and "signal_hook_registry" in crates and "kabuki" in crates
+
+
+def test_clearing_incremental_state_keeps_the_rest_of_the_target(
+    tmp_path: Path,
+) -> None:
+    from piceli.dev.pod import clear_incremental
+
+    target = tmp_path / "target"
+    for name in (
+        "debug/incremental/kabuki-1/s-1/x.o",
+        "wasm32-unknown-unknown/debug/incremental/kabuki-2/s/x.o",
+        "debug/deps/libkabuki-1.rlib",
+    ):
+        (target / name).parent.mkdir(parents=True, exist_ok=True)
+        (target / name).write_text("x")
+    assert clear_incremental(target) == 2
+    assert not (target / "debug/incremental").exists()
+    assert not (target / "wasm32-unknown-unknown/debug/incremental").exists()
+    assert (target / "debug/deps/libkabuki-1.rlib").exists()

@@ -143,7 +143,8 @@ def pack(root: SourceRequest, extras: list[SourceRequest], out: Path) -> Packed:
     """
     names = [root.name, *(item.name for item in extras)]
     if len(set(names)) != len(names):
-        raise _bad_source("two sources have the same name")
+        twice = sorted({name for name in names if names.count(name) > 1})
+        raise _bad_source(f"two sources have the same name: {', '.join(twice)}")
     out.mkdir(parents=True, exist_ok=True)
     path = out / "tree.tar.gz"
     sources: dict[str, dict[str, Any]] = {}

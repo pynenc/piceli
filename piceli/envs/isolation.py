@@ -513,6 +513,8 @@ def _required_terms(pod: dict[str, Any]) -> list[dict[str, Any]] | None:
 def place(manifest: dict[str, Any], env: BranchEnv, ref: ResourceRef) -> bool:
     """Put every pod of ``manifest`` on ``env.on_nodes``; whether it changed.
 
+    DaemonSets are left alone (0.20.0): a node agent belongs on every node.
+
     Node names become ``kubernetes.io/hostname In [...]`` (a required node
     affinity, added to each existing term); a ``{label: value}`` mapping is
     merged into ``nodeSelector``. A pod already pinned elsewhere (``node=``,
@@ -521,6 +523,10 @@ def place(manifest: dict[str, Any], env: BranchEnv, ref: ResourceRef) -> bool:
     """
     nodes = env.on_nodes
     if nodes is None or ref.kind not in STACK_KINDS:
+        return False
+    if ref.kind == "DaemonSet":
+        # 0.20: a node agent runs on every node its own selector allows (and
+        # every platform it is built for), not only the environment's nodes.
         return False
     changed = False
     for pod in pod_specs(manifest):

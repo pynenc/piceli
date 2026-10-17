@@ -4,6 +4,54 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.20.0
+
+- **Build hosts.** `DevBuilds(hosts=[...])` declares where development runs
+  may execute besides the in-cluster builder: `BuildHost.docker(name,
+  context=None | "ssh://user@host")` (Linux containers of the profile's
+  image through Docker Desktop, OrbStack, colima, Podman or a Linux
+  engine, locally or over the CLI's own SSH transport),
+  `BuildHost.native(name)` (this machine, no container: macOS-only builds)
+  and `BuildHost.cluster(node)`. Each has `slots`, `cpu`, `memory`,
+  `platforms`. `DevBuilds(node=None)` means no in-cluster runs.
+- **A queue on each host.** Slots and waiting runs live on the host itself
+  (uniquely named containers, or lock files), so every client shares them
+  and they work with the cluster or its controller down; waiting runs start
+  in the cluster queue's order (priority, fair share, age).
+- **Automatic fallback.** `piceli dev run` takes the first host that is up
+  and has a free slot (a docker host whose engine does not answer, or a
+  cordoned builder node, is skipped) and tries the next one when the chosen
+  host turns out unavailable (`dev-host-unavailable`). `--host` pins one,
+  `--platform` runs another platform (emulated on a docker host).
+  `piceli dev hosts` shows each host's state, platforms, slots and queue.
+- **The toolchain the source pins.** A run in a pod or a docker host reads
+  the source's `rust-toolchain.toml` (or `rust-toolchain`) and installs
+  that toolchain once into the cache with `rustup` (channel, targets,
+  components), instead of the image's Rust; `toolchain.rust` in the result
+  (`dev-toolchain-invalid`, `dev-toolchain-failed`).
+- **Every second of a run is attributed.** The result has a `timeline`:
+  contiguous phases with millisecond wall times (the client's queue, pack
+  and transfer; the run's extract, isolation, toolchain, lineage, sync,
+  fetch, build and test, repair and artifacts). The controller's trace of a
+  run uses it: no gap, no second-rounded edges.
+- **Failed tests by name:** `tests.failed_names` in the result and
+  `piceli.dev.tests.failed_names` on the trace.
+- **A dropped log stream no longer orphans a run:** the client reopens the
+  pod's (or container's) log and skips the lines it has seen.
+- **More corrupted caches repaired:** an internal compiler error in rustc's
+  incremental state drops `incremental/` and retries once; a plain
+  `undefined symbol` (a corrupt rlib) clears the crates whose artifacts the
+  link error names and retries once.
+- **Errors name the path:** a link out of the tree (with its target), an
+  unsafe path or special file in a run's archive, a duplicate source name,
+  a symlink leaving an image directory, an undeclared, missing or oversized
+  build output.
+- **DaemonSets run on every node:** an environment's `on_nodes` no longer
+  narrows a DaemonSet (a node agent); its own `node_selector` still does.
+- **`piceli access ENV --cluster ...` forwards only the declared forwards**
+  when the app declares any (no internal ports); `--all-ports` adds the
+  other live Service ports.
+
 ## Version 0.19.1
 
 - **Tailnet companions in GitOps deploys.** The controller rebuilt each

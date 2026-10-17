@@ -138,7 +138,14 @@ def test_a_run_job_is_isolated() -> None:
     assert spec["tools"] == ["cargo"] and spec["timeout_seconds"] == 3600
     assert spec["isolation_check"] is True  # no code before the policy holds
     assert container["command"][:3] == ["python3", "-I", "-c"]
-    assert "def main(" in container["command"][3]  # the wrapper travels with the Job
+    # The wrapper travels with the Job, compressed (0.20).
+    import base64
+    import re
+    import zlib
+
+    blob = re.search(r"b64decode\('([^']+)'\)", container["command"][3])
+    assert blob is not None
+    assert b"def main(" in zlib.decompress(base64.b64decode(blob.group(1)))
     labels = job["metadata"]["labels"]
     assert labels["piceli.io/dev-run"] == "20261008t071900-ab12"
     assert labels["piceli.io/dev-requester"] == "agent-7"

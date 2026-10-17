@@ -86,8 +86,12 @@ def run(
     clock: Callable[[], float] = time.monotonic,
     run_id: str | None = None,
     suspend: bool | None = None,
+    host: Any = None,
 ) -> dict[str, Any]:
     """Run ``request`` on the builder; the ``piceli.dev-run.v1`` result.
+
+    :param host: The :class:`~piceli.dev.model.BuildHost` ``port`` runs on
+        (0.20.0; ``None``: the in-cluster builder node).
 
     :param log: Receives each line of the run's output (``None``: dropped).
     :raises DevError: refusals before anything runs (``dev-profile-unknown``,
@@ -119,7 +123,9 @@ def run(
         "command": list(request.command),
         "cwd": str(Path(request.root.name) / cwd),
         "profile": profile.name,
-        "node": dev.node,
+        "node": dev.node if host is None or host.kind == "cluster" else None,
+        # 0.20: where it ran (a build host's name, kind and platform).
+        **({"host": host.describe()} if host is not None else {}),
         "requester": request.requester,
         "priority": request.priority,
     }
@@ -170,20 +176,33 @@ def run(
             },
         )
         port.create(job)
-        say(f"run {run_id}: {profile.name} on {dev.node}")
+        say(
+            f"run {run_id}: {profile.name} on "
+            + (host.name if host is not None else str(dev.node))
+        )
         result: dict[str, Any] | None = None
         # With a scheduler the Job stays until it records the run; a run that
         # never got its result (interrupted, failed to start) goes now.
         remove = not suspend
+        phases: list[dict[str, Any]] = []
+
+        def phase(name: str, start: float) -> None:
+            phases.append(
+                {"phase": name, "start": round(start, 3), "end": round(time.time(), 3)}
+            )
+
         try:
             step = clock()
+            wall = time.time()
             pod = port.wait_started(
                 run_id,
                 request.queue_timeout,
                 lambda state: say(f"run {run_id}: {state}"),
             )
             durations["queue"] = round(clock() - step, 3)
+            phase("queue", wall)
             step = clock()
+            wall = time.time()
             have = port.have(pod)
             if have is None or not have.get("git", True):
                 # An image without git: the whole tree, as 0.18 did.
@@ -202,10 +221,12 @@ def run(
                             key: entry.get(key) for key in ("fetched", "error", "note")
                         }
             durations["pack"] = round(clock() - step, 3)
+            phase("pack", wall)
             body["sources"] = packed.sources
             body["upload_bytes"] = packed.bytes
             say(f"run {run_id}: uploading {_size(packed.bytes)} ({mode})")
             step = clock()
+            wall = time.time()
             shown = {"at": 0.0}
 
             def progress(sent: int, total: int, elapsed: float) -> None:
@@ -220,6 +241,7 @@ def run(
 
             report = port.upload(pod, packed.path, packed.sha256, progress)
             durations["transfer"] = round(clock() - step, 3)
+            phase("transfer", wall)
             body["upload"] = {"mode": mode, **(report or {"bytes": packed.bytes})}
             found: list[dict[str, Any]] = []
 
@@ -282,5 +304,11 @@ def run(
         {k: v for k, v in result.items() if k not in {"schema", "run", "durations"}}
     )
     body["durations"] = durations
+    # 0.20: one timeline, millisecond wall times: this client's queue, pack
+    # and transfer, then the run's own phases (its wait for the upload is the
+    # pack and transfer above).
+    body["timeline"] = phases + [
+        item for item in result.get("timeline") or () if item.get("phase") != "upload"
+    ]
     body.setdefault("log_tail", [])
     return body

@@ -211,7 +211,9 @@ def collect(
                 resolved = os.path.normpath(os.path.join(os.path.dirname(inner), link))
                 if link.startswith("/") or resolved.startswith(".."):
                     raise LayerError(
-                        "host-output-missing", "a symlink leaves its image directory"
+                        "host-output-missing",
+                        f"a symlink leaves its image directory: {inner[:300]} -> "
+                        f"{link[:300]}",
                     )
                 entries.append(LayerEntry(inner, "symlink", 0o777, link=link))
             elif stat.S_ISDIR(mode):

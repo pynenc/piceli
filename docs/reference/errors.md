@@ -189,6 +189,8 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`deploy-stage-unknown`](#error-deploy-stage-unknown) | cli | no |
 | [`dev-cache-clear-failed`](#error-dev-cache-clear-failed) | dev | yes |
 | [`dev-command-failed`](#error-dev-command-failed) | dev | yes |
+| [`dev-host-unavailable`](#error-dev-host-unavailable) | dev | no |
+| [`dev-host-unknown`](#error-dev-host-unknown) | dev | no |
 | [`dev-isolation-not-enforced`](#error-dev-isolation-not-enforced) | dev | no |
 | [`dev-not-enabled`](#error-dev-not-enabled) | dev | no |
 | [`dev-profile-unknown`](#error-dev-profile-unknown) | dev | no |
@@ -202,6 +204,8 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 | [`dev-run-unknown`](#error-dev-run-unknown) | dev | no |
 | [`dev-source-invalid`](#error-dev-source-invalid) | dev | no |
 | [`dev-tool-missing`](#error-dev-tool-missing) | dev | no |
+| [`dev-toolchain-failed`](#error-dev-toolchain-failed) | dev | no |
+| [`dev-toolchain-invalid`](#error-dev-toolchain-invalid) | dev | no |
 | [`dev-upload-failed`](#error-dev-upload-failed) | dev | yes |
 | [`digest-mismatch`](#error-digest-mismatch) | artifacts-delivery | no |
 | [`discovery-incomplete`](#error-discovery-incomplete) | release | yes |
@@ -4883,6 +4887,22 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 - **Fix:** Read `log_tail` (or `piceli dev logs RUN`), fix the code, run again.
 - **Retry-safe:** yes
 
+(error-dev-host-unavailable)=
+### `dev-host-unavailable`
+
+**Build host unavailable.** No declared build host could take the run (0.20.0): a docker host's engine did not answer (not running, `ssh://` unreachable, the CLI missing), the image could not be pulled, or the in-cluster builder node is down or cordoned. The message names each host and why; `piceli dev run` already tried the next host.
+
+- **Fix:** Start the engine (Docker Desktop, OrbStack, colima), check `piceli dev hosts`, or pass `--host` for one that is up.
+- **Retry-safe:** no
+
+(error-dev-host-unknown)=
+### `dev-host-unknown`
+
+**No such build host.** `--host` names a host `DevBuilds(hosts=[...])` does not declare (0.20.0).
+
+- **Fix:** Use a name from `piceli dev hosts`, or declare the host.
+- **Retry-safe:** no
+
 (error-dev-isolation-not-enforced)=
 ### `dev-isolation-not-enforced`
 
@@ -4985,6 +5005,22 @@ Codes never contain paths, secret values or server messages. See {doc}`../agents
 **Tool missing in the image.** A tool the profile declares (`DevProfile(tools=...)`) is not on the image's PATH.
 
 - **Fix:** Use an image with the tool or remove it from the profile.
+- **Retry-safe:** no
+
+(error-dev-toolchain-failed)=
+### `dev-toolchain-failed`
+
+**Toolchain install failed.** rustup could not install the toolchain the source pins into the cache (0.20.0): no network (a profile with `network="none"`), an unknown channel or a target or component that does not exist for it. The message has rustup's last lines.
+
+- **Fix:** Check the pin's channel, targets and components; runs need public HTTPS to install a toolchain once.
+- **Retry-safe:** no
+
+(error-dev-toolchain-invalid)=
+### `dev-toolchain-invalid`
+
+**Toolchain pin unreadable.** The source's `rust-toolchain.toml` (or `rust-toolchain`) is not valid TOML, or its channel, targets or components are not plain names (0.20.0). The message names the file.
+
+- **Fix:** Fix the file; `channel` is a version (1.97.0), `stable`, `beta` or `nightly-YYYY-MM-DD`.
 - **Retry-safe:** no
 
 (error-dev-upload-failed)=
