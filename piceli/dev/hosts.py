@@ -790,8 +790,10 @@ class NativePort:
 
         spec = json.loads(_env(self.jobs[run])["PICELI_DEV_SPEC"])
         spec["isolation_check"] = False
-        # This machine's own rustup honours rust-toolchain.toml itself.
+        # This machine's own rustup honours rust-toolchain.toml itself, and
+        # its own ~/.cargo already holds the crates.
         spec["provision_toolchains"] = False
+        spec["own_cargo_home"] = True
         env = {
             **os.environ,
             "PICELI_DEV_SPEC": json.dumps(spec, sort_keys=True),
