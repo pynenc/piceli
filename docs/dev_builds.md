@@ -108,7 +108,7 @@ dev=DevBuilds(
 | Kind | Where the run executes | Needs |
 | --- | --- | --- |
 | `docker` | A Linux container of the profile's image, through a Docker-compatible CLI: Docker Desktop, OrbStack, colima or Podman on a Mac, Docker or Podman on Linux; locally, or over the CLI's own `ssh://` transport (`context=`) or a CLI context name | The engine on the host; nothing else is installed there. The cache is a named volume (`piceli-dev-cache`) |
-| `native` | This machine itself, the wrapper as a process (no container) | Python 3 and the tools; its cache and queue live in `state_dir` (default `~/.cache/piceli/dev/NAME`). For builds that only work on the host's OS (macOS) |
+| `native` | This machine itself, the wrapper as a process (no container) | Python 3 and the tools; its lineages and queue live in `state_dir` (default `~/.cache/piceli/dev/NAME`); it keeps the user's own `CARGO_HOME` and rustup (crates already downloaded, `--offline` works). For builds that only work on the host's OS (macOS), and the fastest test runs |
 | `cluster` | A Job on `DevBuilds.node`, as before | `piceli cluster init` |
 
 `piceli dev run` asks the hosts in order and takes the first one that is up

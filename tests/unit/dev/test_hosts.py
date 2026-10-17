@@ -370,3 +370,21 @@ def test_cache_clear_on_a_native_host(
     assert result.exit_code == 0, result.stdout + result.stderr
     assert json.loads(result.stdout)["cleared"][0]["lineage"] == "shop-sh/0"
     assert not target.exists()
+
+
+def test_a_native_run_keeps_the_users_cargo_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Its crates are already there, and ``cargo --offline`` keeps working."""
+    app = repo(tmp_path / "shop", {"t.sh": 'echo "home=${CARGO_HOME:-unset}"'})
+    host = BuildHost.native("laptop", state_dir=str(tmp_path / "state"))
+    dev = _dev(host)
+    monkeypatch.setenv("CARGO_HOME", str(tmp_path / "my-cargo"))
+    lines: list[str] = []
+    result = run(
+        NativePort(host, dev), dev,
+        RunRequest(SourceRequest("shop", app, None), ["sh", "t.sh"]),
+        log=lines.append, host=host,
+    )  # fmt: skip
+    assert result["state"] == "passed"
+    assert f"home={tmp_path / 'my-cargo'}" in lines
