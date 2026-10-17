@@ -1464,7 +1464,10 @@ def main(
         }
         env.update(selected)
         env["CARGO_TARGET_DIR"] = str(target)
-        env["CARGO_HOME"] = str(cache / "cargo-home" / toolchain)
+        if not spec.get("own_cargo_home"):
+            # A native host keeps the user's own ~/.cargo (its crates, and
+            # --offline works); everywhere else the cache's, per toolchain.
+            env["CARGO_HOME"] = str(cache / "cargo-home" / toolchain)
         env["PICELI_DEV_RUN"] = str(spec.get("run"))
         if spec.get("prefetch") == "cargo" and (cwd / "Cargo.lock").is_file():
             timeline.phase("fetch")
@@ -1472,9 +1475,10 @@ def main(
             # 0.20: this lineage already fetched this exact Cargo.lock into
             # this CARGO_HOME: nothing to fetch, skip cargo's 2 s check.
             lock = hashlib.sha256((cwd / "Cargo.lock").read_bytes()).hexdigest()
-            key = f"{lock}:{env['CARGO_HOME']}:{cwd.relative_to(lineage.path)}"
+            home = env.get("CARGO_HOME") or str(Path.home() / ".cargo")
+            key = f"{lock}:{home}:{cwd.relative_to(lineage.path)}"
             meta = _read_meta(lineage.path)
-            if meta.get("fetched") == key and Path(env["CARGO_HOME"]).is_dir():
+            if meta.get("fetched") == key and Path(home).is_dir():
                 result["prefetch"] = "cached"
             else:
                 emit("[piceli-dev] cargo fetch --locked")
