@@ -628,6 +628,44 @@ def _job_item(item: BuildItem) -> dict[str, Any]:
     }
 
 
+class ArchiveRecorder:
+    """A ``deliver`` that pushes nothing (``job-run --archives-only``,
+    0.21.0): it records each built image's OCI archive, platform, config
+    and manifest digest for the build host to deliver itself, and answers
+    like a delivery (``archive.local/<repository>@<manifest digest>``)."""
+
+    def __init__(self, out: Path) -> None:
+        self.out = out
+        self.archives: list[dict[str, Any]] = []
+
+    def __call__(
+        self, source: Any, target: Any, grant: Any, node_registry: Any = None
+    ) -> dict[str, Any]:
+        import tarfile
+
+        path = Path(source.path)
+        with tarfile.open(path) as tar:
+            member = tar.extractfile("index.json")
+            if member is None:
+                raise CompositionError("component-build-failed", "no OCI index.json")
+            index = json.loads(member.read())
+        digest = str(index["manifests"][0]["digest"])
+        relative = path.relative_to(self.out)
+        self.archives.append(
+            {
+                "archive": relative.as_posix(),
+                "platform": relative.parts[0].replace("-", "/", 1),
+                "repository": str(target.repository),
+                "image_id": str(grant.approved_digest),
+                "digest": digest,
+            }
+        )
+        return {
+            "state": "succeeded",
+            "pull_ref": f"archive.local/{target.repository}@{digest}",
+        }
+
+
 def job_run_components(
     *,
     sources: Path,
@@ -639,8 +677,13 @@ def job_run_components(
     node_registry: str | None,
     say: Callable[[str], None] = lambda _: None,
     deliver: Any = None,
+    archives_only: bool = False,
 ) -> dict[str, Any]:
     """What the Job runs: build each component from ``sources/<source>``; a receipt.
+
+    With several ``platforms`` (0.21.0) each component also gets one OCI
+    index over them (its ``pull_ref``); ``archives_only`` pushes nothing
+    and lists the archives (a build host delivers them).
 
     Each item is ``{"component", "source", "digest", "repository"}``; the
     contract is read again from the fetched ``piceli.toml`` (the digest is
@@ -655,9 +698,13 @@ def job_run_components(
     from piceli.artifacts.registry_delivery import RegistryDelivery
     from piceli.infra.contract import CONTRACT_FILE, parse_contracts
 
-    if deliver is None:
+    recorder = ArchiveRecorder(out) if archives_only else None
+    if recorder is not None:
+        deliver = recorder
+    elif deliver is None:
         deliver = RegistryDelivery().deliver
     results: dict[str, Any] = {}
+    per_platform: dict[str, dict[str, str]] = {}
     prefix = registry_url.rstrip("/")
     for item in items:
         name, source = str(item["component"]), str(item["source"])
@@ -690,9 +737,28 @@ def job_run_components(
                 node_registry=node_registry,
             )
             image = _pinned(delivered, name)
+            per_platform.setdefault(name, {})[platform] = image.manifest_digest
             results.setdefault(
                 name,
                 {**image.to_dict(), "platform": platform, "digest": item["digest"]},
+            )
+    if recorder is not None:
+        return {"components": results, "archives": recorder.archives}
+    if len(platforms) > 1:
+        repositories = {
+            str(item["component"]): str(item["repository"]) for item in items
+        }
+        for name, entry in results.items():
+            digests = per_platform[name]
+            found = RegistryDelivery().push_index(
+                RegistryTarget.parse(f"{prefix}/{repositories[name]}"), digests
+            )
+            base = str(entry["pull_ref"]).split("@", 1)[0]
+            entry.update(
+                pull_ref=f"{base}@{found}",
+                manifest_digest=found,
+                platform=None,
+                platforms=dict(sorted(digests.items())),
             )
     return {"components": results}
 
@@ -758,8 +824,12 @@ def job_run_spec(
     facts: Mapping[str, Any] | None = None,
     say: Callable[[str], None] = lambda _: None,
     deliver: Any = None,
+    archives_only: bool = False,
 ) -> dict[str, Any]:
     """What a pipeline image build Job runs: the spec at ``sources/<repo>/<path>``.
+
+    ``archives_only`` (0.21.0, a build host): push nothing; the receipt's
+    ``archives`` lists each image's OCI archive per platform.
 
     ``spec`` is ``<repo source>/<path>``; each fetched source is
     ``sources/<name>``. Pushes each of ``images`` (``{"image",
@@ -771,7 +841,10 @@ def job_run_spec(
     from piceli.artifacts.registry_delivery import RegistryDelivery
     from piceli.infra.pipelines import SpecBuildRequest, run_spec_build
 
-    if deliver is None:
+    recorder = ArchiveRecorder(out) if archives_only else None
+    if recorder is not None:
+        deliver = recorder
+    elif deliver is None:
         deliver = RegistryDelivery().deliver
     repo, _, path = spec.partition("/")
     names = sorted(item.name for item in sources.iterdir() if item.is_dir())
@@ -802,7 +875,12 @@ def job_run_spec(
             node_registry=node_registry,
         )
 
-    return run_spec_build(
+    def index(repository: str, digests: Mapping[str, str]) -> str:
+        return RegistryDelivery().push_index(
+            RegistryTarget.parse(f"{prefix}/{repository}"), digests
+        )
+
+    receipt = run_spec_build(
         request,
         {name: sources / name for name in names},
         platforms=platforms,
@@ -810,7 +888,11 @@ def job_run_spec(
         out=out,
         deliver=push,
         say=say,
+        index=None if recorder is not None else index,
     )
+    if recorder is not None:
+        receipt["archives"] = recorder.archives
+    return receipt
 
 
 class JobBuilder:

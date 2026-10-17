@@ -4,6 +4,30 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.21.0
+
+- **GitOps builds on build hosts.** `Controller(builds=("hosts",))` (or
+  `("hosts", "cluster")`) makes the controller hand its builds to the build
+  hosts instead of a builder-node Job: it publishes what it waits for
+  (`builds_wanted` in `piceli gitops status`) and the step waits as
+  `retrying` with reason `build-waiting` (no attempt counted).
+  `Controller(host_wait="30m")` is how long an unclaimed build waits before
+  `("hosts", "cluster")` falls back to the in-cluster Job.
+- **`piceli builder serve`.** On a docker build host: claims a wanted build
+  (`build-claim`), exports each source at its commit with the host's Git,
+  builds with the same host-build code as the in-cluster Job, pushes to the
+  cluster registry through a port-forward and answers `built` (or
+  `build-failed` with its log tail). The controller checks the id, every
+  image's key and that each digest is in its registry, then deploys through
+  the same plan, approval and checks. `--once` builds one and exits.
+- **Every platform.** A build for several platforms pushes one image per
+  platform and one OCI index over them; the deploy pins the index digest.
+  `piceli gitops enable` defaults the platforms to the cluster nodes'
+  architectures. Another architecture is cross-compiled (`cargo zigbuild`),
+  not emulated.
+- `piceli build job-run --archives-only` writes the image archives without
+  pushing them.
+
 ## Version 0.20.0
 
 - **Build hosts.** `DevBuilds(hosts=[...])` declares where development runs

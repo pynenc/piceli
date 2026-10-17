@@ -227,6 +227,14 @@ def job_run(
     ] = None,
     node_registry: Annotated[str | None, typer.Option("--node-registry")] = None,
     timeout: Annotated[int, typer.Option("--timeout")] = 3600,
+    archives_only: Annotated[
+        bool,
+        typer.Option(
+            "--archives-only",
+            help="Push nothing: list each image's OCI archive per platform in the "
+            "receipt (a build host delivers them, 0.21.0)",
+        ),
+    ] = False,
 ) -> None:
     """Inside the build Job: build and push; print the receipt line."""
     import sys
@@ -259,6 +267,7 @@ def job_run(
                 node_registry=node_registry,
                 facts=declared,
                 say=say,
+                archives_only=archives_only,
             )
         except BuildSpecError as error:
             _say_tail(error)
@@ -288,6 +297,7 @@ def job_run(
                 registry_url=registry_url,
                 node_registry=node_registry,
                 say=say,
+                archives_only=archives_only,
             )
         except BuildSpecError as error:
             _say_tail(error)

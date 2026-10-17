@@ -271,6 +271,31 @@ class Backend:
             node_registry=route.node_registry,
         )
 
+    def _delivery(self, route: RegistryRoute) -> Any:
+        from piceli.artifacts.registry_delivery import RegistryDelivery
+
+        return RegistryDelivery(
+            credentials=self._credentials(route),
+            ca_file=route.ca_file.absolute() if route.ca_file else None,
+            forward=self._registry_forward(route) if route.forward else None,
+        )
+
+    def registry_index(
+        self, route: RegistryRoute, repository: str, manifests: Mapping[str, str]
+    ) -> str:
+        """Push one OCI index over ``{platform: digest}`` (0.21.0); its digest."""
+        from piceli.artifacts.registry import RegistryTarget
+
+        url = route.url(repository, free_port())
+        return self._delivery(route).push_index(RegistryTarget.parse(url), manifests)
+
+    def registry_has(self, route: RegistryRoute, repository: str, digest: str) -> bool:
+        """Whether the registry holds ``repository@digest`` (0.21.0)."""
+        from piceli.artifacts.registry import RegistryTarget
+
+        url = route.url(repository, free_port())
+        return self._delivery(route).has_manifest(RegistryTarget.parse(url), digest)
+
     def mirror_deliver(
         self,
         route: RegistryRoute,

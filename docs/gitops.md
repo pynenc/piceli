@@ -349,6 +349,74 @@ is not asked for again). Branch environments keep their idle stop. Both
 commands only write a request (`--state-dir DIR` for a local controller);
 the UI's **Stop** and **Start** write the same ones.
 
+### Every platform
+
+Since 0.21.0 the controller builds every image for every platform it is
+enabled with, and deploys one OCI index over them: each node pulls its own
+architecture, so a Deployment can land on any node and a DaemonSet runs on
+all of them. Without `--platform`, `piceli gitops enable` takes the
+architectures of the cluster's declared nodes (`Node(arch=...)`; a cluster
+of arm64 and amd64 nodes builds both). An image's change key covers its
+platforms, so changing them rebuilds once.
+
+A Rust build for the other architecture cross-compiles with `cargo zigbuild`
+(no emulation; the build takes about as long as the native one plus the
+link with zig's linker); a build spec whose commands cannot cross-compile
+needs a build host of that architecture.
+
+### Builds on build hosts
+
+When the cluster's own builder node is down, or a laptop or a Mac mini
+builds faster, the controller can hand its builds to build hosts:
+
+```python
+controller=Controller(on="node-a", builds=("hosts", "cluster"), host_wait="30m"),
+dev=DevBuilds(
+    node=None,
+    image="ghcr.io/pynenc/piceli-builder@sha256:<digest>",
+    hosts=[BuildHost.docker("laptop", memory="7Gi")],
+),
+```
+
+- `builds=("hosts",)`: the controller never runs a build Job. It publishes
+  what it waits for in its status (`controller.builds_wanted`: the spec or
+  components, every source at its commit, the platforms, each image's
+  repository and change key) and the environment waits (`retrying`, reason
+  `build-waiting`, its components `waiting-build`; no attempt is counted
+  and nothing goes to the history while it waits).
+- `builds=("hosts", "cluster")`: the same, and after `host_wait` without a
+  host claiming it, the in-cluster Job builds it.
+
+On a build host, with the cluster's credential profile:
+
+```sh
+piceli builder serve --cluster infra.py:my_cluster            # until Ctrl-C
+piceli builder serve --cluster infra.py:my_cluster --once     # one build
+```
+
+It takes the oldest wanted build nobody holds (request `build-claim`; a
+claim not answered in 4 hours lapses), fetches each source at its commit
+with **this machine's own Git access** (mirrors in
+`~/.cache/piceli/builder/git`, fetched incrementally), builds it in a
+container of the builder image on the host's engine (`piceli build job-run
+--archives-only`: the in-cluster build's code, every platform, its cache
+in the `piceli-build-cache` volume), pushes the images to the cluster's
+registry through a port-forward (only the blobs it lacks) and one OCI
+index per image, and answers `built` (each image's key, pull reference,
+digest and platforms, and a receipt: host, times, builder image, commits).
+A failure answers `build-failed` with the output's tail: the environment's
+step fails with it, as an in-cluster build would.
+
+The controller accepts a `built` request only for a build it asked for,
+with every image built from the same inputs (its change key) and its digest
+present in its registry; then it records the images as its own builds and
+the environment deploys them through the same plan, approval and checks.
+Anything else is a rejected request (`rejected_requests` in the status).
+
+The builder image must be the controller's Piceli version. Its registry
+must be on a node that works: `Registry.in_cluster(on=...)` places it, and
+moving it means a new claim, which the next builds and mirrors fill again.
+
 ### Removed objects are deleted (pruning)
 
 New in 0.14.7. Every sync, of a branch, a named environment or main, and of
