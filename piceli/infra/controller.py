@@ -126,12 +126,16 @@ from piceli.infra import CompositionError, Source
 from piceli.infra.builders import BuildItem, BuiltImage, MirrorItem
 from piceli.infra.composition import COMPOSITION_SCHEMA, Composition, EnvItem
 from piceli.infra.contract import ComponentContract, image_contract
+from piceli.infra.remote_builds import WAITING, BuildPending
 from piceli.infra.sources import SourceSet, describe_refs
 from piceli.pipeline.errors import PipelineError
 
 CONFIG_SCHEMA = "piceli.gitops-composition-config.v1"
 #: States of a component in the status.
-COMPONENT_STATES = ("synced", "building", "rolling", "failed", "unchanged")
+COMPONENT_STATES = (
+    "synced", "building", "rolling", "failed", "unchanged",
+    "waiting-build",  # 0.21.0: a build host builds it
+)  # fmt: skip
 #: Errors no retry fixes: the environment waits for a new revision.
 FINAL_CODES = frozenset(
     {
@@ -175,7 +179,8 @@ class CompositionConfig:
         components whose images are in its cache.
     :param build_git_secret: The one Secret (``username``/``password``) the
         build Job fetches every source with.
-    :param platforms: Platforms the Job builds for (the first one deploys).
+    :param platforms: Platforms every image is built for; with several, one
+        OCI index over them deploys (0.21.0; before, only the first).
     :param repo: The composition's own repository (``{"name", "url",
         "branch", "entry"}``, :class:`~piceli.infra.pipelines.RepoSettings`):
         the controller follows it and imports the module at its commit;
@@ -698,6 +703,12 @@ def _running_images(record: Mapping[str, Any]) -> dict[str, Any]:
         for key, entry in sorted((record.get("components") or {}).items())
         if isinstance(entry, Mapping)
     }
+
+
+def _wanted_builds(state: Mapping[str, Any], now: float) -> list[dict[str, Any]]:
+    from piceli.infra.remote_builds import public
+
+    return public(state, now)
 
 
 def _failing(record: Mapping[str, Any], reason: str) -> str:
@@ -1409,6 +1420,53 @@ class CompositionController:
             + f": {outcome.get('state')}"
         )
 
+    def _delivered(self, body: Mapping[str, Any]) -> None:
+        """A build host's ``built`` request: checked against what this
+        controller asked for and against its registry, then recorded as
+        its own build would be (0.21.0)."""
+        from piceli.infra import remote_builds
+
+        images = remote_builds.delivered(self.state, body, self._in_registry)
+        for name, item in images.items():
+            self._remember(
+                name,
+                item["key"],
+                BuiltImage(
+                    item["pull_ref"],
+                    item["manifest_digest"],
+                    {"platforms": item["platforms"], "host": str(body.get("host"))}
+                    if item["platforms"]
+                    else {"host": str(body.get("host"))},
+                ),
+            )
+        self.log(
+            f"build host {body.get('host')}: delivered {', '.join(sorted(images))}"
+        )
+        self._wake_waiting()
+
+    def _wake_waiting(self) -> None:
+        """Environments waiting for a build go at once, not at their next try."""
+        for record in self._envs().values():
+            if record.get("reason") == WAITING:
+                record["next_attempt_at"] = self.clock()
+
+    def _in_registry(self, pull_ref: str) -> bool:
+        route = (
+            getattr(self.ports.builder, "mirror_route", None)
+            or getattr(self.ports.builder, "route", None)
+            or getattr(getattr(self.ports.builder, "_mirror", None), "route", None)
+        )
+        if route is None:
+            return True  # nothing to check against (no registry route)
+        name, _, digest = pull_ref.partition("@")
+        repository = name.split("/", 1)[1] if "/" in name else name
+        from piceli.pipeline.backend import Backend
+
+        try:
+            return Backend().registry_has(route, repository, digest)
+        except Exception:
+            return False
+
     def _requests(self) -> None:
         try:
             pending = self.channel.requests()
@@ -1434,6 +1492,17 @@ class CompositionController:
                     self._stop_request(body, start=kind == "start")
                 elif kind == "cache-clear":
                     self._cache_clear(body)
+                elif kind == "build-claim":
+                    from piceli.infra import remote_builds
+
+                    remote_builds.claim(self.state, body, self.clock())
+                elif kind == "built":
+                    self._delivered(body)
+                elif kind == "build-failed":
+                    from piceli.infra import remote_builds
+
+                    remote_builds.failed(self.state, body)
+                    self._wake_waiting()
                 else:
                     raise GitOpsError("gitops-request-invalid", "unknown request kind")
             except GitOpsError as error:
@@ -1598,6 +1667,27 @@ class CompositionController:
         )
         return f"{prefix}/{component}"
 
+    def _builder(self) -> Any:
+        """The builder of this step: the in-cluster one, or (0.21.0,
+        ``Controller(builds=("hosts", ...))``) the build hosts in front of it."""
+        cluster = getattr(self._composition, "cluster", None)
+        controller = getattr(cluster, "controller", None)
+        order = tuple(getattr(controller, "builds", None) or ("cluster",))
+        if "hosts" not in order:
+            return self.ports.builder
+        from piceli.gitops.config import parse_duration
+        from piceli.infra.remote_builds import HostBuilds
+
+        return HostBuilds(
+            self.ports.builder,
+            self.state,
+            platforms=self.config.platforms,
+            order=order,
+            host_wait=parse_duration(getattr(controller, "host_wait", "30m")),
+            clock=self.clock,
+            urls={key: source.url for key, source in self.sources.sources.items()},
+        )
+
     def _cache_path(self, component: str, digest: str) -> Path:
         hexa = digest.split(":", 1)[-1]
         return self.state_dir / "components" / component / f"{hexa}.json"
@@ -1727,12 +1817,14 @@ class CompositionController:
             if to_build:
                 built = self._timed(
                     [item.component for item in to_build],
-                    lambda: self.ports.builder.build(to_build, self.sources.checkout),
+                    lambda: self._builder().build(to_build, self.sources.checkout),
                 )
                 for item in to_build:
                     image = built[item.component]
                     self._remember(item.component, item.digest, image)
                     images[item.component] = image
+        except BuildPending:
+            raise  # a build host builds them: not failed (see _step)
         except Exception:
             for entry in components.values():
                 if entry["state"] == "building":
@@ -1803,7 +1895,9 @@ class CompositionController:
         rebuild = set((self.state.get("rebuild") or {}).get(name) or ())
         previous: dict[str, Any] = dict(record.get("components") or {})
         now = _iso(self.clock())
-        platform = self.config.platforms[0]
+        # 0.21: an image built for several platforms deploys as one index;
+        # its key covers them all (one platform keeps its 0.20 key).
+        platform = ",".join(self.config.platforms)
         components: dict[str, dict[str, Any]] = {}
         images: dict[str, BuiltImage] = {}
         requests: list[SpecBuildRequest] = []
@@ -1877,7 +1971,7 @@ class CompositionController:
                 built = self._timed(
                     sorted(request.images),
                     functools.partial(
-                        self.ports.builder.build_spec, request, self.sources.checkout
+                        self._builder().build_spec, request, self.sources.checkout
                     ),
                 )
                 for image_name, wanted in request.images.items():
@@ -1889,6 +1983,8 @@ class CompositionController:
                     self._remember(image_name, wanted["key"], built[image_name])
                     images[image_name] = built[image_name]
                 self._build_times(name, sorted(request.images))
+        except BuildPending:
+            raise  # a build host builds them: not failed (see _step)
         except Exception:
             for entry in components.values():
                 if entry["state"] == "building":
@@ -2641,8 +2737,25 @@ class CompositionController:
         }
         self._publish()
         self.telemetry.step_started(record, work.__name__.lstrip("_"))
+        pending = False
         try:
             work(record)
+        except BuildPending as waiting:
+            # 0.21: a build host builds it; look again at the next poll. No
+            # attempt is counted and nothing goes to the history.
+            pending = True
+            for entry in (record.get("components") or {}).values():
+                if entry.get("state") == "building":
+                    entry["state"] = "waiting-build"
+            self._set(
+                record,
+                state="retrying",
+                reason=WAITING,
+                next_attempt_at=self.clock() + float(self.config.poll_seconds),
+            )
+            if record.get("waiting_since") is None:
+                record["waiting_since"] = _iso(self.clock())
+                self.log(f"{record['branch']}: {waiting}")
         except Exception as error:  # one bad environment never stops the loop
             if isinstance(error, PipelineError | GitOpsError):
                 self.log(f"{record['branch']}: {error}")  # registered, no secret
@@ -2659,7 +2772,9 @@ class CompositionController:
         finally:
             self.busy = False
             record.pop("in_progress", None)
-            if deploy:
+            if not pending:
+                record.pop("waiting_since", None)
+            if deploy and not pending:
                 self._record_step(record, *started)
             self.telemetry.step_finished(
                 record, work.__name__.lstrip("_"), self._last_outcome
@@ -3183,6 +3298,9 @@ class CompositionController:
                 "warnings": self._warnings(self.clock()),
                 # Added in 0.19.0: the last `piceli gitops cache clear`.
                 "cache_clear": self.state.get("cache_clear"),
+                # Added in 0.21.0: what this controller waits for build hosts
+                # to build (piceli builder serve reads it).
+                "builds_wanted": _wanted_builds(self.state, self.clock()),
                 "poll_failures": int(self.state.get("poll_failures") or 0),
                 # Added in 0.14.6: the registry claim's use measured by the
                 # controller (``du`` in the registry pod), for the UI.

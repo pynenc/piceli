@@ -99,6 +99,20 @@ def check_controller(controller: Controller) -> None:
 
     if controller.telemetry is not None and not isinstance(controller.telemetry, Otlp):
         raise _invalid("Controller(telemetry=) must be Otlp(...)")
+    builds = tuple(controller.builds) if not isinstance(controller.builds, str) else ()
+    if (
+        not builds
+        or len(set(builds)) != len(builds)
+        or not all(item in {"cluster", "hosts"} for item in builds)
+    ):
+        raise _invalid(
+            'Controller(builds=) is ("cluster",), ("hosts",) or both, in order'
+        )
+    object.__setattr__(controller, "builds", builds)
+    try:
+        parse_duration(controller.host_wait)
+    except GitOpsError:
+        raise _invalid("Controller(host_wait=) must be like 30m or 2h") from None
 
 
 def check_ui(ui: Ui) -> None:
@@ -223,6 +237,9 @@ def describe(cluster: Cluster) -> dict[str, Any]:
             body["controller"]["delete_volumes"] = True
         if cluster.controller.telemetry is not None:  # absent when off: same hashes
             body["controller"]["telemetry"] = cluster.controller.telemetry.to_dict()
+        if tuple(cluster.controller.builds) != ("cluster",):  # 0.21.0; same hashes
+            body["controller"]["builds"] = list(cluster.controller.builds)
+            body["controller"]["host_wait"] = cluster.controller.host_wait
     if cluster.dev is not None:  # 0.18.0; absent when off: same hashes
         body["dev"] = cluster.dev.describe()
     if cluster.access is not None:  # 0.19.0; absent when off: same hashes

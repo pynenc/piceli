@@ -519,7 +519,9 @@ def _enable_composition(
                     else "60s"
                 )
             ),
-            platforms=tuple(platform or ("linux/amd64",)),
+            # 0.21: by default every architecture the cluster's nodes declare
+            # (a workload runs on any of them; a DaemonSet on all).
+            platforms=tuple(platform or _node_platforms(composition)),
             builder_image=builder_image,
             build_git_secret=build_git_secret or "piceli-build-git",
             builder_selector=parse_selector(builder_selector or []),
@@ -917,6 +919,20 @@ def disable(
                 )
             },
         )
+
+
+def _node_platforms(composition: Any) -> tuple[str, ...]:
+    """``linux/<arch>`` of every node the composition's cluster declares;
+    ``linux/amd64`` when it declares none."""
+    cluster = getattr(composition, "cluster", None)
+    found = sorted(
+        {
+            f"linux/{node.arch}"
+            for node in getattr(cluster, "nodes", None) or ()
+            if getattr(node, "arch", None) in {"amd64", "arm64"}
+        }
+    )
+    return tuple(found) or ("linux/amd64",)
 
 
 def _health(status: dict[str, Any] | None, ready: bool | None, now: float) -> str:

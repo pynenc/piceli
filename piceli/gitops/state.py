@@ -52,7 +52,11 @@ HISTORY_KEY = "history.json"
 #: Who sent an approval (``via`` of an approve request; recorded as its approver).
 APPROVAL_VIA = ("cli", "ui")
 #: Request kinds (the prefix of their key).
-REQUEST_KINDS = ("approve", "promote", "sync", "stop", "start", "cache-clear")
+REQUEST_KINDS = (
+    "approve", "promote", "sync", "stop", "start", "cache-clear",
+    # 0.21.0: build hosts (piceli builder serve)
+    "build-claim", "built", "build-failed",
+)  # fmt: skip
 #: Env states a status may carry.
 ENV_STATES = (
     "pending",
@@ -291,6 +295,50 @@ def cache_clear_request(
         )
     at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     return request("cache-clear", crates=names, at=at)
+
+
+def _build_id(value: str) -> str:
+    import re
+
+    if not re.fullmatch(r"[0-9a-f]{20}", value):
+        raise GitOpsError("gitops-request-invalid", "not a wanted build's id")
+    return value
+
+
+def build_claim_request(build: str, host: str) -> tuple[str, dict[str, Any]]:
+    """A build host takes the wanted build ``build`` (``piceli builder serve``)."""
+    return request("build-claim", id=_build_id(build), host=str(host)[:64])
+
+
+def built_request(
+    build: str,
+    host: str,
+    images: Mapping[str, Mapping[str, Any]],
+    receipt: Mapping[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    """The wanted build ``build`` is delivered: each image's key, pull
+    reference, digest and platforms, and a short receipt (host, times,
+    toolchain, commits)."""
+    return request(
+        "built",
+        id=_build_id(build),
+        host=str(host)[:64],
+        images={name: dict(item) for name, item in images.items()},
+        receipt=dict(receipt),
+    )
+
+
+def build_failed_request(
+    build: str, host: str, reason: str, log_tail: str
+) -> tuple[str, dict[str, Any]]:
+    """The wanted build ``build`` failed on ``host`` (its output's tail)."""
+    return request(
+        "build-failed",
+        id=_build_id(build),
+        host=str(host)[:64],
+        reason=str(reason)[:300],
+        log_tail=str(log_tail)[-8000:],
+    )
 
 
 def stop_request(

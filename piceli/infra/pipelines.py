@@ -440,8 +440,15 @@ def run_spec_build(
     out: Path,
     deliver: Any,
     say: Any = lambda _: None,
+    index: Any = None,
 ) -> dict[str, Any]:
     """Build ``request``'s spec from checkouts (``roots``) and push its changed images.
+
+    With several ``platforms`` and ``index(repository, {platform: digest})``
+    (0.21.0), each image also gets one OCI index over its platforms: its
+    ``pull_ref`` and ``manifest_digest`` are the index's (what deploys, on
+    every node's architecture) and ``platforms`` maps each platform to its
+    manifest.
 
     ``deliver(image, archive, image_id, repository)`` pushes one image and
     returns its delivery receipt. Returns ``{"images": {name: {"pull_ref",
@@ -461,6 +468,7 @@ def run_spec_build(
     root = roots[request.repo]
     path = root.joinpath(*PurePosixPath(request.spec).parts)
     results: dict[str, Any] = {}
+    per_platform: dict[str, dict[str, str]] = {}
     commands: list[dict[str, Any]] = []
     declared = NodeFacts.from_dict(request.facts) if request.facts else None
     for platform in platforms:
@@ -516,6 +524,7 @@ def run_spec_build(
                 wanted["repository"],
             )
             image = _pinned(delivered, name)
+            per_platform.setdefault(name, {})[platform] = image.manifest_digest
             results.setdefault(
                 name,
                 {
@@ -530,6 +539,17 @@ def run_spec_build(
                         "push_seconds": round(time.monotonic() - began, 3),
                     },
                 },
+            )
+    if index is not None and len(platforms) > 1:
+        for name, entry in results.items():
+            digests = per_platform[name]
+            found = index(request.images[name]["repository"], digests)
+            base = str(entry["pull_ref"]).split("@", 1)[0]
+            entry.update(
+                pull_ref=f"{base}@{found}",
+                manifest_digest=found,
+                platform=None,
+                platforms=dict(sorted(digests.items())),
             )
     return {"images": results, "commands": commands}
 
