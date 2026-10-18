@@ -39,6 +39,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli artifacts retention`](#cli-artifacts-retention) | Report which registry manifests the last releases, pins and live workloads keep, and delete the rest. | reads | yes |
 | [`piceli build job`](#cli-build-job) | Build at a commit as a Job on a builder node (plan, then --approve HASH). | writes | yes |
 | [`piceli build job-run`](#cli-build-job-run) | Inside the build Job: build and push; print the receipt line. | none | no |
+| [`piceli builder serve`](#cli-builder-serve) | Take the builds the controller publishes, build and deliver them, answer it. | writes | no |
 | [`piceli bundle`](#cli-bundle) | Package the app for a cluster Piceli never accesses (kustomize, prepare.sh, images). | none | no |
 | [`piceli cache prune`](#cli-cache-prune) | Remove what no release, rollback or resume needs: stale temporary directories and partial files, runs beyond --keep-last, unused delivery receipts, and (over --budget) build outputs and logs. | none | no |
 | [`piceli cache status`](#cli-cache-status) | Show the disk used per state directory and category, and Piceli's temporary directories. Read-only. | none | no |
@@ -52,6 +53,7 @@ Every `piceli` command with its options and its contract: what it reads and writ
 | [`piceli deploy`](#cli-deploy) | Deploy a pipeline: inputs → build → deliver → plan → apply → checks. | writes | yes |
 | [`piceli dev cache clear`](#cli-dev-cache-clear) | Empty free lineages' cargo targets (a corrupted cache); busy ones are skipped. | writes | no |
 | [`piceli dev cancel`](#cli-dev-cancel) | Cancel a queued or running run (its Job and pod are deleted). | writes | no |
+| [`piceli dev hosts`](#cli-dev-hosts) | Each declared build host: up or down (why), platforms, slots, runs and queue. | reads | no |
 | [`piceli dev logs`](#cli-dev-logs) | A run's output (stdout): live, or the recorded tail of a finished run. | reads | no |
 | [`piceli dev run`](#cli-dev-run) | Run COMMAND on the builder for a commit (--ref) or a working tree (default: here). | writes | no |
 | [`piceli dev schedule`](#cli-dev-schedule) | Run the queue yourself (a cluster without the GitOps controller, which runs it). | writes | no |
@@ -164,6 +166,7 @@ Forward the app's declared ports to 127.0.0.1 and keep them healthy.
 | `--cluster` | text |  | With an environment name as TARGET: the composition's Cluster (infra.py:ATTR). Forwards the environment's declared forwards and every other Service port of it on free local ports, with the cluster's credentials profile |
 | `--ui` | boolean | `False` | With --cluster: also forward the in-cluster UI (127.0.0.1:8790) and print its launch URL, as `piceli access ui` does |
 | `--forward` | boolean | `False` | Port-forward every service, also those the environment exposes on the tailnet (Access(tailnet=True)) |
+| `--all-ports` | boolean | `False` | With --cluster: also forward the Service ports the app declares no forward for (internal ports: OTLP, databases); by default only the declared forwards, when the app declares any |
 
 **Contract**
 
@@ -617,6 +620,7 @@ Inside the build Job: build and push; print the receipt line.
 | `--facts` | text |  | A pipeline image build: declared node facts (JSON) |
 | `--node-registry` | text |  |  |
 | `--timeout` | integer | `3600` |  |
+| `--archives-only` | boolean | `False` | Push nothing: list each image's OCI archive per platform in the receipt (a build host delivers them, 0.21.0) |
 
 **Contract**
 
@@ -628,6 +632,36 @@ Inside the build Job: build and push; print the receipt line.
 - **Exit codes:** `0` success, `1` the operation ran but did not succeed (not ready, drift, build failed), `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** The command the Job runs; it prints one receipt line on stdout. The approval was the plan hash of `build job`. With --sources and --component it builds a composition's components from their piceli.toml (the Job the composition controller runs).
+
+(cli-builder-serve)=
+### `piceli builder serve`
+
+Take the builds the controller publishes, build and deliver them, answer it.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--cluster` | text | env `PICELI_DEV_CLUSTER` | MODULE:ATTR of the piceli.infra.Cluster whose controller to serve |
+| `--host` | text |  | The docker build host to build on (DevBuilds(hosts=[...]); default: the first docker host) |
+| `--image` | text |  | The builder image (default: the host's, else DevBuilds(image=)); the same Piceli version as the controller |
+| `--namespace` | text | `piceli-system` | The controller's namespace |
+| `--once` | boolean | `False` | Build at most one wanted build, then exit |
+| `--poll` | float | `15.0` | Seconds between looks when idle |
+| `--state-dir` | path |  | Where Git mirrors live (default ~/.cache/piceli/builder) |
+| `--allow-exec` | boolean | `False` | Allow the context's exec credential plugin (GKE, EKS, AKS, OIDC) |
+| `--exec-sha256` | text |  | Expected sha256:<hex> of the resolved exec plugin file |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.Cluster with dev=DevBuilds(hosts=[...])), credential profile, the controller's status, each source with this machine's Git access
+- **Writes:** the controller's requests (build-claim, built, build-failed), images in the cluster's registry (through a port-forward), ~/.cache/piceli/builder (Git mirrors), the piceli-build-cache volume
+- **Cluster:** writes
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.21.0. Runs until Ctrl-C (--once: one build). The builder image must be the controller's Piceli version.
 
 (cli-bundle)=
 ### `piceli bundle`
@@ -943,6 +977,7 @@ Empty free lineages' cargo targets (a corrupted cache); busy ones are skipped.
 | `--cluster` | text | env `PICELI_DEV_CLUSTER` | MODULE:ATTR of the piceli.infra.Cluster with dev=DevBuilds(...) (or PICELI_DEV_CLUSTER) |
 | `--lineage` | text |  | KEY/N, KEY, or a root source name (every lineage of it); default: all |
 | `--crate` | text (repeatable) |  | Only this crate's artifacts (repeat) |
+| `--host` | text |  | A declared docker or native build host's cache (0.20.0; default: the in-cluster builder's) |
 | `--allow-exec` | boolean | `False` | Allow the profile's exec credential plugin |
 | `--exec-sha256` | text |  | Pin the exec credential plugin's sha256 |
 | `--transport` | text | `https` | https, or loopback-http for a local test API |
@@ -983,6 +1018,30 @@ Cancel a queued or running run (its Job and pod are deleted).
 - **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
 - **Output contract:** conforms
 - **Notes:** Only your own runs (the run id dev run printed); the run ends as dev-run-cancelled. dev-run-unknown when it is not queued or running.
+
+(cli-dev-hosts)=
+### `piceli dev hosts`
+
+Each declared build host: up or down (why), platforms, slots, runs and queue.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--cluster` | text | env `PICELI_DEV_CLUSTER` | MODULE:ATTR of the piceli.infra.Cluster with dev=DevBuilds(...) (or PICELI_DEV_CLUSTER) |
+| `--allow-exec` | boolean | `False` | Allow the profile's exec credential plugin |
+| `--exec-sha256` | text |  | Pin the exec credential plugin's sha256 |
+| `--transport` | text | `https` | https, or loopback-http for a local test API |
+| `--json` | boolean | `False` | Print one JSON object on stdout |
+
+**Contract**
+
+- **Reads:** MODULE:ATTR (piceli.infra.Cluster with dev=), each host's container engine (docker hosts), the queue files (native hosts), the builder node (cluster host)
+- **Writes:** nothing (read-only)
+- **Cluster:** reads
+- **Approval required:** no
+- **Safe to retry:** yes
+- **Exit codes:** `0` success, `2` rejected before any change (stdout: the rejection object)
+- **Output contract:** conforms
+- **Notes:** 0.20.0. Read-only. A docker host is asked with its CLI (`info`, `ps`), locally or over its ssh:// context.
 
 (cli-dev-logs)=
 ### `piceli dev logs`
@@ -1027,6 +1086,8 @@ Run COMMAND on the builder for a commit (--ref) or a working tree (default: here
 | `--source` | text (repeatable) |  | A sibling source NAME=PATH@REF (repeat); it sits next to the root, as ../NAME |
 | `--profile` | text |  | A DevProfile name (default: the first) |
 | `--node` | text |  | The builder node (must be the declared one) |
+| `--host` | text | env `PICELI_DEV_HOST` | Run on this declared build host only (default: the first that is up, with a free slot first; the next one if it turns out down) |
+| `--platform` | text |  | linux/amd64 or linux/arm64 (default: the host's own; a docker host runs another one emulated, slower) |
 | `--priority` | text | `agent` | round (integration rounds), agent or normal |
 | `--requester` | text |  | Who asks (fair share; default PICELI_DEV_REQUESTER or user-host) |
 | `--artifact` | text (repeatable) |  | Copy back files matching this glob (target/... is the target dir; repeat) |

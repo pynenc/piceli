@@ -549,7 +549,20 @@ def _cluster_dict(cluster: Cluster, *, remote: bool = False) -> dict[str, Any]:
             # Only when declared: other configs (and their hashes) are unchanged.
             **({"mirror": list(registry.mirror)} if registry.mirror else {}),
         }
-    return {"name": cluster.name, "api": cluster.api, "registry": described}
+    body: dict[str, Any] = {
+        "name": cluster.name,
+        "api": cluster.api,
+        "registry": described,
+    }
+    controller = cluster.controller
+    if controller is not None and tuple(controller.builds) != ("cluster",):
+        # 0.21.0, only when declared (other configs and hashes unchanged).
+        body["controller"] = {
+            "on": controller.on,
+            "builds": list(controller.builds),
+            "host_wait": controller.host_wait,
+        }
+    return body
 
 
 def _cluster_from(value: Any) -> Cluster | None:
@@ -573,11 +586,22 @@ def _cluster_from(value: Any) -> Cluster | None:
     # controller's pod every profile name resolves to its service account.
     from piceli.profiles import IN_CLUSTER_CONTEXT
 
+    controller = None
+    if isinstance(value.get("controller"), dict):
+        from piceli.infra import Controller
+
+        found_controller = value["controller"]
+        controller = Controller(
+            on=found_controller["on"],
+            builds=tuple(found_controller.get("builds") or ("cluster",)),
+            host_wait=str(found_controller.get("host_wait") or "30m"),
+        )
     return Cluster(
         name=value["name"],
         api=value["api"],
         credentials=IN_CLUSTER_CONTEXT,
         registry=registry,
+        controller=controller,
     )
 
 

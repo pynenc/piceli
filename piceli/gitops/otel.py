@@ -847,6 +847,11 @@ class ControllerTelemetry:
                 "piceli.dev.cache.hit_ratio": cache.get("hit_ratio"),
                 "piceli.dev.tests.passed": tests.get("passed"),
                 "piceli.dev.tests.failed": tests.get("failed"),
+                # 0.20: which tests failed, not only how many.
+                "piceli.dev.tests.failed_names": _text(
+                    ", ".join(str(n) for n in tests.get("failed_names") or ()), 1000
+                )
+                or None,
                 "k8s.node.name": None,
             }
             name = f"DEV {record.get('profile') or 'run'} {record.get('requester') or ''}".strip()
@@ -855,7 +860,30 @@ class ControllerTelemetry:
                 ok=state == "passed", root=True, parent=None,
                 message=_text(record.get("reason"), 64),
             )  # fmt: skip
-            if started is not None:
+            timeline = [
+                item
+                for item in record.get("timeline") or ()
+                if isinstance(item, Mapping)
+                and isinstance(item.get("start"), int | float)
+                and isinstance(item.get("end"), int | float)
+            ]
+            if timeline:
+                # 0.20: measured phases with millisecond times, contiguous:
+                # the queue up to the first phase, then each phase.
+                def ns(value: Any) -> int:  # millisecond-precise wall times
+                    return round(float(value) * 1000) * 1_000_000
+
+                first = ns(timeline[0]["start"])
+                self._span(
+                    run, "queue", "queue", created, max(created, first), {}, ok=None
+                )
+                for index, item in enumerate(timeline):
+                    phase = _text(item.get("phase"), 32) or "phase"
+                    self._span(
+                        run, f"{phase}-{index}", phase,
+                        ns(item["start"]), min(ns(item["end"]), end), {}, ok=None,
+                    )  # fmt: skip
+            elif started is not None:
                 self._span(run, "queue", "queue", created, started, {}, ok=None)
                 at = started
                 for phase in ("sync", "fetch", "build", "test"):

@@ -136,11 +136,157 @@ class DevProfile:
         }
 
 
+_PLATFORMS = ("linux/amd64", "linux/arm64")
+_CONTEXT = re.compile(
+    r"(?:(?:ssh|tcp|unix|npipe)://\S+|[A-Za-z0-9][A-Za-z0-9._-]{0,63})"
+)
+_CLI = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}")
+HOST_KINDS = ("docker", "native", "cluster")
+
+
+@dataclass(frozen=True)
+class BuildHost:
+    """A host development runs (and, with ``piceli builder serve``, GitOps
+    builds) execute on (0.20.0; ``DevBuilds(hosts=[...])``).
+
+    Build them with :meth:`docker`, :meth:`native` or :meth:`cluster`; the
+    order of ``hosts`` is the order of preference.
+
+    :param name: The host's name in ``--host``, results and status.
+    :param kind: ``docker``: Linux containers through a Docker-compatible
+        CLI (Docker Desktop, OrbStack, colima, Podman, a Linux host's
+        Docker), local or over SSH; ``native``: the wrapper runs on this
+        machine itself, no container (macOS-only builds); ``cluster``: a
+        Job on the declared node (``DevBuilds(node=)``).
+    :param context: ``docker`` only: ``None`` (the CLI's default),
+        ``ssh://user@host`` (the CLI's own SSH transport: nothing to install
+        on the host but the container engine) or a CLI context name.
+    :param cli: ``docker`` only: the executable (``docker``, ``podman``).
+    :param node: ``cluster`` only: the node (``DevBuilds.node``).
+    :param slots: Runs at once on this host. Its queue lives on the host
+        (container names, or lock files for ``native``), so every client of
+        the host shares it, whether or not the cluster is reachable.
+    :param cpu: CPU limit of one run (``docker``; default: none).
+    :param memory: Memory limit of one run (``docker``; default: the
+        profile's).
+    :param platforms: The platforms it builds natively (default: the
+        host's own architecture, read when it is first used).
+    :param state_dir: ``native`` only: where its cache and queue live
+        (default ``~/.cache/piceli/dev/NAME``).
+    :param image: The run image here (default: the profile's).
+    """
+
+    name: str
+    kind: Literal["docker", "native", "cluster"]
+    context: str | None = None
+    cli: str = "docker"
+    node: str | None = None
+    slots: int = 1
+    cpu: str | None = None
+    memory: str | None = None
+    platforms: Sequence[str] = ()
+    state_dir: str | None = None
+    image: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or not _LABEL.fullmatch(self.name):
+            raise _invalid("a build host's name is a DNS label")
+        if self.kind not in HOST_KINDS:
+            raise _invalid(f"host {self.name}: kind is one of {', '.join(HOST_KINDS)}")
+        if self.context is not None and (
+            self.kind != "docker" or not _CONTEXT.fullmatch(self.context)
+        ):
+            raise _invalid(
+                f"host {self.name}: context is ssh://user@host, a socket URL or "
+                "a CLI context name (docker hosts only)"
+            )
+        if not _CLI.fullmatch(self.cli):
+            raise _invalid(f"host {self.name}: cli is an executable name")
+        if (self.kind == "cluster") != (self.node is not None):
+            raise _invalid(f"host {self.name}: node is given for cluster hosts only")
+        if self.node is not None and not _LABEL.fullmatch(self.node):
+            raise _invalid(f"host {self.name}: node must name a declared node")
+        if (
+            not isinstance(self.slots, int)
+            or isinstance(self.slots, bool)
+            or self.slots < 1
+        ):
+            raise _invalid(f"host {self.name}: slots is a positive integer")
+        if self.cpu is not None and (_cpu(self.cpu) or 0) <= 0:
+            raise _invalid(f"host {self.name}: cpu is a CPU quantity (4, 500m)")
+        if self.memory is not None and (_bytes(self.memory) or 0) <= 0:
+            raise _invalid(f"host {self.name}: memory is a byte quantity (8Gi)")
+        platforms = tuple(str(item) for item in self.platforms)
+        if not all(item in _PLATFORMS for item in platforms):
+            raise _invalid(
+                f"host {self.name}: platforms are among {', '.join(_PLATFORMS)}"
+            )
+        object.__setattr__(self, "platforms", platforms)
+        if self.image is not None and not _PINNED.fullmatch(self.image):
+            raise _invalid(f"host {self.name}: image must be pinned by digest")
+
+    @classmethod
+    def docker(
+        cls, name: str, *, context: str | None = None, **options: Any
+    ) -> BuildHost:
+        """Linux containers through a Docker-compatible CLI, local or ``ssh://``."""
+        return cls(name, "docker", context=context, **options)
+
+    @classmethod
+    def native(cls, name: str, **options: Any) -> BuildHost:
+        """This machine itself, no container (macOS-only builds)."""
+        return cls(name, "native", **options)
+
+    @classmethod
+    def cluster(
+        cls, name: str, *, node: str | None = None, **options: Any
+    ) -> BuildHost:
+        """A Job on a cluster node (``node`` defaults to ``name``)."""
+        return cls(name, "cluster", node=node or name, **options)
+
+    def describe(self) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in {
+                "name": self.name,
+                "kind": self.kind,
+                "context": self.context,
+                "cli": self.cli if self.kind == "docker" else None,
+                "node": self.node,
+                "slots": self.slots,
+                "cpu": self.cpu,
+                "memory": self.memory,
+                "platforms": list(self.platforms),
+                "state_dir": self.state_dir,
+                "image": self.image,
+            }.items()
+            if value not in (None, [])
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> BuildHost:
+        return cls(
+            str(value["name"]),
+            value["kind"],
+            context=value.get("context"),
+            cli=str(value.get("cli") or "docker"),
+            node=value.get("node"),
+            slots=int(value.get("slots") or 1),
+            cpu=value.get("cpu"),
+            memory=value.get("memory"),
+            platforms=value.get("platforms") or (),
+            state_dir=value.get("state_dir"),
+            image=value.get("image"),
+        )
+
+
 @dataclass(frozen=True)
 class DevBuilds:
-    """Development builds on one builder node (``Cluster(dev=...)``).
+    """Development builds (``Cluster(dev=...)``): on a builder node, and since
+    0.20.0 on declared build hosts.
 
-    :param node: The declared node runs execute on (usually the builder).
+    :param node: The declared node in-cluster runs execute on (usually the
+        builder); ``None``: no in-cluster runs (then ``hosts`` is required).
     :param image: The default run image, pinned by digest (Piceli's builder
         image: ``ghcr.io/pynenc/piceli-builder@sha256:...``).
     :param profiles: :class:`DevProfile` items; the first is the default
@@ -158,9 +304,12 @@ class DevBuilds:
     :param network: ``"fetch"``: runs may reach public addresses on ports
         80 and 443 (crates, toolchains) and DNS, never cluster or private
         addresses; ``"none"``: DNS only.
+    :param hosts: :class:`BuildHost` items, in order of preference (0.20.0).
+        With ``node`` and no ``BuildHost.cluster`` among them, the node is
+        the first host.
     """
 
-    node: str
+    node: str | None
     image: str
     profiles: Sequence[DevProfile] = ()
     slots: int | Literal["auto"] = "auto"
@@ -170,10 +319,29 @@ class DevBuilds:
     cache_size: str = "200Gi"
     timeout: str = "1h"
     network: Literal["fetch", "none"] = "fetch"
+    hosts: Sequence[BuildHost] = ()
 
     def __post_init__(self) -> None:
-        if not isinstance(self.node, str) or not _LABEL.fullmatch(self.node):
+        if self.node is not None and (
+            not isinstance(self.node, str) or not _LABEL.fullmatch(self.node)
+        ):
             raise _invalid("node must name a declared node")
+        hosts = tuple(self.hosts)
+        if not all(isinstance(item, BuildHost) for item in hosts):
+            raise _invalid("hosts are BuildHost.docker/native/cluster(...) items")
+        names = [item.name for item in hosts]
+        if len(set(names)) != len(names):
+            raise _invalid("a build host is declared twice")
+        for item in hosts:
+            if item.kind == "cluster" and item.node != self.node:
+                raise _invalid(
+                    f"host {item.name}: a cluster host runs on DevBuilds(node=)"
+                )
+        if self.node is not None and not any(i.kind == "cluster" for i in hosts):
+            hosts = (BuildHost.cluster(self.node),) + hosts
+        if not hosts:
+            raise _invalid("declare node= (in-cluster runs) or hosts=[...]")
+        object.__setattr__(self, "hosts", hosts)
         if not isinstance(self.image, str) or not _PINNED.fullmatch(self.image):
             raise _invalid("image must be pinned by digest (repository@sha256:...)")
         profiles = tuple(self.profiles) or (DevProfile("default"),)
@@ -228,10 +396,15 @@ class DevBuilds:
             timeout=found.timeout or self.timeout,
         )
 
+    def host(self, name: str | None) -> BuildHost | None:
+        """The declared host ``name`` (``None``: none given)."""
+        return next((item for item in self.hosts if item.name == name), None)
+
     def describe(self) -> dict[str, Any]:
         """The declaration as data (in the cluster's description and config)."""
         return {
             "node": self.node,
+            "hosts": [item.describe() for item in self.hosts],
             "image": self.image,
             "profiles": [item.describe() for item in self.profiles],
             "slots": self.slots,
@@ -260,9 +433,11 @@ class DevBuilds:
             )
             for item in value.get("profiles") or ()
         ]
+        node = value.get("node")
         return cls(
-            node=str(value["node"]),
+            node=str(node) if node else None,
             image=str(value["image"]),
+            hosts=[BuildHost.from_dict(item) for item in value.get("hosts") or ()],
             profiles=profiles,
             slots=value.get("slots", "auto"),
             run_cpu=str(value.get("run_cpu", "4")),

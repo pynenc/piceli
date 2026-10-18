@@ -136,9 +136,9 @@ environments = [
 def test_a_pipeline_environment_forwards_what_its_app_declares(
     profile: Path, tmp_path: Path
 ) -> None:
-    """0.14.7: the declared forwards (local port, path, health) come first;
-    the other live Service ports get free ports; a declared Service that is not
-    live is left out."""
+    """0.14.7: the declared forwards (local port, path, health); 0.20: the
+    other live Service ports only with --all-ports; a declared Service that
+    is not live is left out."""
     (tmp_path / "infra.py").write_text(_PIPELINE_INFRA)
     free = iter(range(43000, 43010))
     resolved = composition_env_target(
@@ -152,7 +152,18 @@ def test_a_pipeline_environment_forwards_what_its_app_declares(
         (item.id, item.target, item.remote_port, item.local_port, item.path)
         for item in resolved.shortcuts
     ]
-    assert rows == [
+    # 0.20: only the declared forwards (no internal ports)...
+    assert rows == [("web", "service/web", 80, 18080, "/login")]
+    # ...and every live Service port with --all-ports, as before.
+    every = composition_env_target(
+        "infra.py:cluster", "main", tmp_path,
+        services=lambda _t: [service("web", 80), service("cache", 6379)],
+        port=lambda: next(free), all_ports=True,
+    )  # fmt: skip
+    assert [
+        (item.id, item.target, item.remote_port, item.local_port, item.path)
+        for item in every.shortcuts
+    ] == [
         ("web", "service/web", 80, 18080, "/login"),
         ("cache-6379", "service/cache", 6379, 43000, "/"),
     ]

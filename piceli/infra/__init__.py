@@ -11,11 +11,11 @@ that implement them; behaviour lives in the submodules.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from piceli.dev.model import DevBuilds, DevProfile
+from piceli.dev.model import BuildHost, DevBuilds, DevProfile
 from piceli.pipeline.errors import PipelineError
 from piceli.pipeline.model import Registry
 
@@ -34,6 +34,7 @@ def _slug(text: str) -> str:
 
 
 __all__ = [
+    "BuildHost",
     "Cluster",
     "Component",
     "CompositionError",
@@ -156,6 +157,12 @@ class Controller:
 
     ``telemetry=Otlp(...)`` makes the controller send OpenTelemetry traces,
     events and metrics of every deploy (off when not set).
+
+    ``builds`` (0.21.0) is where images are built, in order: ``"cluster"``
+    (a Job on the builder node, the default) and ``"hosts"`` (a build host
+    running ``piceli builder serve`` takes the build the controller
+    publishes). ``("hosts", "cluster")`` waits ``host_wait`` for a host,
+    then builds in the cluster.
     """
 
     on: str
@@ -164,6 +171,8 @@ class Controller:
     image: str | None = None
     delete_volumes: bool = False
     telemetry: Otlp | None = None
+    builds: Sequence[str] = ("cluster",)
+    host_wait: str = "30m"
 
     def __post_init__(self) -> None:
         from piceli.infra.cluster import check_controller

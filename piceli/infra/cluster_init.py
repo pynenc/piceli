@@ -213,7 +213,8 @@ def render_objects(
         )
     if cluster.ui is not None and ui is not None:
         objects += ui(cluster)
-    if cluster.dev is not None:  # 0.18.0: development builds
+    if cluster.dev is not None and cluster.dev.node is not None:
+        # 0.18.0: development builds; build hosts (0.20.0) need nothing here.
         from piceli.dev.jobs import install_objects
 
         objects += install_objects(cluster)

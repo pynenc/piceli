@@ -93,13 +93,18 @@ def _is_env(target: str) -> bool:
 
 
 def _resolve(
-    target: str, pipeline: str | None = None, cluster: str | None = None
+    target: str,
+    pipeline: str | None = None,
+    cluster: str | None = None,
+    all_ports: bool = False,
 ) -> AccessTarget:
     if cluster is not None:
         if not _is_env(target):
             reject("access-target-invalid", "with --cluster, TARGET is an environment")
         try:
-            return composition_env_target(cluster, target, Path.cwd())
+            return composition_env_target(
+                cluster, target, Path.cwd(), all_ports=all_ports
+            )
         except AccessTargetError as error:
             reject(error.code, str(error))
     if pipeline and _is_env(target):
@@ -449,6 +454,15 @@ def access(
             "on the tailnet (Access(tailnet=True))",
         ),
     ] = False,
+    all_ports: Annotated[
+        bool,
+        typer.Option(
+            "--all-ports",
+            help="With --cluster: also forward the Service ports the app declares "
+            "no forward for (internal ports: OTLP, databases); by default only the "
+            "declared forwards, when the app declares any",
+        ),
+    ] = False,
 ) -> None:
     """Forward the app's declared ports to 127.0.0.1 and keep them healthy.
 
@@ -469,7 +483,7 @@ def access(
             "piceli: --ui takes the composition's cluster: add --cluster infra.py:CLUSTER"
         )
         reject("access-ui-target-required")
-    resolved = _resolve(target, pipeline, cluster)
+    resolved = _resolve(target, pipeline, cluster, all_ports)
     selected, unknown = select_shortcuts(resolved.shortcuts, only)
     if unknown:
         say(f"piceli: unknown forward id(s): {', '.join(unknown)}")

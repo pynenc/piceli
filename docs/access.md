@@ -167,9 +167,12 @@ the current context). An environment that deploys a `Pipeline`
 (`Environment(pipeline=…)`) forwards what its app declares
 (`app.access.forward(...)`) on the declared local port, with its path, health
 probe and restart policy (a declared Service that is not live is left out).
-Every other Service port (component ports live in their contracts, in the
-source repositories) gets one forward on a free loopback port, so several
-environments are reachable at once. Only named environments are supported
+Since 0.20.0 those are the only forwards when the app declares any: internal
+ports (an OTLP intake, a database, a TLS graph port) are not forwarded;
+`--all-ports` adds one forward per other live Service port, on a free
+loopback port. An environment whose app declares no forward (component
+ports live in their contracts, in the source repositories) forwards every
+Service port, so several environments are reachable at once. Only named environments are supported
 (`env-not-found` otherwise; a branch environment uses `--pipeline`). The web
 UI describes its forwards the same way (see {doc}`ui`).
 

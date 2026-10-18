@@ -23,7 +23,9 @@ extensions = [
     "sphinx.ext.intersphinx",
     "sphinx.ext.mathjax",
     "sphinx.ext.todo",
-    "sphinx.ext.viewcode",
+    # Source links go to GitHub: viewcode rendered every module again (2.5 of
+    # the build's 4.5 minutes).
+    "sphinx.ext.linkcode",
     "myst_parser",
     "sphinx_copybutton",
     "sphinx_design",
@@ -74,6 +76,22 @@ for _name, _base in _INVENTORIES.items():
 # -- Autodoc settings ---------------------------------------------------
 autodoc2_render_plugin = "myst"
 autodoc2_packages = [{"path": "../piceli"}]
+# The generated reference (329 module pages) is kept out of the global
+# toctree: Furo copies that tree into every page's sidebar, which made the
+# site 166 MB. docs/api.md links to it; the index is an orphan page.
+autodoc2_index_template = (
+    ":orphan:\n\n"
+    "API Reference\n"
+    "=============\n"
+    "\n"
+    "Generated from the docstrings with sphinx-autodoc2.\n"
+    "\n"
+    ".. toctree::\n"
+    "   :titlesonly:\n"
+    "{% for package in top_level %}\n"
+    "   {{ package }}\n"
+    "{%- endfor %}\n"
+)
 # Regex constants render as MyST link syntax and break the -W build.
 # Builtins such as `type`/`bytes` in annotations collide with same-named model
 # fields (e.g. HealthProbe.type); these ambiguity warnings are not doc errors.
@@ -82,6 +100,29 @@ autodoc2_hidden_regexes = [
     r"piceli\.k8s\.templates\.auxiliary\.names\..*_REGEX",
     r"piceli\.chart\._(DNS_SUBDOMAIN|HOST)",
 ]
+
+
+def linkcode_resolve(domain: str, info: dict[str, str]) -> str | None:
+    """The object's lines in the repository on GitHub (``sphinx.ext.linkcode``)."""
+    import importlib
+    import inspect
+
+    if domain != "py" or not info.get("module"):
+        return None
+    try:
+        target: Any = importlib.import_module(info["module"])
+        for part in info.get("fullname", "").split("."):
+            target = getattr(target, part)
+        target = inspect.unwrap(target)
+        path = Path(inspect.getsourcefile(target) or "").resolve()
+        lines, start = inspect.getsourcelines(target)
+    except Exception:
+        return None
+    root = Path(__file__).resolve().parent.parent
+    if not path.is_relative_to(root):
+        return None
+    anchor = f"#L{start}-L{start + len(lines) - 1}" if start else ""
+    return f"https://github.com/pynenc/piceli/blob/v{version}/{path.relative_to(root)}{anchor}"
 
 
 # -- MyST settings ---------------------------------------------------

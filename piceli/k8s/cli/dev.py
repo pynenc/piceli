@@ -11,6 +11,7 @@ import getpass
 import os
 import re
 import socket
+from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -163,6 +164,23 @@ def run(
         str | None,
         typer.Option("--node", help="The builder node (must be the declared one)"),
     ] = None,
+    host: Annotated[
+        str | None,
+        typer.Option(
+            "--host",
+            envvar="PICELI_DEV_HOST",
+            help="Run on this declared build host only (default: the first that is "
+            "up, with a free slot first; the next one if it turns out down)",
+        ),
+    ] = None,
+    platform: Annotated[
+        str | None,
+        typer.Option(
+            "--platform",
+            help="linux/amd64 or linux/arm64 (default: the host's own; a docker "
+            "host runs another one emulated, slower)",
+        ),
+    ] = None,
     priority: Annotated[
         str,
         typer.Option("--priority", help="round (integration rounds), agent or normal"),
@@ -239,29 +257,102 @@ def run(
         )
     except DevError as error:
         reject(error.code, str(error))
-    with connect(declared, transport, allow_exec, exec_sha256) as api, _cluster_guard():
-        port = DevCluster(api)
-        dev = port.config()
-        if dev is None:
-            reject(
-                "dev-not-enabled",
-                f"development builds are not installed on {declared.name}: declare "
-                "Cluster(dev=DevBuilds(...)) and run piceli cluster init",
-            )
-        if node is not None and node != dev.node:
-            reject(
-                "dev-run-invalid", f"--node {node}: runs go to the builder {dev.node}"
-            )
+    dev = declared.dev
+    if dev is None:
+        # No local declaration: the cluster's installed one, on its builder
+        # node only (as before 0.20).
+        with (
+            connect(declared, transport, allow_exec, exec_sha256) as api,
+            _cluster_guard(),
+        ):
+            port = DevCluster(api)
+            installed = port.config()
+            if installed is None:
+                reject(
+                    "dev-not-enabled",
+                    f"development builds are not installed on {declared.name}: "
+                    "declare Cluster(dev=DevBuilds(...)) and run piceli cluster init",
+                )
+            if node is not None and node != installed.node:
+                reject(
+                    "dev-run-invalid",
+                    f"--node {node}: runs go to the builder {installed.node}",
+                )
+            try:
+                result: dict[str, Any] = run_on(
+                    port, installed, request, say=say, log=None if quiet else say
+                )
+            except DevError as error:
+                reject(error.code, str(error))
+        _finish_run(result, quiet, as_json)
+        return
+    if node is not None and node != dev.node:
+        reject("dev-run-invalid", f"--node {node}: runs go to the builder {dev.node}")
+    from piceli.dev.hosts import UNAVAILABLE, candidates, probe
+
+    try:
+        states = candidates(
+            dev,
+            requested=host
+            or (
+                node and next((h.name for h in dev.hosts if h.kind == "cluster"), None)
+            ),
+            platform=platform,
+            probe=lambda item: probe(
+                item,
+                cluster_up=lambda: _cluster_up(
+                    declared, item.node, transport, allow_exec, exec_sha256
+                ),
+            ),
+        )
+    except DevError as error:
+        reject(error.code, str(error))
+    result = {}
+    for index, state in enumerate(states):
+        chosen = state.host
         try:
-            result = run_on(
-                port,
-                dev,
-                request,
-                say=say,
-                log=None if quiet else say,
-            )
+            if chosen.kind == "cluster":
+                with (
+                    connect(declared, transport, allow_exec, exec_sha256) as api,
+                    _cluster_guard(),
+                ):
+                    port = DevCluster(api)
+                    installed = port.config()
+                    if installed is None:
+                        reject(
+                            "dev-not-enabled",
+                            f"development builds are not installed on "
+                            f"{declared.name}: run piceli cluster init",
+                        )
+                    result = run_on(
+                        port, installed, request, say=say,
+                        log=None if quiet else say, host=chosen,
+                    )  # fmt: skip
+            else:
+                from piceli.dev.hosts import DockerPort, NativePort
+
+                host_port: Any = (
+                    DockerPort(chosen, dev, platform=platform)
+                    if chosen.kind == "docker"
+                    else NativePort(chosen, dev)
+                )
+                result = run_on(
+                    host_port, dev, request, say=say,
+                    log=None if quiet else say, host=chosen,
+                )  # fmt: skip
         except DevError as error:
             reject(error.code, str(error))
+        if result.get("reason") == UNAVAILABLE and index + 1 < len(states):
+            # 0.20: the host went down between the check and the run.
+            say(
+                f"piceli: {result.get('message')}; trying {states[index + 1].host.name}"
+            )
+            continue
+        break
+    _finish_run(result, quiet, as_json)
+
+
+def _finish_run(result: dict[str, Any], quiet: bool, as_json: bool) -> None:
     say(run_summary(result))
     if result.get("state") != "passed" and result.get("first_error"):
         say("first error:")
@@ -275,6 +366,39 @@ def run(
         emit_json(result)
     if result.get("state") != "passed":
         raise typer.Exit(1)
+
+
+def _cluster_up(
+    declared: Any,
+    node: str | None,
+    transport: str,
+    allow_exec: bool,
+    exec_sha256: str | None,
+) -> bool:
+    """Whether the in-cluster host can take runs: the API answers and its
+    node is Ready and schedulable (a cordoned builder is skipped)."""
+    from piceli.gitops.install import Api
+    from piceli.k8s.cli.cluster import exec_policy
+    from piceli.k8s.ops.provider_factory import api_client_from_kubeconfig
+    from piceli.profiles import override, resolve
+
+    if node is None:
+        return False
+    try:
+        found = resolve(override() or declared.credentials)
+        client = api_client_from_kubeconfig(
+            found.kubeconfig.absolute(), found.context, transport=transport,  # type: ignore[arg-type]
+            exec_policy=exec_policy(allow_exec, exec_sha256),
+        )  # fmt: skip
+        raw = Api(client).call(f"/api/v1/nodes/{node}", "GET")
+    except Exception:
+        return False
+    if not isinstance(raw, dict) or (raw.get("spec") or {}).get("unschedulable"):
+        return False
+    return any(
+        item.get("type") == "Ready" and item.get("status") == "True"
+        for item in (raw.get("status") or {}).get("conditions") or ()
+    )
 
 
 def register(root: typer.Typer) -> None:
@@ -344,6 +468,49 @@ def queue_view(port: Any, dev: Any, now: float) -> dict[str, Any]:
     }
 
 
+@app.command("hosts")
+def hosts(
+    cluster: ClusterOption,
+    allow_exec: AllowExecOption = False,
+    exec_sha256: ExecSha256Option = None,
+    transport: TransportOption = "https",
+    as_json: JsonOption = False,
+) -> None:
+    """Each declared build host: up or down (why), platforms, slots, runs and queue."""
+    from piceli.dev.hosts import probe
+
+    declared = load_cluster(cluster)
+    dev = declared.dev
+    if dev is None:
+        reject(
+            "dev-not-enabled",
+            f"{declared.name} declares no development builds: add "
+            "Cluster(dev=DevBuilds(...))",
+        )
+
+    def cluster_up(node: str | None) -> Callable[[], bool]:
+        return lambda: _cluster_up(declared, node, transport, allow_exec, exec_sha256)
+
+    states = [probe(item, cluster_up=cluster_up(item.node)) for item in dev.hosts]
+    for state in states:
+        say(
+            f"{state.host.name:<12} {state.host.kind:<8} "
+            + (
+                f"up, {', '.join(state.platforms) or '?'}; "
+                f"{state.running}/{state.host.slots} busy, {state.waiting} waiting"
+                if state.up
+                else f"down: {state.detail}"
+            )
+        )
+    if as_json:
+        emit_json(
+            {
+                "schema": "piceli.dev-hosts.v1",
+                "hosts": [state.describe() for state in states],
+            }
+        )
+
+
 @app.command("status")
 def status(
     cluster: ClusterOption,
@@ -407,6 +574,14 @@ def cache_clear(
         list[str] | None,
         typer.Option("--crate", help="Only this crate's artifacts (repeat)"),
     ] = None,
+    host: Annotated[
+        str | None,
+        typer.Option(
+            "--host",
+            help="A declared docker or native build host's cache (0.20.0; "
+            "default: the in-cluster builder's)",
+        ),
+    ] = None,
     allow_exec: AllowExecOption = False,
     exec_sha256: ExecSha256Option = None,
     transport: TransportOption = "https",
@@ -416,7 +591,24 @@ def cache_clear(
     import secrets
 
     from piceli.dev.jobs import cache_clear_job
+    from piceli.dev.model import DevError
 
+    declared = load_cluster(cluster)
+    local = declared.dev
+    chosen = local.host(host) if local is not None and host else None
+    if host and chosen is None:
+        reject("dev-host-unknown", f"no build host {host!r} is declared")
+    if local is not None and chosen is not None and chosen.kind != "cluster":
+        from piceli.dev.hosts import clear_host_cache
+
+        try:
+            result = clear_host_cache(
+                chosen, local, lineage=lineage, crates=list(crate or ())
+            )
+        except DevError as error:
+            reject(error.code, str(error))
+        _report_cleared(result, crate, as_json)
+        return
     with _port(cluster, transport, allow_exec, exec_sha256) as (port, dev):
         job = cache_clear_job(
             dev, name=secrets.token_hex(4), lineage=lineage, crates=list(crate or ())
@@ -424,6 +616,12 @@ def cache_clear(
         result = port.clear_cache(job)
     if result is None:
         reject("dev-cache-clear-failed", "the cache-clear Job printed no result")
+    _report_cleared(result, crate, as_json)
+
+
+def _report_cleared(
+    result: dict[str, Any], crate: list[str] | None, as_json: bool
+) -> None:
     for item in result.get("cleared") or ():
         what = (
             f"{item['entries']} entries of {', '.join(crate or ())}"

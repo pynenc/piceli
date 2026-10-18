@@ -80,6 +80,83 @@ runs need no hash of their own.
 find their crates), `toolchain` (the command whose output keys the cache,
 default `rustc --version`), `cpu`, `memory`, `timeout`.
 
+## Build hosts
+
+Since 0.20.0 runs may also execute outside the cluster, on hosts the
+declaration names: a laptop or a Mac mini running Linux containers, a Linux
+server, this machine itself. `hosts` lists them in order of preference;
+with `node=`, the in-cluster builder is the first one unless you place
+`BuildHost.cluster(...)` yourself, and `node=None` means no in-cluster runs
+at all:
+
+```python
+from piceli.infra import BuildHost, DevBuilds, DevProfile
+
+dev=DevBuilds(
+    node="builder-1",                      # or None: no in-cluster runs
+    image="ghcr.io/pynenc/piceli-builder@sha256:<digest>",
+    hosts=[
+        BuildHost.docker("laptop", slots=2, memory="7Gi"),
+        BuildHost.docker("mini", context="ssh://me@mini.example.ts.net", slots=3),
+        BuildHost.cluster("builder-1"),    # the in-cluster builder, last
+        BuildHost.native("macos"),         # macOS-only builds, no container
+    ],
+    profiles=[DevProfile("rust", tools=["cargo"], prefetch="cargo")],
+)
+```
+
+| Kind | Where the run executes | Needs |
+| --- | --- | --- |
+| `docker` | A Linux container of the profile's image, through a Docker-compatible CLI: Docker Desktop, OrbStack, colima or Podman on a Mac, Docker or Podman on Linux; locally, or over the CLI's own `ssh://` transport (`context=`) or a CLI context name | The engine on the host; nothing else is installed there. The cache is a named volume (`piceli-dev-cache`) |
+| `native` | This machine itself, the wrapper as a process (no container) | Python 3 and the tools; its lineages and queue live in `state_dir` (default `~/.cache/piceli/dev/NAME`); it keeps the user's own `CARGO_HOME` and rustup (crates already downloaded, `--offline` works). For builds that only work on the host's OS (macOS), and the fastest test runs |
+| `cluster` | A Job on `DevBuilds.node`, as before | `piceli cluster init` |
+
+`piceli dev run` asks the hosts in order and takes the first one that is up
+and has a free slot (a docker host whose engine does not answer, or a
+cordoned builder node, is skipped); when the chosen host turns out
+unavailable at start, it tries the next one. `--host NAME` (or
+`PICELI_DEV_HOST`) pins one. `--platform linux/amd64` runs another platform
+on a docker host, emulated by its engine (QEMU or Rosetta: several times
+slower than native; for Rust prefer a native run that cross-compiles with
+`cargo zigbuild`). `piceli dev hosts` shows each host: up or down and why,
+its platforms, busy slots and waiting runs.
+
+**Each host keeps its own queue,** so it works while the cluster (or its
+GitOps controller) is down, and every client of the host shares it: on a
+docker host a slot is a container named `piceli-dev-HOST-N` (the engine
+refuses a second container of a name, so taking a slot is atomic, locally
+and over SSH) and a waiting run is a small attached container that goes
+away with its client; on a native host they are lock files. Waiting runs
+start in the order of the cluster's queue: priority (`round`, `agent`,
+`normal`), then fair share per requester, then age.
+
+A run on a docker host is the same as in a pod: the same wrapper, deltas,
+lineages, corrupted-cache repair and result (`host`: the host's name,
+kind and slots). The container runs as the image's user with no
+capabilities, `no-new-privileges`, a PID limit and the profile's memory
+(or the host's `memory=`); it has no credential: no kubeconfig, no Git or
+registry secret is mounted (the source fetch then only reaches public
+remotes; private ones travel as bundles from the client).
+
+### The toolchain the source pins
+
+When the source has a `rust-toolchain.toml` (or a legacy `rust-toolchain`)
+at or above the run's directory, a run in a pod or a docker host uses that
+toolchain, not the image's: it is installed once into the cache with
+`rustup` (channel, targets, components; under a lock, so concurrent runs
+install it once) and selected for the command; the lineage and
+`CARGO_HOME` follow it. The result's `toolchain.rust` says which file,
+channel, and whether this run installed it (and how long it took). A
+native host's own rustup reads the file itself.
+
+```toml
+# rust-toolchain.toml
+[toolchain]
+channel = "1.97.0"
+targets = ["wasm32-unknown-unknown"]
+components = ["clippy", "rustfmt"]
+```
+
 ## Run
 
 ```sh
@@ -229,12 +306,47 @@ piceli dev cache clear --cluster infra.py:k_lab --lineage ih-rust-1a2b3c4d5e/0 -
 
 It runs a short Job on the builder (same user and claim as a run, no
 Secret, no repository code) that empties the lineages' cargo targets, or
-only the named crates' artifacts. A lineage a run holds is skipped and
+only the named crates' artifacts. `--host NAME` (0.20.0) clears a docker
+host's cache volume (a short container, no network) or a native host's
+cache directory instead. A lineage a run holds is skipped and
 listed under `busy`. The next run on a cleared lineage is cold.
 
 A failed run's result also carries `first_error`: the first `error` line
 of the output and the 19 lines after it, so the cause survives a long log
 whose `log_tail` only shows the end. `piceli dev run` prints it.
+
+## Speed
+
+What a warm run costs, and where it goes: the result's `timeline` has every
+phase to the millisecond. Measured on an Apple M3 Pro laptop with a large
+Rust workspace (a test build after a one-line change in one crate):
+
+| Where | Warm build |
+| --- | --- |
+| Native macOS (`BuildHost.native`, macOS binaries) | 16 s |
+| Docker Desktop host, image defaults (GNU ld, full debug info) | 44-63 s |
+| Same, `CARGO_PROFILE_DEV_DEBUG=line-tables-only` | 34-41 s |
+
+Piceli's own part of a warm run is 4-6 s: the upload is the delta (a few
+hundred bytes for a one-line change), the lineage's tree is refreshed in
+place (only the files the change touches; unchanged files keep their
+mtime), and `cargo fetch` is skipped while `Cargo.lock` does not change.
+The rest is the compiler. To make it faster:
+
+- **Tests that only need to pass:** a `native` host first; Linux containers
+  only for Linux artifacts.
+- **In a Linux container:** less debug info for test builds
+  (`env={"CARGO_PROFILE_DEV_DEBUG": "line-tables-only"}` on the profile;
+  backtraces keep file and line), and a faster linker
+  (`RUSTFLAGS="-C link-arg=-fuse-ld=lld"` with lld in the image, or the
+  toolchain's own `rust-lld` through its `gcc-ld` directory).
+- **The container VM on a Mac** is the largest remaining factor (rustc's
+  incremental front end runs mostly on one thread): give it more memory
+  and free disk (a nearly full VM disk slows every build), or use a lighter
+  VM (OrbStack). A Linux host over `ssh://` has no VM at all.
+- **One lineage per kind of work:** a lineage evicted from the host's page
+  cache by another large build makes its next run up to twice as slow;
+  `slots` beyond what the host's memory holds do the same.
 
 ## Isolation
 
@@ -305,7 +417,18 @@ span per phase (`queue`, `sync`, `fetch`, `build`, `test`), an event
   machine, against what the mirror has), `transfer` (the upload), `sync` (into the lineage), `fetch`
   (`prefetch`), `build` and `test` (split at cargo's `Finished` line),
   `command`, `total`.
-- `tests`: summed from cargo's `test result:` lines (absent otherwise).
+- `tests`: summed from cargo's `test result:` lines (absent otherwise);
+  since 0.20.0 `failed_names` lists the failed tests (`test NAME ...
+  FAILED`, at most 100).
+- `timeline` (0.20.0): contiguous phases with wall-clock times in seconds
+  to the millisecond: `queue`, `pack`, `transfer` (this client), then the
+  run's `extract`, `isolation`, `toolchain`, `lineage`, `sync`, `fetch`,
+  `build` and `test` (or `command` when cargo printed no `Finished`),
+  `repair` and the retried `command` after a corrupted cache, `artifacts`.
+  Every second of the run belongs to one phase.
+- `host` (0.20.0): the build host it ran on (`name`, `kind`, `slots`, ...);
+  `toolchain.rust`: the source's pinned toolchain (`file`, `channel`,
+  `targets`, `components`, `installed`, `seconds`).
 - `cache`: the lineage, whether it was warm, crates compiled against the
   packages in `Cargo.lock` (`hit_ratio`).
 - `log_tail`: the last 80 lines, when the command did not pass.
@@ -402,5 +525,9 @@ its `tests`, `durations` and `log_tail`.
 | `dev-source-invalid` | A source is not `NAME=PATH@REF` in a Git repository | Fix the argument |
 | `dev-profile-unknown` | No such profile | Use a declared one |
 | `dev-run-invalid` | No command, a bad priority, `--cwd` or `--node` | Fix the argument |
+| `dev-host-unavailable` | No declared build host could take the run (engine down, ssh unreachable, builder cordoned); the message names each | `piceli dev hosts`; start the engine or pass `--host` |
+| `dev-host-unknown` | `--host` names an undeclared host | Use one from `piceli dev hosts` |
+| `dev-toolchain-invalid` | The source's `rust-toolchain.toml` cannot be read | Fix the file the message names |
+| `dev-toolchain-failed` | rustup could not install the pinned toolchain | Check channel, targets, components; runs need public HTTPS once |
 | `dev-run-unknown` | No such run queued, running or recorded | `piceli dev status` |
 | `dev-not-enabled` | No `DevBuilds` installed on the cluster | Ask the owner to declare it and run `cluster init` |

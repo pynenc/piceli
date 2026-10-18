@@ -29,7 +29,7 @@ import re
 import tarfile
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -503,6 +503,61 @@ class RegistryDelivery:
                 )
             except RegistryError as error:
                 raise _Failure("failed", error.reason) from error
+
+    def push_index(self, target: RegistryTarget, manifests: Mapping[str, str]) -> str:
+        """Push one OCI index over the per-platform ``manifests``
+        (``{platform: digest}``, already in ``target``'s repository): the
+        image every node pulls, whatever its architecture (0.21.0). Each
+        manifest is read back and checked against its digest first. Returns
+        the index digest.
+        """
+        import hashlib
+
+        from piceli.artifacts.image_manifest import OCI_INDEX
+        from piceli.artifacts.multi_platform import IndexEntry, image_index
+
+        forwarded: AbstractContextManager[None] = (
+            self.forwarder(self.forward, target.effective_port)
+            if self.forward is not None
+            else nullcontext()
+        )
+        with forwarded:
+            client = self.client_factory(
+                target.endpoint(
+                    credentials=self.credentials, ca_file=self.ca_file, timeout=120.0
+                )
+            )
+            entries = []
+            for platform, wanted in sorted(manifests.items()):
+                body, media = client.get_manifest(target.repository, wanted)
+                if "sha256:" + hashlib.sha256(body).hexdigest() != wanted:
+                    raise RegistryError("digest-mismatch", 0)
+                entries.append(
+                    IndexEntry(platform, wanted, len(body), media.split(";")[0].strip())
+                )
+            index = image_index(entries)
+            found = "sha256:" + hashlib.sha256(index).hexdigest()
+            if client.manifest_digest(target.repository, found) != found:
+                client.push_manifest(target.repository, found, index, OCI_INDEX)
+            return found
+
+    def has_manifest(self, target: RegistryTarget, digest: str) -> bool:
+        """Whether ``target``'s repository holds the manifest ``digest``."""
+        forwarded: AbstractContextManager[None] = (
+            self.forwarder(self.forward, target.effective_port)
+            if self.forward is not None
+            else nullcontext()
+        )
+        with forwarded:
+            client = self.client_factory(
+                target.endpoint(
+                    credentials=self.credentials, ca_file=self.ca_file, timeout=60.0
+                )
+            )
+            try:
+                return client.manifest_digest(target.repository, digest) == digest
+            except RegistryError:
+                return False
 
     def _push(
         self,

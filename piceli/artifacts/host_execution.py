@@ -371,17 +371,22 @@ class HostExecution:
         self.log.line(f"### {label} {state} {seconds}s")
         self.log.say(f"[piceli] {label}: {state} in {seconds}s")
         if state != "succeeded":
-            from piceli.dev.pod import clear_crates, corrupt_crates
+            from piceli.dev.pod import clear_crates, clear_incremental, corrupt_crates
 
             crates, damage = (
                 corrupt_crates(list(tail.recent))
                 if state != "timed-out" and not repaired
                 else ([], None)
             )
-            if crates:
+            if crates or damage == "incremental":
                 # 0.19: a damaged cached artifact (a loader or link failure),
                 # not the code: clear those crates and run the step once more.
-                removed = clear_crates(self.target, crates)
+                # 0.20: an ICE in rustc's incremental state: drop incremental/.
+                removed = (
+                    clear_incremental(self.target)
+                    if damage == "incremental"
+                    else clear_crates(self.target, crates)
+                )
                 self.log.say(
                     f"[piceli] {label}: corrupted cache ({damage}): cleared "
                     f"{', '.join(crates)} ({removed} entries); running once more"

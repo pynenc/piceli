@@ -3,7 +3,7 @@ name: piceli
 description: Deploy and operate Kubernetes apps described as typed Python with Piceli, safely, from an agent. Covers installing piceli, describing an App and a Pipeline, rendering without a cluster, planning and showing the plan to the owner, deploying only with the hash the owner approved (or inside the owner's declared auto_approve policy), checking status and access, diagnosing failures with `piceli explain` and the JSON output contract, resuming interrupted runs and rolling back. Use when a project imports piceli or has a Pipeline or release.toml, or when asked to deploy, plan, roll back or debug a Piceli release.
 license: MIT
 metadata:
-  piceli-version: "0.19"
+  piceli-version: "0.21"
 ---
 
 # Piceli
@@ -248,6 +248,18 @@ command retried by itself (`cache.repaired`); with `cache.suspect`, ask the
 owner before `piceli dev cache clear --lineage NAME`. `piceli dev status`
 shows the queue. Never change the declaration, never cancel another
 requester's run.
+
+Since 0.20 runs may go to declared build hosts (a laptop's or a server's
+container engine, or the machine itself): `piceli dev hosts` shows which
+are up; `piceli dev run` picks one and falls back when one is down (`--host`
+pins it). The result's `timeline` says where every second went;
+`tests.failed_names` names the failing tests.
+
+Since 0.21 a controller declared with `Controller(builds=("hosts", ...))`
+waits for a build host: `piceli gitops status` shows `builds_wanted` and the
+step `build-waiting`. `piceli builder serve` on a build host builds them;
+ask the owner before starting it. A `build-failed` answer carries the log
+tail: report it, do not retry blindly.
 
 `piceli gitops wait ENV COMMIT` fails with `cause: gitops-git-failed` and
 `controller_error` when the controller cannot read Git (an expired token):

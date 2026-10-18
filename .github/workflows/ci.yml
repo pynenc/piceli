@@ -54,11 +54,11 @@ jobs:
           curl -sSfL -o /tmp/sops https://github.com/getsops/sops/releases/download/v3.10.2/sops-v3.10.2.linux.amd64
           echo "79b0f844237bd4b0446e4dc884dbc1765fc7dedc3968f743d5949c6f2e701739  /tmp/sops" | sha256sum -c -
           sudo install -m 0755 /tmp/sops /usr/local/bin/sops
+      # Coverage only on 3.12, the run whose data is combined (a third slower).
       - name: Unit and acceptance tests
-        run: uv run pytest -n auto --cov --cov-report=term --cov-report=xml
-      - name: Eval harness self-tests (mock models, no keys, no network)
-        if: matrix.python == '3.12'
-        run: make evals-check
+        env:
+          COV: ${{ matrix.python == '3.12' && '--cov --cov-report=term' || '' }}
+        run: uv run pytest -n auto $COV
       - name: Store coverage data
         if: matrix.python == '3.12'
         uses: actions/upload-artifact@v6
@@ -66,6 +66,18 @@ jobs:
           name: coverage-data-unit
           path: .coverage
           include-hidden-files: true
+
+  evals:
+    # Self-tests of the eval harness (mock models, no keys, no network).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --all-extras --python 3.12
+      - run: make evals-check
 
   comparisons:
     # examples/comparisons: the same app in Helm, Kustomize, cdk8s and Pulumi
@@ -128,7 +140,7 @@ jobs:
           echo "nodes=$(jq -c "$select" .github/kind-nodes.json)" >> "$GITHUB_OUTPUT"
 
   integration:
-    name: integration (k8s ${{ matrix.node.minor }})
+    name: integration (k8s ${{ matrix.node.minor }}, ${{ matrix.shard }}/4)
     needs: kind-nodes
     # The same tree already passed on its pull request; main and releases do
     # not wait for kind again. Nightly and manual runs cover every version.
@@ -139,6 +151,9 @@ jobs:
       fail-fast: false
       matrix:
         node: ${{ fromJSON(needs.kind-nodes.outputs.nodes) }}
+        # The kind tests run serially on one cluster (some change
+        # cluster-wide objects); four shards, each on its own cluster.
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v7
@@ -174,17 +189,21 @@ jobs:
       - name: Integration tests
         env:
           EVENT: ${{ github.event_name }}
+          SHARD: ${{ matrix.shard }}
         run: |
+          # Files split by their measured time (scripts/kind_shard.py);
+          # --durations shows when to refresh the numbers.
+          files=$(python3 scripts/kind_shard.py "$SHARD" 4)
           # The Rust image build (up to 25 min) runs nightly and on demand only.
           args=""
           if [ "$EVENT" = pull_request ]; then
             args="--deselect tests/integration/test_release_pipeline_kind.py"
           fi
-          uv run pytest tests/integration --cov --cov-report=term $args
+          uv run pytest $files --cov --cov-report=term --durations=15 $args
       - name: Store coverage data
         uses: actions/upload-artifact@v6
         with:
-          name: coverage-data-integration-${{ matrix.node.minor }}
+          name: coverage-data-integration-${{ matrix.node.minor }}-${{ matrix.shard }}
           path: .coverage
           include-hidden-files: true
 
@@ -268,7 +287,7 @@ jobs:
       github.event_name == 'pull_request'
       && github.event.pull_request.head.repo.full_name == github.repository
       && github.actor != 'dependabot[bot]'
-    needs: [lint, test, package, docs]
+    needs: [lint, test, evals, package, docs]
     runs-on: ubuntu-latest
     environment: testpypi
     permissions:

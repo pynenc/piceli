@@ -1482,6 +1482,42 @@ COMMANDS: Mapping[str, CommandContract] = MappingProxyType(
             "dev-source-invalid, dev-profile-unknown, dev-run-invalid). The run's "
             "Job is removed on every outcome.",
         ),
+        "builder serve": _C(
+            "On a build host: take the builds the GitOps controller publishes "
+            '(Controller(builds=("hosts", ...))), build them in the builder '
+            "image on the host's container engine, push them with an index per "
+            "image, answer built or build-failed.",
+            reads=(
+                "MODULE:ATTR (piceli.infra.Cluster with dev=DevBuilds(hosts=[...]))",
+                "credential profile",
+                "the controller's status",
+                "each source with this machine's Git access",
+            ),
+            writes=(
+                "the controller's requests (build-claim, built, build-failed)",
+                "images in the cluster's registry (through a port-forward)",
+                "~/.cache/piceli/builder (Git mirrors), the piceli-build-cache volume",
+            ),
+            cluster="writes",
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.21.0. Runs until Ctrl-C (--once: one build). The builder "
+            "image must be the controller's Piceli version.",
+        ),
+        "dev hosts": _C(
+            "Show each declared build host: up or down (and why), its platforms, "
+            "slots, running and waiting runs.",
+            reads=(
+                "MODULE:ATTR (piceli.infra.Cluster with dev=)",
+                "each host's container engine (docker hosts), the queue files "
+                "(native hosts), the builder node (cluster host)",
+            ),
+            cluster="reads",
+            contract="conforms",
+            exit_codes=(0, 2),
+            notes="0.20.0. Read-only. A docker host is asked with its CLI "
+            "(`info`, `ps`), locally or over its ssh:// context.",
+        ),
         "dev status": _C(
             "Show the development-run queue: slots, running and queued runs with "
             "their position, the last finished runs and the cache use.",

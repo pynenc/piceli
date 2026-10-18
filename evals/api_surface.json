@@ -5035,6 +5035,7 @@
      "access",
      "artifacts",
      "build",
+     "builder",
      "bundle",
      "cache",
      "chart",
@@ -5079,6 +5080,7 @@
      "target"
     ],
     "flags": [
+     "--all-ports",
      "--cluster",
      "--dashboard",
      "--forward",
@@ -5336,6 +5338,7 @@
    "build job-run": {
     "arguments": [],
     "flags": [
+     "--archives-only",
      "--cache",
      "--commit",
      "--component",
@@ -5349,6 +5352,30 @@
      "--sources",
      "--spec",
      "--timeout"
+    ],
+    "subcommands": []
+   },
+   "builder": {
+    "arguments": [],
+    "flags": [],
+    "subcommands": [
+     "serve"
+    ]
+   },
+   "builder serve": {
+    "arguments": [],
+    "flags": [
+     "--allow-exec",
+     "--cluster",
+     "--exec-sha256",
+     "--host",
+     "--image",
+     "--json",
+     "--namespace",
+     "--once",
+     "--poll",
+     "--state-dir",
+     "--transport"
     ],
     "subcommands": []
    },
@@ -5564,6 +5591,7 @@
     "subcommands": [
      "cache",
      "cancel",
+     "hosts",
      "logs",
      "run",
      "schedule",
@@ -5584,6 +5612,7 @@
      "--cluster",
      "--crate",
      "--exec-sha256",
+     "--host",
      "--json",
      "--lineage",
      "--transport"
@@ -5594,6 +5623,17 @@
     "arguments": [
      "run_id"
     ],
+    "flags": [
+     "--allow-exec",
+     "--cluster",
+     "--exec-sha256",
+     "--json",
+     "--transport"
+    ],
+    "subcommands": []
+   },
+   "dev hosts": {
+    "arguments": [],
     "flags": [
      "--allow-exec",
      "--cluster",
@@ -5628,10 +5668,12 @@
      "--cluster",
      "--cwd",
      "--exec-sha256",
+     "--host",
      "--json",
      "--keep",
      "--name",
      "--node",
+     "--platform",
      "--priority",
      "--profile",
      "--queue-timeout",
@@ -7211,6 +7253,8 @@
    "deploy-stage-unknown",
    "dev-cache-clear-failed",
    "dev-command-failed",
+   "dev-host-unavailable",
+   "dev-host-unknown",
    "dev-isolation-not-enforced",
    "dev-not-enabled",
    "dev-profile-unknown",
@@ -7224,6 +7268,8 @@
    "dev-run-unknown",
    "dev-source-invalid",
    "dev-tool-missing",
+   "dev-toolchain-failed",
+   "dev-toolchain-invalid",
    "dev-upload-failed",
    "digest-mismatch",
    "discovery-incomplete",
@@ -8700,6 +8746,7 @@
   "piceli.dev.client",
   "piceli.dev.cluster",
   "piceli.dev.delta",
+  "piceli.dev.hosts",
   "piceli.dev.jobs",
   "piceli.dev.model",
   "piceli.dev.pack",
@@ -8738,6 +8785,7 @@
   "piceli.importing.generate",
   "piceli.importing.sources",
   "piceli.infra",
+  "piceli.infra.builder_serve",
   "piceli.infra.builders",
   "piceli.infra.cluster",
   "piceli.infra.cluster_init",
@@ -8758,6 +8806,7 @@
   "piceli.infra.machines.tofu",
   "piceli.infra.multicluster",
   "piceli.infra.pipelines",
+  "piceli.infra.remote_builds",
   "piceli.infra.render",
   "piceli.infra.sources",
   "piceli.infra.ui_install",
@@ -8768,6 +8817,7 @@
   "piceli.k8s.cli",
   "piceli.k8s.cli.access",
   "piceli.k8s.cli.build",
+  "piceli.k8s.cli.builder",
   "piceli.k8s.cli.bundle",
   "piceli.k8s.cli.chart",
   "piceli.k8s.cli.cluster",
@@ -8986,5 +9036,5 @@
   "update_forward_refs",
   "validate"
  ],
- "version": "0.19.1"
+ "version": "0.21.0"
 }

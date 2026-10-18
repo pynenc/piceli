@@ -49,8 +49,19 @@ PRIVATE = (
 
 
 def wrapper_source() -> str:
-    """The stdlib-only wrapper the run's pod executes (:mod:`piceli.dev.pod`)."""
-    return (Path(__file__).with_name("pod.py")).read_text()
+    """The stdlib-only wrapper the run's pod executes (:mod:`piceli.dev.pod`),
+    as a ``python3 -c`` program: compressed (0.20.0), so the one argument
+    stays far below Linux's 128 KiB limit for a single argument
+    (``MAX_ARG_STRLEN``) however the wrapper grows, and the Job is small."""
+    import base64
+    import zlib
+
+    raw = (Path(__file__).with_name("pod.py")).read_bytes()
+    blob = base64.b64encode(zlib.compress(raw, 9)).decode("ascii")
+    return (
+        "import base64,zlib;exec(compile(zlib.decompress(base64.b64decode("
+        f"'{blob}')),'piceli-dev-wrapper','exec'))"
+    )
 
 
 def install_objects(cluster: Any) -> list[dict[str, Any]]:
