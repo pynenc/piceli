@@ -184,3 +184,184 @@ def test_a_build_host_builds_every_platform_and_pushes_one_index(
         for m in index["manifests"]
     ) == ["linux/amd64", "linux/arm64"]
     print(f"\nbuilder serve: two platforms built and delivered in {seconds:.0f}s")
+
+
+SPEC = f"""revision = "piceli.host-build.v1"
+name = "two-sources"
+inputs = "inputs.toml"
+
+[build]
+tools = ["cargo", "cargo-zigbuild", "zig"]
+commands = [
+    ["cargo", "zigbuild", "--release", "--locked", "--offline",
+     "--target", "{{rust_arch}}-unknown-linux-gnu.2.36",
+     "--manifest-path", "app/Cargo.toml"],
+]
+env = {{ CARGO_TERM_COLOR = "never", CARGO_INCREMENTAL = "0" }}
+timeout_seconds = 1800
+
+[context.app]
+source = "product"
+path = "crates/hello"
+include = ["Cargo.toml", "Cargo.lock", "src/**/*.rs"]
+
+[context.notes]
+source = "workspace"
+path = "notes"
+include = ["*.txt"]
+
+[[output.image]]
+name = "hello"
+repository = "shop/hello"
+base = {{ image = "docker.io/library/busybox:1.37.0", digest = "{BUSYBOX.rsplit("@", 1)[1]}" }}
+target_files = {{ "{{rust_arch}}-unknown-linux-gnu/release/hello" = "/usr/local/bin/hello" }}
+user = "65534:65534"
+entrypoint = ["/usr/local/bin/hello"]
+"""
+INPUTS = """[[source]]
+name = "workspace"
+path = "."
+
+[[source]]
+name = "product"
+path = "../product"
+"""
+
+
+def _repo(path: Path, files: dict[str, str]) -> str:
+    """A bare repository at ``path`` (a private remote) holding ``files``;
+    its commit."""
+    work = path.with_suffix(".work")
+    work.mkdir(parents=True)
+    for name, text in files.items():
+        (work / name).parent.mkdir(parents=True, exist_ok=True)
+        (work / name).write_text(text)
+    _git(work, "init", "-q", "-b", "main")
+    _git(work, "-c", "user.email=t@x", "-c", "user.name=t", "add", "-A")
+    _git(work, "-c", "user.email=t@x", "-c", "user.name=t", "commit", "-qm", "one")
+    subprocess.run(
+        ["git", "clone", "-q", "--bare", str(work), str(path)],
+        check=True,
+        capture_output=True,
+    )
+    return _git(work, "rev-parse", "HEAD")
+
+
+def test_a_build_host_builds_a_two_source_spec_from_private_repositories(
+    builder_image: str,
+    registry: int,
+    tmp_path: Path,
+) -> None:
+    """IH's shape (0.21.1): a spec in one repository building another's crate,
+    both private (HTTPS has no credential, SSH has), both verified by their
+    Git identity inside the builder container."""
+    from piceli.dev.hosts import ContainerCli
+    from piceli.dev.model import BuildHost
+    from piceli.gitops.state import DirectoryChannel
+    from piceli.infra.builder_serve import BuilderServe, docker_container, prepare_cache
+    from piceli.pipeline.backend import Backend, RegistryRoute
+
+    remotes = tmp_path / "remotes"
+    commits = {
+        "workspace": _repo(
+            remotes / "workspace.git",
+            {"host-build.toml": SPEC, "inputs.toml": INPUTS, "notes/a.txt": "hi\n"},
+        ),
+        "product": _repo(
+            remotes / "product.git",
+            {
+                "crates/hello/Cargo.toml": '[package]\nname = "hello"\nversion = "0.1.0"\n'
+                'edition = "2021"\n',
+                "crates/hello/Cargo.lock": 'version = 4\n\n[[package]]\nname = "hello"\n'
+                'version = "0.1.0"\n',
+                "crates/hello/src/main.rs": 'fn main() { println!("hi"); }\n',
+            },
+        ),
+    }
+    urls = {name: f"https://git.example.invalid/org/{name}.git" for name in commits}
+    fetched_over: list[str] = []
+
+    def private_git(
+        argv: list[str], **kwargs: Any
+    ) -> subprocess.CompletedProcess[bytes]:
+        """HTTPS asks for a credential nobody has; SSH (the host's key) works."""
+        if "fetch" in argv and any(url in argv for url in urls.values()):
+            return subprocess.CompletedProcess(
+                argv, 128, b"", b"could not read Username"
+            )
+        mapped = []
+        for item in argv:
+            if item.startswith("git@git.example.invalid:org/"):
+                fetched_over.append(item)
+                item = str(remotes / item.rsplit("/", 1)[1])
+            mapped.append(item)
+        return subprocess.run(mapped, **kwargs)
+
+    cli = ContainerCli(BuildHost.docker("laptop"))
+    platform = cli.platform()
+    channel = DirectoryChannel(tmp_path / "controller")
+    key = "sha256:" + "7" * 64
+    wanted = {
+        "id": "b" * 20,
+        "kind": "spec",
+        "spec": "host-build.toml",
+        "repo": "workspace",
+        "commits": commits,
+        "urls": urls,
+        "facts": None,
+        "keys": {"hello": {"repository": "shop/hello", "key": key}},
+        "platforms": [platform],
+        "images": ["hello"],
+        "claimed": {"host": "laptop"},
+    }
+    channel.publish({"controller": {"builds_wanted": [wanted]}})
+    volume = f"piceli-build-cache-test-{uuid.uuid4().hex[:8]}"
+    route = RegistryRoute(
+        push=f"127.0.0.1:{registry}", node_registry=f"127.0.0.1:{registry}", tls=False
+    )
+    backend = Backend()
+    lines: list[str] = []
+    try:
+        prepare_cache(cli, builder_image, volume)
+
+        def push(image_id: str, repository: str, archive: Path) -> str:
+            delivered: dict[str, Any] = backend.registry_deliver(
+                route, image_id, repository, archive=archive
+            )
+            assert delivered.get("state") == "succeeded", delivered
+            return str(delivered["pull_ref"])
+
+        worker = BuilderServe(
+            host="laptop",
+            image=builder_image,
+            channel=channel,
+            container=docker_container(cli, builder_image, volume),
+            push=push,
+            index=lambda repository, digests: backend.registry_index(
+                route, repository, digests
+            ),
+            root=tmp_path / "builder",
+            say=lines.append,
+            git=private_git,
+        )
+        assert worker.once() == "b" * 20, "\n".join(lines[-40:])
+        # The container removed its copy of the sources.
+        left = cli.run(
+            "run", "--rm", "-v", f"{volume}:/cache", "--entrypoint", "ls",
+            builder_image, "/cache", timeout=120,
+        )  # fmt: skip
+        assert "builder-src" not in left.stdout.decode(), left.stdout
+    finally:
+        subprocess.run(
+            ["docker", "volume", "rm", "-f", volume], capture_output=True, check=False
+        )
+    answers = list(channel.requests().values())
+    failed = [b for b in answers if b["kind"] == "build-failed"]
+    assert not failed, failed[0]["reason"] + "\n" + failed[0]["log_tail"][-3000:]
+    (built,) = [b for b in answers if b["kind"] == "built"]
+    image = built["images"]["hello"]
+    assert image["key"] == key and list(image["platforms"]) == [platform]
+    assert sorted(item.rsplit("/", 1)[1] for item in set(fetched_over)) == [
+        "product.git",
+        "workspace.git",
+    ]

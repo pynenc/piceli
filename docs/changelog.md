@@ -4,6 +4,23 @@ The changelog documents the history of changes and version releases for Piceli.
 
 For detailed information on each version, please visit the [Piceli GitHub Releases page](https://github.com/pynenc/piceli/releases).
 
+## Version 0.21.1
+
+- **`piceli builder serve` builds specs with inputs.** Each source is
+  checked out with its `.git` (kept between builds in
+  `~/.cache/piceli/builder/checkouts`) instead of exported as plain files,
+  so the build's source identity check passes; 0.21.0 failed every spec
+  build with an inputs file (`source-identity`, "not a git repository"). The
+  builder container copies the read-only checkouts into its cache volume,
+  owned by its own user, so Git verifies them with no exception to its
+  ownership check. Unchanged files keep their times: incremental builds see
+  only what changed (0.21.0's archives stamped every file with the commit's
+  time).
+- **Private sources.** Fetches never prompt; an HTTPS URL that cannot be
+  fetched is fetched again over SSH with the host's keys (this process
+  only; no Git config changes). A source neither transport reaches fails
+  with both errors.
+
 ## Version 0.21.0
 
 - **GitOps builds on build hosts.** `Controller(builds=("hosts",))` (or
