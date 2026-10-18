@@ -41,7 +41,9 @@ def _ssh_only(repo: Path, calls: list[list[str]]) -> Any:
     def run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
         calls.append(list(argv))
         if "fetch" in argv and URL in argv:
-            return subprocess.CompletedProcess(argv, 128, b"", b"fatal: could not read Username")
+            return subprocess.CompletedProcess(
+                argv, 128, b"", b"fatal: could not read Username"
+            )
         return subprocess.run([str(repo) if a == SSH else a for a in argv], **kwargs)
 
     return run
@@ -70,7 +72,9 @@ def test_a_private_source_is_checked_out_over_ssh_with_its_identity(
     commit = _git(repo, "rev-parse", "HEAD")
     calls: list[list[str]] = []
     into = tmp_path / "builder" / "checkouts" / "product"
-    export_source(URL, commit, into, tmp_path / "builder" / "git", _ssh_only(repo, calls))
+    export_source(
+        URL, commit, into, tmp_path / "builder" / "git", _ssh_only(repo, calls)
+    )
     assert any(SSH in argv for argv in calls)
     assert _git(into, "rev-parse", "HEAD") == commit
     assert _git(into, "status", "--porcelain") == ""
@@ -79,7 +83,9 @@ def test_a_private_source_is_checked_out_over_ssh_with_its_identity(
     assert all(os.stat(p).st_mode & 0o004 for p in into.rglob("*"))  # others read
 
 
-def test_the_next_commit_keeps_unchanged_files_times(repo: Path, tmp_path: Path) -> None:
+def test_the_next_commit_keeps_unchanged_files_times(
+    repo: Path, tmp_path: Path
+) -> None:
     """Incremental builds (cargo) compare file times: only what changed moves."""
     mirrors, into = tmp_path / "git", tmp_path / "checkout"
     run = _ssh_only(repo, [])
@@ -99,11 +105,13 @@ def test_the_next_commit_keeps_unchanged_files_times(repo: Path, tmp_path: Path)
     assert _git(into, "rev-list", "--count", "HEAD") == "1"
 
 
-def test_an_unreachable_source_names_both_transports(repo: Path, tmp_path: Path) -> None:
+def test_an_unreachable_source_names_both_transports(
+    repo: Path, tmp_path: Path
+) -> None:
     def run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
         if "fetch" in argv:
             return subprocess.CompletedProcess(argv, 128, b"", b"Permission denied")
         return subprocess.run(argv, **kwargs)
 
-    with pytest.raises(BuildFailed, match="over HTTPS or SSH.*Permission denied"):
+    with pytest.raises(BuildFailed, match=r"over HTTPS or SSH.*Permission denied"):
         export_source(URL, "a" * 40, tmp_path / "c", tmp_path / "git", run)
