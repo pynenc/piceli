@@ -191,8 +191,9 @@ jobs:
           EVENT: ${{ github.event_name }}
           SHARD: ${{ matrix.shard }}
         run: |
-          # Every fourth test file, by name; --durations shows how to rebalance.
-          files=$(ls tests/integration/test_*.py | awk -v s="$SHARD" 'NR % 4 == s % 4')
+          # Files split by their measured time (scripts/kind_shard.py);
+          # --durations shows when to refresh the numbers.
+          files=$(python3 scripts/kind_shard.py "$SHARD" 4)
           # The Rust image build (up to 25 min) runs nightly and on demand only.
           args=""
           if [ "$EVENT" = pull_request ]; then
