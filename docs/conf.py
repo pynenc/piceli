@@ -23,7 +23,9 @@ extensions = [
     "sphinx.ext.intersphinx",
     "sphinx.ext.mathjax",
     "sphinx.ext.todo",
-    "sphinx.ext.viewcode",
+    # Source links go to GitHub: viewcode rendered every module again (2.5 of
+    # the build's 4.5 minutes).
+    "sphinx.ext.linkcode",
     "myst_parser",
     "sphinx_copybutton",
     "sphinx_design",
@@ -82,6 +84,29 @@ autodoc2_hidden_regexes = [
     r"piceli\.k8s\.templates\.auxiliary\.names\..*_REGEX",
     r"piceli\.chart\._(DNS_SUBDOMAIN|HOST)",
 ]
+
+
+def linkcode_resolve(domain: str, info: dict[str, str]) -> str | None:
+    """The object's lines in the repository on GitHub (``sphinx.ext.linkcode``)."""
+    import importlib
+    import inspect
+
+    if domain != "py" or not info.get("module"):
+        return None
+    try:
+        target: Any = importlib.import_module(info["module"])
+        for part in info.get("fullname", "").split("."):
+            target = getattr(target, part)
+        target = inspect.unwrap(target)
+        path = Path(inspect.getsourcefile(target) or "").resolve()
+        lines, start = inspect.getsourcelines(target)
+    except Exception:
+        return None
+    root = Path(__file__).resolve().parent.parent
+    if not path.is_relative_to(root):
+        return None
+    anchor = f"#L{start}-L{start + len(lines) - 1}" if start else ""
+    return f"https://github.com/pynenc/piceli/blob/v{version}/{path.relative_to(root)}{anchor}"
 
 
 # -- MyST settings ---------------------------------------------------
