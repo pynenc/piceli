@@ -76,6 +76,22 @@ for _name, _base in _INVENTORIES.items():
 # -- Autodoc settings ---------------------------------------------------
 autodoc2_render_plugin = "myst"
 autodoc2_packages = [{"path": "../piceli"}]
+# The generated reference (329 module pages) is kept out of the global
+# toctree: Furo copies that tree into every page's sidebar, which made the
+# site 166 MB. docs/api.md links to it; the index is an orphan page.
+autodoc2_index_template = (
+    ":orphan:\n\n"
+    "API Reference\n"
+    "=============\n"
+    "\n"
+    "Generated from the docstrings with sphinx-autodoc2.\n"
+    "\n"
+    ".. toctree::\n"
+    "   :titlesonly:\n"
+    "{% for package in top_level %}\n"
+    "   {{ package }}\n"
+    "{%- endfor %}\n"
+)
 # Regex constants render as MyST link syntax and break the -W build.
 # Builtins such as `type`/`bytes` in annotations collide with same-named model
 # fields (e.g. HealthProbe.type); these ambiguity warnings are not doc errors.

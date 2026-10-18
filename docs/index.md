@@ -283,7 +283,7 @@ cli/index
 reference/cli
 reference/errors
 agents
-apidocs/index
+api
 ```
 
 ```{toctree}
