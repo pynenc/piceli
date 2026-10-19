@@ -239,7 +239,7 @@ def test_forwards_workspace_lists_starts_stops_and_reaps_stale(
     gone = subprocess.Popen([sys.executable, "-c", "pass"])
     gone.wait()
     try:
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + 60
         identity = None
         while identity is None and time.monotonic() < deadline:
             identity = process_identity(child.pid)

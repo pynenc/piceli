@@ -109,7 +109,7 @@ def stop(*_):
 signal.signal(signal.SIGTERM, stop)
 try:
     supervisor.quick_start("ui", "piceli-system")
-    deadline = time.monotonic() + 10
+    deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
         with socket.socket() as probe:
             if probe.connect_ex(("127.0.0.1", port)) == 0:
@@ -394,7 +394,7 @@ def test_a_stale_access_ui_forward_is_recognised_and_stopped(tmp_path: Path) -> 
             assert [item["port"] for item in result["left"]] == [foreign_port]
             assert result["failed"] == []
             owner.wait(timeout=60)
-            deadline = time.monotonic() + 5
+            deadline = time.monotonic() + 60
             while (_alive(child) or _accepting(port)) and time.monotonic() < deadline:
                 time.sleep(0.05)
             assert not _accepting(port) and not _alive(child)

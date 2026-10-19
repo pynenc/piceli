@@ -78,7 +78,7 @@ supervisor = ForwardSupervisor(
     registry=OwnedProcessRegistry(Path(registry)),
 )
 supervisor.quick_start("ui-demo", "shop")
-deadline = time.monotonic() + 10
+deadline = time.monotonic() + 60
 while time.monotonic() < deadline:
     with socket.socket() as probe:
         if probe.connect_ex(("127.0.0.1", int(port))) == 0:
@@ -160,7 +160,7 @@ def test_a_sigkilled_servers_forward_is_reaped_at_the_next_start(
         assert _accepting(port)
 
         assert OwnedProcessRegistry(registry).reap_orphans() == (child,)
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + 60
         while _accepting(port) and time.monotonic() < deadline:
             time.sleep(0.05)
         assert not _accepting(port)

@@ -90,7 +90,7 @@ def test_cluster_build_is_scoped_reviewed_and_runs_in_token_free_job(
             query.registration("other", action="deploy")
     control.start()
     try:
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
             with request_principal(actor):
                 finished = control.operation(operation["id"])

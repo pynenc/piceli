@@ -184,7 +184,7 @@ def test_forward_supervisor_owns_only_saved_loopback_processes(tmp_path: Path) -
     )
     supervisor.restore()
     try:
-        deadline = time.monotonic() + 2
+        deadline = time.monotonic() + 60
         while time.monotonic() < deadline and not supervisor.statuses()[0].error:
             time.sleep(0.01)
         status = supervisor.statuses()[0]

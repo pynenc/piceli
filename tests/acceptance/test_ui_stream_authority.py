@@ -71,7 +71,7 @@ def test_live_observation_stream_closes_on_scope_revocation(tmp_path: Path) -> N
         )
         thread.start()
         try:
-            deadline = time.monotonic() + 5
+            deadline = time.monotonic() + 60
             while (
                 not server.started and thread.is_alive() and time.monotonic() < deadline
             ):

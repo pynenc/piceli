@@ -82,7 +82,7 @@ def test_shared_watch_scoped_replay_and_expiry() -> None:
         hub.observe(two, Reader(two), "v1", "Pod")
         assert Reader.lists == 2
         Reader.queues["one"].put(event("api", "2"))
-        deadline = time.monotonic() + 2
+        deadline = time.monotonic() + 60
         while not hub.events("one", "0")[0] and time.monotonic() < deadline:
             time.sleep(0.01)
         events, cursor, reset = hub.events("one", "0")
@@ -111,7 +111,7 @@ def test_same_credential_boundary_shares_one_watch_across_registrations() -> Non
         hub.observe(two, Reader(two), "v1", "Pod")
         assert Reader.lists == 1
         Reader.queues["one"].put(event("api", "2"))
-        deadline = time.monotonic() + 2
+        deadline = time.monotonic() + 60
         while not hub.events("two", "0")[0] and time.monotonic() < deadline:
             time.sleep(0.01)
         assert len(hub.events("one", "0")[0]) == 1
@@ -175,7 +175,7 @@ def test_sensitive_objects_are_projected_before_shared_cache() -> None:
                 },
             )
         )
-        deadline = time.monotonic() + 2
+        deadline = time.monotonic() + 60
         while hub.cursor() == "0" and time.monotonic() < deadline:
             time.sleep(0.01)
         latest, _ = hub.observe(scope, SecretReader(scope), "v1", "Secret")
@@ -214,7 +214,7 @@ def test_watch_error_marks_snapshot_stale_then_relists_with_reset() -> None:
         # A list count advances before the watch thread publishes its new
         # snapshot. Wait for the relist's reset event so the next observe()
         # reads that committed snapshot instead of starting a third list.
-        deadline = time.monotonic() + 4
+        deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
             events, _, reset = hub.events("one", "0")
             if not reset and sum(item.kind == "reset" for item in events) >= 2:

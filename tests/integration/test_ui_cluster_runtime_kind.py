@@ -240,7 +240,7 @@ def _tls_gateway_responds(namespace: str, pod: str, certificate: Path) -> None:
     )
     try:
         context = ssl.create_default_context(cafile=str(certificate))
-        deadline = time.monotonic() + 20
+        deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
             assert process.poll() is None, "scratch port-forward exited"
             try:

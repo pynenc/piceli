@@ -153,7 +153,7 @@ def post(
 
 
 def wait(client: TestClient, path: str) -> dict[str, Any]:
-    deadline = time.monotonic() + 15
+    deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
         response = client.get(API + path)
         assert response.status_code == 200, response.text

@@ -356,7 +356,7 @@ def test_killed_apply_with_shared_state_resumes_on_another_runner(tmp_path, inde
         assert len([r for r in api.requests if _write(r)]) == index
 
         other = _spec(tmp_path, url, DIGEST_1, "blue", state="cluster", state_dir="b")
-        deadline = time.monotonic() + 30
+        deadline = time.monotonic() + 60
         while True:
             code, resumed = _run(other, "resume")
             if code != 2 or resumed.get("reason") not in {

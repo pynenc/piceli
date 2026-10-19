@@ -211,7 +211,7 @@ def test_status_and_access_on_kind(tmp_path: Path, namespace: str) -> None:
             finally:
                 if process.poll() is None:
                     process.kill()
-    deadline = time.monotonic() + 10
+    deadline = time.monotonic() + 60
     while time.monotonic() < deadline and local_port_in_use(local):
         time.sleep(0.1)
     assert not local_port_in_use(local)
@@ -359,7 +359,7 @@ def test_access_follows_the_live_owner_across_a_rollout(
             finally:
                 if process.poll() is None:
                     process.kill()
-    deadline = time.monotonic() + 10
+    deadline = time.monotonic() + 60
     while time.monotonic() < deadline and local_port_in_use(local):
         time.sleep(0.1)
     assert not local_port_in_use(local)

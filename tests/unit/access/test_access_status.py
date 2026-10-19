@@ -960,7 +960,7 @@ def test_cli_access_supervises_declared_forwards_and_serves_the_dashboard(
     last = json.loads(out.strip().splitlines()[-1])
     assert last == {"event": "stopped", "state": "stopped"}
     assert process.returncode == 0
-    deadline = time.monotonic() + 5
+    deadline = time.monotonic() + 60
     while time.monotonic() < deadline and access_module.local_port_in_use(local):
         time.sleep(0.05)
     assert not access_module.local_port_in_use(local)  # no leftover relay

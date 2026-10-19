@@ -75,7 +75,7 @@ def agent(
     lines: list[str] = []
     try:
         assert process.stdout is not None
-        deadline = time.monotonic() + 10
+        deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
             line = process.stdout.readline()
             if not line:

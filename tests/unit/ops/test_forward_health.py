@@ -663,7 +663,7 @@ def test_cli_apply_supervises_until_interrupted(
     events: list[dict[str, object]] = []
     try:
         assert process.stdout is not None
-        deadline = time.monotonic() + 20
+        deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
             line = process.stdout.readline()
             if not line:

@@ -196,7 +196,7 @@ def test_a_busy_lineage_is_never_shared(tmp_path: Path) -> None:
 
     thread = threading.Thread(target=slow)
     thread.start()
-    deadline = time.monotonic() + 5
+    deadline = time.monotonic() + 60
     while not list((tmp_path / "cache").rglob("busy")) and time.monotonic() < deadline:
         time.sleep(0.02)
     other, _ = _run(tmp_path, data, _spec(data, ["true"]), "fast")
@@ -224,7 +224,7 @@ def test_artifacts_are_collected_for_the_client(tmp_path: Path) -> None:
 
     thread = threading.Thread(target=run)
     thread.start()
-    deadline = time.monotonic() + 10
+    deadline = time.monotonic() + 60
     while (
         not any(line.startswith(pod.RESULT_MARKER) for line in lines)
         and time.monotonic() < deadline

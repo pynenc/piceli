@@ -385,7 +385,7 @@ def test_cli_access_stop_stale_stops_a_leftover_piceli_access(
             if process.poll() is None:
                 process.send_signal(signal.SIGKILL)
                 process.wait(timeout=60)
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + 60
         while time.monotonic() < deadline and access_module.local_port_in_use(local):
             time.sleep(0.05)
         assert not access_module.local_port_in_use(local)

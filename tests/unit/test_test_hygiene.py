@@ -45,3 +45,22 @@ def test_no_short_process_waits() -> None:
         if float(match.group(1)) < PROCESS_MINIMUM
     ]
     assert not short, f"process waits under {PROCESS_MINIMUM} s: {short}"
+
+
+STARTUP_WAIT = re.compile(
+    r"^\s*deadline = time\.monotonic\(\) \+ ([0-9]*\.?[0-9]+)$", re.M
+)
+
+
+def test_no_short_polling_deadlines() -> None:
+    """A loop that waits for a process or thread to get somewhere is a hang
+    guard: at least 30 s (0.23.0), it ends as soon as the condition holds."""
+    short = [
+        f"{path.relative_to(ROOT)}:{text[: match.start()].count(chr(10)) + 1}"
+        for path in sorted((ROOT / "tests").rglob("*.py"))
+        if path.name != Path(__file__).name
+        for text in [path.read_text(errors="ignore")]
+        for match in STARTUP_WAIT.finditer(text)
+        if float(match.group(1)) < PROCESS_MINIMUM
+    ]
+    assert not short, f"polling deadlines under {PROCESS_MINIMUM} s: {short}"

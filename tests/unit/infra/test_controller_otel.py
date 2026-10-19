@@ -625,7 +625,7 @@ def test_the_heartbeat_ticks_while_a_step_runs(tmp_path: Path) -> None:
     telemetry = signals.telemetry(tmp_path, clock)
     telemetry.start_heartbeat(0.01)
     try:
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
             points = signals.metrics().get("piceli.controller.heartbeats") or []
             if points and points[0].value >= 3:
