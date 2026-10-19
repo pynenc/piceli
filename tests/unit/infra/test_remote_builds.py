@@ -164,8 +164,24 @@ def test_builder_serve_builds_delivers_and_the_controller_deploys(
     pushed: list[tuple[str, str]] = []
     indexed: list[tuple[str, dict[str, str]]] = []
 
-    def container(argv: list[str], src: Path, out: Path, line: Any) -> int:
-        seen_sources.append(sorted(p.name for p in src.iterdir()))
+    def container(
+        argv: list[str], sources: dict[str, Path], out: Path, line: Any
+    ) -> int:
+        import subprocess
+
+        seen_sources.append(sorted(sources))
+        for checkout in sources.values():
+            # A Git work tree at the wanted commit, so the build can verify
+            # it: its .git, a clean tree, the source's URL as origin.
+            def git(*args: str, at: Path = checkout) -> str:
+                return subprocess.run(
+                    ["git", "-C", str(at), *args],
+                    check=True, capture_output=True, text=True,
+                ).stdout.strip()  # fmt: skip
+
+            assert git("rev-parse", "--show-toplevel") == str(checkout.resolve())
+            assert git("status", "--porcelain") == ""
+            assert git("config", "--get", "remote.origin.url").endswith(".git")
         assert "--archives-only" in argv and argv.count("--platform") == 2
         archives = []
         for spec in (a for a in argv if a.startswith("{")):
@@ -216,5 +232,8 @@ def test_builder_serve_builds_delivers_and_the_controller_deploys(
     assert main["state"] == "deployed", main
     assert main["components"]["web"]["digest"] == "sha256:" + "9" * 64
     assert worker.once() is None  # nothing left to build
-    # The Git mirrors stay for the next build; nothing else does.
-    assert [p.name for p in (tmp_path / "builder").iterdir()] == ["git"]
+    # The Git mirrors and checkouts stay for the next build; nothing else does.
+    assert sorted(p.name for p in (tmp_path / "builder").iterdir()) == [
+        "checkouts",
+        "git",
+    ]

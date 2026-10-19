@@ -397,15 +397,34 @@ piceli builder serve --cluster infra.py:my_cluster --once     # one build
 It takes the oldest wanted build nobody holds (request `build-claim`; a
 claim not answered in 4 hours lapses), fetches each source at its commit
 with **this machine's own Git access** (mirrors in
-`~/.cache/piceli/builder/git`, fetched incrementally), builds it in a
-container of the builder image on the host's engine (`piceli build job-run
---archives-only`: the in-cluster build's code, every platform, its cache
-in the `piceli-build-cache` volume), pushes the images to the cluster's
+`~/.cache/piceli/builder/git`, fetched incrementally), checks each one out
+with its `.git` (`~/.cache/piceli/builder/checkouts`, kept between builds),
+builds it in a container of the builder image on the host's engine
+(`piceli build job-run --archives-only`: the in-cluster build's code, every
+platform, its cache in the `piceli-build-cache` volume), pushes the images to the cluster's
 registry through a port-forward (only the blobs it lacks) and one OCI
 index per image, and answers `built` (each image's key, pull reference,
 digest and platforms, and a receipt: host, times, builder image, commits).
 A failure answers `build-failed` with the output's tail: the environment's
 step fails with it, as an in-cluster build would.
+
+**Private sources.** Sources are fetched at the URLs the composition
+declares, never with a prompt. An HTTPS URL is fetched with the host's Git
+credentials (its credential helper); when that fails, the same repository is
+fetched over SSH with the host's keys (`https://github.com/org/repo.git` as
+`git@github.com:org/repo.git`, for this process only: the user's Git config
+is not changed). SSH runs in batch mode unless `GIT_SSH_COMMAND` names
+another command. A source neither reaches fails the build with both errors.
+
+**Source identity.** A build spec with an inputs file verifies each source's
+Git identity (its commit, a clean tree, its origin) inside the builder
+container, as an in-cluster build does. The container runs as its own user
+(65532) and reads the checkouts read-only, so it first copies them into its
+cache volume (`/cache/builder-src`, owned by that user, file times kept,
+removed when the build ends): Git verifies the copy without any exception
+to its ownership check. Files a commit does not change keep their times in
+the checkout and the copy, so incremental builds (cargo) rebuild only what
+changed.
 
 The controller accepts a `built` request only for a build it asked for,
 with every image built from the same inputs (its change key) and its digest
