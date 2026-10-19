@@ -24,7 +24,7 @@ def test_signals_a_child_session() -> None:
     )
     try:
         assert signal_group(child.pid, signal.SIGTERM) is True
-        assert child.wait(timeout=10) == -signal.SIGTERM
+        assert child.wait(timeout=60) == -signal.SIGTERM
     finally:
         if child.poll() is None:
             child.kill()

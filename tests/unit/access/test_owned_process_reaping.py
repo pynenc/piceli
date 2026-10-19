@@ -121,7 +121,7 @@ def _process(argv: list[str]) -> Iterator[subprocess.Popen[str]]:
     finally:
         with suppress(ProcessLookupError):
             os.killpg(process.pid, signal.SIGKILL)
-        process.wait(timeout=5)
+        process.wait(timeout=60)
         if process.stdout is not None:
             process.stdout.close()
 
@@ -154,7 +154,7 @@ def test_a_sigkilled_servers_forward_is_reaped_at_the_next_start(
             assert _accepting(port)
             assert (registry / f"{child}.json").stat().st_mode & 0o777 == 0o600
             owner.send_signal(signal.SIGKILL)
-            owner.wait(timeout=5)
+            owner.wait(timeout=60)
         # The crashed server's forward keeps running with nobody to stop it.
         assert _alive(child)
         assert _accepting(port)

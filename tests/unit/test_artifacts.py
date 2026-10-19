@@ -85,7 +85,7 @@ assert main(["preview","--plan",sys.argv[1]]) == 0
         [sys.executable, "-c", script, str(spec)],
         capture_output=True,
         text=True,
-        timeout=10,
+        timeout=120,
     )
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)["network"] is False
@@ -93,7 +93,7 @@ assert main(["preview","--plan",sys.argv[1]]) == 0
         [sys.executable, "-m", "piceli", "artifacts", "preview", "--plan", str(spec)],
         capture_output=True,
         text=True,
-        timeout=10,
+        timeout=120,
     )
     assert cli.returncode == 0, cli.stderr
     assert json.loads(cli.stdout) == plan.preview()

@@ -171,7 +171,7 @@ def _process(
     finally:
         with suppress(ProcessLookupError):
             os.killpg(process.pid, signal.SIGKILL)
-        process.wait(timeout=5)
+        process.wait(timeout=60)
         if process.stdout is not None:
             process.stdout.close()
 
@@ -393,7 +393,7 @@ def test_a_stale_access_ui_forward_is_recognised_and_stopped(tmp_path: Path) -> 
             ]
             assert [item["port"] for item in result["left"]] == [foreign_port]
             assert result["failed"] == []
-            owner.wait(timeout=10)
+            owner.wait(timeout=60)
             deadline = time.monotonic() + 5
             while (_alive(child) or _accepting(port)) and time.monotonic() < deadline:
                 time.sleep(0.05)

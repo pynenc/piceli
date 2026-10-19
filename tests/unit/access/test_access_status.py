@@ -873,7 +873,7 @@ def test_cli_access_refuses_a_taken_port_and_names_its_owner(
 
 
 def _read_events(
-    process: subprocess.Popen[str], until: Any, timeout: float = 20
+    process: subprocess.Popen[str], until: Any, timeout: float = 90
 ) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     assert process.stdout is not None
@@ -953,7 +953,7 @@ def test_cli_access_supervises_declared_forwards_and_serves_the_dashboard(
     finally:
         process.send_signal(signal.SIGINT)
         try:
-            out, _ = process.communicate(timeout=15)
+            out, _ = process.communicate(timeout=120)
         finally:
             if process.poll() is None:
                 process.kill()

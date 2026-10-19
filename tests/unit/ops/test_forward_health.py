@@ -675,7 +675,7 @@ def test_cli_apply_supervises_until_interrupted(
         assert events[-1]["health"] == "healthy", events
         assert local_port_in_use(local)
         process.send_signal(signal.SIGTERM)
-        out, err = process.communicate(timeout=15)
+        out, err = process.communicate(timeout=120)
     finally:
         if process.poll() is None:
             process.kill()

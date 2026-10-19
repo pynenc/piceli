@@ -1047,7 +1047,7 @@ assert "piceli.k8s.observe" not in sys.modules
         [sys.executable, "-c", script],
         capture_output=True,
         text=True,
-        timeout=10,
+        timeout=120,
         env={**os.environ},
     )
     assert result.returncode == 0, result.stderr

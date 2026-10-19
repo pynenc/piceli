@@ -86,7 +86,7 @@ def agent(
         yield lines
     finally:
         os.killpg(process.pid, stop)
-        process.wait(timeout=10)
+        process.wait(timeout=60)
         if process.stdout is not None:
             process.stdout.close()
 

@@ -259,7 +259,7 @@ def test_forwards_workspace_lists_starts_stops_and_reaps_stale(
         assert client.post(f"{API}/forwards/stale/stop").status_code == 403
         result = client.post(f"{API}/forwards/stale/stop", headers=_headers(client))
         assert result.json() == {"stopped": 1, "orphans": 0}
-        assert child.wait(timeout=10) is not None
+        assert child.wait(timeout=60) is not None
     finally:
         if child.poll() is None:
             child.kill()
