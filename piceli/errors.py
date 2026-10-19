@@ -1509,6 +1509,22 @@ ERRORS: Mapping[str, ErrorCode] = _entries(
         "secrets",
     ),
     _E(
+        "secret-adoption-invalid",
+        "Live secret values not adoptable",
+        "No release in the state records a generator, and the live Secret an earlier release of this owner wrote holds values the generator could not have made (another key set, a malformed value, or copies that differ). Nothing was adopted or written.",
+        "Fix or delete the live Secret, or rotate the generator into a Secret with a new name.",
+        False,
+        "secrets",
+    ),
+    _E(
+        "secret-adoption-incomplete",
+        "Live secret values incomplete",
+        "Only some of a generator's values are in live Secrets of an earlier release (a tls-ca CA key never is), so they cannot be kept without new values. Nothing was written.",
+        "Rotate the generator (--rotate NAME) into Secrets with new names.",
+        False,
+        "secrets",
+    ),
+    _E(
         "secret-import-unavailable",
         "Secret import unavailable",
         "The import source (file, env var, Secret or key) is missing, empty or unreadable, or the read was refused.",

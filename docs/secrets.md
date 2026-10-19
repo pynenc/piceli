@@ -399,6 +399,78 @@ under `secrets`:
 | `rendered` | a template, rendered from its current inputs |
 | `fetched` | an external source: the first value, or a value that changed at the source |
 | `static` | the value from the spec |
+| `adopted` | read back from a live Secret an earlier release wrote (see below) |
+
+## When the state starts empty
+
+Generated values live in the state directory (`state_dir`, or the GitOps
+controller's state volume). A new state directory knows none of them: a
+clone on another machine, a lost volume, a controller rescheduled to another
+node. Before 0.23.0 its first plan generated new values, and apply then
+failed with `retained-content-precondition-failed` on every generated Secret
+the earlier release had created, because Piceli never rewrites a retained
+Secret. Deleting those Secrets by hand rotated every password, token and the
+private CA.
+
+Now the plan **adopts** them. When no release in the state records a
+`random`, `tls-self-signed` or `tls-ca` generator, and a Secret the
+composition declares is live with that generator's values, `plan` reads the
+values from the Secret and records them in the state exactly as if it had
+generated them. Nothing is rotated, deleted or written: the Secret plans as
+`no-op`.
+
+```console
+$ piceli release plan --spec release.toml
+  ...
+  secret password: adopted from Secret credential (kept, not rotated)
+  secret ca: adopted from Secret turn-auth (kept, not rotated)
+```
+
+The JSON output shows `"secrets": {"password": "adopted", ...}` and
+`"secret_adoptions": [{"secret": "password", "from": ["credential"]}]`. The
+plan itself records each adopted generator with the Secret's UID
+(`secret_adoptions` in the plan), so the plan hash you approve covers the
+adoption. `piceli deploy` prints `[plan] secret password: adopted from Secret
+credential (no record in the state; values kept, not rotated)`, puts the same
+list in its plan stage (and in the preview before images exist), and its
+combined hash covers it. The release engine also logs one warning per
+adopted generator. `piceli release secret show NAME --json` reports
+`origin: adopted`; later releases carry the value as usual
+(`carried:<release>`).
+
+Only a Secret this release wrote is adopted. It must carry:
+
+- the `piceli.io/owner` annotation equal to the release owner (`[release]
+  owner`, or the pipeline's `owner`, by default the app name); an
+  `inherited_owners` id does not count;
+- a `managedFields` entry of the release's field manager (`[release]
+  field_manager`, by default the owner);
+- the target namespace (discovery reads only that namespace).
+
+A Secret without these marks (unlabelled, or written by another app,
+environment or tool) is never adopted: the plan and apply refuse it exactly
+as before (`resource-requires-adoption` for another owner,
+`retained-content-precondition-failed` for different content).
+
+The values must also be values the generator could make. The plan refuses
+with `secret-adoption-invalid` when the live Secret has another key set than
+the composition declares, a `random` value has another length or characters
+than `token_urlsafe(bytes)` gives, a certificate or key is not PEM, or two
+Secrets hold different values for the same output. It refuses with
+`secret-adoption-incomplete` when only some of a generator's values are live.
+In both cases nothing is stored or written.
+
+Adoption never replaces an explicit `--rotate`, and never applies when the
+state already records the generator (its values then come from the state, or
+new values are made when its settings changed). Imports, templates, static
+values and external sources are not adopted: imports read their source
+again, templates render from their (adopted) inputs.
+
+**The CA key of a `tls-ca`.** The CA key is internal: Piceli never writes it
+to a Secret, so an adopted CA has no key. The CA certificate and every leaf
+are kept, and later releases carry them. Adding a leaf needs the key, so it
+is refused with `secret-adoption-incomplete`: rotate the CA (`--rotate ca`)
+into Secrets with new names when you need new leaves.
 
 ## If it fails
 
@@ -424,6 +496,8 @@ version is left behind by a refused plan.
 | `secret-reveal-required` | `secret show` was asked for a value without `--reveal` and without a terminal to confirm on. | Add `--reveal` (owner only), or use `--json` for metadata. |
 | `secret-key-required` | `secret show` without `--json` for a generator with several outputs. | Add `--key`, for example `--key ca.crt`. |
 | `secret-not-found` | `secret show` named an unknown secret, key or release, or no release exists yet. | Check the name; the message lists what exists. |
+| `secret-adoption-invalid` | The state has no record of a generator, and the live Secret an earlier release wrote holds values it could not have made: another key set, a malformed value, or copies that differ. | Fix or delete the live Secret, or rotate the generator into a Secret with a new name. |
+| `secret-adoption-incomplete` | Only some of a generator's values are live (an adopted CA has no key, so it cannot sign a new leaf). | Rotate the generator (`--rotate NAME`) into Secrets with new names. |
 
 A composition that does not bind a declared output is refused with
 `declared secret inputs are not bound by the composition: […]`.

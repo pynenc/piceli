@@ -63,6 +63,7 @@ if TYPE_CHECKING:
     from piceli.k8s.secret_sources import Fetched
 
 __all__ = [
+    "Adopt",
     "Carry",
     "ImportSources",
     "Materialized",
@@ -81,6 +82,9 @@ _IMPORT_BYTES = 1_000_000
 
 # (generator, part, part digest, output names) -> (encoded values, release) | None
 Carry = Callable[[str, str, str, tuple[str, ...]], tuple[dict[str, str], str] | None]
+# (generator, spec, outputs) -> encoded values of every exposed output | None
+# (see piceli.k8s.secret_adoption.LiveSecrets)
+Adopt = Callable[[str, GeneratorSpec, tuple[Output, ...]], dict[str, str] | None]
 
 
 class SecretGeneratorError(ReleaseSpecError):
@@ -483,8 +487,12 @@ class Materialized:
 
     ``origin`` per generator: ``generated``, ``imported``, ``rotated``,
     ``rendered``, ``static``, ``fetched`` (a new or changed external value),
+    ``adopted`` (read back from live Secrets of an earlier release),
     ``carried:<release>`` or, for a ``tls-ca``
     whose CA was carried, ``signed:<release>``.
+
+    A ``tls-ca`` adopted from the cluster has no CA key (it is never written
+    to a Secret): ``values`` then lacks that internal output.
     """
 
     values: dict[str, str] = field(repr=False)
@@ -517,12 +525,15 @@ def materialize(
     carry: Carry | None = None,
     sources: ImportSources | None = None,
     external: Mapping[str, Fetched] | None = None,
+    adopt: Adopt | None = None,
 ) -> Materialized:
     """Produce every output, in dependency order, carrying values over.
 
     ``external`` holds the values already read from external sources (see
-    :func:`piceli.k8s.secret_sources.fetch_all`). Nothing here writes to the
-    store; the caller stores the result only after the plan was accepted.
+    :func:`piceli.k8s.secret_sources.fetch_all`). ``adopt`` reads a value
+    nothing carries over back from the cluster (never for a rotated
+    generator). Nothing here writes to the store; the caller stores the
+    result only after the plan was accepted.
     """
     check_rotation(secrets_spec, rotate)
     sources = sources or ImportSources()
@@ -574,7 +585,7 @@ def materialize(
             origin[name] = "static"
         else:
             fresh, origin[name] = _carried_or_new(
-                name, spec, digests, name in rotate, carry, sources
+                name, spec, digests, name in rotate, carry, sources, adopt
             )
         for output, value in fresh.items():
             raw[output] = value
@@ -589,10 +600,19 @@ def _carried_or_new(
     rotating: bool,
     carry: Carry | None,
     sources: ImportSources,
+    adopt: Adopt | None = None,
 ) -> tuple[dict[str, bytes], str]:
     groups: dict[str, list[Output]] = {}
     for item in outputs(name, spec):
         groups.setdefault(item.part, []).append(item)
+
+    def adopted() -> dict[str, bytes] | None:
+        if rotating or adopt is None:
+            return None
+        found = adopt(name, spec, outputs(name, spec))
+        if found is None:
+            return None
+        return {key: decode(value, spec.encoding) for key, value in found.items()}
 
     def carried(part: str) -> tuple[dict[str, bytes], str] | None:
         if rotating or carry is None:
@@ -610,6 +630,9 @@ def _carried_or_new(
     if isinstance(spec, TlsCaSpec):
         ca = carried("ca")
         if ca is None:
+            live = adopted()
+            if live is not None:
+                return live, "adopted"
             return _fresh(name, spec, None, ()), "rotated" if rotating else "generated"
         result = dict(ca[0])
         missing = []
@@ -619,6 +642,13 @@ def _carried_or_new(
                 missing.append(leaf)
             else:
                 result.update(leaf_values[0])
+        if missing and f"{name}.ca.key" not in result:
+            raise SecretError(
+                "secret-adoption-incomplete",
+                f"the CA of secret {name!r} was adopted from the cluster without "
+                f"its private key, so it cannot sign the new leaves {missing}: "
+                f"rotate it (--rotate {name}) into Secrets with new names",
+            )
         if missing:
             authority = (result[f"{name}.ca.crt"], result[f"{name}.ca.key"])
             result.update(
@@ -633,6 +663,9 @@ def _carried_or_new(
     found = carried("")
     if found is not None:
         return found[0], f"carried:{found[1]}"
+    live = adopted()
+    if live is not None:
+        return live, "adopted"
     if isinstance(spec, ImportSecretSpec):
         if rotating and spec.rotate == "random":
             return {name: secrets.token_urlsafe(spec.bytes).encode()}, "rotated"

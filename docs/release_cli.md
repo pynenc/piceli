@@ -380,6 +380,11 @@ Rotating under the same name fails at apply with
 `retained-content-precondition-failed` and writes nothing to that Secret. The
 old Secret stays until you delete it.
 
+A new, empty state directory does not rotate anything: the plan adopts the
+generated values from the Secrets an earlier release of the same owner wrote
+(origin `adopted`, listed under `secret_adoptions` and bound to the plan
+hash). See "When the state starts empty" in {doc}`secrets`.
+
 ## Plan and approval
 
 `plan` identifies the cluster (kube-system and namespace UIDs, optional node

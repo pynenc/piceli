@@ -1329,6 +1329,12 @@ class PipelineRunner:
             # The preview itself is never hashed (its digests are
             # placeholders); only its ownership outcome is, and after
             # delivery the real plan may not go beyond it (see _run_plan).
+            hashed_preview: dict[str, Any] = {
+                "model": fingerprint,
+                "ownership": _ownership(preview["changes"]),
+            }
+            if preview.get("secret_adoptions"):
+                hashed_preview["secret_adoptions"] = preview["secret_adoptions"]
             return (
                 {
                     "state": "pending",
@@ -1336,11 +1342,12 @@ class PipelineRunner:
                     "preview": preview,
                     **access,
                 },
-                {"model": fingerprint, "ownership": _ownership(preview["changes"])},
+                hashed_preview,
             )
         result = self._release_plan(work)
         drift = _drift(result)
         kept = result.to_dict()["kept_orphaned"]
+        adopted = result.secret_adoptions
         stage = {
             "state": "planned",
             "release": result.release,
@@ -1350,6 +1357,7 @@ class PipelineRunner:
             "drift": drift,
             "images": work.release_images,
             **({"kept_orphaned": kept} if kept else {}),
+            **({"secret_adoptions": adopted} if adopted else {}),
             **access,
         }
         hashed = {
@@ -1358,6 +1366,10 @@ class PipelineRunner:
             "actions": _hex(_compact(result)),
             "drift": drift,
         }
+        if adopted:
+            # Only when secret values are read back from the cluster, so other
+            # plans keep their hash.
+            hashed["secret_adoptions"] = adopted
         if kept:
             # Only when a prune keeps something, so other plans keep their hash.
             hashed["kept_orphaned"] = [
@@ -1417,6 +1429,11 @@ class PipelineRunner:
             "authorized": result["authorized"],
             "dry_run_skipped": result["dry_run_skipped"],
             "dry_run_unavailable": result["dry_run_unavailable"],
+            **(
+                {"secret_adoptions": result["secret_adoptions"]}
+                if result.get("secret_adoptions")
+                else {}
+            ),
         }
         preview["preview_hash"] = _hex(
             {
@@ -2430,8 +2447,16 @@ class PipelineRunner:
                 or "no actions"
             )
         )
+        adopted = result.secret_adoptions
+        for item in adopted:
+            self.say(
+                f"[plan] secret {item['secret']}: adopted from Secret "
+                + ", ".join(item["from"])
+                + " (no record in the state; values kept, not rotated)"
+            )
         kept = result.to_dict()["kept_orphaned"]
         return "done", {
+            **({"secret_adoptions": adopted} if adopted else {}),
             "release": result.release,
             "mode": result.mode,
             "plan_hash": result.plan_hash,
@@ -2458,6 +2483,17 @@ class PipelineRunner:
             return
         allowed = set(_ownership(approved.get("changes", [])))
         extra = [item for item in _ownership(_changes(result)) if item not in allowed]
+        # Secret values read back from the cluster are covered only when the
+        # preview showed them (same generator, same Secrets).
+        shown = {
+            (item["secret"], tuple(item["from"]))
+            for item in approved.get("secret_adoptions", ())
+        }
+        extra += [
+            f"adopt secret {item['secret']} from Secret {', '.join(item['from'])}"
+            for item in result.secret_adoptions
+            if (item["secret"], tuple(item["from"])) not in shown
+        ]
         if extra:
             raise PipelineError(
                 "pipeline-preview-changed",
